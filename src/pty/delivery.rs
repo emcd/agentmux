@@ -34,7 +34,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::transports::{
     DeliveryDiagnosticContext, DeliveryEnvelope, DeliveryWaitError, QuiescenceAction,
-    QuiescenceState, SingleDeliveryOutcome, quiescence_classify_step,
+    QuiescenceBounds, QuiescenceState, SingleDeliveryOutcome, quiescence_classify_step,
 };
 
 use super::state::{PtyShared, WorkerTerminalProbe};
@@ -237,10 +237,12 @@ pub struct DeliveryRun {
         Box<DeliveryEnvelope>,
         oneshot::Sender<SingleDeliveryOutcome>,
     )>,
-    quiet_window: Duration,
-    prime_started_at: Instant,
-    prime_deadline: Option<Instant>,
-    prime_timeout_ms: Option<u64>,
+    /// The group's quiescence bounds, fixed at group formation. Pty passes no
+    /// readiness bound: it writes to the pty master before its readiness wait,
+    /// so an expired bound could not be reported as non-delivery without
+    /// claiming a message did not land that the target may already hold. See
+    /// `agentmux:issues/relay/61`.
+    bounds: QuiescenceBounds,
     wedge_detection: bool,
     qstate: QuiescenceState,
     /// Active wait. `Some` when the state machine is between
@@ -279,10 +281,9 @@ pub enum DeliveryStep {
 /// (so envelopes queued behind the raw are not dropped).
 pub struct RawDelivery {
     raw: Option<PendingRaw>,
-    quiet_window: Duration,
-    prime_started_at: Instant,
-    prime_deadline: Option<Instant>,
-    prime_timeout_ms: Option<u64>,
+    /// See [`DeliveryRun::bounds`]; a raw write carries no readiness bound for
+    /// the same reason.
+    bounds: QuiescenceBounds,
     wedge_detection: bool,
     qstate: QuiescenceState,
     wait: Option<PtyWait>,
@@ -511,16 +512,14 @@ impl Delivery {
 
 impl DeliveryRun {
     fn new(shared: &PtyShared) -> Self {
-        let prime_started_at = Instant::now();
-        let prime_timeout_ms = shared.config.prime_timeout_ms;
-        let prime_deadline =
-            prime_timeout_ms.map(|ms| prime_started_at + Duration::from_millis(ms));
         Self {
             group: Vec::new(),
-            quiet_window: QUIET_WINDOW,
-            prime_started_at,
-            prime_deadline,
-            prime_timeout_ms,
+            bounds: QuiescenceBounds::new(
+                QUIET_WINDOW,
+                Instant::now(),
+                shared.config.prime_timeout_ms,
+                None,
+            ),
             wedge_detection: shared.config.wedge_detection,
             qstate: QuiescenceState::new(),
             wait: None,
@@ -577,10 +576,7 @@ impl DeliveryRun {
                     .iter()
                     .map(|(envelope, _)| envelope.message_id.as_str()),
             ),
-            self.quiet_window,
-            self.prime_deadline,
-            self.prime_started_at,
-            self.prime_timeout_ms,
+            &self.bounds,
             self.wedge_detection,
         );
         match classify {
@@ -698,10 +694,7 @@ impl DeliveryRun {
                     .iter()
                     .map(|(envelope, _)| envelope.message_id.as_str()),
             ),
-            self.quiet_window,
-            self.prime_deadline,
-            self.prime_started_at,
-            self.prime_timeout_ms,
+            &self.bounds,
             self.wedge_detection,
         );
         match classify {
@@ -718,16 +711,14 @@ impl DeliveryRun {
 
 impl RawDelivery {
     fn new(shared: &PtyShared, raw: PendingRaw) -> Self {
-        let prime_started_at = Instant::now();
-        let prime_timeout_ms = shared.config.prime_timeout_ms;
-        let prime_deadline =
-            prime_timeout_ms.map(|ms| prime_started_at + Duration::from_millis(ms));
         Self {
             raw: Some(raw),
-            quiet_window: QUIET_WINDOW,
-            prime_started_at,
-            prime_deadline,
-            prime_timeout_ms,
+            bounds: QuiescenceBounds::new(
+                QUIET_WINDOW,
+                Instant::now(),
+                shared.config.prime_timeout_ms,
+                None,
+            ),
             wedge_detection: shared.config.wedge_detection,
             qstate: QuiescenceState::new(),
             wait: None,
@@ -766,10 +757,7 @@ impl RawDelivery {
             &mut probe,
             &mut self.qstate,
             diagnostics,
-            self.quiet_window,
-            self.prime_deadline,
-            self.prime_started_at,
-            self.prime_timeout_ms,
+            &self.bounds,
             self.wedge_detection,
         );
         match classify {
@@ -935,6 +923,27 @@ fn envelope_outcome_from_wait_result(
             outcome: crate::transports::SendOutcome::Failed,
             reason_code: Some("pane_wedged".to_string()),
             reason: Some(format!("pty pane wedged: {reason}")),
+            details: None,
+        },
+        // Pty builds its bounds with no readiness bound, so the shared
+        // classifier cannot reach its readiness-expiry path for a Pty group.
+        // Mapped rather than asserted for the same reason the Tmux transport
+        // maps its unreachable `Wedged` arm: this runs on the worker thread
+        // behind a tokio task, where a panic is isolated and swallowed, leaving
+        // the sender with no outcome at all. A structured failure is more
+        // observable than an assertion nothing can hear. It is deliberately not
+        // mapped to `Timeout`, which would present a bound Pty does not have as
+        // though it had elapsed.
+        Err(DeliveryWaitError::ReadinessTimeout { reason_code, .. }) => SingleDeliveryOutcome {
+            target_session: target_session.to_string(),
+            message_id: String::new(),
+            outcome: crate::transports::SendOutcome::Failed,
+            reason_code: Some("pty_probe_failed".to_string()),
+            reason: Some(format!(
+                "pty classifier returned a readiness expiry it cannot produce \
+                 (pty carries no readiness bound): {}",
+                reason_code.code()
+            )),
             details: None,
         },
         Err(DeliveryWaitError::Failed { reason }) => SingleDeliveryOutcome {

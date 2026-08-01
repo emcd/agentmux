@@ -762,8 +762,9 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
         }
     }
 
-    // Prime timeout check. Fires `Timeout` when the prime window has elapsed
-    // AND the target is not sitting in a settled wedge-class frame.
+    // Prime timeout check. Fires `Timeout` when the prime window has elapsed,
+    // except on a settled wedge-class frame *in a group that carries a
+    // readiness bound*.
     //
     // The exclusion used to be implicit: wedge-class content returned from the
     // wedge branch above before reaching here. With wedge detection off for
@@ -773,19 +774,25 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
     // observable output" to "the target is not ready" — which is the same
     // inference from absence that the wedge classifier was removed for making,
     // just wearing the prime timeout's reason code. A settled permission
-    // dialog is a target that answered; only the readiness bound may end that
-    // wait.
+    // dialog is a target that answered.
     //
-    // The condition is a no-op for Pty, which still enables wedge detection:
-    // any observation reaching here with `quiescent && wedge_class` and an
-    // elapsed prime deadline already returned `Wedged` above.
+    // The bound is what earns the exclusion, which is why it is part of the
+    // condition rather than assumed. Prime may stop adjudicating a settled
+    // frame only where something else is guaranteed to end the wait. A group
+    // with no readiness bound has nothing to hand the duty to: for Pty with
+    // `wedge-detection = false` — no wedge branch, no bound — the prime
+    // timeout is the only terminal path a settled frame can reach, and
+    // excluding it there strands the wait forever. This is the same reasoning
+    // the retired `Tmux prime timeout bounds post-quiescence wait when wedge is
+    // disabled` scenario encoded; it stopped applying to Tmux because Tmux
+    // gained a bound, not because it stopped being true.
     //
     // Checked before the readiness bound: when both have elapsed in the same
     // iteration the prime timeout wins, as the more specific diagnosis (no
     // observable output at all) and the one an operator opted into.
     if let Some(deadline) = bounds.prime_deadline
         && now >= deadline
-        && !(quiescent && wedge_class)
+        && !(quiescent && wedge_class && bounds.readiness_deadline.is_some())
     {
         let timeout_ms = bounds.prime_timeout_ms.unwrap_or(0);
         let timeout = Duration::from_millis(timeout_ms);

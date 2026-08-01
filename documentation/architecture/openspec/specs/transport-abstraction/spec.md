@@ -827,24 +827,24 @@ not among them, because Tmux no longer classifies `wedged`.
 
 #### Scenario: Tmux probe trait is transport-internal
 
-- **WHEN** a developer reads `src/tmux/transport.rs`
+- **WHEN** a developer reads `src/tmux/quiescence_probe.rs`
 - **THEN** they find a `PaneQuiescenceProbe` trait used by
-  `wait_for_quiescent_pane`
+  `wait_for_quiescent_pane_three_state`, both re-exported from `src/tmux/mod.rs`
 - **AND** the trait is not re-exported from `src/transports/`
 - **AND** the `Transport` trait in `src/transports/contract.rs` has no
   knowledge of probes
 
 #### Scenario: Tmux unit tests cover the reachable canonical sequences
 
-- **WHEN** `cargo test --test tmux_transport` runs
+- **WHEN** `cargo nextest run --test unit tmux_transport` runs
 - **THEN** it asserts the canonical probe sequences produce the
-  expected terminal outcomes:
-  - a probe that never produces output → `SendOutcome::Timeout`
-  - a probe that quiesces at a prompt after several ticks → `Delivered`
-  - a probe that produces output then settles at a prompt → `Delivered`
-    without the prime timeout firing
-- **AND** no Tmux sequence asserts `SendOutcome::Failed` with
-  `reason_code = "pane_wedged"`, which the transport cannot produce
+  expected wait results:
+  - a probe that never produces output → `Err(DeliveryWaitError::Timeout)`
+  - a probe that quiesces at a prompt after several ticks → `Ok(pane_target)`
+  - a probe that produces output then settles at a prompt →
+    `Ok(pane_target)` without the prime timeout firing
+- **AND** no Tmux sequence asserts `Err(DeliveryWaitError::Wedged)`, which the
+  transport cannot produce
 
 #### Scenario: Readiness-bound coverage lives with the shared classifier
 

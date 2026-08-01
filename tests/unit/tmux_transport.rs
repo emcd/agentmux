@@ -268,9 +268,10 @@ fn always_unresponsive_probe_resolves_timeout() {
 #[test]
 fn slow_prompt_probe_resolves_delivered() {
     // Pane transitions through distinct non-prompt states (empty → stuck)
-    // before finally reaching a ready state. Each mismatch signature
-    // change resets the wedge counter, so wedge does not fire even with
-    // wedge detection enabled.
+    // before finally reaching a ready state. Tmux passes
+    // `wedge_detection: false`, so no wedge verdict is reachable here at all;
+    // the transitions matter because each must leave the group pending rather
+    // than resolving it early.
     let mut probe = ScriptedProbe::sequence(vec![
         ProbeObservation::empty_unready(),
         ProbeObservation::empty_unready(),
@@ -403,8 +404,10 @@ fn coalesce_during_prime_does_not_extend_window() {
     // prime_deadline were re-captured.
     //
     // Uses an empty-pane (non-wedge-class) probe so the prime timeout
-    // fires `Timeout`; a wedge-class probe would fire `Wedged` per the
-    // precedence rules (see `short_prime_timeout_*` tests).
+    // fires `Timeout`. A wedge-class probe would not resolve here at all on
+    // Tmux: the wedge verdict is unreachable, and an elapsed prime timeout is
+    // excluded from settled wedge-class frames on a group that carries a
+    // readiness bound, which every Tmux group does.
     let mut probe = ScriptedProbe::sequence(vec![
         ProbeObservation::empty_unready(),
         ProbeObservation::empty_unready(),

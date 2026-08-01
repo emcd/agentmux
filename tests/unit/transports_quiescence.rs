@@ -854,6 +854,35 @@ fn an_elapsed_prime_timeout_spares_a_settled_frame_but_not_a_silent_target() {
         ),
         "the prime timeout must still fire for a target with no observable output; got {result:?}",
     );
+
+    // A group with no readiness bound has nothing to hand termination to, so the
+    // narrowing must not apply to it. This is the case whose absence let a false
+    // claim ship: the narrowing was described as a no-op for Pty because Pty's
+    // wedge branch intercepts first — true only while `wedge-detection` is on.
+    // With Pty's documented opt-out there is no wedge branch and no bound, and
+    // excluding the prime timeout here stranded the wait forever.
+    let unbounded = QuiescenceBounds {
+        readiness_deadline: None,
+        ..bounds
+    };
+    let dialog = readiness_observation(7, "Do you want to allow this? (y/n)", Some(false));
+    let mut probe = MockProbe::new(dialog.clone(), dialog);
+    let mut state = QuiescenceState::new();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &unbounded,
+        false,
+    );
+    assert!(
+        matches!(
+            result,
+            QuiescenceAction::Done(Err(DeliveryWaitError::Timeout { .. }))
+        ),
+        "with no readiness bound the prime timeout must still resolve a settled frame, \
+         or the wait has no terminal path at all; got {result:?}",
+    );
 }
 
 /// AuxBE `reviews/relay/13` finding 1 — the bound must not overshoot by a full

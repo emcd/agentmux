@@ -75,9 +75,10 @@ pub struct PromptReadinessEvaluation {
 ///
 /// The real implementation ([`RealPaneQuiescenceProbe`]) wraps tmux queries
 /// against the active pane. Tests inject scripted probes that drive the
-/// three-state classifier deterministically — see the unit tests in
-/// `tests/unit/tmux_transport.rs` for the four probe classes
-/// (unresponsive, wedged, slow-prompt, normal).
+/// classifier deterministically — see the unit tests in
+/// `tests/unit/tmux_transport.rs` for the probe classes Tmux can reach
+/// (unresponsive, slow-prompt, normal). There is no wedged class: Tmux passes
+/// `wedge_detection: false`, so the classifier cannot return that verdict here.
 ///
 /// `pub` to support the external test surface; the trait is not part of
 /// the public runtime API (no other code outside `src/tmux` consumes it).
