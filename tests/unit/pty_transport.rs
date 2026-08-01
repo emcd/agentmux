@@ -2650,3 +2650,195 @@ fn pty_transport_start_envelope_group_emits_receipt_marker_for_receipt_only() {
         "peer envelope must not include the marker line; got: {peer_str:?}"
     );
 }
+
+/// Regression test for `agentmux:issues/relay/62` — Pty silently drops
+/// envelopes coalesced into a flush group during the wait.
+///
+/// Pty writes every envelope of a group to the pty master inside
+/// `start_envelope_group`, BEFORE the quiescence wait begins. Envelopes
+/// absorbed into the same group *during* that wait are pushed onto the
+/// group but never written anywhere, while `send_group_outcomes` resolves
+/// every member of the group identically. The late envelope's sender is
+/// therefore told whatever the group resolved to — `Delivered` on the normal
+/// path where the prompt matches — for bytes that never left the relay. This
+/// test forces `Timeout` instead, by using a prompt that never matches, since
+/// that is what keeps the group's wait open long enough to absorb a second
+/// envelope. The defect being pinned is the missing write, not the outcome.
+///
+/// The assertion has to be on bytes reaching the master rather than on the
+/// outcome, precisely because the outcome is a false success. `/bin/cat`
+/// echoes whatever reaches the master, so both bodies must appear in the
+/// pane snapshot; today only the first does.
+///
+/// `wedge-detection` is disabled so the first group's wait survives long
+/// enough for the second `mailw` to land inside it — with the classifier
+/// enabled the group would resolve in roughly 150 ms and the second
+/// envelope would start a fresh group, writing correctly and hiding the
+/// defect. The prime timeout bounds the whole test at ~1.5 s.
+#[cfg(feature = "pty")]
+#[test]
+#[ignore = "RED: pins agentmux:issues/relay/62, an unfixed defect. \
+            Run with --ignored. Removing this attribute is the fix's \
+            acceptance criterion."]
+fn pty_envelope_absorbed_during_wait_reaches_the_master() {
+    use agentmux::configuration::{
+        BundleMember, PromptReadinessTemplate, PtyTargetConfiguration as PtyConfig, TermProtocol,
+    };
+    use agentmux::envelope::AddressIdentity;
+    use agentmux::pty::PtyTargetConfiguration;
+    use agentmux::transports::{
+        DeliveryEnvelope, DeliveryMessage, LookMode, LookSnapshotPayload, StartupContext, Transport,
+    };
+
+    const FIRST_BODY: &str = "RELAY62-FIRST-ENVELOPE";
+    const SECOND_BODY: &str = "RELAY62-SECOND-ENVELOPE";
+    /// Never matches the echoed bodies, so the group stays in its wait
+    /// until the prime deadline rather than resolving Delivered early.
+    const NEVER_READY: &str = "RELAY62_PROMPT_THAT_NEVER_APPEARS";
+
+    fn pty_config() -> PtyConfig {
+        PtyConfig {
+            initial_command: "/bin/cat".to_string(),
+            resume_command: "/bin/cat".to_string(),
+            prompt_readiness: Some(PromptReadinessTemplate {
+                prompt_regex: NEVER_READY.to_string(),
+                inspect_lines: None,
+                input_idle_cursor_column: None,
+            }),
+            prime_timeout_ms: Some(1500),
+            wedge_detection: false,
+            cols: 80,
+            rows: 24,
+            term_protocol: TermProtocol::Xterm256Color,
+        }
+    }
+
+    fn member() -> BundleMember {
+        BundleMember {
+            id: "relay62-test".to_string(),
+            name: None,
+            working_directory: None,
+            target: agentmux::configuration::TargetConfiguration::Pty(pty_config()),
+            coder_session_id: None,
+            policy_id: None,
+            environment: Vec::new(),
+        }
+    }
+
+    fn envelope(message_id: &str, body: &str) -> DeliveryEnvelope {
+        DeliveryEnvelope {
+            message_id: message_id.to_string(),
+            message: DeliveryMessage {
+                body: body.to_string(),
+                created_at: "2026-08-01T00:00:00Z".to_string(),
+                namespace: "test-ns".to_string(),
+                sender: AddressIdentity {
+                    session_name: "alpha@test-ns".to_string(),
+                    display_name: None,
+                },
+                target: AddressIdentity {
+                    session_name: "relay62-test@test-ns".to_string(),
+                    display_name: None,
+                },
+                cc: Vec::new(),
+                authenticated_identity: None,
+                on_behalf_of: None,
+            },
+            append_enter: true,
+            choice_decider_sessions: Vec::new(),
+            quiet_window: Duration::from_millis(50),
+            prime_timeout_ms: Some(1500),
+            readiness_timeout_ms: None,
+            is_receipt: false,
+        }
+    }
+
+    let mut transport = agentmux::pty::PtyTransport::new(
+        member(),
+        PtyTargetConfiguration {
+            initial_command: "/bin/cat".to_string(),
+            resume_command: "/bin/cat".to_string(),
+            prompt_readiness: Some(PromptReadinessTemplate {
+                prompt_regex: NEVER_READY.to_string(),
+                inspect_lines: None,
+                input_idle_cursor_column: None,
+            }),
+            cols: 80,
+            rows: 24,
+            prime_timeout_ms: Some(1500),
+            wedge_detection: false,
+            working_directory: None,
+            term_protocol: TermProtocol::Xterm256Color,
+        },
+        None,
+    );
+    let context = StartupContext {
+        namespace: "agentmux".to_string(),
+        runtime_directory: std::env::temp_dir(),
+        target_member: member(),
+        choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+            decided_by: "test".to_string(),
+            reason_code: "test_cancel".to_string(),
+            reason: None,
+        }),
+    };
+    let status = match transport.startup(context) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "pty_envelope_absorbed_during_wait_reaches_the_master: \
+                 skipped (startup failed: {e:?}); requires Zig 0.15.x + \
+                 libghostty-vt built via --features pty"
+            );
+            return;
+        }
+    };
+    assert!(matches!(
+        status.readiness,
+        agentmux::transports::TransportReadiness::Ready
+    ));
+
+    // First envelope forms the flush group and is written immediately.
+    let first_rx = transport.mailw(envelope("relay62-first", FIRST_BODY));
+
+    // Let `start_envelope_group` finish draining `write_rx` and enter its
+    // wait, so the second envelope is absorbed by the wait-loop path
+    // rather than by the pre-wait drain.
+    thread::sleep(Duration::from_millis(150));
+
+    // Second envelope lands during the first group's wait.
+    let second_rx = transport.mailw(envelope("relay62-second", SECOND_BODY));
+
+    let first = recv_bounded(first_rx, Duration::from_secs(5)).expect("first outcome receive");
+    let second = recv_bounded(second_rx, Duration::from_secs(5)).expect("second outcome receive");
+
+    // Read the pane. `/bin/cat` echoes everything written to the master,
+    // so an envelope that reached the master appears here.
+    let output = transport
+        .give_output()
+        .expect("give_output returns Some after startup");
+    let snapshot = output
+        .look(LookMode {
+            lines: Some(80),
+            offset: None,
+            prime_timeout: Duration::from_secs(2),
+        })
+        .expect("look should succeed");
+    let snapshot_lines = match snapshot {
+        LookSnapshotPayload::Lines { snapshot_lines } => snapshot_lines,
+        other => panic!("expected Lines payload, got {other:?}"),
+    };
+    let pane = snapshot_lines.join("\n");
+
+    assert!(
+        pane.contains(FIRST_BODY),
+        "the first envelope should have reached the pty master; pane: {pane:?}"
+    );
+    assert!(
+        pane.contains(SECOND_BODY),
+        "the envelope absorbed during the wait never reached the pty master, \
+         yet its sender was told {:?} (relay/62). first outcome: {:?}; pane: {pane:?}",
+        second.outcome,
+        first.outcome,
+    );
+}
