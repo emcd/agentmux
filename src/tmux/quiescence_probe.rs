@@ -55,7 +55,7 @@ const PROMPT_INSPECT_LINES_MAX: usize = 40;
 // ---------------------------------------------------------------------------
 
 #[derive(Debug)]
-pub(crate) struct PromptReadinessMatcher {
+struct PromptReadinessMatcher {
     prompt_regex: Regex,
     inspect_lines: usize,
     input_idle_cursor_column: Option<usize>,
@@ -350,16 +350,15 @@ fn build_prompt_readiness_matcher(
 }
 
 /// OpenCode-specific compose-region second gate. Returns true when
-/// the inspected block looks like an OpenCode prompt UI (the
-/// `╹▀{20,}` separator and the `ctrl+p commands` status-row token
-/// are present), AND any of the three rows immediately preceding the
-/// info row contains compose text in the left-of-sidebar columns.
+/// the inspected block has the adjacent OpenCode frame suffix and
+/// any of the three rows immediately preceding its info row contains
+/// compose text in the left-of-sidebar columns.
 ///
-/// The OpenCode frame signature is the gate: Claude/Codex/Gemini
-/// panes whose prompt regex also matches but lack the separator +
-/// status row are returned false here without inspecting the rows
-/// above the info row, so the readiness evaluation for them is
-/// unchanged from before this gate existed.
+/// The OpenCode frame signature is an info row followed immediately by
+/// a 20-or-more-character separator and a status row containing
+/// `ctrl+p commands`. Claude/Codex/Gemini panes whose prompt regex also
+/// matches but lack this suffix are returned false here, so their
+/// readiness evaluation is unchanged.
 ///
 /// `compose text` is `┃` + 2-99 non-newline whitespace chars +
 /// non-whitespace (sidebar text has 100+ leading spaces, which is
@@ -370,47 +369,35 @@ fn build_prompt_readiness_matcher(
 /// range is exclusive on the right (100 spaces = sidebar, not
 /// compose).
 ///
-/// **Supported layout: exactly three input rows.** Verified by
-/// `agentmux:artifacts/10` (api-aux idle, 1.18.9) and
-/// `agentmux:artifacts/11` (editor idle, 1.18.9) — the measured
-/// sidebar run is 148 and 152 spaces, and the input box is three
-/// rows in both. A future OpenCode layout change (e.g. input box
-/// collapsing to fewer rows, or a wider pane changing the sidebar
-/// whitespace count) requires this implementation to be revisited.
+/// **Supported layout: exactly three input rows.** The preserved api-aux and
+/// editor idle captures from OpenCode 1.18.9 show sidebar runs of 148 and 152
+/// spaces, with a three-row input box in both. A future OpenCode layout change
+/// (e.g. input box collapsing to fewer rows, or a wider pane changing the
+/// sidebar whitespace count) requires this implementation to be revisited.
 fn compose_region_has_text(block: &str) -> bool {
-    // Frame gate. The OpenCode separator is `╹` followed by 20+
-    // `▀` (U+2580) characters; the status row token is
-    // `ctrl+p commands`. If the block lacks either, the inspected
-    // pane is not an OpenCode prompt UI and the compose check is a
-    // no-op (returns false). Non-OpenCode coders' readiness
-    // evaluations are therefore unchanged.
-    if !block.contains("╹▀") || !block.contains("ctrl+p commands") {
-        return false;
-    }
-
     let lines: Vec<&str> = block.lines().collect();
-
-    // Find the info row: the LAST line that starts with `┃` and has
-    // whitespace then non-whitespace content. In Opencode's prompt
-    // UI this is the row reading `┃  <label> · <model> ...`, which
-    // sits directly above the separator. Walks bottom-up so that
-    // chat history with similar ┃+content patterns further up does
-    // not get mistaken for the info row.
-    let info_row_idx = lines.iter().rposition(|line| {
-        let trimmed = line.trim_start();
-        if !trimmed.starts_with('┃') {
+    // Prefer the current footer when older OpenCode frames remain in the tail.
+    let info_row_idx = lines.windows(3).rposition(|window| {
+        let trimmed = window[0].trim_start();
+        let Some(after_bar) = trimmed.strip_prefix('┃') else {
+            return false;
+        };
+        if !after_bar
+            .chars()
+            .any(|character| !character.is_whitespace())
+        {
             return false;
         }
-        let after_b = trimmed.split_at('┃'.len_utf8()).1;
-        let mut saw_ws = false;
-        for c in after_b.chars() {
-            if c.is_whitespace() {
-                saw_ws = true;
-            } else {
-                return saw_ws;
-            }
+        let separator = window[1].trim();
+        let Some(separator) = separator.strip_prefix('╹') else {
+            return false;
+        };
+        if separator.chars().count() < 20 || !separator.chars().all(|character| character == '▀')
+        {
+            return false;
         }
-        false
+        window[2].chars().next().is_some_and(char::is_whitespace)
+            && window[2].contains("ctrl+p commands")
     });
 
     let Some(info_idx) = info_row_idx else {
@@ -418,9 +405,8 @@ fn compose_region_has_text(block: &str) -> bool {
     };
 
     // Inspect the three rows immediately above the info row. The
-    // input box in Opencode's idle layout is exactly three rows
-    // (proven by `agentmux:artifacts/10` and `/11`); a future
-    // layout change requires this implementation to be revisited.
+    // input box in OpenCode's supported idle layout is exactly three rows;
+    // a future layout change requires this implementation to be revisited.
     let start = info_idx.saturating_sub(3);
     for line in lines.iter().take(info_idx).skip(start) {
         let trimmed = line.trim_start();
@@ -449,7 +435,7 @@ fn compose_region_has_text(block: &str) -> bool {
     false
 }
 
-pub(crate) fn prompt_readiness_matches(
+fn prompt_readiness_matches(
     tmux_socket: &Path,
     pane_target: &str,
     snapshot: &str,
@@ -545,13 +531,12 @@ pub(crate) fn prompt_readiness_matches(
 // One inline `#[cfg(test)] mod tests` is permitted by project
 // policy for crate-private-by-design paths. The compose-region
 // helper is a localized OpenCode-specific gate; testing it via
-// `prompt_readiness_matches` (the public path) avoids test-only
+// `prompt_readiness_matches` (the production path) avoids test-only
 // public re-exports. Fixture cases are loaded from the byte-for-byte
-// copies of `agentmux:artifacts/10` (api-aux idle, 1.18.9) and
-// `agentmux:artifacts/11` (editor idle, 1.18.9) under
-// `tests/unit/fixtures/opencode_idle_captures/`; the regex is read
-// from the shipped `data/configuration/coders.toml` so the
-// test cannot drift from production.
+// copies of the preserved api-aux and editor idle captures from OpenCode
+// 1.18.9 under `tests/unit/fixtures/opencode_idle_captures/`; the regex is
+// read from the shipped `data/configuration/coders.toml` so the test cannot
+// drift from production.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -563,9 +548,9 @@ mod tests {
 
     fn fixture_path(name: &str) -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("src")
-            .join("tmux")
-            .join("test_fixtures")
+            .join("tests")
+            .join("unit")
+            .join("fixtures")
             .join("opencode_idle_captures")
             .join(name)
     }
@@ -692,14 +677,58 @@ mod tests {
             fs::read_to_string(fixture_path(API_AUX_FIXTURE)).expect("read api-aux fixture");
         let editor = fs::read_to_string(fixture_path(EDITOR_FIXTURE)).expect("read editor fixture");
 
-        // Non-OpenCode synthetic block: different separator
-        // (`╹▀...` absent) and different status-row token
-        // (`ctrl+p commands` absent). The OpenCode regex must not
-        // match; the compose check must not run (no-op on a
-        // non-matching block).
+        // Non-OpenCode synthetic block: different separator and
+        // status-row token. The OpenCode regex must not match; the
+        // compose check must not run (no-op on a non-matching block).
         let non_opencode = "\
   >>> some separator
   prompt > READY";
+        let non_opencode_matcher = PromptReadinessMatcher {
+            prompt_regex: Regex::new(r"(?s).*").expect("generic test regex"),
+            inspect_lines: 10,
+            input_idle_cursor_column: None,
+        };
+        let non_opencode_composing = "\
+  ┃  typed text
+  ┃
+  ┃
+  ┃  Ready";
+        let malformed_opencode = "\
+  ┃  typed text
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ┃ unrelated content
+  status ctrl+p commands";
+        let multi_frame_matcher = PromptReadinessMatcher {
+            prompt_regex: Regex::new(r"(?s).*").expect("multi-frame test regex"),
+            inspect_lines: 20,
+            input_idle_cursor_column: None,
+        };
+        let older_composing_current_idle = "\
+  ┃  old text
+  ┃
+  ┃
+  ┃  Older
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /old ctrl+p commands
+  ┃
+  ┃
+  ┃
+  ┃  Current
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /current ctrl+p commands";
+        let older_idle_current_composing = "\
+  ┃
+  ┃
+  ┃
+  ┃  Older
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /old ctrl+p commands
+  ┃  current text
+  ┃
+  ┃
+  ┃  Current
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   /current ctrl+p commands";
 
         // ---- both preserved idle captures ready ----
         let eval =
@@ -761,6 +790,61 @@ mod tests {
         assert!(
             !eval.ready,
             "non-OpenCode block must remain non-ready (regex mismatch)"
+        );
+
+        // A non-OpenCode matcher that matches a compose-like block
+        // must remain ready because the OpenCode frame suffix is
+        // absent. This exercises the production path after regex
+        // matching, rather than the earlier mismatch branch.
+        let eval = prompt_readiness_matches(
+            Path::new("(test)"),
+            "(test)",
+            non_opencode_composing,
+            Some(&non_opencode_matcher),
+        )
+        .expect("non-OpenCode matching eval");
+        assert_eq!(eval.regex_matched, Some(true));
+        assert!(
+            eval.ready,
+            "matching non-OpenCode compose-like block must remain ready"
+        );
+
+        // OpenCode-looking tokens without an adjacent suffix must
+        // also bypass the compose predicate. Independent contains
+        // checks would incorrectly reject this matching frame.
+        let eval = prompt_readiness_matches(
+            Path::new("(test)"),
+            "(test)",
+            malformed_opencode,
+            Some(&non_opencode_matcher),
+        )
+        .expect("malformed OpenCode eval");
+        assert_eq!(eval.regex_matched, Some(true));
+        assert!(eval.ready, "non-adjacent frame tokens must remain ready");
+
+        // The current frame is the bottommost valid suffix. Both
+        // orderings prove stale frame state cannot control readiness.
+        let eval = prompt_readiness_matches(
+            Path::new("(test)"),
+            "(test)",
+            older_composing_current_idle,
+            Some(&multi_frame_matcher),
+        )
+        .expect("older composing/current idle eval");
+        assert!(
+            eval.ready,
+            "current idle frame must override older composing frame"
+        );
+        let eval = prompt_readiness_matches(
+            Path::new("(test)"),
+            "(test)",
+            older_idle_current_composing,
+            Some(&multi_frame_matcher),
+        )
+        .expect("older idle/current composing eval");
+        assert!(
+            !eval.ready,
+            "current composing frame must override older idle frame"
         );
 
         // ---- teeth-check: with the compose-gate call removed from

@@ -16,19 +16,17 @@
 //!    the status row so the version is recognised as Opencode.
 //! 2. **Code-side compose-region check** (`compose_region_has_text`
 //!    in `src/tmux/quiescence_probe.rs`, called from
-//!    `prompt_readiness_matches`): walks `input_box_rows` rows
+//!    `prompt_readiness_matches`): walks the three rows
 //!    immediately preceding the info row and rejects compose text
 //!    (`┃` + 2-99 leading whitespace + non-whitespace) in any of
 //!    them. Closed the top/middle-row compose gap that the regex's
 //!    `(?m)^`-anchored shape cannot express on its own (Rust's
 //!    stable `regex` crate has no look-around; "every row of a
 //!    variable-height box is empty" is not expressible as a single
-//!    unanchored regex). Gated on `prompt-compose-region-check = true`
-//!    in the OpenCode coder config so other coders' readiness
-//!    evaluations are unchanged. Tested via the production path in
-//!    `tests/unit/tmux_transport.rs` (with teeth-check via
-//!    `prompt_readiness_matches`); this file only tests the regex in
-//!    isolation.
+//!    unanchored regex). The check is internally gated on the adjacent
+//!    OpenCode frame suffix so other coders' readiness evaluations are
+//!    unchanged. The production-path test lives inline beside the
+//!    private helper; this file only tests the regex in isolation.
 //!
 //! The cursor-column check (`prompt-idle-column`) is wired alongside
 //! both in `prompt_readiness_matches`; it remains the only universal
@@ -65,9 +63,9 @@ const COLD_START: &str = "\
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
    /Users/me/src/WORKTREES/agentmux/pty                            133.6K (13%) · $0.27 ctrl+p commands    • OpenCode 1.18.4";
 
-// Measured sidebar run is 148 spaces (`agentmux:artifacts/10`). The
-// synthetic fixture uses 150 spaces; the threshold-100 code-side
-// check classifies it as sidebar-only (well above 100).
+// The measured api-aux idle capture has a 148-space sidebar run. The
+// synthetic fixture uses 150 spaces; the threshold-100 code-side check
+// classifies it as sidebar-only (well above 100).
 const API_AUX_SIDEBAR_WRAP: &str = "\
   ┃
   ┃
@@ -88,8 +86,8 @@ const AGENT_JUST_RESPONDED: &str = "\
 
 // Composing cases: text in input box. The regex matches the frame
 // structure; the production-path code-side compose-region check
-// rejects these. The compose check is tested through
-// `prompt_readiness_matches` in `tests/unit/tmux_transport.rs`.
+// rejects these. The compose check is tested through the inline
+// production-path test in `src/tmux/quiescence_probe.rs`.
 const COMPOSING: &str = "\
   ┃
   ┃
@@ -188,9 +186,8 @@ fn opencode_prompt_regex_classifies_states() {
     // because the regex does not (and cannot, in a single Rust
     // `regex` pattern without look-around) inspect every row above
     // the info row for compose text. The compose-region rejection
-    // lives in `prompt_readiness_matches`; the production-path
-    // test in `tests/unit/tmux_transport.rs` exercises that check
-    // directly.
+    // lives in `prompt_readiness_matches`; its inline production-path
+    // test exercises that check directly.
     let cases: &[(&str, &str, bool)] = &[
         ("idle_editor", IDLE_EDITOR, true),
         ("idle_acp", IDLE_ACP, true),
