@@ -219,11 +219,14 @@ flush group SHALL NOT resolve as `Timeout AND Failed`).
 - **WHEN** a Tmux pane is quiescent with the prompt frame absent, for any reason
   — a hung coder, a permission dialog awaiting an operator, a compose box
   holding typed input, or a coder working without terminal output
-- **THEN** the Tmux transport issues no terminal failure on that basis
-- **AND** the flush group remains pending until the target becomes ready, the
-  prime timeout fires if enabled, or the readiness bound elapses
+- **THEN** the Tmux transport issues no terminal outcome on that basis
+- **AND** the flush group remains pending until the target becomes ready or the
+  readiness bound elapses
+- **AND** an elapsed prime timeout does not resolve the group either: the prime
+  window measures absence of observable output, and a settled frame is output
 - **BECAUSE** the four cases are indistinguishable from the inspected tail, so
-  classifying any of them as failed misreports three of them
+  classifying any of them as failed misreports three of them, and resolving them
+  on the prime timeout instead would draw the same inference under another name
 
 #### Scenario: Absent Tmux prime timeout suppresses the prime verdict, not the bound
 

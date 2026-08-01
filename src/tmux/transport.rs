@@ -793,9 +793,25 @@ fn wait_error_to_outcome(
             )),
             details: None,
         },
-        DeliveryWaitError::Wedged { .. } => unreachable!(
-            "tmux passes wedge_detection: false, so the shared classifier never returns Wedged"
-        ),
+        // Tmux passes `wedge_detection: false`, so the shared classifier cannot
+        // return this. It is mapped rather than asserted because this runs inside
+        // a tokio delivery task: a panic here would be isolated to that task and
+        // swallowed, leaving the sender with no outcome at all and the process
+        // reporting success. A structured failure is strictly more observable
+        // than an invariant assertion that nothing can hear. The reason code is
+        // the generic unavailable one — `pane_wedged` is deliberately not
+        // resurrected for Tmux.
+        DeliveryWaitError::Wedged { reason } => SingleDeliveryOutcome {
+            target_session: target_session.to_string(),
+            message_id: message_id.to_string(),
+            outcome: SendOutcome::Failed,
+            reason_code: Some(TMUX_TARGET_UNAVAILABLE_CODE.to_string()),
+            reason: Some(format!(
+                "tmux classifier returned a wedge verdict it cannot produce \
+                 (wedge detection is off for tmux): {reason}"
+            )),
+            details: None,
+        },
         DeliveryWaitError::Failed { reason } => SingleDeliveryOutcome {
             target_session: target_session.to_string(),
             message_id: message_id.to_string(),

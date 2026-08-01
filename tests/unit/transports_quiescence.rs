@@ -795,6 +795,114 @@ fn no_scheduled_wait_outlives_the_readiness_bound() {
     }
 }
 
+/// AuxBE `reviews/relay/13` finding 2 — removing wedge detection must not widen
+/// the prime timeout's scope.
+///
+/// The prime timeout answers "the target never produced observable output". A
+/// settled wedge-class frame is a target that *answered* — a permission dialog,
+/// a compose box — and used to be intercepted by the wedge branch before it
+/// could reach the prime branch. With wedge detection off for Tmux that
+/// interception is gone, so a settled dialog would fall through and terminate on
+/// the prime timeout: the same inference from absence the wedge classifier was
+/// removed for making, wearing a different reason code.
+///
+/// Both halves are asserted together, because the fix is a narrowing and a test
+/// that only proves the narrowing would also pass if the prime timeout were
+/// disabled outright.
+#[test]
+fn an_elapsed_prime_timeout_spares_a_settled_frame_but_not_a_silent_target() {
+    // Prime elapsed 60s ago; the readiness bound is still live.
+    let bounds = QuiescenceBounds {
+        quiet_window: TEST_QUIET_WINDOW,
+        started_at: Instant::now() - Duration::from_secs(120),
+        prime_deadline: Some(Instant::now() - Duration::from_secs(60)),
+        prime_timeout_ms: Some(60_000),
+        readiness_deadline: Some(Instant::now() + Duration::from_secs(600)),
+    };
+
+    // A settled permission dialog: non-empty tail, regex did not match.
+    let dialog = readiness_observation(7, "Do you want to allow this? (y/n)", Some(false));
+    let mut probe = MockProbe::new(dialog.clone(), dialog);
+    let mut state = QuiescenceState::new();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &bounds,
+        false,
+    );
+    assert!(
+        matches!(result, QuiescenceAction::NeedsWait(_)),
+        "an elapsed prime timeout must not adjudicate a settled frame; got {result:?}",
+    );
+
+    // A target that produced nothing at all is what the prime timeout is for.
+    let silent = make_observation(7, false);
+    let mut probe = MockProbe::new(silent.clone(), silent);
+    let mut state = QuiescenceState::new();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &bounds,
+        false,
+    );
+    assert!(
+        matches!(
+            result,
+            QuiescenceAction::Done(Err(DeliveryWaitError::Timeout { .. }))
+        ),
+        "the prime timeout must still fire for a target with no observable output; got {result:?}",
+    );
+}
+
+/// AuxBE `reviews/relay/13` finding 1 — the bound must not overshoot by a full
+/// quiet window.
+///
+/// Capping the `NeedsWait` deadlines makes the wrapper wake at the bound, but
+/// the classifier then observes, sleeps a quiet window, observes, and only then
+/// evaluates the bound. An uncapped sleep therefore reports expiry a whole
+/// window late and opens a post-deadline interval in which a target that was
+/// not ready at the bound can still deliver.
+///
+/// The quiet window here (2s) is far longer than any real one so the overshoot
+/// would be unmistakable; the assertion allows an order of magnitude of
+/// scheduling slack and still fails against the unshortened sleep.
+#[test]
+fn an_elapsed_bound_is_not_slept_past() {
+    let observation = readiness_observation(7, "a dialog", Some(false));
+    let mut probe = MockProbe::new(observation.clone(), observation);
+    let mut state = QuiescenceState::new();
+    let bounds = QuiescenceBounds {
+        quiet_window: Duration::from_secs(2),
+        started_at: Instant::now() - Duration::from_secs(120),
+        prime_deadline: None,
+        prime_timeout_ms: None,
+        readiness_deadline: Some(Instant::now() - Duration::from_secs(60)),
+    };
+    let entered_at = Instant::now();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &bounds,
+        false,
+    );
+    let spent = entered_at.elapsed();
+    assert!(
+        matches!(
+            result,
+            QuiescenceAction::Done(Err(DeliveryWaitError::ReadinessTimeout { .. }))
+        ),
+        "expected the elapsed bound to resolve, got {result:?}",
+    );
+    assert!(
+        spent < Duration::from_millis(500),
+        "an iteration entered past the bound must not sleep another quiet window; \
+         spent {spent:?} of a 2s window",
+    );
+}
+
 /// Task 4.5 — a settled Tmux target whose readiness frame is absent must
 /// produce no terminal outcome until the bound elapses, whatever the target
 /// shows. This is the whole point of dropping wedge detection from Tmux: the

@@ -158,20 +158,36 @@ that case is not covered by this requirement and is tracked as
 - **AND** records a `delivery_prime_timeout` inscription in relay
   diagnostics
 
-#### Scenario: Prime timeout does not bound the post-quiescence wait
+#### Scenario: Prime timeout does not bound a settled non-matching frame
 
 - **WHEN** the target pane output becomes quiescent
-- **AND** the prompt-readiness template does not match
+- **AND** the prompt-readiness template's frame does not match the inspected tail
 - **THEN** the transport SHALL NOT classify the flush group as `Timeout` solely
   on the basis of `prime_timeout_ms` elapsing
 - **AND** the wait remains bounded by the readiness bound
+- **BECAUSE** the prime window measures absence of observable output, and a
+  settled frame is output; resolving it on the prime timeout would draw the same
+  inference from absence that removing wedge detection eliminated
+
+#### Scenario: Prime timeout still bounds a target that produces no output
+
+- **WHEN** a finite prime timeout is configured
+- **AND** the target produces no observable output within the prime window
+- **THEN** the transport SHALL classify the flush group as `Timeout`
+- **BECAUSE** narrowing the prime timeout away from settled frames does not
+  retire it; a target that never answered at all is what it exists to bound
 
 #### Scenario: Prime timeout takes precedence when both bounds elapse together
 
 - **WHEN** a finite prime timeout and the readiness bound have both elapsed in
   the same classification iteration
+- **AND** the prime timeout's own predicate is satisfied for that iteration —
+  the target has produced no observable output and is not sitting in a settled
+  non-matching frame
 - **THEN** the flush group resolves with the prime-timeout outcome and reason
 - **AND** the readiness reason is not reported for the same group
+- **BECAUSE** precedence orders the outcomes that are *available*; a bound whose
+  predicate does not hold is not an available outcome to rank
 
 #### Scenario: Map Tmux prime timeout to transport envelope field
 

@@ -469,6 +469,32 @@ impl QuiescenceBounds {
             None => deadline,
         }
     }
+
+    /// The quiet period to sleep between an iteration's two observations,
+    /// shortened so the pair cannot run past the readiness bound.
+    ///
+    /// Capping the `NeedsWait` deadlines alone is not enough to make the bound
+    /// hard. The wrapper wakes at the deadline, then re-enters the classifier,
+    /// which observes, sleeps, observes, and only then evaluates the bound — so
+    /// an uncapped sleep reports expiry a full quiet window late and opens a
+    /// post-deadline interval in which a target that was not ready at the
+    /// deadline can still deliver. The window is the wait's own sampling
+    /// interval, and an operator may set it per send, so the overshoot is not
+    /// negligible by construction.
+    ///
+    /// The final iteration's pair is therefore sampled over a shorter interval
+    /// than the ones before it. That can only make the expiry's *reason* less
+    /// specific — an activity advance is less likely to be caught in a shorter
+    /// window — and the reason is diagnostic. The outcome is unaffected: every
+    /// arm resolves the same way, and a prompt-ready second observation still
+    /// outranks the elapsed bound and delivers.
+    #[must_use]
+    fn sleep_window(&self, now: Instant) -> Duration {
+        match self.readiness_deadline {
+            Some(bound) => self.quiet_window.min(bound.saturating_duration_since(now)),
+            None => self.quiet_window,
+        }
+    }
 }
 
 /// Outcome of a single [`quiescence_classify_step`] call. The state
@@ -549,7 +575,7 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
         Err(reason) => return QuiescenceAction::Done(Err(DeliveryWaitError::Failed { reason })),
     };
 
-    thread::sleep(bounds.quiet_window);
+    thread::sleep(bounds.sleep_window(Instant::now()));
     if shutdown_requested() {
         return QuiescenceAction::Done(Err(DeliveryWaitError::Shutdown));
     }
@@ -705,16 +731,30 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
         }
     }
 
-    // Prime timeout check: hard bound on the total wait. Fires
-    // `Timeout` when the prime window has elapsed AND the pane is
-    // NOT showing wedge-class content. Wedge-class content takes
-    // the wedge branch above; the pane is stuck, not unresponsive.
+    // Prime timeout check. Fires `Timeout` when the prime window has elapsed
+    // AND the target is not sitting in a settled wedge-class frame.
+    //
+    // The exclusion used to be implicit: wedge-class content returned from the
+    // wedge branch above before reaching here. With wedge detection off for
+    // Tmux that branch no longer intercepts, so the exclusion is stated
+    // directly. Without it, removing wedge detection would have silently
+    // widened the prime timeout's scope from "the target never produced
+    // observable output" to "the target is not ready" — which is the same
+    // inference from absence that the wedge classifier was removed for making,
+    // just wearing the prime timeout's reason code. A settled permission
+    // dialog is a target that answered; only the readiness bound may end that
+    // wait.
+    //
+    // The condition is a no-op for Pty, which still enables wedge detection:
+    // any observation reaching here with `quiescent && wedge_class` and an
+    // elapsed prime deadline already returned `Wedged` above.
     //
     // Checked before the readiness bound: when both have elapsed in the same
     // iteration the prime timeout wins, as the more specific diagnosis (no
     // observable output at all) and the one an operator opted into.
     if let Some(deadline) = bounds.prime_deadline
         && now >= deadline
+        && !(quiescent && wedge_class)
     {
         let timeout_ms = bounds.prime_timeout_ms.unwrap_or(0);
         let timeout = Duration::from_millis(timeout_ms);

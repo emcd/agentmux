@@ -136,8 +136,17 @@ each remain terminal — but it is the only one guaranteed to arrive.
   `input_idle_cursor_column`
 - **THEN** relay does not inject the message
 - **AND** on Tmux, relay continues waiting until the target becomes prompt-ready,
-  the readiness bound elapses, or relay shuts down
-- **AND** no terminal failure is issued on account of the pending input
+  the readiness bound elapses, an enabled prime timeout elapses, or relay shuts
+  down
+- **AND** no terminal *failure* is issued on account of the pending input
+
+> A cursor mismatch is not a frame mismatch, so the narrowing that keeps an
+> elapsed prime timeout from adjudicating a settled non-matching frame does not
+> reach this case: a pane whose frame matches while the operator is mid-keystroke
+> still resolves on an enabled prime timeout. Whether it should is a live
+> question — the same "a target that answered is not a silent target" argument
+> applies — but narrowing it would change Pty, which this change holds fixed.
+> Carried to `agentmux:issues/relay/61` with the rest of the Pty bound work.
 
 #### Scenario: Do not inject into a pane awaiting an operator decision
 
@@ -152,7 +161,7 @@ each remain terminal — but it is the only one guaranteed to arrive.
 - **BECAUSE** a pane blocked on a human decision is neither ready nor failed, and
   the inspected tail cannot distinguish it from one that is
 
-#### Scenario: Time out when quiescent pane never becomes prompt-ready
+#### Scenario: Time out when pane output never begins flowing
 
 - **WHEN** target member has a prompt-readiness template
 - **AND** `[coders.<id>.{tmux,pty}].prime-timeout-ms` is set to a

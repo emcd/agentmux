@@ -102,8 +102,10 @@ keys govern that wait, and they answer different questions.
 
 - `[coders.tmux].prime-timeout-ms` — optional, off by default. Bounds
   only the *prime* window: how long a silent target may stay silent
-  before the delivery gives up. Any output from the target resets what
-  it measures, so a target that keeps printing never trips it.
+  before the delivery gives up. It is measured from the moment the
+  delivery starts waiting and is never reset — output from the target
+  defers the verdict for as long as the output keeps arriving, but the
+  clock does not restart.
 - `[coders.tmux].readiness-timeout-ms` — always in effect, default
   `900000` (15 minutes), accepted range `30000`–`3600000`. Bounds the
   wait *as a whole*, anchored when the delivery starts waiting. Nothing
