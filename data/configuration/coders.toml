@@ -37,7 +37,7 @@ id = 'opencode'
 [coders.tmux]
 initial-command = 'opencode'
 resume-command = 'opencode --session {coder-session-id}'
-prompt-regex = '(?m)^.*┃.*\n\s*╹▀{20,}\s*\n\s+.*\bctrl\+p commands(?:\s+•\s+OpenCode\s+[\d.]+\s*)?\s*$'
+prompt-regex = '(?m)^(?:\s*┃\s*$|\s*┃[ \t]{30,}\S[^\n]*)\n{1,3}\s*┃\s+Build · [^\n]*\n\s*╹▀{20,}\s*\n\s+.*\bctrl\+p commands(?:\s+•\s+OpenCode\s+[\d.]+\s*)?\s*$'
 prompt-inspect-lines = 10
 prompt-idle-column = 5
 
