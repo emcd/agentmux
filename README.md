@@ -213,8 +213,10 @@ Delivery behavior:
   `[coders.<id>.acp]` (`prime-timeout-ms`); v1 has no per-call
   operator override.
 - Tmux delivery bounds are configured per-coder under
-  `[coders.<id>.tmux]` (`prime-timeout-ms`, `wedge-detection`); v1
-  has no per-call operator override.
+  `[coders.<id>.tmux]` (`prime-timeout-ms`, `readiness-timeout-ms`);
+  v1 has no per-call operator override. `readiness-timeout-ms` bounds
+  the whole wait and always applies; `prime-timeout-ms` is opt-in.
+  Tmux has no `wedge-detection` key.
 - Pty sessions use the same look bounds as Tmux (the relay truncates
   to `mode.lines` rows). Pty delivery bounds are configured per-coder
   under `[coders.<id>.pty]` (`prime-timeout-ms`, `wedge-detection`,

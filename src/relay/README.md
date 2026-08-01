@@ -512,8 +512,13 @@ exported from `src/relay/mod.rs`.
 - Chat delivery is async-only; `delivery_mode` is no longer part of the relay
   send API. With the field removed, an internally tagged request silently
   ignores it like any other unrecognised field.
-- Delivery is unbounded by design — bounded only by relay lifetime via
-  shutdown — so the send API carries no caller-supplied delivery timeout.
+- The send API carries no caller-supplied delivery timeout. Bounds are
+  per-coder configuration, not per-request: a Tmux delivery's whole wait is
+  bounded by `[coders.<id>.tmux].readiness-timeout-ms`, mirrored onto
+  `DeliveryEnvelope::readiness_timeout_ms`. ACP and Pty deliveries remain
+  bounded only by an opt-in prime timeout and by relay lifetime via shutdown —
+  they commit the message before their readiness wait, so an expired bound
+  there is not reportable as non-delivery (`agentmux:issues/relay/61`).
 - Pre-hello idle sockets are reaped in host connection workers to prevent
   starvation (`AGENTMUX_RELAY_PRE_HELLO_IDLE_TIMEOUT_MS` override).
 - Each connection owns a per-connection writer task (mpsc + tokio write half)

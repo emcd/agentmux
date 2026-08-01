@@ -46,17 +46,16 @@ fn relay_send_async_delivers_terminal_outcome_receipt_to_coder_sender() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
     // Two coders: `responsive` has no prompt gate, so it delivers to a quiet pane
-    // (used to prime alpha's worker). `wedging` gates delivery on a prompt regex
-    // that never appears in its quiet pane and bounds the wait with a prime
-    // timeout, so a send to it resolves to a non-delivered terminal outcome
-    // (Timeout, or Wedged first) rather than waiting unbounded.
+    // (used to prime alpha's worker). `unresponsive` gates delivery on a prompt
+    // regex that never appears in its quiet pane and bounds the wait with a prime
+    // timeout, so a send to it resolves as `Timeout` rather than waiting unbounded.
     let coders = vec![
         CoderSpec::sleeping("responsive"),
         CoderSpec {
             prompt_regex: Some("READY_PROMPT_THAT_NEVER_APPEARS>".to_string()),
             prompt_inspect_lines: Some(3),
             prime_timeout_ms: Some(300),
-            ..CoderSpec::sleeping("wedging")
+            ..CoderSpec::sleeping("unresponsive")
         },
     ];
     let sessions = vec![
@@ -71,7 +70,7 @@ fn relay_send_async_delivers_terminal_outcome_receipt_to_coder_sender() {
             id: "bravo".to_string(),
             name: Some("bravo".to_string()),
             directory: PathBuf::from("/tmp"),
-            coder: "wedging".to_string(),
+            coder: "unresponsive".to_string(),
             coder_session_id: None,
         },
     ];
@@ -157,6 +156,15 @@ fn relay_send_async_delivers_terminal_outcome_receipt_to_coder_sender() {
     assert!(
         flattened.contains(&queued_message_id),
         "receipt should name the queued message id, snapshot={snapshot:?}"
+    );
+    // The receipt carries the terminal outcome's machine-readable reason code, not
+    // just prose. Every bounded Tmux non-delivery — this prime timeout and the
+    // readiness bound alike — resolves as `Timeout` with a reason code and reaches
+    // the sender through this one render path, so asserting the code here covers
+    // the readiness expiry's route to the sender as well.
+    assert!(
+        flattened.contains("reason_code=delivery_prime_timeout"),
+        "receipt should carry the terminal outcome's reason code, snapshot={snapshot:?}"
     );
 
     let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);

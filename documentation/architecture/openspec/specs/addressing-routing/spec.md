@@ -68,11 +68,15 @@ Descriptor fields SHALL be:
   - optional `prompt-regex`
   - optional `prompt-inspect-lines`
   - optional `prompt-idle-column`
+  - optional `prime-timeout-ms`
+  - optional `readiness-timeout-ms` (default `900_000`, range
+    `30_000..=3_600_000`)
 - `[coders.acp]`:
   - required `channel` (`stdio` | `http`)
   - for `channel = "stdio"`: required `command`
   - for `channel = "http"`: required `url`; optional `headers` entries
     (`name`, `value`)
+  - optional `prime-timeout-ms`
 - `[coders.pty]` (new in `add-pty-transport`):
   - required `initial-command`
   - required `resume-command`
@@ -82,6 +86,22 @@ Descriptor fields SHALL be:
   - optional `cols` (default 120) and `rows` (default 40)
   - optional `prime-timeout-ms`
   - optional `wedge-detection` (default `true`)
+  - optional `term-protocol` (default `xterm-256color`)
+
+This enumeration is authoritative for what an operator may write, so it SHALL be
+kept complete as descriptor keys are added, and SHALL be reconciled against the
+loader rather than extended only with the key a change happens to introduce.
+
+Reconciling it here found four keys the loader has accepted while this list
+omitted them: `prime-timeout-ms` and `wedge-detection` under `[coders.tmux]`
+since `tmux-wedge-detection`, `prime-timeout-ms` under `[coders.acp]`, and
+`term-protocol` under `[coders.pty]`. Three are restored; `wedge-detection` is
+not, because this change removes the Tmux wedge classifier and its knob with it.
+That four keys accumulated undetected is the reason the reconciliation duty is
+stated rather than assumed.
+
+`wedge-detection` remains listed under `[coders.pty]`, which retains its
+classifier until `agentmux:issues/relay/61` supplies a Pty readiness bound.
 
 ACP lifecycle selection constraints:
 
@@ -133,6 +153,13 @@ Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
 - **AND** the session is routed via the Pty transport
 - **AND** the Pty transport spawns the child under a portable-pty master
   sized to the per-coder `cols` and `rows` (defaults 120 x 40)
+
+#### Scenario: Accept a Tmux coder declaring a readiness timeout
+
+- **WHEN** a `[[coders]]` entry defines `[coders.tmux]` with
+  `readiness-timeout-ms` set to a value within the permitted range
+- **THEN** the system loads configuration successfully
+- **AND** the value governs the readiness bound for that coder's Tmux deliveries
 
 #### Scenario: Reject session with neither coder nor marker
 

@@ -213,8 +213,10 @@ opting in, the relay stopping, a probe erroring), and the bound is what
 guarantees that one of them arrives.
 
 The reason attached to a timeout is diagnostic only — every arm below is the same
-outcome, and the distinction exists so an operator can tell a short bound from a
-stuck target, not so the transport can decide differently:
+outcome. The distinction records *which observation the wait ended on*, so an
+operator has something to calibrate the bound against; it does not report why the
+target was in that state, which the transport cannot determine. It exists to be
+read, not so the transport can decide differently:
 
 | Most recent observation at expiry | `reason_code` |
 |---|---|
@@ -259,8 +261,11 @@ classification, as the existing requirement demands.
 - **A long agent turn fails a delivery that would have succeeded** → The
   substantive risk, and why the default is 15 minutes rather than something
   tighter. Mitigated by the per-coder key, by a lower range bound that prevents
-  configuring below one turn, and by `target_never_settled` naming the cause so
-  an operator can distinguish a short bound from a stuck target. On Tmux the
+  configuring below one turn, and by `target_never_settled` naming the state the
+  wait ended on — which is calibration input, not a diagnosis. It says the
+  target was still producing output when the bound arrived; whether that was a
+  turn needing more time or a target that will never finish is exactly what the
+  transport cannot determine, and the reason code does not claim to. On Tmux the
   failure is non-destructive — injection had not happened, so the sender learns
   the message did not land and can resend. That is what makes a generous bound
   affordable, and it is a Tmux-specific property, not a general one.

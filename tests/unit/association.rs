@@ -36,7 +36,8 @@ fn bundle_with_sessions(sessions: &[&str]) -> BundleConfiguration {
                         start_command: "sh -lc 'true'".to_string(),
                         prompt_readiness: None,
                         prime_timeout_ms: None,
-                        wedge_detection: true,
+                        readiness_timeout_ms:
+                            agentmux::configuration::TMUX_READINESS_TIMEOUT_MS_DEFAULT,
                     },
                 ),
                 coder_session_id: None,
@@ -67,7 +68,8 @@ fn bundle_with_directories(
                             start_command: "sh -lc 'true'".to_string(),
                             prompt_readiness: None,
                             prime_timeout_ms: None,
-                            wedge_detection: true,
+                            readiness_timeout_ms:
+                                agentmux::configuration::TMUX_READINESS_TIMEOUT_MS_DEFAULT,
                         },
                     ),
                     coder_session_id: None,

@@ -29,7 +29,7 @@ use agentmux::pty::{
 };
 use agentmux::transports::{
     DeliveryDiagnosticContext, DeliveryWaitError, LookMode, LookSnapshotPayload, OutputView,
-    WedgeProbe, wait_for_quiescent_three_state,
+    QuiescenceBounds, WedgeProbe, wait_for_quiescent_three_state,
 };
 use regex::Regex;
 use tokio::sync::mpsc;
@@ -168,13 +168,19 @@ fn make_pty_shared(
 
 /// Build `(prime_deadline, prime_started_at, prime_timeout_ms)` the
 /// state machine expects.
-fn prime_window(timeout_ms: Option<u64>) -> (Option<Instant>, Instant, Option<u64>) {
-    let now = Instant::now();
-    (
-        timeout_ms.map(|ms| now + Duration::from_millis(ms)),
-        now,
-        timeout_ms,
-    )
+/// Bounds for one Pty flush group, anchored now.
+///
+/// `readiness_timeout_ms` is always `None`: Pty carries no readiness bound,
+/// because it writes to the pty master before its readiness wait and so cannot
+/// report an expiry as non-delivery. Passing one here would test a
+/// configuration the relay never constructs for a Pty target.
+///
+/// This returns the bounds struct rather than a tuple of parts. The tuple form
+/// sampled `Instant::now()` once per field access at the call sites
+/// (`prime_window(x).0`, `.1`, `.2` were three separate calls), so a group's
+/// deadline and its anchor came from different instants.
+fn prime_window(timeout_ms: Option<u64>) -> QuiescenceBounds {
+    QuiescenceBounds::new(SHORT_QUIET_WINDOW, Instant::now(), timeout_ms, None)
 }
 
 // ---------------------------------------------------------------------------
@@ -195,10 +201,7 @@ fn always_unresponsive_probe_resolves_timeout() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(30)).0,
-        prime_window(Some(30)).1,
-        prime_window(Some(30)).2,
+        &prime_window(Some(30)),
         false,
     );
     assert!(
@@ -221,10 +224,7 @@ fn always_wedge_probe_resolves_wedged() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
+        &prime_window(Some(10_000)),
         true,
     );
     assert!(
@@ -255,10 +255,7 @@ fn cursor_mismatch_preserves_its_reason_in_wedged_outcome() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
+        &prime_window(Some(10_000)),
         true,
     );
     match result {
@@ -291,10 +288,7 @@ fn cursor_mismatch_preserves_its_reason_in_timeout_outcome() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10)).0,
-        prime_window(Some(10)).1,
-        prime_window(Some(10)).2,
+        &prime_window(Some(10)),
         false,
     );
     match result {
@@ -331,10 +325,7 @@ fn slow_prompt_probe_resolves_delivered() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
+        &prime_window(Some(10_000)),
         true,
     );
     assert!(result.is_ok(), "expected Ok, got {result:?}");
@@ -358,10 +349,7 @@ fn normal_flow_probe_resolves_delivered() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
+        &prime_window(Some(10_000)),
         true,
     );
     assert!(result.is_ok(), "expected Ok, got {result:?}");
@@ -393,10 +381,7 @@ fn coalesce_during_wedge_counter_does_not_fire_on_changing_signatures() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
+        &prime_window(Some(10_000)),
         true,
     );
     eprintln!("slow_prompt result: {result:?}");
@@ -422,10 +407,7 @@ fn coalesce_during_wedge_counter_fires_after_consecutive_identical_signatures() 
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
+        &prime_window(Some(10_000)),
         true,
     );
     assert!(
@@ -462,10 +444,7 @@ fn coalesce_during_prime_does_not_extend_window() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(50)).0,
-        prime_window(Some(50)).1,
-        prime_window(Some(50)).2,
+        &prime_window(Some(50)),
         true,
     );
     let elapsed = started.elapsed();
@@ -506,10 +485,7 @@ fn wedge_default_on_fires_after_consecutive_identical_mismatches() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
+        &prime_window(Some(10_000)),
         true,
     );
     assert!(
@@ -541,10 +517,7 @@ fn wedge_disabled_does_not_fire_wedged_within_short_window() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(200)).0,
-        prime_window(Some(200)).1,
-        prime_window(Some(200)).2,
+        &prime_window(Some(200)),
         false,
     );
     assert!(
@@ -573,16 +546,9 @@ fn prime_timeout_default_off_does_not_fire() {
     );
     let mut probe = PtyQuiescenceProbe::new(shared);
     let started = Instant::now();
+    let bounds = QuiescenceBounds::new(SHORT_QUIET_WINDOW, started, None, None);
     let join = thread::spawn(move || {
-        wait_for_quiescent_three_state(
-            &mut probe,
-            &diagnostic_context(),
-            SHORT_QUIET_WINDOW,
-            None,
-            started,
-            None,
-            true,
-        )
+        wait_for_quiescent_three_state(&mut probe, &diagnostic_context(), &bounds, true)
     });
     thread::sleep(Duration::from_millis(100));
     assert!(
@@ -611,10 +577,7 @@ fn prime_timeout_opt_in_fires_after_window() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10)).0,
-        prime_window(Some(10)).1,
-        prime_window(Some(10)).2,
+        &prime_window(Some(10)),
         true,
     );
     assert!(
@@ -641,10 +604,7 @@ fn short_prime_timeout_does_not_preempt_wedge_for_wedge_class_mismatch() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10)).0,
-        prime_window(Some(10)).1,
-        prime_window(Some(10)).2,
+        &prime_window(Some(10)),
         true,
     );
     assert!(
@@ -683,10 +643,7 @@ fn wedge_disabled_with_prime_timeout_bounds_every_quiescent_state() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(50)).0,
-        prime_window(Some(50)).1,
-        prime_window(Some(50)).2,
+        &prime_window(Some(50)),
         false,
     );
     let elapsed = started.elapsed();
@@ -1227,6 +1184,7 @@ fn pty_transport_mailw_during_raww_wait_is_not_dropped() {
         choice_decider_sessions: Vec::new(),
         quiet_window: Duration::from_millis(50),
         prime_timeout_ms: Some(2000),
+        readiness_timeout_ms: None,
         is_receipt: false,
     };
     let mailw_outcome = transport.mailw(envelope);
@@ -1845,10 +1803,7 @@ fn pty_constant_activity_fires_wedged_as_before() {
     let result = wait_for_quiescent_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
+        &prime_window(Some(10_000)),
         true,
     );
     assert!(
@@ -2425,6 +2380,7 @@ fn pty_transport_wedge_publishes_unavailable_via_mirror() {
         choice_decider_sessions: Vec::new(),
         quiet_window: Duration::from_millis(50),
         prime_timeout_ms: Some(2000),
+        readiness_timeout_ms: None,
         is_receipt: false,
     };
 
@@ -2667,6 +2623,7 @@ fn pty_transport_start_envelope_group_emits_receipt_marker_for_receipt_only() {
             choice_decider_sessions: Vec::new(),
             quiet_window: Duration::from_millis(50),
             prime_timeout_ms: None,
+            readiness_timeout_ms: None,
             is_receipt,
         }
     }

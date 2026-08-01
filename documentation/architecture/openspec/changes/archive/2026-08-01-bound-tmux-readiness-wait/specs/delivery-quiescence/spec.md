@@ -158,20 +158,36 @@ that case is not covered by this requirement and is tracked as
 - **AND** records a `delivery_prime_timeout` inscription in relay
   diagnostics
 
-#### Scenario: Prime timeout does not bound the post-quiescence wait
+#### Scenario: Prime timeout does not bound a settled non-matching frame
 
 - **WHEN** the target pane output becomes quiescent
-- **AND** the prompt-readiness template does not match
+- **AND** the prompt-readiness template's frame does not match the inspected tail
 - **THEN** the transport SHALL NOT classify the flush group as `Timeout` solely
   on the basis of `prime_timeout_ms` elapsing
 - **AND** the wait remains bounded by the readiness bound
+- **BECAUSE** the prime window measures absence of observable output, and a
+  settled frame is output; resolving it on the prime timeout would draw the same
+  inference from absence that removing wedge detection eliminated
+
+#### Scenario: Prime timeout still bounds a target that produces no output
+
+- **WHEN** a finite prime timeout is configured
+- **AND** the target produces no observable output within the prime window
+- **THEN** the transport SHALL classify the flush group as `Timeout`
+- **BECAUSE** narrowing the prime timeout away from settled frames does not
+  retire it; a target that never answered at all is what it exists to bound
 
 #### Scenario: Prime timeout takes precedence when both bounds elapse together
 
 - **WHEN** a finite prime timeout and the readiness bound have both elapsed in
   the same classification iteration
+- **AND** the prime timeout's own predicate is satisfied for that iteration —
+  the target has produced no observable output and is not sitting in a settled
+  non-matching frame
 - **THEN** the flush group resolves with the prime-timeout outcome and reason
 - **AND** the readiness reason is not reported for the same group
+- **BECAUSE** precedence orders the outcomes that are *available*; a bound whose
+  predicate does not hold is not an available outcome to rank
 
 #### Scenario: Map Tmux prime timeout to transport envelope field
 
@@ -261,6 +277,101 @@ that case is not covered by this requirement and is tracked as
 - **AND** the most recent observation shows an absent prompt frame
 - **THEN** the flush group resolves as `Timeout` with
   `reason_code = "target_not_ready"`
+
+### Requirement: Asynchronous Terminal-Outcome Receipt
+
+When a queued message resolves to a non-delivered terminal outcome, relay SHALL
+deliver a terminal-outcome receipt back to the original sender, out of band from
+the accept-time response. The receipt SHALL be a relay-originated envelope
+addressed to the sender and delivered through the sender's own transport via the
+existing delivery pipeline, the same way any message reaches that session (a
+Tmux pane, an ACP turn, a Pty write, or a UI stream frame). The receipt SHALL
+carry the original `message_id`, the delivery target, the terminal outcome, and
+any `reason_code`, so the sender can correlate it to the `queued` result it
+received at accept time.
+
+Receipts SHALL be delivered for non-delivered terminal outcomes only: `failed`
+(including `reason_code = "pane_wedged"`), `timeout`, and `dropped_on_shutdown`.
+A `delivered` outcome SHALL NOT produce a receipt; it is recorded per Async
+Delivery Observability only.
+
+A terminal-outcome receipt SHALL be relay/system-originated and SHALL NOT be
+attributed to a peer principal, so a recipient can distinguish it from inbound
+peer traffic.
+
+A terminal-outcome receipt is itself a delivery and SHALL NOT produce a receipt
+of its own; receipts are non-recursive. A receipt's own terminal outcome SHALL be
+recorded per Async Delivery Observability and go no further.
+
+Receipt delivery SHALL be best-effort. If the sender session is not routable at
+terminal-resolution time, relay SHALL drop the receipt. Relay SHALL NOT persist,
+queue indefinitely, or retry a dropped receipt; deferred delivery is out of
+scope. The underlying terminal outcome SHALL still be recorded per Async Delivery
+Observability regardless of whether the receipt is delivered.
+
+`queued` SHALL denote async acceptance for delivery only. Relay SHALL NOT present
+`queued` as a terminal `delivered`/success outcome, and the terminal outcome
+SHALL be the authoritative result for a queued message.
+
+#### Scenario: Deliver a non-delivered outcome receipt through the sender's transport
+
+- **WHEN** a queued message to a target resolves as a non-delivered terminal
+  outcome (`failed`, `timeout`, or `dropped_on_shutdown`)
+- **AND** the original sender's session is routable
+- **THEN** relay delivers a terminal-outcome receipt to the sender through the
+  sender's own transport
+- **AND** the receipt carries the original `message_id`, the delivery target, the
+  terminal outcome, and any `reason_code`
+
+#### Scenario: Deliver a wedged outcome receipt
+
+- **WHEN** a queued message to a Pty target resolves as `SendOutcome::Failed`
+  with `reason_code = "pane_wedged"`
+- **AND** the original sender's session is routable
+- **THEN** relay delivers a terminal-outcome receipt naming that `message_id`,
+  target, and `reason_code = "pane_wedged"` to the sender
+
+#### Scenario: Deliver a readiness-bound timeout receipt
+
+- **WHEN** a queued message to a Tmux target resolves as `SendOutcome::Timeout`
+  at the readiness bound
+- **AND** the original sender's session is routable
+- **THEN** relay delivers a terminal-outcome receipt naming that `message_id`,
+  target, and the expiry `reason_code` to the sender
+- **BECAUSE** this replaces `pane_wedged` as what a Tmux sender learns when the
+  target never became ready, and the reason code is the only record of which
+  observation the wait ended on — it names the state, not its cause, which the
+  transport cannot determine
+
+#### Scenario: No receipt for a delivered outcome
+
+- **WHEN** a queued message resolves as `delivered`
+- **THEN** relay does not deliver a terminal-outcome receipt to the sender
+- **AND** records the `delivered` outcome per Async Delivery Observability
+
+#### Scenario: Drop receipt when the sender is not routable
+
+- **WHEN** a queued message resolves to a non-delivered terminal outcome
+- **AND** the original sender's session is not routable at resolution time
+- **THEN** relay drops the receipt without persisting or retrying it
+- **AND** relay still records the terminal outcome per Async Delivery
+  Observability
+
+#### Scenario: Receipts are not recursive
+
+- **WHEN** a terminal-outcome receipt delivered to a sender itself reaches a
+  terminal outcome
+- **THEN** relay does not deliver a receipt for the receipt
+- **AND** records the receipt's own terminal outcome per Async Delivery
+  Observability
+
+#### Scenario: Queued is not a terminal success signal
+
+- **WHEN** a target is accepted for async delivery
+- **THEN** the accept-time per-target result is `queued`
+- **AND** `queued` is not presented as a terminal `delivered`/success outcome
+- **AND** the authoritative outcome is the terminal outcome, delivered as a
+  receipt when non-delivered
 
 ### Requirement: Async Queue Growth Risk Disclosure
 

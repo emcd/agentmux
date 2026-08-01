@@ -158,11 +158,13 @@ that the Tmux transport consumes (`prime_timeout_ms` is the only
 timeout field, with no transport-prefixed variant).
 
 Wedge detection is intentionally not applied to the ACP path. ACP
-does not have a tmux-style pane-wedge classifier: there is no
-snapshot polling, no operator-interaction concept in the same shape,
-and no empty-pane mismatch to compare against. The prime timeout is
-the only wedge-classifier surface on ACP in v1; a follow-up
-proposal may add wedge semantics if ACP runtime signals warrant them.
+does no snapshot polling, so there is no settled non-prompt frame to
+classify and no empty-pane mismatch to compare against. Pty is now
+the only transport that classifies `wedged` at all — Tmux stopped
+doing so in `bound-tmux-readiness-wait`, because a settled non-prompt
+frame cannot be told apart from a permission dialog or a coder
+working silently. The prime timeout is ACP's only bound; a follow-up
+proposal may add further semantics if ACP runtime signals warrant them.
 
 ## Prime timeout suppresses during pending choice
 

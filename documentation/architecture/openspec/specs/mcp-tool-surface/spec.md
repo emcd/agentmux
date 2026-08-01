@@ -209,11 +209,24 @@ If one token matches both a bundle member `session_id` and UI session id, the
 bundle member `session_id` interpretation SHALL win.
 
 `send` SHALL NOT accept any transport-scoped timeout override
-field in v1. v1 of ACP delivery and v1 of Tmux delivery are fully
+field in v1. v1 of ACP, Tmux, and Pty delivery is fully
 config-only: the per-coder config keys
-`[coders.<id>.acp].prime-timeout-ms` and
-`[coders.<id>.tmux].prime-timeout-ms` are the only timeout
+`[coders.<id>.acp].prime-timeout-ms`,
+`[coders.<id>.pty].prime-timeout-ms`,
+`[coders.<id>.tmux].prime-timeout-ms`, and
+`[coders.<id>.tmux].readiness-timeout-ms` are the only timeout
 surfaces.
+
+Adding a per-coder timeout key SHALL NOT be read as licence to add a per-call
+override for it. The config-only property is the invariant this requirement
+states; the enumeration of keys is incidental to it and SHALL be kept current as
+keys are added, so that "the only timeout surfaces" remains a true statement
+rather than a stale one. The enumeration SHALL be reconciled against the
+authoritative descriptor list in the `addressing-routing` capability's `Bundle
+Membership Configuration` requirement rather than extended only with the key a
+change happens to introduce. Reconciling it here restored
+`[coders.<id>.pty].prime-timeout-ms`, which shipped with `add-pty-transport` and
+was never added to this list.
 
 The pre-existing `quiescence_timeout_ms` payload field was
 retired by the `tmux-wedge-detection` proposal; the pre-existing
@@ -263,6 +276,14 @@ reintroduced — see `design.md` Future Work).
 - **WHEN** `send` request payload includes
   `acp_prime_timeout_ms` (a field that has never existed)
 - **THEN** the tool rejects the field as unknown
+
+#### Scenario: The readiness bound has no per-call payload field
+
+- **WHEN** a caller wants to change how long a Tmux delivery waits for a target
+  to become ready
+- **THEN** the only surface is the per-coder
+  `[coders.<id>.tmux].readiness-timeout-ms` config key
+- **AND** `send` accepts no payload field to override it for one call
 
 ### Requirement: Sender Identity Inference
 

@@ -780,7 +780,7 @@ mod tests {
                 start_command: format!("run-{id}"),
                 prompt_readiness: None,
                 prime_timeout_ms: None,
-                wedge_detection: true,
+                readiness_timeout_ms: crate::configuration::TMUX_READINESS_TIMEOUT_MS_DEFAULT,
             }),
             coder_session_id: None,
             policy_id: None,
@@ -965,9 +965,9 @@ mod tests {
             Ok(SendResult {
                 target_session: sender_member_id.to_string(),
                 message_id: "receipt-message-id".to_string(),
-                outcome: SendOutcome::Failed,
-                reason_code: Some("pane_wedged".to_string()),
-                reason: Some("sender pane wedged".to_string()),
+                outcome: SendOutcome::Timeout,
+                reason_code: Some("target_never_settled".to_string()),
+                reason: Some("tmux target did not become ready".to_string()),
                 details: None,
             }),
         );

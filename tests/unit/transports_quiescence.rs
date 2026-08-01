@@ -19,7 +19,9 @@ use std::time::{Duration, Instant};
 
 use agentmux::transports::{
     DIAGNOSTIC_MESSAGE_IDS_MAXIMUM, DeliveryDiagnosticContext, DeliveryWaitError, QuiescenceAction,
-    QuiescenceState, ReadinessMismatch, WedgeObservation, WedgeProbe, quiescence_classify_step,
+    QuiescenceBounds, QuiescenceState, ReadinessMismatch, ReadinessTimeoutReason,
+    WEDGE_CONSECUTIVE_TICKS, WedgeObservation, WedgeProbe, classify_readiness_timeout_reason,
+    quiescence_classify_step,
 };
 
 const TEST_TARGET_SESSION: &str = "test-session";
@@ -28,6 +30,20 @@ const TEST_PANE: &str = "%0";
 
 fn diagnostic_context() -> DeliveryDiagnosticContext<'static> {
     DeliveryDiagnosticContext::without_messages("test-namespace", TEST_TARGET_SESSION)
+}
+
+/// Test helper: bounds for one flush group, anchored at `started_at`.
+fn quiescence_bounds(
+    started_at: Instant,
+    prime_timeout_ms: Option<u64>,
+    readiness_timeout_ms: Option<u64>,
+) -> QuiescenceBounds {
+    QuiescenceBounds::new(
+        TEST_QUIET_WINDOW,
+        started_at,
+        prime_timeout_ms,
+        readiness_timeout_ms,
+    )
 }
 
 #[test]
@@ -118,12 +134,7 @@ fn busy_short_circuit_returns_needs_wait_when_activity_advances() {
         &mut probe,
         &mut state,
         &diagnostic_context(),
-        TEST_QUIET_WINDOW,
-        // Unbounded prime deadline so the prime-timeout branch cannot
-        // fire and confuse the test.
-        None,
-        started_at,
-        None,
+        &quiescence_bounds(started_at, None, None),
         true,
     );
     assert!(
@@ -166,10 +177,7 @@ fn busy_short_circuit_defers_delivered_when_activity_advances_while_ready() {
         &mut probe,
         &mut state,
         &diagnostic_context(),
-        TEST_QUIET_WINDOW,
-        None,
-        started_at,
-        None,
+        &quiescence_bounds(started_at, None, None),
         true,
     );
     assert!(
@@ -197,10 +205,7 @@ fn delivery_ready_fires_when_ready_and_no_activity_advance() {
         &mut probe,
         &mut state,
         &diagnostic_context(),
-        TEST_QUIET_WINDOW,
-        None,
-        started_at,
-        None,
+        &quiescence_bounds(started_at, None, None),
         true,
     );
     assert!(
@@ -226,12 +231,7 @@ fn prompt_ready_resolves_delivered_under_unbounded_prime() {
         &mut probe,
         &mut state,
         &diagnostic_context(),
-        TEST_QUIET_WINDOW,
-        // Unbounded: the exact deadline that paired with the removed
-        // copy-mode gate to hang forever.
-        None,
-        started_at,
-        None,
+        &quiescence_bounds(started_at, None, None),
         true,
     );
     assert!(
@@ -256,10 +256,13 @@ fn prime_timeout_fires_when_not_ready_and_no_activity_advance() {
         &mut probe,
         &mut state,
         &diagnostic_context(),
-        TEST_QUIET_WINDOW,
-        prime_deadline,
-        started_at,
-        Some(0),
+        &QuiescenceBounds {
+            quiet_window: TEST_QUIET_WINDOW,
+            started_at,
+            prime_deadline,
+            prime_timeout_ms: Some(0),
+            readiness_deadline: None,
+        },
         false,
     );
     assert!(
@@ -318,10 +321,7 @@ fn busy_short_circuit_resets_wedge_counter() {
         &mut seed_probe,
         &mut state,
         &diagnostic_context(),
-        TEST_QUIET_WINDOW,
-        None,
-        Instant::now(),
-        None,
+        &quiescence_bounds(Instant::now(), None, None),
         true,
     );
     let counter_before_busy = state.consecutive_quiescent_mismatches();
@@ -343,10 +343,7 @@ fn busy_short_circuit_resets_wedge_counter() {
         &mut busy_probe,
         &mut state,
         &diagnostic_context(),
-        TEST_QUIET_WINDOW,
-        None,
-        Instant::now(),
-        None,
+        &quiescence_bounds(Instant::now(), None, None),
         true,
     );
     assert!(
@@ -399,13 +396,7 @@ fn busy_needswait_deadline_is_bounded_by_quiet_window() {
         &mut probe,
         &mut state,
         &diagnostic_context(),
-        TEST_QUIET_WINDOW,
-        // Unbounded prime deadline: under the pre-fix code the
-        // NeedsWait deadline would be ~now + 1 year; the test asserts
-        // the deadline is bounded near `quiet_window` instead.
-        None,
-        started_at,
-        None,
+        &quiescence_bounds(started_at, None, None),
         true,
     );
     match result {
@@ -445,10 +436,7 @@ fn idle_wedge_rechecks_until_the_counter_fires() {
             &mut probe,
             &mut state,
             &diagnostic_context(),
-            TEST_QUIET_WINDOW,
-            None,
-            started_at,
-            None,
+            &quiescence_bounds(started_at, None, None),
             true,
         );
         let QuiescenceAction::NeedsWait(deadline) = result else {
@@ -465,10 +453,7 @@ fn idle_wedge_rechecks_until_the_counter_fires() {
         &mut probe,
         &mut state,
         &diagnostic_context(),
-        TEST_QUIET_WINDOW,
-        None,
-        started_at,
-        None,
+        &quiescence_bounds(started_at, None, None),
         true,
     );
     assert!(
@@ -505,10 +490,7 @@ fn composing_cursor_mismatch_never_advances_the_wedge_counter() {
             &mut probe,
             &mut state,
             &diagnostic_context(),
-            TEST_QUIET_WINDOW,
-            None,
-            Instant::now(),
-            None,
+            &quiescence_bounds(Instant::now(), None, None),
             true,
         );
         assert!(
@@ -517,4 +499,518 @@ fn composing_cursor_mismatch_never_advances_the_wedge_counter() {
         );
         assert_eq!(state.consecutive_quiescent_mismatches(), 0);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Readiness bound
+// ---------------------------------------------------------------------------
+
+/// Builds an observation with an explicit tail and optional cursor-class
+/// mismatch, so the reason classifier's four arms can be driven apart.
+fn readiness_observation(
+    activity_generation: u64,
+    inspected_tail: &str,
+    regex_matched: Option<bool>,
+) -> WedgeObservation {
+    WedgeObservation {
+        inspected_tail: inspected_tail.to_string(),
+        is_prompt_ready: false,
+        pane_target: Some(TEST_PANE.to_string()),
+        mismatch: regex_matched.map(|matched| ReadinessMismatch {
+            reason: "scripted mismatch".to_string(),
+            regex_matched: Some(matched),
+            expected_cursor_column: Some(4),
+            observed_cursor_column: Some(0),
+        }),
+        activity_generation,
+    }
+}
+
+/// A bound anchored far enough in the past that it has already elapsed.
+fn elapsed_readiness_bounds() -> QuiescenceBounds {
+    QuiescenceBounds {
+        quiet_window: TEST_QUIET_WINDOW,
+        started_at: Instant::now() - Duration::from_secs(120),
+        prime_deadline: None,
+        prime_timeout_ms: None,
+        readiness_deadline: Some(Instant::now() - Duration::from_secs(60)),
+    }
+}
+
+/// Task 4.1 — the Band 2 defect itself. A target whose activity advances on
+/// every observation was previously suppressed indefinitely by the Busy
+/// short-circuit; the readiness bound must end the wait.
+#[test]
+fn advancing_activity_terminates_at_the_readiness_bound() {
+    let mut probe = MockProbe::new(
+        readiness_observation(1, "still working", None),
+        readiness_observation(2, "still working", None),
+    );
+    let mut state = QuiescenceState::new();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &elapsed_readiness_bounds(),
+        false,
+    );
+    assert!(
+        matches!(
+            result,
+            QuiescenceAction::Done(Err(DeliveryWaitError::ReadinessTimeout {
+                reason_code: ReadinessTimeoutReason::TargetNeverSettled,
+                ..
+            }))
+        ),
+        "expected ReadinessTimeout/target_never_settled, got {result:?}",
+    );
+}
+
+/// Task 4.2 — each reason-classifier arm at expiry, and none of them a
+/// `pane_wedged` failure.
+#[test]
+fn readiness_expiry_reports_the_reason_for_each_observation_shape() {
+    let cases = [
+        (
+            readiness_observation(7, "", None),
+            ReadinessTimeoutReason::TargetUnresponsive,
+        ),
+        (
+            readiness_observation(7, "$ ", Some(true)),
+            ReadinessTimeoutReason::PendingOperatorInput,
+        ),
+        (
+            readiness_observation(7, "a dialog", Some(false)),
+            ReadinessTimeoutReason::TargetNotReady,
+        ),
+    ];
+    for (observation, expected) in cases {
+        let mut probe = MockProbe::new(observation.clone(), observation.clone());
+        let mut state = QuiescenceState::new();
+        let result = quiescence_classify_step(
+            &mut probe,
+            &mut state,
+            &diagnostic_context(),
+            &elapsed_readiness_bounds(),
+            false,
+        );
+        match result {
+            QuiescenceAction::Done(Err(DeliveryWaitError::ReadinessTimeout {
+                reason_code,
+                ..
+            })) => assert_eq!(reason_code, expected, "for observation {observation:?}"),
+            other => panic!("expected ReadinessTimeout for {observation:?}, got {other:?}"),
+        }
+    }
+}
+
+/// Task 4.3 — reason precedence: activity outranks every static signal,
+/// because it is the only one describing the observation *pair*.
+#[test]
+fn activity_outranks_the_static_reason_signals() {
+    // Empty tail AND a cursor-class mismatch would each claim a reason, but
+    // the activity advance describes the pair and wins.
+    let reason = classify_readiness_timeout_reason(
+        &readiness_observation(1, "", Some(true)),
+        &readiness_observation(2, "", Some(true)),
+    );
+    assert_eq!(reason, ReadinessTimeoutReason::TargetNeverSettled);
+
+    // With activity settled, the empty tail outranks the cursor mismatch.
+    let reason = classify_readiness_timeout_reason(
+        &readiness_observation(2, "", Some(true)),
+        &readiness_observation(2, "", Some(true)),
+    );
+    assert_eq!(reason, ReadinessTimeoutReason::TargetUnresponsive);
+}
+
+/// Task 4.4 — the prime timeout outranks the readiness bound when both have
+/// elapsed in the same iteration: it is the more specific diagnosis and the
+/// operator opted into it.
+#[test]
+fn prime_timeout_outranks_a_simultaneously_elapsed_readiness_bound() {
+    let long_ago = Instant::now() - Duration::from_secs(120);
+    let bounds = QuiescenceBounds {
+        quiet_window: TEST_QUIET_WINDOW,
+        started_at: long_ago,
+        prime_deadline: Some(long_ago),
+        prime_timeout_ms: Some(1),
+        readiness_deadline: Some(long_ago),
+    };
+    let observation = readiness_observation(7, "", None);
+    let mut probe = MockProbe::new(observation.clone(), observation);
+    let mut state = QuiescenceState::new();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &bounds,
+        false,
+    );
+    assert!(
+        matches!(
+            result,
+            QuiescenceAction::Done(Err(DeliveryWaitError::Timeout { .. }))
+        ),
+        "expected the prime Timeout to win, got {result:?}",
+    );
+
+    // Discriminating half: the same elapsed bound with no prime timeout
+    // configured resolves as the readiness expiry. Without this the test
+    // would pass against a build that ignores the readiness bound entirely,
+    // because the prime timeout fires either way.
+    let without_prime = QuiescenceBounds {
+        prime_deadline: None,
+        prime_timeout_ms: None,
+        ..bounds
+    };
+    let observation = readiness_observation(7, "", None);
+    let mut probe = MockProbe::new(observation.clone(), observation);
+    let mut state = QuiescenceState::new();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &without_prime,
+        false,
+    );
+    assert!(
+        matches!(
+            result,
+            QuiescenceAction::Done(Err(DeliveryWaitError::ReadinessTimeout { .. }))
+        ),
+        "the bound must resolve the group when no prime timeout outranks it, got {result:?}",
+    );
+}
+
+/// Task 4.9 — delivery outranks a simultaneous expiry. Reaching readiness
+/// late is the outcome the wait existed to obtain.
+#[test]
+fn delivery_outranks_a_simultaneously_elapsed_readiness_bound() {
+    let ready = WedgeObservation {
+        is_prompt_ready: true,
+        ..readiness_observation(7, "$ ", None)
+    };
+    let mut probe = MockProbe::new(ready.clone(), ready);
+    let mut state = QuiescenceState::new();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &elapsed_readiness_bounds(),
+        false,
+    );
+    assert!(
+        matches!(result, QuiescenceAction::Done(Ok(_))),
+        "expected Delivered despite the elapsed bound, got {result:?}",
+    );
+
+    // Discriminating half: the identical bound resolves a target that is NOT
+    // ready. Without this the test would pass against a build that never
+    // consults the bound, since delivery fires either way.
+    let unready = readiness_observation(7, "a dialog", Some(false));
+    let mut probe = MockProbe::new(unready.clone(), unready);
+    let mut state = QuiescenceState::new();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &elapsed_readiness_bounds(),
+        false,
+    );
+    assert!(
+        matches!(
+            result,
+            QuiescenceAction::Done(Err(DeliveryWaitError::ReadinessTimeout { .. }))
+        ),
+        "the same elapsed bound must resolve an unready target, got {result:?}",
+    );
+}
+
+/// Task 4.9, second half — a Busy target that merely *looks* ready in the
+/// iteration the bound elapses is not granted the match Busy just denied.
+#[test]
+fn busy_target_is_not_delivered_on_a_momentary_match_at_expiry() {
+    let ready_before = WedgeObservation {
+        is_prompt_ready: true,
+        ..readiness_observation(1, "$ ", None)
+    };
+    let ready_after = WedgeObservation {
+        is_prompt_ready: true,
+        ..readiness_observation(2, "$ ", None)
+    };
+    let mut probe = MockProbe::new(ready_before, ready_after);
+    let mut state = QuiescenceState::new();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &elapsed_readiness_bounds(),
+        false,
+    );
+    assert!(
+        matches!(
+            result,
+            QuiescenceAction::Done(Err(DeliveryWaitError::ReadinessTimeout {
+                reason_code: ReadinessTimeoutReason::TargetNeverSettled,
+                ..
+            }))
+        ),
+        "expected target_never_settled rather than a granted momentary match, got {result:?}",
+    );
+}
+
+/// Tasks 4.6 and 4.7 — an absent prime timeout still terminates on the bound,
+/// and no `NeedsWait` deadline the classifier returns may exceed it.
+#[test]
+fn no_scheduled_wait_outlives_the_readiness_bound() {
+    // No prime deadline, so the classifier's fall-through would otherwise
+    // propose the one-year `unbounded_deadline`. The bound must shorten it.
+    let started_at = Instant::now();
+    let bound = started_at + Duration::from_secs(5);
+    let bounds = QuiescenceBounds {
+        quiet_window: TEST_QUIET_WINDOW,
+        started_at,
+        prime_deadline: None,
+        prime_timeout_ms: None,
+        readiness_deadline: Some(bound),
+    };
+    let observation = readiness_observation(7, "a dialog", Some(false));
+    let mut probe = MockProbe::new(observation.clone(), observation);
+    let mut state = QuiescenceState::new();
+    match quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &bounds,
+        false,
+    ) {
+        QuiescenceAction::NeedsWait(deadline) => assert!(
+            deadline <= bound,
+            "a scheduled wait outlived the readiness bound",
+        ),
+        QuiescenceAction::Done(result) => {
+            panic!("expected NeedsWait before the bound, got {result:?}")
+        }
+    }
+}
+
+/// AuxBE `reviews/relay/13` finding 2 — removing wedge detection must not widen
+/// the prime timeout's scope.
+///
+/// The prime timeout answers "the target never produced observable output". A
+/// settled wedge-class frame is a target that *answered* — a permission dialog,
+/// a compose box — and used to be intercepted by the wedge branch before it
+/// could reach the prime branch. With wedge detection off for Tmux that
+/// interception is gone, so a settled dialog would fall through and terminate on
+/// the prime timeout: the same inference from absence the wedge classifier was
+/// removed for making, wearing a different reason code.
+///
+/// Both halves are asserted together, because the fix is a narrowing and a test
+/// that only proves the narrowing would also pass if the prime timeout were
+/// disabled outright.
+#[test]
+fn an_elapsed_prime_timeout_spares_a_settled_frame_but_not_a_silent_target() {
+    // Prime elapsed 60s ago; the readiness bound is still live.
+    let bounds = QuiescenceBounds {
+        quiet_window: TEST_QUIET_WINDOW,
+        started_at: Instant::now() - Duration::from_secs(120),
+        prime_deadline: Some(Instant::now() - Duration::from_secs(60)),
+        prime_timeout_ms: Some(60_000),
+        readiness_deadline: Some(Instant::now() + Duration::from_secs(600)),
+    };
+
+    // A settled permission dialog: non-empty tail, regex did not match.
+    let dialog = readiness_observation(7, "Do you want to allow this? (y/n)", Some(false));
+    let mut probe = MockProbe::new(dialog.clone(), dialog);
+    let mut state = QuiescenceState::new();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &bounds,
+        false,
+    );
+    assert!(
+        matches!(result, QuiescenceAction::NeedsWait(_)),
+        "an elapsed prime timeout must not adjudicate a settled frame; got {result:?}",
+    );
+
+    // A target that produced nothing at all is what the prime timeout is for.
+    let silent = make_observation(7, false);
+    let mut probe = MockProbe::new(silent.clone(), silent);
+    let mut state = QuiescenceState::new();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &bounds,
+        false,
+    );
+    assert!(
+        matches!(
+            result,
+            QuiescenceAction::Done(Err(DeliveryWaitError::Timeout { .. }))
+        ),
+        "the prime timeout must still fire for a target with no observable output; got {result:?}",
+    );
+
+    // A group with no readiness bound has nothing to hand termination to, so the
+    // narrowing must not apply to it. This is the case whose absence let a false
+    // claim ship: the narrowing was described as a no-op for Pty because Pty's
+    // wedge branch intercepts first — true only while `wedge-detection` is on.
+    // With Pty's documented opt-out there is no wedge branch and no bound, and
+    // excluding the prime timeout here stranded the wait forever.
+    let unbounded = QuiescenceBounds {
+        readiness_deadline: None,
+        ..bounds
+    };
+    let dialog = readiness_observation(7, "Do you want to allow this? (y/n)", Some(false));
+    let mut probe = MockProbe::new(dialog.clone(), dialog);
+    let mut state = QuiescenceState::new();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &unbounded,
+        false,
+    );
+    assert!(
+        matches!(
+            result,
+            QuiescenceAction::Done(Err(DeliveryWaitError::Timeout { .. }))
+        ),
+        "with no readiness bound the prime timeout must still resolve a settled frame, \
+         or the wait has no terminal path at all; got {result:?}",
+    );
+}
+
+/// AuxBE `reviews/relay/13` finding 1 — the bound must not overshoot by a full
+/// quiet window.
+///
+/// Capping the `NeedsWait` deadlines makes the wrapper wake at the bound, but
+/// the classifier then observes, sleeps a quiet window, observes, and only then
+/// evaluates the bound. An uncapped sleep therefore reports expiry a whole
+/// window late and opens a post-deadline interval in which a target that was
+/// not ready at the bound can still deliver.
+///
+/// The quiet window here (2s) is far longer than any real one so the overshoot
+/// would be unmistakable; the assertion allows an order of magnitude of
+/// scheduling slack and still fails against the unshortened sleep.
+#[test]
+fn an_elapsed_bound_is_not_slept_past() {
+    let observation = readiness_observation(7, "a dialog", Some(false));
+    let mut probe = MockProbe::new(observation.clone(), observation);
+    let mut state = QuiescenceState::new();
+    let bounds = QuiescenceBounds {
+        quiet_window: Duration::from_secs(2),
+        started_at: Instant::now() - Duration::from_secs(120),
+        prime_deadline: None,
+        prime_timeout_ms: None,
+        readiness_deadline: Some(Instant::now() - Duration::from_secs(60)),
+    };
+    let entered_at = Instant::now();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &bounds,
+        false,
+    );
+    let spent = entered_at.elapsed();
+    assert!(
+        matches!(
+            result,
+            QuiescenceAction::Done(Err(DeliveryWaitError::ReadinessTimeout { .. }))
+        ),
+        "expected the elapsed bound to resolve, got {result:?}",
+    );
+    assert!(
+        spent < Duration::from_millis(500),
+        "an iteration entered past the bound must not sleep another quiet window; \
+         spent {spent:?} of a 2s window",
+    );
+}
+
+/// Task 4.5 — a settled Tmux target whose readiness frame is absent must
+/// produce no terminal outcome until the bound elapses, whatever the target
+/// shows. This is the whole point of dropping wedge detection from Tmux: the
+/// mismatch counter still accumulates past its threshold (asserted below, so
+/// the test cannot pass merely because the observations were never wedge-class),
+/// but with `wedge_detection: false` the counter fires nothing. A settled
+/// non-prompt frame is produced by a hung coder, a permission dialog, a compose
+/// box, and a coder working silently alike, and only the bound may end the wait.
+#[test]
+fn a_settled_absent_frame_produces_no_outcome_before_the_bound() {
+    // A live bound, far enough out that none of the iterations below reach it.
+    let bounds = quiescence_bounds(Instant::now(), None, Some(60_000));
+    let contents = [
+        "Do you want to allow this? (y/n)",
+        "",
+        "$ half-typed command",
+        "\u{2588}",
+    ];
+    for content in contents {
+        let observation = readiness_observation(7, content, Some(false));
+        let mut probe = MockProbe::new(observation.clone(), observation);
+        let mut state = QuiescenceState::new();
+        for iteration in 0..=WEDGE_CONSECUTIVE_TICKS {
+            let result = quiescence_classify_step(
+                &mut probe,
+                &mut state,
+                &diagnostic_context(),
+                &bounds,
+                false,
+            );
+            assert!(
+                matches!(result, QuiescenceAction::NeedsWait(_)),
+                "iteration {iteration} on {content:?} must keep waiting, got {result:?}",
+            );
+        }
+        assert!(
+            state.consecutive_quiescent_mismatches() > WEDGE_CONSECUTIVE_TICKS,
+            "the observations must be wedge-class for this test to discriminate; \
+             counter reached {} on {content:?}",
+            state.consecutive_quiescent_mismatches(),
+        );
+    }
+}
+
+/// Task 4.8 — the shared code path must not impose the bound on a transport
+/// that carries none. This is the guard that keeps Pty's behavior identical.
+#[test]
+fn a_group_without_a_readiness_bound_is_unaffected() {
+    let started_at = Instant::now() - Duration::from_secs(120);
+    let bounds = QuiescenceBounds::new(TEST_QUIET_WINDOW, started_at, None, None);
+    let observation = readiness_observation(7, "a dialog", Some(false));
+    let mut probe = MockProbe::new(observation.clone(), observation);
+    let mut state = QuiescenceState::new();
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        &diagnostic_context(),
+        &bounds,
+        false,
+    );
+    assert!(
+        matches!(result, QuiescenceAction::NeedsWait(_)),
+        "a group with no bound must keep waiting exactly as before, got {result:?}",
+    );
+}
+
+/// Task 4.12 — both deadlines share one anchor, so a later envelope absorbed
+/// by coalesce-during-wait cannot shift either.
+#[test]
+fn both_bounds_derive_from_one_anchor() {
+    let started_at = Instant::now();
+    let bounds = QuiescenceBounds::new(TEST_QUIET_WINDOW, started_at, Some(1_000), Some(5_000));
+    assert_eq!(
+        bounds.prime_deadline,
+        Some(started_at + Duration::from_millis(1_000)),
+    );
+    assert_eq!(
+        bounds.readiness_deadline,
+        Some(started_at + Duration::from_millis(5_000)),
+    );
+    assert_eq!(bounds.started_at, started_at);
 }

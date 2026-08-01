@@ -219,11 +219,14 @@ flush group SHALL NOT resolve as `Timeout AND Failed`).
 - **WHEN** a Tmux pane is quiescent with the prompt frame absent, for any reason
   — a hung coder, a permission dialog awaiting an operator, a compose box
   holding typed input, or a coder working without terminal output
-- **THEN** the Tmux transport issues no terminal failure on that basis
-- **AND** the flush group remains pending until the target becomes ready, the
-  prime timeout fires if enabled, or the readiness bound elapses
+- **THEN** the Tmux transport issues no terminal outcome on that basis
+- **AND** the flush group remains pending until the target becomes ready or the
+  readiness bound elapses
+- **AND** an elapsed prime timeout does not resolve the group either: the prime
+  window measures absence of observable output, and a settled frame is output
 - **BECAUSE** the four cases are indistinguishable from the inspected tail, so
-  classifying any of them as failed misreports three of them
+  classifying any of them as failed misreports three of them, and resolving them
+  on the prime timeout instead would draw the same inference under another name
 
 #### Scenario: Absent Tmux prime timeout suppresses the prime verdict, not the bound
 
@@ -464,3 +467,47 @@ A bound applies to a flush group only when that group's envelope carries it.
   `tmux-wedge-detection` and `add-wedge-detection-busy-state`
   proposals unchanged, except that Tmux no longer consumes the
   state machine's `Wedged` result
+
+### Requirement: Transport-Internal Probe Seam for Testability
+
+Each promptable transport that owns a quiescence wait SHALL expose an
+internal probe trait that lets tests inject deterministic quiescence and
+prompt-readiness results. The probe trait SHALL be transport-internal (not
+part of the `Transport` contract) and SHALL NOT appear in
+`src/transports/contract.rs`.
+
+The probe trait SHALL return the next observation on demand so tests can
+drive the classifier through specific sequences. The sequences a transport's
+tests SHALL cover are the terminal states that transport can actually reach:
+for Tmux, unresponsive, slow-prompt, and normal-flow; a wedged sequence is
+not among them, because Tmux no longer classifies `wedged`.
+
+#### Scenario: Tmux probe trait is transport-internal
+
+- **WHEN** a developer reads `src/tmux/quiescence_probe.rs`
+- **THEN** they find a `PaneQuiescenceProbe` trait used by
+  `wait_for_quiescent_pane_three_state`, both re-exported from `src/tmux/mod.rs`
+- **AND** the trait is not re-exported from `src/transports/`
+- **AND** the `Transport` trait in `src/transports/contract.rs` has no
+  knowledge of probes
+
+#### Scenario: Tmux unit tests cover the reachable canonical sequences
+
+- **WHEN** `cargo nextest run --test unit tmux_transport` runs
+- **THEN** it asserts the canonical probe sequences produce the
+  expected wait results:
+  - a probe that never produces output → `Err(DeliveryWaitError::Timeout)`
+  - a probe that quiesces at a prompt after several ticks → `Ok(pane_target)`
+  - a probe that produces output then settles at a prompt →
+    `Ok(pane_target)` without the prime timeout firing
+- **AND** no Tmux sequence asserts `Err(DeliveryWaitError::Wedged)`, which the
+  transport cannot produce
+
+#### Scenario: Readiness-bound coverage lives with the shared classifier
+
+- **WHEN** a developer looks for the tests covering the Tmux readiness bound
+- **THEN** they find them against the shared classifier both transports drive,
+  not duplicated per transport
+- **BECAUSE** the bound is applied by the shared state machine, and asserting it
+  through one transport's probe adapter would test the adapter rather than the
+  rule
