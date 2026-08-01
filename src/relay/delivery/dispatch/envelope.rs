@@ -178,10 +178,20 @@ fn noop_tmux_chooser() -> Chooser {
 ///
 /// The envelope's generic [`DeliveryEnvelope::prime_timeout_ms`] field is
 /// populated from the per-coder config: `TmuxTargetConfiguration.prime_timeout_ms`
-/// for tmux sessions (`[coders.<id>.tmux].prime-timeout-ms`) and
+/// for tmux sessions (`[coders.<id>.tmux].prime-timeout-ms`),
 /// `AcpTargetConfiguration.prime_timeout_ms` for ACP sessions
-/// (`[coders.<id>.acp].prime-timeout-ms`). Each transport consumes the same
-/// generic envelope field; no transport-prefixed envelope field is introduced.
+/// (`[coders.<id>.acp].prime-timeout-ms`), and the Pty equivalent. Each
+/// transport consumes the same generic envelope field; no transport-prefixed
+/// envelope field is introduced.
+///
+/// [`DeliveryEnvelope::readiness_timeout_ms`] comes from
+/// [`TargetConfiguration::readiness_timeout_ms`], which is the sole place the
+/// per-transport rule is decided: **Tmux targets only**, from
+/// `[coders.<id>.tmux].readiness-timeout-ms`. Every other target gets `None` —
+/// not because their waits are bounded elsewhere, but because only Tmux can
+/// soundly report an expired bound as non-delivery (it injects after its
+/// readiness wait; Pty and ACP commit before theirs). See
+/// `agentmux:issues/relay/61`.
 ///
 /// For terminal-outcome receipts addressed to an ACP sender the envelope's
 /// `quiet_window` is forced to zero, satisfying the
@@ -195,14 +205,26 @@ pub(super) fn build_coder_envelope(
     task: &AsyncDeliveryTask,
     message: DeliveryMessage,
 ) -> DeliveryEnvelope {
-    let (prime_timeout_ms, target_is_acp) = match resolve_target_member(task) {
-        Ok(Some(member)) => match &member.target {
-            TargetConfiguration::Tmux(tmux_target) => (tmux_target.prime_timeout_ms, false),
-            TargetConfiguration::Acp(acp_target) => (acp_target.prime_timeout_ms, true),
-            TargetConfiguration::Pty(pty_target) => (pty_target.prime_timeout_ms, false),
-            TargetConfiguration::Ui | TargetConfiguration::Pubsub => (None, false),
-        },
-        _ => (None, false),
+    let (prime_timeout_ms, readiness_timeout_ms, target_is_acp) = match resolve_target_member(task)
+    {
+        Ok(Some(member)) => {
+            let readiness_timeout_ms = member.target.readiness_timeout_ms();
+            match &member.target {
+                TargetConfiguration::Tmux(tmux_target) => {
+                    (tmux_target.prime_timeout_ms, readiness_timeout_ms, false)
+                }
+                TargetConfiguration::Acp(acp_target) => {
+                    (acp_target.prime_timeout_ms, readiness_timeout_ms, true)
+                }
+                TargetConfiguration::Pty(pty_target) => {
+                    (pty_target.prime_timeout_ms, readiness_timeout_ms, false)
+                }
+                TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
+                    (None, readiness_timeout_ms, false)
+                }
+            }
+        }
+        _ => (None, None, false),
     };
     let quiet_window = if task.is_receipt && target_is_acp {
         Duration::ZERO
@@ -216,6 +238,7 @@ pub(super) fn build_coder_envelope(
         choice_decider_sessions: task.choice_decider_sessions.clone(),
         quiet_window,
         prime_timeout_ms,
+        readiness_timeout_ms,
         is_receipt: task.is_receipt,
     }
 }
@@ -423,6 +446,7 @@ pub(super) fn build_ui_envelope(task: &AsyncDeliveryTask) -> DeliveryEnvelope {
         choice_decider_sessions: task.choice_decider_sessions.clone(),
         quiet_window: task.quiescence.quiet_window,
         prime_timeout_ms: None,
+        readiness_timeout_ms: None,
         is_receipt: task.is_receipt,
     }
 }

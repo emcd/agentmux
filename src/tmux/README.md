@@ -22,10 +22,27 @@ introduced.
   driven by relay bundle reconcile/startup.
 - `pane` — pane operations: resolve active pane target, inject literal
   text into the pane, capture pane tail lines.
-- `quiescence_probe` — the cross-thread wedge/prime quiescence probe
-  consumed by the transport's internal delivery task. Implements
+- `quiescence_probe` — the cross-thread quiescence probe consumed by the
+  transport's internal delivery task. Implements
   [`wait_for_quiescent_pane_three_state`] driving
   [`PaneQuiescenceProbe`].
+
+  Tmux does **not** classify `wedged`. Inferring a terminal failure from
+  the absence of change in rendered content cannot distinguish a hung
+  coder from a permission dialog awaiting an operator, a compose box
+  holding typed input, or a coder working without terminal output, so the
+  transport passes `wedge_detection: false` unconditionally. Termination
+  comes from the per-coder readiness bound
+  (`[coders.<id>.tmux].readiness-timeout-ms`, default 15 minutes): an
+  unconditional bound on the entire wait for a flush group that no signal
+  may defer. Other terminal paths remain — an opted-in prime timeout,
+  shutdown, a positively observed probe failure — but the bound is the
+  only one guaranteed to arrive.
+
+  Pty still classifies `wedged` through the same shared machinery, and
+  keeps it until `agentmux:issues/relay/61` supplies a Pty readiness
+  bound. That the classifier survives there is a known-unsound exception,
+  not a property of Pty.
 - `transport` — [`TmuxTransport`] (the per-target `Transport`
   implementation with its internal delivery task + write channel +
   ordering) plus [`render_paste_text`] (the per-envelope pane-text
@@ -66,9 +83,10 @@ in the prompt before token budgeting and paste injection.
 - `src/transports/contract.rs` — the transport contract and the
   `DeliveryEnvelope` / `DeliveryMessage` types the relay populates
   and the Tmux transport renders.
-- `src/transports/quiescence.rs` — the cross-transport wedge/prime
-  quiescence state machine the Tmux transport's quiescence probe
-  drives.
+- `src/transports/quiescence.rs` — the cross-transport quiescence state
+  machine the Tmux transport's quiescence probe drives, including
+  `QuiescenceBounds` (the per-flush-group bounds, both deadlines anchored
+  at group formation) and the readiness-expiry reason classifier.
 - `src/envelope.rs` — the canonical pane-envelope renderer
   (`render_envelope`) and `AddressIdentity` helpers. The Tmux
   transport renders one pane envelope per `DeliveryEnvelope.message`

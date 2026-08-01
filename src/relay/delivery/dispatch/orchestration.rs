@@ -215,7 +215,9 @@ mod tests {
         build_worker_key, close_worker, register_worker, unregister_worker, worker_exists,
     };
     use super::*;
-    use crate::configuration::{BundleConfiguration, BundleMember, TargetConfiguration};
+    use crate::configuration::{
+        BundleConfiguration, BundleMember, TMUX_READINESS_TIMEOUT_MS_DEFAULT, TargetConfiguration,
+    };
     use crate::relay::delivery::QuiescenceOptions;
     use crate::relay::{DeliveryPayloadMode, SCHEMA_VERSION, SenderReturnRoute};
     use std::path::{Path, PathBuf};
@@ -231,7 +233,7 @@ mod tests {
                 start_command: format!("run-{id}"),
                 prompt_readiness: None,
                 prime_timeout_ms: None,
-                wedge_detection: true,
+                readiness_timeout_ms: TMUX_READINESS_TIMEOUT_MS_DEFAULT,
             }),
             coder_session_id: None,
             policy_id: None,

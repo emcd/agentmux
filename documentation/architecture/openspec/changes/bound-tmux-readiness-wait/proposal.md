@@ -120,6 +120,12 @@ None. Every change constrains behavior under an existing requirement.
 - `delivery-quiescence`:
   - **Quiescence-Gated Delivery** — gains the Tmux readiness bound and the
     `readiness_timeout_ms` envelope field.
+  - **Asynchronous Terminal-Outcome Receipt** — its "Deliver a wedged outcome
+    receipt" scenario names a **Tmux** target resolving `pane_wedged`, which
+    this change makes unreachable. Retargeted to Pty, which still resolves it,
+    and gains a scenario for the receipt a Tmux sender now gets instead. Found
+    during implementation, not during proposal review: the removal's reach into
+    the receipt surface was missed by both of us.
   - **Async Queue Growth Risk Disclosure** — states that the queue may grow
     without bound if targets never become ready, and directs operators to a
     `quiescence_timeout_ms` setting that does not exist.

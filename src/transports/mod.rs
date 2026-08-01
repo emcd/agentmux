@@ -18,15 +18,16 @@ pub use crate::pty::{PtyTargetConfiguration, PtyTransport};
 pub use crate::tmux::TmuxTransport;
 pub use contract::{
     ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryMessage, DeliveryWaitError,
-    LookMode, OutcomeFuture, OutputView, PromptReadinessTemplate, SingleDeliveryOutcome,
-    StartupContext, ThingToChoose, Transport, TransportError, TransportImpl, TransportReadiness,
-    TransportStatus,
+    LookMode, OutcomeFuture, OutputView, PromptReadinessTemplate, ReadinessTimeoutReason,
+    SingleDeliveryOutcome, StartupContext, ThingToChoose, Transport, TransportError, TransportImpl,
+    TransportReadiness, TransportStatus,
 };
 pub use quiescence::{
     DIAGNOSTIC_MESSAGE_IDS_MAXIMUM, DeliveryDiagnosticContext, EMPTY_PANE_MISMATCH_PREFIX,
-    QuiescenceAction, QuiescenceState, ReadinessMismatch, WEDGE_CONSECUTIVE_TICKS,
-    WedgeObservation, WedgeProbe, emit_delivery_progress, mismatch_is_wedge_class,
-    quiescence_classify_step, wait_for_quiescent_three_state,
+    QuiescenceAction, QuiescenceBounds, QuiescenceState, ReadinessMismatch,
+    WEDGE_CONSECUTIVE_TICKS, WedgeObservation, WedgeProbe, classify_readiness_timeout_reason,
+    emit_delivery_progress, mismatch_is_wedge_class, quiescence_classify_step,
+    wait_for_quiescent_three_state,
 };
 pub use ui::{
     UiBroadcastFn, UiBroadcastStatus, UiIncomingMessage, UiOutcomePhase, UiPhaseFn, UiTransport,

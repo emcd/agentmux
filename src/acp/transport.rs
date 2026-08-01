@@ -1546,6 +1546,7 @@ mod envelope_batch_prime_anchor_tests {
             choice_decider_sessions: vec!["alpha".to_string()],
             quiet_window: Duration::ZERO,
             prime_timeout_ms: prime,
+            readiness_timeout_ms: None,
             is_receipt: false,
         }
     }
@@ -1676,6 +1677,7 @@ mod delivery_plan_tests {
             choice_decider_sessions: vec![],
             quiet_window: Duration::ZERO,
             prime_timeout_ms: None,
+            readiness_timeout_ms: None,
             is_receipt,
         }
     }

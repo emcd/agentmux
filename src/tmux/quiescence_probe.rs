@@ -38,7 +38,7 @@ use regex::Regex;
 use crate::configuration::PromptReadinessTemplate;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::{
-    DeliveryDiagnosticContext, DeliveryWaitError, WedgeObservation, WedgeProbe,
+    DeliveryDiagnosticContext, DeliveryWaitError, QuiescenceBounds, WedgeObservation, WedgeProbe,
     wait_for_quiescent_three_state,
 };
 
@@ -243,8 +243,8 @@ impl PaneQuiescenceProbe for RealPaneQuiescenceProbe<'_> {
 /// Pane target resolution is delegated to the underlying probe (which
 /// returns the active tmux pane id like `%0`) so the state machine can
 /// thread it through to its diagnostic inscriptions
-/// (`delivery_ready`, `delivery_pane_wedged`, `delivery_prime_timeout`,
-/// `delivery_prompt_mismatch`).
+/// (`delivery_ready`, `delivery_prime_timeout`,
+/// `delivery_readiness_timeout`, `delivery_prompt_mismatch`).
 struct TmuxAsWedgeProbe<'a, P: PaneQuiescenceProbe> {
     inner: &'a mut P,
 }
@@ -288,53 +288,43 @@ impl<'a, P: PaneQuiescenceProbe> WedgeProbe for TmuxAsWedgeProbe<'a, P> {
     }
 }
 
-/// Drives the three-state delivery classifier (running / unresponsive /
-/// wedged) over a [`PaneQuiescenceProbe`]. `pub` to support the external
-/// test surface in `tests/unit/tmux_transport.rs`; the function is not part
-/// of the runtime API (callers reach it via `flush_and_resolve`).
+/// Drives the delivery classifier over a [`PaneQuiescenceProbe`]. `pub` to
+/// support the external test surface in `tests/unit/tmux_transport.rs`; the
+/// function is not part of the runtime API (callers reach it via
+/// `flush_and_resolve`).
 ///
-/// Three-state classifier:
+/// Tmux outcomes derived from pane content:
 /// - `running` — output flowing or settled at prompt. Returns `Ok(pane)`.
-/// - `unresponsive` — prime window elapsed with no observable change AND
-///   no operator interaction. Returns `Err(DeliveryWaitError::Timeout)`.
-/// - `wedged` — pane quiesced + not prompt-ready + no operator interaction.
-///   Returns `Err(DeliveryWaitError::Wedged)` when `wedge_detection` is
-///   enabled; otherwise the loop continues waiting (the prime window is
-///   the only bounded-wait path).
+/// - `unresponsive` — the opted-in prime window elapsed with no observable
+///   change. Returns `Err(DeliveryWaitError::Timeout)`.
+/// - readiness expiry — the flush group's readiness bound elapsed. Returns
+///   `Err(DeliveryWaitError::ReadinessTimeout)` with a reason describing the
+///   last observation.
+///
+/// Tmux does NOT classify `wedged`. Inferring a terminal failure from the
+/// absence of change in rendered content cannot distinguish a hung coder from
+/// a permission dialog awaiting an operator, a compose box holding typed input,
+/// or a coder working without terminal output, so this transport passes
+/// `wedge_detection: false` unconditionally and the readiness bound supplies
+/// the termination the classifier used to.
 ///
 /// This is a thin wrapper that constructs a [`TmuxAsWedgeProbe`] adapter
 /// and delegates to the cross-transport
 /// [`wait_for_quiescent_three_state`] in `src/transports/quiescence.rs`.
-/// The signature is preserved (including the `Result<String,
-/// DeliveryWaitError>` return type that callers and unit tests rely on);
-/// the pane target in the `Ok` value comes from the post-wait
-/// observation the state machine reports (which differs from the
+/// The `Result<String, DeliveryWaitError>` return type that callers and unit
+/// tests rely on is preserved; the pane target in the `Ok` value comes from
+/// the post-wait observation the state machine reports (which differs from the
 /// pre-wait pane target when the active pane changed during the wait).
-/// The 16-probe test surface in `tests/unit/tmux_transport.rs` is
-/// unchanged — probes implement [`PaneQuiescenceProbe`] as before.
 ///
-/// `prime_deadline`, `prime_started_at`, `prime_timeout_ms`, and
-/// `wedge_detection` carry the same semantics as the underlying
+/// `bounds` carries the same semantics as in the underlying
 /// [`wait_for_quiescent_three_state`] (see that function's docs).
 pub fn wait_for_quiescent_pane_three_state<P: PaneQuiescenceProbe>(
     probe: &mut P,
     diagnostics: &DeliveryDiagnosticContext<'_>,
-    quiet_window: Duration,
-    prime_deadline: Option<Instant>,
-    prime_started_at: Instant,
-    prime_timeout_ms: Option<u64>,
-    wedge_detection: bool,
+    bounds: &QuiescenceBounds,
 ) -> Result<String, DeliveryWaitError> {
     let mut adapter = TmuxAsWedgeProbe::new(probe);
-    wait_for_quiescent_three_state(
-        &mut adapter,
-        diagnostics,
-        quiet_window,
-        prime_deadline,
-        prime_started_at,
-        prime_timeout_ms,
-        wedge_detection,
-    )
+    wait_for_quiescent_three_state(&mut adapter, diagnostics, bounds, false)
 }
 
 fn build_prompt_readiness_matcher(

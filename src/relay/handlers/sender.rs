@@ -7,7 +7,8 @@
 use serde_json::json;
 
 use crate::configuration::{
-    BundleConfiguration, BundleMember, TargetConfiguration, TmuxTargetConfiguration,
+    BundleConfiguration, BundleMember, TMUX_READINESS_TIMEOUT_MS_DEFAULT, TargetConfiguration,
+    TmuxTargetConfiguration,
 };
 
 use super::super::authorization::{AuthorizationContext, has_ui_session, ui_session_display_name};
@@ -48,7 +49,7 @@ impl SenderIdentity {
                 start_command: "ui-session".to_string(),
                 prompt_readiness: None,
                 prime_timeout_ms: None,
-                wedge_detection: true,
+                readiness_timeout_ms: TMUX_READINESS_TIMEOUT_MS_DEFAULT,
             }),
             coder_session_id: None,
             policy_id: None,

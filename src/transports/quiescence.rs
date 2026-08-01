@@ -69,7 +69,7 @@ use serde_json::{Value, json};
 use crate::runtime::{
     inscriptions::emit_delivery_diagnostic as emit_diagnostic, signals::shutdown_requested,
 };
-use crate::transports::contract::DeliveryWaitError;
+use crate::transports::contract::{DeliveryWaitError, ReadinessTimeoutReason};
 
 /// Maximum message ids carried by one delivery-progress inscription.
 pub const DIAGNOSTIC_MESSAGE_IDS_MAXIMUM: usize = 32;
@@ -404,6 +404,73 @@ impl QuiescenceState {
     }
 }
 
+/// The bounds one flush group's quiescence wait is subject to.
+///
+/// Grouped rather than passed as loose arguments because they are one cohesive
+/// unit: every field is fixed at group formation from the head envelope, and
+/// none changes for the life of the group. Deriving both deadlines from a
+/// single `started_at` is what implements the spec's requirement that the
+/// readiness bound share the prime window's anchor, and that neither resets
+/// when coalesce-during-wait absorbs a later envelope.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QuiescenceBounds {
+    /// Quiet period slept between the two observations of one iteration.
+    pub quiet_window: Duration,
+    /// The instant the group's wait began; the anchor for both deadlines.
+    pub started_at: Instant,
+    /// Opt-in prime-window deadline. `None` issues no prime-window verdict.
+    /// Its absence does NOT make the wait unbounded — `readiness_deadline`
+    /// applies regardless, where the transport defines one.
+    pub prime_deadline: Option<Instant>,
+    /// The configured prime window, carried for diagnostics only.
+    pub prime_timeout_ms: Option<u64>,
+    /// Unconditional bound on the entire wait, for transports whose readiness
+    /// contract defines one. `None` for a transport that has not defined one;
+    /// that absence SHALL NOT be read as the transport being bounded by some
+    /// other means. See `agentmux:issues/relay/61`.
+    pub readiness_deadline: Option<Instant>,
+}
+
+impl QuiescenceBounds {
+    /// Builds the bounds for one flush group from its head envelope's hints.
+    #[must_use]
+    pub fn new(
+        quiet_window: Duration,
+        started_at: Instant,
+        prime_timeout_ms: Option<u64>,
+        readiness_timeout_ms: Option<u64>,
+    ) -> Self {
+        Self {
+            quiet_window,
+            started_at,
+            prime_deadline: prime_timeout_ms.map(|ms| started_at + Duration::from_millis(ms)),
+            prime_timeout_ms,
+            readiness_deadline: readiness_timeout_ms
+                .map(|ms| started_at + Duration::from_millis(ms)),
+        }
+    }
+
+    /// Reports whether the readiness bound has elapsed as of `now`.
+    #[must_use]
+    fn readiness_elapsed(&self, now: Instant) -> bool {
+        self.readiness_deadline
+            .is_some_and(|deadline| now >= deadline)
+    }
+
+    /// Caps a proposed wait deadline at the readiness bound.
+    ///
+    /// Every `NeedsWait` deadline passes through here, so no wait the
+    /// classifier schedules can outlive the bound. A group carrying no bound
+    /// is returned unchanged, which is what keeps Pty's behavior identical.
+    #[must_use]
+    fn cap(&self, deadline: Instant) -> Instant {
+        match self.readiness_deadline {
+            Some(bound) => deadline.min(bound),
+            None => deadline,
+        }
+    }
+}
+
 /// Outcome of a single [`quiescence_classify_step`] call. The state
 /// machine either resolves (Done) or needs the caller to wait for a
 /// change before the next step.
@@ -430,17 +497,46 @@ pub enum QuiescenceAction {
 /// inside a long wait.
 ///
 /// See [`wait_for_quiescent_three_state`] for the timing contract
-/// (prime_deadline anchored to "delivery-task perspective", operator
-/// interaction indefinitely suppressing both classifiers, etc.).
-#[allow(clippy::too_many_arguments)]
+/// (both deadlines anchored to "delivery-task perspective", neither reset
+/// across coalesce iterations).
+///
+/// # Readiness bound
+///
+/// [`QuiescenceBounds::readiness_deadline`], where the transport defines one,
+/// is the **unconditional termination guarantee** for the wait: it applies
+/// whatever the target shows and whether or not a prime timeout is configured,
+/// and no signal defers, extends, or suspends it. It is not the only terminal
+/// path — an opted-in prime timeout, shutdown, and a positively observed probe
+/// failure each remain terminal — but it is the only one guaranteed to arrive.
+///
+/// It is deliberately **not** a branch in the ordering below. It is a
+/// precondition on the iteration's result: no branch may return `NeedsWait`
+/// once it has elapsed, and every `NeedsWait` deadline is capped at it. Writing
+/// it as a positional early return would report the readiness outcome in an
+/// iteration where a higher-precedence outcome was available. Outcome
+/// precedence, highest first: delivery, then the prime timeout, then the
+/// readiness bound.
+///
+/// # What absence of change does not mean
+///
+/// A target that is not ready is a target that is not ready *now*. The reason
+/// is not knowable from the inspected tail: a permission dialog awaiting an
+/// operator, a compose box holding typed input, a coder producing no terminal
+/// output while working, and a hung process all present as a settled non-prompt
+/// frame. Only a positively observed terminal event — process death, a closed
+/// connection, a protocol error — is sound evidence of failure. Tmux exposes
+/// `pane_dead`, but only under `remain-on-exit`, which this system does not set;
+/// without it a dead process destroys the pane and the resulting probe failure
+/// already resolves the wait. That path is left unbuilt deliberately.
+///
+/// The `wedged` classification draws exactly the inference this warns against.
+/// Pty is its only remaining caller, retained because it is Pty's sole terminal
+/// path until `agentmux:issues/relay/61` supplies a Pty readiness bound.
 pub fn quiescence_classify_step<W: WedgeProbe>(
     probe: &mut W,
     state: &mut QuiescenceState,
     diagnostics: &DeliveryDiagnosticContext<'_>,
-    quiet_window: Duration,
-    prime_deadline: Option<Instant>,
-    prime_started_at: Instant,
-    prime_timeout_ms: Option<u64>,
+    bounds: &QuiescenceBounds,
     wedge_detection: bool,
 ) -> QuiescenceAction {
     if shutdown_requested() {
@@ -453,7 +549,7 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
         Err(reason) => return QuiescenceAction::Done(Err(DeliveryWaitError::Failed { reason })),
     };
 
-    thread::sleep(quiet_window);
+    thread::sleep(bounds.quiet_window);
     if shutdown_requested() {
         return QuiescenceAction::Done(Err(DeliveryWaitError::Shutdown));
     }
@@ -463,6 +559,13 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
         Ok(s) => s,
         Err(reason) => return QuiescenceAction::Done(Err(DeliveryWaitError::Failed { reason })),
     };
+
+    // Sampled once so every bound in this iteration is evaluated against the
+    // same instant. Re-reading the clock per branch would let one bound
+    // observe an elapse the branch above it did not, which is how a
+    // precedence rule silently stops holding.
+    let now = Instant::now();
+    let readiness_elapsed = bounds.readiness_elapsed(now);
 
     // Quiescence: both observations agree across all signals
     // (including pane target and mismatch metadata and the
@@ -499,6 +602,16 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
                     .saturating_sub(snapshot_before.activity_generation),
             }),
         );
+        // Busy suppression is bounded, not indefinite. The
+        // terminal-output-write signal is itself unbounded — a target may
+        // emit bytes forever without ever becoming ready — so suppression
+        // keyed to it is an unbounded wait unless something outranks it.
+        // This is the defect the readiness bound exists to close, and the
+        // reason it must be checked here rather than only on the settled
+        // path below.
+        if readiness_elapsed {
+            return readiness_expiry(diagnostics, bounds, &snapshot_before, &snapshot_after, now);
+        }
         // Return `NeedsWait` with a SHORT deadline (`now + quiet_window`)
         // rather than the prime deadline. The prime deadline can be
         // unbounded when `prime_timeout_ms = None`; production
@@ -514,7 +627,7 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
         // tied to the polling interval — production Tmux wakes up
         // at most every `quiet_window` after the activity has settled,
         // enough to deliver promptly without artificial signals.
-        return QuiescenceAction::NeedsWait(Instant::now() + quiet_window);
+        return QuiescenceAction::NeedsWait(bounds.cap(now + bounds.quiet_window));
     }
 
     // --- `running` — pane is ready. -----------------------------------
@@ -522,6 +635,11 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
     // matches the prompt regex while activity was advancing during
     // the same quiet_window fires Busy above (returning NeedsWait)
     // rather than Delivered here.
+    //
+    // Delivery outranks an elapsed readiness bound, which is why this
+    // branch does not consult `readiness_elapsed`. Reaching readiness late
+    // is the outcome the wait existed to obtain; the bound exists to stop
+    // waiting forever, not to refuse a success already in hand.
     if snapshot_after.is_prompt_ready {
         emit_delivery_progress(
             "delivery_ready",
@@ -565,7 +683,9 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
     // window has not elapsed.
     if wedge_detection && quiescent && !snapshot_after.is_prompt_ready && wedge_class {
         let counter_fires = state.consecutive_quiescent_mismatches >= WEDGE_CONSECUTIVE_TICKS;
-        let prime_elapsed = prime_deadline.is_some_and(|deadline| Instant::now() >= deadline);
+        let prime_elapsed = bounds
+            .prime_deadline
+            .is_some_and(|deadline| now >= deadline);
         if counter_fires || prime_elapsed {
             emit_delivery_progress(
                 "delivery_pane_wedged",
@@ -589,14 +709,16 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
     // `Timeout` when the prime window has elapsed AND the pane is
     // NOT showing wedge-class content. Wedge-class content takes
     // the wedge branch above; the pane is stuck, not unresponsive.
-    if let Some(deadline) = prime_deadline
-        && Instant::now() >= deadline
+    //
+    // Checked before the readiness bound: when both have elapsed in the same
+    // iteration the prime timeout wins, as the more specific diagnosis (no
+    // observable output at all) and the one an operator opted into.
+    if let Some(deadline) = bounds.prime_deadline
+        && now >= deadline
     {
-        let timeout_ms = prime_timeout_ms.unwrap_or(0);
+        let timeout_ms = bounds.prime_timeout_ms.unwrap_or(0);
         let timeout = Duration::from_millis(timeout_ms);
-        let elapsed_ms = Instant::now()
-            .saturating_duration_since(prime_started_at)
-            .as_millis();
+        let elapsed_ms = now.saturating_duration_since(bounds.started_at).as_millis();
         let readiness_mismatch = !snapshot_after.is_prompt_ready;
         emit_delivery_progress(
             "delivery_prime_timeout",
@@ -614,6 +736,12 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
             readiness_mismatch,
             mismatch_reason,
         }));
+    }
+
+    // Readiness bound: the lowest-precedence outcome, reached only when no
+    // delivery, wedge, or prime-timeout outcome was available above.
+    if readiness_elapsed {
+        return readiness_expiry(diagnostics, bounds, &snapshot_before, &snapshot_after, now);
     }
 
     // Non-quiesced or wedge not yet at threshold: emit the dedup'd
@@ -637,18 +765,84 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
     }
 
     let deadline = if wedge_detection && quiescent && wedge_class {
-        let recheck = Instant::now() + quiet_window;
-        prime_deadline.map_or(recheck, |prime| prime.min(recheck))
+        let recheck = now + bounds.quiet_window;
+        bounds
+            .prime_deadline
+            .map_or(recheck, |prime| prime.min(recheck))
     } else {
-        prime_deadline.unwrap_or_else(unbounded_deadline)
+        bounds.prime_deadline.unwrap_or_else(unbounded_deadline)
     };
-    QuiescenceAction::NeedsWait(deadline)
+    // Capping here is what removes the unbounded fall-through for a group
+    // that carries a bound, while leaving a group without one untouched.
+    QuiescenceAction::NeedsWait(bounds.cap(deadline))
+}
+
+/// Resolves a flush group whose readiness bound has elapsed.
+///
+/// Every arm is the same outcome — `SendOutcome::Timeout` — and the reason
+/// only tells an operator which observation the wait ended on.
+fn readiness_expiry(
+    diagnostics: &DeliveryDiagnosticContext<'_>,
+    bounds: &QuiescenceBounds,
+    snapshot_before: &WedgeObservation,
+    snapshot_after: &WedgeObservation,
+    now: Instant,
+) -> QuiescenceAction {
+    let reason_code = classify_readiness_timeout_reason(snapshot_before, snapshot_after);
+    let mismatch_reason = resolve_mismatch_reason(snapshot_after);
+    let elapsed = now.saturating_duration_since(bounds.started_at);
+    emit_delivery_progress(
+        "delivery_readiness_timeout",
+        diagnostics,
+        json!({
+            "pane_target": snapshot_after.pane_target,
+            "reason_code": reason_code.code(),
+            "mismatch_reason": mismatch_reason,
+            "readiness_wait_elapsed_ms": elapsed.as_millis(),
+        }),
+    );
+    QuiescenceAction::Done(Err(DeliveryWaitError::ReadinessTimeout {
+        reason_code,
+        elapsed,
+        mismatch_reason,
+    }))
+}
+
+/// Classifies an observation pair into the reason a readiness bound expired.
+///
+/// Precedence, highest first: activity advancing, an empty inspected tail, a
+/// cursor mismatch on a healthy prompt frame, then frame absence. Activity
+/// ranks first because it is the only signal describing the *pair* rather than
+/// the final snapshot — by the time the bound elapses the last snapshot may
+/// look settled even though the target never was.
+#[must_use]
+pub fn classify_readiness_timeout_reason(
+    snapshot_before: &WedgeObservation,
+    snapshot_after: &WedgeObservation,
+) -> ReadinessTimeoutReason {
+    if snapshot_before.activity_generation != snapshot_after.activity_generation {
+        return ReadinessTimeoutReason::TargetNeverSettled;
+    }
+    if snapshot_after.inspected_tail.trim().is_empty() {
+        return ReadinessTimeoutReason::TargetUnresponsive;
+    }
+    if snapshot_after
+        .mismatch
+        .as_ref()
+        .is_some_and(|mismatch| mismatch.regex_matched == Some(true))
+    {
+        return ReadinessTimeoutReason::PendingOperatorInput;
+    }
+    ReadinessTimeoutReason::TargetNotReady
 }
 
 /// Returns a one-year deadline used when the caller passes `None` for
 /// the prime timeout (i.e. unbounded wait). Bounded so the
 /// `wait_for_change` polling loop terminates on a sane horizon even
 /// if the probe never reports a change.
+///
+/// Only reachable for a flush group carrying no readiness bound;
+/// [`QuiescenceBounds::cap`] shortens it to the bound otherwise.
 fn unbounded_deadline() -> Instant {
     Instant::now() + Duration::from_secs(60 * 60 * 24 * 365)
 }
@@ -664,49 +858,34 @@ fn unbounded_deadline() -> Instant {
 /// other channels between steps (the Pty worker, see
 /// `pty::delivery`) drive [`quiescence_classify_step`] directly.
 ///
-/// `prime_deadline` is the OVERALL bound for the wait — passed in by the
-/// caller and NOT reset across iterations (the spec requires the prime
-/// timer to be anchored to "delivery-task perspective (when flush
-/// begins, not enqueue time)"). `prime_started_at` is the corresponding
-/// anchor instant used for diagnostic `prime_wait_elapsed_ms` values.
-/// `prime_timeout_ms` is the configured timeout value used only for
-/// diagnostic inscriptions (the wait function does not use it for timing
-/// decisions). `None` for both means unbounded.
+/// `bounds` is fixed for the whole wait — built by the caller at group
+/// formation and NOT rebuilt across iterations, because both deadlines are
+/// anchored to "delivery-task perspective (when flush begins, not enqueue
+/// time)" and neither may be extended by a coalesced envelope.
 ///
 /// Precedence: a pane that has settled into a non-prompt state
 /// (quiescent + not-ready) is wedge
 /// territory — prime_timeout MUST NOT fire in this case. Prime timeout
 /// only fires while the pane is still active (changing between
 /// observation ticks) or when wedge detection is disabled and the pane
-/// never settles.
+/// never settles. The readiness bound overrides all of that: it resolves
+/// the group whatever the pane is doing.
 ///
 /// Returns `Ok(pane_target)` on the running branch (the pane is
 /// prompt-ready); the pane target is the
 /// value the probe reported in the successful observation, or an empty
 /// string when the probe did not surface one. Returns
-/// `Err(DeliveryWaitError::...)` on the unresponsive / wedged / failed
-/// / shutdown branches.
+/// `Err(DeliveryWaitError::...)` on the unresponsive / wedged / readiness /
+/// failed / shutdown branches.
 pub fn wait_for_quiescent_three_state<W: WedgeProbe>(
     probe: &mut W,
     diagnostics: &DeliveryDiagnosticContext<'_>,
-    quiet_window: Duration,
-    prime_deadline: Option<Instant>,
-    prime_started_at: Instant,
-    prime_timeout_ms: Option<u64>,
+    bounds: &QuiescenceBounds,
     wedge_detection: bool,
 ) -> Result<String, DeliveryWaitError> {
     let mut state = QuiescenceState::new();
     loop {
-        match quiescence_classify_step(
-            probe,
-            &mut state,
-            diagnostics,
-            quiet_window,
-            prime_deadline,
-            prime_started_at,
-            prime_timeout_ms,
-            wedge_detection,
-        ) {
+        match quiescence_classify_step(probe, &mut state, diagnostics, bounds, wedge_detection) {
             QuiescenceAction::Done(result) => return result,
             QuiescenceAction::NeedsWait(deadline) => {
                 // Block until the probe reports a change or the prime

@@ -1,28 +1,32 @@
-//! Test surface for the tmux transport's three-state delivery classifier
-//! (running / unresponsive / wedged).
+//! Test surface for the tmux transport's delivery classifier
+//! (running / unresponsive).
 //!
 //! Tests inject scripted [`agentmux::tmux::PaneQuiescenceProbe`]
 //! implementations to drive the classifier deterministically — without
 //! real tmux IPC, the probe's state machine is the only seam that can
-//! exercise the wait loop's wedge/timeout/ready branches.
+//! exercise the wait loop's timeout/ready branches.
 //!
-//! The four baseline probe classes cover the wedge/prime-timeout
-//! behavioral contract:
+//! Tmux does not classify `wedged`: it passes `wedge_detection: false`
+//! into the shared classifier, so a settled non-prompt frame resolves
+//! only through a bound. The scripted probes here therefore cover the
+//! prime-timeout and delivery contract:
 //!
-//! - `AlwaysUnresponsiveProbe` — never produces output. Asserts `Timeout`.
-//! - `AlwaysWedgeProbe` — immediately quiesces at a non-prompt state.
-//!   Asserts `Failed` + `reason_code = "pane_wedged"`.
-//! - `SlowPromptProbe` — quiesces at a prompt state after several ticks.
-//!   Asserts `Delivered`.
-//! - `NormalFlowProbe` — produces output then settles at a prompt.
-//!   Asserts `Delivered` without prime or wedge firing.
+//! - a probe that never produces output asserts `Timeout`.
+//! - a probe that quiesces at a prompt after several ticks asserts
+//!   `Delivered`.
+//! - a probe that produces output then settles at a prompt asserts
+//!   `Delivered` without the prime timeout firing.
+//!
+//! The readiness bound's own coverage lives in
+//! `tests/unit/transports_quiescence.rs`, against the shared classifier
+//! both transports drive.
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use agentmux::tmux::{
     PaneQuiescenceProbe, PromptReadinessEvaluation, wait_for_quiescent_pane_three_state,
 };
-use agentmux::transports::{DeliveryDiagnosticContext, DeliveryWaitError};
+use agentmux::transports::{DeliveryDiagnosticContext, DeliveryWaitError, QuiescenceBounds};
 
 const SHORT_QUIET_WINDOW: Duration = Duration::from_millis(5);
 const TEST_TARGET_SESSION: &str = "test-session";
@@ -32,16 +36,20 @@ fn diagnostic_context() -> DeliveryDiagnosticContext<'static> {
     DeliveryDiagnosticContext::without_messages("test-namespace", TEST_TARGET_SESSION)
 }
 
-/// Test helper: builds the `(prime_deadline, prime_started_at, prime_timeout_ms)`
-/// triple the wait function expects. The captured `Instant::now()` is
-/// returned as the `prime_started_at` anchor so the diagnostic
-/// `prime_wait_elapsed_ms` is correctly computed.
-fn prime_window(timeout_ms: Option<u64>) -> (Option<Instant>, Instant, Option<u64>) {
-    let now = Instant::now();
-    (
-        timeout_ms.map(|ms| now + Duration::from_millis(ms)),
-        now,
-        timeout_ms,
+/// Test helper: builds the bounds one flush group's wait is subject to.
+///
+/// Both deadlines derive from a single `Instant::now()`, the way the transport
+/// anchors them at group formation, so the diagnostic elapsed values and the
+/// two bounds all agree on one origin.
+fn tmux_bounds(
+    prime_timeout_ms: Option<u64>,
+    readiness_timeout_ms: Option<u64>,
+) -> QuiescenceBounds {
+    QuiescenceBounds::new(
+        SHORT_QUIET_WINDOW,
+        Instant::now(),
+        prime_timeout_ms,
+        readiness_timeout_ms,
     )
 }
 
@@ -249,38 +257,11 @@ fn always_unresponsive_probe_resolves_timeout() {
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(30)).0,
-        prime_window(Some(30)).1,
-        prime_window(Some(30)).2,
-        false,
+        &tmux_bounds(Some(30), None),
     );
     assert!(
         matches!(result, Err(DeliveryWaitError::Timeout { .. })),
         "expected Timeout, got {result:?}",
-    );
-}
-
-#[test]
-fn always_wedge_probe_resolves_wedged() {
-    // Pane immediately quiesces at a non-prompt state (a stuck-on-
-    // permission-dialog mismatch). Wedge detection enabled and the
-    // mismatch signature stays the same across ticks, so the wedge
-    // counter accumulates to the threshold and fires Wedged before the
-    // prime window expires.
-    let mut probe = ScriptedProbe::constant(ProbeObservation::stuck_unready());
-    let result = wait_for_quiescent_pane_three_state(
-        &mut probe,
-        &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
-        true,
-    );
-    assert!(
-        matches!(result, Err(DeliveryWaitError::Wedged { .. })),
-        "expected Wedged, got {result:?}",
     );
 }
 
@@ -300,11 +281,7 @@ fn slow_prompt_probe_resolves_delivered() {
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
-        true,
+        &tmux_bounds(Some(10_000), None),
     );
     assert!(
         matches!(result, Ok(ref pane) if pane == TEST_PANE_TARGET),
@@ -326,67 +303,11 @@ fn normal_flow_probe_resolves_delivered() {
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
-        false,
+        &tmux_bounds(Some(10_000), None),
     );
     assert!(
         matches!(result, Ok(ref pane) if pane == TEST_PANE_TARGET),
         "expected Ok(pane), got {result:?}",
-    );
-}
-
-#[test]
-fn wedge_default_on_fires_after_consecutive_identical_mismatches() {
-    // Verifies the default-on wedge behavior: with wedge_detection = true
-    // and a sustained non-prompt state, Wedged fires after the wedge
-    // counter reaches the consecutive-tick threshold.
-    let mut probe = ScriptedProbe::constant(ProbeObservation::stuck_unready());
-    let result = wait_for_quiescent_pane_three_state(
-        &mut probe,
-        &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
-        true,
-    );
-    assert!(
-        matches!(result, Err(DeliveryWaitError::Wedged { .. })),
-        "expected Wedged, got {result:?}",
-    );
-}
-
-#[test]
-fn wedge_disabled_preserves_unbounded_wait() {
-    // With wedge disabled and no prime timeout, the wait function does
-    // NOT fire Timeout or Wedged even when the pane is at a sustained
-    // non-prompt state. We use `abort_after_calls` to terminate the
-    // wait function with `Failed` and prove neither Timeout nor Wedged
-    // fired during the run.
-    let mut probe = ScriptedProbe::constant(ProbeObservation::stuck_unready()).with_abort_after(20);
-    let result = wait_for_quiescent_pane_three_state(
-        &mut probe,
-        &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(None).0,
-        prime_window(None).1,
-        prime_window(None).2,
-        false,
-    );
-    assert!(
-        matches!(result, Err(DeliveryWaitError::Failed { .. })),
-        "expected Failed (abort), got {result:?}",
-    );
-    assert!(
-        !matches!(result, Err(DeliveryWaitError::Timeout { .. })),
-        "must not fire Timeout when no prime timeout is configured",
-    );
-    assert!(
-        !matches!(result, Err(DeliveryWaitError::Wedged { .. })),
-        "must not fire Wedged when wedge detection is disabled",
     );
 }
 
@@ -399,11 +320,7 @@ fn prime_timeout_default_off_does_not_fire() {
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(None).0,
-        prime_window(None).1,
-        prime_window(None).2,
-        false,
+        &tmux_bounds(None, None),
     );
     assert!(
         matches!(result, Err(DeliveryWaitError::Failed { .. })),
@@ -424,98 +341,12 @@ fn prime_timeout_opt_in_fires_after_window() {
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(30)).0,
-        prime_window(Some(30)).1,
-        prime_window(Some(30)).2,
-        false,
+        &tmux_bounds(Some(30), None),
     );
     assert!(
         matches!(result, Err(DeliveryWaitError::Timeout { .. })),
         "expected Timeout after prime window, got {result:?}",
     );
-}
-
-#[test]
-fn coalesce_during_wedge_counter_does_not_fire_on_changing_signatures() {
-    // Verifies that the wedge counter resets when the mismatch signature
-    // changes between ticks — agents transitioning through distinct
-    // non-prompt states (e.g. boot output, tool-call prep, idle screens)
-    // must not accumulate wedge ticks.
-    let mut probe = ScriptedProbe::sequence(vec![
-        ProbeObservation::empty_unready(),
-        ProbeObservation::stuck_unready(),
-        ProbeObservation::ready(),
-    ]);
-    let result = wait_for_quiescent_pane_three_state(
-        &mut probe,
-        &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
-        true,
-    );
-    assert!(
-        matches!(result, Ok(ref pane) if pane == TEST_PANE_TARGET),
-        "expected Delivered after signature changes, got {result:?}",
-    );
-}
-
-#[test]
-fn coalesce_during_wedge_counter_fires_after_consecutive_identical_signatures() {
-    // Counterpart to the prior test: when the mismatch signature stays
-    // the same across ticks, the wedge counter accumulates and Wedged
-    // fires at the threshold even if the probe would later transition to
-    // a ready state.
-    let mut probe = ScriptedProbe::sequence(vec![
-        ProbeObservation::stuck_unready(),
-        ProbeObservation::stuck_unready(),
-        ProbeObservation::stuck_unready(),
-        ProbeObservation::ready(),
-    ]);
-    let result = wait_for_quiescent_pane_three_state(
-        &mut probe,
-        &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
-        true,
-    );
-    assert!(
-        matches!(result, Err(DeliveryWaitError::Wedged { .. })),
-        "expected Wedged after consecutive identical signatures, got {result:?}",
-    );
-}
-
-/// A cursor mismatch with a matching prompt regex represents pending operator
-/// input, not a wedge. An already-elapsed prime window therefore resolves it as
-/// Timeout while preserving the probe-supplied cursor reason.
-#[test]
-fn cursor_mismatch_with_matching_regex_is_not_wedged() {
-    let mut probe = ScriptedProbe::constant(ProbeObservation::cursor_mismatch());
-    let result = wait_for_quiescent_pane_three_state(
-        &mut probe,
-        &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(0)).0,
-        prime_window(Some(0)).1,
-        prime_window(Some(0)).2,
-        true,
-    );
-    match result {
-        Err(DeliveryWaitError::Timeout {
-            mismatch_reason: Some(reason),
-            ..
-        }) => {
-            assert!(
-                reason.contains("cursor column"),
-                "expected cursor-column reason, got {reason:?}",
-            );
-        }
-        other => panic!("expected Timeout with cursor reason, got {other:?}"),
-    }
 }
 
 /// Same cursor-class probe, but with wedge detection disabled so the
@@ -531,11 +362,7 @@ fn cursor_mismatch_preserves_its_reason_in_timeout_outcome() {
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10)).0,
-        prime_window(Some(10)).1,
-        prime_window(Some(10)).2,
-        false,
+        &tmux_bounds(Some(10), None),
     );
     match result {
         Err(DeliveryWaitError::Timeout {
@@ -551,40 +378,6 @@ fn cursor_mismatch_preserves_its_reason_in_timeout_outcome() {
     }
 }
 
-/// Verifies the spec requirement that the prime timer is anchored to
-/// the delivery-task perspective and does NOT reset across coalesce
-/// iterations. The test passes a `prime_deadline` that has ALREADY
-/// elapsed (computed against a captured `Instant::now()` from well in
-/// the past) and asserts the wait function fires Timeout on the very
-/// first iteration. If the deadline were reset on each call (i.e.
-/// re-captured from `Instant::now()` inside the wait function), the
-/// wait would loop indefinitely instead of firing Timeout.
-/// Verifies BE's spec interpretation: a short prime timeout MUST NOT
-/// pre-empt wedge for a quiesced pane showing wedge-class content
-/// (regex/cursor mismatch). The probe stays at `stuck_unready` (a
-/// wedge-class mismatch) for the entire run; wedge detection is
-/// enabled; the prime timeout is shorter than the wedge counter
-/// threshold. Expected outcome: `Wedged` (not `Timeout`).
-#[test]
-fn short_prime_timeout_does_not_preempt_wedge_for_wedge_class_mismatch() {
-    let mut probe = ScriptedProbe::constant(ProbeObservation::stuck_unready());
-    // Short prime window (10ms) — would fire before the wedge counter
-    // reaches WEDGE_CONSECUTIVE_TICKS (3 ticks × 5ms = 15ms).
-    let result = wait_for_quiescent_pane_three_state(
-        &mut probe,
-        &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10)).0,
-        prime_window(Some(10)).1,
-        prime_window(Some(10)).2,
-        true,
-    );
-    assert!(
-        matches!(result, Err(DeliveryWaitError::Wedged { .. })),
-        "expected Wedged (wedge-class mismatch fires Wedged regardless of prime window), got {result:?}",
-    );
-}
-
 /// Counterpart to the prior test: a short prime timeout with a
 /// dead-pane probe (empty mismatch, no observable content) fires
 /// `Timeout`, not `Wedged`. Empty mismatches are Unresponsive
@@ -595,11 +388,7 @@ fn short_prime_timeout_fires_timeout_for_dead_pane_mismatch() {
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10)).0,
-        prime_window(Some(10)).1,
-        prime_window(Some(10)).2,
-        true,
+        &tmux_bounds(Some(10), None),
     );
     assert!(
         matches!(result, Err(DeliveryWaitError::Timeout { .. })),
@@ -626,55 +415,17 @@ fn coalesce_during_prime_does_not_extend_window() {
     // The wait function MUST use the passed deadline (not re-capture
     // `Instant::now()`) for this assertion to hold.
     let past_now = Instant::now() - Duration::from_secs(60);
-    let already_elapsed_deadline = past_now;
-    let result = wait_for_quiescent_pane_three_state(
-        &mut probe,
-        &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        Some(already_elapsed_deadline),
-        past_now - Duration::from_secs(60),
-        Some(0),
-        false,
-    );
+    let bounds = QuiescenceBounds {
+        quiet_window: SHORT_QUIET_WINDOW,
+        started_at: past_now - Duration::from_secs(60),
+        prime_deadline: Some(past_now),
+        prime_timeout_ms: Some(0),
+        readiness_deadline: None,
+    };
+    let result = wait_for_quiescent_pane_three_state(&mut probe, &diagnostic_context(), &bounds);
     assert!(
         matches!(result, Err(DeliveryWaitError::Timeout { .. })),
         "expected Timeout from pre-elapsed prime deadline, got {result:?}",
-    );
-}
-
-/// R1 integration test: Busy pre-classification prevents Wedged from
-/// firing on a Tmux probe whose terminal-output-write marker advances
-/// on every iteration. The probe keeps `is_prompt_ready == false` and
-/// the same wedge-class mismatch signature across iterations, so under
-/// the pre-R0 classifier this exact sequence would fire `Wedged` after
-/// `WEDGE_CONSECUTIVE_TICKS = 3` consecutive identical signatures.
-/// The Busy short-circuit (Tasks.md §3.3) must reset the wedge counter
-/// every iteration, preventing Wedged from firing within the abort
-/// window. The wait function terminates via the probe's
-/// `abort_after` instead, returning `DeliveryWaitError::Failed`.
-#[test]
-fn tmux_busy_short_circuit_prevents_wedged_when_activity_advances_on_every_iteration() {
-    let observations = vec![ProbeObservation::stuck_unready(); 40];
-    let activity: Vec<u64> = (1..=80).collect();
-    let mut probe = ScriptedProbe::sequence(observations)
-        .with_activity_sequence(activity)
-        .with_abort_after(60);
-    let result = wait_for_quiescent_pane_three_state(
-        &mut probe,
-        &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(None).0,
-        prime_window(None).1,
-        prime_window(None).2,
-        true,
-    );
-    assert!(
-        !matches!(result, Err(DeliveryWaitError::Wedged { .. })),
-        "Busy must have prevented Wedged from firing, got {result:?}",
-    );
-    assert!(
-        matches!(result, Err(DeliveryWaitError::Failed { .. })),
-        "expected Failed (from abort_after) since Busy should keep the wait function looping, got {result:?}",
     );
 }
 
@@ -697,11 +448,7 @@ fn tmux_busy_short_circuit_defers_delivered_when_activity_advances_while_ready()
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
         &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(None).0,
-        prime_window(None).1,
-        prime_window(None).2,
-        true,
+        &tmux_bounds(None, None),
     );
     assert!(
         result.is_err(),
@@ -710,109 +457,6 @@ fn tmux_busy_short_circuit_defers_delivered_when_activity_advances_while_ready()
     assert!(
         matches!(result, Err(DeliveryWaitError::Failed { .. })),
         "expected Failed (from abort_after), got {result:?}",
-    );
-}
-
-/// R1 regression check: when activity stays constant (the default
-/// ScriptedProbe behavior — no `with_activity_sequence` call), the
-/// Tmux probe behaves identically to before R1. Wedge-class mismatch
-/// on a constant observation fires `Wedged` after the counter
-/// threshold (`WEDGE_CONSECUTIVE_TICKS = 3`). This guards against an
-/// accidental default-activity=non-zero regression.
-#[test]
-fn tmux_constant_activity_fires_wedged_as_before() {
-    let mut probe = ScriptedProbe::constant(ProbeObservation::stuck_unready());
-    let result = wait_for_quiescent_pane_three_state(
-        &mut probe,
-        &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(Some(10_000)).0,
-        prime_window(Some(10_000)).1,
-        prime_window(Some(10_000)).2,
-        true,
-    );
-    assert!(
-        matches!(result, Err(DeliveryWaitError::Wedged { .. })),
-        "constant activity must not change Wedged baseline behavior, got {result:?}",
-    );
-}
-
-/// §5.1: alternating activity-on / activity-off with sustained
-/// non-prompt pane content. The probe alternates between
-/// iterations where activity advances (Busy fires, wedge counter
-/// resets) and iterations where activity is quiesced (wedge counter
-/// increments). Across multiple iterations, `Wedged` must not
-/// fire because Busy resets the counter between accumulations,
-/// and never-3-consecutive is sufficient to keep the counter
-/// below the threshold.
-#[test]
-fn tmux_alternating_activity_does_not_fire_wedged() {
-    // 20 iterations of alternating behavior. Each iteration
-    // consumes 2 activity values (one per observe). Pair 1:
-    // advancing (Busy fires); pair 2: constant (wedge counter
-    // increments); repeat.
-    let mut activity: Vec<u64> = Vec::with_capacity(40);
-    for i in 0..20u64 {
-        // Even-indexed iterations are constant; odd-indexed
-        // iterations are advancing by 1.
-        if i % 2 == 0 {
-            activity.push(i);
-            activity.push(i);
-        } else {
-            activity.push(i);
-            activity.push(i + 1);
-        }
-    }
-    let observations = vec![ProbeObservation::stuck_unready(); 20];
-    let mut probe = ScriptedProbe::sequence(observations)
-        .with_activity_sequence(activity)
-        .with_abort_after(40);
-    let result = wait_for_quiescent_pane_three_state(
-        &mut probe,
-        &diagnostic_context(),
-        SHORT_QUIET_WINDOW,
-        prime_window(None).0,
-        prime_window(None).1,
-        prime_window(None).2,
-        true,
-    );
-    assert!(
-        !matches!(result, Err(DeliveryWaitError::Wedged { .. })),
-        "alternating activity must keep the wedge counter below threshold, got {result:?}",
-    );
-    assert!(
-        matches!(result, Err(DeliveryWaitError::Failed { .. })),
-        "expected Failed (from abort_after) since alternating Busy keeps the wait function looping, got {result:?}",
-    );
-}
-
-/// Group atomicity test (5.8): when the wedge classifier fires for a
-/// coalesced flush group, the entire group resolves with the same
-/// `pane_wedged` outcome. The wait function itself only returns one
-/// error per call; `flush_and_resolve` maps that error to every
-/// sender in the group. This test exercises the mapping logic
-/// through `wait_error_to_outcome` directly.
-#[test]
-fn wedge_outcome_maps_to_pane_wedged_reason_code() {
-    use agentmux::tmux::wait_error_to_outcome_for_test;
-    let outcome = wait_error_to_outcome_for_test(
-        TEST_TARGET_SESSION,
-        &DeliveryWaitError::Wedged {
-            reason: "prompt regex did not match inspected pane tail".to_string(),
-        },
-        "msg-1",
-    );
-    use agentmux::transports::SendOutcome;
-    assert_eq!(outcome.outcome, SendOutcome::Failed);
-    assert_eq!(outcome.reason_code.as_deref(), Some("pane_wedged"));
-    assert!(
-        outcome
-            .reason
-            .as_deref()
-            .unwrap_or("")
-            .contains("prompt regex did not match inspected pane tail"),
-        "reason should carry the wedge diagnostic, got {:?}",
-        outcome.reason,
     );
 }
 
@@ -878,6 +522,7 @@ fn tmux_transport_render_paste_text_emits_receipt_marker_for_receipt_only() {
             choice_decider_sessions: Vec::new(),
             quiet_window: std::time::Duration::from_millis(50),
             prime_timeout_ms: None,
+            readiness_timeout_ms: None,
             is_receipt,
         }
     }

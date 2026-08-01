@@ -11,7 +11,8 @@ use super::{
     },
     types::{
         AcpChannel, AcpTargetConfiguration, NameValueEntry, PromptReadinessTemplate,
-        PtyTargetConfiguration, SessionType, TargetConfiguration, TmuxTargetConfiguration,
+        PtyTargetConfiguration, SessionType, TMUX_READINESS_TIMEOUT_MS_DEFAULT,
+        TMUX_READINESS_TIMEOUT_MS_RANGE, TargetConfiguration, TmuxTargetConfiguration,
     },
 };
 
@@ -63,7 +64,9 @@ pub(super) fn build_session_target(
                             start_command,
                             prompt_readiness,
                             prime_timeout_ms: tmux_target.prime_timeout_ms,
-                            wedge_detection: tmux_target.wedge_detection.unwrap_or(true),
+                            readiness_timeout_ms: tmux_target
+                                .readiness_timeout_ms
+                                .unwrap_or(TMUX_READINESS_TIMEOUT_MS_DEFAULT),
                         }),
                         coder_session_id,
                     ))
@@ -270,6 +273,20 @@ pub(super) fn validate_tmux_target(
         ));
     }
 
+    if let Some(readiness_timeout_ms) = target.readiness_timeout_ms
+        && !TMUX_READINESS_TIMEOUT_MS_RANGE.contains(&readiness_timeout_ms)
+    {
+        let minimum = TMUX_READINESS_TIMEOUT_MS_RANGE.start();
+        let maximum = TMUX_READINESS_TIMEOUT_MS_RANGE.end();
+        return Err(ConfigurationError::invalid(
+            coders_path,
+            format!(
+                "coder '{coder_id}' tmux readiness-timeout-ms must be between \
+                 {minimum} and {maximum} inclusive (got {readiness_timeout_ms})"
+            ),
+        ));
+    }
+
     Ok(TmuxTarget {
         initial_command: target.initial_command,
         resume_command: target.resume_command,
@@ -277,7 +294,7 @@ pub(super) fn validate_tmux_target(
         prompt_inspect_lines: target.prompt_inspect_lines,
         prompt_idle_column: target.prompt_idle_column,
         prime_timeout_ms: target.prime_timeout_ms,
-        wedge_detection: target.wedge_detection,
+        readiness_timeout_ms: target.readiness_timeout_ms,
     })
 }
 

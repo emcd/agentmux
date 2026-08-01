@@ -553,14 +553,30 @@ pub struct DeliveryEnvelope {
     /// it for ACP targets) without knowing which transport will consume it,
     /// so the envelope stays transport-neutral.
     ///
-    /// `None` means unbounded (bounded only by relay shutdown). When the
-    /// prime window elapses during a transport's prime wait with no
-    /// observable output AND no operator-interaction signal active, the
-    /// transport MUST resolve its wait as `SendOutcome::Timeout` (existing
-    /// outcome variant). The transport's own wedge-detection machinery
-    /// governs the post-quiescence prompt-readiness wait; this field bounds
-    /// only the prime window.
+    /// `None` issues no prime-window verdict. It does NOT mean the wait is
+    /// unbounded: see `readiness_timeout_ms`, which applies regardless where
+    /// the transport defines one. When the prime window elapses during a
+    /// transport's prime wait with no observable output, the transport MUST
+    /// resolve its wait as `SendOutcome::Timeout` (existing outcome variant).
+    /// This field bounds only the prime window.
     pub prime_timeout_ms: Option<u64>,
+    /// Bound on the ENTIRE wait for a flush group, for transports whose
+    /// readiness contract defines one. Covers the prime window and any period
+    /// of continuous target activity, not merely the post-quiescence stretch,
+    /// and no signal defers, extends, or suspends it.
+    ///
+    /// Populated only for transports that both define a readiness bound and
+    /// can soundly report its expiry as non-delivery. That is Tmux alone
+    /// today: Tmux injects into the pane only after its readiness wait, so an
+    /// expired bound provably precedes delivery. Pty writes every envelope to
+    /// the PTY master before its wait and ACP submits the prompt before its
+    /// wait, so on those an expired bound may follow actual delivery and
+    /// reporting non-delivery would assert what the transport cannot
+    /// establish. They receive `None`, as do UI and pubsub.
+    ///
+    /// A `None` value MUST NOT be read as that transport being bounded by
+    /// some other means. It is not. See `agentmux:issues/relay/61`.
+    pub readiness_timeout_ms: Option<u64>,
     /// True when this envelope carries a terminal-outcome receipt (a
     /// relay/system-originated notice back to the original sender for a
     /// non-delivered outcome). Carried on the envelope so per-transport
@@ -631,9 +647,8 @@ impl DeliveryMessage {
 /// raises it forms no transport<->relay back-edge.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DeliveryWaitError {
-    /// The prime window elapsed during the wait with no observable output
-    /// and no operator-interaction signal active. Maps to
-    /// `SendOutcome::Timeout` (existing variant); the
+    /// The prime window elapsed during the wait with no observable output.
+    /// Maps to `SendOutcome::Timeout` (existing variant); the
     /// `readiness_mismatch`/`mismatch_reason` fields capture whether the
     /// pane was already in a not-prompt-ready state at fire time.
     Timeout {
@@ -641,8 +656,11 @@ pub enum DeliveryWaitError {
         readiness_mismatch: bool,
         mismatch_reason: Option<String>,
     },
-    /// The pane became quiescent + not-prompt-ready + no operator
-    /// interaction active, and wedge detection is enabled. Maps to
+    /// The target became quiescent + not-prompt-ready, and wedge detection is
+    /// enabled. Only Pty enables it: Tmux passes `wedge_detection: false`
+    /// because a settled non-prompt frame is produced by a hung coder, a
+    /// permission dialog, a compose box, and a coder working silently alike,
+    /// and `capture-pane` cannot tell them apart. Maps to
     /// `SendOutcome::Failed` with `reason_code = "pane_wedged"`. The
     /// `reason` carries the last-observed prompt-readiness mismatch reason
     /// (or a default placeholder when the probe did not record one) so
@@ -650,10 +668,57 @@ pub enum DeliveryWaitError {
     Wedged {
         reason: String,
     },
+    /// The flush group's readiness bound elapsed without the target becoming
+    /// ready. Maps to `SendOutcome::Timeout` carrying `reason_code`'s string
+    /// form. Distinct from [`DeliveryWaitError::Timeout`] because the two
+    /// bounds diagnose different things and the prime timeout outranks this
+    /// one when both elapse in the same iteration.
+    ReadinessTimeout {
+        reason_code: ReadinessTimeoutReason,
+        elapsed: Duration,
+        mismatch_reason: Option<String>,
+    },
     Failed {
         reason: String,
     },
     Shutdown,
+}
+
+/// Why a readiness bound expired, derived from the most recent observation.
+///
+/// Diagnostic only: every variant resolves the same `SendOutcome::Timeout`.
+/// The distinction exists so an operator can tell a short bound from a stuck
+/// target, not so the transport can decide differently. In particular none of
+/// these is a claim that the target has failed — a settled non-prompt frame is
+/// produced by a hung coder, a permission dialog, a compose box, and a coder
+/// working without terminal output alike, and the inspected tail cannot
+/// separate them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadinessTimeoutReason {
+    /// Target activity advanced across the observation pair: the target was
+    /// producing output the whole time and never settled.
+    TargetNeverSettled,
+    /// The inspected tail carried no observable content.
+    TargetUnresponsive,
+    /// The prompt frame was present but the cursor sat away from its
+    /// configured idle column, so an operator has input pending.
+    PendingOperatorInput,
+    /// The prompt frame was absent. Covers the four indistinguishable cases
+    /// together, precisely because they are indistinguishable.
+    TargetNotReady,
+}
+
+impl ReadinessTimeoutReason {
+    /// Returns the stable `reason_code` string reported to the sender.
+    #[must_use]
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::TargetNeverSettled => "target_never_settled",
+            Self::TargetUnresponsive => "target_unresponsive",
+            Self::PendingOperatorInput => "pending_operator_input",
+            Self::TargetNotReady => "target_not_ready",
+        }
+    }
 }
 
 /// The transport-level outcome for one delivered envelope. Structurally mirrors

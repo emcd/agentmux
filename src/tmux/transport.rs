@@ -26,7 +26,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use serde_json::json;
@@ -37,8 +37,8 @@ use crate::envelope::{PromptBatchSettings, batch_envelope_groups};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::transports::{
     DeliveryDiagnosticContext, DeliveryEnvelope, DeliveryWaitError, LookMode, LookSnapshotPayload,
-    OutcomeFuture, OutputView, SendOutcome, SingleDeliveryOutcome, StartupContext, Transport,
-    TransportError, TransportReadiness, TransportStatus,
+    OutcomeFuture, OutputView, QuiescenceBounds, SendOutcome, SingleDeliveryOutcome,
+    StartupContext, Transport, TransportError, TransportReadiness, TransportStatus,
 };
 
 /// Default tmux look window applied when the caller omits a window size.
@@ -259,12 +259,9 @@ fn run_delivery_task(
 ) {
     let tmux_socket_path = tmux_socket_path_for_runtime_directory(ctx.runtime_directory.as_path());
 
-    let (prompt_readiness, wedge_detection) = match &ctx.target_member.target {
-        TargetConfiguration::Tmux(tmux_target) => (
-            tmux_target.prompt_readiness.clone(),
-            tmux_target.wedge_detection,
-        ),
-        _ => (None, true),
+    let prompt_readiness = match &ctx.target_member.target {
+        TargetConfiguration::Tmux(tmux_target) => tmux_target.prompt_readiness.clone(),
+        _ => None,
     };
 
     // Current envelope group. Accumulates contiguous envelopes; flushed
@@ -291,7 +288,6 @@ fn run_delivery_task(
                         &ctx.namespace,
                         &ctx.target_session,
                         prompt_readiness.as_ref(),
-                        wedge_detection,
                         &mut receiver,
                         &shutdown_flag,
                         batch_settings,
@@ -316,7 +312,6 @@ fn run_delivery_task(
                         &ctx.namespace,
                         &ctx.target_session,
                         prompt_readiness.as_ref(),
-                        wedge_detection,
                         &mut receiver,
                         &shutdown_flag,
                         batch_settings,
@@ -348,7 +343,6 @@ fn run_delivery_task(
                             &ctx.namespace,
                             &ctx.target_session,
                             prompt_readiness.as_ref(),
-                            wedge_detection,
                             &mut receiver,
                             &shutdown_flag,
                             batch_settings,
@@ -371,7 +365,6 @@ fn run_delivery_task(
                             &ctx.namespace,
                             &ctx.target_session,
                             prompt_readiness.as_ref(),
-                            wedge_detection,
                             &mut receiver,
                             &shutdown_flag,
                             batch_settings,
@@ -388,7 +381,6 @@ fn run_delivery_task(
                             &ctx.namespace,
                             &ctx.target_session,
                             prompt_readiness.as_ref(),
-                            wedge_detection,
                             &mut receiver,
                             &shutdown_flag,
                             batch_settings,
@@ -459,7 +451,6 @@ fn flush_and_resolve(
     namespace: &str,
     target_session: &str,
     prompt_readiness: Option<&PromptReadinessTemplate>,
-    wedge_detection: bool,
     receiver: &mut mpsc::Receiver<WriteItem>,
     shutdown_flag: &AtomicBool,
     batch_settings: PromptBatchSettings,
@@ -469,21 +460,23 @@ fn flush_and_resolve(
     }
 
     // Use the head envelope's quiescence hints for the entire group.
-    // `prime_timeout_ms` is the per-coder bounded prime window the tmux
-    // transport consumes from the envelope; `wedge_detection` is the
-    // per-coder switch (default-on) for firing `pane_wedged` on
-    // quiescent + non-prompt + no operator interaction.
+    // `prime_timeout_ms` is the operator's opt-in prime window;
+    // `readiness_timeout_ms` is the unconditional bound on the whole wait.
     //
-    // The prime timer is anchored to the START OF THIS FLUSH GROUP and
-    // is NOT reset across coalesce iterations (the spec requires the
-    // prime timer to be anchored to "delivery-task perspective (when
-    // flush begins, not enqueue time)" and "does NOT reset on
-    // coalesce-during-wait"). The deadline is computed once here and
-    // threaded into every wait call below.
-    let quiet_window = group[0].0.quiet_window;
-    let prime_timeout_ms = group[0].0.prime_timeout_ms;
-    let prime_started_at = Instant::now();
-    let prime_deadline = prime_timeout_ms.map(|ms| prime_started_at + Duration::from_millis(ms));
+    // Both are anchored to the START OF THIS FLUSH GROUP and neither is
+    // reset across coalesce iterations (the spec requires the prime timer
+    // to be anchored to "delivery-task perspective (when flush begins, not
+    // enqueue time)" and to not reset on coalesce-during-wait, and requires
+    // the readiness bound to share that anchor). `QuiescenceBounds` derives
+    // both deadlines from one anchor instant, so a later envelope cannot
+    // extend either; the bounds are computed once here and threaded into
+    // every wait call below.
+    let bounds = QuiescenceBounds::new(
+        group[0].0.quiet_window,
+        Instant::now(),
+        group[0].0.prime_timeout_ms,
+        group[0].0.readiness_timeout_ms,
+    );
 
     // Deferred raw item from the post-quiescence drain. Carries across
     // coalesce loop iterations so the re-check happens before paste.
@@ -523,9 +516,9 @@ fn flush_and_resolve(
             }
         };
 
-        // Wait for quiescence (blocks). The same `prime_deadline` is
-        // passed on every coalesce iteration, so absorbed envelopes do
-        // not extend the prime window.
+        // Wait for quiescence (blocks). The same `bounds` is passed on every
+        // coalesce iteration, so absorbed envelopes extend neither the prime
+        // window nor the readiness bound.
         // Group membership is fixed for this call: unlike Pty, Tmux absorbs
         // new envelopes only after the wait returns, then starts a new
         // coalesce iteration with a freshly built diagnostic context.
@@ -538,11 +531,7 @@ fn flush_and_resolve(
                     .iter()
                     .map(|(envelope, _)| envelope.message_id.as_str()),
             ),
-            quiet_window,
-            prime_deadline,
-            prime_started_at,
-            prime_timeout_ms,
-            wedge_detection,
+            &bounds,
         ) {
             Ok(_) => {}
             Err(DeliveryWaitError::Shutdown) => {
@@ -788,16 +777,25 @@ fn wait_error_to_outcome(
             )),
             details: None,
         },
-        DeliveryWaitError::Wedged { reason } => SingleDeliveryOutcome {
+        DeliveryWaitError::ReadinessTimeout {
+            reason_code,
+            elapsed,
+            mismatch_reason,
+        } => SingleDeliveryOutcome {
             target_session: target_session.to_string(),
             message_id: message_id.to_string(),
-            outcome: SendOutcome::Failed,
-            reason_code: Some("pane_wedged".to_string()),
+            outcome: SendOutcome::Timeout,
+            reason_code: Some(reason_code.code().to_string()),
             reason: Some(format!(
-                "tmux pane wedged (pane settled at non-prompt state with no operator interaction): {reason}"
+                "tmux target did not become ready within {}ms (reason={:?})",
+                elapsed.as_millis(),
+                mismatch_reason
             )),
             details: None,
         },
+        DeliveryWaitError::Wedged { .. } => unreachable!(
+            "tmux passes wedge_detection: false, so the shared classifier never returns Wedged"
+        ),
         DeliveryWaitError::Failed { reason } => SingleDeliveryOutcome {
             target_session: target_session.to_string(),
             message_id: message_id.to_string(),
