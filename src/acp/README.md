@@ -139,7 +139,9 @@ prompt completion wait for a flush group to that window. On fire:
 - the per-target readiness latches to `Unavailable`, matching the
   path used for `PromptCompletion::ConnectionClosed`;
 - a `delivery_prime_timeout` inscription is emitted carrying
-  `target_session`, `timeout_ms`, and `prime_wait_elapsed_ms`;
+  `namespace`, `target_session`, the bounded `message_ids` from the combined
+  turn, the uncapped `message_ids_total`, `timeout_ms`, and
+  `prime_wait_elapsed_ms`;
 - the transport signals respawn-needed so the worker can re-bootstrap
   the runtime on the same path used for connection closure.
 

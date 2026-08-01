@@ -22,11 +22,15 @@ use std::time::{Duration, Instant};
 use agentmux::tmux::{
     PaneQuiescenceProbe, PromptReadinessEvaluation, wait_for_quiescent_pane_three_state,
 };
-use agentmux::transports::DeliveryWaitError;
+use agentmux::transports::{DeliveryDiagnosticContext, DeliveryWaitError};
 
 const SHORT_QUIET_WINDOW: Duration = Duration::from_millis(5);
 const TEST_TARGET_SESSION: &str = "test-session";
 const TEST_PANE_TARGET: &str = "%0";
+
+fn diagnostic_context() -> DeliveryDiagnosticContext<'static> {
+    DeliveryDiagnosticContext::without_messages("test-namespace", TEST_TARGET_SESSION)
+}
 
 /// Test helper: builds the `(prime_deadline, prime_started_at, prime_timeout_ms)`
 /// triple the wait function expects. The captured `Instant::now()` is
@@ -244,7 +248,7 @@ fn always_unresponsive_probe_resolves_timeout() {
     let mut probe = ScriptedProbe::constant(ProbeObservation::empty_unready());
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(30)).0,
         prime_window(Some(30)).1,
@@ -267,7 +271,7 @@ fn always_wedge_probe_resolves_wedged() {
     let mut probe = ScriptedProbe::constant(ProbeObservation::stuck_unready());
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -295,7 +299,7 @@ fn slow_prompt_probe_resolves_delivered() {
     ]);
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -321,7 +325,7 @@ fn normal_flow_probe_resolves_delivered() {
     ]);
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -342,7 +346,7 @@ fn wedge_default_on_fires_after_consecutive_identical_mismatches() {
     let mut probe = ScriptedProbe::constant(ProbeObservation::stuck_unready());
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -365,7 +369,7 @@ fn wedge_disabled_preserves_unbounded_wait() {
     let mut probe = ScriptedProbe::constant(ProbeObservation::stuck_unready()).with_abort_after(20);
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(None).0,
         prime_window(None).1,
@@ -394,7 +398,7 @@ fn prime_timeout_default_off_does_not_fire() {
     let mut probe = ScriptedProbe::constant(ProbeObservation::empty_unready()).with_abort_after(20);
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(None).0,
         prime_window(None).1,
@@ -419,7 +423,7 @@ fn prime_timeout_opt_in_fires_after_window() {
     let mut probe = ScriptedProbe::constant(ProbeObservation::empty_unready());
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(30)).0,
         prime_window(Some(30)).1,
@@ -445,7 +449,7 @@ fn coalesce_during_wedge_counter_does_not_fire_on_changing_signatures() {
     ]);
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -472,7 +476,7 @@ fn coalesce_during_wedge_counter_fires_after_consecutive_identical_signatures() 
     ]);
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -493,7 +497,7 @@ fn cursor_mismatch_with_matching_regex_is_not_wedged() {
     let mut probe = ScriptedProbe::constant(ProbeObservation::cursor_mismatch());
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(0)).0,
         prime_window(Some(0)).1,
@@ -526,7 +530,7 @@ fn cursor_mismatch_preserves_its_reason_in_timeout_outcome() {
     ]);
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10)).0,
         prime_window(Some(10)).1,
@@ -568,7 +572,7 @@ fn short_prime_timeout_does_not_preempt_wedge_for_wedge_class_mismatch() {
     // reaches WEDGE_CONSECUTIVE_TICKS (3 ticks × 5ms = 15ms).
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10)).0,
         prime_window(Some(10)).1,
@@ -590,7 +594,7 @@ fn short_prime_timeout_fires_timeout_for_dead_pane_mismatch() {
     let mut probe = ScriptedProbe::constant(ProbeObservation::empty_unready());
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10)).0,
         prime_window(Some(10)).1,
@@ -625,7 +629,7 @@ fn coalesce_during_prime_does_not_extend_window() {
     let already_elapsed_deadline = past_now;
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         Some(already_elapsed_deadline),
         past_now - Duration::from_secs(60),
@@ -657,7 +661,7 @@ fn tmux_busy_short_circuit_prevents_wedged_when_activity_advances_on_every_itera
         .with_abort_after(60);
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(None).0,
         prime_window(None).1,
@@ -692,7 +696,7 @@ fn tmux_busy_short_circuit_defers_delivered_when_activity_advances_while_ready()
         .with_abort_after(60);
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(None).0,
         prime_window(None).1,
@@ -720,7 +724,7 @@ fn tmux_constant_activity_fires_wedged_as_before() {
     let mut probe = ScriptedProbe::constant(ProbeObservation::stuck_unready());
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -765,7 +769,7 @@ fn tmux_alternating_activity_does_not_fire_wedged() {
         .with_abort_after(40);
     let result = wait_for_quiescent_pane_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(None).0,
         prime_window(None).1,

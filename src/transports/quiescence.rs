@@ -15,11 +15,11 @@
 //! ## Three-state classifier
 //!
 //! - `running` — output is flowing or settled at prompt. Returns `Ok`.
-//! - `unresponsive` — prime window elapsed with no observable change AND
-//!   no operator interaction AND an empty inspected tail. Returns
+//! - `unresponsive` — prime window elapsed with no observable change and
+//!   an empty inspected tail. Returns
 //!   `Err(DeliveryWaitError::Timeout)`.
-//! - `wedged` — pane quiesced + not prompt-ready + no operator interaction
-//!   AND the inspected tail has observable non-prompt content. Returns
+//! - `wedged` — pane quiesced + not prompt-ready and the inspected tail has
+//!   observable non-prompt content. Returns
 //!   `Err(DeliveryWaitError::Wedged)` after the counter threshold
 //!   (`WEDGE_CONSECUTIVE_TICKS`) is reached.
 //!
@@ -64,10 +64,82 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde_json::json;
+use serde_json::{Value, json};
 
-use crate::runtime::{inscriptions::emit_delivery_diagnostic, signals::shutdown_requested};
+use crate::runtime::{
+    inscriptions::emit_delivery_diagnostic as emit_diagnostic, signals::shutdown_requested,
+};
 use crate::transports::contract::DeliveryWaitError;
+
+/// Maximum message ids carried by one delivery-progress inscription.
+pub const DIAGNOSTIC_MESSAGE_IDS_MAXIMUM: usize = 32;
+
+/// Identity and group correlation shared by delivery-progress diagnostics.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeliveryDiagnosticContext<'a> {
+    pub namespace: &'a str,
+    pub target_session: &'a str,
+    message_ids: Vec<String>,
+    message_ids_total: usize,
+}
+
+impl<'a> DeliveryDiagnosticContext<'a> {
+    #[must_use]
+    pub fn new<I, S>(namespace: &'a str, target_session: &'a str, message_ids: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut ids = Vec::new();
+        let mut total = 0;
+        for message_id in message_ids {
+            if ids.len() < DIAGNOSTIC_MESSAGE_IDS_MAXIMUM {
+                ids.push(message_id.as_ref().to_string());
+            }
+            total += 1;
+        }
+        Self {
+            namespace,
+            target_session,
+            message_ids: ids,
+            message_ids_total: total,
+        }
+    }
+
+    #[must_use]
+    pub fn without_messages(namespace: &'a str, target_session: &'a str) -> Self {
+        Self::new(namespace, target_session, std::iter::empty::<&str>())
+    }
+
+    #[must_use]
+    pub fn message_ids(&self) -> &[String] {
+        self.message_ids.as_slice()
+    }
+
+    #[must_use]
+    pub fn message_ids_total(&self) -> usize {
+        self.message_ids_total
+    }
+}
+
+/// Emits one delivery-progress diagnostic with bounded group correlation.
+pub fn emit_delivery_progress(
+    event: &str,
+    context: &DeliveryDiagnosticContext<'_>,
+    mut details: Value,
+) {
+    let object = details
+        .as_object_mut()
+        .expect("delivery diagnostic details must be an object");
+    object.insert("namespace".to_string(), json!(context.namespace));
+    object.insert("target_session".to_string(), json!(context.target_session));
+    object.insert("message_ids".to_string(), json!(context.message_ids));
+    object.insert(
+        "message_ids_total".to_string(),
+        json!(context.message_ids_total),
+    );
+    emit_diagnostic(event, &details);
+}
 
 /// Number of consecutive observation iterations showing the SAME wedge-class
 /// non-prompt evaluation before wedge detection fires. Bounded by design: a
@@ -364,7 +436,7 @@ pub enum QuiescenceAction {
 pub fn quiescence_classify_step<W: WedgeProbe>(
     probe: &mut W,
     state: &mut QuiescenceState,
-    target_session: &str,
+    diagnostics: &DeliveryDiagnosticContext<'_>,
     quiet_window: Duration,
     prime_deadline: Option<Instant>,
     prime_started_at: Instant,
@@ -417,10 +489,10 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
     // as a follow-up proposal with a process-level aliveness signal.
     if snapshot_before.activity_generation != snapshot_after.activity_generation {
         state.consecutive_quiescent_mismatches = 0;
-        emit_delivery_diagnostic(
+        emit_delivery_progress(
             "delivery_target_active",
-            &json!({
-                "target_session": target_session,
+            diagnostics,
+            json!({
                 "pane_target": snapshot_after.pane_target,
                 "activity_delta": snapshot_after
                     .activity_generation
@@ -451,10 +523,10 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
     // the same quiet_window fires Busy above (returning NeedsWait)
     // rather than Delivered here.
     if snapshot_after.is_prompt_ready {
-        emit_delivery_diagnostic(
+        emit_delivery_progress(
             "delivery_ready",
-            &json!({
-                "target_session": target_session,
+            diagnostics,
+            json!({
                 "pane_target": snapshot_after.pane_target,
             }),
         );
@@ -495,10 +567,10 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
         let counter_fires = state.consecutive_quiescent_mismatches >= WEDGE_CONSECUTIVE_TICKS;
         let prime_elapsed = prime_deadline.is_some_and(|deadline| Instant::now() >= deadline);
         if counter_fires || prime_elapsed {
-            emit_delivery_diagnostic(
+            emit_delivery_progress(
                 "delivery_pane_wedged",
-                &json!({
-                    "target_session": target_session,
+                diagnostics,
+                json!({
                     "pane_target": snapshot_after.pane_target,
                     "mismatch_reason": mismatch_reason,
                     "consecutive_quiescent_ticks": state.consecutive_quiescent_mismatches,
@@ -526,10 +598,10 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
             .saturating_duration_since(prime_started_at)
             .as_millis();
         let readiness_mismatch = !snapshot_after.is_prompt_ready;
-        emit_delivery_diagnostic(
+        emit_delivery_progress(
             "delivery_prime_timeout",
-            &json!({
-                "target_session": target_session,
+            diagnostics,
+            json!({
                 "pane_target": snapshot_after.pane_target,
                 "timeout_ms": timeout_ms,
                 "prime_wait_elapsed_ms": elapsed_ms,
@@ -549,10 +621,10 @@ pub fn quiescence_classify_step<W: WedgeProbe>(
     if !snapshot_after.is_prompt_ready {
         let signature = MismatchSignature::from_observation(&snapshot_after);
         if should_emit_prompt_mismatch(&mut state.last_mismatch_signature, &signature) {
-            emit_delivery_diagnostic(
+            emit_delivery_progress(
                 "delivery_prompt_mismatch",
-                &json!({
-                    "target_session": target_session,
+                diagnostics,
+                json!({
                     "pane_target": snapshot_after.pane_target,
                     "mismatch_reason": signature.mismatch_reason,
                     "regex_matched": signature.regex_matched,
@@ -601,22 +673,22 @@ fn unbounded_deadline() -> Instant {
 /// diagnostic inscriptions (the wait function does not use it for timing
 /// decisions). `None` for both means unbounded.
 ///
-/// Precedence: a pane that has settled into a non-prompt state with no
-/// operator interaction (quiescent + not-ready + no op) is wedge
+/// Precedence: a pane that has settled into a non-prompt state
+/// (quiescent + not-ready) is wedge
 /// territory — prime_timeout MUST NOT fire in this case. Prime timeout
 /// only fires while the pane is still active (changing between
 /// observation ticks) or when wedge detection is disabled and the pane
 /// never settles.
 ///
 /// Returns `Ok(pane_target)` on the running branch (the pane is
-/// prompt-ready + not in operator interaction); the pane target is the
+/// prompt-ready); the pane target is the
 /// value the probe reported in the successful observation, or an empty
 /// string when the probe did not surface one. Returns
 /// `Err(DeliveryWaitError::...)` on the unresponsive / wedged / failed
 /// / shutdown branches.
 pub fn wait_for_quiescent_three_state<W: WedgeProbe>(
     probe: &mut W,
-    target_session: &str,
+    diagnostics: &DeliveryDiagnosticContext<'_>,
     quiet_window: Duration,
     prime_deadline: Option<Instant>,
     prime_started_at: Instant,
@@ -628,7 +700,7 @@ pub fn wait_for_quiescent_three_state<W: WedgeProbe>(
         match quiescence_classify_step(
             probe,
             &mut state,
-            target_session,
+            diagnostics,
             quiet_window,
             prime_deadline,
             prime_started_at,

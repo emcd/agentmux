@@ -38,7 +38,8 @@ use regex::Regex;
 use crate::configuration::PromptReadinessTemplate;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::{
-    DeliveryWaitError, WedgeObservation, WedgeProbe, wait_for_quiescent_three_state,
+    DeliveryDiagnosticContext, DeliveryWaitError, WedgeObservation, WedgeProbe,
+    wait_for_quiescent_three_state,
 };
 
 use super::pane::{
@@ -301,11 +302,6 @@ impl<'a, P: PaneQuiescenceProbe> WedgeProbe for TmuxAsWedgeProbe<'a, P> {
 ///   enabled; otherwise the loop continues waiting (the prime window is
 ///   the only bounded-wait path).
 ///
-/// Operator interaction (copy-mode or active key-table) indefinitely
-/// suppresses BOTH the unresponsive and the wedged classification, on
-/// both the prime window and the post-quiescence wait. Prime timeout
-/// does NOT fire while operator interaction is active.
-///
 /// This is a thin wrapper that constructs a [`TmuxAsWedgeProbe`] adapter
 /// and delegates to the cross-transport
 /// [`wait_for_quiescent_three_state`] in `src/transports/quiescence.rs`.
@@ -322,7 +318,7 @@ impl<'a, P: PaneQuiescenceProbe> WedgeProbe for TmuxAsWedgeProbe<'a, P> {
 /// [`wait_for_quiescent_three_state`] (see that function's docs).
 pub fn wait_for_quiescent_pane_three_state<P: PaneQuiescenceProbe>(
     probe: &mut P,
-    target_session: &str,
+    diagnostics: &DeliveryDiagnosticContext<'_>,
     quiet_window: Duration,
     prime_deadline: Option<Instant>,
     prime_started_at: Instant,
@@ -332,7 +328,7 @@ pub fn wait_for_quiescent_pane_three_state<P: PaneQuiescenceProbe>(
     let mut adapter = TmuxAsWedgeProbe::new(probe);
     wait_for_quiescent_three_state(
         &mut adapter,
-        target_session,
+        diagnostics,
         quiet_window,
         prime_deadline,
         prime_started_at,

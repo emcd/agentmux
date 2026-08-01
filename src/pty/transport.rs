@@ -51,8 +51,9 @@ use tokio::sync::{mpsc, oneshot};
 use crate::configuration::BundleMember;
 use crate::configuration::TermProtocol;
 use crate::transports::{
-    DeliveryEnvelope, OutcomeFuture, OutputView, SingleDeliveryOutcome, StartupContext, Transport,
-    TransportError, TransportReadiness, TransportStatus, WorkerReadinessState,
+    DeliveryDiagnosticContext, DeliveryEnvelope, OutcomeFuture, OutputView, SingleDeliveryOutcome,
+    StartupContext, Transport, TransportError, TransportReadiness, TransportStatus,
+    WorkerReadinessState,
 };
 
 /// Mirrors the worker readiness state into the relay's global registry.
@@ -459,6 +460,7 @@ impl PtyTransport {
 
         let target_session = self.target_member.id.clone();
         let target_session_for_worker = target_session.clone();
+        let namespace_for_worker = context.namespace.clone();
         let writer_for_worker = writer_arc.clone();
         let child_for_worker = child_arc.clone();
         let shutdown_flag_for_worker = self.shutdown_flag.clone();
@@ -484,6 +486,7 @@ impl PtyTransport {
                     shared_for_worker,
                     writer_for_worker,
                     child_for_worker,
+                    namespace_for_worker,
                     target_session_for_worker,
                     shutdown_flag_for_worker,
                     Some(init_tx),
@@ -858,6 +861,7 @@ fn run_worker(
     shared: PtyShared,
     writer: Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
     _child: Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+    namespace: String,
     target_session: String,
     shutdown_flag: Arc<AtomicBool>,
     // Init-result handshake: send `Ok(())` after a successful
@@ -1019,12 +1023,16 @@ fn run_worker(
         // the wait stashes the raw in `pending_raw` for the next
         // iteration.
         if let Some(d) = delivery.as_mut() {
+            let diagnostics = DeliveryDiagnosticContext::without_messages(
+                namespace.as_str(),
+                target_session.as_str(),
+            );
             match d.step(
                 &mut terminal,
                 &mut bytes_rx,
                 &mut write_rx,
                 &shared,
-                &target_session,
+                &diagnostics,
                 &mut pending_raw,
             ) {
                 super::delivery::DeliveryStep::Continue => {

@@ -33,8 +33,8 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 
 use crate::transports::{
-    DeliveryEnvelope, DeliveryWaitError, QuiescenceAction, QuiescenceState, SingleDeliveryOutcome,
-    quiescence_classify_step,
+    DeliveryDiagnosticContext, DeliveryEnvelope, DeliveryWaitError, QuiescenceAction,
+    QuiescenceState, SingleDeliveryOutcome, quiescence_classify_step,
 };
 
 use super::state::{PtyShared, WorkerTerminalProbe};
@@ -437,7 +437,7 @@ impl Delivery {
         bytes_rx: &mut mpsc::Receiver<Vec<u8>>,
         write_rx: &mut mpsc::Receiver<super::transport::DeliveryCommand>,
         shared: &PtyShared,
-        target_session: &str,
+        diagnostics: &DeliveryDiagnosticContext<'_>,
         pending_raw: &mut Option<PendingRaw>,
     ) -> DeliveryStep {
         match self {
@@ -446,7 +446,7 @@ impl Delivery {
                 bytes_rx,
                 write_rx,
                 shared,
-                target_session,
+                diagnostics,
                 pending_raw,
             ),
             Delivery::Raw(raw) => raw.step(
@@ -454,7 +454,7 @@ impl Delivery {
                 bytes_rx,
                 write_rx,
                 shared,
-                target_session,
+                diagnostics,
                 pending_raw,
             ),
         }
@@ -539,7 +539,7 @@ impl DeliveryRun {
         bytes_rx: &mut mpsc::Receiver<Vec<u8>>,
         write_rx: &mut mpsc::Receiver<super::transport::DeliveryCommand>,
         shared: &PtyShared,
-        target_session: &str,
+        diagnostics: &DeliveryDiagnosticContext<'_>,
         _pending_raw: &mut Option<PendingRaw>,
     ) -> DeliveryStep {
         if self.wait.is_some() {
@@ -548,11 +548,11 @@ impl DeliveryRun {
                 bytes_rx,
                 write_rx,
                 shared,
-                target_session,
+                diagnostics,
                 _pending_raw,
             )
         } else {
-            self.step_classify(terminal, shared, target_session)
+            self.step_classify(terminal, shared, diagnostics)
         }
     }
 
@@ -560,7 +560,7 @@ impl DeliveryRun {
         &mut self,
         terminal: &mut libghostty_vt::Terminal<'static, 'static>,
         shared: &PtyShared,
-        target_session: &str,
+        diagnostics: &DeliveryDiagnosticContext<'_>,
     ) -> DeliveryStep {
         let mut probe = WorkerTerminalProbe::new(
             terminal,
@@ -570,7 +570,13 @@ impl DeliveryRun {
         let classify = quiescence_classify_step(
             &mut probe,
             &mut self.qstate,
-            target_session,
+            &DeliveryDiagnosticContext::new(
+                diagnostics.namespace,
+                diagnostics.target_session,
+                self.group
+                    .iter()
+                    .map(|(envelope, _)| envelope.message_id.as_str()),
+            ),
             self.quiet_window,
             self.prime_deadline,
             self.prime_started_at,
@@ -581,7 +587,7 @@ impl DeliveryRun {
             QuiescenceAction::Done(result) => {
                 self.resolved = true;
                 let wedged = is_wedged(&result);
-                send_group_outcomes(&mut self.group, result, target_session);
+                send_group_outcomes(&mut self.group, result, diagnostics.target_session);
                 DeliveryStep::Done { wedged }
             }
             QuiescenceAction::NeedsWait(deadline) => {
@@ -603,7 +609,7 @@ impl DeliveryRun {
         bytes_rx: &mut mpsc::Receiver<Vec<u8>>,
         write_rx: &mut mpsc::Receiver<super::transport::DeliveryCommand>,
         shared: &PtyShared,
-        target_session: &str,
+        diagnostics: &DeliveryDiagnosticContext<'_>,
         pending_raw: &mut Option<PendingRaw>,
     ) -> DeliveryStep {
         // Borrow the wait (and probe) for the duration of this
@@ -647,7 +653,7 @@ impl DeliveryRun {
                 self.wait = None;
                 // Drop the probe borrow before the recursive call.
                 drop(probe);
-                match self.classify_after_raw_barrier(terminal, shared, target_session) {
+                match self.classify_after_raw_barrier(terminal, shared, diagnostics) {
                     Some(action) => action,
                     None => {
                         // Classify still wants to wait. Treat the
@@ -657,7 +663,7 @@ impl DeliveryRun {
                             &mut self.group,
                             "delivery interrupted by raw batch barrier".to_string(),
                             "raw_interrupted",
-                            target_session,
+                            diagnostics.target_session,
                         );
                         DeliveryStep::Done { wedged: false }
                     }
@@ -675,7 +681,7 @@ impl DeliveryRun {
         &mut self,
         terminal: &mut libghostty_vt::Terminal<'static, 'static>,
         shared: &PtyShared,
-        target_session: &str,
+        diagnostics: &DeliveryDiagnosticContext<'_>,
     ) -> Option<DeliveryStep> {
         let mut probe = WorkerTerminalProbe::new(
             terminal,
@@ -685,7 +691,13 @@ impl DeliveryRun {
         let classify = quiescence_classify_step(
             &mut probe,
             &mut self.qstate,
-            target_session,
+            &DeliveryDiagnosticContext::new(
+                diagnostics.namespace,
+                diagnostics.target_session,
+                self.group
+                    .iter()
+                    .map(|(envelope, _)| envelope.message_id.as_str()),
+            ),
             self.quiet_window,
             self.prime_deadline,
             self.prime_started_at,
@@ -696,7 +708,7 @@ impl DeliveryRun {
             QuiescenceAction::Done(result) => {
                 self.resolved = true;
                 let wedged = is_wedged(&result);
-                send_group_outcomes(&mut self.group, result, target_session);
+                send_group_outcomes(&mut self.group, result, diagnostics.target_session);
                 Some(DeliveryStep::Done { wedged })
             }
             QuiescenceAction::NeedsWait(_) => None,
@@ -729,13 +741,13 @@ impl RawDelivery {
         bytes_rx: &mut mpsc::Receiver<Vec<u8>>,
         _write_rx: &mut mpsc::Receiver<super::transport::DeliveryCommand>,
         shared: &PtyShared,
-        target_session: &str,
+        diagnostics: &DeliveryDiagnosticContext<'_>,
         _pending_raw: &mut Option<PendingRaw>,
     ) -> DeliveryStep {
         if self.wait.is_some() {
-            self.step_wait_poll(terminal, bytes_rx, _write_rx, shared, target_session)
+            self.step_wait_poll(terminal, bytes_rx, _write_rx, shared, diagnostics)
         } else {
-            self.step_classify(terminal, shared, target_session)
+            self.step_classify(terminal, shared, diagnostics)
         }
     }
 
@@ -743,7 +755,7 @@ impl RawDelivery {
         &mut self,
         terminal: &mut libghostty_vt::Terminal<'static, 'static>,
         shared: &PtyShared,
-        target_session: &str,
+        diagnostics: &DeliveryDiagnosticContext<'_>,
     ) -> DeliveryStep {
         let mut probe = WorkerTerminalProbe::new(
             terminal,
@@ -753,7 +765,7 @@ impl RawDelivery {
         let classify = quiescence_classify_step(
             &mut probe,
             &mut self.qstate,
-            target_session,
+            diagnostics,
             self.quiet_window,
             self.prime_deadline,
             self.prime_started_at,
@@ -764,7 +776,7 @@ impl RawDelivery {
             QuiescenceAction::Done(result) => {
                 self.resolved = true;
                 let wedged = is_wedged(&result);
-                let outcome = envelope_outcome_from_wait_result(result, target_session);
+                let outcome = envelope_outcome_from_wait_result(result, diagnostics.target_session);
                 if let Some(raw) = self.raw.take() {
                     let _ = raw.outcome_tx.send(outcome);
                 }
@@ -792,7 +804,7 @@ impl RawDelivery {
         bytes_rx: &mut mpsc::Receiver<Vec<u8>>,
         write_rx: &mut mpsc::Receiver<super::transport::DeliveryCommand>,
         shared: &PtyShared,
-        _target_session: &str,
+        _diagnostics: &DeliveryDiagnosticContext<'_>,
     ) -> DeliveryStep {
         let wait = self
             .wait
