@@ -16,8 +16,34 @@ one of three terminal states:
 - `wedged` — during the quiescence wait for the flush group, output has
   settled and the prompt-readiness template's frame does not match; the
   transport resolves the flush group as `SendOutcome::Failed` with a
-  transport-defined `reason_code` on the same `Failed` variant (for the Tmux
-  transport, `reason_code = "pane_wedged"`).
+  transport-defined `reason_code` on the same `Failed` variant.
+
+The `wedged` classification is **unsound**. It infers a terminal failure from the
+absence of change in rendered content, which cannot distinguish a hung target
+from a permission dialog awaiting an operator, a compose box holding typed input,
+or a target working without output.
+
+Tmux SHALL NOT classify `wedged`. **Pty is the sole retained user of the
+classification, as a named temporary exception**: it is Pty's only terminal path
+today, and removing it before `agentmux:issues/relay/61` supplies a Pty readiness
+bound would leave Pty unable to end a wait at all. No other transport SHALL adopt
+`wedged`, and a transport lacking a readiness bound SHALL NOT read that lack as
+licence to classify `wedged`. Missing a bound is the condition that has so far
+kept Pty from dropping an unsound classification, not a criterion that makes the
+classification sound; the remedy is to supply the bound.
+
+Positive observation of activity remains a valid signal on every transport and
+continues to suppress injection. **For Tmux**, the absence of activity SHALL NOT
+be treated as a signal: only a positively observed terminal event — process
+death, a closed connection, a protocol error — is sound evidence of failure, and
+an unchanged screen is not. Pty's retained `wedged` classifier does infer failure
+from an unchanged screen; that it does is the defect `agentmux:issues/relay/61`
+closes, not an exemption this rule grants.
+
+Tmux exposes `pane_dead`, but only under `remain-on-exit`, which this system
+does not set; without it a dead process destroys the pane and the resulting
+probe failure already resolves the wait. That path is therefore left unbuilt
+deliberately rather than overlooked.
 
 A Tmux quiescence wait SHALL be bounded by the flush group's readiness bound
 (`DeliveryEnvelope.readiness_timeout_ms`; see the `delivery-quiescence`
@@ -75,10 +101,15 @@ written to the target's pane/screen. It does NOT trigger when the
 target's agent process is busy but is producing zero terminal bytes
 (e.g., silent model thinking, pre-output tool-call prep). This
 distinction is explicit: a target in silent thinking produces a
-constant `activity_generation` value across observations, the
-comparator never registers an advance, and the wedge classifier
-continues to fire `pane_wedged` on such a target — the same false
-positive the change was supposed to prevent. The silent-thinking case
+constant `activity_generation` value across observations and the
+comparator never registers an advance. On a transport that still
+classifies `wedged` — Pty today — that target is reported as wedged,
+which is the false positive the Busy short-circuit was meant to
+prevent and cannot. On Tmux the case is now benign: the target simply
+remains pending until it produces output or the readiness bound
+elapses. This is one of the four indistinguishable cases that motivated
+removing the Tmux classifier, and it is why Pty's removal is tracked
+alongside its bound. The silent-thinking case
 is a real bug but requires a separate process-level aliveness
 signal (filed as a follow-up); it is out of scope for this change.
 
@@ -120,11 +151,12 @@ outcome and then apply precedence.
 An elapsed readiness bound SHALL NOT pre-empt the `delivery_ready` branch. When
 the bound has elapsed and the observation is prompt-ready and the activity
 signal did not advance, the classifier SHALL resolve `Delivered`. Full outcome
-precedence within one iteration, highest first: delivery, then the wedge
-predicate, then the prime timeout, then the readiness bound. Delivery ranks
-first because the bound exists to stop an unbounded wait rather than to refuse a
-success that is already available, and because the prompt-ready check already
-precedes the prime-timeout check in the branch order above.
+precedence within one iteration, highest first: delivery, then the prime
+timeout, then the readiness bound. Delivery ranks first because the bound exists
+to stop an unbounded wait rather than to refuse a success that is already
+available, and because the prompt-ready check already precedes the prime-timeout
+check in the branch order above. On a transport that still classifies `wedged` —
+Pty today — that classification sits between delivery and the prime timeout.
 
 The Busy pre-classification is unaffected by this. A prompt-ready observation
 whose activity generation advanced across the pair is still deferred rather than
@@ -132,20 +164,19 @@ delivered; if the bound has elapsed in that iteration the group resolves
 terminally instead of returning `NeedsWait`.
 
 The `unresponsive` and `wedged` classifiers SHALL each be config-surfaced
-per the per-transport spec (see `transport-contracts` Tmux Prime Timeout and
-Tmux Wedged State Detection requirements for the Tmux surface).
+per the per-transport spec (see `transport-contracts` Tmux Prime Timeout for the
+Tmux surface and Pty Wedged State Detection for the Pty surface).
 
 - The Tmux `unresponsive` classifier's prime window SHALL be **opt-in**: absent
   or `None` on `[coders.<id>.tmux].prime-timeout-ms` means no prime-window
   verdict is issued. It does not mean the wait is unbounded; the Tmux readiness
   bound still applies.
-- The Tmux `wedged` classifier SHALL be **opt-out**: it defaults to
-  enabled (`wedge-detection` is `true` when absent or `true`),
-  because the cost of a silently-wedged pane is higher than the cost
-  of a false-positive wedge. Operators MAY set
-  `[coders.<id>.tmux].wedge-detection = false` to suppress the early wedge
-  verdict. The opt-out SHALL NOT restore an unbounded wait; the readiness bound
-  still applies and the group resolves as `Timeout` when it elapses.
+- Tmux SHALL NOT surface a `wedged` knob. Tmux does not classify `wedged` at all,
+  so there is no behavior for a knob to select.
+- The Pty `wedged` classifier SHALL remain **opt-out**, defaulting to enabled,
+  until `agentmux:issues/relay/61` supplies a Pty readiness bound and the
+  classifier is removed with it. It is retained because it is Pty's only terminal
+  path, not because the classification is sound.
 
 No signal that the transport cannot bound SHALL suppress, defer, or otherwise
 gate a Tmux classification indefinitely. This applies to operator-observable
@@ -170,34 +201,29 @@ The three states are mutually exclusive at the moment of terminal
 classification. The classifier SHALL NOT combine them (for example, a
 flush group SHALL NOT resolve as `Timeout AND Failed`).
 
-#### Scenario: Tmux delivery classifies into one of three states
+#### Scenario: Tmux pane-content observation resolves to delivery or timeout
 
 - **WHEN** the Tmux transport's quiescence wait observes the target's
   output state during the wait for a flush group
-- **THEN** it routes the flush group to exactly one of `Delivered`,
-  `Timeout`, or `Failed` with `reason_code = "pane_wedged"`
+- **THEN** the outcome it derives from that observation is exactly one of
+  `Delivered` or `Timeout`
+- **AND** no Tmux outcome carries `reason_code = "pane_wedged"`
+- **AND** the transport's terminal paths that are not derived from pane content —
+  relay shutdown, and a positively observed probe or transport failure — are
+  unaffected by this scenario
 - **AND** the relay worker treats the resulting `SingleDeliveryOutcome`
   as terminal regardless of which classifier fired
 
-#### Scenario: Tmux wedge detection defaults to enabled
+#### Scenario: A settled Tmux pane is not classified as failed
 
-- **WHEN** the bundle config does not set
-  `[coders.<id>.tmux].wedge-detection` (or sets it to `true`)
-- **THEN** the Tmux transport classifies a settled pane whose prompt frame is
-  absent as `wedged`
-- **AND** resolves the flush group as `Failed` with
-  `reason_code = "pane_wedged"`
-
-#### Scenario: Tmux wedge detection opt-out suppresses the verdict, not the bound
-
-- **WHEN** the bundle config sets
-  `[coders.<id>.tmux].wedge-detection = false`
-- **THEN** the Tmux transport continues to wait past quiescence without issuing
-  a wedge verdict
-- **AND** the flush group's readiness bound still applies
-- **AND** the terminal failure modes for the flush group are `Timeout` (from the
-  readiness bound, or from the prime timeout if enabled and it fires) and
-  `Shutdown` (if relay shutdown is requested)
+- **WHEN** a Tmux pane is quiescent with the prompt frame absent, for any reason
+  — a hung coder, a permission dialog awaiting an operator, a compose box
+  holding typed input, or a coder working without terminal output
+- **THEN** the Tmux transport issues no terminal failure on that basis
+- **AND** the flush group remains pending until the target becomes ready, the
+  prime timeout fires if enabled, or the readiness bound elapses
+- **BECAUSE** the four cases are indistinguishable from the inspected tail, so
+  classifying any of them as failed misreports three of them
 
 #### Scenario: Absent Tmux prime timeout suppresses the prime verdict, not the bound
 
@@ -206,9 +232,8 @@ flush group SHALL NOT resolve as `Timeout AND Failed`).
 - **THEN** the Tmux transport does not fire a prime-window `Timeout` for
   unresponsive targets regardless of how long output remains absent
 - **AND** the flush group's readiness bound still applies
-- **AND** the terminal failure modes for the flush group are `Failed` +
-  `reason_code = "pane_wedged"` (when wedge detection is enabled, which is the
-  default), `Timeout` from the readiness bound, and `Shutdown`
+- **AND** the terminal failure modes for the flush group are `Timeout` from the
+  readiness bound and `Shutdown`
 
 #### Scenario: Classification is unaffected by operator copy-mode
 
@@ -222,14 +247,15 @@ flush group SHALL NOT resolve as `Timeout AND Failed`).
 
 #### Scenario: Group atomicity on failure classification
 
-- **WHEN** the Tmux transport's quiescence wait classifies the flush
-  group as `unresponsive` or `wedged`
+- **WHEN** a promptable transport's quiescence wait classifies the flush group
+  into a non-delivered terminal state — `unresponsive` on either transport, or
+  `wedged` on Pty
 - **THEN** every sender in the flush group receives the same terminal
   outcome
 - **AND** the transport does NOT classify individual envelopes
   independently within the same flush group
 
-#### Scenario: Busy short-circuit suppresses wedged classification on active target
+#### Scenario: Busy short-circuit suppresses terminal classification on an active Tmux target
 
 - **WHEN** the Tmux transport's quiescence wait observes the target's
   activity signal advancing between two consecutive observation polls
@@ -237,7 +263,8 @@ flush group SHALL NOT resolve as `Timeout AND Failed`).
   template (the screen has not yet returned to the prompt because the
   target is mid-generation)
 - **AND** the flush group's readiness bound has not elapsed
-- **THEN** the transport does NOT classify the flush group as `wedged`
+- **THEN** the transport does NOT promote the flush group to any terminal
+  classification for that iteration
 - **AND** continues to wait for either the activity to settle and the
   pane to become prompt-ready, or the prime window to elapse with no
   activity observed, or the readiness bound to elapse
@@ -433,6 +460,7 @@ A bound applies to a flush group only when that group's envelope carries it.
   whose fields (`inspected_tail`, `is_prompt_ready`, `pane_target`,
   `mismatch`, `activity_generation`) reflect the live pane state at
   the moment of the call
-- **AND** the Tmux-side wedge/prime semantics match the merged
+- **AND** the Tmux-side prime and Busy semantics match the merged
   `tmux-wedge-detection` and `add-wedge-detection-busy-state`
-  proposals unchanged
+  proposals unchanged, except that Tmux no longer consumes the
+  state machine's `Wedged` result

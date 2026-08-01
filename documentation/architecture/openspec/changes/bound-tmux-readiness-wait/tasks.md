@@ -20,18 +20,16 @@
 - [ ] 2.1 Thread an optional readiness deadline through
   `quiescence_classify_step`, anchored at `prime_started_at`
 - [ ] 2.2 Evaluate every available outcome before selecting one — delivery
-  readiness, the wedge predicate, and each elapsed bound — then apply precedence;
+  readiness and each elapsed bound — then apply precedence;
   do not add the readiness check as a positional early return, which would
   pre-empt a higher-precedence outcome
 - [ ] 2.3 Add the reason classifier mapping the most recent observation to a
   `Timeout` reason code, with reason precedence activity, empty tail, cursor
-  mismatch, frame absence. A readiness expiry SHALL NOT produce `pane_wedged`:
-  that reason belongs to the wedge path, which resolves before the bound is
-  consulted, and a frame first seen absent at expiry has not satisfied the tick
-  threshold
+  mismatch, frame absence. The reason is diagnostic only — every arm is the same
+  outcome — and no Tmux path produces `pane_wedged`
 - [ ] 2.4 Apply outcome precedence when more than one outcome is available in
-  the same iteration: delivery, then the wedge predicate, then the prime
-  timeout, then the readiness bound. The Busy pre-classification is applied
+  the same iteration: delivery, then the prime timeout, then the readiness
+  bound. The Busy pre-classification is applied
   before outcome selection, so a prompt-ready observation whose activity
   advanced across the pair does not count as delivery-available and resolves
   `target_never_settled` when the bound has elapsed
@@ -50,28 +48,43 @@
   (`src/tmux/quiescence_probe.rs`)
 - [ ] 3.2 Confirm `src/pty/delivery.rs` passes no readiness bound and its
   delivery behavior is byte-for-byte unchanged
-- [ ] 3.3 Exclude cursor-class mismatches from wedge-class in the shared
-  classifier's documented contract, matching the shipped `regex_matched` gate
+- [ ] 3.3 In the **Tmux** outcome mapping, use the frame-versus-cursor
+  distinction only to select the `Timeout` reason code, never as a failure
+  predicate. Leave the shared `regex_matched` wedge-class gate itself in place —
+  Pty still classifies on it, and demoting it in the shared classifier would
+  change Pty behavior this change has not specified
+
+## 3b. Remove Tmux Wedge Detection
+
+- [ ] 3b.1 Stop the Tmux transport passing `wedge_detection` into the shared
+  classifier, and stop it consuming `DeliveryWaitError::Wedged`
+- [ ] 3b.2 Delete the `wedge-detection` key from the Tmux per-coder config type,
+  leaving the Pty key in place
+- [ ] 3b.3 Remove the `pane_wedged` reason string and the
+  `delivery_pane_wedged` diagnostic from the Tmux path, including the
+  operator-facing wedge reason text that claims operator interaction was ruled
+  out
+- [ ] 3b.4 Leave the shared `WedgeProbe` trait, `QuiescenceState`, the
+  consecutive-mismatch counter and `WEDGE_CONSECUTIVE_TICKS` intact — Pty still
+  drives them. Do not rename or relocate shared machinery in this change
+- [ ] 3b.5 Remove Tmux wedge tests, and confirm the Pty wedge tests still pass
+  unchanged as the evidence that removal was Tmux-scoped
 
 ## 4. Coverage
 
 - [ ] 4.1 Unit coverage that a Tmux target whose activity advances on every
   observation terminates on the readiness bound with `target_never_settled`
 - [ ] 4.2 Unit coverage for each reason-classifier arm at expiry: empty tail,
-  cursor mismatch, and frame absent below the wedge threshold — the last
-  asserting `Timeout` with `target_not_ready` and explicitly not `pane_wedged`,
-  with wedge detection both enabled and disabled to prove the knob does not
-  change what an expiry means
+  cursor mismatch, and frame absent — each asserting `Timeout` with its reason,
+  and none producing `pane_wedged`
 - [ ] 4.3 Unit coverage for reason precedence when more than one condition holds
   in the same observation pair
-- [ ] 4.4 Unit coverage for outcome precedence below delivery: a wedge predicate
-  satisfied in the same iteration as expiry resolves as the wedge, and a prime
-  timeout elapsing alongside the readiness bound resolves as the prime timeout
-  (the delivery tier is covered by 4.9)
-- [ ] 4.5 Unit coverage that the wedge counter still resets on activity, so a
-  pre-activity wedge start cannot combine with newly settled content
-- [ ] 4.6 Unit coverage that `wedge-detection = false` and an absent prime
-  timeout both still terminate on the readiness bound
+- [ ] 4.4 Unit coverage that a prime timeout elapsing alongside the readiness
+  bound resolves as the prime timeout (the delivery tier is covered by 4.9)
+- [ ] 4.5 Unit coverage that a settled Tmux pane with the frame absent produces
+  no terminal outcome before the bound, whatever the pane content
+- [ ] 4.6 Unit coverage that an absent prime timeout still terminates on the
+  readiness bound
 - [ ] 4.7 Unit coverage that no returned `NeedsWait` deadline exceeds the bound
 - [ ] 4.8 Unit coverage that a flush group carrying no readiness bound is
   classified exactly as it was before this change, so the shared code path does
@@ -97,12 +110,17 @@
 ## 5. Documentation
 
 - [ ] 5.1 Update the quiescence subsystem README where it describes the Tmux
-  wait as bounded only by wedge detection or the prime window
+  wait as bounded by wedge detection, and record that Tmux no longer classifies
+  `wedged` while Pty still does
 - [ ] 5.2 Update operator-facing async-delivery documentation to describe the
   Tmux readiness bound, name the transports that remain unbounded, and drop the
   `quiescence_timeout_ms` reference
-- [ ] 5.3 Record the Tmux bound and the split between it and wedge detection in
-  the `quiescence_classify_step` doc comment
+- [ ] 5.3 Record in the `quiescence_classify_step` doc comment that the bound is
+  Tmux's unconditional termination guarantee rather than its only terminal path —
+  an opted-in prime timeout, shutdown, and a positively observed probe failure
+  remain — that absence of activity is not evidence of failure, and that
+  `pane_dead` is the only sound Tmux failure signal and is unreachable without
+  `remain-on-exit`
 - [ ] 5.4 Triage every surviving reference to the removed operator-interaction
   gate and delete the stale ones. Enumerate with
   `grep -rnE "operator.interaction" src/ documentation/architecture/openspec/specs/`,
@@ -114,10 +132,6 @@
   whether the surface has moved since. Exclude `changes/archive/`, whose
   proposals legitimately describe what they removed. This overlaps
   `todos/general/39`, which proposes making the sweep mechanical; doing the
-  triage here supplies that item's seed data either way.
-- [ ] 5.5 Rewrite the operator-facing wedge reason string in
-  `src/tmux/transport.rs` that reads "pane settled at non-prompt state with no
-  operator interaction". Unlike the others this is delivered to the sender, so
-  it asserts to an operator that their interaction was ruled out as a cause when
-  no such check runs — the opposite of the conclusion the incident showed they
-  need to reach
+  triage here supplies that item's seed data either way. The operator-facing
+  wedge reason string in `src/tmux/transport.rs` is not part of this triage — it
+  is deleted outright by task 3b.3, not rewritten

@@ -32,7 +32,8 @@ stated for one signal and given no enforcement mechanism.
   generalize it there from rendering signals to every unbounded signal.
 - Keep the change surgical: one new orthogonal bound rather than a rework of the
   classifier's internal state.
-- Preserve the diagnostic quality of the wedge fast path.
+- Preserve the diagnostic detail the wedge path provided, as timeout reasons
+  rather than as a failure predicate.
 
 **Non-Goals:**
 
@@ -77,6 +78,59 @@ The requirement text names Tmux rather than stating a universal rule with an
 exception. "Every wait is bounded, except Pty and ACP" is a sentence a later
 reader takes as complete; "the Tmux readiness wait is bounded" is not.
 
+### Remove the Tmux wedge classifier rather than narrow it again
+
+Three successive changes tried to make the classifier correct by refining what
+counts as wedge-class: `322bf80`, then `3fe6fb8`, then the frame-versus-cursor
+split in this proposal's earlier drafts. Each traded one false positive for
+another. The pattern is not bad luck; the classifier asks a question its inputs
+cannot answer.
+
+A settled non-prompt frame is produced by at least four conditions: a hung
+coder, a permission dialog awaiting an operator, a compose box holding typed
+input, and a coder working with no terminal output. From `capture-pane` these
+are identical. Any predicate over that content classifies all four the same way,
+so a predicate that catches the hang necessarily misreports the other three.
+
+The cost is asymmetric, which is what settles it. Every false positive is a
+message that failed and should have landed — unrecoverable, and the sender was
+told something untrue. The only cost of not classifying is latency before a
+genuinely hung pane is reported, which the readiness bound now supplies. And the
+benign cases are the common ones while a genuinely hung coder is rare, so the
+classifier bought speed on a rare condition by being wrong on frequent ones.
+
+The incident that forced this: a send to Coordinator resolved `pane_wedged`
+while its pane was blocked on a tool-permission request. Not hung — waiting on a
+human. The receipt read "settled at non-prompt state with no operator
+interaction" while operator interaction was the entire cause.
+
+The boundary this draws is **positive evidence versus inference**, not transport
+identity. Activity advancing is a one-way positive signal and continues to
+suppress injection; its absence is evidence of nothing. Only a positively
+observed terminal event is sound: process death, a closed connection, a protocol
+error. Tmux does expose `pane_dead`, but only under `remain-on-exit`, which this
+system does not set — without it a dead process destroys the pane, and the
+resulting probe failure already resolves the wait. `pane_pid` liveness proves
+nothing, since hung processes are alive. `pane_current_command` looks like
+positive evidence and is not: a coder that exited to a shell and a coder running
+a shell tool call both report the shell. So the sound-signal door is left open
+deliberately, not overlooked, and nothing behind it is currently reachable.
+
+Pty is excluded from the removal, and the exclusion is a **knowing violation of
+the rule above, not an application of it**. Pty's classifier draws exactly the
+unsound inference this section rejects. It survives only because deleting it
+without first supplying a bound would leave Pty with no terminal path at all — a
+strictly worse regression than the one being fixed, shipped inside the fix. Its
+removal is atomic with its bound in `agentmux:issues/relay/61`.
+
+The distinction matters for how the requirements are worded. Since the boundary
+is evidence quality rather than transport identity, "this transport has no
+readiness bound" must not become the criterion that licenses `wedged`. Written
+that way it would read as a general rule and would authorize the next
+bound-less transport to infer failure from a static screen. The deltas therefore
+state the classification as unsound outright, name Pty as the single retained
+exception, and give the exception an expiry.
+
 ### One orthogonal bound, not a classifier rework
 
 The readiness bound is evaluated on every iteration and nothing may defer it.
@@ -103,12 +157,11 @@ to match the shipped threshold.
 The bound must not be expressed as "check readiness first and return", because
 that contradicts the precedence rule below: a positional early return would
 report the readiness outcome in an iteration where a higher-precedence outcome
-was available — a delivery the target had just become ready for, a satisfied
-wedge predicate, or a prime timeout.
+was available — a delivery the target had just become ready for, or a prime
+timeout.
 
 The contract is therefore stated as two steps. First, evaluate every available
-outcome — delivery readiness, the wedge predicate, and each elapsed bound.
-Second, apply precedence. What the bound
+outcome — delivery readiness and each elapsed bound. Second, apply precedence. What the bound
 guarantees is that no iteration may return `NeedsWait` once it has elapsed, and
 that no returned deadline may exceed it — not that it occupies a particular
 branch position.
@@ -145,29 +198,34 @@ unbounded wait.
 
 ### Terminal taxonomy
 
-A readiness-bound expiry is never a wedge. The wedge verdict has its own
-predicate — a wedge-class mismatch repeated across `WEDGE_CONSECUTIVE_TICKS`
-consecutive quiescent evaluations — and a frame first observed absent at the
-instant the bound elapses has not satisfied it. Reporting `pane_wedged` there
-would assert a repeated, settled diagnosis from a single observation, which is
-exactly the claim the tick threshold exists to prevent. Since this change
-preserves the threshold unchanged, the taxonomy has to respect it.
+On Tmux, nothing derived from pane content produces a failure any more:
+`pane_wedged` does not exist on this transport. Pane-content observation feeds
+exactly two outcomes — `Delivered` when the target is prompt-ready, `Timeout`
+when a bound elapses.
 
-`pane_wedged` therefore belongs to the wedge path alone, which resolves the
-group before the bound is ever consulted. Everything reaching the bound resolves
-`Timeout`, with the reason taken from the most recent observation:
+The transport's other terminal paths are unchanged and are not derived from what
+the pane shows: an opted-in prime timeout resolves `Timeout`, relay shutdown
+resolves `Shutdown`, and a positively observed probe or transport failure
+resolves `Failed`. So "the readiness bound is the sole terminal path" would be
+wrong; the accurate claim is narrower and stronger — the bound is the
+*unconditional* one. Every other path is conditional on something (an operator
+opting in, the relay stopping, a probe erroring), and the bound is what
+guarantees that one of them arrives.
 
-| Most recent observation at expiry | Outcome | `reason_code` |
-|---|---|---|
-| Frame absent, wedge predicate not yet satisfied | `Timeout` | `target_not_ready` |
-| Inspected tail empty | `Timeout` | `target_unresponsive` |
-| Frame present, cursor off idle column | `Timeout` | `pending_operator_input` |
-| Activity advancing | `Timeout` | `target_never_settled` |
+The reason attached to a timeout is diagnostic only — every arm below is the same
+outcome, and the distinction exists so an operator can tell a short bound from a
+stuck target, not so the transport can decide differently:
 
-Note that wedge-enabled and wedge-disabled collapse to the same row. Whether the
-knob is on changes only whether the wedge path could have fired *earlier*; it
-does not change what an expiry means, because an expiry reached with the
-predicate unsatisfied is the same observation either way.
+| Most recent observation at expiry | `reason_code` |
+|---|---|
+| Prompt frame absent | `target_not_ready` |
+| Inspected tail empty | `target_unresponsive` |
+| Frame present, cursor off idle column | `pending_operator_input` |
+| Activity advancing | `target_never_settled` |
+
+`target_not_ready` covers the four indistinguishable cases together — hung
+coder, permission dialog, compose box, silent work — precisely because they are
+indistinguishable. Naming one of them would be a guess dressed as a diagnosis.
 
 Two orderings, easily conflated:
 
@@ -175,9 +233,10 @@ Two orderings, easily conflated:
   advancing, then empty tail, then cursor mismatch, then frame absence. Activity
   ranks first because it is the only signal describing the pair rather than the
   final snapshot.
-- **Verdict precedence** when more than one outcome is available in the same
-  iteration, highest first: delivery, then the wedge predicate, then the prime
-  timeout, then the readiness bound.
+- **Outcome precedence** when more than one outcome is available in the same
+  iteration, highest first: delivery, then the prime timeout, then the readiness
+  bound. On a transport that still classifies `wedged` — Pty today — that sits
+  between delivery and the prime timeout.
 
 Delivery ranking first is the non-obvious one. A target that becomes prompt-ready
 in the very iteration the bound expires is delivered to, not timed out: reaching
@@ -189,10 +248,8 @@ one. Busy is unaffected — a prompt-ready observation whose activity advanced i
 still deferred, and an elapsed bound then resolves it as `target_never_settled`
 rather than granting the match Busy had just denied.
 
-Below delivery, the wedge predicate and prime timeout outrank the readiness
-bound as more specific diagnoses, reached only under conditions the readiness
-bound does not describe. Wedge cannot conflict with delivery, since it requires
-the target not be prompt-ready.
+The prime timeout outranks the readiness bound as the more specific diagnosis,
+reached only when an operator opted into it.
 
 The three states remain mutually exclusive at the moment of terminal
 classification, as the existing requirement demands.
@@ -223,8 +280,12 @@ classification, as the existing requirement demands.
   be wrong. Pty passes no readiness bound, and coverage asserts that a Pty-shaped
   delivery is unaffected.
 - **Removing the unbounded path changes behavior for operators who opted out**
-  → Both Tmux opt-outs currently mean "wait forever". They are re-scoped to "no
-  early verdict". Called out as BREAKING rather than shimmed.
+  → The Tmux prime-timeout opt-out currently means "wait forever"; it is
+  re-scoped to "no early verdict", with the readiness bound applying regardless.
+  The Tmux wedge opt-out is not re-scoped — it goes away with the classifier, and
+  an operator who set `wedge-detection = false` was already getting the behavior
+  this change makes unconditional. Both are called out as BREAKING rather than
+  shimmed, and the removed key requires an operator edit (see Migration Plan).
 - **A deleted safety claim may read as a removed feature** → The
   operator-interaction prose documents a gate already deleted, so only stale
   text goes. The risk is the inverse: a reader may conclude the composing case
@@ -232,8 +293,15 @@ classification, as the existing requirement demands.
 
 ## Migration Plan
 
-No data or configuration migration. The new key is optional with a default.
-Rollback is a revert; no persisted state changes shape.
+No data migration and no persisted-state shape change. Rollback is a revert.
+
+Configuration is not migration-free, though there is no migration *path*.
+`readiness-timeout-ms` is optional with a default, so adding it needs no operator
+action. Removing `[coders.<id>.tmux].wedge-detection` does need one: the key is
+deleted outright rather than deprecated, so a config still carrying it fails load
+on existing unknown-field validation, and the operator must delete the line. No
+`format-version` bump accompanies that, because the schema version is not what
+tells the operator — the load error is. The identically named Pty key stays.
 
 Sequencing: this change edits `src/transports/quiescence.rs`, which is also
 touched by the Band 1 merge and by `agentmux:issues/relay/60`. It follows both,
