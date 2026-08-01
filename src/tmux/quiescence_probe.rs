@@ -349,6 +349,86 @@ fn build_prompt_readiness_matcher(
     }))
 }
 
+/// Walks up to three rows immediately preceding the info row of an
+/// Opencode prompt-UI pane and returns true if any of them contains
+/// compose text in the left-of-sidebar columns. Used as a code-side
+/// second gate on top of the prompt regex: the regex's
+/// `(?m)^`-anchored shape can match starting at any later line, so
+/// without this check a regex that anchors on the LAST input row
+/// alone would accept composing with text in the top or middle rows.
+///
+/// Compose text is `┃` + 2-100 non-newline whitespace chars +
+/// non-whitespace (sidebar text has 100+ leading spaces, which is
+/// above the threshold; empty rows have no content at all).
+/// `(?ms)` is not used here: this is Rust code, not regex, and
+/// `is_whitespace` matches the same class the regex class
+/// `[^\S\n]` matches.
+///
+/// Public for unit tests in `tests/unit/tmux_transport.rs`; the
+/// `pub use` re-export in `src/tmux/mod.rs` keeps it from leaking
+/// outside the tmux subtree.
+pub fn compose_region_has_text(block: &str) -> bool {
+    let lines: Vec<&str> = block.lines().collect();
+
+    // Find the info row: the LAST line that starts with `┃` and has
+    // whitespace then non-whitespace content. In Opencode's prompt
+    // UI this is the row reading `┃  <label> · <model> ...`, which
+    // sits directly above the separator. Walks bottom-up so that
+    // chat history with similar ┃+content patterns further up does
+    // not get mistaken for the info row.
+    let info_row_idx = lines.iter().rposition(|line| {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with('┃') {
+            return false;
+        }
+        let after_b = trimmed.split_at('┃'.len_utf8()).1;
+        let mut saw_ws = false;
+        for c in after_b.chars() {
+            if c.is_whitespace() {
+                saw_ws = true;
+            } else {
+                return saw_ws;
+            }
+        }
+        false
+    });
+
+    let Some(info_idx) = info_row_idx else {
+        return false;
+    };
+
+    // Inspect up to three rows immediately above the info row.
+    // The input box in Opencode's idle layout is 1-3 rows tall; this
+    // covers the common case (3 rows) and the collapse-to-1-row case
+    // when the agent is processing. Chat history further up is out
+    // of scope; the info-row-anchored regex already ensures the block
+    // ends at the right place.
+    let start = info_idx.saturating_sub(3);
+    for line in lines.iter().take(info_idx).skip(start) {
+        let trimmed = line.trim_start();
+        if !trimmed.starts_with('┃') {
+            continue;
+        }
+        let after_b = trimmed.split_at('┃'.len_utf8()).1;
+        let ws_count = after_b.chars().take_while(|c| c.is_whitespace()).count();
+        // Compose text: 2..=100 leading whitespace, then a
+        // non-whitespace char. Sidebar (>100 spaces then content)
+        // and empty rows fall outside this band.
+        if !(2..=100).contains(&ws_count) {
+            continue;
+        }
+        if after_b
+            .chars()
+            .nth(ws_count)
+            .is_some_and(|c| !c.is_whitespace())
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn prompt_readiness_matches(
     tmux_socket: &Path,
     pane_target: &str,
@@ -386,6 +466,24 @@ fn prompt_readiness_matches(
             mismatch_reason: Some("prompt regex did not match inspected pane tail".to_string()),
             inspected_block: Some(sanitize_diagnostic_text(&block)),
             regex_matched: Some(false),
+            expected_cursor_column: matcher.input_idle_cursor_column,
+            ..PromptReadinessEvaluation::default()
+        });
+    }
+
+    // Code-side compose-region second gate. The regex's `(?m)^`
+    // anchor accepts a match starting at any line; the LAST input
+    // row above the info row is what `┃[ \t]{100,}\S`-style shapes
+    // protected, but rows above that -- where text is also legal in
+    // Opencode's layout -- were silently passed. Walking the 1-3 rows
+    // immediately above the info row in code closes that gap.
+    if compose_region_has_text(&block) {
+        return Ok(PromptReadinessEvaluation {
+            mismatch_reason: Some(
+                "input box contains compose text in left-of-sidebar columns".to_string(),
+            ),
+            inspected_block: Some(sanitize_diagnostic_text(&block)),
+            regex_matched: Some(true),
             expected_cursor_column: matcher.input_idle_cursor_column,
             ..PromptReadinessEvaluation::default()
         });
