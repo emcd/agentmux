@@ -28,14 +28,18 @@ use agentmux::pty::{
     PtyConfigSnapshot, PtyOutputView, PtyQuiescenceProbe, PtyShared, SnapshotResponse,
 };
 use agentmux::transports::{
-    DeliveryWaitError, LookMode, LookSnapshotPayload, OutputView, WedgeProbe,
-    wait_for_quiescent_three_state,
+    DeliveryDiagnosticContext, DeliveryWaitError, LookMode, LookSnapshotPayload, OutputView,
+    WedgeProbe, wait_for_quiescent_three_state,
 };
 use regex::Regex;
 use tokio::sync::mpsc;
 
 const SHORT_QUIET_WINDOW: Duration = Duration::from_millis(5);
 const TEST_TARGET_SESSION: &str = "test-session";
+
+fn diagnostic_context() -> DeliveryDiagnosticContext<'static> {
+    DeliveryDiagnosticContext::without_messages("test-namespace", TEST_TARGET_SESSION)
+}
 
 /// Scripted snapshot carrying a prompt tail (`$ `) at cursor column 2.
 /// With the default `prompt-regex = r"^\\$"` and no `prompt_idle_column`,
@@ -190,7 +194,7 @@ fn always_unresponsive_probe_resolves_timeout() {
     let mut probe = PtyQuiescenceProbe::new(shared);
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(30)).0,
         prime_window(Some(30)).1,
@@ -216,7 +220,7 @@ fn always_wedge_probe_resolves_wedged() {
     let mut probe = PtyQuiescenceProbe::new(shared);
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -250,7 +254,7 @@ fn cursor_mismatch_preserves_its_reason_in_wedged_outcome() {
     let mut probe = PtyQuiescenceProbe::new(shared);
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -286,7 +290,7 @@ fn cursor_mismatch_preserves_its_reason_in_timeout_outcome() {
     let mut probe = PtyQuiescenceProbe::new(shared);
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10)).0,
         prime_window(Some(10)).1,
@@ -326,7 +330,7 @@ fn slow_prompt_probe_resolves_delivered() {
     let mut probe = PtyQuiescenceProbe::new(shared);
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -353,7 +357,7 @@ fn normal_flow_probe_resolves_delivered() {
     let mut probe = PtyQuiescenceProbe::new(shared);
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -388,7 +392,7 @@ fn coalesce_during_wedge_counter_does_not_fire_on_changing_signatures() {
     let mut probe = PtyQuiescenceProbe::new(shared);
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -417,7 +421,7 @@ fn coalesce_during_wedge_counter_fires_after_consecutive_identical_signatures() 
     let mut probe = PtyQuiescenceProbe::new(shared);
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -457,7 +461,7 @@ fn coalesce_during_prime_does_not_extend_window() {
     let started = Instant::now();
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(50)).0,
         prime_window(Some(50)).1,
@@ -501,7 +505,7 @@ fn wedge_default_on_fires_after_consecutive_identical_mismatches() {
     let mut probe = PtyQuiescenceProbe::new(shared);
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,
@@ -536,7 +540,7 @@ fn wedge_disabled_does_not_fire_wedged_within_short_window() {
     let mut probe = PtyQuiescenceProbe::new(shared);
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(200)).0,
         prime_window(Some(200)).1,
@@ -572,7 +576,7 @@ fn prime_timeout_default_off_does_not_fire() {
     let join = thread::spawn(move || {
         wait_for_quiescent_three_state(
             &mut probe,
-            TEST_TARGET_SESSION,
+            &diagnostic_context(),
             SHORT_QUIET_WINDOW,
             None,
             started,
@@ -606,7 +610,7 @@ fn prime_timeout_opt_in_fires_after_window() {
     let mut probe = PtyQuiescenceProbe::new(shared);
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10)).0,
         prime_window(Some(10)).1,
@@ -636,7 +640,7 @@ fn short_prime_timeout_does_not_preempt_wedge_for_wedge_class_mismatch() {
     let mut probe = PtyQuiescenceProbe::new(shared);
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10)).0,
         prime_window(Some(10)).1,
@@ -678,7 +682,7 @@ fn wedge_disabled_with_prime_timeout_bounds_every_quiescent_state() {
     let started = Instant::now();
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(50)).0,
         prime_window(Some(50)).1,
@@ -1840,7 +1844,7 @@ fn pty_constant_activity_fires_wedged_as_before() {
     let mut probe = PtyQuiescenceProbe::new(shared);
     let result = wait_for_quiescent_three_state(
         &mut probe,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         SHORT_QUIET_WINDOW,
         prime_window(Some(10_000)).0,
         prime_window(Some(10_000)).1,

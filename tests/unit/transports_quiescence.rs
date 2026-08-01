@@ -18,13 +18,42 @@
 use std::time::{Duration, Instant};
 
 use agentmux::transports::{
-    DeliveryWaitError, QuiescenceAction, QuiescenceState, ReadinessMismatch, WedgeObservation,
-    WedgeProbe, quiescence_classify_step,
+    DIAGNOSTIC_MESSAGE_IDS_MAXIMUM, DeliveryDiagnosticContext, DeliveryWaitError, QuiescenceAction,
+    QuiescenceState, ReadinessMismatch, WedgeObservation, WedgeProbe, quiescence_classify_step,
 };
 
 const TEST_TARGET_SESSION: &str = "test-session";
 const TEST_QUIET_WINDOW: Duration = Duration::from_millis(1);
 const TEST_PANE: &str = "%0";
+
+fn diagnostic_context() -> DeliveryDiagnosticContext<'static> {
+    DeliveryDiagnosticContext::without_messages("test-namespace", TEST_TARGET_SESSION)
+}
+
+#[test]
+fn diagnostic_context_caps_ids_and_preserves_total() {
+    let ids: Vec<String> = (0..DIAGNOSTIC_MESSAGE_IDS_MAXIMUM + 3)
+        .map(|index| format!("message-{index}"))
+        .collect();
+    let context = DeliveryDiagnosticContext::new(
+        "test-namespace",
+        TEST_TARGET_SESSION,
+        ids.iter().map(String::as_str),
+    );
+
+    assert_eq!(context.namespace, "test-namespace");
+    assert_eq!(context.target_session, TEST_TARGET_SESSION);
+    assert_eq!(context.message_ids().len(), DIAGNOSTIC_MESSAGE_IDS_MAXIMUM);
+    assert_eq!(context.message_ids_total(), ids.len());
+    assert_eq!(
+        context.message_ids().first().map(String::as_str),
+        Some("message-0")
+    );
+    assert_eq!(
+        context.message_ids().last().map(String::as_str),
+        Some(format!("message-{}", DIAGNOSTIC_MESSAGE_IDS_MAXIMUM - 1).as_str()),
+    );
+}
 
 fn make_observation(activity_generation: u64, is_prompt_ready: bool) -> WedgeObservation {
     WedgeObservation {
@@ -88,7 +117,7 @@ fn busy_short_circuit_returns_needs_wait_when_activity_advances() {
     let result = quiescence_classify_step(
         &mut probe,
         &mut state,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         TEST_QUIET_WINDOW,
         // Unbounded prime deadline so the prime-timeout branch cannot
         // fire and confuse the test.
@@ -136,7 +165,7 @@ fn busy_short_circuit_defers_delivered_when_activity_advances_while_ready() {
     let result = quiescence_classify_step(
         &mut probe,
         &mut state,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         TEST_QUIET_WINDOW,
         None,
         started_at,
@@ -167,7 +196,7 @@ fn delivery_ready_fires_when_ready_and_no_activity_advance() {
     let result = quiescence_classify_step(
         &mut probe,
         &mut state,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         TEST_QUIET_WINDOW,
         None,
         started_at,
@@ -196,7 +225,7 @@ fn prompt_ready_resolves_delivered_under_unbounded_prime() {
     let result = quiescence_classify_step(
         &mut probe,
         &mut state,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         TEST_QUIET_WINDOW,
         // Unbounded: the exact deadline that paired with the removed
         // copy-mode gate to hang forever.
@@ -226,7 +255,7 @@ fn prime_timeout_fires_when_not_ready_and_no_activity_advance() {
     let result = quiescence_classify_step(
         &mut probe,
         &mut state,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         TEST_QUIET_WINDOW,
         prime_deadline,
         started_at,
@@ -288,7 +317,7 @@ fn busy_short_circuit_resets_wedge_counter() {
     let _ = quiescence_classify_step(
         &mut seed_probe,
         &mut state,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         TEST_QUIET_WINDOW,
         None,
         Instant::now(),
@@ -313,7 +342,7 @@ fn busy_short_circuit_resets_wedge_counter() {
     let result = quiescence_classify_step(
         &mut busy_probe,
         &mut state,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         TEST_QUIET_WINDOW,
         None,
         Instant::now(),
@@ -369,7 +398,7 @@ fn busy_needswait_deadline_is_bounded_by_quiet_window() {
     let result = quiescence_classify_step(
         &mut probe,
         &mut state,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         TEST_QUIET_WINDOW,
         // Unbounded prime deadline: under the pre-fix code the
         // NeedsWait deadline would be ~now + 1 year; the test asserts
@@ -415,7 +444,7 @@ fn idle_wedge_rechecks_until_the_counter_fires() {
         let result = quiescence_classify_step(
             &mut probe,
             &mut state,
-            TEST_TARGET_SESSION,
+            &diagnostic_context(),
             TEST_QUIET_WINDOW,
             None,
             started_at,
@@ -435,7 +464,7 @@ fn idle_wedge_rechecks_until_the_counter_fires() {
     let result = quiescence_classify_step(
         &mut probe,
         &mut state,
-        TEST_TARGET_SESSION,
+        &diagnostic_context(),
         TEST_QUIET_WINDOW,
         None,
         started_at,
@@ -475,7 +504,7 @@ fn composing_cursor_mismatch_never_advances_the_wedge_counter() {
         let result = quiescence_classify_step(
             &mut probe,
             &mut state,
-            TEST_TARGET_SESSION,
+            &diagnostic_context(),
             TEST_QUIET_WINDOW,
             None,
             Instant::now(),

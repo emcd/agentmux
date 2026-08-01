@@ -17,7 +17,9 @@ are documented in `documentation/development/README.md` Zig-free Pty Builds.
   the only thread that can apply bytes to the libghostty-vt terminal (the
   terminal is `!Send + !Sync`); the state machine drives a per-tick wait
   that drains PTY output during quiescence so the probe observes fresh
-  terminal state.
+  terminal state. Each classify step supplies the target namespace and the
+  current coalesced group's message ids to shared progress diagnostics; raw
+  waits use an empty message-id group.
 - `state` — cross-thread shared state (`PtyShared`, `PtyConfigSnapshot`,
   `SnapshotRequest`/`SnapshotResponse`) plus the per-thread look / probe
   consumers (`PtyOutputView`, `PtyQuiescenceProbe`).

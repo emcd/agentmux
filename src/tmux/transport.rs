@@ -36,9 +36,9 @@ use crate::configuration::{PromptReadinessTemplate, TargetConfiguration};
 use crate::envelope::{PromptBatchSettings, batch_envelope_groups};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::transports::{
-    DeliveryEnvelope, DeliveryWaitError, LookMode, LookSnapshotPayload, OutcomeFuture, OutputView,
-    SendOutcome, SingleDeliveryOutcome, StartupContext, Transport, TransportError,
-    TransportReadiness, TransportStatus,
+    DeliveryDiagnosticContext, DeliveryEnvelope, DeliveryWaitError, LookMode, LookSnapshotPayload,
+    OutcomeFuture, OutputView, SendOutcome, SingleDeliveryOutcome, StartupContext, Transport,
+    TransportError, TransportReadiness, TransportStatus,
 };
 
 /// Default tmux look window applied when the caller omits a window size.
@@ -97,6 +97,7 @@ enum WriteItem {
 
 /// Context captured at `startup` for the internal delivery task.
 struct DeliveryTaskContext {
+    namespace: String,
     target_session: String,
     runtime_directory: PathBuf,
     target_member: crate::configuration::BundleMember,
@@ -182,6 +183,7 @@ impl TmuxTransport {
 impl Transport for TmuxTransport {
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
         self.task_context = Some(DeliveryTaskContext {
+            namespace: context.namespace,
             target_session: context.target_member.id.clone(),
             runtime_directory: context.runtime_directory,
             target_member: context.target_member,
@@ -286,6 +288,7 @@ fn run_delivery_task(
                     flush_and_resolve(
                         &mut group,
                         &tmux_socket_path,
+                        &ctx.namespace,
                         &ctx.target_session,
                         prompt_readiness.as_ref(),
                         wedge_detection,
@@ -310,6 +313,7 @@ fn run_delivery_task(
                     flush_and_resolve(
                         &mut group,
                         &tmux_socket_path,
+                        &ctx.namespace,
                         &ctx.target_session,
                         prompt_readiness.as_ref(),
                         wedge_detection,
@@ -341,6 +345,7 @@ fn run_delivery_task(
                         flush_and_resolve(
                             &mut group,
                             &tmux_socket_path,
+                            &ctx.namespace,
                             &ctx.target_session,
                             prompt_readiness.as_ref(),
                             wedge_detection,
@@ -363,6 +368,7 @@ fn run_delivery_task(
                         flush_and_resolve(
                             &mut group,
                             &tmux_socket_path,
+                            &ctx.namespace,
                             &ctx.target_session,
                             prompt_readiness.as_ref(),
                             wedge_detection,
@@ -379,6 +385,7 @@ fn run_delivery_task(
                         flush_and_resolve(
                             &mut group,
                             &tmux_socket_path,
+                            &ctx.namespace,
                             &ctx.target_session,
                             prompt_readiness.as_ref(),
                             wedge_detection,
@@ -449,6 +456,7 @@ fn drain_group_as_dropped(
 fn flush_and_resolve(
     group: &mut Vec<(DeliveryEnvelope, OutcomeSender)>,
     tmux_socket_path: &Path,
+    namespace: &str,
     target_session: &str,
     prompt_readiness: Option<&PromptReadinessTemplate>,
     wedge_detection: bool,
@@ -518,9 +526,18 @@ fn flush_and_resolve(
         // Wait for quiescence (blocks). The same `prime_deadline` is
         // passed on every coalesce iteration, so absorbed envelopes do
         // not extend the prime window.
+        // Group membership is fixed for this call: unlike Pty, Tmux absorbs
+        // new envelopes only after the wait returns, then starts a new
+        // coalesce iteration with a freshly built diagnostic context.
         match wait_for_quiescent_pane_three_state(
             &mut probe,
-            target_session,
+            &DeliveryDiagnosticContext::new(
+                namespace,
+                target_session,
+                group
+                    .iter()
+                    .map(|(envelope, _)| envelope.message_id.as_str()),
+            ),
             quiet_window,
             prime_deadline,
             prime_started_at,

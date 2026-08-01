@@ -29,7 +29,9 @@ introduced.
 - `transport` — [`TmuxTransport`] (the per-target `Transport`
   implementation with its internal delivery task + write channel +
   ordering) plus [`render_paste_text`] (the per-envelope pane-text
-  rendering used by `paste_group`).
+  rendering used by `paste_group`). The delivery task retains the target
+  namespace from `StartupContext` and supplies the current coalesced group's
+  message ids to shared quiescence diagnostics.
 
 ## Terminal-outcome receipt rendering
 

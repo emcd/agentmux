@@ -42,12 +42,12 @@ use crate::acp::{
 };
 
 use crate::envelope::PromptBatchSettings;
-use crate::runtime::inscriptions::emit_delivery_diagnostic;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
-    ChoiceMade, DeliveryEnvelope, LookMode, LookSnapshotPayload, OutputView, SingleDeliveryOutcome,
-    StartupContext, Transport, TransportError, TransportReadiness, TransportStatus,
+    ChoiceMade, DeliveryDiagnosticContext, DeliveryEnvelope, LookMode, LookSnapshotPayload,
+    OutputView, SingleDeliveryOutcome, StartupContext, Transport, TransportError,
+    TransportReadiness, TransportStatus, emit_delivery_progress,
 };
 use crate::transports::{SendOutcome, WorkerReadinessState};
 
@@ -152,6 +152,8 @@ pub struct AcpTransport {
     /// Prompt-batch settings (token budget and tokenizer profile) for envelope
     /// combining.
     batch_settings: PromptBatchSettings,
+    /// Target namespace, captured at startup for progress diagnostics.
+    namespace: String,
     /// Target session id, captured at startup for permission correlation.
     target_session: String,
     /// Stable respawn-needed signal. Created once at construction (not per
@@ -187,6 +189,7 @@ impl AcpTransport {
             write_tx: None,
             shutdown_tx: None,
             batch_settings,
+            namespace: String::new(),
             target_session: String::new(),
             respawn_needed_tx: tokio::sync::watch::channel(false).0,
         }
@@ -269,7 +272,10 @@ impl AcpTransport {
         let shared = Arc::clone(&self.shared);
         let batch_settings = self.batch_settings;
         let chooser = self.chooser.clone();
-        let target_session = self.target_session.clone();
+        let identity = DeliveryTaskIdentity {
+            namespace: self.namespace.clone(),
+            target_session: self.target_session.clone(),
+        };
 
         let runtime = self.runtime.take().expect("runtime present at task spawn");
         let client = runtime.client;
@@ -288,7 +294,7 @@ impl AcpTransport {
                 shared,
                 chooser,
                 batch_settings,
-                target_session,
+                identity,
             );
         });
 
@@ -305,9 +311,11 @@ impl AcpTransport {
     pub(crate) fn prepare_for_startup(
         &mut self,
         chooser: crate::transports::Chooser,
+        namespace: String,
         target_session: String,
     ) {
         self.chooser = Some(chooser);
+        self.namespace = namespace;
         self.target_session = target_session;
         // Close any existing delivery task's channel before creating a new
         // runtime; the old task drains and exits.
@@ -352,7 +360,11 @@ impl AcpTransport {
 
 impl Transport for AcpTransport {
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
-        self.prepare_for_startup(context.choose, context.target_member.id.clone());
+        self.prepare_for_startup(
+            context.choose,
+            context.namespace,
+            context.target_member.id.clone(),
+        );
         self.set_readiness(WorkerReadinessState::Initializing);
         match bootstrap_acp_worker_runtime(&context.runtime_directory, &context.target_member) {
             Ok(runtime) => {
@@ -515,6 +527,7 @@ struct TurnContext<'a> {
     session_id: &'a str,
     shared: &'a Arc<AcpSharedState>,
     chooser: &'a Option<crate::transports::Chooser>,
+    namespace: &'a str,
     target_session: &'a str,
 }
 
@@ -596,6 +609,11 @@ struct DeliveryChannels {
     respawn_needed_tx: tokio::sync::watch::Sender<bool>,
 }
 
+struct DeliveryTaskIdentity {
+    namespace: String,
+    target_session: String,
+}
+
 /// Internal ACP delivery task. Runs on a dedicated thread, draining the write
 /// channel, combining contiguous envelopes respecting the token budget, and
 /// submitting turns to the ACP runtime. Exits when the channel closes (sender
@@ -607,13 +625,14 @@ fn acp_delivery_task(
     shared: Arc<AcpSharedState>,
     chooser: Option<crate::transports::Chooser>,
     batch_settings: PromptBatchSettings,
-    target_session: String,
+    identity: DeliveryTaskIdentity,
 ) {
     let ctx = TurnContext {
         session_id: &session_id,
         shared: &shared,
         chooser: &chooser,
-        target_session: &target_session,
+        namespace: &identity.namespace,
+        target_session: &identity.target_session,
     };
 
     let mut rx = channels.rx;
@@ -1091,6 +1110,7 @@ fn flush_envelope_group(
             ctx,
             &group.combined_prompt,
             &head_msg_id,
+            &group_msg_ids,
             &head_deciders,
             prime_timeout_ms,
         );
@@ -1120,6 +1140,7 @@ fn submit_envelope_turn(
     ctx: &TurnContext,
     prompt: &str,
     message_id: &str,
+    message_ids: &[String],
     decider_sessions: &[String],
     prime_timeout_ms: Option<u64>,
 ) -> SingleDeliveryOutcome {
@@ -1217,10 +1238,14 @@ fn submit_envelope_turn(
                     .saturating_duration_since(prime_started_at)
                     .as_millis();
                 let timeout_ms = prime_timeout_ms.unwrap_or(0);
-                emit_delivery_diagnostic(
+                emit_delivery_progress(
                     "delivery_prime_timeout",
-                    &json!({
-                        "target_session": ctx.target_session,
+                    &DeliveryDiagnosticContext::new(
+                        ctx.namespace,
+                        ctx.target_session,
+                        message_ids.iter().map(String::as_str),
+                    ),
+                    json!({
                         "timeout_ms": timeout_ms,
                         "prime_wait_elapsed_ms": elapsed_ms,
                     }),
@@ -1281,7 +1306,7 @@ fn submit_raw_turn(
     content: &str,
     _append_enter: bool,
 ) -> SingleDeliveryOutcome {
-    submit_envelope_turn(client, ctx, content, "", &[], None)
+    submit_envelope_turn(client, ctx, content, "", &[], &[], None)
 }
 
 /// Polls the prompt completion slot under a bounded prime wait.

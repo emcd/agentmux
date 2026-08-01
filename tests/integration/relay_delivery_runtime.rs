@@ -1052,6 +1052,89 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn delivery_progress_inscription_carries_group_and_namespace() {
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let state_root = temporary.path().join("state");
+    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
+    let attempts_file = temporary.path().join("attempts.txt");
+    let log_file = temporary.path().join("fake-tmux.log");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
+
+    let relay_socket = state_root.join("relay.sock");
+    let mut child = spawn_relay_with_fake_tmux_and_env(
+        bundle_name,
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux_script,
+        &[
+            ("FAKE_TMUX_CAPTURE_MODE", "stable"),
+            ("AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS", "true"),
+        ],
+    );
+    wait_for_relay_ready(&relay_socket).await;
+
+    let response = request_relay(
+        &relay_socket,
+        bundle_name,
+        "alpha",
+        &RelayRequest::Send {
+            request_id: Some("req-delivery-progress".to_string()),
+            requester_session: "alpha".to_string(),
+            message: "diagnostic correlation".to_string(),
+            targets: vec!["alpha@party".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(10),
+            on_behalf_of: None,
+        },
+    )
+    .expect("send request should succeed");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
+    };
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
+
+    let inscriptions_path = inscriptions_root.join("relay.log");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let diagnostic = loop {
+        let current = fs::read_to_string(&inscriptions_path).unwrap_or_default();
+        if let Some(value) = current
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .find(|value| value["event"] == "relay.delivery_ready")
+        {
+            break value;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "timed out waiting for delivery progress, inscriptions={current:?}"
+        );
+        sleep(Duration::from_millis(20)).await;
+    };
+
+    child.start_kill().expect("kill relay");
+    let _ = child.wait().await;
+
+    let details = &diagnostic["details"];
+    assert_eq!(details["namespace"], bundle_name);
+    assert_eq!(details["target_session"], "alpha");
+    assert_eq!(details["message_ids_total"], 1);
+    let message_ids = details["message_ids"]
+        .as_array()
+        .expect("delivery progress message_ids array");
+    assert_eq!(message_ids.len(), 1);
+    assert!(
+        message_ids[0]
+            .as_str()
+            .is_some_and(|value| !value.is_empty()),
+        "delivery progress must carry the queued message id: {diagnostic}"
+    );
+}
+
 /// A pane reporting `#{pane_in_mode} = 1` (tmux copy-mode, as a
 /// mouse-wheel scroll leaves it) must NOT block delivery: the classifier
 /// ignores copy-mode, so the message is both pasted and submitted. This
