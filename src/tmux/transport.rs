@@ -455,10 +455,6 @@ fn flush_and_resolve(
     shutdown_flag: &AtomicBool,
     batch_settings: PromptBatchSettings,
 ) {
-    if group.is_empty() {
-        return;
-    }
-
     // Use the head envelope's quiescence hints for the entire group.
     // `prime_timeout_ms` is the operator's opt-in prime window;
     // `readiness_timeout_ms` is the unconditional bound on the whole wait.
@@ -469,14 +465,15 @@ fn flush_and_resolve(
     // enqueue time)" and to not reset on coalesce-during-wait, and requires
     // the readiness bound to share that anchor). `QuiescenceBounds` derives
     // both deadlines from one anchor instant, so a later envelope cannot
-    // extend either; the bounds are computed once here and threaded into
-    // every wait call below.
-    let bounds = QuiescenceBounds::new(
-        group[0].0.quiet_window,
-        Instant::now(),
-        group[0].0.prime_timeout_ms,
-        group[0].0.readiness_timeout_ms,
-    );
+    // extend either; the bounds are computed ONCE here, before the coalesce
+    // loop below, and threaded into every wait call.
+    //
+    // `None` here means the group is empty, which has nothing to deliver.
+    let Some(bounds) =
+        QuiescenceBounds::from_group(group.iter().map(|(envelope, _)| envelope), Instant::now())
+    else {
+        return;
+    };
 
     // Deferred raw item from the post-quiescence drain. Carries across
     // coalesce loop iterations so the re-check happens before paste.

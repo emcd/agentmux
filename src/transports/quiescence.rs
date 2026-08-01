@@ -69,7 +69,7 @@ use serde_json::{Value, json};
 use crate::runtime::{
     inscriptions::emit_delivery_diagnostic as emit_diagnostic, signals::shutdown_requested,
 };
-use crate::transports::contract::{DeliveryWaitError, ReadinessTimeoutReason};
+use crate::transports::contract::{DeliveryEnvelope, DeliveryWaitError, ReadinessTimeoutReason};
 
 /// Maximum message ids carried by one delivery-progress inscription.
 pub const DIAGNOSTIC_MESSAGE_IDS_MAXIMUM: usize = 32;
@@ -448,6 +448,31 @@ impl QuiescenceBounds {
             readiness_deadline: readiness_timeout_ms
                 .map(|ms| started_at + Duration::from_millis(ms)),
         }
+    }
+
+    /// Builds the bounds for a flush group from the group's **head** envelope,
+    /// ignoring every later one.
+    ///
+    /// This is the operation the anchoring rule lives in. A transport that
+    /// indexes the head inline states the rule nowhere, so nothing can test it
+    /// and coalesce-during-wait can silently start honoring a later envelope's
+    /// hints. Taking the whole group and discarding the tail makes "the head
+    /// owns the bounds" the function's observable behavior: pass a group whose
+    /// later envelopes carry different hints and the result is unchanged.
+    ///
+    /// Returns `None` for an empty group, which has no head to anchor to.
+    #[must_use]
+    pub fn from_group<'a>(
+        envelopes: impl IntoIterator<Item = &'a DeliveryEnvelope>,
+        started_at: Instant,
+    ) -> Option<Self> {
+        let head = envelopes.into_iter().next()?;
+        Some(Self::new(
+            head.quiet_window,
+            started_at,
+            head.prime_timeout_ms,
+            head.readiness_timeout_ms,
+        ))
     }
 
     /// Reports whether the readiness bound has elapsed as of `now`.

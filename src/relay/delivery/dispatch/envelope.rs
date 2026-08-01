@@ -466,3 +466,140 @@ fn stream_send_to_broadcast_status(
         }
     }
 }
+
+/// Inline because [`build_coder_envelope`] is `pub(super)` and takes
+/// [`AsyncDeliveryTask`], a relay-internal type. Reaching it from
+/// `tests/unit` would mean widening both to `pub` — publishing the relay's
+/// dispatch internals as API to observe one field assignment. The
+/// per-transport *rule* is covered publicly through
+/// `TargetConfiguration::readiness_timeout_ms`; what only this seam can show is
+/// that the builder puts the resolved value on the envelope it emits.
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+    use crate::configuration::{
+        AcpChannel, AcpTargetConfiguration, BundleConfiguration, BundleMember,
+        PtyTargetConfiguration, TermProtocol, TmuxTargetConfiguration,
+    };
+    use crate::envelope::AddressIdentity;
+    use crate::transports::DeliveryPayloadMode;
+
+    const SCHEMA_VERSION: &str = "1";
+    const TEST_BOUND_MS: u64 = 45_000;
+
+    fn member(target: TargetConfiguration) -> BundleMember {
+        BundleMember {
+            id: "target".to_string(),
+            name: None,
+            working_directory: None,
+            target,
+            coder_session_id: None,
+            policy_id: None,
+            environment: Vec::new(),
+        }
+    }
+
+    fn task_for(target: TargetConfiguration) -> AsyncDeliveryTask {
+        let target_member = member(target);
+        AsyncDeliveryTask {
+            bundle: BundleConfiguration {
+                schema_version: SCHEMA_VERSION.to_string(),
+                bundle_name: "party".to_string(),
+                autostart: false,
+                groups: Vec::new(),
+                members: vec![target_member.clone()],
+            },
+            sender_namespace: "party".to_string(),
+            sender: target_member,
+            authenticated_identity: None,
+            on_behalf_of: None,
+            all_target_sessions: Vec::new(),
+            target_session: "target".to_string(),
+            message: "body".to_string(),
+            message_id: "message-id".to_string(),
+            quiescence: crate::relay::delivery::QuiescenceOptions::for_async(None),
+            runtime_directory: PathBuf::from("/runtime"),
+            payload_mode: DeliveryPayloadMode::EnvelopeMessage,
+            append_enter: true,
+            choice_decider_sessions: Vec::new(),
+            is_receipt: false,
+            sender_return_route: None,
+        }
+    }
+
+    fn delivery_message() -> DeliveryMessage {
+        DeliveryMessage {
+            body: "body".to_string(),
+            created_at: "2026-08-01T00:00:00Z".to_string(),
+            namespace: "party".to_string(),
+            sender: AddressIdentity {
+                session_name: "sender".to_string(),
+                display_name: None,
+            },
+            target: AddressIdentity {
+                session_name: "target".to_string(),
+                display_name: None,
+            },
+            cc: Vec::new(),
+            authenticated_identity: None,
+            on_behalf_of: None,
+        }
+    }
+
+    /// Task 4.11 — the builder places the resolved readiness bound on the
+    /// envelope for Tmux and leaves every other transport's at `None`.
+    ///
+    /// Table-driven over all five target variants: a bound that leaked to Pty
+    /// or ACP would make those transports report an expired wait as
+    /// non-delivery, which they cannot do soundly — they commit the message
+    /// before their readiness wait, so the target may already hold it.
+    #[test]
+    fn build_coder_envelope_carries_the_readiness_bound_for_tmux_only() {
+        let cases = [
+            (
+                TargetConfiguration::Tmux(TmuxTargetConfiguration {
+                    start_command: "run".to_string(),
+                    prompt_readiness: None,
+                    prime_timeout_ms: None,
+                    readiness_timeout_ms: TEST_BOUND_MS,
+                }),
+                Some(TEST_BOUND_MS),
+            ),
+            (
+                TargetConfiguration::Pty(PtyTargetConfiguration {
+                    initial_command: "/bin/cat".to_string(),
+                    resume_command: "/bin/cat".to_string(),
+                    prompt_readiness: None,
+                    prime_timeout_ms: None,
+                    wedge_detection: true,
+                    cols: 120,
+                    rows: 40,
+                    term_protocol: TermProtocol::default(),
+                }),
+                None,
+            ),
+            (
+                TargetConfiguration::Acp(AcpTargetConfiguration {
+                    channel: AcpChannel::Stdio,
+                    command: Some("acp-shell".to_string()),
+                    url: None,
+                    prime_timeout_ms: None,
+                    headers: Vec::new(),
+                }),
+                None,
+            ),
+            (TargetConfiguration::Ui, None),
+            (TargetConfiguration::Pubsub, None),
+        ];
+        for (target, expected) in cases {
+            let label = target.session_type();
+            let envelope = build_coder_envelope(&task_for(target), delivery_message());
+            assert_eq!(
+                envelope.readiness_timeout_ms, expected,
+                "wrong readiness bound on the envelope for {label:?}",
+            );
+        }
+    }
+}
