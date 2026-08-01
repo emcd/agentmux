@@ -3,9 +3,10 @@
 ### Requirement: Send Timeout Override Flags by Transport
 
 `agentmux send` SHALL NOT expose any transport-scoped timeout
-override flag in v1. v1 of ACP delivery and v1 of Tmux delivery
-are fully config-only: the per-coder config keys
+override flag in v1. v1 of ACP, Tmux, and Pty delivery is fully
+config-only: the per-coder config keys
 `[coders.<id>.acp].prime-timeout-ms`,
+`[coders.<id>.pty].prime-timeout-ms`,
 `[coders.<id>.tmux].prime-timeout-ms`, and
 `[coders.<id>.tmux].readiness-timeout-ms` are the only timeout
 surfaces.
@@ -14,7 +15,12 @@ Adding a per-coder timeout key SHALL NOT be read as licence to add a per-call
 override for it. The config-only property is the invariant this requirement
 states; the enumeration of keys is incidental to it and SHALL be kept current as
 keys are added, so that "the only timeout surfaces" remains a true statement
-rather than a stale one.
+rather than a stale one. The enumeration SHALL be reconciled against the
+authoritative descriptor list in the `addressing-routing` capability's `Bundle
+Membership Configuration` requirement rather than extended only with the key a
+change happens to introduce. Reconciling it here restored
+`[coders.<id>.pty].prime-timeout-ms`, which shipped with `add-pty-transport` and
+was never added to this list.
 
 The pre-existing `--quiescence-timeout-ms` CLI flag was retired
 by the `tmux-wedge-detection` proposal; the pre-existing

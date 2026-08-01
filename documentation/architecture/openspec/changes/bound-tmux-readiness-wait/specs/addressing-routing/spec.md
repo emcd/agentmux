@@ -63,7 +63,6 @@ Descriptor fields SHALL be:
   - optional `prompt-inspect-lines`
   - optional `prompt-idle-column`
   - optional `prime-timeout-ms`
-  - optional `wedge-detection` (default `true`)
   - optional `readiness-timeout-ms` (default `900_000`, range
     `30_000..=3_600_000`)
 - `[coders.acp]`:
@@ -90,9 +89,13 @@ loader rather than extended only with the key a change happens to introduce.
 Reconciling it here found four keys the loader has accepted while this list
 omitted them: `prime-timeout-ms` and `wedge-detection` under `[coders.tmux]`
 since `tmux-wedge-detection`, `prime-timeout-ms` under `[coders.acp]`, and
-`term-protocol` under `[coders.pty]`. All four are restored alongside the new
-`readiness-timeout-ms`. That four accumulated undetected is the reason the
-reconciliation duty is stated rather than assumed.
+`term-protocol` under `[coders.pty]`. Three are restored; `wedge-detection` is
+not, because this change removes the Tmux wedge classifier and its knob with it.
+That four keys accumulated undetected is the reason the reconciliation duty is
+stated rather than assumed.
+
+`wedge-detection` remains listed under `[coders.pty]`, which retains its
+classifier until `agentmux:issues/relay/61` supplies a Pty readiness bound.
 
 ACP lifecycle selection constraints:
 

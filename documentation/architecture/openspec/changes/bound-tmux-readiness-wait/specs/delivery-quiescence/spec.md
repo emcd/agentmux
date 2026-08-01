@@ -55,23 +55,38 @@ bounds have elapsed in the same iteration, the prime timeout SHALL take
 precedence, because it is the more specific diagnosis and is reached only when
 an operator opted into it. Otherwise the earlier bound governs.
 
-A readiness-bound expiry SHALL NOT be reported as a wedge. The wedge verdict has
-its own predicate — a wedge-class mismatch repeated across a threshold number of
-consecutive quiescent evaluations — and a frame first observed absent at the
-moment the bound elapses has not satisfied it. Reporting `pane_wedged` there
-would assert a settled-and-repeated diagnosis from a single observation.
-`reason_code = "pane_wedged"` SHALL therefore be reserved for an
-already-satisfied wedge predicate, which resolves the group on its own path
-before the bound is consulted.
+The readiness bound SHALL be the **unconditional termination guarantee** for a
+Tmux post-quiescence wait: it applies regardless of what the pane shows and
+regardless of whether a prime timeout is configured, and no signal defers it. It
+is not the only terminal path — an opted-in prime timeout, relay shutdown, and a
+positively observed probe or transport failure each remain terminal — but it is
+the only one guaranteed to arrive, which is what makes the wait terminate.
 
-When the readiness bound elapses without a more specific verdict having fired,
-the transport SHALL resolve the flush group as `SendOutcome::Timeout` and SHALL
-derive the reason code from the most recent observation rather than from which
-internal wait path was executing:
+No classification of pane content SHALL produce a terminal failure on a Tmux
+wait. A settled non-prompt frame is produced by a hung coder, by a permission
+dialog awaiting an operator, by a compose box holding typed input, and by a
+coder working without terminal output; these are indistinguishable from the
+inspected tail, so the absence of a prompt frame SHALL NOT be treated as
+evidence that the target has failed.
+
+Target activity advancing between observations remains a valid **positive**
+signal on every transport and SHALL continue to suppress injection. **For Tmux**,
+its absence SHALL NOT be treated as a signal of any kind: only a positively
+observed terminal event — process death, a closed connection, a protocol error —
+is sound evidence of failure, and an unchanged screen is not. Pty's retained
+wedge classifier does infer failure from an unchanged screen; it is a
+known-unsound exception carried until `agentmux:issues/relay/61` supplies a Pty
+readiness bound, not a counterexample to this rule (see the
+`transport-abstraction` capability's `Three-State Delivery Classifier`).
+
+When the readiness bound elapses without delivery or a prime timeout having
+fired, the transport SHALL resolve the flush group as `SendOutcome::Timeout` and
+SHALL derive the reason code from the most recent observation. The reason is
+diagnostic only; every arm is the same outcome:
 
 | Most recent observation | `reason_code` |
 |---|---|
-| Frame absent, wedge predicate not yet satisfied | `target_not_ready` |
+| Prompt frame absent | `target_not_ready` |
 | Inspected tail empty | `target_unresponsive` |
 | Frame present, cursor away from its idle column | `pending_operator_input` |
 | Target activity advancing across the observation pair | `target_never_settled` |
@@ -79,9 +94,9 @@ internal wait path was executing:
 Classification precedence within one observation pair, highest first: activity
 advancing, then an empty tail, then a cursor mismatch, then frame absence.
 
-Verdict precedence when more than one outcome is available in the same
-iteration, highest first: **delivery**, then the wedge predicate, then the prime
-timeout, then the readiness bound.
+Outcome precedence when more than one outcome is available in the same
+iteration, highest first: **delivery**, then the prime timeout, then the
+readiness bound.
 
 Delivery ranks first. A target observed prompt-ready in the same iteration in
 which the readiness bound elapses SHALL be delivered to, not resolved as
@@ -91,11 +106,9 @@ failing it there would discard a success on a technicality. This also preserves
 the existing branch order, in which the prompt-ready check already precedes the
 prime-timeout check.
 
-Below delivery, the wedge predicate and the prime timeout outrank the readiness
-bound because both are more specific diagnoses than "the target never became
-ready", and both are reached only under a condition the readiness bound does not
-describe. The wedge predicate cannot conflict with delivery, since it requires
-the target not be prompt-ready.
+The prime timeout outranks the readiness bound because it is the more specific
+diagnosis — no observable output at all — and is reached only when an operator
+opted into it.
 
 A target suppressed as Busy is not prompt-ready for this purpose: activity
 advancing across the observation pair defers delivery under the existing
@@ -232,24 +245,22 @@ that case is not covered by this requirement and is tracked as
   match, and an elapsed bound resolves the group rather than granting the match
   it was denied
 
-#### Scenario: A wedge verdict outranks a simultaneous readiness expiry
+#### Scenario: A settled non-prompt frame is not a failure before the bound
 
-- **WHEN** the wedge predicate becomes satisfied in the same classification
-  iteration in which the readiness bound elapses
-- **THEN** the flush group resolves as `Failed` with
-  `reason_code = "pane_wedged"`
-- **AND** no readiness reason is reported for the same group
+- **WHEN** a Tmux target's pane is quiescent with the prompt frame absent
+- **AND** the readiness bound has not elapsed
+- **THEN** no terminal outcome is issued for the flush group
+- **AND** the group remains pending
+- **BECAUSE** the inspected tail cannot distinguish a hung coder from a
+  permission dialog, a compose box, or a coder working silently, so absence of a
+  prompt frame is not evidence of failure
 
-#### Scenario: Readiness expiry below the wedge threshold is not a wedge
+#### Scenario: A settled non-prompt frame resolves at the bound
 
 - **WHEN** the readiness bound elapses
 - **AND** the most recent observation shows an absent prompt frame
-- **AND** the wedge predicate has not been satisfied
 - **THEN** the flush group resolves as `Timeout` with
   `reason_code = "target_not_ready"`
-- **AND** it is not reported as `pane_wedged`
-- **BECAUSE** the wedge verdict asserts a repeated, settled diagnosis that a
-  single observation at expiry has not established
 
 ### Requirement: Async Queue Growth Risk Disclosure
 

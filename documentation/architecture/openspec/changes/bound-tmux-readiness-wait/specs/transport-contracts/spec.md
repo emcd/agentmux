@@ -1,3 +1,40 @@
+## REMOVED Requirements
+
+### Requirement: Tmux Wedged State Detection
+
+**Reason:** the classifier infers a terminal failure from the absence of change
+in rendered pane content, and that inference is unsound. A settled non-prompt
+frame is produced by a hung coder, by a permission dialog awaiting an operator
+decision, by a compose box holding typed input, and by a coder thinking with no
+terminal output. These are indistinguishable from `capture-pane` output, so the
+classifier reports a failure whenever it meets the three benign cases.
+
+The cost is asymmetric. Every false positive is a message that failed and should
+have landed; the only cost of not classifying is latency before a genuinely hung
+pane is reported, which the readiness bound now supplies. The benign cases are
+also the common ones, so the classifier bought speed on a rare condition by
+being wrong on frequent ones.
+
+**Migration:** no `format-version` bump, no compatibility shim, and no runtime or
+persisted-state migration. The readiness bound introduced by this change
+terminates every Tmux wait, so removing the classifier does not reintroduce an
+unbounded wait. Deliveries that previously resolved `Failed` with
+`reason_code = "pane_wedged"` now resolve `Timeout` at the readiness bound with
+a reason describing the observation, and deliveries that previously failed
+against a dialog, a compose box, or a briefly-settled pane now succeed once the
+target returns to its prompt.
+
+One operator edit is required. The `[coders.<id>.tmux].wedge-detection` key is
+deleted outright, so a `coders.toml` that still sets it fails load on existing
+unknown-field validation. An operator using the key SHALL delete the line; no
+value preserves the prior behavior, because the behavior is gone. Absence of a
+shim is not absence of an edit.
+
+The identically named `[coders.<id>.pty].wedge-detection` key is unaffected. Pty
+retains its own wedge detection under `Pty Wedged State Detection` until
+`agentmux:issues/relay/61` supplies a Pty readiness bound; removing it before
+then would leave Pty with no terminal path at all.
+
 ## MODIFIED Requirements
 
 ### Requirement: Prompt-Readiness Template Gating
@@ -18,37 +55,43 @@ transport-specific: Tmux reads from `capture-pane`; Pty reads from
 
 When `input_idle_cursor_column` is configured, relay SHALL treat the target as
 prompt-ready only when the transport reports the cursor at that configured
-column. For Tmux, this is `tmux display-message -p`; for Pty, this is
-`Terminal::cursor_x()`.
+column.
 
 A readiness failure SHALL be distinguished by its cause. A **frame mismatch**
-(`prompt_regex` did not match the inspected tail) means the target has settled
-on content that is not its prompt. A **cursor mismatch** (`prompt_regex` matched
-but the reported cursor is not at `input_idle_cursor_column`) means the prompt
-frame is healthy and the operator has input pending. The two SHALL NOT be
-treated as one condition: only a frame mismatch is wedge-class.
+(`prompt_regex` did not match the inspected tail) means the target has settled on
+content that is not its prompt. A **cursor mismatch** (`prompt_regex` matched but
+the reported cursor is not at `input_idle_cursor_column`) means the prompt frame
+is healthy and the operator has input pending. Both mean the same thing
+operationally — do not inject yet. What a transport may conclude from them
+differs by transport, and is stated per transport below rather than universally.
 
-Wedge detection defaults to enabled for both Tmux-backed and Pty-
-backed sessions (the operator MAY opt out per coder via
-`[coders.<id>.{tmux,pty}].wedge-detection = false`). When wedge
-detection is enabled and the pane settles at a **frame mismatch**, the coder
-transport SHALL classify the flush group as `wedged`. A pane settled at a
-cursor mismatch SHALL NOT be classified as `wedged` at any tick count.
+**On Tmux** the distinction SHALL be a **diagnostic** one rather than a predicate
+for terminal failure, and neither cause SHALL be treated as evidence that the
+target has failed. A target that is not prompt-ready is a target that is not
+ready *now*; the reason it is not ready is not knowable from the inspected tail.
+A permission dialog awaiting an operator, a compose box holding typed input, a
+coder producing no terminal output while working, and a hung process all present
+as a settled non-prompt frame. The distinction survives only as the reason
+reported if the wait later expires.
 
-The wedge classifier is the same `Wedged` outcome for both Tmux
-and Pty: `SendOutcome::Failed` + `reason_code = "pane_wedged"`
-after `WEDGE_CONSECUTIVE_TICKS` (3) identical wedge-class
-evaluations, OR when the prime window has elapsed with a wedge-
-class mismatch observed. Per-transport knobs and Pty-specific
-wedge scenarios live under the `Pty Wedged State Detection`
-requirement; per-transport knobs live under the cross-cutting
-`Pty Prime Timeout` requirement.
+**On Pty** a frame mismatch still resolves `SendOutcome::Failed` with
+`reason_code = "pane_wedged"` (see `Pty Wedged State Detection` and the scenario
+below). That inference has exactly the soundness problem described above. It is
+retained as a named temporary exception, because it is Pty's only terminal path
+until `agentmux:issues/relay/61` supplies a Pty readiness bound, and removing it
+first would leave Pty unable to end a wait at all. It SHALL NOT be read as
+establishing that a transport without a readiness bound may infer failure from
+rendered content. A cursor mismatch is not a failure predicate on either
+transport.
 
 For Tmux, a pane that never becomes prompt-ready — for either cause — SHALL be
 bounded by the flush group's readiness bound (see the `delivery-quiescence`
-capability's `Quiescence-Gated Delivery` requirement), so waiting for the target
-is bounded independently of whether a wedge verdict is ever reached. This
-requirement does not state a bound for Pty; see `agentmux:issues/relay/61`.
+capability's `Quiescence-Gated Delivery` requirement). That bound is the
+**unconditional termination guarantee** for the post-quiescence wait: it applies
+whatever the pane shows and whether or not a prime timeout is configured, and no
+signal defers it. It is not the only way a Tmux wait can end — an opted-in prime
+timeout, relay shutdown, and a positively observed probe or transport failure
+each remain terminal — but it is the only one guaranteed to arrive.
 
 > **Re-scoped 2026-07-15 against the post-`remove-operator-
 > interaction-delivery-gate` archive (master `2708884`).** The
@@ -92,13 +135,22 @@ requirement does not state a bound for Pty; see `agentmux:issues/relay/61`.
 - **AND** the transport-reported cursor position differs from configured
   `input_idle_cursor_column`
 - **THEN** relay does not inject the message
-- **AND** relay does NOT classify the flush group as `wedged`, however long the
-  state persists
 - **AND** on Tmux, relay continues waiting until the target becomes prompt-ready,
   the readiness bound elapses, or relay shuts down
-- **BECAUSE** a matching frame with a displaced cursor is an operator composing
-  input; wedging it would report a healthy target as stuck and inject into text
-  the operator is still writing
+- **AND** no terminal failure is issued on account of the pending input
+
+#### Scenario: Do not inject into a pane awaiting an operator decision
+
+- **WHEN** a Tmux target is displaying a prompt that awaits an operator response,
+  such as a tool-permission request
+- **AND** the pane is quiescent and `prompt_regex` does not match
+- **THEN** relay does not inject the message
+- **AND** relay does not report a terminal failure on account of the settled
+  non-prompt frame
+- **AND** the message is delivered once the operator answers and the pane returns
+  to its prompt, provided the readiness bound has not elapsed
+- **BECAUSE** a pane blocked on a human decision is neither ready nor failed, and
+  the inspected tail cannot distinguish it from one that is
 
 #### Scenario: Time out when quiescent pane never becomes prompt-ready
 
@@ -110,17 +162,19 @@ requirement does not state a bound for Pty; see `agentmux:issues/relay/61`.
   `SendOutcome::Timeout`
 - **AND** relay does not inject the message
 
-#### Scenario: Classify as wedged when a settled pane has a frame mismatch (default-on)
+#### Scenario: Classify a Pty settled frame mismatch as wedged (default-on)
 
 - **WHEN** target member has a prompt-readiness template
-- **AND** the coder defines `[coders.<id>.tmux]` or
-  `[coders.<id>.pty]` with `wedge-detection` not disabled (it
-  defaults to enabled)
+- **AND** the coder defines `[coders.pty]` with `wedge-detection` not disabled
+  (it defaults to enabled)
 - **AND** pane output reaches quiescence
 - **AND** `prompt_regex` does not match the inspected pane tail
-- **THEN** the coder transport resolves the flush group as
+- **THEN** the Pty transport resolves the flush group as
   `SendOutcome::Failed` with `reason_code = "pane_wedged"`
 - **AND** relay does not inject the message
+- **BECAUSE** Pty has no readiness bound until `agentmux:issues/relay/61`, so
+  this remains its only terminal path despite sharing the Tmux transport's
+  soundness problem
 
 #### Scenario: Deliver to a pane the operator has scrolled into copy-mode
 
@@ -131,16 +185,15 @@ requirement does not state a bound for Pty; see `agentmux:issues/relay/61`.
 - **AND** the pane remains in copy-mode with the operator's scroll
   position undisturbed
 
-#### Scenario: Wedge detection opt-out suppresses the verdict, not the Tmux bound
+#### Scenario: Pty wedge detection opt-out preserves prior behavior
 
 - **WHEN** target member has a prompt-readiness template
-- **AND** `[coders.<id>.{tmux,pty}].wedge-detection = false`
+- **AND** `[coders.<id>.pty].wedge-detection = false`
 - **AND** pane output reaches quiescence
 - **AND** template matching conditions are not true
-- **THEN** relay does not issue a wedge verdict
-- **AND** on Tmux, relay continues waiting until the pane becomes prompt-ready,
-  the prime timeout fires (if enabled), the readiness bound elapses, or relay
-  shuts down
+- **THEN** relay continues waiting until the pane becomes
+  prompt-ready, prime timeout fires (if enabled), or relay shuts
+  down
 
 ### Requirement: Tmux Prime Timeout
 
@@ -207,10 +260,8 @@ delivery.
 - **THEN** the Tmux transport does not classify any flush group as
   `unresponsive` on the basis of the prime window
 - **AND** the readiness bound still applies to the flush group
-- **AND** the terminal failure modes for a flush group are
-  `Failed` + `reason_code = "pane_wedged"` (when wedge detection is
-  enabled, which is the default), `Timeout` from the readiness bound, and
-  `Shutdown`
+- **AND** the terminal failure modes for a flush group are `Timeout` from the
+  readiness bound and `Shutdown`
 
 #### Scenario: Prime timer does not reset on coalesce-during-wait
 
@@ -222,120 +273,3 @@ delivery.
   original prime window anchor (set at first wait start)
 - **AND** the absorbed envelope does NOT extend or restart the prime
   window
-
-### Requirement: Tmux Wedged State Detection
-
-The system SHALL surface a config-surfaced wedge detection knob for
-Tmux-backed sessions, applied as the `wedge-detection` boolean TOML
-key under the per-coder `[coders.<id>.tmux]` table. The knob SHALL
-classify a settled pane whose prompt frame is absent as `wedged`.
-
-Wedge detection is an early exit, not the termination guarantee. The wait for a
-flush group is bounded by that group's readiness bound (see the
-`delivery-quiescence` capability's `Quiescence-Gated Delivery` requirement)
-whether or not wedge detection is enabled. Wedge detection only allows a verdict
-to be reached sooner, with a more specific reason, when the diagnosis is
-unambiguous.
-
-Wedge detection defaults to **enabled** (`true`) — the cost of a
-silently-wedged pane (delivery queue growth, silent failure) is
-higher than the cost of a false-positive wedge (operator restarts the
-target, future deliveries proceed normally). Operators MAY opt out by
-setting `[coders.<id>.tmux].wedge-detection = false`. The opt-out
-suppresses the early verdict only; it SHALL NOT restore an unbounded wait, and
-the flush group still resolves as `Timeout` when its readiness bound elapses.
-
-A wedge detection SHALL fire when wedge detection is enabled and the
-Tmux transport observes, during the quiescence wait for a flush
-group:
-
-- the pane output has been quiescent, and
-- the prompt-readiness template's **frame** did not match the inspected pane
-  tail, and
-- the same wedge-class mismatch signature has been observed across
-  `WEDGE_CONSECUTIVE_TICKS` consecutive quiescent evaluations.
-
-Those evaluations SHALL continue to accrue while the pane is settled, without
-requiring the pane to change. A wedge condition that stops advancing because its
-target stopped producing output is not detectable by the classifier that exists
-to detect stopped targets.
-
-A readiness mismatch SHALL NOT be treated as a single undifferentiated
-condition. A **frame mismatch** (the prompt-readiness template did not match)
-indicates the target has settled on content that is not its prompt, and is
-wedge-class. A **cursor mismatch** (the template matched but the cursor is away
-from its configured idle column) indicates a healthy prompt frame holding
-pending operator input, and SHALL NOT be classified as wedged at any tick count;
-it remains subject to the readiness bound like any other non-ready state.
-An **empty inspected tail** indicates a target with no observable content and is
-unresponsive rather than wedged.
-
-No operator-interaction signal SHALL suppress these classifications. The Tmux
-transport's target queries are limited to pane identity, window activity, and
-cursor column, and it detects neither copy-mode nor an active key-table.
-Documentation asserting that such a signal defers a classification or a bound
-describes a gate that no longer exists and SHALL be removed rather than relied
-upon, since it reads as covering the pending-operator-input case governed above.
-
-When wedge detection fires, the Tmux transport SHALL resolve every
-sender in the flush group with `SendOutcome::Failed` and
-`reason_code = "pane_wedged"`. The classification SHALL be sticky:
-once the flush group is classified as wedged, the transport SHALL NOT
-re-evaluate across coalesce iterations. Per-message wedge deadlines
-within a flush group are out of scope.
-
-#### Scenario: Wedge fires on a settled pane with an absent frame (default-on)
-
-- **WHEN** the bundle config does not set
-  `[coders.<id>.tmux].wedge-detection` (or sets it to `true`)
-- **AND** the Tmux transport's quiescence wait observes the pane becomes
-  quiescent
-- **AND** the prompt-readiness template's frame does not match the inspected
-  pane tail
-- **AND** that signature repeats across `WEDGE_CONSECUTIVE_TICKS` consecutive
-  quiescent evaluations
-- **THEN** every sender in the flush group receives
-  `SendOutcome::Failed` with `reason_code = "pane_wedged"`
-- **AND** no message is injected into the pane
-
-#### Scenario: Wedge evaluations accrue without target output
-
-- **WHEN** a pane holds a settled frame-absent state and produces no further
-  output
-- **THEN** further quiescent evaluations still occur
-- **AND** the verdict is reached without requiring any further target change
-- **BECAUSE** a target that has stopped producing output is precisely the case
-  wedge detection exists to catch
-
-#### Scenario: Pending operator input is never wedged
-
-- **WHEN** the prompt-readiness template matches the inspected pane tail
-- **AND** the cursor is away from its configured idle column
-- **AND** the pane remains quiescent in that state across arbitrarily many
-  evaluations
-- **THEN** no wedge verdict is issued
-- **AND** the flush group remains pending until the target becomes ready or the
-  readiness bound elapses
-- **BECAUSE** a healthy prompt frame with a displaced cursor is an operator
-  composing input, and injecting into it would corrupt what they are typing
-
-#### Scenario: Wedge detection opt-out suppresses the verdict, not the bound
-
-- **WHEN** the bundle config sets
-  `[coders.<id>.tmux].wedge-detection = false`
-- **THEN** the Tmux transport continues to wait past quiescence without issuing
-  a wedge verdict
-- **AND** the readiness bound still bounds that wait
-- **AND** the terminal failure modes for the flush group are `Timeout` and
-  `Shutdown`
-
-#### Scenario: Wedge is sticky across coalesce iterations
-
-- **WHEN** the Tmux transport's quiescence wait classifies a flush
-  group as `wedged`
-- **AND** new envelopes are absorbed into the flush group via
-  coalesce-during-wait before the wedge classification propagates
-- **THEN** every sender in the enlarged flush group receives the same
-  wedge outcome (`Failed` + `reason_code = "pane_wedged"`)
-- **AND** the transport does NOT re-evaluate wedge state across
-  coalesce iterations
