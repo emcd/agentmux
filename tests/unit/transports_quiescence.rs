@@ -18,8 +18,8 @@
 use std::time::{Duration, Instant};
 
 use agentmux::transports::{
-    DeliveryWaitError, QuiescenceAction, QuiescenceState, WedgeObservation, WedgeProbe,
-    quiescence_classify_step,
+    DeliveryWaitError, QuiescenceAction, QuiescenceState, ReadinessMismatch, WedgeObservation,
+    WedgeProbe, quiescence_classify_step,
 };
 
 const TEST_TARGET_SESSION: &str = "test-session";
@@ -392,5 +392,100 @@ fn busy_needswait_deadline_is_bounded_by_quiet_window() {
             );
         }
         other => panic!("expected NeedsWait after Busy, got {other:?}"),
+    }
+}
+
+/// A stable wedge-class mismatch must keep advancing toward its terminal
+/// verdict even when no prime timeout is configured. The production probe
+/// otherwise waits for pane output that an idle pane will never produce.
+#[test]
+fn idle_wedge_rechecks_until_the_counter_fires() {
+    let observation = WedgeObservation {
+        inspected_tail: "idle non-prompt screen".to_string(),
+        is_prompt_ready: false,
+        pane_target: Some(TEST_PANE.to_string()),
+        mismatch: None,
+        activity_generation: 0,
+    };
+    let mut probe = MockProbe::new(observation.clone(), observation);
+    let mut state = QuiescenceState::new();
+    let started_at = Instant::now();
+
+    for expected_count in 1..3 {
+        let result = quiescence_classify_step(
+            &mut probe,
+            &mut state,
+            TEST_TARGET_SESSION,
+            TEST_QUIET_WINDOW,
+            None,
+            started_at,
+            None,
+            true,
+        );
+        let QuiescenceAction::NeedsWait(deadline) = result else {
+            panic!("idle wedge must await another observation before threshold");
+        };
+        assert_eq!(state.consecutive_quiescent_mismatches(), expected_count);
+        assert!(
+            deadline.saturating_duration_since(Instant::now()) <= TEST_QUIET_WINDOW,
+            "idle wedge recheck must not use the one-year sentinel",
+        );
+    }
+
+    let result = quiescence_classify_step(
+        &mut probe,
+        &mut state,
+        TEST_TARGET_SESSION,
+        TEST_QUIET_WINDOW,
+        None,
+        started_at,
+        None,
+        true,
+    );
+    assert!(
+        matches!(
+            result,
+            QuiescenceAction::Done(Err(DeliveryWaitError::Wedged { .. }))
+        ),
+        "third stable observation must classify the idle pane as wedged: {result:?}",
+    );
+}
+
+/// A matching prompt frame with a non-idle cursor means the operator has
+/// composed input and paused. Stable pending input must not become a wedge
+/// merely because the idle-pane fix now rechecks genuine regex mismatches.
+#[test]
+fn composing_cursor_mismatch_never_advances_the_wedge_counter() {
+    let observation = WedgeObservation {
+        inspected_tail: "prompt frame with pending input".to_string(),
+        is_prompt_ready: false,
+        pane_target: Some(TEST_PANE.to_string()),
+        mismatch: Some(ReadinessMismatch {
+            reason: "cursor column 12 did not match required 5".to_string(),
+            regex_matched: Some(true),
+            expected_cursor_column: Some(5),
+            observed_cursor_column: Some(12),
+        }),
+        activity_generation: 0,
+    };
+    let mut probe = MockProbe::new(observation.clone(), observation);
+    let mut state = QuiescenceState::new();
+
+    for _ in 0..4 {
+        let result = quiescence_classify_step(
+            &mut probe,
+            &mut state,
+            TEST_TARGET_SESSION,
+            TEST_QUIET_WINDOW,
+            None,
+            Instant::now(),
+            None,
+            true,
+        );
+        assert!(
+            matches!(result, QuiescenceAction::NeedsWait(_)),
+            "composing pane must remain pending rather than wedge: {result:?}",
+        );
+        assert_eq!(state.consecutive_quiescent_mismatches(), 0);
     }
 }
