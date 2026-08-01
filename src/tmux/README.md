@@ -27,6 +27,13 @@ introduced.
   [`wait_for_quiescent_pane_three_state`] driving
   [`PaneQuiescenceProbe`].
 
+  OpenCode readiness has a second, private compose-region gate. It recognizes
+  the measured 1.18.9 frame suffix (info row, 20-or-more `▀` characters, and
+  the `ctrl+p commands` status row), then checks exactly the three input rows
+  before the info row. Two captured 1.18.9 layouts establish the 99/100-space
+  boundary: 99 spaces can be compose text, while 100 or more belongs to the
+  sidebar. A future OpenCode layout change requires revisiting these bounds.
+
   Tmux does **not** classify `wedged`. Inferring a terminal failure from
   the absence of change in rendered content cannot distinguish a hung
   coder from a permission dialog awaiting an operator, a compose box
