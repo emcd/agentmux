@@ -467,3 +467,47 @@ A bound applies to a flush group only when that group's envelope carries it.
   `tmux-wedge-detection` and `add-wedge-detection-busy-state`
   proposals unchanged, except that Tmux no longer consumes the
   state machine's `Wedged` result
+
+### Requirement: Transport-Internal Probe Seam for Testability
+
+Each promptable transport that owns a quiescence wait SHALL expose an
+internal probe trait that lets tests inject deterministic quiescence and
+prompt-readiness results. The probe trait SHALL be transport-internal (not
+part of the `Transport` contract) and SHALL NOT appear in
+`src/transports/contract.rs`.
+
+The probe trait SHALL return the next observation on demand so tests can
+drive the classifier through specific sequences. The sequences a transport's
+tests SHALL cover are the terminal states that transport can actually reach:
+for Tmux, unresponsive, slow-prompt, and normal-flow; a wedged sequence is
+not among them, because Tmux no longer classifies `wedged`.
+
+#### Scenario: Tmux probe trait is transport-internal
+
+- **WHEN** a developer reads `src/tmux/transport.rs`
+- **THEN** they find a `PaneQuiescenceProbe` trait used by
+  `wait_for_quiescent_pane`
+- **AND** the trait is not re-exported from `src/transports/`
+- **AND** the `Transport` trait in `src/transports/contract.rs` has no
+  knowledge of probes
+
+#### Scenario: Tmux unit tests cover the reachable canonical sequences
+
+- **WHEN** `cargo test --test tmux_transport` runs
+- **THEN** it asserts the canonical probe sequences produce the
+  expected terminal outcomes:
+  - a probe that never produces output → `SendOutcome::Timeout`
+  - a probe that quiesces at a prompt after several ticks → `Delivered`
+  - a probe that produces output then settles at a prompt → `Delivered`
+    without the prime timeout firing
+- **AND** no Tmux sequence asserts `SendOutcome::Failed` with
+  `reason_code = "pane_wedged"`, which the transport cannot produce
+
+#### Scenario: Readiness-bound coverage lives with the shared classifier
+
+- **WHEN** a developer looks for the tests covering the Tmux readiness bound
+- **THEN** they find them against the shared classifier both transports drive,
+  not duplicated per transport
+- **BECAUSE** the bound is applied by the shared state machine, and asserting it
+  through one transport's probe adapter would test the adapter rather than the
+  rule
