@@ -3,7 +3,7 @@
 //! The regex is shipped in `data/configuration/coders.toml` under the
 //! `opencode` coder's `prompt-regex` field. It matches the Opencode
 //! prompt UI frame structure: a `┃` line, then the separator
-//! `╹▀▀▀...`, then the status row that ends with `ctrl+p commands`
+//! `╹▀{20,}`, then the status row that ends with `ctrl+p commands`
 //! (with optional `• OpenCode <version>` tail).
 //!
 //! ## Two-stage readiness gate
@@ -14,15 +14,21 @@
 //!    regress; 20+ `▀` chars in the separator so the rendered run
 //!    matches regardless of pane width; `ctrl+p commands` token in
 //!    the status row so the version is recognised as Opencode.
-//! 2. **Code-side compose-region check** (`compose_region_has_text`,
-//!    re-exported from `src/tmux/quiescence_probe.rs`): walks up to
-//!    three rows immediately preceding the info row and rejects
-//!    compose text (`┃` + 2-100 leading whitespace + non-whitespace)
-//!    in any of them. Closes the top/middle-row compose gap that
-//!    the regex's `(?m)^`-anchored shape cannot express on its own
-//!    (Rust's stable `regex` crate has no look-around; "every row of
-//!    a variable-height box is empty" is not expressible as a single
-//!    unanchored regex).
+//! 2. **Code-side compose-region check** (`compose_region_has_text`
+//!    in `src/tmux/quiescence_probe.rs`, called from
+//!    `prompt_readiness_matches`): walks `input_box_rows` rows
+//!    immediately preceding the info row and rejects compose text
+//!    (`┃` + 2-99 leading whitespace + non-whitespace) in any of
+//!    them. Closed the top/middle-row compose gap that the regex's
+//!    `(?m)^`-anchored shape cannot express on its own (Rust's
+//!    stable `regex` crate has no look-around; "every row of a
+//!    variable-height box is empty" is not expressible as a single
+//!    unanchored regex). Gated on `prompt-compose-region-check = true`
+//!    in the OpenCode coder config so other coders' readiness
+//!    evaluations are unchanged. Tested via the production path in
+//!    `tests/unit/tmux_transport.rs` (with teeth-check via
+//!    `prompt_readiness_matches`); this file only tests the regex in
+//!    isolation.
 //!
 //! The cursor-column check (`prompt-idle-column`) is wired alongside
 //! both in `prompt_readiness_matches`; it remains the only universal
@@ -40,7 +46,7 @@ const IDLE_EDITOR: &str = "\
   ┃
   ┃
   ┃  Build · MiniMax-M3 MiniMax Token Plan (minimax.io)                                                                                                ~/src/WORKTREES/agentmux/editor:editor
-  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
    /home/me/src/WORKTREES/agentmux/editor                                                                              97.9K (10%)  ctrl+p commands    • OpenCode 1.18.5";
 
 const IDLE_ACP: &str = "\
@@ -67,7 +73,7 @@ const API_AUX_SIDEBAR_WRAP: &str = "\
   ┃
   ┃                                                                                                                              ~/src/WORKTREES/agentmux/api-aux:api-
   ┃  Build · GPT-5.6 Sol OpenAI                                                        aux
-  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
    /home/me/src/WORKTREES/agentmux/api-aux                                                                            105.1K (21%)  ctrl+p commands    • OpenCode 1.18.9";
 
 const AGENT_JUST_RESPONDED: &str = "\
@@ -81,7 +87,9 @@ const AGENT_JUST_RESPONDED: &str = "\
    /Users/me/src/WORKTREES/agentmux/pty                            133.6K (13%) · $0.27 ctrl+p commands    • OpenCode 1.18.4";
 
 // Composing cases: text in input box. The regex matches the frame
-// structure; the code-side `compose_region_has_text` rejects these.
+// structure; the production-path code-side compose-region check
+// rejects these. The compose check is tested through
+// `prompt_readiness_matches` in `tests/unit/tmux_transport.rs`.
 const COMPOSING: &str = "\
   ┃
   ┃
@@ -98,9 +106,6 @@ const COMPOSING_FULL: &str = "\
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
    /Users/me/src/WORKTREES/agentmux/pty                            65.6K (7%) · $0.27 ctrl+p commands    • OpenCode 1.18.3";
 
-// User typed text only in the TOP row of the input box; middle and
-// bottom are empty. The regex matches the frame; the code-side
-// compose-region check rejects because the top row has compose text.
 const COMPOSING_TOP: &str = "\
   ┃  hello
   ┃
@@ -109,8 +114,6 @@ const COMPOSING_TOP: &str = "\
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
    /Users/me/src/WORKTREES/agentmux/pty                            65.6K (7%) · $0.27 ctrl+p commands    • OpenCode 1.18.3";
 
-// User typed text only in the MIDDLE row; top and bottom are empty.
-// Same as COMPOSING_TOP but text in the middle row.
 const COMPOSING_MIDDLE: &str = "\
   ┃
   ┃  hello
@@ -119,10 +122,6 @@ const COMPOSING_MIDDLE: &str = "\
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
    /Users/me/src/WORKTREES/agentmux/pty                            65.6K (7%) · $0.27 ctrl+p commands    • OpenCode 1.18.3";
 
-// User typed text then pressed Home so the cursor sits back at the
-// idle column. The cursor-column check passes (col 5); the regex
-// matches the frame; the compose-region check rejects because the
-// bottom input row contains compose text.
 const HOME_AFTER_TYPING: &str = "\
   ┃
   ┃
@@ -131,11 +130,6 @@ const HOME_AFTER_TYPING: &str = "\
   ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
    /Users/me/src/WORKTREES/agentmux/pty                            65.6K (7%) · $0.27 ctrl+p commands    • OpenCode 1.18.3";
 
-// Opencode may switch the info-row label from "Build" to another
-// agent/mode label (e.g. "Plan" for plan-mode agents). The info-row
-// anchor `.*┃.*` is mode-agnostic; this fixture protects against a
-// regression to a label-hardcoded form that would stop all delivery
-// on label change.
 const PLAN_MODE: &str = "\
   ┃
   ┃
@@ -194,8 +188,9 @@ fn opencode_prompt_regex_classifies_states() {
     // because the regex does not (and cannot, in a single Rust
     // `regex` pattern without look-around) inspect every row above
     // the info row for compose text. The compose-region rejection
-    // lives in `compose_region_has_text`; the second test below
-    // exercises that check directly.
+    // lives in `prompt_readiness_matches`; the production-path
+    // test in `tests/unit/tmux_transport.rs` exercises that check
+    // directly.
     let cases: &[(&str, &str, bool)] = &[
         ("idle_editor", IDLE_EDITOR, true),
         ("idle_acp", IDLE_ACP, true),
@@ -217,42 +212,6 @@ fn opencode_prompt_regex_classifies_states() {
         assert_eq!(
             actual, *expected_match,
             "fixture {label}: expected match={expected_match}, got match={actual}",
-        );
-    }
-}
-
-#[test]
-fn compose_region_check_rejects_compose_text() {
-    // Direct test of the code-side compose-region second gate. The
-    // regex alone accepts all composing fixtures (frame structure
-    // is present); the readiness check rejects them via this gate.
-    // This test pins the gate's coverage so the gap stays closed.
-    let idle_cases: &[(&str, &str)] = &[
-        ("idle_editor", IDLE_EDITOR),
-        ("idle_acp", IDLE_ACP),
-        ("cold_start", COLD_START),
-        ("agent_just_responded", AGENT_JUST_RESPONDED),
-        ("api_aux_sidebar_wrap", API_AUX_SIDEBAR_WRAP),
-        ("plan_mode", PLAN_MODE),
-    ];
-    for (label, fixture) in idle_cases {
-        assert!(
-            !agentmux::tmux::compose_region_has_text(fixture),
-            "{label}: expected no compose text, but compose_region_has_text returned true",
-        );
-    }
-
-    let composing_cases: &[(&str, &str)] = &[
-        ("composing", COMPOSING),
-        ("composing_full", COMPOSING_FULL),
-        ("composing_top", COMPOSING_TOP),
-        ("composing_middle", COMPOSING_MIDDLE),
-        ("home_after_typing", HOME_AFTER_TYPING),
-    ];
-    for (label, fixture) in composing_cases {
-        assert!(
-            agentmux::tmux::compose_region_has_text(fixture),
-            "{label}: expected compose text, but compose_region_has_text returned false",
         );
     }
 }
