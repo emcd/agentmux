@@ -48,6 +48,7 @@ use super::pane::{capture_pane_tail_lines, inject_literal_text, resolve_active_p
 use super::quiescence_probe::{RealPaneQuiescenceProbe, wait_for_quiescent_pane_three_state};
 
 const TMUX_TARGET_UNAVAILABLE_CODE: &str = "tmux_target_unavailable";
+const TMUX_DELIVERY_THREAD_STOPPED_CODE: &str = "tmux_delivery_thread_stopped";
 
 /// Capacity of the internal write channel. Sized to absorb bursts from the
 /// relay worker without unbounded growth; the delivery task drains continuously.
@@ -112,6 +113,7 @@ struct DeliveryTaskContext {
 pub struct TmuxTransport {
     batch_settings: PromptBatchSettings,
     sender: Option<mpsc::Sender<WriteItem>>,
+    task_handle: Option<thread::JoinHandle<()>>,
     task_context: Option<DeliveryTaskContext>,
     shutdown_flag: Arc<AtomicBool>,
 }
@@ -121,6 +123,13 @@ impl std::fmt::Debug for TmuxTransport {
         f.debug_struct("TmuxTransport")
             .field("batch_settings", &self.batch_settings)
             .field("sender", &self.sender.as_ref().map(|_| "..."))
+            .field(
+                "task_running",
+                &self
+                    .task_handle
+                    .as_ref()
+                    .map(|handle| !handle.is_finished()),
+            )
             .finish()
     }
 }
@@ -131,29 +140,51 @@ impl TmuxTransport {
         Self {
             batch_settings,
             sender: None,
+            task_handle: None,
             task_context: None,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
         }
     }
 
     /// Starts the internal delivery task if not already running and `startup()`
-    /// has been called. Returns `true` if the task is running (or just started).
-    fn ensure_task_running(&mut self) -> bool {
+    /// has been called. Returns an error when startup was omitted or the task
+    /// has stopped after startup.
+    fn ensure_task_running(&mut self) -> Result<(), &'static str> {
+        if let Some(handle) = self.task_handle.as_ref()
+            && handle.is_finished()
+        {
+            let handle = self
+                .task_handle
+                .take()
+                .expect("finished task handle must still be present");
+            let _ = handle.join();
+            self.sender = None;
+            return Err(TMUX_DELIVERY_THREAD_STOPPED_CODE);
+        }
+        if let Some(handle) = self.task_handle.as_ref() {
+            if self.sender.is_some() && !handle.is_finished() {
+                return Ok(());
+            }
+            self.sender = None;
+            return Err(TMUX_DELIVERY_THREAD_STOPPED_CODE);
+        }
         if self.sender.is_some() {
-            return true;
+            self.sender = None;
+            return Err(TMUX_DELIVERY_THREAD_STOPPED_CODE);
         }
         let ctx = match self.task_context.take() {
             Some(ctx) => ctx,
-            None => return false,
+            None => return Err("transport_not_started"),
         };
         let (sender, receiver) = mpsc::channel(WRITE_CHANNEL_CAPACITY);
-        self.sender = Some(sender);
         let shutdown_flag = Arc::clone(&self.shutdown_flag);
         let batch_settings = self.batch_settings;
-        thread::spawn(move || {
+        let task_handle = thread::spawn(move || {
             run_delivery_task(receiver, ctx, shutdown_flag, batch_settings);
         });
-        true
+        self.sender = Some(sender);
+        self.task_handle = Some(task_handle);
+        Ok(())
     }
 
     /// Enqueues a write item on the channel. If the channel is full or closed,
@@ -195,13 +226,18 @@ impl Transport for TmuxTransport {
 
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
         let (sender, receiver) = oneshot::channel();
-        if !self.ensure_task_running() {
+        if let Err(reason_code) = self.ensure_task_running() {
+            let reason = if reason_code == "transport_not_started" {
+                "mailw called before startup()"
+            } else {
+                "mailw called after the delivery thread stopped"
+            };
             let _ = sender.send(SingleDeliveryOutcome {
                 target_session: String::new(),
                 message_id: envelope.message_id.clone(),
                 outcome: SendOutcome::Failed,
-                reason_code: Some("transport_not_started".to_string()),
-                reason: Some("mailw called before startup()".to_string()),
+                reason_code: Some(reason_code.to_string()),
+                reason: Some(reason.to_string()),
                 details: None,
             });
             return receiver;
@@ -212,13 +248,18 @@ impl Transport for TmuxTransport {
 
     fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
         let (sender, receiver) = oneshot::channel();
-        if !self.ensure_task_running() {
+        if let Err(reason_code) = self.ensure_task_running() {
+            let reason = if reason_code == "transport_not_started" {
+                "raww called before startup()"
+            } else {
+                "raww called after the delivery thread stopped"
+            };
             let _ = sender.send(SingleDeliveryOutcome {
                 target_session: String::new(),
                 message_id: String::new(),
                 outcome: SendOutcome::Failed,
-                reason_code: Some("transport_not_started".to_string()),
-                reason: Some("raww called before startup()".to_string()),
+                reason_code: Some(reason_code.to_string()),
+                reason: Some(reason.to_string()),
                 details: None,
             });
             return receiver;
@@ -234,6 +275,7 @@ impl Transport for TmuxTransport {
     fn shutdown(&mut self) {
         self.shutdown_flag.store(true, Ordering::Release);
         self.sender = None;
+        self.task_handle = None;
     }
 
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {
@@ -890,5 +932,61 @@ impl OutputView for TmuxOutputView {
             details: Some(json!({ "cause": reason })),
         })?;
         Ok(LookSnapshotPayload::Lines { snapshot_lines })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::envelope::AddressIdentity;
+
+    fn test_envelope() -> DeliveryEnvelope {
+        DeliveryEnvelope {
+            message_id: "stopped-thread-message".to_string(),
+            message: crate::transports::DeliveryMessage {
+                body: "test body".to_string(),
+                created_at: "2026-08-01T00:00:00Z".to_string(),
+                namespace: "test-ns".to_string(),
+                sender: AddressIdentity {
+                    session_name: "sender@test-ns".to_string(),
+                    display_name: None,
+                },
+                target: AddressIdentity {
+                    session_name: "target@test-ns".to_string(),
+                    display_name: None,
+                },
+                cc: Vec::new(),
+                authenticated_identity: None,
+                on_behalf_of: None,
+            },
+            append_enter: true,
+            choice_decider_sessions: Vec::new(),
+            quiet_window: std::time::Duration::from_millis(50),
+            prime_timeout_ms: None,
+            readiness_timeout_ms: None,
+            is_receipt: false,
+        }
+    }
+
+    #[test]
+    fn mailw_resolves_when_delivery_thread_has_stopped() {
+        let (sender, _receiver) = mpsc::channel(WRITE_CHANNEL_CAPACITY);
+        let task_handle = thread::spawn(|| {});
+        while !task_handle.is_finished() {
+            thread::yield_now();
+        }
+
+        let mut transport = TmuxTransport::new(PromptBatchSettings::default());
+        transport.sender = Some(sender);
+        transport.task_handle = Some(task_handle);
+
+        let outcome = Transport::mailw(&mut transport, test_envelope())
+            .blocking_recv()
+            .expect("stopped delivery thread must resolve mailw");
+        assert_eq!(outcome.outcome, SendOutcome::Failed);
+        assert_eq!(
+            outcome.reason_code.as_deref(),
+            Some("tmux_delivery_thread_stopped")
+        );
     }
 }
