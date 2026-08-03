@@ -209,29 +209,61 @@ async queue lifecycle and terminal-outcome semantics.
 
 ### Modified Capabilities
 
-The delta set is large and the `specs` artifact is authoritative; this is the
-expected inventory, to be reconciled against a full sweep before the specs are
-written.
+36 deltas across seven capabilities. The `specs` artifact is authoritative; this
+inventory is reconciled against it.
 
-- `transport-abstraction` — the commit contract's home. `Transport Interface
-  Contract` (handover, capacity declaration, injected readiness notifier),
-  `Delivery Classifier` (collapses to positive observation only), `Generalized
-  Wedge/Prime State Machine` (RENAMED; loses the prime deadline), `Worker
-  Readiness Interface`, `Transport-Internal Probe Seam for Testability`,
-  `Positive Activity Signal`, `Transport Module Boundaries` (must distinguish
-  queueing from quiescence scheduling and packing), `Pty Transport
-  Implementation` (write moves after the wait), `Prime Timeout Envelope Field`
-  and `ACP Prime Timeout Envelope Field Consumption` (both REMOVED).
-- `transport-contracts` — `Tmux Prime Timeout`, `ACP Prime Timeout`, `Pty Prime
-  Timeout`, and `Pty Wedged State Detection` all REMOVED. `Prompt-Readiness
-  Template Gating` and `Transport Capability Contract` MODIFIED.
-- `delivery-quiescence` — `Quiescence-Gated Delivery` (the commitment boundary),
-  `Async Queue Lifecycle and Ordering` (relay-owned queue, residency policy),
-  `Asynchronous Terminal-Outcome Receipt` (pre/post-commit outcome vocabulary),
-  `Async Delivery Observability`, `Async Queue Growth Risk Disclosure` (its
-  per-transport asymmetry disappears).
-- `addressing-routing` — `Bundle Membership Configuration`, for the removed
-  descriptor keys.
+- `transport-abstraction` (7 MODIFIED, 3 ADDED, 4 REMOVED) — the commit
+  contract's home. MODIFIED: `Transport Interface Contract` (batch seam, fallible
+  invocation, no waiting), `Transport Module Boundaries` (separates queueing,
+  readiness scheduling, and packing), `Synchronous Delivery Completion` (per-unit
+  outcomes), `Worker Readiness Interface`, `Positive Activity Signal` (relay
+  consumes it; no classifier), `Transport-Internal Probe Seam for Testability`,
+  `Pty Transport Implementation` (buffer then write; singleton units). ADDED:
+  `Packing Units and Typed Submission Evidence`, `Transport Generation Fencing
+  and Termination Authority`, `Transport Handover Capacity and Readiness`.
+  REMOVED: `Three-State Delivery Classifier`, `Prime Timeout Envelope Field`,
+  `ACP Prime Timeout Envelope Field Consumption`, `Generalized Wedge/Prime State
+  Machine`.
+- `transport-contracts` (4 MODIFIED, 4 REMOVED) — MODIFIED:
+  `Prompt-Readiness Template Gating` (gates authorization uniformly; no
+  per-transport failure inference), `Relay raww operation contract` (mode
+  discriminator), `Relay raww transport behavior` (ordering, Pty and UI arms),
+  `ACP Transport Error Code` (separates the synchronous code from the delivery
+  outcome, and bounds the outcome to positively observed terminal lifecycle).
+  REMOVED: `ACP Prime Timeout`, `Tmux Prime Timeout`, `Pty Prime Timeout`, `Pty
+  Wedged State Detection`.
+- `delivery-quiescence` (7 MODIFIED, 2 ADDED) — MODIFIED:
+  `Quiescence-Gated Delivery` (relay-owned readiness), `Delivery Results Without
+  ACK Protocol` (admission reservation, Pubsub rejection), `Async Queue Lifecycle
+  and Ordering` (entry states, residency, DRR), `Asynchronous Terminal-Outcome
+  Receipt` (new outcome vocabulary), `Async Delivery Observability`, `Async Queue
+  Growth Risk Disclosure`, `Quiescence Documentation`. ADDED: `Delivery
+  Authorization and Terminal Guard`, `In-Process Delivery Recovery Scope`.
+- `addressing-routing` (1 MODIFIED) — `Bundle Membership Configuration`, for the
+  five removed descriptor keys.
+- `runtime-bootstrap` (1 MODIFIED) — `Relay Configuration File` gains the
+  `[delivery]` table that replaces them.
+- `cli-surface` (2 MODIFIED) — `Send Timeout Override Flags by Transport` (its
+  key enumeration is now relay-level), `CLI raww command surface` (`--mode`).
+- `mcp-tool-surface` (1 MODIFIED) — `MCP raww request contract` (`mode`).
+
+**Deliberately not modified**, recorded so they read as decisions rather than
+omissions:
+
+- `transport-contracts` / `Transport Capability Contract` — it derives static
+  look/write capability from `SessionType`. Maximum handover dimensions and
+  `can_accept_handover` are a different axis (dynamic delivery capacity), and
+  adding a fifth capability there would conflate them. They live in
+  `transport-abstraction` / `Transport Handover Capacity and Readiness`.
+- `transport-contracts` / `ACP Persistent Worker Lifecycle` — ACP's discarded
+  `JoinHandle` is real and blocks fence acknowledgment, but the generic
+  `Transport Generation Fencing and Termination Authority` requirement is
+  normative for all five transports and already forbids it. The ACP-specific work
+  is carried in `tasks.md` and tracked at `agentmux:todos/relay/128` rather than
+  duplicated as spec text.
+- `tui-surface` / `TUI raww *` — the TUI dispatches normal raw only; `mode`
+  defaults to `normal`, so no TUI contract changes. Exposing emergency mode in
+  the TUI is follow-on.
 
 `session-relay/spec.md` carries hub *prose* that goes stale (a requirement total,
 a partition description advertising "prime/wedge timeouts"). Not requirement
@@ -239,13 +271,24 @@ text, so it takes no delta; reconciled as a sync/archive task.
 
 ## Impact
 
-- **Configuration — BREAKING, five keys deleted.**
-  `[coders.<id>.pty].wedge-detection`,
-  `[coders.<id>.{tmux,acp,pty}].prime-timeout-ms`, and
-  `[coders.<id>.tmux].readiness-timeout-ms`. Any live `coders.toml` setting them
-  fails to load. The replacement residency/size policy is relay configuration
-  rather than per-coder, since it is a property of the relay's patience and not
-  of any coder — flagged as a design decision rather than assumed.
+- **Configuration — BREAKING, five keys deleted.** Reconciled against the
+  authoritative descriptor list in `addressing-routing` / `Bundle Membership
+  Configuration`, not assembled from memory:
+  `[coders.<id>.tmux].prime-timeout-ms`,
+  `[coders.<id>.tmux].readiness-timeout-ms`,
+  `[coders.<id>.acp].prime-timeout-ms`,
+  `[coders.<id>.pty].prime-timeout-ms`, and
+  `[coders.<id>.pty].wedge-detection`. Any live `coders.toml` setting them fails
+  to load on existing unknown-field validation. UI adds nothing to this list: its
+  reconnect timeout is a constant plus builder (`src/transports/ui.rs:129-147`),
+  not a TOML key, so retiring it is a code deletion rather than a config break.
+- **Configuration — additive, relay-level.** A `[delivery]` table in `relay.toml`
+  replaces them: `residency-ms`, `scheduling-quantum-bytes`,
+  `fence-join-timeout-ms`, and the four admission-quota keys. These are relay
+  configuration rather than per-coder because they describe the relay's patience
+  and scheduling, not any coder's behavior. `scheduling-quantum-bytes` is
+  validated at load against every registered transport's maximum handover
+  dimension.
 - **Relay** — `src/relay/delivery/**` gains the pending queue, the residency
   policy, and handover dispatch.
 - **Transports** — `src/transports/{contract,quiescence,mod,ui}.rs`,
