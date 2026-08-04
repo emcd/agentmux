@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -48,6 +48,13 @@ pub(super) struct AsyncDeliveryRegistry {
 }
 
 pub(super) struct AsyncWorkerEntry {
+    /// Identifies the worker that installed this entry.
+    ///
+    /// Registry keys are per-target and outlive individual workers, so a key
+    /// alone cannot say *which* worker an entry belongs to. Without that, a
+    /// worker exiting could remove a successor's entry and strand a live
+    /// worker's only sender.
+    pub owner: WorkerOwner,
     pub sender: UnboundedSender<AsyncDeliveryTask>,
     pub pending: std::sync::Arc<AtomicUsize>,
     pub bounded_acp_queue: bool,
@@ -178,16 +185,32 @@ pub(super) fn try_existing_worker(
     Ok(WorkerDispatch::Missing(task))
 }
 
+/// Identifies one worker installation, distinct from every other for the same
+/// target. Minted by whichever caller wins the registry insert.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct WorkerOwner(u64);
+
+static NEXT_WORKER_OWNER: AtomicU64 = AtomicU64::new(1);
+
+impl WorkerOwner {
+    fn mint() -> Self {
+        Self(NEXT_WORKER_OWNER.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+#[cfg(test)]
 pub(super) fn register_worker(
     key: AsyncWorkerKey,
     sender: UnboundedSender<AsyncDeliveryTask>,
     pending: std::sync::Arc<AtomicUsize>,
     bounded_acp_queue: bool,
-) {
+) -> WorkerOwner {
+    let owner = WorkerOwner::mint();
     if let Ok(mut workers) = async_delivery_registry().workers.lock() {
         workers.insert(
             key,
             AsyncWorkerEntry {
+                owner,
                 sender,
                 pending,
                 bounded_acp_queue,
@@ -198,6 +221,7 @@ pub(super) fn register_worker(
             },
         );
     }
+    owner
 }
 
 pub(super) fn register_worker_if_absent(
@@ -205,7 +229,7 @@ pub(super) fn register_worker_if_absent(
     sender: UnboundedSender<AsyncDeliveryTask>,
     pending: std::sync::Arc<AtomicUsize>,
     bounded_acp_queue: bool,
-) -> Result<bool, RelayError> {
+) -> Result<Option<WorkerOwner>, RelayError> {
     let mut workers = async_delivery_registry().workers.lock().map_err(|_| {
         super::super::relay_error(
             "internal_unexpected_failure",
@@ -214,11 +238,13 @@ pub(super) fn register_worker_if_absent(
         )
     })?;
     if workers.contains_key(&key) {
-        return Ok(false);
+        return Ok(None);
     }
+    let owner = WorkerOwner::mint();
     workers.insert(
         key,
         AsyncWorkerEntry {
+            owner,
             sender,
             pending,
             bounded_acp_queue,
@@ -228,16 +254,17 @@ pub(super) fn register_worker_if_absent(
             closing: false,
         },
     );
-    Ok(true)
+    Ok(Some(owner))
 }
 
 /// Marks a worker as closing so it bounces new sends while its entry stays
 /// registered, preserving the shutdown-barrier worker count until the worker
 /// finishes draining and unregisters. Called at the start of the shutdown drain
 /// to close the accept-after-drain race without dropping the count early.
-pub(super) fn close_worker(key: &AsyncWorkerKey) {
+pub(super) fn close_worker(key: &AsyncWorkerKey, owner: WorkerOwner) {
     if let Ok(mut workers) = async_delivery_registry().workers.lock()
         && let Some(entry) = workers.get_mut(key)
+        && entry.owner == owner
     {
         entry.closing = true;
     }
@@ -387,8 +414,17 @@ pub(in crate::relay) fn acp_session_ready_for_startup(
     )
 }
 
-pub(super) fn unregister_worker(key: &AsyncWorkerKey) {
-    if let Ok(mut workers) = async_delivery_registry().workers.lock() {
+/// Removes this target's registry entry, but only if `owner` still holds it.
+///
+/// The ownership check is what keeps an exiting worker from deleting a
+/// successor's entry. A worker that lost a registration race, or whose entry was
+/// already replaced, finds a different owner here and leaves it alone — removing
+/// it would drop the only sender for a live worker and silently strand every
+/// subsequent send to that target.
+pub(super) fn unregister_worker(key: &AsyncWorkerKey, owner: WorkerOwner) {
+    if let Ok(mut workers) = async_delivery_registry().workers.lock()
+        && workers.get(key).is_some_and(|entry| entry.owner == owner)
+    {
         workers.remove(key);
     }
 }
@@ -948,7 +984,7 @@ mod tests {
         );
         let (sender_tx, mut sender_rx) =
             tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        register_worker(
+        let _owner = register_worker(
             sender_key.clone(),
             sender_tx,
             Arc::new(AtomicUsize::new(0)),
@@ -958,7 +994,7 @@ mod tests {
             build_worker_key(target_namespace, Path::new(target_runtime), target_session);
         let (target_tx, mut target_rx) =
             tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        register_worker(
+        let owner = register_worker(
             target_key.clone(),
             target_tx,
             Arc::new(AtomicUsize::new(0)),
@@ -1034,8 +1070,8 @@ mod tests {
             "the receipt must not route to a worker at the target key"
         );
 
-        unregister_worker(&sender_key);
-        unregister_worker(&target_key);
+        unregister_worker(&sender_key, owner);
+        unregister_worker(&target_key, owner);
     }
 
     /// A receipt's own terminal outcome spawns no further receipt (non-recursion).
@@ -1059,7 +1095,7 @@ mod tests {
         );
         let (sender_tx, mut sender_rx) =
             tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        register_worker(
+        let owner = register_worker(
             sender_key.clone(),
             sender_tx,
             Arc::new(AtomicUsize::new(0)),
@@ -1121,6 +1157,6 @@ mod tests {
              would mean the worker was never live, voiding the proof)"
         );
 
-        unregister_worker(&sender_key);
+        unregister_worker(&sender_key, owner);
     }
 }

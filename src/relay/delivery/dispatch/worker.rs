@@ -25,7 +25,7 @@ use super::payload::{
 
 use crate::transports::{OutcomeFuture, SingleDeliveryOutcome, TransportImpl};
 
-use super::super::async_worker::AsyncWorkerKey;
+use super::super::async_worker::{AsyncWorkerKey, WorkerOwner};
 use super::super::fence::{FenceInProgress, FenceResolution, FenceVerdict};
 use super::super::guard::{BatchId, GuardTrigger};
 use crate::runtime::inscriptions::emit_inscription;
@@ -70,12 +70,13 @@ pub(super) struct AcpWorkerBootstrap {
 /// `shutdown_requested()` polled between receives.
 pub(super) fn spawn_async_delivery_worker(
     key: AsyncWorkerKey,
+    owner: WorkerOwner,
     receiver: UnboundedReceiver<AsyncDeliveryTask>,
     pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     bootstrap: Option<AcpWorkerBootstrap>,
 ) {
     delivery_runtime_handle().spawn(async move {
-        run_async_delivery_worker(key, receiver, pending, bootstrap).await;
+        run_async_delivery_worker(key, owner, receiver, pending, bootstrap).await;
     });
 }
 
@@ -109,6 +110,7 @@ fn delivery_runtime_handle() -> Handle {
 
 async fn run_async_delivery_worker(
     key: AsyncWorkerKey,
+    owner: WorkerOwner,
     mut receiver: UnboundedReceiver<AsyncDeliveryTask>,
     pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     bootstrap: Option<AcpWorkerBootstrap>,
@@ -179,7 +181,7 @@ async fn run_async_delivery_worker(
             // the shutdown-barrier worker count still counts this still-draining
             // worker; the final unregister below drops it. Anything already queued
             // before this point is still drained.
-            super::super::async_worker::close_worker(&key);
+            super::super::async_worker::close_worker(&key, owner);
             shutdown_drain(
                 &key,
                 transport.as_mut(),
@@ -228,7 +230,7 @@ async fn run_async_delivery_worker(
             }
         }
     }
-    super::super::async_worker::unregister_worker(&key);
+    super::super::async_worker::unregister_worker(&key, owner);
 }
 
 /// Submits one task to its transport via the non-blocking write seam and spawns

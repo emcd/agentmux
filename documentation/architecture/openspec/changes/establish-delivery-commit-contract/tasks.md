@@ -24,7 +24,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Implement the single terminal CAS, releasing admission quota on that transition and nowhere else
 - [x] Implement the guard resolution order once: unit record if present, else `not_submitted` for a member never bound to a unit, else `submission_unknown`
 - [ ] Implement the mandatory post-authorization execution watchdog bounded by `[delivery].submission-timeout-ms`, anchored at authorization. Arming REQUIRES the transport submission-evidence tasks below: until a transport records `Submitted` at write time, its outcome future resolves only after the target has finished responding, so a bound anchored at authorization measures the agent's inference and fences a healthy target mid-turn. Land the two together
-- [x] On elapse, initiate the generation fence and terminalize nothing yet; keep accepting unit evidence through the fence windows and terminalize every still-unresolved member through the evidence order at the fence verdict
+- [ ] On elapse, initiate the generation fence and terminalize nothing yet; keep accepting unit evidence through the fence windows and terminalize every still-unresolved member through the evidence order at the fence verdict. Deleted with the watchdog trigger; lands again with arming
 - [ ] Release quota and outcome barriers at terminalization, but release the target's FIFO, raw barrier, and replacement only on a positive fence verdict
 - [ ] Make unwind, channel closure, task or thread exit, generation replacement, and graceful shutdown all route through that one order; no lifecycle path selects an outcome of its own
 - [x] Make collectors carry guard keys rather than own resolution; remove the `JoinError` branch in `src/relay/delivery/dispatch/outcomes.rs` that returns without producing an outcome
@@ -68,16 +68,16 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Fencing
 
-- [x] Retain every generation-owned submission and permission executor handle
+- [ ] Retain every generation-owned submission and permission executor handle. The ACP respawn monitor's blocking bootstrap is retained only through its async wrapper, and aborting that wrapper does not cancel the `spawn_blocking` closure, so the executor that owns a child is still neither terminable nor observable
 - [x] Implement the five-step fence state machine as the only fence protocol: cooperative stop request, bounded cessation observation, non-blocking forced termination, second bounded observation, verdict
 - [x] Keep steps 1 and 3 distinct, so a cooperatively stoppable executor is never force-terminated
 - [x] Make both observations non-blocking with their own clock, never a blocking join, each bounded by `[delivery].fence-observation-timeout-ms`
 - [x] Add a generation termination primitive to the transport contract, contracted to *initiate* cessation of every generation-owned effect path and return without blocking
 - [x] Implement step 3 per transport as initiation only: ACP and Pty signal the child to terminate; Tmux signals its owned client invocations, never the server; UI drops the generation's broadcaster handle and subscriber senders
-- [x] Observe the results in step 4 — child reaped, invocations exited, executor returned — never inside the step 3 call
+- [ ] Observe the results in step 4 — child reaped, invocations exited, executor returned — never inside the step 3 call. Child and invocations are observed; the ACP bootstrap executor is not
 - [x] Make a successful primitive invocation not itself acknowledge the fence; only observed cessation does
-- [x] Make the fence positive only on observed cessation, and route both timeout and failure to the negative branch
-- [x] Keep the fence negative when cessation is not observed: admit no replacement for that target, hold its raw barrier, record the condition, and still resolve every member through the guard
+- [ ] Make the fence positive only on observed cessation, and route both timeout and failure to the negative branch. A positive verdict is still reachable while an unobserved ACP bootstrap runs
+- [ ] Keep the fence negative when cessation is not observed: admit no replacement for that target, hold its raw barrier, record the condition, and still resolve every member through the guard. The negative registry state was deleted with the watchdog trigger, and shutdown exercises no replacement; lands again with arming
 - [ ] Block replacement and normal-raw ordering barriers until the fence is positive, while allowing `submission_unknown` to terminalize before it
 - [ ] Resolve a submission stopped by the fence before any effect as `not_submitted`
 

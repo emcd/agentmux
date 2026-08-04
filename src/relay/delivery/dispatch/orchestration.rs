@@ -60,7 +60,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
             runtime_directory: runtime_directory.to_path_buf(),
             choices_pending_max,
         };
-        if super::super::async_worker::register_worker_if_absent(
+        if let Some(owner) = super::super::async_worker::register_worker_if_absent(
             key.clone(),
             sender,
             pending.clone(),
@@ -76,7 +76,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
                 })),
             )
         })? {
-            spawn_async_delivery_worker(key, receiver, pending, Some(bootstrap));
+            spawn_async_delivery_worker(key, owner, receiver, pending, Some(bootstrap));
         }
     }
     let deadline = Instant::now() + Duration::from_millis(ACP_STARTUP_PRIME_TIMEOUT_MS);
@@ -189,17 +189,59 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
             }
             let (sender, receiver) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
             let pending = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            sender.send(task).map_err(|source| {
-                super::super::super::relay_error(
-                    "internal_unexpected_failure",
-                    "failed to enqueue async delivery task",
-                    Some(json!({"cause": source.to_string()})),
-                )
-            })?;
-            spawn_async_delivery_worker(key.clone(), receiver, pending.clone(), None);
-            super::super::async_worker::register_worker(key, sender, pending, false);
+            // The registry insert is the election, and it happens before anything
+            // is spawned. Two concurrent first sends both reach this arm; only the
+            // one that installs an entry owns the target, and only it starts a
+            // worker. Spawning first and registering after let both start, let the
+            // second registration orphan the first — which still held and executed
+            // a task — and then let that orphan's exit delete the survivor's entry.
+            match super::super::async_worker::register_worker_if_absent(
+                key.clone(),
+                sender.clone(),
+                pending.clone(),
+                false,
+            )? {
+                Some(owner) => {
+                    sender.send(task).map_err(|source| {
+                        super::super::super::relay_error(
+                            "internal_unexpected_failure",
+                            "failed to enqueue async delivery task",
+                            Some(json!({"cause": source.to_string()})),
+                        )
+                    })?;
+                    spawn_async_delivery_worker(key, owner, receiver, pending, None);
+                    Ok(())
+                }
+                // Lost the election: someone installed between the lookup above and
+                // this claim. Hand the task to the owner they installed rather than
+                // to the channel nothing will ever read.
+                None => dispatch_to_installed_owner(&key, task),
+            }
+        }
+    }
+}
+
+/// Dispatches a task to whichever worker won the registration race.
+///
+/// Deliberately not a retry loop. Reaching `Missing` here means the owner
+/// installed and vanished inside this window, which is not a condition the relay
+/// can resolve by trying again — reporting it names the state instead of
+/// spinning.
+fn dispatch_to_installed_owner(
+    key: &super::super::async_worker::AsyncWorkerKey,
+    task: AsyncDeliveryTask,
+) -> Result<(), RelayError> {
+    match super::super::async_worker::try_existing_worker(key, task)? {
+        WorkerDispatch::Accepted => Ok(()),
+        WorkerDispatch::Closing(task) => {
+            super::super::async_worker::complete_task_on_shutdown(&task);
             Ok(())
         }
+        WorkerDispatch::Missing(task) => Err(super::super::super::relay_error(
+            "internal_unexpected_failure",
+            "target worker was replaced while the delivery was being enqueued",
+            Some(json!({"target_session": task.target_session})),
+        )),
     }
 }
 
@@ -259,13 +301,13 @@ mod tests {
         let target_key =
             build_worker_key(target_namespace, Path::new(target_runtime), target_session);
         let (target_tx, mut target_rx) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        register_worker(
+        let owner = register_worker(
             target_key.clone(),
             target_tx,
             Arc::new(AtomicUsize::new(0)),
             false,
         );
-        close_worker(&target_key);
+        close_worker(&target_key, owner);
 
         // A live sender worker: the DroppedOnShutdown receipt should land here.
         let sender_key = build_worker_key(
@@ -274,7 +316,7 @@ mod tests {
             sender_member_id,
         );
         let (sender_tx, mut sender_rx) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        register_worker(
+        let owner = register_worker(
             sender_key.clone(),
             sender_tx,
             Arc::new(AtomicUsize::new(0)),
@@ -336,7 +378,7 @@ mod tests {
             receipt.message
         );
 
-        unregister_worker(&target_key);
-        unregister_worker(&sender_key);
+        unregister_worker(&target_key, owner);
+        unregister_worker(&sender_key, owner);
     }
 }
