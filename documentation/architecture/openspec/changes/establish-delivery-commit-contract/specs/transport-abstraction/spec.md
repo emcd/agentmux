@@ -559,17 +559,43 @@ check will still produce its effect, so a generation that is marked but not
 acknowledged can write to the target after its members have been resolved. Only a
 positive fence acknowledgment establishes that execution has ceased.
 
-**Fence acknowledgment SHALL be ordered**, not merely conjunctive:
+**Fence acknowledgment SHALL follow an explicit five-step state machine.** Each
+step is distinct, and no step blocks:
 
-1. **terminate** — child/stdin termination authority is applied first;
-2. **join** — every generation-owned submission and permission executor is then
-   joined.
+1. **Cooperative stop request** — mark the generation fenced. An executor that
+   checks the flag stops at its next check. This step is a signal, not a wait.
+2. **First bounded cessation observation** — observe for up to
+   `[delivery].fence-join-timeout-ms` whether every generation-owned executor has
+   ceased. If all have, go to step 5 positive.
+3. **Forced generation termination** — invoke the transport's generation
+   termination primitive. **The invocation SHALL be non-blocking**: it initiates
+   termination and returns, consuming none of the acknowledgment budget. Waiting
+   for its effect belongs to step 4, not to the call.
+4. **Second bounded cessation observation** — observe for a further
+   `[delivery].fence-join-timeout-ms`.
+5. **Verdict** — **positive** if every generation-owned executor has been
+   observed to cease; **negative** otherwise. Timeout and failure both route to
+   negative; there is no third outcome.
 
-The order is load-bearing. A submission blocked in a primitive that observes no
-flag will never yield to a join alone; the termination is what lets the join
-complete. A generation supervisor SHALL therefore retain child termination
-authority **plus every submission and permission executor handle it owns**. An
-executor whose handle is discarded cannot be joined and cannot be fenced.
+Total acknowledgment is therefore bounded by **twice**
+`fence-join-timeout-ms`, because steps 1 and 3 are non-blocking and only steps 2
+and 4 consume time.
+
+**Neither observation SHALL be a blocking join.** No runtime primitive can force
+a thread blocked in a syscall to return, so a blocking join would reintroduce the
+unbounded wait the bound exists to close. The supervisor observes cessation and
+gives up on its own clock.
+
+Steps 1 and 3 are genuinely different actions, and conflating them was a defect
+in an earlier draft. Step 1 asks an executor that is *able* to observe a flag to
+stop, and costs nothing when it works. Step 3 is the hard action for an executor
+that cannot observe anything, and it is destructive — it terminates a child or
+drops a broadcaster. Escalating straight to step 3 would destroy a child that was
+about to stop cooperatively.
+
+A generation supervisor SHALL retain the termination primitive **plus every
+submission and permission executor handle it owns**. An executor whose handle is
+discarded cannot be observed and cannot be fenced.
 
 **The join SHALL be bounded.** Because replacement and ordering barriers may not
 proceed until the fence is positive, an unbounded join would reintroduce exactly
@@ -599,20 +625,9 @@ no in-flight primitive can still reach the target. That is a stronger fact than
 joining an executor, and it is the fact the raw barrier and generation
 replacement actually require.
 
-**Fence acknowledgment SHALL be bounded end to end, not only before escalation.**
-After invoking the termination primitive the supervisor SHALL observe for
-cessation within a second window of `[delivery].fence-join-timeout-ms`, so the
-total is bounded by twice the configured value. That post-escalation observation
-SHALL itself be bounded and SHALL NOT be an unbounded blocking join — a second
-blocking join would recreate exactly the hole the first bound closed, since no
-runtime primitive can force a thread blocked in a syscall to return.
-
-The fence becomes **positive** only when every generation-owned executor has been
-observed to cease within that second window. If any has not, the fence SHALL
-remain **negative**, and the supervisor SHALL NOT admit a replacement generation
-for that target, SHALL NOT release its raw barrier, and SHALL record the
-condition as observability. Timeout and failure both route to the negative
-branch; there is no third outcome.
+When the verdict is **negative**, the supervisor SHALL NOT admit a replacement
+generation for that target, SHALL NOT release its raw barrier, and SHALL record
+the condition as observability.
 
 This is deliberately fail-stop: a target that stops accepting new generations is
 recoverable by operator action, and a target whose old generation might still
@@ -666,13 +681,22 @@ A submission stopped by the fence before producing its effect SHALL resolve
 - **THEN** the generation supervisor cannot acknowledge a fence for it
 - **AND** the transport does not satisfy this requirement
 
-#### Scenario: The fence join is bounded and escalates
+#### Scenario: A cooperative stop is tried before forced termination
+
+- **WHEN** a generation is fenced and its executors observe the fenced flag
+- **THEN** they cease within the first bounded observation window
+- **AND** the termination primitive is never invoked
+- **BECAUSE** forced termination is destructive, and escalating straight to it
+  would terminate a child that was about to stop on its own
+
+#### Scenario: The first observation is bounded and escalates
 
 - **WHEN** `[delivery].fence-join-timeout-ms` elapses without every
   generation-owned executor having ceased
 - **THEN** the supervisor invokes the transport's generation termination
   primitive
-- **AND** begins a second bounded observation window of the same duration
+- **AND** that invocation returns without blocking
+- **AND** a second bounded observation window of the same duration begins
 
 #### Scenario: Escalation succeeds within the post-escalation window
 
@@ -712,7 +736,7 @@ A submission stopped by the fence before producing its effect SHALL resolve
 
 #### Scenario: A negative fence does not strand any member
 
-- **WHEN** a fence remains negative because an executor could not be joined
+- **WHEN** a fence remains negative because cessation was not observed
 - **THEN** every member of that generation still resolves through the guard's
   evidence order
 - **AND** each member's admission quota is released

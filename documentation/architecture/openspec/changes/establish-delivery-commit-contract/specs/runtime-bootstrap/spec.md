@@ -16,7 +16,8 @@ file SHALL use kebab-case TOML keys and MAY contain:
   |---|---|---|---|
   | `residency-ms` | `900_000` | `30_000..=3_600_000` | how long a `Pending` entry may wait before resolving `expired` |
   | `scheduling-quantum-bytes` | `262_144` | `65_536..=16_777_216` | a target's credit per rotation visit, in canonical payload bytes |
-  | `fence-join-timeout-ms` | `5_000` | `100..=60_000` | how long a generation fence waits to join its executors before reaping the child |
+  | `submission-timeout-ms` | `30_000` | `1_000..=300_000` | how long an authorized batch's execution may run before the relay resolves it through the guard and initiates the fence |
+  | `fence-join-timeout-ms` | `5_000` | `100..=60_000` | the budget for each of the generation fence's two cessation observations, so total acknowledgment is bounded by twice this value |
   | `queued-envelopes-max` | `10_000` | `1..=1_000_000` | relay-global admission quota, envelope count |
   | `queued-bytes-max` | `268_435_456` | `1_048_576..=4_294_967_296` | relay-global admission quota, canonical payload bytes |
   | `queued-envelopes-per-target-max` | `1_000` | `1..=1_000_000` | per-target admission quota, envelope count |
@@ -36,6 +37,14 @@ turn, since a target mid-turn is legitimately not ready and its message must
 wait. The lower bound SHALL keep an operator from configuring a value beneath a
 single turn, and the upper bound SHALL keep the setting from re-creating an
 effectively unbounded wait.
+
+`residency-ms` and `submission-timeout-ms` bound different things and SHALL NOT
+be conflated. Residency bounds how long the relay is willing to *wait to start*,
+and expires a message that was never authorized. The submission timeout bounds
+how long the relay lets its own already-started execution run. Their appropriate
+durations differ by orders of magnitude — a pending wait legitimately spans an
+agent's whole turn, while an authorized submission is a short write — which is
+why one setting cannot serve both.
 
 **Zero is not a permitted value for any `[delivery]` key, and no value denotes
 "unlimited."** Every range above excludes zero, and a zero SHALL be rejected with
@@ -88,6 +97,15 @@ and pre-flight configuration validation with structured validation errors.
 - **THEN** relay startup uses that value as the bound on how long any transport's
   `Pending` entries may wait
 - **AND** the value applies uniformly across every transport
+
+#### Scenario: Bound authorized execution
+
+- **WHEN** `relay.toml` sets `[delivery].submission-timeout-ms` within the
+  permitted range
+- **THEN** an authorized batch whose execution exceeds it is resolved through the
+  guard's evidence order and its generation fence is initiated
+- **AND** the setting is documented as an execution watchdog over the relay's own
+  code, not as a judgement about target health
 
 #### Scenario: Reject an out-of-range residency
 

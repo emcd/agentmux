@@ -145,10 +145,20 @@ precede. The correct rule:
 - the newly authorized batch's own turn lifecycle is **post-submission target
   state** and does not hold its members' delivery outcomes open.
 - Any submission primitive that can block SHALL be supervised and
-  fenced/interruptible. An *operational* bound on that primitive may terminalize
-  `SubmissionUnknown`, which is sound because it states our own execution
-  evidence rather than a claim about target health — the distinction that makes
-  it categorically different from the timers being retired.
+  fenced/interruptible, and post-authorization execution **SHALL** be bounded by
+  `[delivery].submission-timeout-ms`. This was written as a *may* in an earlier
+  draft, which left the model without a liveness trigger: every other trigger the
+  guard has is an event, and an executor that stays alive and blocked produces
+  none of them, so its quota would leak and its target's FIFO would stay blocked
+  forever. Operator confirmed making it mandatory on 2026-08-04.
+
+  On elapse the relay resolves every unresolved member through the guard's
+  evidence order and initiates the generation fence. The bound is an **execution
+  watchdog over the relay's own supervised code**: it states that our execution
+  overran the time we allow it, not that the target failed. That is what makes it
+  categorically different from the timers being retired, which inferred target
+  failure from an unchanged screen. It yields `submission_unknown` rather than a
+  failure spelling, because not knowing is what actually happened.
 
 This is why residency is meaningful: the members that wait are exactly the ones
 for which nothing has been submitted, so expiring them asserts non-delivery on

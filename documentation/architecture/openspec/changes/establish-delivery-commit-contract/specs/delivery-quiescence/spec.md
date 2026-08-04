@@ -619,6 +619,67 @@ A fence that stops a submission before any target-side effect SHALL record
 `NotSubmitted` as that unit's evidence, so it resolves through step 1 rather
 than needing a rule of its own.
 
+#### Mandatory post-authorization execution bound
+
+Every trigger listed above is an *event*. An executor that remains alive and
+blocked forever produces none of them: it does not unwind, does not close its
+channel, does not exit, does not prompt a replacement, and does not reach
+shutdown. Without a bound, such a batch would never resolve, its admission quota
+would leak permanently, and its target's FIFO and raw barrier would stay blocked
+— the same defect that put the guard in the core phase, on the other side of the
+authorization line.
+
+**The relay SHALL therefore bound post-authorization execution.** A batch's
+execution SHALL be bounded by `[delivery].submission-timeout-ms`, anchored at
+authorization. When that bound elapses and the batch has not fully resolved, the
+relay SHALL:
+
+1. resolve every unresolved member **through the guard's evidence order** — a
+   unit that recorded `Submitted` still resolves `delivered`, a member never
+   bound to a packing unit still resolves `not_submitted`, and only members with
+   no stronger evidence resolve `submission_unknown`;
+2. initiate the generation fence, which then follows its own bounded
+   positive-or-negative path.
+
+**This bound is not a reintroduction of the timers this change retires, and the
+distinction is the whole basis of the change.** A retired timer concluded that
+*the target had failed* because its screen did not change or its prompt did not
+return — an inference from absence about a system the relay cannot see. This
+bound states a fact about the relay's own supervised code: *our execution
+exceeded the time we allow it, so we are stopping and recording that we do not
+know.* It asserts nothing about target health, and it produces
+`submission_unknown` rather than a failure, precisely because not knowing is what
+actually happened.
+
+It is an execution watchdog, and it SHALL be described as one wherever it is
+documented, so a later reader does not mistake it for the class of timer this
+change removed.
+
+#### Scenario: A blocked executor is bounded rather than waiting forever
+
+- **WHEN** an authorized batch's executor remains alive and blocked past
+  `[delivery].submission-timeout-ms`
+- **THEN** every unresolved member resolves through the guard's evidence order
+- **AND** each member's admission quota is released
+- **AND** the target's FIFO resumes scheduling
+- **AND** the generation fence is initiated
+
+#### Scenario: The execution bound does not override stronger evidence
+
+- **WHEN** the execution bound elapses for a batch in which one unit already
+  recorded `Submitted`
+- **THEN** that unit's members resolve `delivered`
+- **AND** only members with no stronger evidence resolve `submission_unknown`
+
+#### Scenario: The execution bound asserts nothing about the target
+
+- **WHEN** the execution bound elapses
+- **THEN** the outcome recorded is `submission_unknown`
+- **AND** no member resolves to a failure spelling, and no target-health state is
+  inferred
+- **BECAUSE** the bound reports that the relay's own execution overran, not that
+  the target is unhealthy
+
 **Admission quota SHALL be released by the guard's terminal transition**, and by
 nothing else. Releasing it anywhere other than the single terminal transition
 permits a double release on any path that attempts termination twice, which the

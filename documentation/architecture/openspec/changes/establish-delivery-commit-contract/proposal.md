@@ -241,7 +241,8 @@ inventory is reconciled against it.
 - `delivery-quiescence` (7 MODIFIED, 2 ADDED) — MODIFIED:
   `Quiescence-Gated Delivery` (relay-owned readiness), `Delivery Results Without
   ACK Protocol` (admission reservation, Pubsub rejection), `Async Queue Lifecycle
-  and Ordering` (entry states, residency, DRR), `Asynchronous Terminal-Outcome
+  and Ordering` (entry states, residency, byte-budgeted round-robin),
+  `Asynchronous Terminal-Outcome
   Receipt` (new outcome vocabulary), `Async Delivery Observability`, `Async Queue
   Growth Risk Disclosure`, `Quiescence Documentation`. ADDED: `Delivery
   Authorization and Terminal Guard`, `In-Process Delivery Recovery Scope`.
@@ -289,8 +290,13 @@ text, so it takes no delta; reconciled as a sync/archive task.
   reconnect timeout is a constant plus builder (`src/transports/ui.rs:129-147`),
   not a TOML key, so retiring it is a code deletion rather than a config break.
 - **Configuration — additive, relay-level.** A `[delivery]` table in `relay.toml`
-  replaces them: `residency-ms`, `scheduling-quantum-bytes`,
-  `fence-join-timeout-ms`, and the four admission-quota keys. These are relay
+  replaces them: `residency-ms`, `submission-timeout-ms`,
+  `scheduling-quantum-bytes`, `fence-join-timeout-ms`, and the four
+  admission-quota keys. `submission-timeout-ms` is an **execution watchdog** over
+  the relay's own supervised code, mandatory per the operator's 2026-08-04 call:
+  it bounds how long an authorized submission may run, states nothing about
+  target health, and exists because every other guard trigger is an event that a
+  blocked-but-alive executor never produces. These are relay
   configuration rather than per-coder because they describe the relay's patience
   and scheduling, not any coder's behavior. `scheduling-quantum-bytes` is
   validated at load against every registered transport's maximum handover
