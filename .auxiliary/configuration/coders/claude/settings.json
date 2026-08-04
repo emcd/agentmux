@@ -7,6 +7,11 @@
     "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": 1,
     "DISABLE_NON_ESSENTIAL_MODEL_CALLS": 1
   },
+  "enabledMcpjsonServers": [
+    "agentmux",
+    "context7",
+    "nb"
+  ],
   "permissions": {
     "allow": [
       "mcp__agentmux__help",
