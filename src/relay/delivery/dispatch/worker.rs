@@ -288,6 +288,15 @@ fn submit_task(
         .as_mut()
         .expect("worker transport constructed above");
 
+    // Authorization is the linearization point and the watchdog's anchor, so it
+    // happens once, before any transport-specific branch, and the clock starts
+    // with it. Starting the clock after the write would exclude the synchronous
+    // rendering and submission work the bound is supposed to cover.
+    if !matches!(transport, TransportImpl::Pubsub) {
+        authorize_member(&task);
+    }
+    let authorized_at = Instant::now();
+
     let (future, record_served) = if matches!(transport, TransportImpl::Pubsub) {
         // Forward-declared stub: not deliverable. Its `mailw`/`raww` are
         // `unimplemented!`, so produce an explicit terminal outcome instead of
@@ -302,15 +311,18 @@ fn submit_task(
         super::super::async_worker::release_pending_slot(pending);
         return;
     } else if matches!(transport, TransportImpl::Ui(_)) {
-        // Authorization is the linearization point, so it precedes the write and
-        // nothing else. Handing the envelope to the transport is recorded
-        // separately, because the gap between the two is exactly the window in
-        // which the guard can still prove nothing was written.
-        authorize_member(&task);
+        let envelope = build_ui_envelope(&task);
+        // Recorded immediately before the call that can produce an effect, and
+        // never earlier: the gap between authorization and this point is exactly
+        // the window in which the guard can still prove nothing was written.
         super::super::admission::note_handed_to_transport(task.message_id.as_str());
-        (transport.mailw(build_ui_envelope(&task)), false)
+        (transport.mailw(envelope), false)
     } else {
-        authorize_member(&task);
+        // Every coder submission marks handover too. Omitting it here let a
+        // coder member that panicked *after* its write resolve `not_submitted` —
+        // a positive claim that nothing reached the target — when bytes may well
+        // have landed. That is the exact inversion the evidence order exists to
+        // prevent.
         match prepare_coder_write(&task, transport) {
             Ok(future) => (future, true),
             Err(error) => {
@@ -330,7 +342,7 @@ fn submit_task(
         InflightMember {
             task,
             record_served,
-            authorized_at: Instant::now(),
+            authorized_at,
         },
     );
 }
@@ -455,9 +467,15 @@ fn prepare_coder_write(
             let target_member = resolve_target_member(task)?;
             let message = build_delivery_message(task, target_member, now_rfc3339().as_str());
             emit_envelope_metadata_inscription(&message, task.message_id.as_str());
-            Ok(transport.mailw(build_coder_envelope(task, message)))
+            let envelope = build_coder_envelope(task, message);
+            // Marked immediately before the call that can produce a target-side
+            // effect. Everything above this line is relay-local rendering, so a
+            // failure there is still provably non-delivery.
+            super::super::admission::note_handed_to_transport(task.message_id.as_str());
+            Ok(transport.mailw(envelope))
         }
         DeliveryPayloadMode::RawInput => {
+            super::super::admission::note_handed_to_transport(task.message_id.as_str());
             Ok(transport.raww(task.message.clone(), task.append_enter))
         }
     }

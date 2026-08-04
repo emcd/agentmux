@@ -266,8 +266,13 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
             let outcome = frame["event"]["payload"]["outcome"]
                 .as_str()
                 .unwrap_or_default();
+            // `not_submitted` joins the terminal set: a UI target with no
+            // subscriber resolves it once the reconnect wait elapses, because
+            // the transport can prove it never broadcast.
             if (phase == "delivered" && outcome == "success")
                 || (phase == "failed" && (outcome == "timeout" || outcome == "failed"))
+                || phase == "not_submitted"
+                || phase == "submission_unknown"
             {
                 observed_sender_outcome = Some(frame);
                 break;

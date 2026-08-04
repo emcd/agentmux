@@ -504,6 +504,8 @@ mod tests {
     fn task_for(target: TargetConfiguration) -> AsyncDeliveryTask {
         let target_member = member(target);
         AsyncDeliveryTask {
+            // Test fixture: constructed directly, never admitted.
+            admitted: false,
             bundle: BundleConfiguration {
                 schema_version: SCHEMA_VERSION.to_string(),
                 bundle_name: "party".to_string(),

@@ -125,7 +125,13 @@ fn ui_mailw_times_out_when_no_ui_reconnects() {
         UiTransport::new(services).with_reconnect_timeout(Duration::from_millis(50));
     let outcome = block_on(transport.mailw(ui_envelope())).expect("mailw outcome future resolves");
 
-    assert_eq!(outcome.outcome, SendOutcome::Timeout);
+    // `not_submitted`, not `timeout`. The reconnect wait elapses only on the
+    // `NoUi` branch, so no broadcast was ever attempted and the transport can
+    // prove nothing reached a subscriber. Reporting elapsed time as its own
+    // outcome would understate what the transport knows, and would collapse to
+    // `submission_unknown` at the guard.
+    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
+    assert_eq!(outcome.reason_code.as_deref(), Some("ui_reconnect_elapsed"));
     assert!(
         routed_probes.load(Ordering::SeqCst) >= 1,
         "the routed reconnect probe should have run at least once",

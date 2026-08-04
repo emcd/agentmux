@@ -78,6 +78,19 @@ pub(super) struct AsyncDeliveryTask {
     /// the single terminal-resolution site: a receipt's own terminal outcome
     /// never spawns a receipt of its own.
     pub(super) is_receipt: bool,
+    /// True when this task holds an admission reservation.
+    ///
+    /// The terminal transition removes its ledger entry — it must, or the ledger
+    /// would grow by one record per message the relay ever delivered — so after
+    /// the fact an absent reservation is ambiguous: either nothing was ever
+    /// admitted for this task, or another resolver already won and cleaned up.
+    /// This flag is what distinguishes them, and it is what keeps two competing
+    /// resolvers from each reporting an outcome for one accepted member.
+    ///
+    /// Set by the request-boundary paths that admit. Relay-originated work that
+    /// bypasses admission — terminal-outcome receipts above all — leaves it
+    /// false and therefore stays reportable.
+    pub(super) admitted: bool,
     /// Return route to the original sender for a terminal-outcome receipt: the
     /// sender's real bundle member (its true transport) and runtime directory,
     /// resolved from the sender's HOME bundle at send time. `None` for a

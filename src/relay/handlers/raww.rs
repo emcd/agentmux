@@ -422,6 +422,7 @@ fn execute_raww(
         choose_authorized_ui_sessions(&target_authorization, &raww_bundle);
     let task = AsyncDeliveryTask {
         bundle: raww_bundle.clone(),
+        admitted: true,
         sender_namespace: home_namespace.to_string(),
         sender: sender_member,
         // Raw input does not carry verified sender attribution, and its targets

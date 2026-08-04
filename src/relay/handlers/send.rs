@@ -438,6 +438,7 @@ fn execute_send(
             let message_id = admitted[admitted_index].clone();
             let task = AsyncDeliveryTask {
                 bundle: group.bundle.clone(),
+                admitted: true,
                 sender_namespace: home_namespace.to_string(),
                 sender: sender_member.clone(),
                 authenticated_identity: authenticated_identity.clone(),

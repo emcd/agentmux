@@ -488,6 +488,34 @@ pub(super) fn complete_task_on_shutdown(task: &AsyncDeliveryTask) {
     );
 }
 
+/// Attempts the terminal transition and decides whether this caller may report.
+///
+/// `None` means stay silent: either another caller already won the transition,
+/// or no reservation exists for a task that *should* have had one — which means
+/// the winner already terminalized it and cleaned the ledger entry up.
+///
+/// The winning transition removes the ledger entry, so absence cannot by itself
+/// distinguish "already resolved by someone else" from "never admitted". Only
+/// the task can: a relay-originated receipt is the one thing that legitimately
+/// bypasses admission. Reporting on absence alone is what let two competing
+/// resolvers each emit an outcome for a single accepted member.
+///
+/// `Some((None, _))` is the receipt case — reportable, with no recorded evidence
+/// because nothing was ever admitted to record any against.
+fn resolve_terminal_transition(
+    task: &AsyncDeliveryTask,
+) -> Option<(Option<SubmissionEvidence>, Option<GuardKey>)> {
+    match super::admission::terminalize(task.message_id.as_str()) {
+        TerminalTransition::Won { evidence, guard } => Some((Some(evidence), guard)),
+        TerminalTransition::AlreadyTerminal => None,
+        // Never admitted, so nothing else can be racing to resolve it.
+        TerminalTransition::NoReservation if !task.admitted => Some((None, None)),
+        // Admitted, but its reservation is gone: the winner already terminalized
+        // it and cleaned up. Reporting here would be the duplicate.
+        TerminalTransition::NoReservation => None,
+    }
+}
+
 /// Terminalizes one member because a lifecycle trigger fired, with no outcome of
 /// its own to report.
 ///
@@ -496,14 +524,12 @@ pub(super) fn complete_task_on_shutdown(task: &AsyncDeliveryTask) {
 /// handed to a transport resolves `not_submitted`, because the relay can prove
 /// it, while the same panic after handover resolves `submission_unknown`.
 pub(super) fn complete_task_outcome_from_trigger(task: &AsyncDeliveryTask, trigger: GuardTrigger) {
-    let (evidence, guard) = match super::admission::terminalize(task.message_id.as_str()) {
-        TerminalTransition::Won { evidence, guard } => (evidence, guard),
-        TerminalTransition::AlreadyTerminal => return,
-        // A relay-originated receipt has no reservation and no recorded
-        // evidence, so a trigger on one can only be reported honestly as
-        // unknown.
-        TerminalTransition::NotAdmitted => (SubmissionEvidence::SubmissionUnknown, None),
+    let Some((evidence, guard)) = resolve_terminal_transition(task) else {
+        return;
     };
+    // A receipt carries no recorded evidence, so a trigger on one can only be
+    // reported honestly as unknown.
+    let evidence = evidence.unwrap_or(SubmissionEvidence::SubmissionUnknown);
     report_terminal_outcome(
         task,
         Ok(SendResult {
@@ -524,17 +550,49 @@ pub(super) fn complete_task_outcome(
 ) {
     // The single terminal transition, and the one place admission quota is
     // released. Every path that can finish a member routes through here, so
-    // losing the compare-and-swap means another path already resolved this
-    // member: emitting anything below would be the duplicate resolution the
-    // guard exists to prevent. A relay-originated receipt bypassed admission
-    // (nothing was accepted for it), so it has no guard to consume and reports
-    // normally.
-    let guard = match super::admission::terminalize(task.message_id.as_str()) {
-        TerminalTransition::Won { guard, .. } => guard,
-        TerminalTransition::AlreadyTerminal => return,
-        TerminalTransition::NotAdmitted => None,
+    // being told to stay silent means another path already resolved this member:
+    // emitting anything below would be the duplicate resolution the guard exists
+    // to prevent.
+    let Some((evidence, guard)) = resolve_terminal_transition(task) else {
+        return;
     };
+    // The transport's outcome is the evidence, so it is reported as given —
+    // except where the recorded evidence is strictly more honest than the
+    // spelling the transport chose. An undifferentiated failure cannot support a
+    // claim of non-delivery, so it surfaces as `submission_unknown` rather than
+    // as `failed` or `timeout`.
+    let outcome = outcome.map(|result| match evidence {
+        Some(evidence) => reconcile_with_evidence(result, evidence),
+        None => result,
+    });
     report_terminal_outcome(task, outcome, guard);
+}
+
+/// Replaces a reported outcome's spelling with the guard's recorded evidence
+/// where the evidence says something the spelling cannot support.
+///
+/// `Delivered` and `NotSubmitted` are positive claims a transport is entitled to
+/// make and are left alone. Everything else is an undifferentiated failure from
+/// the guard's point of view: partial effect cannot be excluded, so reporting it
+/// as a failure would assert a non-delivery the relay cannot stand behind.
+/// `dropped_on_shutdown` is preserved as its own spelling, because it names when
+/// the relay stopped rather than what happened at the target.
+fn reconcile_with_evidence(result: SendResult, evidence: SubmissionEvidence) -> SendResult {
+    if evidence != SubmissionEvidence::SubmissionUnknown
+        || matches!(
+            result.outcome,
+            SendOutcome::Delivered | SendOutcome::NotSubmitted | SendOutcome::DroppedOnShutdown
+        )
+    {
+        return result;
+    }
+    SendResult {
+        outcome: SendOutcome::SubmissionUnknown,
+        reason_code: result
+            .reason_code
+            .or_else(|| Some(evidence.reason_code().to_string())),
+        ..result
+    }
 }
 
 /// Emits the observability floor for a resolved member and routes its receipt.
@@ -639,7 +697,16 @@ const TERMINAL_RECEIPT_SENDER_ID: &str = "relay";
 fn is_non_delivered_outcome(outcome: &SendOutcome) -> bool {
     matches!(
         outcome,
-        SendOutcome::Failed | SendOutcome::Timeout | SendOutcome::DroppedOnShutdown
+        SendOutcome::Failed
+            | SendOutcome::Timeout
+            | SendOutcome::DroppedOnShutdown
+            // Both are terminal non-delivery outcomes and owe the sender a
+            // receipt exactly as much as the others do. `not_submitted` is a
+            // sound assertion that nothing arrived; `submission_unknown` is the
+            // absence of one, which a sender arguably needs to hear about more
+            // urgently than a plain failure, not less.
+            | SendOutcome::NotSubmitted
+            | SendOutcome::SubmissionUnknown
     )
 }
 
@@ -707,6 +774,9 @@ fn build_terminal_outcome_receipt(
     };
     AsyncDeliveryTask {
         bundle,
+        // A receipt bypasses admission entirely: nothing was accepted for it, so
+        // it holds no reservation and stays reportable on its own terms.
+        admitted: false,
         // Relay/system origin (`relay@RELAY`), not a peer principal.
         sender_namespace: RELAY_NAMESPACE.to_string(),
         sender: relay_system_sender_member(),
@@ -928,6 +998,8 @@ mod tests {
         // The task's delivery context (bundle + runtime) is the target's; its
         // return route is the sender's, with a runtime distinct from the target's.
         let task = AsyncDeliveryTask {
+            // Test fixture: constructed directly, never admitted.
+            admitted: false,
             bundle: BundleConfiguration {
                 schema_version: SCHEMA_VERSION.to_string(),
                 bundle_name: target_namespace.to_string(),
@@ -1028,6 +1100,8 @@ mod tests {
         // resolves to a non-delivered outcome — the case that, but for the gate,
         // would recurse.
         let task = AsyncDeliveryTask {
+            // Test fixture: constructed directly, never admitted.
+            admitted: false,
             bundle: BundleConfiguration {
                 schema_version: SCHEMA_VERSION.to_string(),
                 bundle_name: sender_namespace.to_string(),

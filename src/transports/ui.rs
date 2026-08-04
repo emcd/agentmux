@@ -44,6 +44,7 @@ const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delive
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 const UI_RAW_WRITE_UNSUPPORTED_CODE: &str = "ui_raw_write_unsupported";
 const UI_GENERATION_FENCED_CODE: &str = "ui_generation_fenced";
+const UI_RECONNECT_ELAPSED_CODE: &str = "ui_reconnect_elapsed";
 const UI_RECONNECT_POLL_INTERVAL_MS: u64 = 100;
 /// Default cap on the UI reconnect wait when no UI endpoint is registered or the
 /// registered one is disconnected. Owned entirely by the UI transport — the
@@ -392,10 +393,17 @@ fn timeout_if_elapsed(
     timeout: Duration,
 ) -> Option<SingleDeliveryOutcome> {
     if start.elapsed() >= timeout {
+        // `not_submitted`, not `timeout`. The reconnect wait elapses only on the
+        // `NoUi` branch, which means no broadcast was ever attempted — so this is
+        // positive evidence that nothing reached a subscriber, and the transport
+        // is entitled to say so. Reporting elapsed time as its own outcome would
+        // be the absence-inferred spelling this delivery contract retires, and it
+        // would collapse into `submission_unknown` at the guard, understating
+        // what the transport actually knows.
         return Some(terminal(
             message_id.to_string(),
-            SendOutcome::Timeout,
-            None,
+            SendOutcome::NotSubmitted,
+            Some(UI_RECONNECT_ELAPSED_CODE.to_string()),
             Some(format!(
                 "ui relay stream was disconnected for {}ms",
                 start.elapsed().as_millis()

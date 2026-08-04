@@ -454,10 +454,20 @@ pub(in crate::relay) enum TerminalTransition {
     /// Another caller already terminalized this member. Report nothing: doing so
     /// would be the duplicate resolution the guard exists to prevent.
     AlreadyTerminal,
-    /// No such entry. A relay-originated receipt bypasses admission (nothing was
-    /// accepted for it), so it has no reservation to release and no guard to
-    /// consume — it reports normally.
-    NotAdmitted,
+    /// No reservation is held under this id.
+    ///
+    /// Deliberately **not** a licence to report. Two very different situations
+    /// produce it: a relay-originated receipt, which bypassed admission because
+    /// nothing was ever accepted for it, and an admitted member whose terminal
+    /// transition another caller already won and cleaned up. The winning
+    /// transition removes the entry — it has to, or the ledger would grow by one
+    /// record per message the relay ever delivered — so absence cannot
+    /// distinguish them on its own.
+    ///
+    /// Callers MUST resolve the ambiguity from the task, reporting only for work
+    /// known to have bypassed admission. Treating absence as reportable is what
+    /// let two competing resolvers each emit an outcome for one accepted member.
+    NoReservation,
 }
 
 /// Attempts the single terminal transition for one member, releasing its
@@ -475,7 +485,7 @@ pub(in crate::relay) fn terminalize(message_id: &str) -> TerminalTransition {
         return TerminalTransition::AlreadyTerminal;
     };
     let Some(entry) = state.entries.get(message_id).cloned() else {
-        return TerminalTransition::NotAdmitted;
+        return TerminalTransition::NoReservation;
     };
     if entry.state == QueueEntryState::Terminal {
         return TerminalTransition::AlreadyTerminal;
@@ -548,9 +558,21 @@ pub fn report_undelivered_queue(reporting: UndeliveredReporting) {
         return;
     };
 
-    // Oldest entry and count per target, in one pass over the live reservations.
+    // Undelivered means *waiting*, not merely reserved. An `Authorized` member
+    // has been handed over and is executing under the watchdog's bound; counting
+    // it here would report work in progress as a backlog, and would age it
+    // toward a warning that describes a target not draining when the target is
+    // in fact being written to right now. So this pass scopes to `Pending` and
+    // computes its own totals rather than reading the all-state quota counters.
     let mut oldest: HashMap<AdmissionTargetKey, Instant> = HashMap::new();
-    for entry in state.entries.values() {
+    let mut pending_per_target: HashMap<AdmissionTargetKey, TargetUsage> = HashMap::new();
+    let mut pending_envelopes_total: usize = 0;
+    let mut pending_bytes_total: u64 = 0;
+    for entry in state
+        .entries
+        .values()
+        .filter(|entry| entry.state == QueueEntryState::Pending)
+    {
         oldest
             .entry(entry.target.clone())
             .and_modify(|current| {
@@ -559,12 +581,16 @@ pub fn report_undelivered_queue(reporting: UndeliveredReporting) {
                 }
             })
             .or_insert(entry.admitted_at);
+        let usage = pending_per_target.entry(entry.target.clone()).or_default();
+        usage.envelopes += 1;
+        usage.bytes += entry.canonical_bytes;
+        pending_envelopes_total += 1;
+        pending_bytes_total += entry.canonical_bytes;
     }
 
     // An idle relay emits nothing rather than a recurring zero.
-    if !state.entries.is_empty() {
-        let mut targets: Vec<_> = state
-            .per_target
+    if !pending_per_target.is_empty() {
+        let mut targets: Vec<_> = pending_per_target
             .iter()
             .map(|(target, usage)| {
                 json!({
@@ -588,8 +614,8 @@ pub fn report_undelivered_queue(reporting: UndeliveredReporting) {
         emit_inscription(
             INSCRIPTION_UNDELIVERED_AGGREGATE,
             &json!({
-                "undelivered_envelopes_total": state.global.envelopes,
-                "undelivered_bytes_total": state.global.bytes,
+                "undelivered_envelopes_total": pending_envelopes_total,
+                "undelivered_bytes_total": pending_bytes_total,
                 "target_total": targets.len(),
                 "targets": targets,
             }),
