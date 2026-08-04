@@ -26,8 +26,8 @@ mod watcher;
 
 use self::authorization::load_authorization_context;
 pub use self::authorization::{
-    PeerConfiguration, RelayRuntimeConfiguration, load_relay_runtime_configuration,
-    parse_relay_bool_env_value, resolve_relay_bool_setting,
+    DeliveryConfiguration, PeerConfiguration, RelayRuntimeConfiguration,
+    load_relay_runtime_configuration, parse_relay_bool_env_value, resolve_relay_bool_setting,
 };
 
 pub use self::client::{RelayStreamSession, request_relay};
@@ -37,7 +37,10 @@ pub use self::connection::{
 use self::constants::*;
 use self::context::*;
 pub use self::contract::*;
-pub use self::delivery::admission::{UndeliveredReporting, report_undelivered_queue};
+pub use self::delivery::admission::{
+    UndeliveredReporting, configure_delivery, configured_undelivered_reporting,
+    report_undelivered_queue,
+};
 pub use self::delivery::install_pending_choice_request_for_testing;
 pub use self::delivery::observability::{
     ChoicesQueueEvent, subscribe_choices_queue_events, subscribe_worker_readiness,

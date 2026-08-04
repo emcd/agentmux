@@ -16,6 +16,7 @@ use crate::{
         policies_configuration_path, relay_configuration_path,
     },
     relay::{POLICIES_FORMAT_VERSION, RelayError, relay_error},
+    transports::HandoverDimensions,
 };
 
 use super::context::{AuthorizationContext, PolicyControls, PolicyScope, UiSessionAuthorization};
@@ -24,10 +25,105 @@ use super::resolution::{normalize_policy_id, resolve_session_policy_controls};
 const DEFAULT_CHOICES_PENDING_MAX: usize = 256;
 const MIN_CHOICES_PENDING_MAX: usize = 1;
 const MAX_CHOICES_PENDING_MAX: usize = 4096;
+
+/// `[delivery]` defaults and permitted ranges, one triple per key.
+///
+/// Zero is outside every range deliberately: a zero quota would reject every
+/// message and a zero fence-observation budget would declare a negative fence
+/// before any executor could be observed, so the two most dangerous
+/// misconfigurations would be indistinguishable from an "unlimited" intent. No
+/// value denotes unlimited.
+const DELIVERY_SCHEDULING_QUANTUM_BYTES: DeliveryRange = DeliveryRange::new(
+    "delivery.scheduling-quantum-bytes",
+    262_144,
+    65_536,
+    16_777_216,
+);
+const DELIVERY_SUBMISSION_TIMEOUT_MS: DeliveryRange =
+    DeliveryRange::new("delivery.submission-timeout-ms", 5_000, 500, 60_000);
+const DELIVERY_FENCE_OBSERVATION_TIMEOUT_MS: DeliveryRange =
+    DeliveryRange::new("delivery.fence-observation-timeout-ms", 5_000, 100, 60_000);
+const DELIVERY_QUEUED_ENVELOPES_MAX: DeliveryRange =
+    DeliveryRange::new("delivery.queued-envelopes-max", 10_000, 1, 1_000_000);
+const DELIVERY_QUEUED_BYTES_MAX: DeliveryRange = DeliveryRange::new(
+    "delivery.queued-bytes-max",
+    268_435_456,
+    1_048_576,
+    4_294_967_296,
+);
+const DELIVERY_QUEUED_ENVELOPES_PER_TARGET_MAX: DeliveryRange = DeliveryRange::new(
+    "delivery.queued-envelopes-per-target-max",
+    1_000,
+    1,
+    1_000_000,
+);
+const DELIVERY_QUEUED_BYTES_PER_TARGET_MAX: DeliveryRange = DeliveryRange::new(
+    "delivery.queued-bytes-per-target-max",
+    33_554_432,
+    1_048_576,
+    4_294_967_296,
+);
+const DELIVERY_UNDELIVERED_WARNING_MS: DeliveryRange = DeliveryRange::new(
+    "delivery.undelivered-warning-ms",
+    1_800_000,
+    60_000,
+    86_400_000,
+);
+const DELIVERY_UNDELIVERED_REPORT_INTERVAL_MS: DeliveryRange = DeliveryRange::new(
+    "delivery.undelivered-report-interval-ms",
+    300_000,
+    30_000,
+    3_600_000,
+);
 const DEFAULT_WATCH_BUNDLES: bool = true;
 const DEFAULT_REQUIRE_SESSION_CREDENTIALS: bool = false;
 const ENV_WATCH_BUNDLES: &str = "AGENTMUX_RELAY_WATCH_BUNDLES";
 const ENV_REQUIRE_SESSION_CREDENTIALS: &str = "AGENTMUX_RELAY_REQUIRE_SESSION_CREDENTIALS";
+
+/// One `[delivery]` key's documented default and permitted range, carried
+/// together so the key name in a range error cannot drift from the bound that
+/// rejected the value.
+#[derive(Clone, Copy, Debug)]
+struct DeliveryRange {
+    field: &'static str,
+    default: u64,
+    minimum: u64,
+    maximum: u64,
+}
+
+impl DeliveryRange {
+    const fn new(field: &'static str, default: u64, minimum: u64, maximum: u64) -> Self {
+        Self {
+            field,
+            default,
+            minimum,
+            maximum,
+        }
+    }
+
+    /// Resolves one key: an absent value takes the documented default, a present
+    /// value must fall within the range. Defaults are not range-checked because
+    /// they are defined inside their own bounds.
+    fn resolve(self, supplied: Option<u64>, path: &Path) -> Result<u64, RelayError> {
+        let Some(value) = supplied else {
+            return Ok(self.default);
+        };
+        if !(self.minimum..=self.maximum).contains(&value) {
+            return Err(relay_error(
+                "validation_invalid_arguments",
+                "relay delivery setting is out of supported range",
+                Some(json!({
+                    "path": path.display().to_string(),
+                    "field": self.field,
+                    "value": value,
+                    "minimum": self.minimum,
+                    "maximum": self.maximum,
+                })),
+            ));
+        }
+        Ok(value)
+    }
+}
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -62,6 +158,8 @@ struct RawRelayFile {
     #[serde(default)]
     choices: Option<RawRelayChoicesSection>,
     #[serde(default)]
+    delivery: Option<RawRelayDeliverySection>,
+    #[serde(default)]
     peers: Vec<RawPeerEntry>,
 }
 
@@ -70,6 +168,36 @@ struct RawRelayFile {
 struct RawRelayChoicesSection {
     #[serde(default)]
     pending_max: Option<usize>,
+}
+
+/// Raw `[delivery]` table. These keys govern the relay's own queue, scheduling,
+/// and reporting rather than any coder's behavior, which is why they live in
+/// `relay.toml` and not `coders.toml`.
+///
+/// Every key is `u64` here regardless of its resolved type: range validation runs
+/// in one denomination, and the two envelope counts narrow to `usize` only after
+/// their bound has already rejected anything that could not fit.
+#[derive(Debug, Deserialize, Default)]
+#[serde(rename_all = "kebab-case", deny_unknown_fields)]
+struct RawRelayDeliverySection {
+    #[serde(default)]
+    scheduling_quantum_bytes: Option<u64>,
+    #[serde(default)]
+    submission_timeout_ms: Option<u64>,
+    #[serde(default)]
+    fence_observation_timeout_ms: Option<u64>,
+    #[serde(default)]
+    queued_envelopes_max: Option<u64>,
+    #[serde(default)]
+    queued_bytes_max: Option<u64>,
+    #[serde(default)]
+    queued_envelopes_per_target_max: Option<u64>,
+    #[serde(default)]
+    queued_bytes_per_target_max: Option<u64>,
+    #[serde(default)]
+    undelivered_warning_ms: Option<u64>,
+    #[serde(default)]
+    undelivered_report_interval_ms: Option<u64>,
 }
 
 /// Raw `[[peers]]` entry: an active outbound peer relay endpoint.
@@ -308,7 +436,51 @@ pub struct RelayRuntimeConfiguration {
     pub watch_bundles: bool,
     pub require_session_credentials: bool,
     pub choices_pending_max: usize,
+    pub delivery: DeliveryConfiguration,
     pub peers: Vec<PeerConfiguration>,
+}
+
+/// Resolved `[delivery]` settings: the relay's scheduling quantum, its two
+/// post-authorization bounds, the four admission quotas, and the two
+/// undelivered-queue reporting intervals.
+///
+/// No field here bounds how long the relay waits for a target to become ready.
+/// A `Pending` entry waits indefinitely by design, and the per-target quota — not
+/// a clock — is what bounds the consequence. `submission_timeout_ms` bounds
+/// ingestion, not readiness: it covers the transport consuming bytes after the
+/// relay has already observed the target ready.
+///
+/// The two undelivered-queue fields govern reporting only. Their sole effect on
+/// elapse is an inscription; neither influences a member's outcome, releases
+/// quota, nor alters scheduling.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DeliveryConfiguration {
+    pub scheduling_quantum_bytes: u64,
+    pub submission_timeout_ms: u64,
+    pub fence_observation_timeout_ms: u64,
+    pub queued_envelopes_max: usize,
+    pub queued_bytes_max: u64,
+    pub queued_envelopes_per_target_max: usize,
+    pub queued_bytes_per_target_max: u64,
+    pub undelivered_warning_ms: u64,
+    pub undelivered_report_interval_ms: u64,
+}
+
+impl Default for DeliveryConfiguration {
+    fn default() -> Self {
+        Self {
+            scheduling_quantum_bytes: DELIVERY_SCHEDULING_QUANTUM_BYTES.default,
+            submission_timeout_ms: DELIVERY_SUBMISSION_TIMEOUT_MS.default,
+            fence_observation_timeout_ms: DELIVERY_FENCE_OBSERVATION_TIMEOUT_MS.default,
+            queued_envelopes_max: DELIVERY_QUEUED_ENVELOPES_MAX.default as usize,
+            queued_bytes_max: DELIVERY_QUEUED_BYTES_MAX.default,
+            queued_envelopes_per_target_max: DELIVERY_QUEUED_ENVELOPES_PER_TARGET_MAX.default
+                as usize,
+            queued_bytes_per_target_max: DELIVERY_QUEUED_BYTES_PER_TARGET_MAX.default,
+            undelivered_warning_ms: DELIVERY_UNDELIVERED_WARNING_MS.default,
+            undelivered_report_interval_ms: DELIVERY_UNDELIVERED_REPORT_INTERVAL_MS.default,
+        }
+    }
 }
 
 /// A validated `[[peers]]` entry naming an outbound peer relay.
@@ -334,7 +506,117 @@ struct RelayFileConfiguration {
     watch_bundles: Option<bool>,
     require_session_credentials: Option<bool>,
     choices_pending_max: usize,
+    delivery: DeliveryConfiguration,
     peers: Vec<PeerConfiguration>,
+}
+
+/// Resolves and validates the `[delivery]` table. An absent table yields the
+/// documented defaults; every supplied key is range-checked, then the two
+/// cross-key relations between per-target and relay-global quota are enforced.
+fn resolve_delivery_configuration(
+    section: Option<RawRelayDeliverySection>,
+    path: &Path,
+) -> Result<DeliveryConfiguration, RelayError> {
+    let section = section.unwrap_or_default();
+    let queued_envelopes_max =
+        DELIVERY_QUEUED_ENVELOPES_MAX.resolve(section.queued_envelopes_max, path)?;
+    let queued_bytes_max = DELIVERY_QUEUED_BYTES_MAX.resolve(section.queued_bytes_max, path)?;
+    let queued_envelopes_per_target_max = DELIVERY_QUEUED_ENVELOPES_PER_TARGET_MAX
+        .resolve(section.queued_envelopes_per_target_max, path)?;
+    let queued_bytes_per_target_max =
+        DELIVERY_QUEUED_BYTES_PER_TARGET_MAX.resolve(section.queued_bytes_per_target_max, path)?;
+    // A per-target limit above the relay-global one is unreachable — the global
+    // check rejects first in both dimensions — so it is always a mistake rather
+    // than a permissive setting, and saying so at load beats letting the operator
+    // believe the larger number is in force.
+    reject_per_target_quota_above_global(
+        DELIVERY_QUEUED_ENVELOPES_PER_TARGET_MAX.field,
+        queued_envelopes_per_target_max,
+        DELIVERY_QUEUED_ENVELOPES_MAX.field,
+        queued_envelopes_max,
+        path,
+    )?;
+    reject_per_target_quota_above_global(
+        DELIVERY_QUEUED_BYTES_PER_TARGET_MAX.field,
+        queued_bytes_per_target_max,
+        DELIVERY_QUEUED_BYTES_MAX.field,
+        queued_bytes_max,
+        path,
+    )?;
+    let scheduling_quantum_bytes =
+        DELIVERY_SCHEDULING_QUANTUM_BYTES.resolve(section.scheduling_quantum_bytes, path)?;
+    reject_quantum_below_handover_maximum(scheduling_quantum_bytes, path)?;
+    Ok(DeliveryConfiguration {
+        scheduling_quantum_bytes,
+        submission_timeout_ms: DELIVERY_SUBMISSION_TIMEOUT_MS
+            .resolve(section.submission_timeout_ms, path)?,
+        fence_observation_timeout_ms: DELIVERY_FENCE_OBSERVATION_TIMEOUT_MS
+            .resolve(section.fence_observation_timeout_ms, path)?,
+        queued_envelopes_max: queued_envelopes_max as usize,
+        queued_bytes_max,
+        queued_envelopes_per_target_max: queued_envelopes_per_target_max as usize,
+        queued_bytes_per_target_max,
+        undelivered_warning_ms: DELIVERY_UNDELIVERED_WARNING_MS
+            .resolve(section.undelivered_warning_ms, path)?,
+        undelivered_report_interval_ms: DELIVERY_UNDELIVERED_REPORT_INTERVAL_MS
+            .resolve(section.undelivered_report_interval_ms, path)?,
+    })
+}
+
+/// Rejects a scheduling quantum smaller than the largest canonical-payload-byte
+/// component any transport declares.
+///
+/// A rotation visit grants the quantum as credit. If that credit cannot cover one
+/// maximal handover, the target holding such a handover is visited forever
+/// without ever being able to submit it, so the misconfiguration is a stall
+/// rather than a slowdown. The envelope-count component is deliberately not
+/// compared: the quantum is denominated in bytes.
+fn reject_quantum_below_handover_maximum(
+    scheduling_quantum_bytes: u64,
+    path: &Path,
+) -> Result<(), RelayError> {
+    let (session_type, canonical_bytes_max) =
+        HandoverDimensions::largest_declared_canonical_bytes();
+    if scheduling_quantum_bytes >= canonical_bytes_max {
+        return Ok(());
+    }
+    Err(relay_error(
+        "validation_invalid_arguments",
+        "relay delivery scheduling quantum is below a transport's maximum handover payload",
+        Some(json!({
+            "path": path.display().to_string(),
+            "field": DELIVERY_SCHEDULING_QUANTUM_BYTES.field,
+            "value": scheduling_quantum_bytes,
+            "session_type": session_type,
+            "canonical_bytes_max": canonical_bytes_max,
+        })),
+    ))
+}
+
+/// Rejects a per-target quota that exceeds its relay-global counterpart, naming
+/// both keys and both values so the operator sees the relation that failed rather
+/// than one bound in isolation.
+fn reject_per_target_quota_above_global(
+    per_target_field: &'static str,
+    per_target_value: u64,
+    global_field: &'static str,
+    global_value: u64,
+    path: &Path,
+) -> Result<(), RelayError> {
+    if per_target_value <= global_value {
+        return Ok(());
+    }
+    Err(relay_error(
+        "validation_invalid_arguments",
+        "relay delivery per-target quota exceeds the relay-global quota",
+        Some(json!({
+            "path": path.display().to_string(),
+            "field": per_target_field,
+            "value": per_target_value,
+            "global_field": global_field,
+            "global_value": global_value,
+        })),
+    ))
 }
 
 /// Loads and resolves the relay-wide runtime configuration from
@@ -367,6 +649,7 @@ pub fn load_relay_runtime_configuration(
             DEFAULT_REQUIRE_SESSION_CREDENTIALS,
         ),
         choices_pending_max: file.choices_pending_max,
+        delivery: file.delivery,
         peers: file.peers,
     })
 }
@@ -432,6 +715,7 @@ fn load_relay_file_configuration(
             watch_bundles: None,
             require_session_credentials: None,
             choices_pending_max: DEFAULT_CHOICES_PENDING_MAX,
+            delivery: DeliveryConfiguration::default(),
             peers: Vec::new(),
         });
     }
@@ -455,6 +739,7 @@ fn load_relay_file_configuration(
             })),
         )
     })?;
+    let delivery = resolve_delivery_configuration(parsed.delivery, path.as_path())?;
     let choices_pending_max = parsed
         .choices
         .and_then(|choices| choices.pending_max)
@@ -542,6 +827,7 @@ fn load_relay_file_configuration(
         watch_bundles: parsed.watch_bundles,
         require_session_credentials: parsed.require_session_credentials,
         choices_pending_max,
+        delivery,
         peers,
     })
 }

@@ -180,7 +180,11 @@ exported from `src/relay/mod.rs`.
     terminalizes. Neither emission resolves an entry, releases quota, or changes
     a scheduling position: this is the only duration-triggered mechanism left on
     the waiting side, and it is sound because elapsing produces a record and
-    nothing else.
+    nothing else. Both the quota limits and the reporting intervals come from
+    `relay.toml`'s `[delivery]` table, published once during relay startup before
+    the listener binds; before that (in tests, and on any path that never hosts a
+    relay) reads fall back to the same defaults a missing `relay.toml` resolves
+    to.
   - `dispatch/mod.rs`: delivery dispatch re-export hub.
   - `dispatch/orchestration.rs`: delivery startup, ACP target priming, and the
     enqueue path that registers/feeds the per-target worker.

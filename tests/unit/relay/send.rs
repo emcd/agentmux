@@ -609,6 +609,64 @@ fn undelivered_warning_is_deduplicated_per_target_not_per_entry() {
     );
 }
 
+/// The `[delivery]` table has to reach the reservation, not merely parse.
+///
+/// Publishing a per-target envelope quota of one and sending twice to a target
+/// that stays queued separates the two: with the configured value in force the
+/// second send is refused, and with only the compiled-in default in force it is
+/// accepted like the first. The refusal names the configured limit rather than
+/// the default, so the assertion cannot pass against the wrong bound.
+#[test]
+fn a_configured_quota_binds_at_admission() {
+    use agentmux::relay::{DeliveryConfiguration, configure_delivery};
+
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    configure_delivery(DeliveryConfiguration {
+        queued_envelopes_per_target_max: 1,
+        ..DeliveryConfiguration::default()
+    });
+
+    let send = || {
+        dispatch_request(
+            RelayRequest::Send {
+                request_id: None,
+                requester_session: "alpha".to_string(),
+                message: "hello".to_string(),
+                targets: vec!["user@GLOBAL".to_string()],
+                broadcast: false,
+                quiet_window_ms: Some(1),
+                on_behalf_of: None,
+            },
+            &config_root,
+            "party",
+            &tmux_socket,
+        )
+    };
+
+    // The UI target holds its entry through the reconnect wait, so the first
+    // reservation is still live when the second send is admitted.
+    send().expect("the first send fits the configured per-target quota");
+    let error = send().expect_err("the second send exceeds a per-target quota of one");
+
+    assert_eq!(error.code, "runtime_delivery_queue_full");
+    let details = error.details.as_ref().expect("queue-full details");
+    assert_eq!(
+        details
+            .get("queued_envelopes_per_target_max")
+            .and_then(serde_json::Value::as_u64),
+        Some(1),
+        "the refusal must name the configured limit, not the compiled-in default: {details}"
+    );
+    assert_eq!(
+        details.get("scope").and_then(serde_json::Value::as_str),
+        Some("target"),
+    );
+}
+
 /// Counts inscription lines for exactly `event`. The aggregate and warning event
 /// names share a prefix, so matching on the closing quote keeps the aggregate
 /// count from absorbing warnings.

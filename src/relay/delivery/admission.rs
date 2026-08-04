@@ -35,38 +35,24 @@ use std::{
 use serde_json::json;
 
 use crate::configuration::{BundleConfiguration, SessionType};
+use crate::relay::DeliveryConfiguration;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::transports::HandoverDimensions;
 
 use super::super::{RelayError, canonical_session_id, relay_error};
 
-/// Relay-global admission quota, envelope count.
-const QUEUED_ENVELOPES_MAX: usize = 10_000;
-/// Relay-global admission quota, canonical payload bytes.
-const QUEUED_BYTES_MAX: u64 = 268_435_456;
-/// Per-target admission quota, envelope count.
-const QUEUED_ENVELOPES_PER_TARGET_MAX: usize = 1_000;
-/// Per-target admission quota, canonical payload bytes.
-const QUEUED_BYTES_PER_TARGET_MAX: u64 = 33_554_432;
-
-/// How long a target's oldest undelivered entry may age before its first-crossing
-/// warning.
-const UNDELIVERED_WARNING_MS: u64 = 1_800_000;
-/// Cadence of the periodic undelivered-queue aggregate.
-const UNDELIVERED_REPORT_INTERVAL_MS: u64 = 300_000;
-
 const ERROR_CODE_QUEUE_FULL: &str = "runtime_delivery_queue_full";
 const ERROR_CODE_PAYLOAD_TOO_LARGE: &str = "validation_payload_too_large";
 
+const INSCRIPTION_CONFIGURATION_CONFLICT: &str = "relay.delivery.configuration.conflict";
 const INSCRIPTION_UNDELIVERED_AGGREGATE: &str = "relay.delivery.undelivered";
 const INSCRIPTION_UNDELIVERED_WARNING: &str = "relay.delivery.undelivered.warning";
 
-/// The four admission quota limits.
+/// The four admission quota limits, projected out of the `[delivery]` table.
 ///
-/// Carried as a value rather than read from the constants at each call site so
-/// the `[delivery]` configuration table can supply them without touching the
-/// reservation logic. The constants above are the spec's defaults and are what
-/// [`AdmissionLimits::default`] yields until that table lands.
+/// Carried as a value rather than read from configuration at each call site, so
+/// the reservation logic takes its bounds as an argument and stays testable
+/// without process-global state.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::relay) struct AdmissionLimits {
     pub(in crate::relay) queued_envelopes_max: usize,
@@ -75,15 +61,58 @@ pub(in crate::relay) struct AdmissionLimits {
     pub(in crate::relay) queued_bytes_per_target_max: u64,
 }
 
-impl Default for AdmissionLimits {
-    fn default() -> Self {
+impl From<DeliveryConfiguration> for AdmissionLimits {
+    fn from(configuration: DeliveryConfiguration) -> Self {
         Self {
-            queued_envelopes_max: QUEUED_ENVELOPES_MAX,
-            queued_bytes_max: QUEUED_BYTES_MAX,
-            queued_envelopes_per_target_max: QUEUED_ENVELOPES_PER_TARGET_MAX,
-            queued_bytes_per_target_max: QUEUED_BYTES_PER_TARGET_MAX,
+            queued_envelopes_max: configuration.queued_envelopes_max,
+            queued_bytes_max: configuration.queued_bytes_max,
+            queued_envelopes_per_target_max: configuration.queued_envelopes_per_target_max,
+            queued_bytes_per_target_max: configuration.queued_bytes_per_target_max,
         }
     }
+}
+
+impl Default for AdmissionLimits {
+    fn default() -> Self {
+        Self::from(DeliveryConfiguration::default())
+    }
+}
+
+/// The relay's resolved `[delivery]` settings, published once at relay startup.
+///
+/// Admission runs at the request boundary, far from anything holding the startup
+/// configuration, and threading nine values through every send path would buy
+/// nothing: the table is relay-wide and immutable for the process lifetime.
+/// Before startup publishes — in tests, and on any path that never hosts a relay
+/// — reads yield the documented defaults, which is what a missing `relay.toml`
+/// resolves to anyway.
+static DELIVERY_CONFIGURATION: OnceLock<DeliveryConfiguration> = OnceLock::new();
+
+/// Publishes the resolved `[delivery]` table for the process. Called once, during
+/// relay startup, before the accept loop can admit anything.
+///
+/// A second call with a *different* table would mean two startup paths resolved
+/// configuration differently, which no caller could detect from the return value
+/// of a setter; it is recorded rather than swallowed. A redundant call with the
+/// same values is silent, because nothing observable differs.
+pub fn configure_delivery(configuration: DeliveryConfiguration) {
+    if let Err(rejected) = DELIVERY_CONFIGURATION.set(configuration)
+        && DELIVERY_CONFIGURATION.get() != Some(&rejected)
+    {
+        emit_inscription(
+            INSCRIPTION_CONFIGURATION_CONFLICT,
+            &json!({
+                "detail": "delivery configuration was already published with different values",
+            }),
+        );
+    }
+}
+
+/// The published `[delivery]` table, or the documented defaults before startup
+/// publishes one.
+#[must_use]
+fn delivery_configuration() -> DeliveryConfiguration {
+    DELIVERY_CONFIGURATION.get().copied().unwrap_or_default()
 }
 
 /// Identifies the target a queue entry is admitted against. Same three
@@ -227,7 +256,7 @@ pub(in crate::relay) fn admit(
         target,
         session_type,
         canonical_bytes,
-        AdmissionLimits::default(),
+        AdmissionLimits::from(delivery_configuration()),
     )
 }
 
@@ -318,8 +347,8 @@ pub(in crate::relay) fn release(message_id: &str) {
 ///
 /// Separate from [`AdmissionLimits`] because these govern what the relay *says*
 /// rather than what it *accepts*: no value here can refuse, resolve, or reorder
-/// anything. The constants above are the spec's defaults, and the `[delivery]`
-/// configuration table will supply them without touching the reporting pass.
+/// anything. Both come from the same `[delivery]` table, projected apart so the
+/// reporting pass cannot reach a quota bound.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UndeliveredReporting {
     /// How long a target's oldest undelivered entry may age before its
@@ -330,13 +359,25 @@ pub struct UndeliveredReporting {
     pub interval: Duration,
 }
 
-impl Default for UndeliveredReporting {
-    fn default() -> Self {
+impl From<DeliveryConfiguration> for UndeliveredReporting {
+    fn from(configuration: DeliveryConfiguration) -> Self {
         Self {
-            warning: Duration::from_millis(UNDELIVERED_WARNING_MS),
-            interval: Duration::from_millis(UNDELIVERED_REPORT_INTERVAL_MS),
+            warning: Duration::from_millis(configuration.undelivered_warning_ms),
+            interval: Duration::from_millis(configuration.undelivered_report_interval_ms),
         }
     }
+}
+
+impl Default for UndeliveredReporting {
+    fn default() -> Self {
+        Self::from(DeliveryConfiguration::default())
+    }
+}
+
+/// The undelivered-queue reporting settings the relay is running with.
+#[must_use]
+pub fn configured_undelivered_reporting() -> UndeliveredReporting {
+    UndeliveredReporting::from(delivery_configuration())
 }
 
 /// Reports the undelivered queue: one periodic aggregate, plus a first-crossing
