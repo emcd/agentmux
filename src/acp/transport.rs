@@ -26,7 +26,7 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
@@ -158,10 +158,17 @@ pub struct AcpTransport {
     target_session: String,
     /// Stable respawn-needed signal. Created once at construction (not per
     /// delivery task) so the driver-owned async respawn monitor can hold a single
-    /// long-lived subscription across respawns. The internal delivery task holds a
-    /// clone and sets it `true` when a turn ends Unavailable; the monitor awaits
-    /// the change, drives the respawn, then resets it to `false`.
+    /// long-lived subscription across respawns. Driven exclusively from the
+    /// transport (bootstrap failure, write-without-runtime paths); readiness
+    /// latches no longer promote themselves into respawn signals. The monitor
+    /// awaits the change, drives the respawn, then resets it to `false`.
     respawn_needed_tx: tokio::sync::watch::Sender<bool>,
+    /// `JoinHandle` for the most recent delivery task thread. Retained so a
+    /// generation supervisor can observe the task's cessation (the binding the
+    /// fence requires) and detach it cleanly on `take`. The handle is replaced
+    /// when `spawn_delivery_task` re-spawns, leaving the previous task's thread
+    /// to exit on its own; only `take` clears the field.
+    delivery_task_handle: Option<JoinHandle<()>>,
 }
 
 impl std::fmt::Debug for AcpTransport {
@@ -192,6 +199,7 @@ impl AcpTransport {
             namespace: String::new(),
             target_session: String::new(),
             respawn_needed_tx: tokio::sync::watch::channel(false).0,
+            delivery_task_handle: None,
         }
     }
 
@@ -224,6 +232,15 @@ impl AcpTransport {
         if matches!(self.readiness(), WorkerReadinessState::Unavailable) {
             self.signal_respawn();
         }
+    }
+
+    /// Takes and clears the most recent delivery task's [`JoinHandle`].
+    /// A generation supervisor binds the handle so it can join the thread
+    /// and observe cessation as part of fence acknowledgment. Returns `None`
+    /// when the transport has never spawned a delivery task or the handle
+    /// has already been taken for the current generation.
+    pub fn take_delivery_task_handle(&mut self) -> Option<JoinHandle<()>> {
+        self.delivery_task_handle.take()
     }
 
     /// Current readiness, mirrored by the `AcpWorkerDriver` into the global registry.
@@ -262,9 +279,10 @@ impl AcpTransport {
     /// ACP runtime. Called from [`Transport::startup`] after the runtime is
     /// established. Takes the client and session_id from the runtime so the task
     /// owns them exclusively — the transport only needs the shared replay handle
-    /// and readiness state after startup. The task holds a clone of the stable
-    /// respawn-needed sender, which it sets `true` when a turn ends Unavailable so
-    /// the driver-owned respawn monitor can react.
+    /// and readiness state after startup. The task's [`JoinHandle`] is retained
+    /// on the transport so a generation supervisor can join it and observe
+    /// cessation as the fence requires; the previous generation's handle, if
+    /// any, is replaced — its thread is left to exit on its own.
     fn spawn_delivery_task(&mut self) {
         let (tx, rx) = mpsc::channel::<WriteItem>(ACP_WRITE_CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -281,23 +299,27 @@ impl AcpTransport {
         let client = runtime.client;
         let session_id = runtime.session_id;
 
-        std::thread::spawn(move || {
-            let channels = DeliveryChannels {
-                rx,
-                shutdown_rx,
-                respawn_needed_tx,
-            };
-            acp_delivery_task(
-                channels,
-                client,
-                session_id,
-                shared,
-                chooser,
-                batch_settings,
-                identity,
-            );
-        });
+        let handle = thread::Builder::new()
+            .name("agentmux-acp-delivery".into())
+            .spawn(move || {
+                let channels = DeliveryChannels {
+                    rx,
+                    shutdown_rx,
+                    respawn_needed_tx,
+                };
+                acp_delivery_task(
+                    channels,
+                    client,
+                    session_id,
+                    shared,
+                    chooser,
+                    batch_settings,
+                    identity,
+                );
+            })
+            .expect("spawn ACP delivery task thread");
 
+        self.delivery_task_handle = Some(handle);
         self.write_tx = Some(tx);
         self.shutdown_tx = Some(shutdown_tx);
     }
@@ -680,7 +702,6 @@ fn acp_delivery_task(
             &mut client,
             &ctx,
             &batch_settings,
-            &shared,
             &respawn_needed_tx,
             &mut rx,
             &mut shutdown_rx,
@@ -700,17 +721,6 @@ fn resolve_head_as_shutdown(head: WriteItem) {
         WriteItem::Raw { outcome_tx, .. } => outcome_tx,
     };
     let _ = outcome_tx.send(dropped_on_shutdown_outcome());
-}
-
-/// Signals the driver if the transport's readiness is Unavailable after a turn.
-fn signal_respawn_if_needed(
-    shared: &Arc<AcpSharedState>,
-    respawn_needed_tx: &tokio::sync::watch::Sender<bool>,
-) {
-    let readiness = *shared.readiness.lock().expect("readiness mutex");
-    if matches!(readiness, WorkerReadinessState::Unavailable) {
-        let _ = respawn_needed_tx.send(true);
-    }
 }
 
 /// Drains all remaining items from the write channel and resolves their outcome
@@ -752,19 +762,16 @@ fn dropped_on_shutdown_outcome() -> SingleDeliveryOutcome {
 /// unused on ACP and the relay's `build_coder_envelope` zeros it for
 /// receipts addressed to an ACP sender so the receipt-bypasses-quiescence
 /// invariant holds at the envelope seam.
-#[allow(clippy::too_many_arguments)]
 fn submit_singleton_envelope(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
     batch_settings: &PromptBatchSettings,
-    shared: &Arc<AcpSharedState>,
     respawn_needed_tx: &tokio::sync::watch::Sender<bool>,
     envelope: Box<DeliveryEnvelope>,
     outcome_tx: tokio::sync::oneshot::Sender<SingleDeliveryOutcome>,
 ) {
     let mut batch = EnvelopeBatch::from_head(&envelope, outcome_tx);
-    flush_envelope_group(client, ctx, batch_settings, &mut batch);
-    signal_respawn_if_needed(shared, respawn_needed_tx);
+    flush_envelope_group(client, ctx, batch_settings, respawn_needed_tx, &mut batch);
 }
 
 /// True when the write item is an envelope flagged as a terminal-outcome
@@ -784,6 +791,27 @@ fn is_receipt_envelope(item: &WriteItem) -> bool {
 /// tested alongside `is_receipt_envelope`.
 fn is_raw_write_item(item: &WriteItem) -> bool {
     matches!(item, WriteItem::Raw { .. })
+}
+
+/// True when a settled [`SingleDeliveryOutcome`] indicates the underlying
+/// agent has died and the worker should respawn. The decision rides on the
+/// observable failure (the outcome's `reason_code`) rather than the
+/// transport's readiness state. `SerializationFailed` is intentionally NOT
+/// a respawn trigger: a bad message cannot be retried by respawning the
+/// agent.
+///
+/// On an ACP settlement, the only `SendOutcome::Timeout` source is the
+/// per-turn prime timer; treating it as a respawn trigger preserves the
+/// prior readiness-latch behavior on that path.
+fn outcome_requires_respawn(outcome: &SingleDeliveryOutcome) -> bool {
+    match outcome.outcome {
+        SendOutcome::Timeout => true,
+        SendOutcome::Failed => matches!(
+            outcome.reason_code.as_deref(),
+            Some(ACP_ERROR_CODE_CONNECTION_CLOSED) | Some(ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE),
+        ),
+        _ => false,
+    }
 }
 
 /// The ordered actions `acp_delivery_task` must execute after receiving
@@ -1004,7 +1032,6 @@ fn execute_delivery_plan(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
     batch_settings: &PromptBatchSettings,
-    shared: &Arc<AcpSharedState>,
     respawn_needed_tx: &tokio::sync::watch::Sender<bool>,
     rx: &mut mpsc::Receiver<WriteItem>,
     shutdown_rx: &mut tokio::sync::oneshot::Receiver<()>,
@@ -1030,8 +1057,7 @@ fn execute_delivery_plan(
             drain_and_resolve_shutdown(rx);
             return;
         }
-        flush_envelope_group(client, ctx, batch_settings, &mut batch);
-        signal_respawn_if_needed(shared, respawn_needed_tx);
+        flush_envelope_group(client, ctx, batch_settings, respawn_needed_tx, &mut batch);
     }
 
     // Execute the boundary action.
@@ -1050,7 +1076,6 @@ fn execute_delivery_plan(
                 client,
                 ctx,
                 batch_settings,
-                shared,
                 respawn_needed_tx,
                 envelope,
                 outcome_tx,
@@ -1067,13 +1092,13 @@ fn execute_delivery_plan(
                 return;
             }
             let result = submit_raw_turn(client, ctx, content.as_str(), append_enter);
-            let _ = outcome_tx.send(result);
-            // A raw turn can leave readiness `Unavailable` (the same
-            // way an envelope turn can); the driver-owned respawn
-            // monitor relies on this signal to react. Symmetric with the
-            // post-envelope signal that `flush_envelope_group`'s callers
-            // emit via `signal_respawn_if_needed`.
-            signal_respawn_if_needed(shared, respawn_needed_tx);
+            let _ = outcome_tx.send(result.clone());
+            // The raw path runs through `submit_envelope_turn`, so the
+            // outcome is a settled `SingleDeliveryOutcome` and the same
+            // observable-event rule applies.
+            if outcome_requires_respawn(&result) {
+                let _ = respawn_needed_tx.send(true);
+            }
         }
     }
 }
@@ -1092,6 +1117,7 @@ fn flush_envelope_group(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
     batch_settings: &PromptBatchSettings,
+    respawn_needed_tx: &tokio::sync::watch::Sender<bool>,
     batch: &mut EnvelopeBatch,
 ) {
     let groups = crate::envelope::batch_envelope_groups(&batch.rendered, *batch_settings);
@@ -1101,6 +1127,7 @@ fn flush_envelope_group(
     let mut decider_sessions = batch.decider_sessions.drain(..);
     let mut outcome_senders = batch.outcome_senders.drain(..);
 
+    let mut last_outcome: Option<SingleDeliveryOutcome> = None;
     for group in groups {
         let group_msg_ids: Vec<String> = message_ids.by_ref().take(group.member_count).collect();
         let group_deciders: Vec<Vec<String>> =
@@ -1123,6 +1150,16 @@ fn flush_envelope_group(
             sender_outcome.message_id = sender_msg_id;
             let _ = tx.send(sender_outcome);
         }
+        last_outcome = Some(outcome);
+    }
+
+    // The signal flows from the observable outcome (the reason a turn did
+    // not land cleanly), not from the readiness state. The driver-owned
+    // respawn monitor reads this and drives replacement.
+    if let Some(outcome) = last_outcome
+        && outcome_requires_respawn(&outcome)
+    {
+        let _ = respawn_needed_tx.send(true);
     }
 }
 
@@ -1134,10 +1171,11 @@ fn flush_envelope_group(
 /// once per group, so there are no internal coalesce iterations to reset on).
 /// On prime-timer fire the loop exits with `SendOutcome::Timeout` +
 /// `reason_code = "acp_turn_timeout"`, latches per-target readiness to
-/// `Unavailable`, emits a `delivery_prime_timeout` inscription, and signals
-/// respawn-needed. When `None`, the prime timer is unbounded (today's default
-/// behavior) and the loop exits only on completion, shutdown, or transport
-/// failure.
+/// `Unavailable`, and emits a `delivery_prime_timeout` inscription. The
+/// returned `SendOutcome::Timeout` is the signal that `flush_envelope_group`
+/// uses, via `outcome_requires_respawn`, to publish the respawn-need the
+/// monitor consumes. When `None`, the prime timer is unbounded and the
+/// loop exits only on completion, shutdown, or transport failure.
 #[allow(clippy::too_many_arguments)]
 fn submit_envelope_turn(
     client: &mut AcpStdioClient,
@@ -1226,10 +1264,10 @@ fn submit_envelope_turn(
                 // should not assume the server honors cancellation; the
                 // transport resolves this flush group and the relay does not
                 // inject further messages until the worker respawns. The
-                // outer `acp_delivery_task` loop's `signal_respawn_if_needed`
-                // call publishes the respawn-needed signal once it observes
-                // `readiness == Unavailable` after this `submit_envelope_turn`
-                // returns, so no separate publish is needed here.
+                // accompanying `SendOutcome::Timeout` outcome is observed by
+                // `outcome_requires_respawn` in `flush_envelope_group`, which
+                // publishes the respawn signal the monitor consumes —
+                // replacing the prior readiness-latch path.
                 //
                 // The leaked `last_prompt_signal` on the client is cleaned up
                 // by the next `client.prompt` (it overwrites the slot) or by
@@ -1826,5 +1864,49 @@ mod delivery_plan_tests {
         );
         assert_eq!(peer_ids(&plan), vec!["p1", "p2"]);
         assert!(matches!(plan.boundary, BoundaryAction::ReturnToOuterLoop));
+    }
+}
+
+#[cfg(test)]
+mod handover_readiness_tests {
+    use super::*;
+
+    #[test]
+    fn can_accept_handover_readiness_matrix_and_delivery_task_handle_retention() {
+        let mut transport = AcpTransport::new(PromptBatchSettings::default(), None);
+
+        // Initial state is `Initializing` — not ready for handover.
+        assert_eq!(
+            transport.readiness(),
+            crate::transports::WorkerReadinessState::Initializing
+        );
+        assert!(!transport.can_accept_handover());
+
+        // The single state that returns true: only when the transport is
+        // actually idle and able to take a batch right now.
+        transport.set_readiness(crate::transports::WorkerReadinessState::Available);
+        assert!(transport.can_accept_handover());
+
+        // `Busy` is intentionally NOT a handover-ready state — accepting
+        // another batch while a turn is in flight would dispatch the wrong
+        // message to the same turn. The readiness signal still exists
+        // through the injected mirror closure.
+        transport.set_readiness(crate::transports::WorkerReadinessState::Busy);
+        assert!(!transport.can_accept_handover());
+        // `is_ready` keeps its pre-existing semantic and continues to
+        // include `Busy`; the two surfaces now differ by design.
+        assert!(transport.is_ready());
+
+        // `Recovering` and `Unavailable` are also not ready.
+        transport.set_readiness(crate::transports::WorkerReadinessState::Recovering);
+        assert!(!transport.can_accept_handover());
+        transport.set_readiness(crate::transports::WorkerReadinessState::Unavailable);
+        assert!(!transport.can_accept_handover());
+
+        // No delivery task has been spawned yet, so there is no handle
+        // for a generation supervisor to take — the field starts empty
+        // and a second `take` after the first stays empty.
+        assert!(transport.take_delivery_task_handle().is_none());
+        assert!(transport.take_delivery_task_handle().is_none());
     }
 }
