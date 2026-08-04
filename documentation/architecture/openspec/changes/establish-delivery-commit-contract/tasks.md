@@ -68,15 +68,15 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Fencing
 
-- [ ] Retain every generation-owned submission and permission executor handle. The ACP respawn monitor's blocking bootstrap is retained only through its async wrapper, and aborting that wrapper does not cancel the `spawn_blocking` closure, so the executor that owns a child is still neither terminable nor observable
+- [ ] Retain every generation-owned submission and permission executor handle. A running ACP bootstrap is now *observed*, so it can no longer be mistaken for a stopped generation, but it is still not *terminable*: aborting the async wrapper does not cancel the `spawn_blocking` closure, so a fence that finds one can only report negative and wait it out
 - [x] Implement the five-step fence state machine as the only fence protocol: cooperative stop request, bounded cessation observation, non-blocking forced termination, second bounded observation, verdict
 - [x] Keep steps 1 and 3 distinct, so a cooperatively stoppable executor is never force-terminated
 - [x] Make both observations non-blocking with their own clock, never a blocking join, each bounded by `[delivery].fence-observation-timeout-ms`
 - [x] Add a generation termination primitive to the transport contract, contracted to *initiate* cessation of every generation-owned effect path and return without blocking
 - [x] Implement step 3 per transport as initiation only: ACP and Pty signal the child to terminate; Tmux signals its owned client invocations, never the server; UI drops the generation's broadcaster handle and subscriber senders
-- [ ] Observe the results in step 4 — child reaped, invocations exited, executor returned — never inside the step 3 call. Child and invocations are observed; the ACP bootstrap executor is not
+- [x] Observe the results in step 4 — child reaped, invocations exited, executor returned — never inside the step 3 call
 - [x] Make a successful primitive invocation not itself acknowledge the fence; only observed cessation does
-- [ ] Make the fence positive only on observed cessation, and route both timeout and failure to the negative branch. A positive verdict is still reachable while an unobserved ACP bootstrap runs
+- [x] Make the fence positive only on observed cessation, and route both timeout and failure to the negative branch
 - [ ] Keep the fence negative when cessation is not observed: admit no replacement for that target, hold its raw barrier, record the condition, and still resolve every member through the guard. The negative registry state was deleted with the watchdog trigger, and shutdown exercises no replacement; lands again with arming
 - [ ] Block replacement and normal-raw ordering barriers until the fence is positive, while allowing `submission_unknown` to terminalize before it
 - [ ] Resolve a submission stopped by the fence before any effect as `not_submitted`

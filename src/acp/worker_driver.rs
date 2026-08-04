@@ -190,7 +190,9 @@ impl AcpWorkerDriver {
 
         let runtime_directory = self.runtime_directory.clone();
         let target_member = self.target_member.clone();
+        let in_flight = self.lock_transport().begin_bootstrap();
         let bootstrap_result = tokio::task::spawn_blocking(move || {
+            let _in_flight = in_flight;
             bootstrap_acp_worker_runtime(&runtime_directory, &target_member)
         })
         .await
@@ -436,7 +438,12 @@ async fn run_acp_respawn(
         // Bootstrap the new runtime OFF the lock (blocking child spawn).
         let bootstrap_dir = runtime_directory.to_path_buf();
         let bootstrap_member = target_member.clone();
+        let in_flight = transport
+            .lock()
+            .expect("acp transport mutex poisoned")
+            .begin_bootstrap();
         let bootstrap_result = tokio::task::spawn_blocking(move || {
+            let _in_flight = in_flight;
             bootstrap_acp_worker_runtime(&bootstrap_dir, &bootstrap_member)
         })
         .await

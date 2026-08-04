@@ -42,6 +42,12 @@ pub(super) struct AcpStubOptions {
     /// `sleep`-based delay would inherit the child's stdout, so killing the
     /// agent would leave the pipe open and no reader could observe EOF.
     pub(super) never_respond_to_prompt: bool,
+    /// Make every agent after the first hang inside `initialize`, by blocking on
+    /// a fifo that never gets a writer.
+    ///
+    /// Holds a respawn's bootstrap in flight so a fence can land while it runs —
+    /// the state in which the relay must not report the generation ceased.
+    pub(super) hang_initialize_on_respawn: bool,
     pub(super) update_count: usize,
     pub(super) update_line_prefix: String,
     pub(super) update_after_response: bool,
@@ -68,6 +74,7 @@ impl Default for AcpStubOptions {
             stop_reason: "end_turn".to_string(),
             prompt_delay_sec: 0,
             never_respond_to_prompt: false,
+            hang_initialize_on_respawn: false,
             update_count: 0,
             update_line_prefix: "ACP".to_string(),
             update_after_response: false,
@@ -97,7 +104,9 @@ set -eu
 
 log_file="${ACP_LOG_FILE:?}"
 pid_file="${ACP_PID_FILE:-}"
+prior_agents=0
 if [ -n "$pid_file" ]; then
+  [ -f "$pid_file" ] && prior_agents=$(wc -l < "$pid_file")
   printf '%s\n' "$$" >> "$pid_file"
 fi
 fail_initialize="${FAIL_INITIALIZE:-0}"
@@ -109,6 +118,7 @@ prompt_capability="${PROMPT_CAPABILITY:-true}"
 stop_reason="${STOP_REASON:-end_turn}"
 prompt_delay_sec="${PROMPT_DELAY_SEC:-0}"
 never_respond_to_prompt="${NEVER_RESPOND_TO_PROMPT:-0}"
+hang_initialize_fifo="${ACP_HANG_INITIALIZE_FIFO:-}"
 update_count="${UPDATE_COUNT:-0}"
 update_line_prefix="${UPDATE_LINE_PREFIX:-ACP}"
 update_after_response="${UPDATE_AFTER_RESPONSE:-0}"
@@ -129,6 +139,11 @@ while IFS= read -r line; do
   fi
   case "$line" in
     *'"method":"initialize"'*)
+      if [ -n "$hang_initialize_fifo" ] && [ "$prior_agents" -ge 1 ]; then
+        [ -p "$hang_initialize_fifo" ] || mkfifo "$hang_initialize_fifo"
+        read hung < "$hang_initialize_fifo"
+        continue
+      fi
       if [ "$fail_initialize" = "1" ]; then
         printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"initialize failed"}}\n' "$id"
       else
@@ -292,6 +307,14 @@ pub(super) fn write_configuration(
         ),
         ("STOP_REASON", options.stop_reason.clone()),
         ("PROMPT_DELAY_SEC", options.prompt_delay_sec.to_string()),
+        (
+            "ACP_HANG_INITIALIZE_FIFO",
+            if options.hang_initialize_on_respawn {
+                root.join("acp_hang_initialize.fifo").display().to_string()
+            } else {
+                String::new()
+            },
+        ),
         (
             "NEVER_RESPOND_TO_PROMPT",
             if options.never_respond_to_prompt {

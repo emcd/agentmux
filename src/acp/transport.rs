@@ -24,7 +24,7 @@
 //!
 //! [`is_ready`]: Transport::is_ready
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -213,6 +213,29 @@ pub struct AcpTransport {
     /// decision to install has to be taken against this flag under the same lock
     /// as the install itself.
     fenced: Arc<AtomicBool>,
+    /// How many bootstraps this generation currently has running.
+    ///
+    /// A bootstrap spawns and owns an agent child, so it is a generation-owned
+    /// executor — but it runs on a blocking pool, and aborting the async task
+    /// awaiting it does not cancel the closure. Observing the wrapper therefore
+    /// says nothing about whether the executor stopped. Counted rather than
+    /// flagged so an initial bootstrap and a respawn cannot clear each other's
+    /// state.
+    bootstrap_in_flight: Arc<AtomicUsize>,
+}
+
+/// Marks a bootstrap as running for as long as it is held.
+///
+/// Moved into the blocking closure itself, not held beside it: the closure
+/// outlives any abort of the task awaiting it, so only something dropped by the
+/// closure can say when that executor actually stopped.
+#[derive(Debug)]
+pub(crate) struct BootstrapInFlight(Arc<AtomicUsize>);
+
+impl Drop for BootstrapInFlight {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::Release);
+    }
 }
 
 impl std::fmt::Debug for AcpTransport {
@@ -247,6 +270,7 @@ impl AcpTransport {
             delivery_task_handle: None,
             generation: None,
             fenced: Arc::new(AtomicBool::new(false)),
+            bootstrap_in_flight: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -399,6 +423,13 @@ impl AcpTransport {
     /// internal delivery task. Brief and lock-safe — the blocking child spawn
     /// already happened in `bootstrap_acp_worker_runtime`, so the respawn monitor
     /// holds the transport lock only for these fast field updates.
+    /// Registers a bootstrap as running until the returned guard drops.
+    #[must_use]
+    pub(crate) fn begin_bootstrap(&self) -> BootstrapInFlight {
+        self.bootstrap_in_flight.fetch_add(1, Ordering::AcqRel);
+        BootstrapInFlight(Arc::clone(&self.bootstrap_in_flight))
+    }
+
     /// Whether this generation has been fenced.
     #[must_use]
     pub(crate) fn generation_is_fenced(&self) -> bool {
@@ -486,7 +517,11 @@ impl GenerationFence for AcpTransport {
             .generation
             .as_ref()
             .is_none_or(AcpGenerationHandle::reader_ceased);
-        delivery_task_ceased && client_ceased && self.shared.permission_executors_ceased()
+        let no_bootstrap_running = self.bootstrap_in_flight.load(Ordering::Acquire) == 0;
+        delivery_task_ceased
+            && client_ceased
+            && no_bootstrap_running
+            && self.shared.permission_executors_ceased()
     }
 }
 

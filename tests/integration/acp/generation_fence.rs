@@ -176,3 +176,103 @@ fn await_inscription(path: &Path, event: &str, scope: &str) -> String {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// A fence must not report cessation while a bootstrap is still running.
+///
+/// The ACP respawn monitor drives its bootstrap on a blocking pool, and
+/// `tokio`'s abort cancels only the task awaiting that closure — never the
+/// closure itself. Observing the async wrapper therefore says nothing about
+/// whether the executor stopped, and that executor is the one that spawns and
+/// owns an agent child. Before this was counted, a fence landing mid-respawn
+/// reported *positive* within a second while a live agent was being brought up
+/// behind it.
+///
+/// The negative verdict is the whole assertion. It is the honest answer, and it
+/// is fail-stop: the relay declines to claim a generation stopped when it cannot
+/// see one of its executors. Reverting the in-flight count turns this positive.
+///
+/// The scenario is built from a first agent that disconnects on its prompt — so
+/// the monitor starts a respawn — and a second that blocks inside `initialize`,
+/// holding that respawn's bootstrap open across the signal.
+#[test]
+fn a_fence_does_not_report_cessation_while_a_bootstrap_runs() {
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+
+    let options = AcpStubOptions {
+        disconnect_on_prompt: Some("before_activity".to_string()),
+        hang_initialize_on_respawn: true,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    configure_delivery(DeliveryConfiguration {
+        fence_observation_timeout_ms: 500,
+        ..DeliveryConfiguration::default()
+    });
+
+    let _ = send_result(dispatch_send(&config_root, &tmux_socket));
+
+    // Both bundle members respawn, so a replacement agent for every one of them
+    // has to be up before the signal; otherwise the fence could land before the
+    // bootstrap this test is about has started.
+    let pid_path = acp_child_pid_path(temporary.path());
+    await_recorded_agents(&pid_path, 4);
+
+    let _signal_guard = agentmux::runtime::signals::install_shutdown_signal_handlers()
+        .expect("install shutdown signal handlers");
+    let self_pid = i32::try_from(std::process::id()).expect("pid fits i32");
+    assert_eq!(
+        unsafe { libc::kill(self_pid, libc::SIGTERM) },
+        0,
+        "failed to signal this process"
+    );
+
+    // Scoped to the target under test: an unscoped lookup reads whichever
+    // sibling's verdict landed first and proves nothing about this one.
+    let verdict = await_inscription(
+        &inscriptions,
+        "relay.delivery.fence.verdict",
+        "\"target_session\":\"bravo\"",
+    );
+    assert!(
+        verdict.contains("\"verdict\":\"negative\""),
+        "a generation with a bootstrap still running has not been observed to \
+         cease: {verdict}"
+    );
+
+    // Release the hung agent so the blocking bootstrap returns rather than
+    // sitting out its full operation timeout while the process tears down.
+    release_hung_initialize(temporary.path());
+}
+
+/// Polls until the stub has recorded at least `count` agents.
+fn await_recorded_agents(path: &Path, count: usize) {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let recorded = std::fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.trim().parse::<i32>().is_ok())
+            .count();
+        if recorded >= count {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "only {recorded} of {count} agents started within 20s"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Opens the hang fifo for writing, which is what unblocks an agent parked in
+/// `initialize`.
+fn release_hung_initialize(root: &Path) {
+    let fifo = root.join("acp_hang_initialize.fifo");
+    if fifo.exists() {
+        let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+    }
+}
