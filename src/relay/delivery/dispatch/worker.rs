@@ -231,6 +231,7 @@ async fn run_async_delivery_worker(
                 &mut inflight_members,
                 &mut receiver,
                 pending.as_ref(),
+                fence_observation,
             )
             .await;
             break;
@@ -561,24 +562,50 @@ fn prepare_coder_write(
     }
 }
 
-/// Drains the worker on relay shutdown: signals the transport so its internal
-/// delivery task resolves every in-flight write terminally, collects those
-/// resolutions to completion, then drops the not-yet-submitted queued tasks. The
-/// transport contract guarantees prompt terminal resolution on shutdown, so the
-/// `join_next` drain does not park indefinitely. The transport is `None` if no
-/// task ever arrived to construct it.
+/// Drains the worker on relay shutdown, bounded by the same fence the watchdog
+/// uses.
+///
+/// Graceful shutdown ends a generation, so it establishes cessation the way
+/// every other generation ending does — and it carries a bound for the same
+/// reason. Waiting on collectors until they happened to finish made the relay's
+/// exit hostage to an executor blocked in a syscall, which is exactly the class
+/// of wait the fence exists to replace: no runtime primitive can force such a
+/// thread to return, so *observing* it is the only sound move and observing has
+/// to be budgeted.
+///
+/// Collection runs alongside both observation windows rather than after the
+/// verdict, so a member whose transport resolves in time still reports its own
+/// evidence instead of a shutdown-shaped guess. The verdict is the cut; whatever
+/// is unresolved at it terminalizes through the guard's evidence order.
+///
+/// The transport's own teardown follows the verdict rather than preceding it.
+/// The fence's cooperative step is already every transport's stop signal — the
+/// dropped shutdown channel, the shutdown flag, the fenced generation — so
+/// tearing resources down first would be the destructive action before the
+/// polite one, and would strip the effect paths the observation reads. The
+/// transport is `None` if no task ever arrived to construct it.
 async fn shutdown_drain(
     transport: Option<&mut TransportImpl>,
     inflight: &mut JoinSet<InflightOutcome>,
     inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
     receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
     pending: &std::sync::atomic::AtomicUsize,
+    fence_observation: Duration,
 ) {
     if let Some(transport) = transport {
+        let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
+        let mut fence = FenceInProgress::begin(transport, fence_observation);
+        while fence.advance(transport, Instant::now()).is_none() {
+            tokio::select! {
+                joined = inflight.join_next_with_id(), if !inflight.is_empty() => {
+                    if let Some(joined) = joined {
+                        collect_outcome(joined, inflight_members, pending);
+                    }
+                }
+                _ = tokio::time::sleep(poll_interval) => {}
+            }
+        }
         transport.shutdown();
-    }
-    while let Some(joined) = inflight.join_next_with_id().await {
-        collect_outcome(joined, inflight_members, pending);
     }
     // Any member still in the table was never joined — its collector neither
     // resolved nor panicked, so the drain left it unresolved. Terminalize it
