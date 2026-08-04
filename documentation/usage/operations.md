@@ -187,10 +187,14 @@ operators (the starter `operator` policy in the scaffolded
 not.
 
 A bundle lifecycle request without an authorized principal receives a
-typed `authorization_forbidden` error from the relay; the CLI surfaces it
-as a `relay returned error: authorization_forbidden` message. Operators who
-hit this should verify that `users.toml` maps their `session@GLOBAL`
-identity to a policy with `updown = "home"`.
+typed `authorization_forbidden` validation error from the relay, which the
+CLI surfaces as a validation-shaped result (not a `relay returned error: ...`
+wrapper). The canonical operator-facing description of the authorization
+model — per-control ladder, home-namespace rules, reachability, and the
+`updown = "home"` requirement — lives in
+[authorization.md](authorization.md); the
+`users.toml` → `operator` policy mapping is the operator-side fix the
+authorization doc describes in its `updown` is deny by default section.
 
 ## State Root
 

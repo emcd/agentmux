@@ -634,6 +634,63 @@ the file would let you write `bundles/work.toml` once and share it
 across hosts with different home directories. Today it does not work
 that way. Track that todo for the future resolution.
 
+## A worked multi-session shared-worktree example
+
+A single bundle typically hosts multiple sessions that work together
+across one or more worktrees. The pattern below mirrors the
+"coordinator + lane" topology: a `master` session owns the main
+worktree and a `tui` session owns a lane within it, both backed by
+the same coder so the operator can switch between them.
+
+### `bundles/myproject.toml`
+
+```toml
+format-version = 1
+groups = ['dev', 'login']
+
+[[sessions]]
+id = 'master'
+name = 'GPT (Coordinator)'
+directory = '/home/me/src/myproject'
+coder = 'codex'
+coder-session-id = '00000000-0000-0000-0000-000000000000'
+
+[[sessions]]
+id = 'tui'
+name = 'GPT (Frontend Engineer)'
+directory = '/home/me/src/WORKTREES/myproject/tui'
+coder = 'codex'
+```
+
+The `groups` field names this bundle's lifecycle groups; `groups`
+is bundle-level, not session-level. `agentmux up --group dev`
+selects every configured bundle whose `groups` list contains `dev`
+and transitions all sessions of each selected bundle, so a
+single group tag drives collective lifecycle across multiple bundles
+(`src/commands/shared.rs:283-297`). `agentmux down --group dev` tears
+the same set back down. The starter `default` policy applies to
+both sessions because each `[[sessions]]` entry omits `policy`.
+
+The two sessions split their directories across the main worktree
+and a sub-worktree: the `master` session runs from
+`/home/me/src/myproject`, and the `tui` session runs from
+`/home/me/src/WORKTREES/myproject/tui`. Both share the same
+`codex` coder definition, so editing `coders.toml` once reaches
+both. With `coder = 'codex'` resolving to the Tmux transport,
+`coder-session-id` on `master` selects the Tmux coder's
+`resume-command` template over `initial-command`
+(`src/configuration/targets.rs:47-68`). The example's
+`resume-command = 'codex resume {coder-session-id}'` substitutes the
+UUID into the literal `codex resume 00000000-0000-0000-0000-000000000000`
+that the relay invokes when it brings the session up. An ACP coder
+takes the same field differently — ACP selects `session/load` versus
+`session/new` from it — so the field carries per-transport semantics.
+
+A worked example with two layer directories (`shared base + R&D
+variant`) is in the layering section above; this section shows the
+shape of a single bundle that hosts more than one session in a
+multi-worktree project.
+
 ## Migrating from `overlay/`
 
 The `overlay/` subdirectory convention is gone. A layer is now an
