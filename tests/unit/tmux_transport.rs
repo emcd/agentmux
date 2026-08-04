@@ -560,3 +560,111 @@ fn tmux_transport_render_paste_text_emits_receipt_marker_for_receipt_only() {
         "peer envelope must not include the marker line; got: {peer_text:?}"
     );
 }
+
+/// The tmux fence's forced step must reach a thread parked inside a tmux client
+/// call.
+///
+/// Dropping the write channel — the only thing termination used to do — returns
+/// a delivery thread waiting for its *next* item. It reaches nothing at all for
+/// one already blocked waiting on a `tmux` invocation, which is precisely the
+/// case that made the cooperative step fail and the escalation necessary. So the
+/// discriminating sequence is: cooperative request, observe still-executing,
+/// forced step, observe ceased. Without signalling the invocation the last
+/// observation never arrives.
+///
+/// The fake tmux blocks on opening a fifo with no writer rather than sleeping: a
+/// `sleep` would be a separate process inheriting the invocation's stdout, so
+/// killing the invocation would leave the pipe open and the waiting thread would
+/// stay blocked reading it — masking exactly what this asserts.
+#[test]
+fn a_parked_tmux_invocation_ceases_only_under_forced_termination() {
+    use agentmux::configuration::{BundleMember, TargetConfiguration, TmuxTargetConfiguration};
+    use agentmux::transports::{GenerationFence, StartupContext};
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    let temporary = tempfile::TempDir::new().expect("temporary");
+    let fifo = temporary.path().join("block.fifo");
+    let entered = temporary.path().join("entered");
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    std::fs::write(
+        &fake_tmux,
+        format!(
+            "#!/bin/sh\n\
+             : > '{entered}'\n\
+             [ -p '{fifo}' ] || mkfifo '{fifo}'\n\
+             read line < '{fifo}'\n",
+            entered = entered.display(),
+            fifo = fifo.display(),
+        ),
+    )
+    .expect("write fake tmux");
+    std::fs::set_permissions(&fake_tmux, std::fs::Permissions::from_mode(0o755))
+        .expect("make fake tmux executable");
+    // SAFETY: nextest runs each test in its own process, so no other thread here
+    // races this read of the environment.
+    unsafe { std::env::set_var("AGENTMUX_TMUX_COMMAND", &fake_tmux) };
+
+    let member = BundleMember {
+        id: TEST_TARGET_SESSION.to_string(),
+        name: None,
+        working_directory: None,
+        target: TargetConfiguration::Tmux(TmuxTargetConfiguration {
+            start_command: "/bin/sh".to_string(),
+            prompt_readiness: None,
+            prime_timeout_ms: None,
+            readiness_timeout_ms: 1_000,
+        }),
+        coder_session_id: None,
+        policy_id: None,
+        environment: Vec::new(),
+    };
+    let mut transport = agentmux::tmux::TmuxTransport::new(PromptBatchSettings::default());
+    transport
+        .startup(StartupContext {
+            namespace: "party".to_string(),
+            runtime_directory: temporary.path().to_path_buf(),
+            target_member: member,
+            choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+                decided_by: "test".to_string(),
+                reason_code: "test_cancel".to_string(),
+                reason: None,
+            }),
+        })
+        .expect("tmux startup");
+
+    let _outcome = transport.raww("hello".to_string(), true);
+    await_path(
+        &entered,
+        "the delivery thread should have entered a tmux invocation",
+    );
+
+    // Step 1: the cooperative request cannot reach a thread blocked in a syscall,
+    // so the generation is still executing after it.
+    transport.fence_generation();
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(
+        !transport.generation_ceased(),
+        "a thread parked in a tmux invocation cannot observe the cooperative flag"
+    );
+
+    // Step 3: signalling the invocation is what lets the observation succeed.
+    transport.terminate_generation();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !transport.generation_ceased() {
+        assert!(
+            Instant::now() < deadline,
+            "the generation did not cease within 5s of forced termination"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Polls for `path` to appear, panicking with `message` if it does not.
+fn await_path(path: &std::path::Path, message: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !path.exists() {
+        assert!(Instant::now() < deadline, "{message}");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

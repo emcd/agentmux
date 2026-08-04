@@ -667,6 +667,31 @@ impl Drop for StartupGuard {
     }
 }
 
+impl PtyTransport {
+    /// Whether this generation's child has been reaped, which the fence's second
+    /// observation requires alongside the executors having returned.
+    ///
+    /// The threads returning is not the whole answer: a live child still holds
+    /// the pty and can still write to it, so a generation whose child survives
+    /// has not ceased in the sense the fence asks about. Nothing before forced
+    /// termination can make this true, which is why a Pty fence always escalates
+    /// — the honest reading of what is still running, not a missing cooperative
+    /// path.
+    ///
+    /// `try_wait` reaps without blocking and `try_lock` keeps the observation
+    /// itself non-blocking: a lock held by a concurrent teardown reads as
+    /// not-yet-ceased, and the next poll asks again.
+    fn child_reaped(&self) -> bool {
+        let Some(child) = self.child.as_ref() else {
+            return true;
+        };
+        let Ok(mut child) = child.try_lock() else {
+            return false;
+        };
+        matches!(child.try_wait(), Ok(Some(_)))
+    }
+}
+
 impl GenerationFence for PtyTransport {
     fn fence_generation(&mut self) {
         self.shutdown_flag.store(true, Ordering::Release);
@@ -691,13 +716,15 @@ impl GenerationFence for PtyTransport {
     }
 
     fn generation_ceased(&self) -> bool {
-        self.worker_handle
+        let executors_returned = self
+            .worker_handle
             .as_ref()
             .is_none_or(thread::JoinHandle::is_finished)
             && self
                 .reader_handle
                 .as_ref()
-                .is_none_or(thread::JoinHandle::is_finished)
+                .is_none_or(thread::JoinHandle::is_finished);
+        executors_returned && self.child_reaped()
     }
 }
 

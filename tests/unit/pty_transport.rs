@@ -2780,3 +2780,95 @@ fn pty_envelope_absorbed_during_wait_reaches_the_master() {
         first.outcome,
     );
 }
+
+/// A Pty fence reaches a positive verdict cooperatively, with its child reaped.
+///
+/// Cessation for Pty requires the child reaped as well as the executors
+/// returned, because a live child still holds the pty and can still write to it.
+/// Adding that conjunct carried an obvious regression risk — a Pty fence that
+/// could never go positive — and this is what rules it out: the cooperative step
+/// alone suffices, because the worker dropping the master gives the child EOF.
+///
+/// Deliberately not framed as an escalation test. Pty needs no forced step here,
+/// so there is no reachable state in which the executors have returned while the
+/// child lives, and nothing available can discriminate the child-reaped conjunct
+/// on its own.
+///
+/// Run with `cargo test --test unit pty_transport -- --ignored` once Zig 0.15.x
+/// is on PATH; skipped by default for the same reason as the round-trip test.
+#[test]
+#[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
+fn a_pty_generation_ceases_cooperatively_with_its_child_reaped() {
+    use agentmux::configuration::{
+        BundleMember, PtyTargetConfiguration as PtyConfig, TermProtocol,
+    };
+    use agentmux::pty::PtyTargetConfiguration;
+    use agentmux::transports::{GenerationFence, StartupContext, Transport};
+
+    let pty_configuration = PtyConfig {
+        initial_command: "/bin/cat".to_string(),
+        resume_command: "/bin/cat".to_string(),
+        prompt_readiness: None,
+        prime_timeout_ms: Some(2000),
+        wedge_detection: true,
+        cols: 80,
+        rows: 24,
+        term_protocol: TermProtocol::Xterm256Color,
+    };
+    let target = BundleMember {
+        id: "fence-test".to_string(),
+        name: None,
+        working_directory: None,
+        target: agentmux::configuration::TargetConfiguration::Pty(pty_configuration),
+        coder_session_id: None,
+        policy_id: None,
+        environment: Vec::new(),
+    };
+    let mut transport = agentmux::pty::PtyTransport::new(
+        target.clone(),
+        PtyTargetConfiguration {
+            initial_command: "/bin/cat".to_string(),
+            resume_command: "/bin/cat".to_string(),
+            prompt_readiness: None,
+            cols: 80,
+            rows: 24,
+            prime_timeout_ms: Some(2000),
+            wedge_detection: true,
+            working_directory: None,
+            term_protocol: TermProtocol::Xterm256Color,
+        },
+        None,
+    );
+    let context = StartupContext {
+        namespace: "agentmux".to_string(),
+        runtime_directory: std::env::temp_dir(),
+        target_member: target,
+        choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+            decided_by: "test".to_string(),
+            reason_code: "test_cancel".to_string(),
+            reason: None,
+        }),
+    };
+    if transport.startup(context).is_err() {
+        eprintln!(
+            "a_pty_generation_ceases_cooperatively_with_its_child_reaped: \
+             skipped (startup failed); requires Zig 0.15.x + libghostty-vt"
+        );
+        return;
+    }
+
+    assert!(
+        !transport.generation_ceased(),
+        "a started generation owns a running child and running executors"
+    );
+
+    transport.fence_generation();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !transport.generation_ceased() {
+        assert!(
+            Instant::now() < deadline,
+            "the cooperative request did not cease the generation within 5s"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}

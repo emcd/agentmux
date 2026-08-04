@@ -43,7 +43,10 @@ use crate::transports::{
 /// Default tmux look window applied when the caller omits a window size.
 const LOOK_LINES_DEFAULT: usize = 120;
 
-use super::pane::{capture_pane_tail_lines, inject_literal_text, resolve_active_pane_target};
+use super::pane::{
+    TmuxInvocationPid, capture_pane_tail_lines, inject_literal_text, publish_tmux_invocations,
+    resolve_active_pane_target, terminate_published_invocation,
+};
 use super::quiescence_probe::{PaneQuiescenceProbe, RealPaneQuiescenceProbe};
 
 const TMUX_TARGET_UNAVAILABLE_CODE: &str = "tmux_target_unavailable";
@@ -115,6 +118,12 @@ pub struct TmuxTransport {
     task_handle: Option<thread::JoinHandle<()>>,
     task_context: Option<DeliveryTaskContext>,
     shutdown_flag: Arc<AtomicBool>,
+    /// The tmux client invocation the delivery thread is currently waiting on.
+    ///
+    /// Retained so the fence's forced step has something to signal: dropping the
+    /// channel reaches a thread between items, and nothing else reaches one
+    /// parked in a tmux client call.
+    invocation: TmuxInvocationPid,
 }
 
 impl std::fmt::Debug for TmuxTransport {
@@ -142,6 +151,7 @@ impl TmuxTransport {
             task_handle: None,
             task_context: None,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
+            invocation: TmuxInvocationPid::default(),
         }
     }
 
@@ -178,7 +188,9 @@ impl TmuxTransport {
         let (sender, receiver) = mpsc::channel(WRITE_CHANNEL_CAPACITY);
         let shutdown_flag = Arc::clone(&self.shutdown_flag);
         let batch_settings = self.batch_settings;
+        let invocation = Arc::clone(&self.invocation);
         let task_handle = thread::spawn(move || {
+            publish_tmux_invocations(invocation);
             run_delivery_task(receiver, ctx, shutdown_flag, batch_settings);
         });
         self.sender = Some(sender);
@@ -218,14 +230,17 @@ impl GenerationFence for TmuxTransport {
     }
 
     fn terminate_generation(&mut self) {
-        // Dropping the sender closes the delivery thread's channel, so a thread
-        // parked waiting for its next item returns rather than waiting forever.
-        // That is the only effect path this generation owns which the relay can
-        // initiate cessation of.
+        // Two effect paths, and the channel only reaches one of them. Dropping
+        // the sender returns a thread parked waiting for its next item; it does
+        // nothing at all for one blocked inside a tmux client call, which is the
+        // case that made the cooperative step fail in the first place. Signalling
+        // the invocation is what unblocks that thread so the observation after
+        // this can succeed.
         //
         // The tmux **server** is deliberately untouched. It is not owned by this
         // generation — it holds the operator's sessions, and terminating it to
         // fence one delivery would destroy work the fence exists to protect.
+        terminate_published_invocation(&self.invocation);
         self.sender = None;
     }
 

@@ -1,15 +1,85 @@
 use std::{
+    cell::RefCell,
     ffi::OsStr,
     io::Write,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    sync::atomic::{AtomicU64, Ordering},
+    process::{Child, Command, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicI32, AtomicU64, Ordering},
+    },
 };
 
 const PASTE_BUFFER_NAME_PREFIX: &str = "agentmux-relay";
 const LOOK_LINES_MAX: usize = 1000;
 
 static PASTE_BUFFER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// The pid of the `tmux` client invocation a generation's executor is currently
+/// waiting on, or zero when it is between invocations.
+///
+/// Shared as a pid rather than as the [`Child`] itself because the executor
+/// holding it is blocked *in* the wait: a `Child` cannot be waited on and killed
+/// through the same handle, and moving it behind a lock the waiter holds would
+/// make signalling wait for the very call it is meant to interrupt.
+pub(crate) type TmuxInvocationPid = Arc<AtomicI32>;
+
+thread_local! {
+    /// The slot this thread publishes its tmux invocations into.
+    ///
+    /// Thread-local because the generation's executor is the only thing that
+    /// makes these invocations, and threading a handle through every pane helper
+    /// would put supervision plumbing into call sites that have nothing to do
+    /// with it. Absent for every other caller — the lifecycle primitives and the
+    /// look path run outside any generation and are not fenced.
+    static PUBLISHED_INVOCATIONS: RefCell<Option<TmuxInvocationPid>> =
+        const { RefCell::new(None) };
+}
+
+/// Publishes this thread's tmux invocations into `slot` for the rest of its
+/// life. Called by a generation's executor as it starts.
+pub(crate) fn publish_tmux_invocations(slot: TmuxInvocationPid) {
+    PUBLISHED_INVOCATIONS.with(|published| *published.borrow_mut() = Some(slot));
+}
+
+/// Signals whichever tmux client invocation `slot` currently names.
+///
+/// The fence's forced step for tmux. Deliberately only the client: the tmux
+/// **server** is not owned by the generation — it holds the operator's sessions,
+/// and terminating it to fence one delivery would destroy the work the fence
+/// exists to protect.
+pub(crate) fn terminate_published_invocation(slot: &TmuxInvocationPid) {
+    let pid = slot.load(Ordering::Acquire);
+    if pid > 0 {
+        // SAFETY: `kill` is safe to call with any pid; an exited or reaped pid
+        // returns ESRCH, which is the outcome we want anyway.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+}
+
+/// Records `pid` as this thread's in-flight invocation for the duration of a
+/// wait, clearing it on the way out however the wait ends.
+struct PublishedInvocation(Option<TmuxInvocationPid>);
+
+impl PublishedInvocation {
+    fn record(child: &Child) -> Self {
+        let slot = PUBLISHED_INVOCATIONS.with(|published| published.borrow().clone());
+        if let Some(slot) = slot.as_ref()
+            && let Ok(pid) = i32::try_from(child.id())
+        {
+            slot.store(pid, Ordering::Release);
+        }
+        Self(slot)
+    }
+}
+
+impl Drop for PublishedInvocation {
+    fn drop(&mut self) {
+        if let Some(slot) = self.0.as_ref() {
+            slot.store(0, Ordering::Release);
+        }
+    }
+}
 
 pub(crate) fn resolve_active_pane_target(
     tmux_socket: &Path,
@@ -179,6 +249,7 @@ fn load_tmux_buffer(tmux_socket: &Path, buffer_name: &str, text: &str) -> Result
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|source| source.to_string())?;
+    let _published = PublishedInvocation::record(&child);
     {
         let mut stdin = child
             .stdin
@@ -225,8 +296,20 @@ pub(crate) fn run_tmux_command_capture(
     command_arguments: &[impl AsRef<OsStr>],
 ) -> Result<std::process::Output, String> {
     let mut command = tmux_command(tmux_socket);
-    command.args(command_arguments);
-    command.output().map_err(|source| source.to_string())
+    command
+        .args(command_arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    // Spawn and wait explicitly rather than `output()`, which does both behind a
+    // handle nothing else can reach. The pid has to be published before the wait
+    // begins, because the whole point is to signal an invocation the caller is
+    // already blocked on.
+    let child = command.spawn().map_err(|source| source.to_string())?;
+    let _published = PublishedInvocation::record(&child);
+    child
+        .wait_with_output()
+        .map_err(|source| source.to_string())
 }
 
 /// Builds a tmux invocation addressing `tmux_socket` relative to its own
