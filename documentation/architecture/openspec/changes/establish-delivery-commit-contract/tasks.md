@@ -31,9 +31,9 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 - [ ] Implement residency over `Pending` entries only, resolving `expired`, and make it unable to fire against an `Authorized` entry
 - [ ] Implement per-target FIFO covering mail and raw as one order
-- [ ] Implement deficit round-robin across targets: canonical payload bytes as the cost unit, deficit capped at one quantum, ineligible targets skipped without accruing deficit
+- [ ] Implement byte-budgeted round-robin across targets: canonical payload bytes as the cost unit, exactly one quantum of credit per visit with no carry-over, ineligible targets skipped
 - [ ] Form batches against both handover components, stopping at whichever of envelope count or canonical payload bytes binds first
-- [ ] Debit deficit at authorization, in the same atomic operation as the `Pending` to `Authorized` transition
+- [ ] Debit the visit's remaining credit at authorization, in the same atomic operation as the `Pending` to `Authorized` transition
 - [ ] Revalidate the quantum against the largest byte component when a transport registers or changes its declared maxima, refusing registration rather than admitting an unschedulable transport
 - [ ] Make authorization outrank residency expiry within one scheduling iteration, and keep an activity-advanced target unauthorizable
 - [ ] Reschedule `Pending` entries to a new generation on respawn; never re-invoke `Authorized` entries
@@ -59,9 +59,12 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 - [ ] Retain every generation-owned submission and permission executor handle
 - [ ] Implement fence acknowledgment as terminate-then-join, in that order
-- [ ] Bound the fence join with `[delivery].fence-join-timeout-ms`
-- [ ] Implement the fixed escalation: on bound elapse, reap the generation's child with prejudice, which unblocks the executors writing to it and establishes that nothing in flight can still reach the target
-- [ ] Keep the fence negative when an executor is still unjoinable after reaping: admit no replacement for that target, hold its raw barrier, record the condition, and still resolve every member through the guard
+- [ ] Bound the pre-escalation join with `[delivery].fence-join-timeout-ms`
+- [ ] Add a generation termination primitive to the transport contract, contracted to positively cease every generation-owned effect path
+- [ ] Implement it per transport: ACP and Pty reap the generation's child; Tmux terminates only its owned client invocations, never the server; UI drops the generation's broadcaster handle and subscriber senders
+- [ ] Bound the post-escalation observation with a second window of the same duration, as a bounded observation rather than a second blocking join
+- [ ] Make the fence positive only on observed cessation within that window, and route both timeout and failure to the negative branch
+- [ ] Keep the fence negative when cessation is not observed: admit no replacement for that target, hold its raw barrier, record the condition, and still resolve every member through the guard
 - [ ] Block replacement and normal-raw ordering barriers until the fence is positive, while allowing `submission_unknown` to terminalize before it
 - [ ] Resolve a submission stopped by the fence before any effect as `not_submitted`
 
@@ -105,8 +108,9 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Cover exactly-once resolution under worker panic, collector panic, transport panic mid-partition and after partial submission, closed outcome channel, generation replacement in flight, and graceful shutdown with mixed `Pending`/`Authorized`
 - [ ] Cover that quota returns to zero after each of those, and that the per-target FIFO still makes progress
 - [ ] Cover fence acknowledgment ordering: a join without termination authority does not complete, and one with it does
-- [ ] Cover the escalation path: the join bound elapses, the child is reaped, the executor unblocks, and the fence becomes positive
-- [ ] Cover the fail-stop path: an executor unjoinable after reaping leaves the fence negative, blocks replacement, and still resolves every member
+- [ ] Cover the escalation path: the join bound elapses, the termination primitive fires, cessation is observed within the second window, and the fence becomes positive
+- [ ] Cover the fail-stop path: cessation not observed when the second window elapses leaves the fence negative, blocks replacement, and still resolves every member
+- [ ] Cover that a UI generation terminates without an owned child, and that fencing a Tmux generation leaves the server running
 - [ ] Cover that an unbound member resolves `not_submitted` under every trigger, and that a recorded `Submitted` is not downgraded by a generation replacement
 - [ ] Cover that siblings of one packing unit never receive different outcomes from one evidence record
 - [ ] Assert the teeth of the ordering and absence tests by reverting each mechanism and confirming the test fails

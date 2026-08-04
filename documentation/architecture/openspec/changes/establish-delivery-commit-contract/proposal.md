@@ -125,9 +125,13 @@ are. Every receipt that fires today for a real reason keeps firing:
 safety of older mail. **Operator emergency raw** (Tmux and Pty) overtakes
 `Pending` mail and bypasses readiness gating, with a documented ordering break,
 selected explicitly through the MCP tool and CLI rather than changing existing
-`raww` calls. It does *not* bypass an in-flight submission; Pty's raw and
-envelope paths share one worker channel and writer mutex, so an escape hatch
-around a blocked worker would either block identically or interleave bytes.
+`raww` calls. It bypasses an in-flight submission only where the transport
+provides a separately supervised writer with a defined interleaving rule, and no
+transport provides one today: Pty's raw and envelope paths share one worker
+channel and writer mutex, so an escape hatch around a blocked worker would either
+block identically or interleave bytes. The requirement states that condition
+rather than the current conclusion, so the follow-on writer does not have to
+reopen it.
 
 **One behavior change to state rather than discover:** Pty raw today interrupts
 an in-flight envelope wait (`src/pty/delivery.rs:634-665`). Under normal raw that

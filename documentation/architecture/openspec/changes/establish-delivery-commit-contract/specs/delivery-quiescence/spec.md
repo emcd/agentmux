@@ -194,34 +194,34 @@ no authorization SHALL occur across a raw barrier, nor younger work across older
 except where the emergency raw mode defined in the `transport-contracts`
 capability applies.
 
-Scheduling across targets SHALL be **deficit round-robin**. Maximum handover
-dimensions have two components — envelope count and canonical payload bytes — and
-the two are used for different purposes, so each rule below names which:
+Scheduling across targets SHALL be **byte-budgeted round-robin**. Maximum
+handover dimensions have two components — envelope count and canonical payload
+bytes — and the two are used for different purposes, so each rule below names
+which:
 
 - **cost unit** — canonical payload bytes, the same unit as admission quota, so
   one accounting serves both. Envelope count is not a scheduling cost;
-- **quantum** — a relay-configured byte value per rotation visit, compared
-  against the **canonical-payload-byte component** of every registered
-  transport's maximum handover dimensions. It SHALL be greater than or equal to
-  the largest such byte component. Configuring it lower SHALL be a validation
-  error at load. The count component is not compared against the quantum, since
-  the quantum is denominated in bytes;
+- **quantum** — a relay-configured byte value, compared against the
+  **canonical-payload-byte component** of every registered transport's maximum
+  handover dimensions. It SHALL be greater than or equal to the largest such byte
+  component. Configuring it lower SHALL be a validation error at load. The count
+  component is not compared against the quantum, since the quantum is denominated
+  in bytes;
+- **per-visit credit** — exactly one quantum. A target's available credit on a
+  rotation visit SHALL be one quantum, and unspent credit SHALL NOT carry
+  forward. **There is one spend limit, and it is the quantum;**
 - **batch formation** — a batch SHALL satisfy **both** components of its target
   transport's maximum handover dimensions: no more envelopes than the count
   maximum, and no more canonical payload bytes than the byte maximum. Whichever
-  binds first stops the batch. A batch SHALL additionally not exceed the
-  visiting target's remaining quantum plus deficit;
-- **debit timing** — a target's deficit SHALL be debited by a batch's canonical
-  payload bytes **at authorization**, in the same atomic operation as the
-  `Pending` → `Authorized` transition. Debiting at admission would charge work
-  that may never be authorized; debiting at resolution would let a target be
-  visited repeatedly while its earlier batches are still in flight;
-- **deficit accrual** — a per-target counter accruing the unused quantum each
-  visit, **capped at one quantum**, so an idle target cannot bank credit and then
-  monopolise a rotation;
+  binds first stops the batch. A batch SHALL additionally not exceed the visiting
+  target's remaining credit for that visit;
+- **debit timing** — credit SHALL be debited by a batch's canonical payload bytes
+  **at authorization**, in the same atomic operation as the `Pending` →
+  `Authorized` transition. Debiting at admission would charge work that may never
+  be authorized; debiting at resolution would let a target be visited repeatedly
+  while its earlier batches are still in flight;
 - **eligible rotation** — only targets with pending work whose transport reports
-  `can_accept_handover` are visited; ineligible targets are skipped without
-  accruing deficit;
+  `can_accept_handover` are visited; ineligible targets are skipped;
 - **revalidation** — when the set of registered transports changes, or a
   registered transport's declared maximum handover dimensions change, the relay
   SHALL revalidate the configured quantum against the new largest byte component.
@@ -229,10 +229,20 @@ the two are used for different purposes, so each rule below names which:
   register that transport and SHALL record the refusal, rather than silently
   admitting a transport whose handover it cannot schedule.
 
-Because the quantum is at least the largest permitted byte component, and
-admission rejects an envelope exceeding its transport's maximum handover
-dimensions, every admissible item fits within one quantum. There is no
-oversized-item case.
+**Why there is no deficit counter.** Classical deficit round-robin accumulates
+unspent quantum so that an item larger than one quantum can eventually be sent.
+This design excludes that case by construction: the quantum is at least the
+largest permitted byte component, and admission rejects an envelope exceeding its
+transport's maximum handover dimensions, so every admissible item fits within one
+quantum and at least one batch is always formable per visit. A carry-over counter
+would therefore have no work to do, and capping it — which anti-monopoly fairness
+requires — reduces available credit back to exactly one quantum in every case.
+Carrying both a carry-over rule and a cap produced two incompatible spend limits;
+removing the counter leaves one.
+
+Fairness is unaffected and slightly stronger: every eligible target is visited
+each rotation and receives a full quantum, so no target can be starved and none
+can bank credit to monopolise a later rotation.
 
 Residency governs `Pending` entries only. When an entry's residency elapses
 before it is authorized, it SHALL resolve `expired`. Residency expiry is a
@@ -274,18 +284,19 @@ any coder. Per-target residency overrides are excluded from this change.
 - **THEN** no residency expiry occurs for it
 - **AND** it resolves only from submission evidence
 
-#### Scenario: Skip an unready target without accruing deficit
+#### Scenario: Skip an unready target
 
 - **WHEN** a target has pending work but its transport does not report
   `can_accept_handover`
 - **THEN** the rotation skips it
-- **AND** its deficit counter does not increase
+- **AND** it accrues no credit toward a later visit
 
-#### Scenario: Cap accrued deficit at one quantum
+#### Scenario: Credit does not accumulate across rotations
 
-- **WHEN** a target is skipped across several consecutive rotations
-- **THEN** its deficit counter does not exceed one quantum
-- **AND** it cannot consume more than one quantum's worth of a later rotation
+- **WHEN** a target is skipped, or spends less than its quantum, across several
+  consecutive rotations
+- **THEN** its credit on the next visit is exactly one quantum
+- **AND** it cannot consume more than one quantum on any single visit
 
 #### Scenario: Reject a quantum smaller than a registered byte maximum
 
@@ -302,11 +313,11 @@ any coder. Per-target residency overrides are excluded from this change.
 - **THEN** the batch stops at whichever component binds first
 - **AND** the remainder stays `Pending` for a later rotation
 
-#### Scenario: Debit deficit at authorization
+#### Scenario: Debit credit at authorization
 
 - **WHEN** a batch transitions from `Pending` to `Authorized`
-- **THEN** the target's deficit is debited by that batch's canonical payload
-  bytes in the same atomic operation
+- **THEN** the target's remaining credit for that visit is debited by the batch's
+  canonical payload bytes in the same atomic operation
 - **AND** the debit does not wait for the batch to resolve
 
 #### Scenario: Refuse a transport whose handover the quantum cannot cover

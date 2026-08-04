@@ -15,7 +15,7 @@ file SHALL use kebab-case TOML keys and MAY contain:
   | Key | Default | Range | Governs |
   |---|---|---|---|
   | `residency-ms` | `900_000` | `30_000..=3_600_000` | how long a `Pending` entry may wait before resolving `expired` |
-  | `scheduling-quantum-bytes` | `262_144` | `65_536..=16_777_216` | the deficit round-robin quantum per rotation visit, in canonical payload bytes |
+  | `scheduling-quantum-bytes` | `262_144` | `65_536..=16_777_216` | a target's credit per rotation visit, in canonical payload bytes |
   | `fence-join-timeout-ms` | `5_000` | `100..=60_000` | how long a generation fence waits to join its executors before reaping the child |
   | `queued-envelopes-max` | `10_000` | `1..=1_000_000` | relay-global admission quota, envelope count |
   | `queued-bytes-max` | `268_435_456` | `1_048_576..=4_294_967_296` | relay-global admission quota, canonical payload bytes |

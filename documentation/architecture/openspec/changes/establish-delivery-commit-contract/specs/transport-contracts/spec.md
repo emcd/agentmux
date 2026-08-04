@@ -152,7 +152,9 @@ a declared contract modification, not an implicit behavior change.
 - `normal` — preserves FIFO against pending mail for that target and waits for
   target-side ordering safety of older work.
 - `emergency` — overtakes that target's `Pending` mail and bypasses the
-  prompt-readiness gate. It does **not** bypass an in-flight submission.
+  prompt-readiness gate. It bypasses an in-flight submission only where the
+  target's transport provides a separately supervised writer with a defined
+  interleaving rule; otherwise it waits for target-side ordering safety.
 
 `emergency` SHALL be supported on Tmux and Pty targets only. On any other
 transport relay SHALL reject the request with `validation_invalid_params`,
@@ -201,17 +203,22 @@ Relay SHALL treat raww `text` as opaque input and SHALL NOT evaluate shell
 expansion or command substitution.
 
 **Ordering.** Mail and raw are variants of one per-target relay FIFO. `raww`
-bypasses readiness gating in `emergency` mode; it does not bypass ordering
-against work that is already executing.
+bypasses readiness gating in `emergency` mode; bypassing work that is already
+executing requires a separately supervised writer, per the rule below.
 
 - **Normal raw** SHALL preserve FIFO: no authorization across a raw barrier, nor
   younger work across older. It SHALL wait for **target-side ordering safety** of
   older mail, which requires that execution has ceased — not merely that an
   outcome has become terminal. A ledger transition to `submission_unknown` does
-  not prove a still-running submission cannot take effect later.
+  not prove a still-running submission cannot take effect later. Normal raw waits
+  regardless of whether a separately supervised writer exists; the writer changes
+  what *emergency* raw may do, not what FIFO means.
 - **Emergency raw** SHALL overtake that target's `Pending` mail and its
-  readiness gate. It SHALL **still wait for target-side ordering safety of older
-  in-flight execution**, using the generation fence.
+  readiness gate. Where the transport provides no separately supervised writer,
+  it SHALL wait for target-side ordering safety of older in-flight execution,
+  using the generation fence. Where the transport does provide one, it MAY
+  proceed against in-flight execution under that writer's defined interleaving
+  rule.
 
 Older `Pending` mail overtaken by an emergency raw SHALL be neither retried nor
 reclassified; it keeps its place in the queue and resolves normally. This is a
@@ -272,6 +279,15 @@ optimisation.
 - **AND** that target's transport provides no separately supervised writer
 - **THEN** the raw write waits for target-side ordering safety of that execution
 - **AND** it does not interleave with the in-flight submission
+
+#### Scenario: Emergency raw proceeds where a supervised writer exists
+
+- **WHEN** an `emergency` raww is submitted for a target whose transport provides
+  a separately supervised writer with a defined interleaving rule
+- **AND** that target has an authorized batch already executing
+- **THEN** the raw write proceeds under that interleaving rule
+- **AND** it does not wait for target-side ordering safety of the in-flight
+  submission
 
 #### Scenario: Terminal outcome does not release the raw barrier
 

@@ -156,9 +156,14 @@ def main():
         by_capability.setdefault(capability, []).append(delta_path)
 
     for capability, delta_paths in sorted(by_capability.items()):
-        live = parse(live_specs / capability / "spec.md")
-        for extra in sorted((live_specs / capability).glob("**/*.md")):
-            if extra.name != "spec.md":
+        # Merge every live file for the capability, skipping only the root
+        # spec.md already parsed. Filtering by basename instead would skip a
+        # nested `<capability>/parts/spec.md` too, and every requirement defined
+        # there would be falsely reported as having no live counterpart.
+        root_spec = live_specs / capability / "spec.md"
+        live = parse(root_spec)
+        for extra in sorted((live_specs / capability).rglob("*.md")):
+            if extra != root_spec:
                 for name, scenarios in parse(extra).items():
                     live.setdefault(name, []).extend(scenarios)
 

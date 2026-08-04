@@ -576,30 +576,51 @@ proceed until the fence is positive, an unbounded join would reintroduce exactly
 the unbounded wait this capability exists to remove. The bound SHALL be relay
 configuration (`[delivery].fence-join-timeout-ms`).
 
-**The escalation action is fixed, not configurable**, because only one action can
-actually establish what the fence needs. When the bound elapses the supervisor
-SHALL terminate the generation's child process with prejudice and reap it.
+**The escalation action is fixed, not configurable**, because only one class of
+action can establish what the fence needs. When the bound elapses the supervisor
+SHALL invoke the **generation termination primitive** that the transport declares.
 
-Reaping is what makes this sound. A timeout that merely stops waiting establishes
-nothing and cannot release a barrier. Reaping the child closes the pty or pipe
-the submission was writing to, which both unblocks an executor blocked in that
-write and positively establishes that no in-flight primitive can still reach the
-target — the target no longer exists. That is a stronger fact than joining the
-executor, and it is the fact the raw barrier and generation replacement require.
+Every transport SHALL declare such a primitive, and its contract is the same on
+all of them: **positively cease every effect path the generation owns.** It is
+not "kill the child" — that is one implementation of it, and it does not
+generalise. A transport owning no child process, or reaching its target through a
+process it does not own, still owes the same guarantee:
 
-**If an executor remains unjoinable after the child has been reaped, the fence
-SHALL remain negative.** The supervisor SHALL NOT admit a replacement generation
-for that target and SHALL NOT release its raw barrier, and SHALL record the
-condition as observability. This is deliberately fail-stop: a target that stops
-accepting new generations is recoverable by operator action, and a target whose
-old generation might still write while a new one runs is not.
+| Transport | Generation termination primitive |
+|---|---|
+| ACP, Pty | terminate and reap the generation's child process, closing the stdin pipe or pty master it was being written to |
+| Tmux | terminate the generation's owned `tmux` client invocations. The tmux **server** is not owned by the generation and SHALL NOT be terminated — doing so would destroy the operator's sessions |
+| UI | drop the generation's broadcaster handle and subscriber senders, so no further frame can be emitted |
+
+A timeout that merely stops waiting establishes nothing and cannot release a
+barrier. The primitive is what makes escalation sound: it both unblocks an
+executor blocked writing into the terminated path and positively establishes that
+no in-flight primitive can still reach the target. That is a stronger fact than
+joining an executor, and it is the fact the raw barrier and generation
+replacement actually require.
+
+**Fence acknowledgment SHALL be bounded end to end, not only before escalation.**
+After invoking the termination primitive the supervisor SHALL observe for
+cessation within a second window of `[delivery].fence-join-timeout-ms`, so the
+total is bounded by twice the configured value. That post-escalation observation
+SHALL itself be bounded and SHALL NOT be an unbounded blocking join — a second
+blocking join would recreate exactly the hole the first bound closed, since no
+runtime primitive can force a thread blocked in a syscall to return.
+
+The fence becomes **positive** only when every generation-owned executor has been
+observed to cease within that second window. If any has not, the fence SHALL
+remain **negative**, and the supervisor SHALL NOT admit a replacement generation
+for that target, SHALL NOT release its raw barrier, and SHALL record the
+condition as observability. Timeout and failure both route to the negative
+branch; there is no third outcome.
+
+This is deliberately fail-stop: a target that stops accepting new generations is
+recoverable by operator action, and a target whose old generation might still
+write while a new one runs is not.
 
 A negative fence SHALL NOT hold any member's outcome open. Members resolve
-through the guard's evidence order regardless, so an unjoinable executor stalls
+through the guard's evidence order regardless, so an unceasing executor stalls
 that target's lifecycle without stranding a single message.
-
-The bound applies to the join, not to the terminate step. Terminating and
-reaping a child is a bounded operation the supervisor performs directly.
 
 Three facts SHALL be kept separate:
 
@@ -645,22 +666,49 @@ A submission stopped by the fence before producing its effect SHALL resolve
 - **THEN** the generation supervisor cannot acknowledge a fence for it
 - **AND** the transport does not satisfy this requirement
 
-#### Scenario: The fence join is bounded and escalates to reaping the child
+#### Scenario: The fence join is bounded and escalates
 
 - **WHEN** `[delivery].fence-join-timeout-ms` elapses without every
-  generation-owned executor having been joined
-- **THEN** the supervisor terminates the generation's child process with
-  prejudice and reaps it
-- **AND** the executors blocked writing to that child unblock and are joined
-- **AND** the fence becomes positive, releasing replacement and the raw barrier
+  generation-owned executor having ceased
+- **THEN** the supervisor invokes the transport's generation termination
+  primitive
+- **AND** begins a second bounded observation window of the same duration
 
-#### Scenario: An unjoinable executor leaves the fence negative
+#### Scenario: Escalation succeeds within the post-escalation window
 
-- **WHEN** an executor remains unjoinable after the child has been reaped
+- **WHEN** the termination primitive has been invoked
+- **AND** every generation-owned executor is observed to cease within the second
+  bounded window
+- **THEN** the fence becomes positive
+- **AND** replacement and the raw barrier are released
+
+#### Scenario: Escalation not observed to complete leaves the fence negative
+
+- **WHEN** the termination primitive has been invoked
+- **AND** at least one generation-owned executor has not been observed to cease
+  when the second bounded window elapses
 - **THEN** the fence remains negative
 - **AND** no replacement generation is admitted for that target and its raw
   barrier is not released
 - **AND** the condition is recorded as observability
+- **BECAUSE** timeout and failure both route here; a supervisor that cannot
+  positively establish cessation SHALL NOT assume it
+
+#### Scenario: A transport without an owned child still terminates its generation
+
+- **WHEN** a UI generation is fenced and its executors do not cease within the
+  first bounded window
+- **THEN** the supervisor drops that generation's broadcaster handle and
+  subscriber senders
+- **AND** no further frame is emitted by that generation
+- **BECAUSE** the primitive's contract is positive cessation of every
+  generation-owned effect path, not the termination of a child process
+
+#### Scenario: Fencing a Tmux generation does not terminate the server
+
+- **WHEN** a Tmux generation's termination primitive is invoked
+- **THEN** only the generation's owned `tmux` client invocations are terminated
+- **AND** the tmux server and the operator's sessions are left running
 
 #### Scenario: A negative fence does not strand any member
 

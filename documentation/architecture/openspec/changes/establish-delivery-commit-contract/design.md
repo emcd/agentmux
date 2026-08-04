@@ -291,26 +291,33 @@ on its own is rejected at admission rather than queued unsendable.
 - Capacity is **atomically reserved at admission, before `queued` is returned**,
   and released at the member's terminal transition — whether that is pre-commit
   expiry or post-commit resolution.
-- Scheduling is FIFO per target. Across targets it is **deficit round-robin**,
-  specified rather than named:
+- Scheduling is FIFO per target. Across targets it is **byte-budgeted
+  round-robin**, specified rather than named:
   - **cost unit** — canonical payload bytes, the same unit as admission quota, so
     one accounting serves both;
-  - **quantum** — a relay-configured byte value per rotation visit, which SHALL
-    be **greater than or equal to every registered transport's maximum handover
-    dimension**. Configuring it lower is a validation error at load;
-  - **deficit** — a per-target counter accrues the unused quantum each visit and
-    is **capped at one quantum**, which prevents an idle target from banking
-    credit and then monopolising a rotation;
+  - **quantum** — a relay-configured byte value, which SHALL be **greater than or
+    equal to the canonical-payload-byte component of every registered transport's
+    maximum handover dimensions**. Configuring it lower is a validation error at
+    load;
+  - **per-visit credit** — exactly one quantum, with no carry-over. One spend
+    limit, not two;
   - **oversized item** — cannot exist. Because the quantum is at least the
-    largest permitted handover, and admission already rejects an envelope
+    largest permitted byte component, and admission already rejects an envelope
     exceeding the transport's maximum handover dimensions, every admissible item
-    fits within one quantum. An earlier draft capped deficit at one quantum while
-    telling oversized items to wait for accumulated deficit to cover them, which
-    was unreachable by construction; the constraint on the quantum removes the
-    case rather than papering over it;
+    fits within one quantum;
   - **eligible rotation** — only targets with pending work and a transport
-    reporting `can_accept_handover` are visited; ineligible targets are skipped
-    without accruing deficit.
+    reporting `can_accept_handover` are visited; ineligible targets are skipped.
+
+  **A deficit counter was specified here and has been removed.** Classical DRR
+  accumulates unspent quantum so an item larger than one quantum can eventually
+  be sent, and the oversized-item rule above excludes that case by construction.
+  The counter therefore had no work to do, while the anti-monopoly cap it needed
+  reduced available credit back to one quantum anyway. Carrying both a carry-over
+  rule and a cap produced two incompatible spend limits — a visit could claim
+  "remaining quantum plus deficit", up to two quanta, while an acceptance
+  scenario forbade exceeding one. Removing the counter leaves a single limit and
+  slightly stronger fairness: every eligible target is visited each rotation and
+  receives a full quantum.
 
   This replaces an earlier "no target may be starved", which named a property
   without defining a mechanism that could be tested for it.
@@ -392,12 +399,21 @@ authority plus every submission and permission executor handle** it owns, and:
 - **the join is bounded** by `[delivery].fence-join-timeout-ms`, because
   replacement waits on the fence and an unbounded join would reintroduce the
   unbounded wait this change removes;
-- **the escalation is fixed**: reap the child with prejudice. A timeout that only
-  stops waiting establishes nothing. Reaping closes the pty or pipe, unblocking
-  the executor *and* positively establishing that no in-flight primitive can
-  reach the target — which is the fact the barrier actually needs;
-- **if an executor is still unjoinable after reaping, the fence stays negative**
-  and that target admits no replacement and releases no raw barrier. Fail-stop is
+- **the escalation is fixed**: invoke the transport's **generation termination
+  primitive**, whose contract is positive cessation of every effect path the
+  generation owns. Reaping a child is ACP's and Pty's implementation of it, not
+  the universal action — UI owns no child, and Tmux reaches its target through a
+  server it must not kill. A timeout that only stops waiting establishes nothing;
+  the primitive both unblocks an executor blocked writing into the terminated
+  path and proves nothing in flight can still reach the target;
+- **acknowledgment is bounded end to end**, not only before escalation. After
+  the primitive is invoked the supervisor observes for cessation within a second
+  window of the same configured duration, so the total is bounded by twice it.
+  That observation must itself be bounded rather than a second blocking join,
+  since no runtime primitive can force a thread blocked in a syscall to return;
+- **if cessation is not positively observed within that window, the fence stays
+  negative** and that target admits no replacement and releases no raw barrier.
+  Timeout and failure both route here — there is no third outcome. Fail-stop is
   the right trade: a stuck target is operator-recoverable, an old generation
   writing alongside a new one is not;
 - `submission_unknown` MAY terminalize before the fence is positive — outcome
@@ -509,7 +525,9 @@ retrofitting them is expensive:
 real and is specified now: when a per-target worker or transport is torn down and
 respawned within a surviving relay, `Pending` entries are rescheduled to the new
 generation, and `Authorized` entries are **never re-invoked** — they resolve
-`submission unknown` through the ledger. Process-startup recovery is **not**
+through the guard's evidence order. Respawn is a trigger for resolution, not a
+chooser of outcomes: a unit that recorded `Submitted` still resolves `delivered`,
+and a member never bound to a packing unit still resolves `not_submitted`. Process-startup recovery is **not**
 specified, because nothing persists across a process boundary in 0.9.0; an
 earlier draft claimed startup behavior was specified when no such behavior
 exists, and that claim is withdrawn rather than restated.
@@ -556,9 +574,10 @@ So the ordering rule is:
 
 - **Normal raw** preserves FIFO and waits for target-side ordering safety.
 - **Operator emergency raw** (Tmux and Pty only) **overtakes `Pending` mail and
-  bypasses readiness gating.** It does **not** bypass an in-flight submission.
-  ACP has no emergency raw — its recovery path is choose/cancel/teardown, not a
-  second prompt.
+  bypasses readiness gating.** It bypasses an in-flight submission only where the
+  transport provides a separately supervised writer with a defined interleaving
+  rule; no transport provides one today, so today it waits. ACP has no emergency
+  raw — its recovery path is choose/cancel/teardown, not a second prompt.
 
 That boundary is not a preference; it is what the transports permit. On Pty, raw
 and envelope submission share one worker channel and one writer mutex
@@ -579,13 +598,17 @@ break only by asking for it.
 **Documented ordering break:** older `Pending` mail is neither retried nor
 reclassified.
 
-Emergency raw **still waits for target-side ordering safety of older in-flight
-execution**. An earlier draft said it does not bypass an in-flight submission and
-also warned that an older authorized attempt might act after it; both cannot
-hold, and the second was the wrong one to keep. What emergency raw overtakes is
-work that has not been authorized — nothing more. Overtaking an unfenced attempt
-would be a deliberate interleaving hazard, and on Pty it is not implementable
-anyway without the second supervised writer named above.
+Emergency raw waits for target-side ordering safety of older in-flight execution
+**wherever the transport provides no separately supervised writer** — which is
+every transport today. An earlier draft said it does not bypass an in-flight
+submission and also warned that an older authorized attempt might act after it;
+both cannot hold, and the second was the wrong one to keep.
+
+The condition is stated rather than the conclusion, because the conclusion is
+phase-dependent and the condition is not. Overtaking an *unfenced* attempt is a
+deliberate interleaving hazard in any phase; overtaking one under a supervised
+writer's defined interleaving rule is the follow-on capability. Writing the rule
+categorically would make the spec forbid what the follow-on implements.
 
 **The operator-recovery capability is preserved in the core phase**, by
 substitution rather than by carrying the old mechanism.
