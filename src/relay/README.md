@@ -158,6 +158,18 @@ exported from `src/relay/mod.rs`.
   - tmux/process adapters used by delivery and look paths.
 - `delivery/`
   - transport-specific delivery decomposition:
+  - `admission.rs`: the request-boundary admission gate and its quota ledger.
+    Every accepted entry reserves envelope count and canonical payload bytes
+    against a per-target and a relay-global limit, atomically across both, before
+    `queued` is returned; the reservation is released at terminalization and
+    nowhere else. Three refusals happen here rather than after queueing: an
+    exhausted quota, an envelope whose canonical payload exceeds its transport's
+    maximum handover dimensions, and a `Pubsub` target, which is refused
+    synchronously so no work is authorized merely to discover the
+    forward-declared stub. Also owns the shared "which transport will deliver
+    this target" judgement (`resolve_target_session_type`,
+    `target_is_relay_wide`), because admission is the first point that needs it
+    and the delivery worker delegates to it rather than deciding again.
   - `dispatch/mod.rs`: delivery dispatch re-export hub.
   - `dispatch/orchestration.rs`: delivery startup, ACP target priming, and the
     enqueue path that registers/feeds the per-target worker.

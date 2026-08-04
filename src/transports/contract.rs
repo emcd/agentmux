@@ -59,7 +59,7 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 
 use crate::acp::{AcpDriverServices, AcpWorkerDriver};
-use crate::configuration::BundleMember;
+use crate::configuration::{BundleMember, SessionType};
 use crate::tmux::TmuxTransport;
 use crate::transports::ui::{UiTransport, UiTransportServices};
 // Re-export the configuration prompt-readiness template into the transport
@@ -163,6 +163,77 @@ pub trait Transport {
 pub trait OutputView: Send + Sync {
     /// Captures a snapshot of the target's current output.
     fn look(&self, mode: LookMode) -> Result<LookSnapshotPayload, TransportError>;
+}
+
+/// The largest handover a transport will accept, declared statically per
+/// transport and expressed in the two units the relay can evaluate without
+/// packing: envelope count and canonical payload bytes.
+///
+/// "Canonical payload bytes" means the serialized envelope payload the relay
+/// already holds, not the text a transport would render for its target.
+/// Declaring the maxima in tokens would be circular, since only the transport can
+/// render and count those.
+///
+/// These are distinct from admission quota (relay-owned, how much may be queued)
+/// and from acceptance capacity (dynamic, whether the transport can accept right
+/// now). The relay uses them for two things: rejecting at admission an envelope
+/// no partition could ever carry, and stopping batch formation at whichever
+/// component binds first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HandoverDimensions {
+    /// Most envelopes one handover may carry.
+    pub envelopes_max: usize,
+    /// Most canonical payload bytes one handover may carry.
+    pub canonical_bytes_max: u64,
+}
+
+/// The canonical-payload-byte ceiling every delivering transport declares.
+///
+/// One value rather than five because the differences between these transports
+/// are not byte ceilings: a tmux pane, a child's stdin, a pty master, and a
+/// broadcast channel all accept far more than any envelope a relay peer should be
+/// sending, and each transport's real constraint binds elsewhere and later —
+/// tmux and pty against the rendered prompt's token budget, ACP against its
+/// framing. What this value is for is the line past which an envelope is not a
+/// large message but a mistake, so that admission rejects it at the request
+/// boundary instead of queueing something no partition could carry.
+///
+/// It equals the default `[delivery].scheduling-quantum-bytes`, which the spec
+/// requires to be at least the largest declared byte component. Equality is the
+/// intended relationship: a rotation visit's credit exactly covers one maximal
+/// handover.
+const HANDOVER_CANONICAL_BYTES_MAX: u64 = 262_144;
+
+/// Most envelopes one handover may carry on a transport that coalesces a group
+/// into a single turn (tmux, ACP, pty). Matches the ACP worker's existing pending
+/// bound so batch formation admits nothing looser than what that queue already
+/// allowed.
+const HANDOVER_ENVELOPES_MAX_COALESCING: usize = 64;
+
+impl HandoverDimensions {
+    /// The maxima declared by the transport implementing `session_type`, or
+    /// `None` for a session type with no delivery path.
+    ///
+    /// `Pubsub` returns `None`: it is a forward-declared stub rejected
+    /// synchronously at admission, so it never reaches batch formation and has no
+    /// dimensions to declare. `None` therefore means "cannot accept a handover at
+    /// all", not "unbounded".
+    #[must_use]
+    pub fn for_session_type(session_type: SessionType) -> Option<Self> {
+        match session_type {
+            SessionType::Tmux | SessionType::Acp | SessionType::Pty => Some(Self {
+                envelopes_max: HANDOVER_ENVELOPES_MAX_COALESCING,
+                canonical_bytes_max: HANDOVER_CANONICAL_BYTES_MAX,
+            }),
+            // UI broadcasts one stream event per envelope and coalesces nothing,
+            // so a handover is exactly one envelope.
+            SessionType::Ui => Some(Self {
+                envelopes_max: 1,
+                canonical_bytes_max: HANDOVER_CANONICAL_BYTES_MAX,
+            }),
+            SessionType::Pubsub => None,
+        }
+    }
 }
 
 /// Static dispatch over the fixed transport set.
@@ -318,6 +389,31 @@ impl TransportImpl {
             Self::Pty(_) => false,
             #[cfg(not(feature = "pty"))]
             Self::Pty => false,
+        }
+    }
+
+    /// The largest handover this transport accepts; see [`HandoverDimensions`].
+    ///
+    /// Delegates to the session-type function so the live-instance answer and the
+    /// one the relay reads at admission — where no transport exists yet — cannot
+    /// diverge.
+    #[must_use]
+    pub fn maximum_handover_dimensions(&self) -> Option<HandoverDimensions> {
+        HandoverDimensions::for_session_type(self.session_type())
+    }
+
+    /// The session type this transport implements.
+    #[must_use]
+    pub fn session_type(&self) -> SessionType {
+        match self {
+            Self::Acp(_) => SessionType::Acp,
+            Self::Tmux(_) => SessionType::Tmux,
+            Self::Ui(_) => SessionType::Ui,
+            Self::Pubsub => SessionType::Pubsub,
+            #[cfg(feature = "pty")]
+            Self::Pty(_) => SessionType::Pty,
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => SessionType::Pty,
         }
     }
 

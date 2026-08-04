@@ -91,6 +91,10 @@ pub(super) fn collect_outcome(
     let (task, record_served, outcome) = match joined {
         Ok(value) => value,
         Err(_join_error) => {
+            // The panicked collector took the task with it, so there is no
+            // message id to release admission quota against and the entry is
+            // stranded. This is the outcome-less `JoinError` branch the guard
+            // work replaces with a guard-key lookup that can resolve it.
             async_worker::release_pending_slot(pending);
             return;
         }

@@ -1,3 +1,4 @@
+pub(in crate::relay) mod admission;
 mod async_worker;
 mod choice_state;
 mod dispatch;

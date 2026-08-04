@@ -460,6 +460,11 @@ pub(super) fn complete_task_outcome(
     task: &AsyncDeliveryTask,
     outcome: Result<SendResult, RelayError>,
 ) {
+    // Terminalization is the one transition that releases admission quota. The
+    // call is idempotent and keyed on the entry's own message id, so a
+    // relay-originated receipt — which bypassed admission because nothing was
+    // accepted for it — releases nothing.
+    super::admission::release(task.message_id.as_str());
     // The terminal outcome (and its reason), independent of the Ok/Err shape, so a
     // non-delivered outcome can be routed back to the sender as a receipt after the
     // observability floor is emitted below. A relay-side delivery error resolves to

@@ -16,9 +16,9 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 ### Relay queue, authorization, and guard
 
 - [ ] Add the queue entry state model — `Pending`, `Authorized`, `Terminal` — with `Batch ID`, `Member ID`, and a stable attempt ID
-- [ ] Implement admission: atomically reserve per-target and relay-global count and byte quota before returning `queued`
-- [ ] Reject at admission an envelope whose canonical payload exceeds the target transport's maximum handover dimensions
-- [ ] Reject a `Pubsub` target synchronously at admission with the existing not-implemented error, queueing and authorizing nothing
+- [x] Implement admission: atomically reserve per-target and relay-global count and byte quota before returning `queued`
+- [x] Reject at admission an envelope whose canonical payload exceeds the target transport's maximum handover dimensions
+- [x] Reject a `Pubsub` target synchronously at admission with the existing not-implemented error, queueing and authorizing nothing
 - [ ] Implement authorization as a relay-local transition that creates the batch's owner in the same atomic operation
 - [ ] Implement the relay-owned guard: keyed on `(batch, member, attempt, generation)` at authorization, atomically bound to `PackingUnit ID` at partition
 - [ ] Implement the single terminal CAS, releasing admission quota on that transition and nowhere else
@@ -52,7 +52,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 ### Readiness
 
 - [ ] Add the level-triggered `can_accept_handover` state to the transport contract, readable on demand
-- [ ] Add static maximum handover dimensions in envelope count and canonical payload bytes
+- [x] Add static maximum handover dimensions in envelope count and canonical payload bytes
 - [ ] Move prompt-readiness matching and quiescence observation relay-side, into the `Pending` phase
 - [ ] Wire the readiness notification as a relay-provided closure, with subscribe-before-check and a bounded poll backstop
 - [ ] Keep the activity signal as a transport-exposed observation the relay reads; delete the classifier's use of it

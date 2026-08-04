@@ -18,9 +18,9 @@ pub use crate::pty::{PtyTargetConfiguration, PtyTransport};
 pub use crate::tmux::TmuxTransport;
 pub use contract::{
     ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryMessage, DeliveryWaitError,
-    LookMode, OutcomeFuture, OutputView, PromptReadinessTemplate, ReadinessTimeoutReason,
-    SingleDeliveryOutcome, StartupContext, ThingToChoose, Transport, TransportError, TransportImpl,
-    TransportReadiness, TransportStatus,
+    HandoverDimensions, LookMode, OutcomeFuture, OutputView, PromptReadinessTemplate,
+    ReadinessTimeoutReason, SingleDeliveryOutcome, StartupContext, ThingToChoose, Transport,
+    TransportError, TransportImpl, TransportReadiness, TransportStatus,
 };
 pub use quiescence::{
     DIAGNOSTIC_MESSAGE_IDS_MAXIMUM, DeliveryDiagnosticContext, EMPTY_PANE_MISMATCH_PREFIX,
