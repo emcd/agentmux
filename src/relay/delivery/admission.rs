@@ -29,11 +29,13 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
+    time::{Duration, Instant},
 };
 
 use serde_json::json;
 
 use crate::configuration::{BundleConfiguration, SessionType};
+use crate::runtime::inscriptions::emit_inscription;
 use crate::transports::HandoverDimensions;
 
 use super::super::{RelayError, canonical_session_id, relay_error};
@@ -47,8 +49,17 @@ const QUEUED_ENVELOPES_PER_TARGET_MAX: usize = 1_000;
 /// Per-target admission quota, canonical payload bytes.
 const QUEUED_BYTES_PER_TARGET_MAX: u64 = 33_554_432;
 
+/// How long a target's oldest undelivered entry may age before its first-crossing
+/// warning.
+const UNDELIVERED_WARNING_MS: u64 = 1_800_000;
+/// Cadence of the periodic undelivered-queue aggregate.
+const UNDELIVERED_REPORT_INTERVAL_MS: u64 = 300_000;
+
 const ERROR_CODE_QUEUE_FULL: &str = "runtime_delivery_queue_full";
 const ERROR_CODE_PAYLOAD_TOO_LARGE: &str = "validation_payload_too_large";
+
+const INSCRIPTION_UNDELIVERED_AGGREGATE: &str = "relay.delivery.undelivered";
+const INSCRIPTION_UNDELIVERED_WARNING: &str = "relay.delivery.undelivered.warning";
 
 /// The four admission quota limits.
 ///
@@ -105,6 +116,11 @@ impl AdmissionTargetKey {
 struct AdmittedEntry {
     target: AdmissionTargetKey,
     canonical_bytes: u64,
+    /// When the entry was admitted, which is what the undelivered-queue warning
+    /// measures. It is a report of how long the relay has been waiting and never
+    /// an input to resolution: no code path compares it against a bound to decide
+    /// an outcome.
+    admitted_at: Instant,
 }
 
 /// Per-target usage. An entry is one envelope, so the count is the number of
@@ -113,6 +129,13 @@ struct AdmittedEntry {
 struct TargetUsage {
     envelopes: usize,
     bytes: u64,
+    /// Set when this target's first-crossing warning has been emitted, so a
+    /// backlogged target warns once rather than once per queued message.
+    ///
+    /// Re-arming is structural rather than a separate reset: the whole usage
+    /// record is dropped when the target's last entry terminalizes, so a target
+    /// that drains and re-accumulates warns again because its flag went with it.
+    warned: bool,
 }
 
 #[derive(Default)]
@@ -262,6 +285,7 @@ pub(in crate::relay) fn admit_with_limits(
         AdmittedEntry {
             target,
             canonical_bytes,
+            admitted_at: Instant::now(),
         },
     );
     Ok(())
@@ -288,6 +312,134 @@ pub(in crate::relay) fn release(message_id: &str) {
             state.per_target.remove(&entry.target);
         }
     }
+}
+
+/// Reporting cadence and threshold for the undelivered queue.
+///
+/// Separate from [`AdmissionLimits`] because these govern what the relay *says*
+/// rather than what it *accepts*: no value here can refuse, resolve, or reorder
+/// anything. The constants above are the spec's defaults, and the `[delivery]`
+/// configuration table will supply them without touching the reporting pass.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UndeliveredReporting {
+    /// How long a target's oldest undelivered entry may age before its
+    /// first-crossing warning.
+    pub warning: Duration,
+    /// Cadence of the periodic aggregate, and the clock the caller drives
+    /// [`report_undelivered_queue`] on.
+    pub interval: Duration,
+}
+
+impl Default for UndeliveredReporting {
+    fn default() -> Self {
+        Self {
+            warning: Duration::from_millis(UNDELIVERED_WARNING_MS),
+            interval: Duration::from_millis(UNDELIVERED_REPORT_INTERVAL_MS),
+        }
+    }
+}
+
+/// Reports the undelivered queue: one periodic aggregate, plus a first-crossing
+/// warning for each target that has newly aged past the threshold.
+///
+/// This is the only duration-triggered mechanism on the waiting side, and it is
+/// sound precisely because elapsing produces a record and nothing else. The pass
+/// reads reservations and writes inscriptions; it resolves no entry, releases no
+/// quota, and touches no scheduling position. The single piece of state it does
+/// write is each target's warned flag, which exists only to suppress a repeat of
+/// its own inscription.
+pub fn report_undelivered_queue(reporting: UndeliveredReporting) {
+    let now = Instant::now();
+    let Ok(mut state) = lock_ledger() else {
+        return;
+    };
+
+    // Oldest entry and count per target, in one pass over the live reservations.
+    let mut oldest: HashMap<AdmissionTargetKey, Instant> = HashMap::new();
+    for entry in state.entries.values() {
+        oldest
+            .entry(entry.target.clone())
+            .and_modify(|current| {
+                if entry.admitted_at < *current {
+                    *current = entry.admitted_at;
+                }
+            })
+            .or_insert(entry.admitted_at);
+    }
+
+    // An idle relay emits nothing rather than a recurring zero.
+    if !state.entries.is_empty() {
+        let mut targets: Vec<_> = state
+            .per_target
+            .iter()
+            .map(|(target, usage)| {
+                json!({
+                    "namespace": target.namespace,
+                    "target_session": target.target_session,
+                    "undelivered_envelopes": usage.envelopes,
+                    "undelivered_bytes": usage.bytes,
+                    "oldest_age_ms": oldest
+                        .get(target)
+                        .map_or(0, |admitted_at| duration_ms(now, *admitted_at)),
+                })
+            })
+            .collect();
+        // Stable ordering: an operator diffing consecutive aggregates should see
+        // queue movement, not HashMap iteration order.
+        targets.sort_by(|left, right| {
+            left["target_session"]
+                .as_str()
+                .cmp(&right["target_session"].as_str())
+        });
+        emit_inscription(
+            INSCRIPTION_UNDELIVERED_AGGREGATE,
+            &json!({
+                "undelivered_envelopes_total": state.global.envelopes,
+                "undelivered_bytes_total": state.global.bytes,
+                "target_total": targets.len(),
+                "targets": targets,
+            }),
+        );
+    }
+
+    // First-crossing warnings, deduplicated per target rather than per entry: a
+    // backlogged target whose entries all cross together is one condition an
+    // operator acts on, not one condition per queued message.
+    let crossed: Vec<(AdmissionTargetKey, u64)> = oldest
+        .into_iter()
+        .filter_map(|(target, admitted_at)| {
+            let age = now.saturating_duration_since(admitted_at);
+            if age < reporting.warning {
+                return None;
+            }
+            let usage = state.per_target.get(&target)?;
+            if usage.warned {
+                return None;
+            }
+            Some((target, duration_ms(now, admitted_at)))
+        })
+        .collect();
+    for (target, oldest_age_ms) in crossed {
+        let Some(usage) = state.per_target.get_mut(&target) else {
+            continue;
+        };
+        usage.warned = true;
+        let undelivered_envelopes = usage.envelopes;
+        emit_inscription(
+            INSCRIPTION_UNDELIVERED_WARNING,
+            &json!({
+                "namespace": target.namespace,
+                "target_session": target.target_session,
+                "undelivered_envelopes": undelivered_envelopes,
+                "oldest_age_ms": oldest_age_ms,
+                "warning_ms": reporting.warning.as_millis() as u64,
+            }),
+        );
+    }
+}
+
+fn duration_ms(now: Instant, since: Instant) -> u64 {
+    u64::try_from(now.saturating_duration_since(since).as_millis()).unwrap_or(u64::MAX)
 }
 
 /// Which of the four limits an admission would breach, checked in a fixed order

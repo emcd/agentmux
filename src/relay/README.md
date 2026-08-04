@@ -170,6 +170,17 @@ exported from `src/relay/mod.rs`.
     this target" judgement (`resolve_target_session_type`,
     `target_is_relay_wide`), because admission is the first point that needs it
     and the delivery worker delegates to it rather than deciding again.
+    Also owns undelivered-queue reporting, driven on an interval arm in the
+    relay host's accept loop: a periodic aggregate (suppressed entirely when
+    nothing is waiting, so an idle relay writes no recurring zero) and a
+    first-crossing warning per target. The warning is deduplicated per target
+    rather than per entry, because the condition an operator acts on is that a
+    target is not draining; re-arming is structural, since a target's usage
+    record — and with it the warned flag — is dropped when its last entry
+    terminalizes. Neither emission resolves an entry, releases quota, or changes
+    a scheduling position: this is the only duration-triggered mechanism left on
+    the waiting side, and it is sound because elapsing produces a record and
+    nothing else.
   - `dispatch/mod.rs`: delivery dispatch re-export hub.
   - `dispatch/orchestration.rs`: delivery startup, ACP target priming, and the
     enqueue path that registers/feeds the per-target worker.

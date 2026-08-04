@@ -491,3 +491,137 @@ fn count_bravo_queued_inscriptions(path: &std::path::Path) -> usize {
         })
         .count()
 }
+
+/// The periodic aggregate reports the undelivered queue and is suppressed
+/// entirely when nothing is waiting, so an idle relay writes nothing rather than
+/// a recurring zero.
+#[test]
+fn undelivered_aggregate_reports_the_queue_and_is_suppressed_when_empty() {
+    use agentmux::relay::{UndeliveredReporting, report_undelivered_queue};
+
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let reporting = UndeliveredReporting::default();
+
+    // Nothing admitted yet: the aggregate is suppressed.
+    report_undelivered_queue(reporting);
+    assert_eq!(
+        count_inscriptions(&inscriptions, "relay.delivery.undelivered"),
+        0,
+        "an idle relay emits no aggregate"
+    );
+
+    dispatch_request(
+        RelayRequest::Send {
+            request_id: None,
+            requester_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["user@GLOBAL".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(1),
+            on_behalf_of: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect("send response");
+
+    report_undelivered_queue(reporting);
+    let aggregates = read_inscriptions(&inscriptions, "relay.delivery.undelivered");
+    assert_eq!(aggregates.len(), 1, "one aggregate for one queued entry");
+    assert!(
+        aggregates[0].contains("\"undelivered_envelopes_total\":1")
+            && aggregates[0].contains("\"target_session\":\"user@GLOBAL\""),
+        "aggregate names the queued target and count: {}",
+        aggregates[0]
+    );
+}
+
+/// A backlogged target warns exactly once, however many entries cross the
+/// threshold together, and the remaining entries surface only in its count. The
+/// dedup is the claim, so the test queues several entries rather than one: with
+/// per-entry dedup this emits three warnings instead of one.
+#[test]
+fn undelivered_warning_is_deduplicated_per_target_not_per_entry() {
+    use agentmux::relay::{UndeliveredReporting, report_undelivered_queue};
+
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    for _ in 0..3 {
+        dispatch_request(
+            RelayRequest::Send {
+                request_id: None,
+                requester_session: "alpha".to_string(),
+                message: "hello".to_string(),
+                targets: vec!["user@GLOBAL".to_string()],
+                broadcast: false,
+                quiet_window_ms: Some(1),
+                on_behalf_of: None,
+            },
+            &config_root,
+            "party",
+            &tmux_socket,
+        )
+        .expect("send response");
+    }
+
+    // A zero threshold makes every queued entry already past it, so all three
+    // cross together — the condition the per-target dedup exists to handle.
+    let reporting = UndeliveredReporting {
+        warning: std::time::Duration::ZERO,
+        ..UndeliveredReporting::default()
+    };
+    report_undelivered_queue(reporting);
+    let warnings = read_inscriptions(&inscriptions, "relay.delivery.undelivered.warning");
+    assert_eq!(
+        warnings.len(),
+        1,
+        "three entries crossing together warn once, not once each: {warnings:?}"
+    );
+    assert!(
+        warnings[0].contains("\"undelivered_envelopes\":3"),
+        "the warning carries the target's full pending count: {}",
+        warnings[0]
+    );
+
+    // Still backlogged, still warned: a second pass repeats the aggregate but not
+    // the warning.
+    report_undelivered_queue(reporting);
+    assert_eq!(
+        count_inscriptions(&inscriptions, "relay.delivery.undelivered.warning"),
+        1,
+        "a target that has already warned does not warn again while backlogged"
+    );
+    assert_eq!(
+        count_inscriptions(&inscriptions, "relay.delivery.undelivered"),
+        2,
+        "the aggregate repeats on each pass"
+    );
+}
+
+/// Counts inscription lines for exactly `event`. The aggregate and warning event
+/// names share a prefix, so matching on the closing quote keeps the aggregate
+/// count from absorbing warnings.
+fn count_inscriptions(path: &std::path::Path, event: &str) -> usize {
+    read_inscriptions(path, event).len()
+}
+
+fn read_inscriptions(path: &std::path::Path, event: &str) -> Vec<String> {
+    let needle = format!("\"event\":\"{event}\"");
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains(needle.as_str()))
+        .map(str::to_string)
+        .collect()
+}

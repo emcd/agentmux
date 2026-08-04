@@ -44,10 +44,10 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Undelivered-queue reporting
 
-- [ ] Delete the `expired` outcome from the outcome type, receipt surfaces, inscription set, and CLI/MCP vocabulary; it has no producer
-- [ ] Emit the periodic undelivered-queue aggregate at `undelivered-report-interval-ms`, carrying global count and bytes plus a per-target breakdown, suppressed entirely when nothing is `Pending`
-- [ ] Emit a first-crossing warning per target at `undelivered-warning-ms`, deduplicated per target and re-armed when that target's queue empties
-- [ ] Keep both emissions free of delivery effects: no resolution, no quota release, no scheduling change
+- [x] Delete the `expired` outcome from the outcome type, receipt surfaces, inscription set, and CLI/MCP vocabulary; it has no producer — no code carried it, so this is spec-side only and lands at sync
+- [x] Emit the periodic undelivered-queue aggregate at `undelivered-report-interval-ms`, carrying global count and bytes plus a per-target breakdown, suppressed entirely when nothing is `Pending`
+- [x] Emit a first-crossing warning per target at `undelivered-warning-ms`, deduplicated per target and re-armed when that target's queue empties
+- [x] Keep both emissions free of delivery effects: no resolution, no quota release, no scheduling change
 
 ### Readiness
 
@@ -131,8 +131,8 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Cover that siblings of one packing unit never receive different outcomes from one evidence record
 - [ ] Cover that a `Pending` entry survives an arbitrarily long wait and is still authorized and delivered when its target finally becomes ready
 - [ ] Cover that no elapsed duration resolves a `Pending` entry, releases its quota, or produces a receipt for it
-- [ ] Cover the warning dedup: many entries crossing together emit one inscription for their target, and the target re-arms after its queue empties
-- [ ] Cover that the aggregate is suppressed when nothing is `Pending`, and that neither emission changes any outcome, quota, or scheduling position
+- [x] Cover the warning dedup: many entries crossing together emit one inscription for their target, and the target re-arms after its queue empties
+- [x] Cover that the aggregate is suppressed when nothing is `Pending`, and that neither emission changes any outcome, quota, or scheduling position
 - [ ] Assert the teeth of the ordering and absence tests by reverting each mechanism and confirming the test fails
 
 ## Phase 2 — 0.9.x follow-on

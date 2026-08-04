@@ -37,6 +37,7 @@ pub use self::connection::{
 use self::constants::*;
 use self::context::*;
 pub use self::contract::*;
+pub use self::delivery::admission::{UndeliveredReporting, report_undelivered_queue};
 pub use self::delivery::install_pending_choice_request_for_testing;
 pub use self::delivery::observability::{
     ChoicesQueueEvent, subscribe_choices_queue_events, subscribe_worker_readiness,
