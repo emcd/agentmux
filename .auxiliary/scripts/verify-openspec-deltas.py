@@ -52,27 +52,35 @@ from pathlib import Path
 REQUIREMENT = "### Requirement:"
 SCENARIO = "#### Scenario:"
 
-# The planning home, relative to the repository root. The repository also
-# carries an `openspec/` symlink to this directory, but that symlink is
-# untracked and listed in `.git/info/exclude`, so it exists only in worktrees
-# where somebody created it by hand. Shelling out to `openspec status` to
-# resolve these paths therefore fails in a fresh clone. Deriving them from this
-# script's own location instead is deterministic everywhere.
-PLANNING_HOME = Path("documentation/architecture/openspec")
+# Candidate planning homes, relative to the repository root, in priority order.
+#
+# `openspec/` at the root is the canonical location -- it is what `openspec init`
+# creates. This repository keeps the real tree under `documentation/architecture/`
+# for historical reasons and reaches it through a root `openspec` symlink, so the
+# first candidate resolves correctly here too.
+#
+# The second candidate is not redundant: that symlink is untracked and listed in
+# `.git/info/exclude`, so it exists only where somebody created it by hand. A
+# fresh clone or a new worktree has no `openspec/` at all, which is why resolving
+# these paths by shelling out to `openspec` fails there. Deriving them from this
+# script's own location works in every case.
+PLANNING_HOMES = (Path("openspec"), Path("documentation/architecture/openspec"))
 
 
 def resolve_paths(change_id):
     """Return (change_specs_dir, live_specs_dir) for a change."""
     repo_root = Path(__file__).resolve().parents[2]
-    home = repo_root / PLANNING_HOME
-    if not home.is_dir():
-        # Fall back to the symlink for a layout this constant has outlived.
-        home = (repo_root / "openspec").resolve()
-    if not home.is_dir():
-        sys.exit(
-            f"cannot locate the OpenSpec planning home; looked for "
-            f"{repo_root / PLANNING_HOME} and {repo_root / 'openspec'}"
-        )
+    home = next(
+        (
+            (repo_root / candidate).resolve()
+            for candidate in PLANNING_HOMES
+            if (repo_root / candidate).is_dir()
+        ),
+        None,
+    )
+    if home is None:
+        looked = " and ".join(str(repo_root / c) for c in PLANNING_HOMES)
+        sys.exit(f"cannot locate the OpenSpec planning home; looked for {looked}")
     change_root = home / "changes" / change_id
     if not change_root.is_dir():
         sys.exit(f"no such change: '{change_id}' (looked in {home / 'changes'})")
