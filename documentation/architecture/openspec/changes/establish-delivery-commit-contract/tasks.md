@@ -73,8 +73,8 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Keep steps 1 and 3 distinct, so a cooperatively stoppable executor is never force-terminated
 - [x] Make both observations non-blocking with their own clock, never a blocking join, each bounded by `[delivery].fence-observation-timeout-ms`
 - [x] Add a generation termination primitive to the transport contract, contracted to *initiate* cessation of every generation-owned effect path and return without blocking
-- [x] Implement step 3 per transport as initiation only: ACP and Pty signal the child to terminate; Tmux signals its owned client invocations, never the server; UI drops the generation's broadcaster handle and subscriber senders
-- [x] Observe the results in step 4 — child reaped, invocations exited, executor returned — never inside the step 3 call
+- [ ] Implement step 3 per transport as initiation only: ACP and Pty signal the child to terminate; Tmux signals its owned client invocations, never the server; UI drops the generation's broadcaster handle and subscriber senders. Done for a steady-state ACP generation, Pty, Tmux, and UI; NOT done for an ACP bootstrap, whose child is unreachable from the fence
+- [ ] Observe the results in step 4 — child reaped, invocations exited, executor returned — never inside the step 3 call. Done for the steady-state child, tmux invocations, and the delivery/permission executors; an ACP bootstrap is observed only as running, and its child's reaping is not
 - [x] Make a successful primitive invocation not itself acknowledge the fence; only observed cessation does
 - [x] Make the fence positive only on observed cessation, and route both timeout and failure to the negative branch
 - [ ] Keep the fence negative when cessation is not observed: admit no replacement for that target, hold its raw barrier, record the condition, and still resolve every member through the guard. The negative registry state was deleted with the watchdog trigger, and shutdown exercises no replacement; lands again with arming

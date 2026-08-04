@@ -984,7 +984,7 @@ mod tests {
         );
         let (sender_tx, mut sender_rx) =
             tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        let _owner = register_worker(
+        let sender_owner = register_worker(
             sender_key.clone(),
             sender_tx,
             Arc::new(AtomicUsize::new(0)),
@@ -1070,7 +1070,7 @@ mod tests {
             "the receipt must not route to a worker at the target key"
         );
 
-        unregister_worker(&sender_key, owner);
+        unregister_worker(&sender_key, sender_owner);
         unregister_worker(&target_key, owner);
     }
 

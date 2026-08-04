@@ -318,18 +318,29 @@ fn load_tmux_buffer(tmux_socket: &Path, buffer_name: &str, text: &str) -> Result
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|source| source.to_string())?;
-    {
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| "failed to capture tmux load-buffer stdin".to_string())?;
+    // Detach stdin and publish the child *before* writing a byte. The write can
+    // park: a client that stops reading lets the pipe fill, and the executor
+    // blocks in `write_all` with nothing left to interrupt it. Publishing after
+    // the write left exactly that interval with an empty slot, so the fence's
+    // forced step had nothing to signal — the one case it exists for.
+    let stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "failed to capture tmux load-buffer stdin".to_string())?;
+    let (owned, stdout, stderr) = PublishedInvocation::record(child);
+    let write_result = {
+        let mut stdin = stdin;
         stdin
             .write_all(text.as_bytes())
-            .map_err(|source| source.to_string())?;
-    }
-    let (owned, stdout, stderr) = PublishedInvocation::record(child);
+            .map_err(|source| source.to_string())
+        // Dropped here, closing the client's stdin so it sees EOF and exits.
+    };
+    // Reap before propagating a write failure. Returning early would drop the
+    // guard without reaping, leaving a zombie and a stale entry in the slot that
+    // a later forced step would signal.
     let drained = drain_invocation_pipes(stdout, stderr);
     let status = owned.reap().map_err(|source| source.to_string())?;
+    write_result?;
     let (_stdout, stderr_bytes) = drained.map_err(|source| source.to_string())?;
     if status.success() {
         return Ok(());

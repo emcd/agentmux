@@ -301,13 +301,13 @@ mod tests {
         let target_key =
             build_worker_key(target_namespace, Path::new(target_runtime), target_session);
         let (target_tx, mut target_rx) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        let owner = register_worker(
+        let target_owner = register_worker(
             target_key.clone(),
             target_tx,
             Arc::new(AtomicUsize::new(0)),
             false,
         );
-        close_worker(&target_key, owner);
+        close_worker(&target_key, target_owner);
 
         // A live sender worker: the DroppedOnShutdown receipt should land here.
         let sender_key = build_worker_key(
@@ -378,7 +378,7 @@ mod tests {
             receipt.message
         );
 
-        unregister_worker(&target_key, owner);
+        unregister_worker(&target_key, target_owner);
         unregister_worker(&sender_key, owner);
     }
 }
