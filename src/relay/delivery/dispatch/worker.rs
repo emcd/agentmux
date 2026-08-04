@@ -59,6 +59,31 @@ pub(super) struct InflightMember {
     pub(super) authorized_at: Instant,
 }
 
+/// Where this worker's generation sits in its fence lifecycle.
+///
+/// Distinct from [`FenceInProgress`], which tracks the steps of one
+/// acknowledgment: this tracks whether the generation may accept work at all,
+/// and it is one-way.
+///
+/// The worker holds exactly one [`TransportImpl`] for its whole lifetime, so the
+/// worker instance *is* the generation. That equivalence is what makes sealing
+/// the right response to either verdict: a verdict ends the generation, ending
+/// the generation ends the worker, and a replacement generation is a new worker
+/// over a new transport — built by the next enqueue, which finds no registered
+/// worker. Clearing the fence and resuming would have resumed the *same* stopped
+/// transport, which is the one thing a fence exists to prevent.
+enum WorkerFence {
+    /// No fence has been initiated; the generation accepts submissions.
+    Open,
+    /// An acknowledgment is running. Submissions are refused for its duration —
+    /// the point of the fence is that this generation stops producing effects —
+    /// while outcome collection deliberately continues, because unit evidence
+    /// stays admissible through both observation windows.
+    Observing(FenceInProgress),
+    /// A verdict was reached. This generation is over and never reopens.
+    Sealed,
+}
+
 #[derive(Clone)]
 pub(super) struct AcpWorkerBootstrap {
     pub(super) target_member: BundleMember,
@@ -176,9 +201,18 @@ async fn run_async_delivery_worker(
     let delivery = super::super::admission::delivery_configuration();
     let submission_timeout = Duration::from_millis(delivery.submission_timeout_ms);
     let fence_observation = Duration::from_millis(delivery.fence_observation_timeout_ms);
-    let mut fence: Option<FenceInProgress> = None;
+    let mut fence = WorkerFence::Open;
 
     loop {
+        if matches!(fence, WorkerFence::Sealed) {
+            // The generation is over. The verdict already unregistered this
+            // worker under the registry lock, so no further task can enter the
+            // channel; what it still holds was accepted before that cut and has
+            // to be terminalized here rather than dropped. Then the worker goes,
+            // and the transport it owns goes with it.
+            drain_sealed_queue(&mut receiver, pending.as_ref());
+            break;
+        }
         if shutdown_requested() {
             // Close this worker to new sends BEFORE draining. Another worker
             // resolving a non-delivered outcome during its own shutdown routes a
@@ -201,8 +235,11 @@ async fn run_async_delivery_worker(
             .await;
             break;
         }
-        if senders_dropped && inflight.is_empty() {
+        if senders_dropped && inflight.is_empty() && !matches!(fence, WorkerFence::Observing(_)) {
             // No more producers and nothing in flight: the worker is unreachable.
+            // An in-progress fence is the exception — leaving before its verdict
+            // would skip the negative marking, which is the only thing that stops
+            // a replacement being admitted for a generation never proven stopped.
             break;
         }
         // The watchdog runs before the select so an elapsed member is noticed on
@@ -223,7 +260,7 @@ async fn run_async_delivery_worker(
         tokio::select! {
             // A fenced generation accepts no new submissions: the whole point of
             // the fence is that this generation stops producing effects.
-            maybe_task = receiver.recv(), if !senders_dropped && fence.is_none() => {
+            maybe_task = receiver.recv(), if !senders_dropped && matches!(fence, WorkerFence::Open) => {
                 match maybe_task {
                     Some(task) => {
                         if shutdown_requested() {
@@ -254,7 +291,13 @@ async fn run_async_delivery_worker(
             }
         }
     }
-    super::super::async_worker::unregister_worker(&key);
+    if !matches!(fence, WorkerFence::Sealed) {
+        // A sealed worker already unregistered at its verdict, and a replacement
+        // may have registered in the meantime. Unregistering by key alone would
+        // remove that successor's entry, dropping the only sender for a live
+        // worker — so the exit path defers to the cut the verdict already made.
+        super::super::async_worker::unregister_worker(&key);
+    }
 }
 
 /// Submits one task to its transport via the non-blocking write seam and spawns
@@ -361,7 +404,7 @@ fn submit_task(
 fn advance_execution_watchdog(
     key: &AsyncWorkerKey,
     transport: &mut TransportImpl,
-    fence: &mut Option<FenceInProgress>,
+    fence: &mut WorkerFence,
     inflight: &mut JoinSet<InflightOutcome>,
     inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
     pending: &std::sync::atomic::AtomicUsize,
@@ -369,23 +412,28 @@ fn advance_execution_watchdog(
     fence_observation: Duration,
 ) {
     let now = Instant::now();
-    let Some(in_progress) = fence.as_mut() else {
-        let overrun = inflight_members
-            .values()
-            .any(|member| now.duration_since(member.authorized_at) >= submission_timeout);
-        if overrun {
-            emit_inscription(
-                "relay.delivery.watchdog.elapsed",
-                &json!({
-                    "namespace": key.namespace,
-                    "target_session": key.target_session,
-                    "submission_timeout_ms": submission_timeout.as_millis() as u64,
-                    "unresolved_members": inflight_members.len(),
-                }),
-            );
-            *fence = Some(FenceInProgress::begin(transport, fence_observation));
+    let in_progress = match fence {
+        WorkerFence::Sealed => return,
+        WorkerFence::Observing(in_progress) => in_progress,
+        WorkerFence::Open => {
+            let overrun = inflight_members
+                .values()
+                .any(|member| now.duration_since(member.authorized_at) >= submission_timeout);
+            if overrun {
+                emit_inscription(
+                    "relay.delivery.watchdog.elapsed",
+                    &json!({
+                        "namespace": key.namespace,
+                        "target_session": key.target_session,
+                        "submission_timeout_ms": submission_timeout.as_millis() as u64,
+                        "unresolved_members": inflight_members.len(),
+                    }),
+                );
+                *fence =
+                    WorkerFence::Observing(FenceInProgress::begin(transport, fence_observation));
+            }
+            return;
         }
-        return;
     };
 
     // Nothing is terminalized at the bound itself: unit evidence stays
@@ -394,7 +442,27 @@ fn advance_execution_watchdog(
     let Some(outcome) = in_progress.advance(transport, now) else {
         return;
     };
-    *fence = None;
+    *fence = WorkerFence::Sealed;
+
+    // Close the target off before anything else, and in this order. A negative
+    // verdict has to reach the enqueue gate first, because that gate is what
+    // refuses a *replacement* generation; unregistering first would let an
+    // enqueue racing the verdict take the missing-worker path and spawn exactly
+    // the second generation the negative verdict exists to forbid. Both
+    // decisions land before a single member is reported, so no outcome this
+    // worker publishes can be observed by a sender that then finds the target
+    // still open.
+    if outcome.verdict == FenceVerdict::Negative {
+        // Fail-stop. A target that admits no new generation is recoverable by
+        // operator action; one whose old generation might still be writing while
+        // a replacement runs is not.
+        super::super::async_worker::mark_generation_fence_negative(key);
+    }
+    // Unregistering happens under the registry lock, which `try_existing_worker`
+    // also holds across its check-and-send. That makes this a clean cut rather
+    // than a race: every send after it finds no worker, and every send before it
+    // is already in the channel, where the sealed drain terminalizes it.
+    super::super::async_worker::unregister_worker(key);
 
     emit_inscription(
         "relay.delivery.fence.verdict",
@@ -427,12 +495,24 @@ fn advance_execution_watchdog(
         );
         super::super::async_worker::release_pending_slot(pending);
     }
+}
 
-    if outcome.verdict == FenceVerdict::Negative {
-        // Fail-stop. A target that admits no new generation is recoverable by
-        // operator action; one whose old generation might still be writing while
-        // a replacement runs is not.
-        super::super::async_worker::mark_generation_fence_negative(key);
+/// Terminalizes the tasks a sealed worker still holds in its channel.
+///
+/// These were accepted before the verdict's registry cut but never authorized
+/// and never handed to a transport, so the guard's evidence order proves
+/// `not_submitted` for them rather than inferring the weaker unknown. Dropping
+/// them instead would strand a sender waiting on an outcome that never comes.
+fn drain_sealed_queue(
+    receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
+    pending: &std::sync::atomic::AtomicUsize,
+) {
+    while let Ok(task) = receiver.try_recv() {
+        super::super::async_worker::complete_task_outcome_from_trigger(
+            &task,
+            GuardTrigger::FenceVerdict,
+        );
+        super::super::async_worker::release_pending_slot(pending);
     }
 }
 

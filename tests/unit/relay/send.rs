@@ -843,6 +843,90 @@ fn the_execution_watchdog_fences_an_overrunning_member_instead_of_waiting() {
     );
 }
 
+/// A fence verdict ends the generation, so the next send gets a new one.
+///
+/// This is the assertion that bites on resuming a stopped transport. The worker
+/// holds one transport for its lifetime, so "a new generation" is observable as
+/// *a new worker doing the whole thing again*: a second send that lands on the
+/// old, already-fenced transport would be refused by that transport's own fenced
+/// flag within a poll interval and would therefore produce no watchdog and no
+/// verdict of its own. Seeing a second matched pair is what proves the second
+/// send ran the full reconnect wait against a transport that had never been
+/// fenced.
+///
+/// Deliberately positive-verdict: a negative verdict closes the target at the
+/// enqueue gate, so it could not distinguish sealing from refusal.
+#[test]
+fn a_fence_verdict_ends_the_generation_and_the_next_send_gets_a_new_one() {
+    use agentmux::relay::{DeliveryConfiguration, configure_delivery};
+
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    configure_delivery(DeliveryConfiguration {
+        submission_timeout_ms: 500,
+        fence_observation_timeout_ms: 100,
+        ..DeliveryConfiguration::default()
+    });
+
+    let send = |body: &str| {
+        dispatch_request(
+            RelayRequest::Send {
+                request_id: None,
+                requester_session: "alpha".to_string(),
+                message: body.to_string(),
+                targets: vec!["user@GLOBAL".to_string()],
+                broadcast: false,
+                quiet_window_ms: Some(1),
+                on_behalf_of: None,
+            },
+            &config_root,
+            "party",
+            &tmux_socket,
+        )
+    };
+
+    send("first").expect("first send response");
+    let first_verdict = await_inscription(&inscriptions, "relay.delivery.fence.verdict");
+    assert!(
+        first_verdict.contains("\"verdict\":\"positive\""),
+        "the UI executor observes the fenced flag and ceases: {first_verdict}"
+    );
+
+    // The target is not fenced negative, so it still admits work — through a
+    // replacement generation, which is the whole point.
+    send("second").expect("second send accepted after a positive verdict");
+
+    await_inscription_count(&inscriptions, "relay.delivery.watchdog.elapsed", 2);
+    await_inscription_count(&inscriptions, "relay.delivery.fence.verdict", 2);
+    assert_eq!(
+        count_inscriptions(&inscriptions, "relay.send.async.completed"),
+        2,
+        "one terminal record per member, and no more"
+    );
+}
+
+/// Polls until at least `count` inscription lines exist for `event`.
+fn await_inscription_count(path: &std::path::Path, event: &str, count: usize) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let seen = count_inscriptions(path, event);
+        if seen >= count {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "only {seen} of {count} {event} inscriptions within 5s; log:\n{}",
+            std::fs::read_to_string(path).unwrap_or_default()
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 /// Polls for the first inscription line for `event`. The terminal record is
 /// written by the delivery worker task rather than on the request path, so it is
 /// not present when the send response returns.
