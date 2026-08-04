@@ -194,7 +194,12 @@ fn await_inscription(path: &Path, event: &str, scope: &str) -> String {
 /// The scenario is built from a first agent that disconnects on its prompt — so
 /// the monitor starts a respawn — and a second that blocks inside `initialize`,
 /// holding that respawn's bootstrap open across the signal.
+///
+/// Ignored by default because holding a bootstrap open across a signal costs
+/// about thirty seconds, which is too much to pay on every commit. The pre-push
+/// hook runs it; see `.auxiliary/configuration/pre-commit.yaml`.
 #[test]
+#[ignore = "~30s: holds a bootstrap open across a signal; run at pre-push"]
 fn a_fence_does_not_report_cessation_while_a_bootstrap_runs() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
