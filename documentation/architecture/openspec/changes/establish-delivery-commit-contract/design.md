@@ -456,7 +456,7 @@ collector, and transport task. A keyed map plus a CAS is not enough on its own â
 it cannot observe a detached Tmux or UI thread, a worker-task panic, a collector
 panic, or a generation replacement. **Guard identity is created in two atomic steps**, because a packing unit does
 not exist at authorization. A guard is created at authorization bound to
-`(batch ID, member ID, attempt ID, transport generation)`; when the transport
+`(batch ID, member ID, attempt ID)`; when the transport
 records its partition, each guard is **atomically bound to its `PackingUnit ID`**.
 A pre-partition refusal or panic therefore terminalizes through the
 batch/member-level guard without requiring a unit ID that was never assigned. An

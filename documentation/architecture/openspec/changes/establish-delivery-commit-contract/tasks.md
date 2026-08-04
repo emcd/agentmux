@@ -20,7 +20,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Reject at admission an envelope whose canonical payload exceeds the target transport's maximum handover dimensions
 - [x] Reject a `Pubsub` target synchronously at admission with the existing not-implemented error, queueing and authorizing nothing
 - [x] Implement authorization as a relay-local transition that creates the batch's owner in the same atomic operation
-- [ ] Implement the relay-owned guard: keyed on `(batch, member, attempt, generation)` at authorization, atomically bound to `PackingUnit ID` at partition — creation at authorization is done; the `PackingUnit ID` binding lands with partition, and stands in meanwhile on whether the member was handed to a transport
+- [ ] Implement the relay-owned guard: keyed on `(batch, member, attempt)` at authorization, atomically bound to `PackingUnit ID` at partition — creation at authorization is done; the `PackingUnit ID` binding lands with partition, and stands in meanwhile on whether the member was handed to a transport
 - [x] Implement the single terminal CAS, releasing admission quota on that transition and nowhere else
 - [x] Implement the guard resolution order once: unit record if present, else `not_submitted` for a member never bound to a unit, else `submission_unknown`
 - [x] Implement the mandatory post-authorization execution watchdog bounded by `[delivery].submission-timeout-ms`, anchored at authorization
@@ -97,7 +97,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] ACP: remove the staging queue so an authorized batch starts a supervised executor synchronously
 - [ ] ACP: record `Submitted` immediately after the framed `session/prompt` write succeeds, before replay-buffer locks or `on_dispatched`
 - [ ] ACP: map active-prompt refusal and serialization failure to `not_submitted`, and a stdin write or flush error without proof of zero bytes to `submission_unknown`
-- [ ] ACP: retain the client/child thread handle so the generation can be fenced (see `agentmux:todos/relay/128`)
+- [x] ACP: retain the client/child thread handle so the generation can be fenced (see `agentmux:todos/relay/128`)
 - [ ] ACP: delete the prime timer, `acp_turn_timeout`, and the readiness latch and respawn signal it drove
 - [ ] Delete `src/transports/quiescence.rs` and the `WedgeProbe` trait
 
@@ -121,11 +121,11 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Remove `#[ignore]` from `pty_envelope_absorbed_during_wait_reaches_the_master`; it passing is the `agentmux:issues/relay/62` acceptance criterion
 - [ ] Cover exactly-once resolution under worker panic, collector panic, transport panic mid-partition and after partial submission, closed outcome channel, generation replacement in flight, and graceful shutdown with mixed `Pending`/`Authorized`
 - [ ] Cover that quota returns to zero after each of those, and that the per-target FIFO still makes progress
-- [ ] Cover fence acknowledgment ordering: against an executor blocked in a primitive that observes no flag, the first observation window does not complete, and cessation is observed only after the termination primitive has been invoked
+- [x] Cover fence acknowledgment ordering: against an executor blocked in a primitive that observes no flag, the first observation window does not complete, and cessation is observed only after the termination primitive has been invoked
 - [ ] Cover the execution watchdog: an executor that stays alive and blocked past `submission-timeout-ms` initiates the fence and terminalizes nothing at the bound; still-unresolved members terminalize through the guard at the verdict, releasing quota there, and the target's FIFO stays blocked unless that verdict is positive
 - [ ] Cover that the watchdog does not override stronger evidence, and that it produces no failure spelling and no target-health inference
-- [ ] Cover the cooperative path: an executor that observes the fenced flag ceases in the first window and the termination primitive never fires
-- [ ] Cover the escalation path: the first window elapses, the termination primitive fires, cessation is observed within the second window, and the fence becomes positive
+- [x] Cover the cooperative path: an executor that observes the fenced flag ceases in the first window and the termination primitive never fires
+- [x] Cover the escalation path: the first window elapses, the termination primitive fires, cessation is observed within the second window, and the fence becomes positive
 - [ ] Cover the fail-stop path: cessation not observed when the second window elapses leaves the fence negative, blocks replacement, and still resolves every member
 - [ ] Cover that a UI generation terminates without an owned child, and that fencing a Tmux generation leaves the server running
 - [ ] Cover that an unbound member resolves `not_submitted` under every trigger, and that a recorded `Submitted` is not downgraded by a generation replacement
