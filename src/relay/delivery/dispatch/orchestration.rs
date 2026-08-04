@@ -153,19 +153,6 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
         task.runtime_directory.as_path(),
         task.target_session.as_str(),
     );
-    // Fail-stop: this target's generation could not be proven to have stopped
-    // executing, so admitting a replacement risks two generations writing to the
-    // same target at once. Refusing here is recoverable by operator action; that
-    // overlap is not.
-    if super::super::async_worker::generation_fence_is_negative(&key) {
-        return Err(super::super::super::relay_error(
-            "runtime_target_fence_negative",
-            "target admits no new delivery generation after a negative fence verdict",
-            Some(json!({
-                "target_session": task.target_session,
-            })),
-        ));
-    }
     if bounded_acp_queue && !super::super::async_worker::worker_exists(&key)? {
         return Err(super::super::super::relay_error(
             "runtime_acp_worker_unavailable",

@@ -217,16 +217,21 @@ exported from `src/relay/mod.rs`.
     fence as one future would stop collecting the very outcomes the fence exists
     to let it keep collecting. `acknowledge_fence` is a thin awaiting driver over
     the same state machine, so there is one implementation.
-  - The **execution watchdog** lives in `dispatch/worker.rs`, anchored at
-    authorization and bounded by `[delivery].submission-timeout-ms`. It is a
-    bound over the relay's own supervised code — it says our execution overran
-    the time we allow it, never that the target failed, which is what separates
-    it from the absence timers this change retires. On elapse it initiates the
-    fence and terminalizes nothing; the verdict is the single resolution cut,
-    and every still-unresolved member terminalizes there through the guard's
-    evidence order from *either* verdict. A negative verdict withholds the
-    target's replacement (further sends are refused
-    `runtime_target_fence_negative`), never a member's outcome.
+    Graceful shutdown is the only thing that fences a generation today, in
+    `shutdown_drain`. The verdict is the resolution cut: still-unresolved members
+    terminalize there through the guard's evidence order from *either* verdict,
+    and only a positive one proceeds to the transport's own teardown — a negative
+    verdict is the finding that those executors were never observed to stop, so
+    reaping and joining them would run the bounded fence straight back into the
+    unbounded wait it exists to replace.
+
+    The **execution watchdog** that `[delivery].submission-timeout-ms` describes
+    is not armed. The bound is over the relay's own supervised code, and it only
+    *is* that once transports record submission evidence at write time: today
+    every coder transport resolves its outcome future after the target has
+    finished responding, so a bound anchored at authorization measures the
+    agent's inference and fences a healthy target mid-turn. Arming lands with the
+    transport-side submission-evidence work, not before it.
   - `dispatch/mod.rs`: delivery dispatch re-export hub.
   - `dispatch/orchestration.rs`: delivery startup, ACP target priming, and the
     enqueue path that registers/feeds the per-target worker.

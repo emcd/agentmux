@@ -25,9 +25,12 @@ use super::helpers::*;
 /// stopped while its child was still alive and its reader still parked in
 /// `read_line`.
 ///
-/// The load-bearing assertion is the dead child. A positive verdict alone would
-/// not discriminate: the failure mode produces one too, by observing an executor
-/// set it never had.
+/// **What this does not prove.** It does not discriminate ACP's forced
+/// termination primitive. On the shutdown path the cooperative step reaches the
+/// agent by other means, so the fence still reaches a positive verdict with that
+/// primitive reverted. Termination's teeth were only demonstrable under the
+/// execution watchdog, which is no longer armed; if it is re-armed, restore the
+/// watchdog-driven variant of this test with it.
 ///
 /// The second half asserts the invariant that lets the guard key drop its
 /// generation component: a fenced generation admits no replacement. The dying
@@ -35,16 +38,21 @@ use super::helpers::*;
 /// bootstrapping a fresh one — a second live agent for a target the relay has
 /// just declared stopped. Counting the agents the stub ever started is what
 /// catches that, because the relay's own account of a generation cannot.
+///
+/// Driven by a real SIGTERM, because graceful shutdown is the only thing that
+/// fences a generation today. The execution watchdog that used to drive this is
+/// unarmed: anchored at authorization, it measured the agent's inference rather
+/// than the relay's own execution, and fenced healthy targets mid-turn.
 #[test]
 fn a_fenced_acp_generation_leaves_no_surviving_child() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
 
-    // A turn that never comes back, so the watchdog elapses with the member
-    // still unresolved. Deliberately not a `sleep`-based delay: that helper
-    // process would inherit the agent's stdout, so killing the agent would
-    // leave the pipe open and the reader could never observe EOF.
+    // A turn that never comes back, so the member is still in flight when the
+    // signal lands. Deliberately not a `sleep`-based stall: that helper process
+    // would inherit the agent's stdout, so ending the agent would leave the pipe
+    // open and no reader could ever observe EOF.
     let options = AcpStubOptions {
         never_respond_to_prompt: true,
         ..AcpStubOptions::default()
@@ -53,7 +61,6 @@ fn a_fenced_acp_generation_leaves_no_surviving_child() {
     let tmux_socket = temporary.path().join("tmux.sock");
 
     configure_delivery(DeliveryConfiguration {
-        submission_timeout_ms: 500,
         fence_observation_timeout_ms: 500,
         ..DeliveryConfiguration::default()
     });
@@ -64,7 +71,26 @@ fn a_fenced_acp_generation_leaves_no_surviving_child() {
     let pid_path = acp_child_pid_path(temporary.path());
     let child_pids = await_recorded_child_pids(&pid_path);
 
-    let verdict = await_inscription(&inscriptions, "relay.delivery.fence.verdict");
+    // The real signal, not a test-only flag: this is the production trigger.
+    // The guard restores the previous handlers and clears the flag on drop, so
+    // it has to outlive every assertion below.
+    let _signal_guard = agentmux::runtime::signals::install_shutdown_signal_handlers()
+        .expect("install shutdown signal handlers");
+    let self_pid = i32::try_from(std::process::id()).expect("pid fits i32");
+    assert_eq!(
+        unsafe { libc::kill(self_pid, libc::SIGTERM) },
+        0,
+        "failed to signal this process"
+    );
+
+    // Scoped to the target under test. The bundle holds two ACP members, and
+    // the other one is idle — its generation ceases trivially, so an unscoped
+    // lookup reads a positive verdict that proves nothing about this one.
+    let verdict = await_inscription(
+        &inscriptions,
+        "relay.delivery.fence.verdict",
+        "\"target_session\":\"bravo\"",
+    );
     assert!(
         verdict.contains("\"verdict\":\"positive\""),
         "the fence must establish cessation rather than fail stop: {verdict}"
@@ -130,21 +156,22 @@ fn await_process_gone(pid: i32) {
     }
 }
 
-/// Polls for the first inscription line naming `event`.
-fn await_inscription(path: &Path, event: &str) -> String {
+/// Polls for the first inscription line naming `event` and also containing
+/// `scope`, so a line emitted for a different target cannot answer for this one.
+fn await_inscription(path: &Path, event: &str, scope: &str) -> String {
     let needle = format!("\"event\":\"{event}\"");
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         if let Some(line) = std::fs::read_to_string(path)
             .unwrap_or_default()
             .lines()
-            .find(|line| line.contains(&needle))
+            .find(|line| line.contains(&needle) && line.contains(scope))
         {
             return line.to_string();
         }
         assert!(
             Instant::now() < deadline,
-            "no {event} inscription within 15s"
+            "no {event} inscription for {scope} within 15s"
         );
         std::thread::sleep(Duration::from_millis(20));
     }

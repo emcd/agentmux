@@ -103,14 +103,6 @@ pub(in crate::relay) enum GuardTrigger {
     ChannelClosed,
     /// The relay is shutting down gracefully.
     GracefulShutdown,
-    /// The generation fence reached its verdict with this member still
-    /// unresolved.
-    ///
-    /// Reached from *either* verdict. A negative fence withholds the target's
-    /// replacement and ordering barriers, but it never holds a member's outcome
-    /// open — an unceasing executor stalls one target's lifecycle without
-    /// stranding a single message.
-    FenceVerdict,
 }
 
 impl GuardTrigger {
@@ -121,9 +113,6 @@ impl GuardTrigger {
             Self::CollectorPanic => "delivery collector task panicked before resolving",
             Self::ChannelClosed => "transport outcome channel closed before resolving",
             Self::GracefulShutdown => "relay shut down before this member resolved",
-            Self::FenceVerdict => {
-                "the generation fence reached its verdict before this member resolved"
-            }
         }
     }
 }
