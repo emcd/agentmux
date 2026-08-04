@@ -16,7 +16,11 @@
 //! (`stream_send_to_broadcast_status` lives in `envelope.rs` because every
 //! call site is inside an envelope builder.)
 
+use std::collections::HashMap;
+
 use super::super::async_worker;
+use super::super::guard::{GuardTrigger, SubmissionEvidence};
+use super::worker::InflightMember;
 use crate::relay::{
     AsyncDeliveryTask, SendResult, identity::canonical_session_id,
     startup_state::note_session_served_successfully, stream::RelayStreamEvent,
@@ -64,51 +68,72 @@ fn outcome_to_send_result(task: &AsyncDeliveryTask, outcome: SingleDeliveryOutco
     }
 }
 
-/// Result for a task whose outcome future was dropped before resolving (the
-/// transport's delivery task vanished); treated as a shutdown drop.
-fn dropped_send_result(task: &AsyncDeliveryTask) -> SendResult {
-    SendResult {
-        target_session: task.target_session.clone(),
-        message_id: task.message_id.clone(),
-        outcome: SendOutcome::DroppedOnShutdown,
-        reason_code: Some("dropped_on_shutdown".to_string()),
-        reason: Some("delivery worker dropped before completion".to_string()),
-        details: None,
+/// The evidence a resolved transport outcome establishes.
+///
+/// `Delivered` is the only spelling that positively reports a target-side
+/// effect. Everything else is an undifferentiated failure from the guard's point
+/// of view, and an undifferentiated failure maps to `SubmissionUnknown` — never
+/// `NotSubmitted`, which requires proof that nothing was written.
+fn evidence_from_outcome(outcome: &SingleDeliveryOutcome) -> SubmissionEvidence {
+    match outcome.outcome {
+        SendOutcome::Delivered => SubmissionEvidence::Submitted,
+        SendOutcome::NotSubmitted => SubmissionEvidence::NotSubmitted,
+        _ => SubmissionEvidence::SubmissionUnknown,
     }
 }
 
-/// Maps one resolved in-flight outcome onto a `SendResult`, fans it back to the
-/// originating sender, records `served_successfully` for delivered coder writes,
-/// and releases the pending slot. A panicked collector task only releases the
-/// slot (a panic is a bug, not a delivery result).
+/// Resolves one joined collector task, whether it completed or panicked.
+///
+/// Both paths look the member up in the worker's table rather than taking it
+/// from the collector, so a panicked collector no longer strands its member: the
+/// guard resolves it through the same evidence order every other lifecycle
+/// trigger uses. This is what makes exactly-once resolution a property of the
+/// system rather than an assumption about well-behaved tasks.
 pub(super) fn collect_outcome(
-    joined: Result<
-        (AsyncDeliveryTask, bool, Option<SingleDeliveryOutcome>),
-        tokio::task::JoinError,
-    >,
+    joined: Result<(tokio::task::Id, Option<SingleDeliveryOutcome>), tokio::task::JoinError>,
+    inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
-    let (task, record_served, outcome) = match joined {
-        Ok(value) => value,
-        Err(_join_error) => {
-            // The panicked collector took the task with it, so there is no
-            // message id to release admission quota against and the entry is
-            // stranded. This is the outcome-less `JoinError` branch the guard
-            // work replaces with a guard-key lookup that can resolve it.
-            async_worker::release_pending_slot(pending);
-            return;
+    let (task_id, outcome, trigger) = match joined {
+        Ok((task_id, Some(outcome))) => (task_id, Some(outcome), None),
+        // The future was dropped before resolving: the transport's delivery task
+        // vanished with the write in its hands.
+        Ok((task_id, None)) => (task_id, None, Some(GuardTrigger::ChannelClosed)),
+        Err(join_error) => (join_error.id(), None, Some(GuardTrigger::CollectorPanic)),
+    };
+    let Some(InflightMember {
+        task,
+        record_served,
+    }) = inflight_members.remove(&task_id)
+    else {
+        // No member for this collector: it was already removed, so nothing is
+        // owed. Releasing the slot is still correct — it was reserved per write.
+        async_worker::release_pending_slot(pending);
+        return;
+    };
+
+    match (outcome, trigger) {
+        (Some(outcome), _) => {
+            // The unit's evidence is recorded before any member outcome is
+            // derived from it, so a resumed fan-out agrees with what the first
+            // pass reported instead of inventing a result for the remainder.
+            super::super::admission::record_unit_evidence(
+                task.message_id.as_str(),
+                evidence_from_outcome(&outcome),
+            );
+            let send_result = outcome_to_send_result(&task, outcome);
+            if record_served && send_result.outcome == SendOutcome::Delivered {
+                let _ = note_session_served_successfully(
+                    task.runtime_directory.as_path(),
+                    task.target_session.as_str(),
+                );
+            }
+            async_worker::complete_task_outcome(&task, Ok(send_result));
         }
-    };
-    let send_result = match outcome {
-        Some(outcome) => outcome_to_send_result(&task, outcome),
-        None => dropped_send_result(&task),
-    };
-    if record_served && send_result.outcome == SendOutcome::Delivered {
-        let _ = note_session_served_successfully(
-            task.runtime_directory.as_path(),
-            task.target_session.as_str(),
-        );
+        (None, Some(trigger)) => {
+            async_worker::complete_task_outcome_from_trigger(&task, trigger);
+        }
+        (None, None) => unreachable!("a resolved outcome or a trigger is always present"),
     }
-    async_worker::complete_task_outcome(&task, Ok(send_result));
     async_worker::release_pending_slot(pending);
 }

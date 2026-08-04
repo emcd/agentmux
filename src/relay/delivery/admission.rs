@@ -34,6 +34,10 @@ use std::{
 
 use serde_json::json;
 
+use super::guard::{
+    AttemptId, BatchId, GuardKey, QueueEntryState, SubmissionEvidence, TransportGeneration,
+    resolve_from_evidence,
+};
 use crate::configuration::{BundleConfiguration, SessionType};
 use crate::relay::DeliveryConfiguration;
 use crate::runtime::inscriptions::emit_inscription;
@@ -140,7 +144,14 @@ impl AdmissionTargetKey {
     }
 }
 
-/// One admitted entry's reservation, held until the entry terminalizes.
+/// One admitted entry: its reservation, its lifecycle state, and the evidence
+/// its guard resolves from. Held until the entry terminalizes.
+///
+/// State and reservation live on the same record, under the same lock, because
+/// the terminal transition and the quota release are one atomic operation. Split
+/// across two structures they could drift, and a released reservation on a
+/// non-terminal entry is exactly the double-resolution this guard exists to make
+/// impossible.
 #[derive(Clone, Debug)]
 struct AdmittedEntry {
     target: AdmissionTargetKey,
@@ -150,6 +161,19 @@ struct AdmittedEntry {
     /// an input to resolution: no code path compares it against a bound to decide
     /// an outcome.
     admitted_at: Instant,
+    state: QueueEntryState,
+    /// Assigned at authorization and never reassigned; `None` while `Pending`.
+    guard: Option<GuardKey>,
+    /// Set when the member is handed to a transport, which is the moment a
+    /// target-side effect becomes possible. It is the discriminator in the
+    /// guard's evidence order between a provable `not_submitted` and an honest
+    /// `submission_unknown`.
+    handed_to_transport: bool,
+    /// The immutable evidence record for the member's packing unit, once its
+    /// submission has produced one. Every member outcome is derived from this
+    /// rather than from live state, so a panic partway through fan-out resumes
+    /// from the recorded result instead of inventing one for the remainder.
+    unit_evidence: Option<SubmissionEvidence>,
 }
 
 /// Per-target usage. An entry is one envelope, so the count is the number of
@@ -315,17 +339,25 @@ pub(in crate::relay) fn admit_with_limits(
             target,
             canonical_bytes,
             admitted_at: Instant::now(),
+            state: QueueEntryState::Pending,
+            guard: None,
+            handed_to_transport: false,
+            unit_evidence: None,
         },
     );
     Ok(())
 }
 
-/// Releases the quota an entry reserved at admission.
+/// Rolls back a reservation made moments ago, before the entry was authorized.
 ///
-/// Idempotent and safe for an id that was never admitted, which is what lets the
-/// single terminal-resolution site call it for every task without discriminating
-/// relay-originated receipts from admitted sends.
-pub(in crate::relay) fn release(message_id: &str) {
+/// Admission is the one reversible event in the model, and this is that
+/// reversal: it exists so a request that is refused partway through can undo the
+/// reservations it already made rather than admitting a fraction of itself. It
+/// is **not** a terminal transition — nothing is resolved, no outcome is
+/// reported, and no receipt is owed, because nothing was ever committed.
+///
+/// Idempotent, and safe for an id that was never admitted.
+pub(in crate::relay) fn rollback_admission(message_id: &str) {
     let Ok(mut state) = lock_ledger() else {
         return;
     };
@@ -340,6 +372,127 @@ pub(in crate::relay) fn release(message_id: &str) {
         if usage.envelopes == 0 && usage.bytes == 0 {
             state.per_target.remove(&entry.target);
         }
+    }
+}
+
+/// Authorizes one member: the `Pending` to `Authorized` transition, minting the
+/// batch's identities and creating the member's guard in the same atomic
+/// operation.
+///
+/// This is the model's sole linearization point. It is a relay-local state
+/// transition on the relay's own queue entry — not a call, not a handshake, and
+/// not dependent on any transport observing anything — which is why it is
+/// trivially atomic and why there is no acceptance race to adjudicate.
+///
+/// Returns the guard key on success. An entry already past `Pending` is not
+/// re-authorized and yields `None`: authorization is irrevocable, so a second
+/// one would be a second attempt at a member the relay has already committed.
+pub(in crate::relay) fn authorize(
+    message_id: &str,
+    batch: BatchId,
+    generation: TransportGeneration,
+) -> Option<GuardKey> {
+    let mut state = lock_ledger().ok()?;
+    let entry = state.entries.get_mut(message_id)?;
+    if entry.state != QueueEntryState::Pending {
+        return None;
+    }
+    let key = GuardKey {
+        batch,
+        attempt: AttemptId::mint(),
+        generation,
+    };
+    entry.state = QueueEntryState::Authorized;
+    entry.guard = Some(key);
+    Some(key)
+}
+
+/// Records that the member has been handed to its transport, which is the point
+/// a target-side effect becomes possible.
+///
+/// Until this is set, the guard can positively prove nothing was written; after
+/// it, partial effect cannot be excluded. Recording it is therefore what keeps a
+/// lifecycle trigger from over-claiming in either direction.
+pub(in crate::relay) fn note_handed_to_transport(message_id: &str) {
+    let Ok(mut state) = lock_ledger() else {
+        return;
+    };
+    if let Some(entry) = state.entries.get_mut(message_id) {
+        entry.handed_to_transport = true;
+    }
+}
+
+/// Records the immutable evidence for the member's packing unit, before any
+/// member outcome is derived from it.
+///
+/// Written once; a later record is ignored, because the first one is what any
+/// resumed fan-out must agree with.
+pub(in crate::relay) fn record_unit_evidence(message_id: &str, evidence: SubmissionEvidence) {
+    let Ok(mut state) = lock_ledger() else {
+        return;
+    };
+    if let Some(entry) = state.entries.get_mut(message_id)
+        && entry.unit_evidence.is_none()
+    {
+        entry.unit_evidence = Some(evidence);
+    }
+}
+
+/// The outcome of attempting the single terminal transition for one member.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::relay) enum TerminalTransition {
+    /// This caller performed the transition; admission quota was released here
+    /// and nowhere else. `evidence` is what the guard's evidence order resolves
+    /// the member to when the caller has no outcome of its own, and `guard`
+    /// carries the identities the member was authorized under — `None` for a
+    /// member terminalized while still `Pending`, which was never authorized and
+    /// so has none.
+    Won {
+        evidence: SubmissionEvidence,
+        guard: Option<GuardKey>,
+    },
+    /// Another caller already terminalized this member. Report nothing: doing so
+    /// would be the duplicate resolution the guard exists to prevent.
+    AlreadyTerminal,
+    /// No such entry. A relay-originated receipt bypasses admission (nothing was
+    /// accepted for it), so it has no reservation to release and no guard to
+    /// consume — it reports normally.
+    NotAdmitted,
+}
+
+/// Attempts the single terminal transition for one member, releasing its
+/// admission quota if and only if this caller wins.
+///
+/// Duplicate completions converge here rather than racing: the state check and
+/// the release happen under one lock, so exactly one caller can observe
+/// [`TerminalTransition::Won`]. Every lifecycle trigger routes through this same
+/// call, and none of them chooses the outcome — the returned `evidence` comes
+/// from the guard's one evidence order.
+pub(in crate::relay) fn terminalize(message_id: &str) -> TerminalTransition {
+    let Ok(mut state) = lock_ledger() else {
+        // A poisoned ledger cannot be reasoned about, and reporting an outcome
+        // whose uniqueness we cannot establish is worse than reporting none.
+        return TerminalTransition::AlreadyTerminal;
+    };
+    let Some(entry) = state.entries.get(message_id).cloned() else {
+        return TerminalTransition::NotAdmitted;
+    };
+    if entry.state == QueueEntryState::Terminal {
+        return TerminalTransition::AlreadyTerminal;
+    }
+    state.entries.remove(message_id);
+    state.global.envelopes = state.global.envelopes.saturating_sub(1);
+    state.global.bytes = state.global.bytes.saturating_sub(entry.canonical_bytes);
+    if let Some(usage) = state.per_target.get_mut(&entry.target) {
+        usage.envelopes = usage.envelopes.saturating_sub(1);
+        usage.bytes = usage.bytes.saturating_sub(entry.canonical_bytes);
+        if usage.envelopes == 0 && usage.bytes == 0 {
+            state.per_target.remove(&entry.target);
+        }
+    }
+    TerminalTransition::Won {
+        evidence: resolve_from_evidence(entry.unit_evidence, entry.handed_to_transport),
+        guard: entry.guard,
     }
 }
 

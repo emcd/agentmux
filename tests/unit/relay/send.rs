@@ -667,6 +667,120 @@ fn a_configured_quota_binds_at_admission() {
     );
 }
 
+/// Authorization mints a batch and an attempt id for every member and binds them
+/// to the entry, so the terminal record can name the authorization a delivery
+/// resolved under.
+///
+/// Without those identities on the wire the state model would be internal
+/// bookkeeping no operator could correlate — a stuck target's outcome could not
+/// be traced back to the authorization that produced it.
+#[test]
+fn a_terminal_outcome_names_the_authorization_it_resolved_under() {
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    dispatch_request(
+        RelayRequest::Send {
+            request_id: None,
+            requester_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["bravo@party".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(1),
+            on_behalf_of: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect("send response");
+
+    let completed = await_inscription(&inscriptions, "relay.send.async.completed");
+    let record: serde_json::Value =
+        serde_json::from_str(completed.as_str()).expect("completed inscription is json");
+    let payload = record
+        .get("details")
+        .expect("completed inscription carries a details object");
+    assert!(
+        payload
+            .get("batch_id")
+            .and_then(serde_json::Value::as_u64)
+            .is_some(),
+        "an authorized member's terminal record carries its batch id: {completed}"
+    );
+    assert!(
+        payload
+            .get("attempt_id")
+            .and_then(serde_json::Value::as_u64)
+            .is_some(),
+        "an authorized member's terminal record carries its attempt id: {completed}"
+    );
+    assert_eq!(
+        payload
+            .get("transport_generation")
+            .and_then(serde_json::Value::as_u64),
+        Some(0),
+        "the generation a member was authorized against: {completed}"
+    );
+}
+
+/// One member, one terminal record. The guard's compare-and-swap is what makes
+/// that a property rather than a consequence of only one path happening to run.
+#[test]
+fn a_member_produces_exactly_one_terminal_record() {
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    dispatch_request(
+        RelayRequest::Send {
+            request_id: None,
+            requester_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["bravo@party".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(1),
+            on_behalf_of: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect("send response");
+
+    await_inscription(&inscriptions, "relay.send.async.completed");
+    // Settle past the resolution before counting, so a second record produced by
+    // a losing path would have been written by the time the count is taken.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_eq!(
+        count_inscriptions(&inscriptions, "relay.send.async.completed"),
+        1,
+        "exactly one terminal record per member"
+    );
+}
+
+/// Polls for the first inscription line for `event`. The terminal record is
+/// written by the delivery worker task rather than on the request path, so it is
+/// not present when the send response returns.
+fn await_inscription(path: &std::path::Path, event: &str) -> String {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        if let Some(line) = read_inscriptions(path, event).into_iter().next() {
+            return line;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no {event} inscription within 5s"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+}
+
 /// Counts inscription lines for exactly `event`. The aggregate and warning event
 /// names share a prefix, so matching on the closing quote keeps the aggregate
 /// count from absorbing warnings.

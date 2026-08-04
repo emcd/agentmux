@@ -11,7 +11,7 @@ use super::super::authorization::{
 };
 use super::super::connection::BundleCatalog;
 use super::super::delivery::admission::{
-    AdmissionTargetKey, admit, canonical_payload_bytes, release,
+    AdmissionTargetKey, admit, canonical_payload_bytes, rollback_admission,
 };
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
 use super::super::identity::{PrincipalType, classify_principal_id};
@@ -460,7 +460,7 @@ fn execute_raww(
             if let Err(error) = enqueue_async_delivery(task) {
                 // No queue entry was created, so nothing will terminalize this
                 // reservation; release it here rather than leaking it.
-                release(message_id.as_str());
+                rollback_admission(message_id.as_str());
                 return Err(error);
             }
         }

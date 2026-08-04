@@ -18,6 +18,9 @@ use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested
 use crate::tmux::TmuxOutputView;
 use crate::transports::{OutputView, WorkerFailureReason, WorkerReadinessState};
 
+use super::admission::TerminalTransition;
+use super::guard::{GuardKey, GuardTrigger, SubmissionEvidence};
+
 use super::super::stream::{RelayStreamEvent, send_event_to_registered_ui};
 use super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, RELAY_NAMESPACE, RelayError, SCHEMA_VERSION,
@@ -456,15 +459,64 @@ pub(super) fn complete_task_on_shutdown(task: &AsyncDeliveryTask) {
     );
 }
 
+/// Terminalizes one member because a lifecycle trigger fired, with no outcome of
+/// its own to report.
+///
+/// The trigger does not choose the outcome — the guard's evidence order does.
+/// That separation is the point: a collector panic on a member that was never
+/// handed to a transport resolves `not_submitted`, because the relay can prove
+/// it, while the same panic after handover resolves `submission_unknown`.
+pub(super) fn complete_task_outcome_from_trigger(task: &AsyncDeliveryTask, trigger: GuardTrigger) {
+    let (evidence, guard) = match super::admission::terminalize(task.message_id.as_str()) {
+        TerminalTransition::Won { evidence, guard } => (evidence, guard),
+        TerminalTransition::AlreadyTerminal => return,
+        // A relay-originated receipt has no reservation and no recorded
+        // evidence, so a trigger on one can only be reported honestly as
+        // unknown.
+        TerminalTransition::NotAdmitted => (SubmissionEvidence::SubmissionUnknown, None),
+    };
+    report_terminal_outcome(
+        task,
+        Ok(SendResult {
+            target_session: task.target_session.clone(),
+            message_id: task.message_id.clone(),
+            outcome: evidence.outcome(),
+            reason_code: Some(evidence.reason_code().to_string()),
+            reason: Some(trigger.reason().to_string()),
+            details: None,
+        }),
+        guard,
+    );
+}
+
 pub(super) fn complete_task_outcome(
     task: &AsyncDeliveryTask,
     outcome: Result<SendResult, RelayError>,
 ) {
-    // Terminalization is the one transition that releases admission quota. The
-    // call is idempotent and keyed on the entry's own message id, so a
-    // relay-originated receipt — which bypassed admission because nothing was
-    // accepted for it — releases nothing.
-    super::admission::release(task.message_id.as_str());
+    // The single terminal transition, and the one place admission quota is
+    // released. Every path that can finish a member routes through here, so
+    // losing the compare-and-swap means another path already resolved this
+    // member: emitting anything below would be the duplicate resolution the
+    // guard exists to prevent. A relay-originated receipt bypassed admission
+    // (nothing was accepted for it), so it has no guard to consume and reports
+    // normally.
+    let guard = match super::admission::terminalize(task.message_id.as_str()) {
+        TerminalTransition::Won { guard, .. } => guard,
+        TerminalTransition::AlreadyTerminal => return,
+        TerminalTransition::NotAdmitted => None,
+    };
+    report_terminal_outcome(task, outcome, guard);
+}
+
+/// Emits the observability floor for a resolved member and routes its receipt.
+///
+/// Reached only after the terminal transition has been won, so everything it
+/// emits happens exactly once per member.
+fn report_terminal_outcome(
+    task: &AsyncDeliveryTask,
+    outcome: Result<SendResult, RelayError>,
+    guard: Option<GuardKey>,
+) {
     // The terminal outcome (and its reason), independent of the Ok/Err shape, so a
     // non-delivered outcome can be routed back to the sender as a receipt after the
     // observability floor is emitted below. A relay-side delivery error resolves to
@@ -504,6 +556,9 @@ pub(super) fn complete_task_outcome(
                     "reason_code": result.reason_code,
                     "reason": result.reason,
                     "details": result.details,
+                    "batch_id": guard.map(|key| key.batch.value()),
+                    "attempt_id": guard.map(|key| key.attempt.value()),
+                    "transport_generation": guard.map(|key| key.generation.value()),
                 }),
             );
         }
@@ -716,6 +771,12 @@ pub(super) fn emit_sender_delivery_outcome_event(
         // send response, never through this local async terminal-outcome path; the
         // arm is defensive so the outcome maps honestly if it ever reaches here.
         SendOutcome::PeerUnavailable => ("failed", Some("peer_unavailable")),
+        // Both terminal, and both distinct from `failed`. `not_submitted` is a
+        // sound assertion of non-delivery; `submission_unknown` is the absence of
+        // one, so neither may be collapsed into a failure spelling that would
+        // claim more than the evidence supports.
+        SendOutcome::NotSubmitted => ("not_submitted", Some("not_submitted")),
+        SendOutcome::SubmissionUnknown => ("submission_unknown", Some("submission_unknown")),
         SendOutcome::Queued => ("routed", None),
     };
     let mut payload = serde_json::Map::new();

@@ -15,19 +15,19 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Relay queue, authorization, and guard
 
-- [ ] Add the queue entry state model — `Pending`, `Authorized`, `Terminal` — with `Batch ID`, `Member ID`, and a stable attempt ID
+- [x] Add the queue entry state model — `Pending`, `Authorized`, `Terminal` — with `Batch ID`, `Member ID`, and a stable attempt ID
 - [x] Implement admission: atomically reserve per-target and relay-global count and byte quota before returning `queued`
 - [x] Reject at admission an envelope whose canonical payload exceeds the target transport's maximum handover dimensions
 - [x] Reject a `Pubsub` target synchronously at admission with the existing not-implemented error, queueing and authorizing nothing
-- [ ] Implement authorization as a relay-local transition that creates the batch's owner in the same atomic operation
-- [ ] Implement the relay-owned guard: keyed on `(batch, member, attempt, generation)` at authorization, atomically bound to `PackingUnit ID` at partition
-- [ ] Implement the single terminal CAS, releasing admission quota on that transition and nowhere else
-- [ ] Implement the guard resolution order once: unit record if present, else `not_submitted` for a member never bound to a unit, else `submission_unknown`
+- [x] Implement authorization as a relay-local transition that creates the batch's owner in the same atomic operation
+- [ ] Implement the relay-owned guard: keyed on `(batch, member, attempt, generation)` at authorization, atomically bound to `PackingUnit ID` at partition — creation at authorization is done; the `PackingUnit ID` binding lands with partition, and stands in meanwhile on whether the member was handed to a transport
+- [x] Implement the single terminal CAS, releasing admission quota on that transition and nowhere else
+- [x] Implement the guard resolution order once: unit record if present, else `not_submitted` for a member never bound to a unit, else `submission_unknown`
 - [ ] Implement the mandatory post-authorization execution watchdog bounded by `[delivery].submission-timeout-ms`, anchored at authorization
 - [ ] On elapse, initiate the generation fence and terminalize nothing yet; keep accepting unit evidence through the fence windows and terminalize every still-unresolved member through the evidence order at the fence verdict
 - [ ] Release quota and outcome barriers at terminalization, but release the target's FIFO, raw barrier, and replacement only on a positive fence verdict
 - [ ] Make unwind, channel closure, task or thread exit, generation replacement, and graceful shutdown all route through that one order; no lifecycle path selects an outcome of its own
-- [ ] Make collectors carry guard keys rather than own resolution; remove the `JoinError` branch in `src/relay/delivery/dispatch/outcomes.rs` that returns without producing an outcome
+- [x] Make collectors carry guard keys rather than own resolution; remove the `JoinError` branch in `src/relay/delivery/dispatch/outcomes.rs` that returns without producing an outcome
 - [ ] Ensure outcome-notification failure is counted and recorded without blocking the terminal transition or the quota release
 
 ### Scheduling
@@ -59,7 +59,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Submission evidence
 
-- [ ] Add the typed evidence enum — `Submitted`, `NotSubmitted`, `SubmissionUnknown` — and map undifferentiated errors to `SubmissionUnknown`
+- [x] Add the typed evidence enum — `Submitted`, `NotSubmitted`, `SubmissionUnknown` — and map undifferentiated errors to `SubmissionUnknown`
 - [ ] Make partition deterministic and recorded to the guard before any target-side effect
 - [ ] Record one immutable per-unit evidence record before member fan-out, and resume fan-out from it after a panic
 - [ ] Resolve an unbound member `not_submitted`, keyed on unit binding rather than on the manner of failure

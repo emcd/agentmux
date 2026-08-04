@@ -185,6 +185,20 @@ exported from `src/relay/mod.rs`.
     the listener binds; before that (in tests, and on any path that never hosts a
     relay) reads fall back to the same defaults a missing `relay.toml` resolves
     to.
+  - `guard.rs`: the queue entry state model (`Pending`/`Authorized`/`Terminal`),
+    the delivery identities (batch, attempt, transport generation), the typed
+    submission evidence, and the guard's single evidence order. The types live
+    here but the state itself lives on the admission ledger's entries, under the
+    lock that also releases quota — the terminal transition and the release are
+    one atomic operation, and splitting them across two structures is exactly how
+    a released reservation could end up on a still-live entry. `Pending` is
+    unbounded by design and holds nothing but its own reservation; `Authorized`
+    holds the target's ordering position, which is why the bound belongs on that
+    side. Every lifecycle trigger — collector panic, closed channel, graceful
+    shutdown — terminalizes through the same evidence order rather than choosing
+    an outcome, so a member the relay can prove was never handed to a transport
+    resolves `not_submitted` instead of being smeared into `submission_unknown`
+    by whichever event happened to fire.
   - `dispatch/mod.rs`: delivery dispatch re-export hub.
   - `dispatch/orchestration.rs`: delivery startup, ACP target priming, and the
     enqueue path that registers/feeds the per-target worker.

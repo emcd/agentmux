@@ -1,4 +1,4 @@
-use std::{sync::OnceLock, time::Duration};
+use std::{collections::HashMap, sync::OnceLock, time::Duration};
 
 use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver, task::JoinSet};
 
@@ -20,15 +20,27 @@ use super::payload::{
 use crate::transports::{OutcomeFuture, SingleDeliveryOutcome, TransportImpl};
 
 use super::super::async_worker::AsyncWorkerKey;
+use super::super::guard::{BatchId, GuardTrigger, TransportGeneration};
 
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
 
-/// One in-flight write awaiting its transport [`OutcomeFuture`]. Carries the
-/// originating task and whether a successful delivery should clear startup
-/// failures (`true` for coder transports, `false` for UI), so the collect site
-/// can map the resolved outcome onto a `SendResult` and complete the task. The
-/// outcome is `None` if the future was dropped before resolving.
-type InflightOutcome = (AsyncDeliveryTask, bool, Option<SingleDeliveryOutcome>);
+/// What one in-flight collector task yields: the resolved transport outcome, or
+/// `None` if the outcome future was dropped before resolving.
+///
+/// Deliberately carries no task and no outcome *interpretation*. The member's
+/// identity lives in the worker's [`InflightMember`] table instead, so a
+/// collector that panics does not take its member's identity with it — which is
+/// what lets the guard resolve that member rather than strand it.
+type InflightOutcome = Option<SingleDeliveryOutcome>;
+
+/// The worker-side record for one in-flight member, held outside the collector
+/// task that carries its write.
+pub(super) struct InflightMember {
+    pub(super) task: AsyncDeliveryTask,
+    /// Whether a successful delivery should clear startup failures: `true` for
+    /// coder transports, `false` for UI.
+    pub(super) record_served: bool,
+}
 
 #[derive(Clone)]
 pub(super) struct AcpWorkerBootstrap {
@@ -137,6 +149,10 @@ async fn run_async_delivery_worker(
     // the transport's internal channel, into which the produce arm enqueues in
     // receive order.
     let mut inflight: JoinSet<InflightOutcome> = JoinSet::new();
+    // Member identities for the in-flight writes, keyed by their collector task's
+    // id. Held here rather than inside the collector so a panicked collector
+    // still leaves the relay able to name — and therefore resolve — its member.
+    let mut inflight_members: HashMap<tokio::task::Id, InflightMember> = HashMap::new();
     let mut senders_dropped = false;
 
     loop {
@@ -155,6 +171,7 @@ async fn run_async_delivery_worker(
             shutdown_drain(
                 transport.as_mut(),
                 &mut inflight,
+                &mut inflight_members,
                 &mut receiver,
                 pending.as_ref(),
             )
@@ -180,15 +197,16 @@ async fn run_async_delivery_worker(
                             &mut transport,
                             batch_settings,
                             &mut inflight,
+                            &mut inflight_members,
                             pending.as_ref(),
                         );
                     }
                     None => senders_dropped = true,
                 }
             }
-            joined = inflight.join_next(), if !inflight.is_empty() => {
+            joined = inflight.join_next_with_id(), if !inflight.is_empty() => {
                 if let Some(joined) = joined {
-                    collect_outcome(joined, pending.as_ref());
+                    collect_outcome(joined, &mut inflight_members, pending.as_ref());
                 }
             }
             _ = tokio::time::sleep(poll_interval) => {
@@ -213,6 +231,7 @@ fn submit_task(
     transport: &mut Option<TransportImpl>,
     batch_settings: PromptBatchSettings,
     inflight: &mut JoinSet<InflightOutcome>,
+    inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
     if transport.is_none() {
@@ -243,11 +262,21 @@ fn submit_task(
         super::super::async_worker::release_pending_slot(pending);
         return;
     } else if matches!(transport, TransportImpl::Ui(_)) {
+        // Authorization is the linearization point, so it precedes the write and
+        // nothing else. Handing the envelope to the transport is recorded
+        // separately, because the gap between the two is exactly the window in
+        // which the guard can still prove nothing was written.
+        authorize_member(&task);
+        super::super::admission::note_handed_to_transport(task.message_id.as_str());
         (transport.mailw(build_ui_envelope(&task)), false)
     } else {
+        authorize_member(&task);
         match prepare_coder_write(&task, transport) {
             Ok(future) => (future, true),
             Err(error) => {
+                // Refused before any target-side effect: the member was never
+                // handed over, so the guard's evidence order can prove
+                // `not_submitted` rather than inferring the weaker unknown.
                 super::super::async_worker::complete_task_outcome(&task, Err(error));
                 super::super::async_worker::release_pending_slot(pending);
                 return;
@@ -255,7 +284,31 @@ fn submit_task(
         }
     };
 
-    inflight.spawn(async move { (task, record_served, future.await.ok()) });
+    let handle = inflight.spawn(async move { future.await.ok() });
+    inflight_members.insert(
+        handle.id(),
+        InflightMember {
+            task,
+            record_served,
+        },
+    );
+}
+
+/// Performs the `Pending` to `Authorized` transition for one member, minting its
+/// batch and guard identities.
+///
+/// One member per batch today: the worker submits tasks one at a time, so a
+/// batch is a batch of one until byte-budgeted round-robin lands and starts
+/// forming real ones. The transport generation is likewise the worker's own,
+/// which does not yet advance — generation replacement arrives with the fence,
+/// and the guard key carries the component now so that work has somewhere to put
+/// it rather than reshaping every key.
+fn authorize_member(task: &AsyncDeliveryTask) {
+    super::super::admission::authorize(
+        task.message_id.as_str(),
+        BatchId::mint(),
+        TransportGeneration::default(),
+    );
 }
 
 /// Builds a coder task's structured payload and submits it via the non-blocking
@@ -289,14 +342,25 @@ fn prepare_coder_write(
 async fn shutdown_drain(
     transport: Option<&mut TransportImpl>,
     inflight: &mut JoinSet<InflightOutcome>,
+    inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
     receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
     if let Some(transport) = transport {
         transport.shutdown();
     }
-    while let Some(joined) = inflight.join_next().await {
-        collect_outcome(joined, pending);
+    while let Some(joined) = inflight.join_next_with_id().await {
+        collect_outcome(joined, inflight_members, pending);
+    }
+    // Any member still in the table was never joined — its collector neither
+    // resolved nor panicked, so the drain left it unresolved. Terminalize it
+    // through the guard rather than dropping it: shutdown is a trigger like any
+    // other, and the evidence order still knows whether it reached a transport.
+    for (_, member) in inflight_members.drain() {
+        super::super::async_worker::complete_task_outcome_from_trigger(
+            &member.task,
+            GuardTrigger::GracefulShutdown,
+        );
     }
     super::super::async_worker::drop_pending_async_tasks_on_shutdown(receiver, pending);
 }

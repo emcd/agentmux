@@ -15,7 +15,8 @@ use super::super::authorization::{
 };
 use super::super::connection::BundleCatalog;
 use super::super::delivery::admission::{
-    AdmissionTargetKey, admit, canonical_payload_bytes, release, resolve_target_session_type,
+    AdmissionTargetKey, admit, canonical_payload_bytes, resolve_target_session_type,
+    rollback_admission,
 };
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
 use super::super::identity::{PrincipalType, classify_principal_id};
@@ -459,7 +460,7 @@ fn execute_send(
                 // no task to terminalize it; entries already queued are live and
                 // release on their own terminal transition.
                 for orphaned in &admitted[admitted_index..] {
-                    release(orphaned);
+                    rollback_admission(orphaned);
                 }
                 return Err(error);
             }
@@ -583,7 +584,7 @@ fn admit_request_targets(
                 Ok(()) => admitted.push(message_id),
                 Err(error) => {
                     for reserved in &admitted {
-                        release(reserved);
+                        rollback_admission(reserved);
                     }
                     return Err(error);
                 }
