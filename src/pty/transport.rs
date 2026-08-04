@@ -52,7 +52,7 @@ use crate::configuration::BundleMember;
 use crate::configuration::TermProtocol;
 use crate::transports::{
     DeliveryDiagnosticContext, DeliveryEnvelope, OutcomeFuture, OutputView, SingleDeliveryOutcome,
-    StartupContext, Transport, TransportError, TransportReadiness, TransportStatus,
+    StartupContext, Transport, TransportError, TransportReadiness, TransportStatus, WedgeProbe,
     WorkerReadinessState,
 };
 
@@ -69,7 +69,8 @@ pub type PtyMirrorStateFn = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
 
 use super::command::program_and_args;
 use super::state::{
-    PtyConfigSnapshot, PtyOutputView, PtyShared, SnapshotRequest, SnapshotResponse,
+    PtyConfigSnapshot, PtyOutputView, PtyQuiescenceProbe, PtyShared, SnapshotRequest,
+    SnapshotResponse,
 };
 
 /// Default pty cols when the per-coder config does not set them.
@@ -803,6 +804,19 @@ impl Transport for PtyTransport {
         )
     }
 
+    fn can_accept_handover(&self) -> bool {
+        if self.write_tx.is_none()
+            || self.shared.child_exited.load(Ordering::Acquire)
+            || !matches!(self.readiness(), WorkerReadinessState::Available)
+        {
+            return false;
+        }
+        let mut probe = PtyQuiescenceProbe::new(self.shared.clone());
+        probe
+            .observe()
+            .is_ok_and(|observation| observation.is_prompt_ready)
+    }
+
     fn shutdown(&mut self) {
         // Mark the lifecycle as attempted so a subsequent
         // `startup()` hits the retry guard with `Unavailable` and
@@ -953,7 +967,6 @@ fn run_worker(
     // two paths to stay independent.
     let mut delivery: Option<super::delivery::Delivery> = None;
     let mut pending_raw: Option<super::delivery::PendingRaw> = None;
-    let mut wait_in_progress = false;
 
     while !shutdown_flag.load(Ordering::Acquire) {
         // 0. Detect child-exit BEFORE servicing any other channel.
@@ -1006,7 +1019,6 @@ fn run_worker(
                         WorkerReadinessState::Busy,
                     );
                     delivery = Some(d);
-                    wait_in_progress = false;
                     continue;
                 }
                 Err(_) => {
@@ -1017,11 +1029,7 @@ fn run_worker(
             }
         }
 
-        // 3. If a delivery is in progress, drive the state machine
-        // one step. The step may resolve (Done), in which case we
-        // drop the run and return to idle. A batch barrier during
-        // the wait stashes the raw in `pending_raw` for the next
-        // iteration.
+        // 3. If a delivery is in progress, resolve its write result.
         if let Some(d) = delivery.as_mut() {
             let diagnostics = DeliveryDiagnosticContext::without_messages(
                 namespace.as_str(),
@@ -1036,19 +1044,6 @@ fn run_worker(
                 &mut pending_raw,
             ) {
                 super::delivery::DeliveryStep::Continue => {
-                    // The wait is in progress. Sleep briefly to
-                    // bound the wait-poll frequency; the outer
-                    // loop will service snapshot_rx on the next
-                    // iteration before the next step.
-                    if wait_in_progress {
-                        thread::sleep(super::delivery::WAIT_POLL_INTERVAL);
-                    } else {
-                        // First wait iteration just set up the
-                        // wait; the next step will do the first
-                        // poll. Brief sleep to avoid busy-looping.
-                        thread::sleep(super::delivery::WAIT_POLL_INTERVAL);
-                    }
-                    wait_in_progress = true;
                     continue;
                 }
                 super::delivery::DeliveryStep::Done { wedged } => {
@@ -1069,7 +1064,6 @@ fn run_worker(
                     };
                     publish(&readiness, mirror_state.as_ref(), next);
                     delivery = None;
-                    wait_in_progress = false;
                     continue;
                 }
             }
@@ -1106,7 +1100,6 @@ fn run_worker(
                         WorkerReadinessState::Busy,
                     );
                     delivery = Some(d);
-                    wait_in_progress = false;
                     continue;
                 }
                 Err(failure) => {

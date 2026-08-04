@@ -260,6 +260,10 @@ impl Transport for AcpWorkerDriver {
         self.lock_transport().is_ready()
     }
 
+    fn can_accept_handover(&self) -> bool {
+        self.lock_transport().can_accept_handover()
+    }
+
     fn shutdown(&mut self) {
         self.lock_transport().shutdown();
     }

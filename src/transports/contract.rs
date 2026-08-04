@@ -133,6 +133,14 @@ pub trait Transport {
     /// Reports whether the transport is ready to accept delivery.
     fn is_ready(&self) -> bool;
 
+    /// Reports whether the transport can accept a handover now.
+    ///
+    /// This is a level-triggered, advisory observation. A caller must still
+    /// handle a fallible delivery attempt after reading it.
+    fn can_accept_handover(&self) -> bool {
+        self.is_ready()
+    }
+
     /// Tears down the transport runtime, releasing its resources.
     fn shutdown(&mut self);
 
@@ -481,6 +489,21 @@ impl TransportImpl {
             Self::Pubsub => false,
             #[cfg(feature = "pty")]
             Self::Pty(transport) => transport.is_ready(),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => false,
+        }
+    }
+
+    /// Reports whether the selected transport can accept a handover now.
+    #[must_use]
+    pub fn can_accept_handover(&self) -> bool {
+        match self {
+            Self::Acp(transport) => transport.can_accept_handover(),
+            Self::Tmux(transport) => transport.can_accept_handover(),
+            Self::Ui(transport) => transport.can_accept_handover(),
+            Self::Pubsub => false,
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.can_accept_handover(),
             #[cfg(not(feature = "pty"))]
             Self::Pty => false,
         }

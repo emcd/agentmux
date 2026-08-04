@@ -22,10 +22,9 @@ introduced.
   driven by relay bundle reconcile/startup.
 - `pane` — pane operations: resolve active pane target, inject literal
   text into the pane, capture pane tail lines.
-- `quiescence_probe` — the cross-thread quiescence probe consumed by the
-  transport's internal delivery task. Implements
-  [`wait_for_quiescent_pane_three_state`] driving
-  [`PaneQuiescenceProbe`].
+- `quiescence_probe` — the pane-readiness probe used by
+  [`TmuxTransport::can_accept_handover`] and the transport-level classifier
+  tests. Implements [`PaneQuiescenceProbe`].
 
   OpenCode readiness has a second, private compose-region gate. It recognizes
   the measured 1.18.9 frame suffix (info row, 20-or-more `▀` characters, and
@@ -34,17 +33,14 @@ introduced.
   boundary: 99 spaces can be compose text, while 100 or more belongs to the
   sidebar. A future OpenCode layout change requires revisiting these bounds.
 
-  Tmux does **not** classify `wedged`. Inferring a terminal failure from
-  the absence of change in rendered content cannot distinguish a hung
-  coder from a permission dialog awaiting an operator, a compose box
-  holding typed input, or a coder working without terminal output, so the
-  transport passes `wedge_detection: false` unconditionally. Termination
-  comes from the per-coder readiness bound
-  (`[coders.<id>.tmux].readiness-timeout-ms`, default 15 minutes): an
-  unconditional bound on the entire wait for a flush group that no signal
-  may defer. Other terminal paths remain — an opted-in prime timeout,
-  shutdown, a positively observed probe failure — but the bound is the
-  only one guaranteed to arrive.
+   Tmux does **not** classify `wedged`. Inferring a terminal failure from
+   the absence of change in rendered content cannot distinguish a hung
+   coder from a permission dialog awaiting an operator, a compose box
+   holding typed input, or a coder working without terminal output. The
+   delivery task therefore pastes immediately after handover; the relay
+   reads `can_accept_handover` as an advisory pane-readiness level before
+   authorization, while the classifier remains available to its focused
+   probe tests.
 
   Pty still classifies `wedged` through the same shared machinery, and
   keeps it until `agentmux:issues/relay/61` supplies a Pty readiness

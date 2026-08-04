@@ -439,6 +439,10 @@ impl Transport for AcpTransport {
         )
     }
 
+    fn can_accept_handover(&self) -> bool {
+        matches!(self.readiness(), WorkerReadinessState::Available)
+    }
+
     fn shutdown(&mut self) {
         // Signal the delivery task to drain and exit, then drop the runtime.
         self.shutdown_tx = None;

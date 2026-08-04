@@ -2315,24 +2315,17 @@ fn pty_transport_busy_available_cycle_records_via_mirror() {
     transport.shutdown();
 }
 
-/// Verifies the worker-readiness transition for a wedge-class
-/// delivery resolution. The prompt regex does not match the
-/// child's idle output, so the wedge counter fires and the
-/// delivery resolves to `Failed` + `pane_wedged`. The worker
-/// MUST then publish `Unavailable` via the relay-global mirror
-/// (the local-mutex is NOT consulted here — this asserts the
-/// actual seam). The delivery MUST also reach the
-/// `Unavailable` steady state and the retry guard MUST reject
-/// the next `startup()`.
+/// Readiness is an advisory handover level, not delivery evidence. A prompt
+/// mismatch keeps `can_accept_handover` false, but a forced handover still
+/// resolves from the successful PTY write and leaves the worker available.
 #[cfg(feature = "pty")]
 #[test]
-fn pty_transport_wedge_publishes_unavailable_via_mirror() {
-    use std::time::{Duration, Instant};
+fn pty_transport_readiness_does_not_infer_delivery_failure() {
+    use std::time::Duration;
 
     use agentmux::envelope::AddressIdentity;
     use agentmux::transports::{
-        DeliveryEnvelope, DeliveryMessage, SendOutcome, Transport, TransportError,
-        WorkerReadinessState,
+        DeliveryEnvelope, DeliveryMessage, SendOutcome, Transport, WorkerReadinessState,
     };
 
     let transitions = Arc::new(Mutex::new(Vec::<WorkerReadinessState>::new()));
@@ -2342,11 +2335,8 @@ fn pty_transport_wedge_publishes_unavailable_via_mirror() {
     });
 
     // /bin/cat produces no output until stdin is written, so the
-    // prompt regex "NEVER_MATCHES" stays unmatched across the
-    // wedge counter's N consecutive ticks. The wedge counter
-    // therefore fires and the delivery resolves to
-    // `Failed` + `pane_wedged`, triggering the `Wedged` →
-    // `Unavailable` worker transition.
+    // prompt regex remains unmatched and handover is not currently
+    // useful.
     let (mut transport, context) = make_pty_transport_for_lifecycle_test_with_prompt_and_mirror(
         "wedge-mirror",
         "/bin/cat",
@@ -2384,74 +2374,22 @@ fn pty_transport_wedge_publishes_unavailable_via_mirror() {
         is_receipt: false,
     };
 
-    let outcome_rx = transport.mailw(envelope);
-
-    // Wait up to 5 s for Unavailable to appear in the transitions
-    // vector (the wedge counter needs N consecutive ticks before
-    // firing; with default quiet-window/poll cadence this completes
-    // well under 1 s on a real system, but 5 s is the safe upper
-    // bound for a CI environment).
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        let t = transitions.lock().unwrap();
-        if t.contains(&WorkerReadinessState::Unavailable) {
-            break;
-        }
-        drop(t);
-        thread::sleep(Duration::from_millis(50));
-    }
-
-    // Receive the wedge-class terminal outcome. This proves the
-    // wedge fired (Failed + reason_code = "pane_wedged") AND the
-    // `DeliveryStep::Done { wedged: true }` path produced the
-    // wedge-class resolution that the worker then mapped to the
-    // `Unavailable` publish (the wedge-result-to-readiness
-    // contract). Snapshot the transitions into an owned Vec,
-    // assert on the snapshot, then drop the guard before any
-    // operation that can publish readiness.
-    let outcome = recv_bounded_for(outcome_rx, Duration::from_secs(5))
-        .expect("wedge-class terminal outcome should arrive within 5 s");
+    assert!(!transport.can_accept_handover());
+    let outcome = recv_bounded_for(transport.mailw(envelope), Duration::from_secs(5))
+        .expect("handover outcome should arrive within 5 s");
     assert!(
-        matches!(outcome.outcome, SendOutcome::Failed),
-        "expected Failed wedge-class outcome, got {:?}",
+        matches!(outcome.outcome, SendOutcome::Delivered),
+        "expected successful write outcome, got {:?}",
         outcome.outcome,
     );
-    assert_eq!(
-        outcome.reason_code.as_deref(),
-        Some("pane_wedged"),
-        "wedge-class outcome must carry reason_code = pane_wedged, got {:?}",
-        outcome.reason_code,
-    );
-    let contains_unavailable = transitions
-        .lock()
-        .unwrap()
-        .clone()
-        .contains(&WorkerReadinessState::Unavailable);
+    let observed = transitions.lock().unwrap().clone();
     assert!(
-        contains_unavailable,
-        "wedge must publish Unavailable via the mirror",
+        observed.contains(&WorkerReadinessState::Busy),
+        "delivery must publish Busy via the mirror: {observed:?}",
     );
-
-    // The retry guard should now reject (the Unavailable steady
-    // state makes re-init unsupported until a teardown-then-restart
-    // path lands).
-    let (_, context2) = make_pty_transport_for_lifecycle_test_with_prompt_and_mirror(
-        "wedge-mirror",
-        "/bin/cat",
-        agentmux::configuration::TermProtocol::Xterm256Color,
-        Some("NEVER_MATCHES"),
-        None,
-    );
-    let result = transport.startup(context2);
     assert!(
-        matches!(
-            result,
-            Err(TransportError {
-                ref code, ..
-            }) if code == "pty_unavailable_restart_unsupported"
-        ),
-        "retry after wedge should be rejected, got {:?}",
-        result,
+        observed.contains(&WorkerReadinessState::Available),
+        "successful delivery must return to Available: {observed:?}",
     );
 
     transport.shutdown();

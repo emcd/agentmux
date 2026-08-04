@@ -206,6 +206,10 @@ impl Transport for UiTransport {
         true
     }
 
+    fn can_accept_handover(&self) -> bool {
+        true
+    }
+
     fn shutdown(&mut self) {}
 
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {

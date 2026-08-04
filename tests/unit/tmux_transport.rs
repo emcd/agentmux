@@ -23,14 +23,24 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
+use agentmux::envelope::PromptBatchSettings;
 use agentmux::tmux::{
     PaneQuiescenceProbe, PromptReadinessEvaluation, wait_for_quiescent_pane_three_state,
 };
-use agentmux::transports::{DeliveryDiagnosticContext, DeliveryWaitError, QuiescenceBounds};
+use agentmux::transports::{
+    DeliveryDiagnosticContext, DeliveryWaitError, QuiescenceBounds, Transport,
+};
 
 const SHORT_QUIET_WINDOW: Duration = Duration::from_millis(5);
 const TEST_TARGET_SESSION: &str = "test-session";
 const TEST_PANE_TARGET: &str = "%0";
+
+#[test]
+fn tmux_handover_is_not_accepted_before_startup() {
+    let transport = agentmux::tmux::TmuxTransport::new(PromptBatchSettings::default());
+
+    assert!(!transport.can_accept_handover());
+}
 
 fn diagnostic_context() -> DeliveryDiagnosticContext<'static> {
     DeliveryDiagnosticContext::without_messages("test-namespace", TEST_TARGET_SESSION)
