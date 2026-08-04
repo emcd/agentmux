@@ -2781,33 +2781,43 @@ fn pty_envelope_absorbed_during_wait_reaches_the_master() {
     );
 }
 
-/// A Pty fence reaches a positive verdict cooperatively, with its child reaped.
+/// A Pty fence reaches a positive verdict only once its child is reaped.
 ///
 /// Cessation for Pty requires the child reaped as well as the executors
 /// returned, because a live child still holds the pty and can still write to it.
-/// Adding that conjunct carried an obvious regression risk — a Pty fence that
-/// could never go positive — and this is what rules it out: the cooperative step
-/// alone suffices, because the worker dropping the master gives the child EOF.
+/// The discriminator is the child's own pid: with the conjunct, the observation
+/// that reports cessation is the same `try_wait` that reaps, so the pid is gone
+/// the instant `generation_ceased` turns true. Without it, cessation is reported
+/// off the threads alone and the child is left an unreaped zombie — still in the
+/// process table, and still answering `kill(pid, 0)`.
 ///
-/// Deliberately not framed as an escalation test. Pty needs no forced step here,
-/// so there is no reachable state in which the executors have returned while the
-/// child lives, and nothing available can discriminate the child-reaped conjunct
-/// on its own.
+/// It also rules out the regression the conjunct risked, a Pty fence that could
+/// never go positive: the cooperative step alone suffices, because the worker
+/// dropping the master gives the child EOF.
 ///
 /// Run with `cargo test --test unit pty_transport -- --ignored` once Zig 0.15.x
 /// is on PATH; skipped by default for the same reason as the round-trip test.
 #[test]
 #[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
-fn a_pty_generation_ceases_cooperatively_with_its_child_reaped() {
+fn a_pty_generation_ceases_only_once_its_child_is_reaped() {
     use agentmux::configuration::{
         BundleMember, PtyTargetConfiguration as PtyConfig, TermProtocol,
     };
     use agentmux::pty::PtyTargetConfiguration;
     use agentmux::transports::{GenerationFence, StartupContext, Transport};
 
+    let temporary = tempfile::TempDir::new().expect("temporary");
+    let pid_path = temporary.path().join("child.pid");
+    // `exec` replaces the shell, so the recorded pid is the surviving process
+    // the transport owns rather than a wrapper that exits immediately.
+    let command = format!(
+        "/bin/sh -c 'echo $$ > {} ; exec /bin/cat'",
+        pid_path.display()
+    );
+
     let pty_configuration = PtyConfig {
-        initial_command: "/bin/cat".to_string(),
-        resume_command: "/bin/cat".to_string(),
+        initial_command: command.clone(),
+        resume_command: command.clone(),
         prompt_readiness: None,
         prime_timeout_ms: Some(2000),
         wedge_detection: true,
@@ -2827,8 +2837,8 @@ fn a_pty_generation_ceases_cooperatively_with_its_child_reaped() {
     let mut transport = agentmux::pty::PtyTransport::new(
         target.clone(),
         PtyTargetConfiguration {
-            initial_command: "/bin/cat".to_string(),
-            resume_command: "/bin/cat".to_string(),
+            initial_command: command.clone(),
+            resume_command: command,
             prompt_readiness: None,
             cols: 80,
             rows: 24,
@@ -2839,24 +2849,20 @@ fn a_pty_generation_ceases_cooperatively_with_its_child_reaped() {
         },
         None,
     );
-    let context = StartupContext {
-        namespace: "agentmux".to_string(),
-        runtime_directory: std::env::temp_dir(),
-        target_member: target,
-        choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
-            decided_by: "test".to_string(),
-            reason_code: "test_cancel".to_string(),
-            reason: None,
-        }),
-    };
-    if transport.startup(context).is_err() {
-        eprintln!(
-            "a_pty_generation_ceases_cooperatively_with_its_child_reaped: \
-             skipped (startup failed); requires Zig 0.15.x + libghostty-vt"
-        );
-        return;
-    }
+    transport
+        .startup(StartupContext {
+            namespace: "agentmux".to_string(),
+            runtime_directory: temporary.path().to_path_buf(),
+            target_member: target,
+            choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+                decided_by: "test".to_string(),
+                reason_code: "test_cancel".to_string(),
+                reason: None,
+            }),
+        })
+        .expect("pty startup (requires Zig 0.15.x + libghostty-vt)");
 
+    let child_pid = await_recorded_pid(&pid_path);
     assert!(
         !transport.generation_ceased(),
         "a started generation owns a running child and running executors"
@@ -2868,6 +2874,33 @@ fn a_pty_generation_ceases_cooperatively_with_its_child_reaped() {
         assert!(
             Instant::now() < deadline,
             "the cooperative request did not cease the generation within 5s"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // The observation that reported cessation is the one that reaped. A child
+    // left unreaped would still be a zombie in the process table here.
+    assert_eq!(
+        unsafe { libc::kill(child_pid, 0) },
+        -1,
+        "cessation was reported while the child was still an unreaped zombie \
+         (pid {child_pid})"
+    );
+}
+
+/// Polls for the child to record its own pid, returning it.
+fn await_recorded_pid(path: &std::path::Path) -> i32 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(pid) = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| text.trim().parse::<i32>().ok())
+        {
+            return pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the pty child did not record its pid within 5s"
         );
         std::thread::sleep(Duration::from_millis(20));
     }

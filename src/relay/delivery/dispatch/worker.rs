@@ -226,6 +226,7 @@ async fn run_async_delivery_worker(
             // before this point is still drained.
             super::super::async_worker::close_worker(&key);
             shutdown_drain(
+                &key,
                 transport.as_mut(),
                 &mut inflight,
                 &mut inflight_members,
@@ -522,10 +523,7 @@ fn drain_sealed_queue(
 ///
 /// One member per batch today: the worker submits tasks one at a time, so a
 /// batch is a batch of one until byte-budgeted round-robin lands and starts
-/// forming real ones. The transport generation is likewise the worker's own,
-/// which does not yet advance — generation replacement arrives with the fence,
-/// and the guard key carries the component now so that work has somewhere to put
-/// it rather than reshaping every key.
+/// forming real ones.
 fn authorize_member(task: &AsyncDeliveryTask) {
     super::super::admission::authorize(task.message_id.as_str(), BatchId::mint());
 }
@@ -574,13 +572,22 @@ fn prepare_coder_write(
 /// evidence instead of a shutdown-shaped guess. The verdict is the cut; whatever
 /// is unresolved at it terminalizes through the guard's evidence order.
 ///
-/// The transport's own teardown follows the verdict rather than preceding it.
-/// The fence's cooperative step is already every transport's stop signal — the
-/// dropped shutdown channel, the shutdown flag, the fenced generation — so
-/// tearing resources down first would be the destructive action before the
-/// polite one, and would strip the effect paths the observation reads. The
-/// transport is `None` if no task ever arrived to construct it.
+/// The transport's own teardown follows the verdict rather than preceding it,
+/// and only on a positive one. The fence's cooperative step is already every
+/// transport's stop signal — the dropped shutdown channel, the shutdown flag,
+/// the fenced generation — so tearing resources down first would be the
+/// destructive action before the polite one, and would strip the effect paths
+/// the observation reads.
+///
+/// A negative verdict skips teardown entirely. `shutdown` reaps children and
+/// joins threads, and a negative verdict is precisely the finding that those
+/// threads were not observed to stop — so calling it there would run the bounded
+/// fence straight into the unbounded wait it exists to replace. Cessation has
+/// already been initiated by the fence's forced step; what is abandoned is the
+/// waiting, and the process is exiting anyway. The transport is `None` if no task
+/// ever arrived to construct it.
 async fn shutdown_drain(
+    key: &AsyncWorkerKey,
     transport: Option<&mut TransportImpl>,
     inflight: &mut JoinSet<InflightOutcome>,
     inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
@@ -591,7 +598,10 @@ async fn shutdown_drain(
     if let Some(transport) = transport {
         let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
         let mut fence = FenceInProgress::begin(transport, fence_observation);
-        while fence.advance(transport, Instant::now()).is_none() {
+        let outcome = loop {
+            if let Some(outcome) = fence.advance(transport, Instant::now()) {
+                break outcome;
+            }
             tokio::select! {
                 joined = inflight.join_next_with_id(), if !inflight.is_empty() => {
                     if let Some(joined) = joined {
@@ -600,8 +610,18 @@ async fn shutdown_drain(
                 }
                 _ = tokio::time::sleep(poll_interval) => {}
             }
+        };
+        match outcome.verdict {
+            FenceVerdict::Positive => transport.shutdown(),
+            FenceVerdict::Negative => emit_inscription(
+                "relay.delivery.shutdown.fence_negative",
+                &json!({
+                    "namespace": key.namespace,
+                    "target_session": key.target_session,
+                    "unresolved_members": inflight_members.len(),
+                }),
+            ),
         }
-        transport.shutdown();
     }
     // Any member still in the table was never joined — its collector neither
     // resolved nor panicked, so the drain left it unresolved. Terminalize it

@@ -44,7 +44,7 @@ use crate::transports::{
 const LOOK_LINES_DEFAULT: usize = 120;
 
 use super::pane::{
-    TmuxInvocationPid, capture_pane_tail_lines, inject_literal_text, publish_tmux_invocations,
+    TmuxInvocationSlot, capture_pane_tail_lines, inject_literal_text, publish_tmux_invocations,
     resolve_active_pane_target, terminate_published_invocation,
 };
 use super::quiescence_probe::{PaneQuiescenceProbe, RealPaneQuiescenceProbe};
@@ -123,7 +123,7 @@ pub struct TmuxTransport {
     /// Retained so the fence's forced step has something to signal: dropping the
     /// channel reaches a thread between items, and nothing else reaches one
     /// parked in a tmux client call.
-    invocation: TmuxInvocationPid,
+    invocation: TmuxInvocationSlot,
 }
 
 impl std::fmt::Debug for TmuxTransport {
@@ -151,7 +151,7 @@ impl TmuxTransport {
             task_handle: None,
             task_context: None,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
-            invocation: TmuxInvocationPid::default(),
+            invocation: TmuxInvocationSlot::default(),
         }
     }
 

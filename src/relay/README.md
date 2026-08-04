@@ -186,7 +186,7 @@ exported from `src/relay/mod.rs`.
     relay) reads fall back to the same defaults a missing `relay.toml` resolves
     to.
   - `guard.rs`: the queue entry state model (`Pending`/`Authorized`/`Terminal`),
-    the delivery identities (batch, attempt, transport generation), the typed
+    the delivery identities (batch, attempt), the typed
     submission evidence, and the guard's single evidence order. The types live
     here but the state itself lives on the admission ledger's entries, under the
     lock that also releases quota — the terminal transition and the release are

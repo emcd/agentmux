@@ -1,12 +1,12 @@
 use std::{
     cell::RefCell,
     ffi::OsStr,
-    io::Write,
+    io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Output, Stdio},
     sync::{
-        Arc,
-        atomic::{AtomicI32, AtomicU64, Ordering},
+        Arc, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
 };
 
@@ -15,14 +15,16 @@ const LOOK_LINES_MAX: usize = 1000;
 
 static PASTE_BUFFER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// The pid of the `tmux` client invocation a generation's executor is currently
-/// waiting on, or zero when it is between invocations.
+/// The `tmux` client invocation a generation's executor currently owns, or
+/// `None` when it is between invocations.
 ///
-/// Shared as a pid rather than as the [`Child`] itself because the executor
-/// holding it is blocked *in* the wait: a `Child` cannot be waited on and killed
-/// through the same handle, and moving it behind a lock the waiter holds would
-/// make signalling wait for the very call it is meant to interrupt.
-pub(crate) type TmuxInvocationPid = Arc<AtomicI32>;
+/// The [`Child`] itself, not its pid. A pid is only a safe thing to signal while
+/// the process it names is unreaped — once reaped, the number is free for the
+/// kernel to reissue, and a destructive signal sent against it lands on whatever
+/// unrelated process took it. Holding the unreaped `Child` here is what reserves
+/// the identity: reaping happens through this same slot, under this same lock,
+/// so there is no interval in which the slot names a process we no longer own.
+pub(crate) type TmuxInvocationSlot = Arc<Mutex<Option<Child>>>;
 
 thread_local! {
     /// The slot this thread publishes its tmux invocations into.
@@ -32,53 +34,120 @@ thread_local! {
     /// would put supervision plumbing into call sites that have nothing to do
     /// with it. Absent for every other caller — the lifecycle primitives and the
     /// look path run outside any generation and are not fenced.
-    static PUBLISHED_INVOCATIONS: RefCell<Option<TmuxInvocationPid>> =
+    static PUBLISHED_INVOCATIONS: RefCell<Option<TmuxInvocationSlot>> =
         const { RefCell::new(None) };
 }
 
 /// Publishes this thread's tmux invocations into `slot` for the rest of its
 /// life. Called by a generation's executor as it starts.
-pub(crate) fn publish_tmux_invocations(slot: TmuxInvocationPid) {
+pub(crate) fn publish_tmux_invocations(slot: TmuxInvocationSlot) {
     PUBLISHED_INVOCATIONS.with(|published| *published.borrow_mut() = Some(slot));
 }
 
-/// Signals whichever tmux client invocation `slot` currently names.
+/// Signals whichever tmux client invocation `slot` currently holds.
 ///
 /// The fence's forced step for tmux. Deliberately only the client: the tmux
 /// **server** is not owned by the generation — it holds the operator's sessions,
 /// and terminating it to fence one delivery would destroy the work the fence
 /// exists to protect.
-pub(crate) fn terminate_published_invocation(slot: &TmuxInvocationPid) {
-    let pid = slot.load(Ordering::Acquire);
-    if pid > 0 {
-        // SAFETY: `kill` is safe to call with any pid; an exited or reaped pid
-        // returns ESRCH, which is the outcome we want anyway.
-        unsafe { libc::kill(pid, libc::SIGKILL) };
+///
+/// `try_lock` keeps the call non-blocking, as step 3 is contracted to be. The
+/// lock is held only across the reap, so failing to take it means the invocation
+/// is already exiting and there is nothing left to signal.
+pub(crate) fn terminate_published_invocation(slot: &TmuxInvocationSlot) {
+    if let Ok(mut held) = slot.try_lock()
+        && let Some(child) = held.as_mut()
+    {
+        let _ = child.kill();
     }
 }
 
-/// Records `pid` as this thread's in-flight invocation for the duration of a
-/// wait, clearing it on the way out however the wait ends.
-struct PublishedInvocation(Option<TmuxInvocationPid>);
+/// Owns one invocation for the duration of a wait: publishes the live child,
+/// hands back the pipes to drain, and reaps through the slot on the way out.
+struct PublishedInvocation {
+    slot: Option<TmuxInvocationSlot>,
+    /// Held only when no slot is published, since the child must still be
+    /// reaped by someone.
+    unpublished: Option<Child>,
+}
 
 impl PublishedInvocation {
-    fn record(child: &Child) -> Self {
+    /// Takes ownership of `child`, publishing it if this thread has a slot.
+    fn record(mut child: Child) -> (Self, Option<ChildStdout>, Option<ChildStderr>) {
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
         let slot = PUBLISHED_INVOCATIONS.with(|published| published.borrow().clone());
-        if let Some(slot) = slot.as_ref()
-            && let Ok(pid) = i32::try_from(child.id())
-        {
-            slot.store(pid, Ordering::Release);
+        let owned = match slot {
+            Some(slot) => {
+                let published = match slot.lock() {
+                    Ok(mut held) => {
+                        *held = Some(child);
+                        None
+                    }
+                    // A poisoned slot means the generation's supervision is
+                    // already broken; keep ownership locally so the child is
+                    // still reaped rather than leaked.
+                    Err(_) => Some(child),
+                };
+                match published {
+                    None => Self {
+                        slot: Some(slot),
+                        unpublished: None,
+                    },
+                    Some(child) => Self {
+                        slot: None,
+                        unpublished: Some(child),
+                    },
+                }
+            }
+            None => Self {
+                slot: None,
+                unpublished: Some(child),
+            },
+        };
+        (owned, stdout, stderr)
+    }
+
+    /// Reaps the invocation, clearing the slot in the same critical section so
+    /// no signaller can observe a pid this process no longer owns.
+    fn reap(mut self) -> io::Result<ExitStatus> {
+        if let Some(mut child) = self.unpublished.take() {
+            return child.wait();
         }
-        Self(slot)
+        let Some(slot) = self.slot.take() else {
+            return Err(io::Error::other("tmux invocation slot poisoned"));
+        };
+        let mut child = slot
+            .lock()
+            .map_err(|_| io::Error::other("tmux invocation slot poisoned"))?
+            .take()
+            .ok_or_else(|| io::Error::other("tmux invocation was already reaped"))?;
+        let status = child.wait();
+        // `child` drops here, still inside no lock but already reaped and no
+        // longer reachable from the slot.
+        status
     }
 }
 
-impl Drop for PublishedInvocation {
-    fn drop(&mut self) {
-        if let Some(slot) = self.0.as_ref() {
-            slot.store(0, Ordering::Release);
-        }
+/// Drains a terminated tmux invocation's pipes.
+///
+/// Reads stdout to EOF before stderr. Safe for this caller specifically: a tmux
+/// client writes an error line to stderr or a result to stdout, never enough of
+/// both to fill a pipe buffer while the other is still open. A future caller
+/// that streams large volumes on both would need concurrent draining.
+fn drain_invocation_pipes(
+    stdout: Option<ChildStdout>,
+    stderr: Option<ChildStderr>,
+) -> io::Result<(Vec<u8>, Vec<u8>)> {
+    let mut out = Vec::new();
+    if let Some(mut stdout) = stdout {
+        stdout.read_to_end(&mut out)?;
     }
+    let mut err = Vec::new();
+    if let Some(mut stderr) = stderr {
+        stderr.read_to_end(&mut err)?;
+    }
+    Ok((out, err))
 }
 
 pub(crate) fn resolve_active_pane_target(
@@ -249,7 +318,6 @@ fn load_tmux_buffer(tmux_socket: &Path, buffer_name: &str, text: &str) -> Result
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|source| source.to_string())?;
-    let _published = PublishedInvocation::record(&child);
     {
         let mut stdin = child
             .stdin
@@ -259,13 +327,14 @@ fn load_tmux_buffer(tmux_socket: &Path, buffer_name: &str, text: &str) -> Result
             .write_all(text.as_bytes())
             .map_err(|source| source.to_string())?;
     }
-    let output = child
-        .wait_with_output()
-        .map_err(|source| source.to_string())?;
-    if output.status.success() {
+    let (owned, stdout, stderr) = PublishedInvocation::record(child);
+    let drained = drain_invocation_pipes(stdout, stderr);
+    let status = owned.reap().map_err(|source| source.to_string())?;
+    let (_stdout, stderr_bytes) = drained.map_err(|source| source.to_string())?;
+    if status.success() {
         return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stderr = String::from_utf8_lossy(&stderr_bytes).trim().to_string();
     if stderr.is_empty() {
         return Err("tmux load-buffer failed".to_string());
     }
@@ -301,15 +370,20 @@ pub(crate) fn run_tmux_command_capture(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // Spawn and wait explicitly rather than `output()`, which does both behind a
-    // handle nothing else can reach. The pid has to be published before the wait
-    // begins, because the whole point is to signal an invocation the caller is
-    // already blocked on.
+    // Spawn, publish, drain, reap — rather than `output()`, which does all of it
+    // behind a handle nothing else can reach. The invocation has to be reachable
+    // before the wait begins, because the whole point is to signal one the caller
+    // is already blocked on.
     let child = command.spawn().map_err(|source| source.to_string())?;
-    let _published = PublishedInvocation::record(&child);
-    child
-        .wait_with_output()
-        .map_err(|source| source.to_string())
+    let (owned, stdout, stderr) = PublishedInvocation::record(child);
+    let drained = drain_invocation_pipes(stdout, stderr);
+    let status = owned.reap().map_err(|source| source.to_string())?;
+    let (stdout, stderr) = drained.map_err(|source| source.to_string())?;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 /// Builds a tmux invocation addressing `tmux_socket` relative to its own
