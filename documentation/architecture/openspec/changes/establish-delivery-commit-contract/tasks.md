@@ -22,7 +22,8 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Implement authorization as a relay-local transition that creates the batch's owner in the same atomic operation
 - [ ] Implement the relay-owned guard: keyed on `(batch, member, attempt, generation)` at authorization, atomically bound to `PackingUnit ID` at partition
 - [ ] Implement the single terminal CAS, releasing admission quota on that transition and nowhere else
-- [ ] Terminalize `submission_unknown` on unwind, channel closure, supervised task or thread exit, generation replacement, and graceful shutdown, unless stronger evidence already won
+- [ ] Implement the guard resolution order once: unit record if present, else `not_submitted` for a member never bound to a unit, else `submission_unknown`
+- [ ] Make unwind, channel closure, task or thread exit, generation replacement, and graceful shutdown all route through that one order; no lifecycle path selects an outcome of its own
 - [ ] Make collectors carry guard keys rather than own resolution; remove the `JoinError` branch in `src/relay/delivery/dispatch/outcomes.rs` that returns without producing an outcome
 - [ ] Ensure outcome-notification failure is counted and recorded without blocking the terminal transition or the quota release
 
@@ -31,6 +32,9 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Implement residency over `Pending` entries only, resolving `expired`, and make it unable to fire against an `Authorized` entry
 - [ ] Implement per-target FIFO covering mail and raw as one order
 - [ ] Implement deficit round-robin across targets: canonical payload bytes as the cost unit, deficit capped at one quantum, ineligible targets skipped without accruing deficit
+- [ ] Form batches against both handover components, stopping at whichever of envelope count or canonical payload bytes binds first
+- [ ] Debit deficit at authorization, in the same atomic operation as the `Pending` to `Authorized` transition
+- [ ] Revalidate the quantum against the largest byte component when a transport registers or changes its declared maxima, refusing registration rather than admitting an unschedulable transport
 - [ ] Make authorization outrank residency expiry within one scheduling iteration, and keep an activity-advanced target unauthorizable
 - [ ] Reschedule `Pending` entries to a new generation on respawn; never re-invoke `Authorized` entries
 - [ ] Resolve still-`Pending` members `dropped_on_shutdown` on graceful shutdown, and `Authorized` members from evidence
@@ -55,7 +59,9 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 - [ ] Retain every generation-owned submission and permission executor handle
 - [ ] Implement fence acknowledgment as terminate-then-join, in that order
-- [ ] Bound the fence join with `fence-join-timeout-ms` and implement its escalation
+- [ ] Bound the fence join with `[delivery].fence-join-timeout-ms`
+- [ ] Implement the fixed escalation: on bound elapse, reap the generation's child with prejudice, which unblocks the executors writing to it and establishes that nothing in flight can still reach the target
+- [ ] Keep the fence negative when an executor is still unjoinable after reaping: admit no replacement for that target, hold its raw barrier, record the condition, and still resolve every member through the guard
 - [ ] Block replacement and normal-raw ordering barriers until the fence is positive, while allowing `submission_unknown` to terminalize before it
 - [ ] Resolve a submission stopped by the fence before any effect as `not_submitted`
 
@@ -99,6 +105,9 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Cover exactly-once resolution under worker panic, collector panic, transport panic mid-partition and after partial submission, closed outcome channel, generation replacement in flight, and graceful shutdown with mixed `Pending`/`Authorized`
 - [ ] Cover that quota returns to zero after each of those, and that the per-target FIFO still makes progress
 - [ ] Cover fence acknowledgment ordering: a join without termination authority does not complete, and one with it does
+- [ ] Cover the escalation path: the join bound elapses, the child is reaped, the executor unblocks, and the fence becomes positive
+- [ ] Cover the fail-stop path: an executor unjoinable after reaping leaves the fence negative, blocks replacement, and still resolves every member
+- [ ] Cover that an unbound member resolves `not_submitted` under every trigger, and that a recorded `Submitted` is not downgraded by a generation replacement
 - [ ] Cover that siblings of one packing unit never receive different outcomes from one evidence record
 - [ ] Assert the teeth of the ordering and absence tests by reverting each mechanism and confirming the test fails
 
@@ -111,9 +120,16 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Expose emergency raw mode in the TUI raww surface
 - [ ] Durable crash recovery, tracked separately
 
-## Interim exception carried by Phase 1
+## Interim exceptions carried by Phase 1
 
-`TransportImpl::Ui` keeps its reconnect timer until Phase 2 lands. The specs
-describe universal timer retirement as the contract; this is the one place the
-core knowingly does not yet reach it, and it is an implementation-phase
-exception rather than a property of the specified contract.
+The specs describe the end state. These are the two places the core knowingly
+does not yet reach it. Both are implementation-phase exceptions rather than
+properties of the specified contract.
+
+- **`TransportImpl::Ui` keeps its reconnect timer** until Phase 2 lands, so timer
+  retirement is not yet universal.
+- **No transport provides a separately supervised writer**, so the clause
+  permitting emergency raw to bypass an in-flight submission is unreachable and
+  emergency raw always waits for target-side ordering safety. The requirement is
+  written against the end state so that adding the writer in Phase 2 does not
+  require reopening it.

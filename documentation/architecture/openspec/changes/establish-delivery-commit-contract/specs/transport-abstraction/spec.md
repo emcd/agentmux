@@ -179,8 +179,10 @@ Every member's outcome SHALL be **derived from its unit's immutable evidence
 record**, never from live re-inspection at fan-out time.
 
 The transport SHALL NOT drop a member without resolving it, and the relay-owned
-guard SHALL terminalize any member the transport fails to resolve. This does not
-block the relay request path: the send RPC returns `queued` at admission.
+guard SHALL terminalize any member the transport fails to resolve, selecting the
+outcome by the guard resolution order defined in the `delivery-quiescence`
+capability's `Delivery Authorization and Terminal Guard` requirement. This does
+not block the relay request path: the send RPC returns `queued` at admission.
 
 #### Scenario: Member outcome resolves through the relay worker
 
@@ -204,7 +206,9 @@ block the relay request path: the send RPC returns `queued` at admission.
 #### Scenario: The guard resolves what the transport does not
 
 - **WHEN** a transport returns without resolving some members
-- **THEN** the relay-owned guard terminalizes them `submission_unknown`
+- **THEN** the relay-owned guard terminalizes them by its evidence order — the
+  unit's record if one exists, `not_submitted` if the member was never bound to a
+  unit, `submission_unknown` otherwise
 - **AND** each member's admission quota is released exactly once
 
 ### Requirement: Worker Readiness Interface
@@ -567,11 +571,35 @@ complete. A generation supervisor SHALL therefore retain child termination
 authority **plus every submission and permission executor handle it owns**. An
 executor whose handle is discarded cannot be joined and cannot be fenced.
 
-**The join SHALL be bounded**, with a defined escalation when the bound elapses.
-Because replacement and ordering barriers may not proceed until the fence is
-positive, an unbounded join would reintroduce exactly the unbounded wait this
-capability exists to remove. The bound and its escalation SHALL be relay
-configuration, not an implementation constant.
+**The join SHALL be bounded.** Because replacement and ordering barriers may not
+proceed until the fence is positive, an unbounded join would reintroduce exactly
+the unbounded wait this capability exists to remove. The bound SHALL be relay
+configuration (`[delivery].fence-join-timeout-ms`).
+
+**The escalation action is fixed, not configurable**, because only one action can
+actually establish what the fence needs. When the bound elapses the supervisor
+SHALL terminate the generation's child process with prejudice and reap it.
+
+Reaping is what makes this sound. A timeout that merely stops waiting establishes
+nothing and cannot release a barrier. Reaping the child closes the pty or pipe
+the submission was writing to, which both unblocks an executor blocked in that
+write and positively establishes that no in-flight primitive can still reach the
+target — the target no longer exists. That is a stronger fact than joining the
+executor, and it is the fact the raw barrier and generation replacement require.
+
+**If an executor remains unjoinable after the child has been reaped, the fence
+SHALL remain negative.** The supervisor SHALL NOT admit a replacement generation
+for that target and SHALL NOT release its raw barrier, and SHALL record the
+condition as observability. This is deliberately fail-stop: a target that stops
+accepting new generations is recoverable by operator action, and a target whose
+old generation might still write while a new one runs is not.
+
+A negative fence SHALL NOT hold any member's outcome open. Members resolve
+through the guard's evidence order regardless, so an unjoinable executor stalls
+that target's lifecycle without stranding a single message.
+
+The bound applies to the join, not to the terminate step. Terminating and
+reaping a child is a bounded operation the supervisor performs directly.
 
 Three facts SHALL be kept separate:
 
@@ -617,12 +645,30 @@ A submission stopped by the fence before producing its effect SHALL resolve
 - **THEN** the generation supervisor cannot acknowledge a fence for it
 - **AND** the transport does not satisfy this requirement
 
-#### Scenario: The fence join is bounded and escalates
+#### Scenario: The fence join is bounded and escalates to reaping the child
 
-- **WHEN** the configured fence-join bound elapses without every executor having
-  been joined
-- **THEN** the supervisor applies the configured escalation
-- **AND** replacement does not proceed on an unacknowledged fence
+- **WHEN** `[delivery].fence-join-timeout-ms` elapses without every
+  generation-owned executor having been joined
+- **THEN** the supervisor terminates the generation's child process with
+  prejudice and reaps it
+- **AND** the executors blocked writing to that child unblock and are joined
+- **AND** the fence becomes positive, releasing replacement and the raw barrier
+
+#### Scenario: An unjoinable executor leaves the fence negative
+
+- **WHEN** an executor remains unjoinable after the child has been reaped
+- **THEN** the fence remains negative
+- **AND** no replacement generation is admitted for that target and its raw
+  barrier is not released
+- **AND** the condition is recorded as observability
+
+#### Scenario: A negative fence does not strand any member
+
+- **WHEN** a fence remains negative because an executor could not be joined
+- **THEN** every member of that generation still resolves through the guard's
+  evidence order
+- **AND** each member's admission quota is released
+- **BECAUSE** outcome terminality does not require the fence to be positive
 
 #### Scenario: A fenced submission resolves not_submitted
 

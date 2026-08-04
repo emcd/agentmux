@@ -217,12 +217,24 @@ Older `Pending` mail overtaken by an emergency raw SHALL be neither retried nor
 reclassified; it keeps its place in the queue and resolves normally. This is a
 documented ordering break.
 
-Emergency raw SHALL NOT bypass a submission already in flight. On Pty, raw and
-envelope submission share one worker channel and one writer mutex: routing around
-the mutex permits byte interleaving that corrupts both writes, and taking it
-blocks exactly as the normal path would. Tmux has the analogous constraint on its
-command path. A separately supervised independent writer with a defined
-interleaving rule is out of scope for this change.
+**Emergency raw SHALL NOT bypass a submission already in flight unless the
+transport provides a separately supervised writer with a defined interleaving
+rule.** Where no such writer exists, emergency raw SHALL wait for target-side
+ordering safety of older in-flight execution.
+
+The constraint is a property of the transports, not a scheduling preference. On
+Pty, raw and envelope submission share one worker channel and one writer mutex:
+routing around the mutex permits byte interleaving that corrupts both writes, and
+taking it blocks exactly as the normal path would. Tmux has the analogous
+constraint on its command path. Overtaking an unfenced in-flight attempt without
+an interleaving rule is a deliberate corruption hazard, not a latency
+optimisation.
+
+> **Interim exception.** No transport provides a separately supervised writer
+> today, so the first clause is currently unreachable on every transport and
+> emergency raw always waits. This is an implementation-phase state, not a
+> narrower contract: the requirement is written against the end state so that
+> adding the writer does not require reopening it.
 
 #### Scenario: Route raww to acp via session/prompt path
 
@@ -257,6 +269,7 @@ interleaving rule is out of scope for this change.
 
 - **WHEN** an `emergency` raww is submitted for a target with an authorized
   batch already executing
+- **AND** that target's transport provides no separately supervised writer
 - **THEN** the raw write waits for target-side ordering safety of that execution
 - **AND** it does not interleave with the in-flight submission
 

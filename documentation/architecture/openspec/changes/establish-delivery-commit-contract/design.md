@@ -362,8 +362,12 @@ The guard then:
   terminal transition, so duplicate completions converge rather than racing;
 - collectors carry keys rather than owning resolution;
 - **unwind, channel closure, supervised task or thread exit, generation
-  replacement, and graceful shutdown each terminalize the guard**
-  `submission_unknown`, unless stronger evidence already won;
+  replacement, and graceful shutdown each terminalize the guard.** They are
+  *triggers*; they do not choose the outcome. The guard applies one evidence
+  order: the unit's immutable record if one exists, else `not_submitted` for a
+  member never bound to a packing unit, else `submission_unknown`. Letting a
+  lifecycle event pick the spelling would report `submission_unknown` for members
+  the system can positively prove were never submitted;
 - `Pending` entries are untouched by guard termination — they remain schedulable
   or take a pre-commit policy outcome.
 
@@ -380,10 +384,24 @@ replacement (`src/acp/worker_driver.rs:328-404`), and permission responders are
 detached too. So the generation supervisor SHALL retain **child termination
 authority plus every submission and permission executor handle** it owns, and:
 
-- **fence acknowledgment** means stdin/child termination **and** joining every
-  generation-owned executor;
+- **fence acknowledgment is ordered**: terminate first, then join every
+  generation-owned executor. The spike settled this — against an executor blocked
+  in a primitive that observes no flag, a join alone never completes, and the
+  termination is what lets it complete. An earlier draft stated the two halves as
+  an unordered conjunction;
+- **the join is bounded** by `[delivery].fence-join-timeout-ms`, because
+  replacement waits on the fence and an unbounded join would reintroduce the
+  unbounded wait this change removes;
+- **the escalation is fixed**: reap the child with prejudice. A timeout that only
+  stops waiting establishes nothing. Reaping closes the pty or pipe, unblocking
+  the executor *and* positively establishing that no in-flight primitive can
+  reach the target — which is the fact the barrier actually needs;
+- **if an executor is still unjoinable after reaping, the fence stays negative**
+  and that target admits no replacement and releases no raw barrier. Fail-stop is
+  the right trade: a stuck target is operator-recoverable, an old generation
+  writing alongside a new one is not;
 - `submission_unknown` MAY terminalize before the fence is positive — outcome
-  terminality does not require it;
+  terminality does not require it, so a negative fence strands no message;
 - **replacement and normal ordering barriers SHALL NOT proceed** until the fence
   is positive.
 

@@ -142,7 +142,9 @@ explicit `Pending`/`Authorized`/`Terminal` entry states and a stable attempt ID
 per authorization — are required now because retrofitting them is expensive.
 **In-process** recovery is specified: across a transport teardown and respawn,
 `Pending` entries reschedule to the new generation and `Authorized` entries are
-never re-invoked, resolving `submission_unknown` before the replacement begins.
+never re-invoked, resolving through the guard's evidence order before the
+replacement begins. Respawn is a trigger for resolution, not a chooser of
+outcomes.
 **Process-startup** recovery is not specified, because nothing persists across a
 process boundary in 0.9.0. Durable recovery is a follow-up issue.
 

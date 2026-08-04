@@ -14,10 +14,15 @@ that describe behavior the change does not touch, and nothing downstream
 complains: the resulting spec is still valid, just quieter than it was.
 
 That is not hypothetical. Authoring the 36 deltas for
-`establish-delivery-commit-contract` dropped nine scenarios that survive the
+`establish-delivery-commit-contract` dropped twelve scenarios that survive the
 change -- cursor-column gating, the operator-decision case, copy-mode delivery,
 the activity-signal sources -- while rewriting the requirements around them.
 Every one passed `--strict`. This script found them.
+
+**The audit is title-only.** It compares `#### Scenario:` headings, so it cannot
+see a scenario whose title survived while its body was hollowed out, nor a
+requirement whose prose lost a normative clause. Those remain a manual-review
+concern; this catches the silent-deletion class, not every regression.
 
 Four checks, three of which are errors and one of which is a report:
 
@@ -40,34 +45,38 @@ Run from the repository root, after `openspec validate <change-id> --strict`
 passes and before requesting review. Exits non-zero on any ERROR.
 """
 
-import json
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 REQUIREMENT = "### Requirement:"
 SCENARIO = "#### Scenario:"
 
+# The planning home, relative to the repository root. The repository also
+# carries an `openspec/` symlink to this directory, but that symlink is
+# untracked and listed in `.git/info/exclude`, so it exists only in worktrees
+# where somebody created it by hand. Shelling out to `openspec status` to
+# resolve these paths therefore fails in a fresh clone. Deriving them from this
+# script's own location instead is deterministic everywhere.
+PLANNING_HOME = Path("documentation/architecture/openspec")
+
 
 def resolve_paths(change_id):
-    """Return (change_specs_dir, live_specs_dir) for a change.
-
-    Resolved from `openspec status` rather than assumed, because the repository
-    reaches its planning artifacts through an `openspec/` symlink and the real
-    tree lives under `documentation/architecture/`. `changeRoot` is reported as
-    the real path; `planningHome.changesDir` is reported through the symlink.
-    Deriving both from `changeRoot` keeps them on the same side of it.
-    """
-    proc = subprocess.run(
-        ["openspec", "status", "--change", change_id, "--json"],
-        capture_output=True,
-        text=True,
-    )
-    if proc.returncode != 0:
-        sys.exit(f"openspec status failed for '{change_id}':\n{proc.stderr.strip()}")
-    root = Path(json.loads(proc.stdout)["changeRoot"])
-    return root / "specs", root.parent.parent / "specs"
+    """Return (change_specs_dir, live_specs_dir) for a change."""
+    repo_root = Path(__file__).resolve().parents[2]
+    home = repo_root / PLANNING_HOME
+    if not home.is_dir():
+        # Fall back to the symlink for a layout this constant has outlived.
+        home = (repo_root / "openspec").resolve()
+    if not home.is_dir():
+        sys.exit(
+            f"cannot locate the OpenSpec planning home; looked for "
+            f"{repo_root / PLANNING_HOME} and {repo_root / 'openspec'}"
+        )
+    change_root = home / "changes" / change_id
+    if not change_root.is_dir():
+        sys.exit(f"no such change: '{change_id}' (looked in {home / 'changes'})")
+    return change_root / "specs", home / "specs"
 
 
 def parse(path):
@@ -127,12 +136,33 @@ def main():
     if not change_specs.is_dir():
         sys.exit(f"no specs/ directory in change '{argv[0]}' -- nothing to audit")
 
-    errors, drops, capabilities = [], 0, 0
+    errors, drops = [], 0
 
-    for delta_path in sorted(change_specs.glob("*/spec.md")):
-        capability = delta_path.parent.name
+    # OpenSpec declares the specs artifact as `specs/**/*.md`, so a capability
+    # may be split across several files rather than a single `spec.md`. Group
+    # every file under its capability directory and merge their deltas before
+    # comparing, or a requirement defined in a sibling file reads as missing.
+    by_capability = {}
+    for delta_path in sorted(change_specs.rglob("*.md")):
+        capability = delta_path.relative_to(change_specs).parts[0]
+        by_capability.setdefault(capability, []).append(delta_path)
+
+    for capability, delta_paths in sorted(by_capability.items()):
         live = parse(live_specs / capability / "spec.md")
-        delta = parse_delta(delta_path)
+        for extra in sorted((live_specs / capability).glob("**/*.md")):
+            if extra.name != "spec.md":
+                for name, scenarios in parse(extra).items():
+                    live.setdefault(name, []).extend(scenarios)
+
+        delta = {}
+        for delta_path in delta_paths:
+            for operation, requirements in parse_delta(delta_path).items():
+                section = delta.setdefault(operation, {})
+                for name, scenarios in requirements.items():
+                    if name == "__pairs__":
+                        section.setdefault(name, []).extend(scenarios)
+                    else:
+                        section.setdefault(name, []).extend(scenarios)
         header_shown = False
 
         for operation in ("MODIFIED", "REMOVED"):
@@ -172,8 +202,8 @@ def main():
                     print(f"     - DROPPED  {s}")
                 for s in added:
                     print(f"     + added    {s}")
-        capabilities += 1
 
+    capabilities = len(by_capability)
     print()
     if errors:
         for message in errors:

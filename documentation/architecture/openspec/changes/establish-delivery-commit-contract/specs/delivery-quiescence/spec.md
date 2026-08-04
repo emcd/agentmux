@@ -194,23 +194,45 @@ no authorization SHALL occur across a raw barrier, nor younger work across older
 except where the emergency raw mode defined in the `transport-contracts`
 capability applies.
 
-Scheduling across targets SHALL be **deficit round-robin**:
+Scheduling across targets SHALL be **deficit round-robin**. Maximum handover
+dimensions have two components — envelope count and canonical payload bytes — and
+the two are used for different purposes, so each rule below names which:
 
 - **cost unit** — canonical payload bytes, the same unit as admission quota, so
-  one accounting serves both;
-- **quantum** — a relay-configured byte value per rotation visit, which SHALL be
-  greater than or equal to every registered transport's maximum handover
-  dimension. Configuring it lower SHALL be a validation error at load;
-- **deficit** — a per-target counter accruing the unused quantum each visit,
-  **capped at one quantum**, so an idle target cannot bank credit and then
+  one accounting serves both. Envelope count is not a scheduling cost;
+- **quantum** — a relay-configured byte value per rotation visit, compared
+  against the **canonical-payload-byte component** of every registered
+  transport's maximum handover dimensions. It SHALL be greater than or equal to
+  the largest such byte component. Configuring it lower SHALL be a validation
+  error at load. The count component is not compared against the quantum, since
+  the quantum is denominated in bytes;
+- **batch formation** — a batch SHALL satisfy **both** components of its target
+  transport's maximum handover dimensions: no more envelopes than the count
+  maximum, and no more canonical payload bytes than the byte maximum. Whichever
+  binds first stops the batch. A batch SHALL additionally not exceed the
+  visiting target's remaining quantum plus deficit;
+- **debit timing** — a target's deficit SHALL be debited by a batch's canonical
+  payload bytes **at authorization**, in the same atomic operation as the
+  `Pending` → `Authorized` transition. Debiting at admission would charge work
+  that may never be authorized; debiting at resolution would let a target be
+  visited repeatedly while its earlier batches are still in flight;
+- **deficit accrual** — a per-target counter accruing the unused quantum each
+  visit, **capped at one quantum**, so an idle target cannot bank credit and then
   monopolise a rotation;
 - **eligible rotation** — only targets with pending work whose transport reports
   `can_accept_handover` are visited; ineligible targets are skipped without
-  accruing deficit.
+  accruing deficit;
+- **revalidation** — when the set of registered transports changes, or a
+  registered transport's declared maximum handover dimensions change, the relay
+  SHALL revalidate the configured quantum against the new largest byte component.
+  If the quantum no longer satisfies the constraint, the relay SHALL refuse to
+  register that transport and SHALL record the refusal, rather than silently
+  admitting a transport whose handover it cannot schedule.
 
-Because the quantum is at least the largest permitted handover, and admission
-rejects an envelope exceeding the transport's maximum handover dimensions, every
-admissible item fits within one quantum. There is no oversized-item case.
+Because the quantum is at least the largest permitted byte component, and
+admission rejects an envelope exceeding its transport's maximum handover
+dimensions, every admissible item fits within one quantum. There is no
+oversized-item case.
 
 Residency governs `Pending` entries only. When an entry's residency elapses
 before it is authorized, it SHALL resolve `expired`. Residency expiry is a
@@ -265,12 +287,35 @@ any coder. Per-target residency overrides are excluded from this change.
 - **THEN** its deficit counter does not exceed one quantum
 - **AND** it cannot consume more than one quantum's worth of a later rotation
 
-#### Scenario: Reject a quantum smaller than a registered handover maximum
+#### Scenario: Reject a quantum smaller than a registered byte maximum
 
-- **WHEN** the configured scheduling quantum is less than any registered
-  transport's maximum handover dimension
+- **WHEN** the configured scheduling quantum is less than the canonical-payload-
+  byte component of any registered transport's maximum handover dimensions
 - **THEN** configuration load fails with a structured error naming the key, the
-  configured value, and the transport whose maximum exceeds it
+  configured value, and the transport whose byte component exceeds it
+
+#### Scenario: Batch formation obeys both handover components
+
+- **WHEN** a target's pending work would exceed either the envelope-count
+  component or the canonical-payload-byte component of its transport's maximum
+  handover dimensions
+- **THEN** the batch stops at whichever component binds first
+- **AND** the remainder stays `Pending` for a later rotation
+
+#### Scenario: Debit deficit at authorization
+
+- **WHEN** a batch transitions from `Pending` to `Authorized`
+- **THEN** the target's deficit is debited by that batch's canonical payload
+  bytes in the same atomic operation
+- **AND** the debit does not wait for the batch to resolve
+
+#### Scenario: Refuse a transport whose handover the quantum cannot cover
+
+- **WHEN** a transport registers, or changes its declared maximum handover
+  dimensions, such that the configured quantum is below its byte component
+- **THEN** the relay refuses to register that transport and records the refusal
+- **AND** it does not silently admit a transport whose handover it cannot
+  schedule
 
 ### Requirement: Asynchronous Terminal-Outcome Receipt
 
@@ -532,11 +577,36 @@ The guard SHALL:
 - consume normal evidence through **one atomic non-terminal → terminal
   transition**, so duplicate completions converge rather than racing;
 - carry keys in collectors rather than granting them ownership of resolution;
-- terminalize `submission_unknown` on unwind, channel closure, supervised task or
-  thread exit, generation replacement, and graceful shutdown — unless stronger
-  evidence already won;
+- terminalize any still-unresolved member on unwind, channel closure, supervised
+  task or thread exit, generation replacement, and graceful shutdown;
 - leave `Pending` entries untouched, so they remain schedulable or take a
   pre-commit policy outcome.
+
+#### Guard resolution order
+
+Whenever the guard terminalizes a member that has not already reached a terminal
+outcome, it SHALL select that outcome by the following order, first match
+winning:
+
+1. the member's packing unit has an **immutable evidence record** → derive the
+   outcome from that record (`Submitted` → `delivered`, `NotSubmitted` →
+   `not_submitted`, `SubmissionUnknown` → `submission_unknown`);
+2. the member was **never bound to a packing unit** → `not_submitted`, because
+   the partition is recorded before the first target-side effect, so nothing
+   could have been submitted;
+3. otherwise → `submission_unknown`.
+
+**Lifecycle context determines *when* the guard resolves a member, never *which*
+outcome it receives.** Unwind, channel closure, task or thread exit, generation
+replacement, and graceful shutdown are all triggers for the same evidence order.
+No requirement SHALL specify an outcome for a member on the basis of the
+lifecycle event that prompted its resolution, because doing so would report
+`submission_unknown` for members the system can positively prove were never
+submitted.
+
+A fence that stops a submission before any target-side effect SHALL record
+`NotSubmitted` as that unit's evidence, so it resolves through step 1 rather
+than needing a rule of its own.
 
 **Admission quota SHALL be released by the guard's terminal transition**, and by
 nothing else. Releasing it anywhere other than the single terminal transition
@@ -560,6 +630,22 @@ did not arrive, reported honestly, leaves the decision with the sender.
 - **WHEN** the submission executor for an authorized batch panics
 - **THEN** every member of that batch reaches exactly one terminal outcome
 - **AND** each member's admission quota is released exactly once
+
+#### Scenario: An unbound member resolves not_submitted whatever the trigger
+
+- **WHEN** the guard terminalizes a member that was never bound to a packing unit
+- **AND** the trigger is a panic, a channel closure, a generation replacement, or
+  graceful shutdown
+- **THEN** the member resolves `not_submitted` in every case
+- **AND** the lifecycle event does not change the outcome
+
+#### Scenario: A recorded unit outcome outranks the lifecycle trigger
+
+- **WHEN** a generation is replaced while one of its units has already recorded
+  `Submitted`
+- **THEN** that unit's members resolve `delivered`
+- **AND** they are not downgraded to `submission_unknown` because a replacement
+  occurred
 
 #### Scenario: Resolve exactly once under a collector panic
 
@@ -609,14 +695,16 @@ this change does not claim to.
 recovery is real and is specified: when a per-target worker or transport is torn
 down and respawned within a surviving relay process, `Pending` entries SHALL be
 rescheduled to the new generation, and `Authorized` entries SHALL **never** be
-re-invoked — they resolve `submission_unknown` through the guard.
+re-invoked — they resolve through the guard's evidence order.
 Process-startup recovery is **not** specified, because nothing persists across a
 process boundary.
 
 On graceful shutdown, still-`Pending` relay-owned members SHALL resolve
 `dropped_on_shutdown`. `Authorized` members SHALL NOT resolve
-`dropped_on_shutdown`; they resolve from evidence — `not_submitted` where the
-transport returned them unchanged, `submission_unknown` otherwise.
+`dropped_on_shutdown`; they resolve through the guard's evidence order.
+
+Neither respawn nor shutdown SHALL select an outcome for an `Authorized` member.
+Both are triggers; the evidence order chooses.
 
 #### Scenario: Reschedule pending entries to a new generation
 
@@ -628,7 +716,7 @@ transport returned them unchanged, `submission_unknown` otherwise.
 #### Scenario: Never re-invoke an authorized entry after respawn
 
 - **WHEN** a transport generation is replaced while it holds `Authorized` entries
-- **THEN** those entries resolve `submission_unknown` through the guard
+- **THEN** those entries resolve through the guard's evidence order
 - **AND** they are not submitted to the replacement generation
 
 #### Scenario: Separate pending and authorized members at shutdown
@@ -636,8 +724,10 @@ transport returned them unchanged, `submission_unknown` otherwise.
 - **WHEN** relay shuts down gracefully with a mix of `Pending` and `Authorized`
   members
 - **THEN** the `Pending` members resolve `dropped_on_shutdown`
-- **AND** the `Authorized` members resolve from evidence, never
-  `dropped_on_shutdown`
+- **AND** the `Authorized` members resolve through the guard's evidence order,
+  never `dropped_on_shutdown`
+- **AND** an `Authorized` member never bound to a packing unit resolves
+  `not_submitted` rather than `submission_unknown`
 
 #### Scenario: State the crash-recovery limitation
 
