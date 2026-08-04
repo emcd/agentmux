@@ -64,8 +64,9 @@ the retirement must land together.
 - **Invocation after authorization is fallible, and that is a terminal evidence
   result rather than a reclaim.** `mailw` can legitimately fail today — Tmux
   resolves `channel_full` when its write channel is full or closed
-  (`src/tmux/transport.rs:159-178`) — and relay residency reserves nothing about
-  a transport's channel, worker generation, or target resources. A refused
+  (`src/tmux/transport.rs:159-178`) — and the relay's admission quota reserves
+  nothing about a transport's channel, worker generation, or target resources. A
+  refused
   invocation resolves the authorized unit as positively **not submitted** when
   the item comes back unchanged, or **submission unknown** when side effects
   cannot be excluded. The relay never reclaims either way.
@@ -74,16 +75,22 @@ the retirement must land together.
   reports ready, and today uses a bounded reconnect wait
   (`src/transports/ui.rs:152-188`) — an absence timeout of exactly the kind this
   change retires. It is in scope for relay-owned queueing, readiness, capacity,
-  authorization, and residency.
+  and authorization.
 - **BREAKING — retire every absence-inference timer.** Delete
   `[coders.<id>.pty].wedge-detection`, `[coders.<id>.{tmux,acp,pty}].prime-timeout-ms`,
   and `[coders.<id>.tmux].readiness-timeout-ms`, along with the `wedged`
   classification, `DeliveryWaitError::Wedged`, and the prime/readiness deadline
   machinery. No transport classifies a delivery from what a pane displays or
   from how long it has been quiet.
-- **Add a relay-level queue residency and size policy**, which is what replaces
-  them. Its expiry is a statement about the relay's own patience, never about the
-  target's health, and it can only fire while a message is provably uncommitted.
+- **BREAKING — add no bound in their place.** An earlier draft replaced them with
+  a relay-level residency bound resolving `expired`. That was the same inference
+  relocated: elapsed waiting decided an outcome, and because expiry terminalizes
+  and releases quota it dropped mail that would have landed once a long agent turn
+  finished. A `Pending` entry now waits indefinitely, and the `expired` outcome is
+  deleted along with the timers. What replaces them is a **relay-level admission
+  quota and scheduling policy** — enforced positively at send time, per target and
+  relay-global — plus **undelivered-queue inscriptions** that report a long wait
+  without adjudicating it.
 - **Fix `agentmux:issues/relay/62` structurally.** With the relay owning the
   queue there is no transport-internal queue for a message to be absorbed into
   after a write, so the defect becomes unreachable rather than patched. Removing
@@ -101,8 +108,11 @@ the retirement must land together.
   `agentmux:issues/relay/61` closes here.
 - **State the guarantee as at most one relay-authorized injection attempt**, not
   at-most-once delivery. Transports do not deduplicate attempt IDs, so the
-  stronger claim would be false. Every accepted member resolves exactly once in a
-  surviving relay process, including when a transport panics.
+  stronger claim would be false. Every accepted member resolves **at most** once
+  in a surviving relay process, including when a transport panics. Uniqueness is
+  guaranteed; completeness is not, because a member queued for a target that never
+  becomes ready is never resolved by anything. Restoring completeness is the
+  `fetch`-cursor work in `agentmux:todos/runtime/23`, not a timer.
 
 ### What does not change
 
@@ -113,11 +123,12 @@ are. Every receipt that fires today for a real reason keeps firing:
 |---|---|---|
 | Transport disappears while members are still pending | relay policy | stays; a transient disappearance need not drop |
 | Relay shutdown, members still pending | pre-commit | stays (`dropped_on_shutdown`, pending members only) |
-| Relay queue residency/size exceeded, pre-commit | our own policy | stays, newly honest |
+| Admission quota exceeded | our own policy, positively accounted | becomes a **synchronous rejection at send time**, with no receipt because nothing was accepted |
 | Target exits after submission | positively observed | recorded as target-health observability, **not** a delivery outcome |
 | Settled non-prompt frame | inference from absence | **retired** |
 | No output within a window | inference from absence | **retired** |
 | Prompt never returned within a window | inference from absence | **retired** |
+| Relay queue residency exceeded | inference from absence | **retired**; the entry keeps waiting and the condition is reported by inscription |
 
 **`raww` gains two modes.** Normal raw keeps today's FIFO batch-barrier ordering
 — a raw item flushes buffered mail first, then delivers as its own write
@@ -159,7 +170,8 @@ scope call. The spec deltas describe the whole contract; `tasks.md` draws the
 line and Coordinator confirms it before implementation starts.
 
 **0.9.0 — the core.** Relay-owned queue; admission, authorization, submission and
-resolution; residency policy; retirement of wedge, prime and readiness timers;
+resolution; admission-quota and scheduling policy; retirement of wedge, prime and
+readiness timers with no bound put in their place;
 relay/62's structural fix; **and the minimum authorization guard and generation
 fence** — guard creation atomic with authorization, terminal CAS with
 exactly-once quota release, supervision of invocation/worker/collector/executor
@@ -241,7 +253,8 @@ inventory is reconciled against it.
 - `delivery-quiescence` (7 MODIFIED, 2 ADDED) — MODIFIED:
   `Quiescence-Gated Delivery` (relay-owned readiness), `Delivery Results Without
   ACK Protocol` (admission reservation, Pubsub rejection), `Async Queue Lifecycle
-  and Ordering` (entry states, residency, byte-budgeted round-robin),
+  and Ordering` (entry states, no elapsed-time resolution, byte-budgeted
+  round-robin),
   `Asynchronous Terminal-Outcome
   Receipt` (new outcome vocabulary), `Async Delivery Observability`, `Async Queue
   Growth Risk Disclosure`, `Quiescence Documentation`. ADDED: `Delivery
@@ -290,19 +303,22 @@ text, so it takes no delta; reconciled as a sync/archive task.
   reconnect timeout is a constant plus builder (`src/transports/ui.rs:129-147`),
   not a TOML key, so retiring it is a code deletion rather than a config break.
 - **Configuration — additive, relay-level.** A `[delivery]` table in `relay.toml`
-  replaces them: `residency-ms`, `submission-timeout-ms`,
-  `scheduling-quantum-bytes`, `fence-observation-timeout-ms`, and the four
-  admission-quota keys. `submission-timeout-ms` is an **execution watchdog** over
-  the relay's own supervised code, mandatory per the operator's 2026-08-04 call:
-  it bounds how long an authorized submission may run, states nothing about
-  target health, and exists because every other guard trigger is an event that a
-  blocked-but-alive executor never produces. These are relay
-  configuration rather than per-coder because they describe the relay's patience
+  replaces them: `submission-timeout-ms`, `scheduling-quantum-bytes`,
+  `fence-observation-timeout-ms`, the four admission-quota keys, and
+  `undelivered-warning-ms` plus `undelivered-report-interval-ms`.
+  **No key bounds how long a delivery waits for its target**, and none may be
+  added. `submission-timeout-ms` is an **execution watchdog** over the relay's own
+  supervised code, mandatory per the operator's 2026-08-04 call: it bounds how
+  long an authorized submission may run, states nothing about target health, and
+  exists because every other guard trigger is an event that a blocked-but-alive
+  executor never produces. The two undelivered keys govern **reporting only** and
+  may not influence any outcome, quota, or scheduling decision. These are relay
+  configuration rather than per-coder because they describe the relay's own queue
   and scheduling, not any coder's behavior. `scheduling-quantum-bytes` is
   validated at load against every registered transport's maximum handover
   dimension.
-- **Relay** — `src/relay/delivery/**` gains the pending queue, the residency
-  policy, and handover dispatch.
+- **Relay** — `src/relay/delivery/**` gains the pending queue, the admission-quota
+  and scheduling policy, undelivered-queue reporting, and handover dispatch.
 - **Transports** — `src/transports/{contract,quiescence,mod,ui}.rs`,
   `src/pty/**`, `src/tmux/**`, `src/acp/**`. All five `TransportImpl` variants
   are covered: Tmux, Acp, and Pty implement the contract, Ui implements it and

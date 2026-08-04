@@ -45,8 +45,9 @@ separates them.
   has been quiet.
 - Exactly one linearization point per message, after which the relay never
   reclaims it, and before which cancellation is free.
-- Every accepted message resolves exactly once in a surviving relay process,
-  including when a transport panics.
+- Any member that resolves does so exactly once in a surviving relay process,
+  including when a transport panics; every *authorized* member resolves within a
+  bound, while a *pending* one may wait indefinitely.
 - Outcomes state what is actually known, distinguishing positive evidence of
   delivery, positive evidence of non-submission, and absence of evidence.
 - Message loss of the relay/62 class becomes unreachable rather than patched.
@@ -84,8 +85,8 @@ responsibility. It never reclaims, never retries, and never asserts non-delivery
 
 The relay then invokes the transport, and **that invocation is fallible.** An
 earlier draft declared it non-rejectable on the grounds that the relay had
-reserved capacity for it. That reasoning was circular: relay residency reserves
-count and bytes **in the relay's own queue**, and reserves nothing about a
+reserved capacity for it. That reasoning was circular: the relay's admission
+quota reserves count and bytes **in the relay's own queue**, and nothing about a
 transport's channel, its live worker generation, UI subscriber capacity, or any
 target resource. `mailw` legitimately fails today — Tmux resolves `channel_full`
 when its write channel is full or closed (`src/tmux/transport.rs:159-178`), ACP
@@ -111,9 +112,13 @@ admission quota is not that mechanism, and this design does not pretend otherwis
 #### All waiting happens before authorization
 
 Retiring every absence timer removes the only thing that previously bounded a
-stuck delivery. Nothing replaces it for an `Authorized` member: residency governs
-`Pending` only, and a ledger records state without manufacturing a terminal event
-while the owner is alive and blocked. An earlier draft left Pty buffering,
+stuck delivery. The two sides of authorization are bounded differently, and
+deliberately so: a `Pending` member waits as long as its target takes, because
+elapsed time spent waiting for readiness is not evidence about the target; an
+`Authorized` member is bounded by `[delivery].submission-timeout-ms`, because
+that clock measures our own supervised code rather than the target's behavior. A
+ledger records state without manufacturing a terminal event while the owner is
+alive and blocked. An earlier draft left Pty buffering,
 waiting, then writing *after* authorization, which would have made an authorized
 member hang indefinitely with no bound anywhere in the system.
 
@@ -166,9 +171,11 @@ precede. The correct rule:
   failure from an unchanged screen. It yields `submission_unknown` rather than a
   failure spelling, because not knowing is what actually happened.
 
-This is why residency is meaningful: the members that wait are exactly the ones
-for which nothing has been submitted, so expiring them asserts non-delivery on
-solid ground.
+This is why the split is where the bound belongs. A member waiting in `Pending`
+holds nothing but its own queue slot, so waiting indefinitely costs only quota,
+which admission already reserves and bounds. A member waiting in `Authorized`
+holds its target's FIFO, an executor, and a transport generation, so leaving that
+side unbounded stalls work that has nothing to do with the stuck member.
 
 ### Decision 2 — Batch versus packing unit
 
@@ -278,10 +285,11 @@ notification is an edge hint, the authoritative state is the level the relay
 reads, and authorization is a relay-local transition. This is what keeps the
 boundary one-directional and representable over a wire.
 
-### Decision 5 — Capacity and residency are contract, not deferred detail
+### Decision 5 — Capacity is contract; the relay does not bound its own patience
 
-Both were previously filed as open questions. They are load-bearing and are
-settled here.
+Capacity and residency were previously filed as open questions. Both are
+load-bearing and are settled here: capacity becomes contract, and residency is
+deleted outright.
 
 **Three distinct quantities were previously conflated under "capacity" and are
 now separate:**
@@ -301,12 +309,12 @@ packing-unit limit**, invisible to the relay, governing *Decision 2*'s partition
 rather than the batch size. An envelope exceeding the maximum handover dimensions
 on its own is rejected at admission rather than queued unsendable.
 
-**Residency and size policy:**
+**Size and scheduling policy:**
 
 - Per-target and relay-global bounds, both enforced.
 - Capacity is **atomically reserved at admission, before `queued` is returned**,
-  and released at the member's terminal transition — whether that is pre-commit
-  expiry or post-commit resolution.
+  and released at the member's terminal transition — whether that is a pre-commit
+  drop or a post-commit resolution.
 - Scheduling is FIFO per target. Across targets it is **byte-budgeted
   round-robin**, specified rather than named:
   - **cost unit** — canonical payload bytes, the same unit as admission quota, so
@@ -340,13 +348,82 @@ on its own is rejected at admission rather than queued unsendable.
 - Admission quota is released through the guard's terminal transition
   (*Decision 6*) rather than by the collector, so a panicked task cannot leak it.
 - The policy lives in relay configuration, not `coders.toml`, because it is a
-  property of the relay's patience rather than of any coder. Per-target overrides
-  are deliberately excluded from this change; a UI session and a long-horizon
-  coder plausibly warrant different patience, and that is a follow-up.
+  property of the relay's own queue rather than of any coder.
 
-Residency expiry is a **pre-commit** outcome only. It is a statement about the
-relay's own patience, never about the target's health, and it cannot fire once a
-message is authorized.
+**There is no residency bound, and no `expired` outcome.**
+
+An earlier draft of this change carried `residency-ms`: a bound on how long a
+`Pending` member could wait before resolving `expired`. It was inherited from the
+predecessor change rather than re-derived, which meant it was never subjected to
+the test this change exists to apply. Under that test it fails.
+
+Ask what elapsing *proves*. For `submission-timeout-ms` it proves that our own
+supervised code overran the time we allot it — directly observed, and reported as
+`submission_unknown`, which states our ignorance rather than the target's
+condition. For residency it proves only that a target has not become ready yet,
+and it is used to conclude that a message should not be delivered. That is
+inference from absence, retired at the transport and reintroduced at the relay
+under a calmer name.
+
+The decisive point is that expiry is not a report. It terminalizes the member and
+releases its quota, so the entry is gone: a message that would have landed when
+the agent finished a long turn does not land. **We would be dropping mail to keep
+a guarantee sentence true.** And the sentence cannot be honestly kept, because we
+do not know how long a multi-round agent turn runs — any bound we pick is a guess
+about someone else's work, and every message it expires is a message the guess
+got wrong.
+
+Residency's three apparent jobs have owners that do not require it:
+
+| Apparent job | Real owner | Basis |
+|---|---|---|
+| Bound queue memory | admission quota, count and bytes, per target and relay-global | positive accounting, enforced before `queued` is returned |
+| Resolve mail to a dead target | `transport_unavailable` | positively observed terminal lifecycle |
+| Unstick a live but blocked target | emergency raw; operator teardown | positive action |
+
+Only the fourth job is real, and it is the guarantee. "Resolves exactly once"
+turns out to be three claims wearing one sentence, and only one of them is lost:
+
+- **Uniqueness** — no member ever produces two terminal outcomes. This is the
+  terminal CAS of *Decision 6*, and it is untouched.
+- **Bounded completeness for `Authorized` members** — every authorized member
+  reaches a terminal outcome within `submission-timeout-ms` plus twice the fence
+  observation budget, on a positive and a negative verdict alike. The execution
+  watchdog and the single resolution cut are what make this true, and it is also
+  untouched.
+- **Completeness for `Pending` members** — this is the one residency was propping
+  up, and it is dropped. Nothing bounds a pending member.
+
+Collapsing the three into one sentence is what made residency look load-bearing:
+the sentence was false without it, so a timer appeared to be the fix. Separating
+them shows the timer was buying only the third claim, which is the one we cannot
+honestly make.
+
+The honest statement, which replaces it: **every accepted message resolves at most
+once, on delivery, on submission evidence, on a positively observed terminal
+target lifecycle, or at relay shutdown.** A message queued for a live target that
+never becomes ready remains `Pending` indefinitely, and that is correct — the
+target may still become ready, and the relay has observed nothing that says
+otherwise. Sends are asynchronous by contract, returning `queued` without blocking
+the caller, so such a member holds no caller and no thread; it holds one queue
+slot, already reserved and already bounded.
+
+Restoring completeness is a mailbox problem, not a timer problem. Client-acknowledged
+receipt advancing a read cursor makes an undelivered message a durable fact rather
+than a wait the relay is running out of patience with. That is tracked in
+`agentmux:todos/runtime/23` and deliberately not attempted here.
+
+**Compensating observability, which reports rather than resolves.** Removing
+residency removes the receipts that made a wedged target visible, so the relay
+emits inscriptions instead: a periodic aggregate of undelivered queue depth,
+suppressed when the queue is empty, and a first-crossing warning per target once
+its oldest `Pending` entry exceeds `[delivery].undelivered-warning-ms`. The
+warning threshold is deduplicated **per target rather than per entry**, because
+the condition an operator acts on is "this target is not draining", and a
+per-entry rule would emit one line per queued message at the moment a wedged
+target crosses. These are timers, and they pass the test for the same reason
+residency fails it: elapsing causes a log line, and no member's outcome depends on
+it.
 
 ### Decision 6 — At most one relay-authorized injection attempt
 
@@ -359,9 +436,11 @@ on a duplicated instruction is a correctness hazard, not an inconvenience. A
 message that did not arrive, with an honest receipt, leaves the decision with the
 sender — usually another agent, capable of asking.
 
-Every accepted member SHALL resolve **exactly once** in a surviving relay
-process, including when a transport, worker, or collector panics. A relay-owned
-collector is **not sufficient** for this: `collect_outcome` today takes a
+Any member that reaches a terminal state SHALL do so **exactly once** in a
+surviving relay process, including when a transport, worker, or collector panics.
+That is uniqueness; completeness is a separate and weaker claim scoped in
+*Decision 5* — authorized members are bounded, pending ones are not. A relay-owned
+collector is **not sufficient** for uniqueness: `collect_outcome` today takes a
 `JoinError` branch that releases the pending slot and returns without producing
 any outcome — "a panic is a bug, not a delivery result"
 (`src/relay/delivery/dispatch/outcomes.rs:80-96`) — and the per-target worker
@@ -452,8 +531,8 @@ That split is the *Decision 9* three-facts distinction applied to respawn:
 resolving an outcome and proving execution ceased are different events, and only
 the second may release a barrier or admit a new generation.
 
-The guard is what makes "resolves exactly once" a property of the system rather
-than an aspiration about well-behaved tasks.
+The guard is what makes uniqueness a property of the system rather than an
+aspiration about well-behaved tasks.
 
 ### Decision 7 — Outcomes are evidence, not position
 
@@ -467,8 +546,7 @@ evidence of non-submission is perfectly sound grounds for asserting non-delivery
 | delivered | `delivered` | post | transport-specific **positive** evidence of injection |
 | not submitted | `not_submitted` | post | positive evidence the unit produced no side effect |
 | submission unknown | `submission_unknown` | post | none either way — panic, lost channel, partial write |
-| expired | `expired` | pre | relay patience elapsed; nothing authorized |
-| dropped, transport unavailable | `transport_unavailable` | pre | relay policy; nothing authorized |
+| dropped, transport unavailable | `transport_unavailable` | pre | positively observed terminal lifecycle; nothing authorized |
 | dropped on shutdown | `dropped_on_shutdown` | pre | **still-pending relay-owned members only** |
 
 **There is no `target failed` delivery outcome.** An earlier draft listed one,
@@ -488,10 +566,11 @@ gone" is not one condition. It fires only on a **positively observed terminal
 lifecycle state** — the transport was shut down, or its generation was torn down
 without replacement. A **transient absence** — a respawn in progress, a
 generation being replaced, a UI subscriber that has disconnected but whose
-session is still registered — leaves members `Pending`, where residency governs
-them and they resolve `expired` if the absence outlasts it. Otherwise
-`transport_unavailable` would become another inference from absence, retired at
-the transport and reintroduced at the relay.
+session is still registered — leaves members `Pending` indefinitely, until the
+absence resolves into readiness or into a positively observed teardown. Nothing
+converts the waiting itself into an outcome; otherwise `transport_unavailable`
+would become another inference from absence, retired at the transport and
+reintroduced at the relay.
 
 **A readiness observation is not delivery evidence** on any transport that writes
 after observing. Each transport's terminal evidence and its **observation window**
@@ -523,7 +602,8 @@ how long the relay chose to watch, which is the class of judgement this change
 exists to remove.
 
 `not_submitted` is a **non-delivered** terminal outcome and produces a
-terminal-outcome receipt exactly as `expired` and `dropped_on_shutdown` do.
+terminal-outcome receipt exactly as `transport_unavailable` and
+`dropped_on_shutdown` do.
 
 `dropped_on_shutdown` applies only to members still pending at shutdown.
 Authorized members resolve from evidence — `not submitted` where the transport
@@ -694,7 +774,7 @@ the same error as omitting five requirements from a sweep last round: enumeratin
 from the set already in mind rather than from the type.
 
 **UI is fully in scope** for relay-owned queueing, readiness, capacity,
-authorization, residency, and the ledger. It is not an edge case here — it is the
+authorization, and the ledger. It is not an edge case here — it is the
 transport that most needs the change. Today it reports `Ready` unconditionally
 (`src/transports/ui.rs:152-159`), spawns a thread per delivery, and resolves each
 one through a **bounded reconnect wait** (`:180-188`). That wait is an
@@ -702,10 +782,11 @@ absence-adjudicating timer of exactly the kind this change retires: a subscriber
 that has not reconnected within the window is not a subscriber that has failed.
 
 Under this contract UI resolves like any other transport — `delivered` on a
-broadcast accepted by at least one live subscriber, `not submitted` when there is
-positively no live subscriber, and relay-side residency governing how long an
-unreachable UI session's mail waits. The reconnect timeout is deleted, not
-relocated.
+broadcast accepted by at least one live subscriber, and `not submitted` when there
+is positively no live subscriber. Mail for a registered UI session with no current
+subscriber stays `Pending` until one attaches, because a closed browser tab is not
+a failed delivery. The reconnect timeout is deleted, not relocated and not
+replaced.
 
 `Pubsub` is a stub with no delivery behavior, and "inherits the contract when it
 gains one" is not a specification. Its behavior is stated concretely: a `Pubsub`
@@ -723,9 +804,30 @@ rather than silently outside it.
   race is the complexity this design avoids. Revisit when a wire transport needs
   an acknowledgment.
 
-- **This retires `bound-tmux-readiness-wait`, merged days ago.** → The bound fixed
-  a real unbounded wait; what it got wrong was the *location* of the judgement.
-  The residency policy replaces it with the same guarantee stated honestly.
+- **This retires `bound-tmux-readiness-wait`, merged days ago.** → The bound
+  addressed a real unbounded wait, and an earlier draft of this change concluded
+  that what it got wrong was the *location* of the judgement, relocating the bound
+  relay-side. That was still wrong: the wait should not be bounded at all, because
+  waiting for a target to become ready is not a fault and a bound converts it into
+  one. Nothing replaces it. The wait is unbounded by design and visible by
+  inscription.
+
+- **A permanently wedged target now holds its queue indefinitely**, where
+  residency previously drained it. Its per-target quota fills, after which further
+  sends to it are rejected at admission. → Accepted, and better than the
+  alternative: the sender learns synchronously, at the request boundary, with a
+  structured error it can act on, instead of learning nothing for the residency
+  window and then receiving an `expired` receipt for a message that was silently
+  discarded.
+
+- **Enough wedged targets can exhaust relay-global quota** and begin rejecting
+  sends to healthy targets; at the default `1_000` per target against `10_000`
+  global, ten fully wedged targets suffice. Residency drained those queues over
+  time and nothing else does. → Accepted rather than mitigated. A relay with ten
+  permanently wedged targets is broken and should fail loudly at the request
+  boundary; adding headroom reservation would buy partial availability in a
+  situation that needs operator attention either way. The undelivered-queue
+  inscriptions are what make it attributable before it reaches that point.
 
 - **Per-unit outcomes are new work on Pty and ACP**, though Tmux already does it.
   → Required by *Decision 2*; Pty's single-outcome-per-group behavior is
@@ -753,10 +855,14 @@ rather than silently outside it.
 
 ## Open Questions
 
-None blocking. Capacity units, residency policy placement, and crash-recovery
-scope were previously listed here and are now settled in *Decisions 5 and 8*;
-carrying them as open questions was itself a review finding.
+None blocking. Capacity units and crash-recovery scope were previously listed
+here and are now settled in *Decisions 5 and 8*; carrying them as open questions
+was itself a review finding. Residency was listed here as a placement question,
+which framed it as "where does this bound live" and skipped the prior question of
+whether it should exist. *Decision 5* answers that one instead.
 
-Deliberately excluded, each a follow-up rather than a gap: per-target residency
-overrides, durable crash recovery, and transport-side attempt-ID deduplication
-that would allow a stronger guarantee than *Decision 6*.
+Deliberately excluded, each a follow-up rather than a gap: durable crash
+recovery; transport-side attempt-ID deduplication that would allow a stronger
+guarantee than *Decision 6*; and mailbox-style delivery with acknowledged read
+cursors (`agentmux:todos/runtime/23`), which is what restores the completeness
+half of "resolves exactly once" without reintroducing a time-based expiry.

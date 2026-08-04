@@ -45,9 +45,10 @@ mismatch is removed. No transport infers a terminal outcome from the template,
 and the distinction between the two causes survives only as diagnostic
 observability.
 
-A target that never becomes prompt-ready SHALL be bounded by relay-side
-residency, which resolves the entry `expired` without asserting anything about
-the target's health.
+A target that never becomes prompt-ready SHALL leave its entry `Pending`
+indefinitely. No bound converts that wait into an outcome, because how long a
+target stays busy is not evidence about the target. The wait is reported through
+the `delivery-quiescence` capability's undelivered-queue inscriptions.
 
 #### Scenario: Authorize when prompt-readiness template matches
 
@@ -95,8 +96,8 @@ the target's health.
 - **AND** the transport-reported cursor position differs from configured
   `input_idle_cursor_column`
 - **THEN** relay does not authorize a batch for that target
-- **AND** relay continues waiting until the target becomes prompt-ready, its
-  residency elapses, or relay shuts down
+- **AND** relay continues waiting until the target becomes prompt-ready or relay
+  shuts down
 - **AND** no terminal *failure* is issued on account of the pending input
 
 #### Scenario: Do not inject into a pane awaiting an operator decision
@@ -108,7 +109,7 @@ the target's health.
 - **AND** relay does not report a terminal failure on account of the settled
   non-prompt frame
 - **AND** the message is delivered once the operator answers and the pane returns
-  to its prompt, provided its residency has not elapsed
+  to its prompt, however long the operator takes
 - **BECAUSE** a pane blocked on a human decision is neither ready nor failed, and
   the inspected tail cannot distinguish it from one that is
 
@@ -121,13 +122,13 @@ the target's health.
 - **AND** the pane remains in copy-mode with the operator's scroll
   position undisturbed
 
-#### Scenario: A never-ready target expires at residency
+#### Scenario: A never-ready target waits without resolving
 
-- **WHEN** a target's prompt-readiness template never matches
-- **AND** the entry's residency elapses
-- **THEN** the entry resolves `expired`
-- **AND** the reason records which observation the wait ended on, as diagnostics
-  only
+- **WHEN** a target's prompt-readiness template never matches, for arbitrarily
+  long
+- **THEN** the entry remains `Pending` and no terminal outcome is issued for it
+- **AND** the most recent observation is recorded as diagnostics only, and does
+  not accumulate toward any verdict
 
 ### Requirement: Relay raww operation contract
 
@@ -321,8 +322,9 @@ policy boundary:
   transport was shut down, or its generation was torn down without replacement;
 - a **transient absence** — a respawn in progress, a generation being replaced, a
   UI subscriber that has disconnected but whose session is still registered —
-  SHALL leave members `Pending`, where residency governs them and they resolve
-  `expired` if the absence outlasts it.
+  SHALL leave members `Pending` indefinitely, until the absence resolves into
+  readiness or into a positively observed teardown. Nothing converts the waiting
+  itself into an outcome.
 
 Otherwise `transport_unavailable` would become another inference from absence,
 retired at the transport and reintroduced at the relay.
@@ -350,7 +352,8 @@ one path while another is scheduling it against a live generation.
 - **WHEN** a target's transport generation is being replaced
 - **AND** queued members are `Pending` for that target
 - **THEN** those members remain `Pending`
-- **AND** they resolve `expired` only if the absence outlasts their residency
+- **AND** they resolve only if the replacement completes and they are authorized,
+  or if the generation is instead torn down with no replacement
 
 #### Scenario: A torn-down transport without replacement resolves its pending members
 
@@ -375,9 +378,10 @@ post-submission target state that does not hold a delivery outcome open.
 so a `coders.toml` that still sets it fails load on existing unknown-field
 validation. An operator SHALL delete the line; no value preserves the prior
 behavior. Deliveries that previously resolved `Timeout` with
-`reason_code = "acp_turn_timeout"` now resolve `delivered` at the framed write,
-or `expired` at relay residency when the target never became ready to be
-authorized.
+`reason_code = "acp_turn_timeout"` now resolve `delivered` at the framed write, or
+remain `Pending` when the target never becomes ready to be authorized. No outcome
+replaces the timeout on that path, because the timeout's outcome was the
+inference being retired.
 
 ### Requirement: Tmux Prime Timeout
 
@@ -387,8 +391,8 @@ prime timeout to bound.
 
 **Migration:** the `[coders.<id>.tmux].prime-timeout-ms` key is deleted outright
 and fails load on existing unknown-field validation. Deliveries that previously
-resolved `Timeout` at the prime window now resolve `expired` at relay residency,
-which states the relay's own patience rather than a claim about the pane.
+resolved `Timeout` at the prime window now remain `Pending` until the pane becomes
+ready, which withholds the claim about the pane that the timeout was making.
 
 ### Requirement: Pty Prime Timeout
 
@@ -408,8 +412,9 @@ received `Timeout` for a message that had in fact been written now receive
 non-matching frame, which cannot distinguish a hung coder from a permission
 dialog, a compose box, or a coder working silently. It was retained as a named
 temporary exception only because it was Pty's sole terminal path pending a Pty
-readiness bound; relay-side residency now supplies that bound, so the stated
-condition for its retirement is met.
+readiness bound. That framing presumed some bound had to supply the terminal path;
+under this change none does, and Pty resolves from typed submission evidence once
+a batch is authorized. The exception's premise is retired along with it.
 
 Retiring it also removes the masking effect that hid
 `agentmux:issues/relay/62`: wedge detection resolved Pty groups within roughly
@@ -421,5 +426,4 @@ retired together rather than sequenced apart.
 a `coders.toml` that still sets it fails load on existing unknown-field
 validation. An operator SHALL delete the line. Deliveries that previously
 resolved `Failed` with `reason_code = "pane_wedged"` now resolve from typed
-submission evidence when a batch was authorized, or `expired` at residency when
-none was.
+submission evidence when a batch was authorized, and otherwise remain `Pending`.

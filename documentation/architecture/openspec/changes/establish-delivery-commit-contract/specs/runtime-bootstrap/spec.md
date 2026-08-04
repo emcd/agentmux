@@ -10,11 +10,11 @@ file SHALL use kebab-case TOML keys and MAY contain:
 - `watch-bundles` (boolean, default `true`)
 - `require-session-credentials` (boolean, default `false`)
 - `[choices].pending-max`
-- `[delivery]` table governing the relay's delivery patience and scheduling:
+- `[delivery]` table governing the relay's delivery scheduling, admission, and
+  queue observability:
 
   | Key | Default | Range | Governs |
   |---|---|---|---|
-  | `residency-ms` | `900_000` | `30_000..=3_600_000` | how long a `Pending` entry may wait before resolving `expired` |
   | `scheduling-quantum-bytes` | `262_144` | `65_536..=16_777_216` | a target's credit per rotation visit, in canonical payload bytes |
   | `submission-timeout-ms` | `5_000` | `500..=60_000` | how long an authorized batch's ingestion may run before the relay initiates the generation fence |
   | `fence-observation-timeout-ms` | `5_000` | `100..=60_000` | the budget for each of the generation fence's two cessation observations, so total acknowledgment is bounded by twice this value |
@@ -22,33 +22,24 @@ file SHALL use kebab-case TOML keys and MAY contain:
   | `queued-bytes-max` | `268_435_456` | `1_048_576..=4_294_967_296` | relay-global admission quota, canonical payload bytes |
   | `queued-envelopes-per-target-max` | `1_000` | `1..=1_000_000` | per-target admission quota, envelope count |
   | `queued-bytes-per-target-max` | `33_554_432` | `1_048_576..=4_294_967_296` | per-target admission quota, canonical payload bytes |
+  | `undelivered-warning-ms` | `1_800_000` | `60_000..=86_400_000` | how long a target's oldest `Pending` entry may age before the relay emits that target's first-crossing warning inscription |
+  | `undelivered-report-interval-ms` | `300_000` | `30_000..=3_600_000` | cadence of the periodic undelivered-queue aggregate inscription |
 
 - top-level `[[peers]]` entries with required `alias`, `address`, and
   `connect-as` string fields (see Outbound Peer Relay Configuration and Relay
   Cross-Relay Presented Identity)
 
 The `[delivery]` keys live here rather than in `coders.toml` because they
-describe the relay's own patience and scheduling rather than any coder's
-behavior. Per-target residency overrides are deliberately excluded from this
-schema.
+describe the relay's own queue, scheduling, and reporting rather than any coder's
+behavior.
 
-`residency-ms` SHALL default to a value exceeding the longest plausible agent
-turn, since a target mid-turn is legitimately not ready and its message must
-wait. The lower bound SHALL keep an operator from configuring a value beneath a
-single turn, and the upper bound SHALL keep the setting from re-creating an
-effectively unbounded wait.
+**No `[delivery]` key bounds how long the relay waits for a target to become
+ready, and no configuration SHALL introduce one.** A `Pending` entry waits
+indefinitely; see the `delivery-quiescence` capability's `Async Queue Lifecycle
+and Ordering` requirement.
 
-`residency-ms` and `submission-timeout-ms` bound different things and SHALL NOT
-be conflated. They separate on the authorization line:
-
-| | `residency-ms` | `submission-timeout-ms` |
-|---|---|---|
-| Bounds | waiting *for* readiness | *ingestion*, after readiness was believed |
-| Side | pre-authorization | post-authorization |
-| Outcome | `expired` | resolution at the fence verdict |
-| States | "we never started" | "we started and do not know" |
-
-**`submission-timeout-ms` bounds ingestion, not readiness.** A batch is
+`submission-timeout-ms` is the sole post-authorization bound, and it SHALL NOT be
+read as a readiness bound. **It bounds ingestion, not readiness.** A batch is
 authorized only once the relay has observed the target ready, and no transport
 may wait on readiness afterwards, so the clock never covers a readiness wait.
 What it covers is the transport consuming the bytes — in practice a single write
@@ -88,6 +79,20 @@ be revalidated when a transport registers or changes its declared maxima; see th
 `delivery-quiescence` capability's `Async Queue Lifecycle and Ordering`
 requirement for the refusal behavior.
 
+**The undelivered-queue keys govern reporting only.** `undelivered-warning-ms`
+and `undelivered-report-interval-ms` SHALL NOT influence any member's outcome,
+release any admission quota, or alter scheduling. Their sole effect on elapse is
+the emission of an inscription; see the `delivery-quiescence` capability's `Async
+Delivery Observability` requirement for the emission rules.
+
+`undelivered-warning-ms` SHALL default above the longest plausible agent turn, so
+that a target legitimately mid-turn does not routinely produce warnings, and its
+upper bound SHALL be permissive enough that an operator running long-horizon
+agents can quiet it. Because zero is not permitted, the setting cannot be switched
+off; raising it is the supported way to reduce its volume. It has no lower bound
+tied to a turn length, because a short threshold produces noise rather than
+incorrect behavior.
+
 Missing `relay.toml` SHALL use the documented defaults. Malformed `relay.toml`,
 unknown fields, wrong field types, and invalid peer entries SHALL fail startup
 and pre-flight configuration validation with structured validation errors.
@@ -106,13 +111,14 @@ and pre-flight configuration validation with structured validation errors.
 - **AND** `require-session-credentials = true`
 - **THEN** relay startup uses those relay-level settings
 
-#### Scenario: Load explicit delivery patience settings
+#### Scenario: Load explicit undelivered reporting settings
 
-- **WHEN** `relay.toml` contains a `[delivery]` table setting `residency-ms`
-  within the permitted range
-- **THEN** relay startup uses that value as the bound on how long any transport's
-  `Pending` entries may wait
-- **AND** the value applies uniformly across every transport
+- **WHEN** `relay.toml` contains a `[delivery]` table setting
+  `undelivered-warning-ms` and `undelivered-report-interval-ms` within their
+  permitted ranges
+- **THEN** relay startup uses those values for undelivered-queue reporting
+- **AND** no member's outcome, quota, or scheduling position depends on either
+  value
 
 #### Scenario: Bound authorized execution
 
@@ -125,9 +131,10 @@ and pre-flight configuration validation with structured validation errors.
 - **AND** the setting is documented as an execution watchdog over the relay's own
   code, not as a judgement about target health
 
-#### Scenario: Reject an out-of-range residency
+#### Scenario: Reject an out-of-range undelivered warning threshold
 
-- **WHEN** `[delivery].residency-ms` is below `30_000` or above `3_600_000`
+- **WHEN** `[delivery].undelivered-warning-ms` is below `60_000` or above
+  `86_400_000`
 - **THEN** relay startup fails with a structured error naming the key and the
   permitted range
 - **AND** `agentmux check configuration` reports the same invalid artifact

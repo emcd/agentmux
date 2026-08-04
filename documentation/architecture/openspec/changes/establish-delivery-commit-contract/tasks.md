@@ -30,17 +30,24 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Make collectors carry guard keys rather than own resolution; remove the `JoinError` branch in `src/relay/delivery/dispatch/outcomes.rs` that returns without producing an outcome
 - [ ] Ensure outcome-notification failure is counted and recorded without blocking the terminal transition or the quota release
 
-### Residency and scheduling
+### Scheduling
 
-- [ ] Implement residency over `Pending` entries only, resolving `expired`, and make it unable to fire against an `Authorized` entry
+- [ ] Ensure no elapsed-time path can resolve a `Pending` entry: it leaves that state only by authorization, positively observed transport teardown, or graceful shutdown
 - [ ] Implement per-target FIFO covering mail and raw as one order
 - [ ] Implement byte-budgeted round-robin across targets: canonical payload bytes as the cost unit, exactly one quantum of credit per visit with no carry-over, ineligible targets skipped
 - [ ] Form batches against both handover components, stopping at whichever of envelope count or canonical payload bytes binds first
 - [ ] Debit the visit's remaining credit at authorization, in the same atomic operation as the `Pending` to `Authorized` transition
 - [ ] Revalidate the quantum against the largest byte component when a transport registers or changes its declared maxima, refusing registration rather than admitting an unschedulable transport
-- [ ] Make authorization outrank residency expiry within one scheduling iteration, and keep an activity-advanced target unauthorizable
+- [ ] Keep an activity-advanced target unauthorizable, even when the later observation matches the prompt-readiness template
 - [ ] Reschedule `Pending` entries to a new generation on respawn; never re-invoke `Authorized` entries
 - [ ] Resolve still-`Pending` members `dropped_on_shutdown` on graceful shutdown, and `Authorized` members from evidence
+
+### Undelivered-queue reporting
+
+- [ ] Delete the `expired` outcome from the outcome type, receipt surfaces, inscription set, and CLI/MCP vocabulary; it has no producer
+- [ ] Emit the periodic undelivered-queue aggregate at `undelivered-report-interval-ms`, carrying global count and bytes plus a per-target breakdown, suppressed entirely when nothing is `Pending`
+- [ ] Emit a first-crossing warning per target at `undelivered-warning-ms`, deduplicated per target and re-armed when that target's queue empties
+- [ ] Keep both emissions free of delivery effects: no resolution, no quota release, no scheduling change
 
 ### Readiness
 
@@ -96,13 +103,14 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 ### Configuration
 
 - [ ] Delete the five per-coder keys and their loader, validation, and default machinery
-- [ ] Add the `relay.toml` `[delivery]` table with residency, submission timeout, quantum, fence-join bound, and the four admission-quota keys
+- [ ] Add the `relay.toml` `[delivery]` table with submission timeout, quantum, fence-observation bound, the four admission-quota keys, and the two undelivered-reporting keys
 - [ ] Validate `scheduling-quantum-bytes` at load against every registered transport's maximum handover dimension
 - [ ] Delete `prime_timeout_ms` and `readiness_timeout_ms` from `DeliveryEnvelope`
 
 ### Documentation
 
-- [ ] Update operator docs to describe relay-side residency as the single delivery-patience setting, applying to every transport
+- [ ] Update operator docs to state that no setting bounds how long a delivery waits for its target, on any transport, and to describe `submission-timeout-ms` as bounding relay-side execution rather than that wait
+- [ ] Document that a `Pending` entry for a never-ready target holds its admission quota indefinitely, naming per-target quota as the bound on the consequence and the undelivered-queue inscriptions as how to observe it
 - [ ] State the crash-recovery limitation: guarantees hold for a surviving relay process and graceful shutdown only
 - [ ] Reconcile `session-relay/spec.md` hub prose (requirement total, the partition description advertising prime/wedge timeouts)
 - [ ] Refresh the MCP tool inventory after the `raww` schema change: restart the server, verify tool inventory client-side, and record the outcome in the lane handoff
@@ -121,6 +129,10 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Cover that a UI generation terminates without an owned child, and that fencing a Tmux generation leaves the server running
 - [ ] Cover that an unbound member resolves `not_submitted` under every trigger, and that a recorded `Submitted` is not downgraded by a generation replacement
 - [ ] Cover that siblings of one packing unit never receive different outcomes from one evidence record
+- [ ] Cover that a `Pending` entry survives an arbitrarily long wait and is still authorized and delivered when its target finally becomes ready
+- [ ] Cover that no elapsed duration resolves a `Pending` entry, releases its quota, or produces a receipt for it
+- [ ] Cover the warning dedup: many entries crossing together emit one inscription for their target, and the target re-arms after its queue empties
+- [ ] Cover that the aggregate is suppressed when nothing is `Pending`, and that neither emission changes any outcome, quota, or scheduling position
 - [ ] Assert the teeth of the ordering and absence tests by reverting each mechanism and confirming the test fails
 
 ## Phase 2 — 0.9.x follow-on

@@ -19,8 +19,8 @@ through two non-blocking write methods defined on the `Transport` trait in
   carrying the explicit mode defined by the `transport-contracts` capability's
   `Relay raww operation contract`.
 
-**The invocation is fallible.** Relay residency reserves count and bytes in the
-relay's own queue and reserves nothing about a transport's channel, its live
+**The invocation is fallible.** The relay's admission quota reserves count and
+bytes in the relay's own queue and nothing about a transport's channel, its live
 worker generation, UI subscriber capacity, or any target resource. A transport
 SHALL be permitted to refuse an invocation, and a refusal SHALL be treated as a
 terminal evidence result rather than as a reclaim:
@@ -327,7 +327,8 @@ advance, so such a target is never suppressed on this basis.
 - **WHEN** a target's activity generation does not advance across any number of
   observations
 - **THEN** no terminal outcome is produced on that basis
-- **AND** the entry resolves only through authorization or residency expiry
+- **AND** the entry remains `Pending`, resolving only if it is later authorized,
+  if its transport is positively observed torn down, or at relay shutdown
 
 ### Requirement: Transport-Internal Probe Seam for Testability
 
@@ -809,9 +810,10 @@ delivery until the next poll; it cannot lose one or resolve it without evidence.
 absence of change in rendered content, and its `unresponsive` state does the same
 from the absence of output. Both are the unsound inference this change exists to
 remove. The requirement itself already recorded that `wedged` is unsound and
-carried Pty as a named temporary exception pending a Pty readiness bound; this
-change supplies the bound relay-side as residency, so the exception's own stated
-condition for retirement is met.
+carried Pty as a named temporary exception pending a Pty readiness bound. This
+change retires the exception's premise rather than satisfying it: no readiness
+bound is supplied anywhere, and Pty resolves from typed submission evidence once a
+batch is authorized, so the classifier's terminal path is not needed.
 
 The remaining sound part — that positively observed activity suppresses handover —
 is retained and relocated to the `Positive Activity Signal` requirement, where it
@@ -819,16 +821,18 @@ is consumed by relay scheduling rather than by a transport classifier.
 
 **Migration:** no `format-version` bump and no persisted-state migration.
 Deliveries that previously resolved `Failed` with a wedge reason code, or
-`Timeout` at a prime or readiness bound, now resolve `expired` at relay residency
-when nothing was authorized, or from typed submission evidence when something
-was. Senders receive a terminal-outcome receipt in every non-delivered case, so
-no outcome becomes silent.
+`Timeout` at a prime or readiness bound, now resolve from typed submission
+evidence when a batch was authorized, and otherwise remain `Pending` until the
+target becomes ready. Senders receive a terminal-outcome receipt in every
+non-delivered case, but a message still waiting has no outcome and therefore no
+receipt; that condition is reported through the `delivery-quiescence` capability's
+undelivered-queue inscriptions instead.
 
 ### Requirement: Prime Timeout Envelope Field
 
 **Reason:** the field exists to carry a bound on "no observable output has been
 produced", which is an absence. With all readiness waiting moved relay-side and
-governed by residency, no transport performs a prime wait, so there is nothing
+left unbounded by design, no transport performs a prime wait, so there is nothing
 for the field to bound.
 
 **Migration:** `DeliveryEnvelope.prime_timeout_ms` is deleted outright, along with

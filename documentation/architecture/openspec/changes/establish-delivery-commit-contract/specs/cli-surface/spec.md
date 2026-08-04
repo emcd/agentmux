@@ -40,12 +40,13 @@ override, if one is ever reintroduced.
   does not exist)
 - **THEN** invocation fails at the CLI parser as an unknown flag
 
-#### Scenario: Delivery patience has no per-call flag
+#### Scenario: No flag bounds how long a delivery waits
 
 - **WHEN** an operator wants to change how long a delivery waits for a target to
   become ready
-- **THEN** the only surface is the relay-level `[delivery].residency-ms` setting
-- **AND** `agentmux send` exposes no flag to override it for one call
+- **THEN** no CLI flag and no configuration key offers that control, because the
+  wait is unbounded by design
+- **AND** `agentmux send` exposes no per-call timeout override of any kind
 
 ### Requirement: CLI raww command surface
 

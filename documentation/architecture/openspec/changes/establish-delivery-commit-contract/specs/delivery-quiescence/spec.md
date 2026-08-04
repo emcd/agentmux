@@ -12,8 +12,9 @@ quiet.
 **All target-readiness and quiescence waiting happens before authorization**,
 while the entry is `Pending`: prompt-readiness matching, quiescence observation,
 and — on ACP — completion and operator-choice resolution of an **older** turn.
-This is what makes residency expiry sound: the members that wait are exactly the
-ones for which nothing has been submitted.
+This is what makes an unbounded `Pending` wait safe: the members that wait are
+exactly the ones for which nothing has been submitted, so no target-side effect is
+outstanding for the duration of the wait, however long it runs.
 
 The relay SHALL determine readiness from a **level-triggered**
 `can_accept_handover` state read from the transport. Because a notification is
@@ -40,20 +41,21 @@ sound evidence of failure, and an unchanged screen is not. This rule now holds
 without exception; the Pty wedge classifier that was previously carried as a
 known-unsound exception is removed by this change.
 
-**Authorization outranks residency expiry.** When a target becomes authorizable
-in the same scheduling iteration in which an entry's residency elapses, the relay
-SHALL authorize rather than expire. Residency exists to stop an unbounded wait,
-not to refuse a handover that is available: reaching readiness late is the
-outcome the wait was for. A target whose activity signal advanced in that
-iteration is not authorizable, so it expires rather than being authorized on a
-momentary match.
+A target whose activity signal advanced across an observation pair is not
+authorizable, even if the later observation happens to match the prompt-readiness
+template. An advancing activity signal defers handover on its own.
 
 The relay SHALL communicate the quiescence quiet period to transports that
 perform target observation via the `DeliveryEnvelope.quiet_window: Duration`
 field. The `prime_timeout_ms` and `readiness_timeout_ms` envelope fields are
-removed, as are the per-coder configuration keys that populated them. How long a
-message may wait is a property of the relay's patience and is governed by
-residency, not by a per-transport timer.
+removed, as are the per-coder configuration keys that populated them.
+
+**How long a message may wait for readiness is not bounded, by a transport timer
+or by any relay setting.** A `Pending` entry waits until its target becomes ready,
+until that target's transport is positively observed torn down, or until the relay
+shuts down. Elapsed waiting SHALL NOT resolve an entry, because the length of a
+target's turn is not evidence about the target and no bound the relay could pick
+would be anything but a guess about work it does not control.
 
 #### Scenario: Hand over after the target becomes ready
 
@@ -65,7 +67,6 @@ residency, not by a per-transport timer.
 #### Scenario: Keep waiting while the target is active
 
 - **WHEN** a target's output continues changing
-- **AND** the entry's residency has not elapsed
 - **THEN** the entry remains `Pending` and schedulable
 - **AND** no terminal outcome is issued for it
 
@@ -77,35 +78,31 @@ residency, not by a per-transport timer.
 - **BECAUSE** the inspected tail cannot distinguish a hung coder from a
   permission dialog, a compose box, or a coder working silently
 
-#### Scenario: A continuously animating target still terminates
+#### Scenario: A continuously animating target keeps waiting
 
 - **WHEN** a target's output advances on every observation without the
-  prompt-readiness template ever matching
-- **AND** the entry's residency elapses
-- **THEN** the entry resolves `expired`
-- **BECAUSE** activity suppresses handover but not termination, and residency is
-  a statement about the relay's own patience rather than about the target
+  prompt-readiness template ever matching, for arbitrarily long
+- **THEN** the entry remains `Pending` and no terminal outcome is issued for it
+- **AND** the relay emits undelivered-queue inscriptions for that target
+- **BECAUSE** a target that is busy is a target that may still become ready, and
+  the relay reports that condition rather than resolving it
 
-#### Scenario: A ready target is authorized despite a simultaneous expiry
+#### Scenario: A ready target is authorized however long it took
 
-- **WHEN** an entry's residency elapses in the same scheduling iteration in which
-  its target is observed prompt-ready
+- **WHEN** a target is observed prompt-ready after an arbitrarily long wait
 - **AND** the target's activity signal did not advance across the observation
   pair
-- **THEN** the batch is authorized and the entry is not resolved `expired`
-- **BECAUSE** reaching readiness, even late, is the outcome the wait existed to
-  obtain
+- **THEN** the batch is authorized
+- **BECAUSE** reaching readiness late is the outcome the wait existed to obtain,
+  and no elapsed duration disqualifies it
 
-#### Scenario: An active target is not authorized on a momentary match at expiry
+#### Scenario: An active target is not authorized on a momentary match
 
-- **WHEN** an entry's residency elapses
-- **AND** the target's activity signal advanced across the observation pair
+- **WHEN** the target's activity signal advanced across the observation pair
 - **AND** the later observation happens to match the prompt-readiness template
-- **THEN** the entry resolves `expired`
-- **AND** no batch is authorized for it
-- **BECAUSE** an advancing activity signal already defers handover, and an
-  elapsed residency resolves the entry rather than granting the match it was
-  denied
+- **THEN** no batch is authorized for it
+- **AND** the entry remains `Pending`
+- **BECAUSE** an advancing activity signal defers handover on its own
 
 #### Scenario: A transport does not wait for readiness
 
@@ -244,14 +241,23 @@ Fairness is unaffected and slightly stronger: every eligible target is visited
 each rotation and receives a full quantum, so no target can be starved and none
 can bank credit to monopolise a later rotation.
 
-Residency governs `Pending` entries only. When an entry's residency elapses
-before it is authorized, it SHALL resolve `expired`. Residency expiry is a
-**pre-commit** outcome: it is a statement about the relay's own patience, never
-about the target's health, and it SHALL NOT fire once a message is authorized.
+**No elapsed duration SHALL resolve a `Pending` entry.** A `Pending` entry leaves
+that state only by being authorized, by its target's transport being positively
+observed torn down without replacement, or by graceful relay shutdown. **No
+configuration key SHALL bound this wait, and none may be introduced.** The length
+of a target's turn is not evidence about the target, and such a bound would
+terminalize the entry and release its quota — discarding a message that would have
+been delivered once the target came back. The relay reports a long wait through
+undelivered-queue inscriptions and never resolves one.
 
-Residency and scheduling policy SHALL live in relay configuration rather than
-`coders.toml`, because they are properties of the relay's patience rather than of
-any coder. Per-target residency overrides are excluded from this change.
+Consequently the relay guarantees that every accepted message resolves **at most
+once**, not that every accepted message eventually resolves. Uniqueness is held by
+the terminal transition; completeness is not claimed, and restoring it is the
+`fetch`-cursor work tracked in `agentmux:todos/runtime/23` rather than a timer.
+
+Scheduling and quota policy SHALL live in relay configuration rather than
+`coders.toml`, because they are properties of the relay's own queue rather than of
+any coder.
 
 #### Scenario: Drop pending async queue on relay restart
 
@@ -270,19 +276,21 @@ any coder. Per-target residency overrides are excluded from this change.
 - **THEN** relay treats them as distinct queue entries
 - **AND** attempts each entry independently
 
-#### Scenario: Expire a pending entry at its residency bound
+#### Scenario: A pending entry is never resolved by elapsed time
 
-- **WHEN** an entry has been `Pending` for its full residency
-- **AND** it has not been authorized
-- **THEN** it resolves `expired`
-- **AND** its admission quota is released
+- **WHEN** an entry has been `Pending` for an arbitrarily long duration
+- **AND** it has not been authorized, its target's transport has not been
+  positively observed torn down, and the relay has not shut down
+- **THEN** it remains `Pending`
+- **AND** no terminal outcome is issued and no admission quota is released for it
 
-#### Scenario: Residency does not apply to an authorized entry
+#### Scenario: A long-waiting entry is still authorized when its target returns
 
-- **WHEN** an entry has transitioned to `Authorized`
-- **AND** its residency would otherwise have elapsed
-- **THEN** no residency expiry occurs for it
-- **AND** it resolves only from submission evidence
+- **WHEN** an entry has been `Pending` far longer than any transport's former
+  readiness or prime bound
+- **AND** its target then becomes ready
+- **THEN** the batch is authorized and submitted normally
+- **BECAUSE** the entry was never disqualified by how long it waited
 
 #### Scenario: Skip an unready target
 
@@ -341,12 +349,20 @@ any `reason_code`, so the sender can correlate it to the `queued` result it
 received at accept time.
 
 Receipts SHALL be delivered for non-delivered terminal outcomes only:
-`not_submitted`, `submission_unknown`, `expired`, `transport_unavailable`, and
+`not_submitted`, `submission_unknown`, `transport_unavailable`, and
 `dropped_on_shutdown`. A `delivered` outcome SHALL NOT produce a receipt; it is
 recorded per Async Delivery Observability only.
 
+Because no outcome is produced by elapsed waiting, a message queued for a target
+that never becomes ready produces **no receipt at all** while it waits. The sender
+is told at accept time that the message was `queued`, and learns nothing further
+until the message resolves. This is deliberate: a receipt issued while an entry is
+still waiting could only report that the relay had stopped waiting, which is a
+fact about the relay rather than about the message.
+
 `not_submitted` and `submission_unknown` are both non-delivered terminal
-outcomes and SHALL produce receipts exactly as `expired` does. They are not
+outcomes and SHALL produce receipts exactly as `transport_unavailable` does. They
+are not
 interchangeable: `not_submitted` asserts non-delivery on positive evidence that
 no side effect occurred, while `submission_unknown` states that side effects
 cannot be excluded. A receipt SHALL NOT collapse them into a single spelling,
@@ -373,8 +389,8 @@ SHALL be the authoritative result for a queued message.
 #### Scenario: Deliver a non-delivered outcome receipt through the sender's transport
 
 - **WHEN** a queued message to a target resolves as a non-delivered terminal
-  outcome (`not_submitted`, `submission_unknown`, `expired`,
-  `transport_unavailable`, or `dropped_on_shutdown`)
+  outcome (`not_submitted`, `submission_unknown`, `transport_unavailable`, or
+  `dropped_on_shutdown`)
 - **AND** the original sender's session is routable
 - **THEN** relay delivers a terminal-outcome receipt to the sender through the
   sender's own transport
@@ -390,14 +406,22 @@ SHALL be the authoritative result for a queued message.
 - **BECAUSE** the first asserts the message did not arrive and the second states
   that it may have
 
-#### Scenario: Deliver a residency expiry receipt
+#### Scenario: Deliver a torn-down transport receipt
 
-- **WHEN** a queued message resolves `expired` at its residency bound
+- **WHEN** a queued message resolves `transport_unavailable` because its target's
+  transport was positively observed torn down without replacement
 - **AND** the original sender's session is routable
 - **THEN** relay delivers a terminal-outcome receipt naming that `message_id`,
-  target, and `expired` to the sender
-- **BECAUSE** nothing was authorized, so the relay can soundly state that the
-  message was not delivered
+  target, and `transport_unavailable` to the sender
+- **BECAUSE** nothing was authorized and the target is positively gone, so the
+  relay can soundly state that the message was not delivered
+
+#### Scenario: No receipt is produced while an entry waits
+
+- **WHEN** a queued message has been `Pending` for an arbitrarily long duration
+- **THEN** relay delivers no terminal-outcome receipt for it
+- **BECAUSE** it has no terminal outcome, and a receipt reporting only that the
+  relay was still waiting would state nothing about the message
 
 #### Scenario: No receipt for a delivered outcome
 
@@ -434,8 +458,8 @@ SHALL be the authoritative result for a queued message.
 Relay SHALL emit inscriptions for async queue lifecycle transitions.
 
 The terminal-outcome inscription SHALL cover every terminal outcome:
-`delivered`, `not_submitted`, `submission_unknown`, `expired`,
-`transport_unavailable`, and `dropped_on_shutdown`. This inscription SHALL be
+`delivered`, `not_submitted`, `submission_unknown`, `transport_unavailable`, and
+`dropped_on_shutdown`. This inscription SHALL be
 recorded regardless of whether a terminal-outcome receipt is delivered to the
 sender, so `relay.log` is a complete observability floor for terminal outcomes.
 
@@ -448,6 +472,81 @@ A positively observed target exit or connection close SHALL be recorded as
 **target-health observability**, not as a delivery outcome for an already
 resolved member.
 
+**Relay SHALL report its undelivered queue.** Because no entry is resolved by
+elapsed waiting, a target that stops draining accumulates `Pending` entries
+silently, and reporting is the only thing that makes that condition visible. Two
+emissions are required:
+
+- **A periodic aggregate**, at the cadence of
+  `[delivery].undelivered-report-interval-ms`, carrying the relay-global count of
+  `Pending` entries and the canonical payload bytes reserved **by those `Pending`
+  entries**, and a per-target breakdown for every target with at least one
+  `Pending` entry. Both figures scope to `Pending` alone; bytes reserved by
+  `Authorized` entries are excluded, so the count and the byte figure always
+  describe the same set. The aggregate SHALL be
+  **suppressed entirely when no entry is `Pending`**, so an idle relay emits
+  nothing rather than a recurring zero.
+- **A first-crossing warning per target**, emitted once when a target's oldest
+  `Pending` entry first exceeds `[delivery].undelivered-warning-ms`, carrying the
+  target, its `Pending` count, and its oldest entry's age.
+
+The warning SHALL be deduplicated **per target, not per entry**. A target that has
+already warned SHALL NOT warn again until its `Pending` queue empties, after which
+a subsequent crossing SHALL warn again. Deduplicating per entry would emit one
+inscription per queued message at the moment a backlogged target crosses, which is
+the volume the threshold exists to control; and the condition an operator acts on
+is that a target is not draining, which is a property of the target rather than of
+any individual message.
+
+**Neither emission SHALL affect delivery.** Crossing the warning threshold, and
+any number of aggregate emissions, SHALL NOT resolve an entry, release admission
+quota, alter scheduling order, or change any member's outcome. These are the only
+duration-triggered mechanisms remaining on the `Pending` side, and they are sound
+precisely because elapsing produces a record and nothing else.
+
+#### Scenario: Report undelivered queue depth periodically
+
+- **WHEN** at least one entry is `Pending` and the report interval elapses
+- **THEN** relay writes an inscription carrying the relay-global `Pending` count
+  and the bytes reserved by those `Pending` entries, and a per-target breakdown
+- **AND** bytes reserved by `Authorized` entries are excluded from both figures
+- **AND** it does so again on each subsequent interval while any entry is
+  `Pending`
+
+#### Scenario: Suppress the aggregate when nothing is pending
+
+- **WHEN** the report interval elapses and no entry is `Pending`
+- **THEN** relay writes no undelivered-queue aggregate inscription
+
+#### Scenario: Warn once per target on first crossing
+
+- **WHEN** a target's oldest `Pending` entry first exceeds
+  `[delivery].undelivered-warning-ms`
+- **THEN** relay writes one warning inscription naming that target, its `Pending`
+  count, and its oldest entry's age
+
+#### Scenario: A backlogged target warns once, not once per message
+
+- **WHEN** a target has many `Pending` entries that cross the warning threshold
+  together
+- **THEN** relay writes exactly one warning inscription for that target
+- **AND** the remaining entries are reflected only in that target's `Pending`
+  count and in the periodic aggregate
+
+#### Scenario: A target warns again after draining and re-accumulating
+
+- **WHEN** a warned target's `Pending` queue empties
+- **AND** it later accumulates a new entry that exceeds the warning threshold
+- **THEN** relay writes a new warning inscription for that target
+
+#### Scenario: Undelivered reporting does not resolve or reorder anything
+
+- **WHEN** a target crosses the warning threshold and several aggregates are
+  emitted while it remains backlogged
+- **THEN** no entry resolves, no admission quota is released, and no target's
+  scheduling position changes
+- **BECAUSE** these emissions report a wait rather than adjudicating it
+
 #### Scenario: Record queued async acceptance
 
 - **WHEN** relay accepts an async target for queued delivery
@@ -457,7 +556,7 @@ resolved member.
 #### Scenario: Record terminal async outcome
 
 - **WHEN** an async queued target reaches a terminal state (`delivered`,
-  `not_submitted`, `submission_unknown`, `expired`, `transport_unavailable`, or
+  `not_submitted`, `submission_unknown`, `transport_unavailable`, or
   `dropped_on_shutdown`)
 - **THEN** relay writes an inscription event containing target session,
   message id, and terminal outcome
@@ -489,27 +588,49 @@ resolved member.
 The system SHALL document the bounds that apply to async queueing, and SHALL NOT
 describe bounds that do not exist.
 
-Documentation SHALL describe relay-side residency as the setting that governs how
-long any delivery may wait for a target, and SHALL describe it as applying
-uniformly to every transport. It SHALL NOT direct operators to configuration keys
-that do not exist, and SHALL NOT describe per-coder timer keys that this change
-deletes.
+Documentation SHALL state plainly that **no bound governs how long a delivery
+waits for its target to become ready**, on any transport. It SHALL NOT direct
+operators to configuration keys that do not exist, and SHALL NOT describe
+per-coder timer keys that this change deletes.
 
-Queue growth SHALL be described accurately. Every entry leaves the queue when it
-reaches a terminal outcome, which residency guarantees for `Pending` entries and
-the authorization guard guarantees for `Authorized` ones. Documentation SHALL
-state the one bound that genuinely does not exist: durability across a relay
-crash.
+Documentation SHALL describe `[delivery].submission-timeout-ms` as bounding the
+relay's own supervised execution after authorization, and SHALL NOT present it as
+a bound on how long a message may wait for a target. Conflating the two would
+recreate, in the operator's mental model, exactly the bound the contract does not
+have.
+
+Queue growth SHALL be described accurately, including what is **not** guaranteed.
+An `Authorized` entry always leaves the queue, because the authorization guard
+terminalizes it. A `Pending` entry leaves the queue only on authorization, on a
+positively observed transport teardown, or at graceful shutdown — so a message
+queued for a target that never becomes ready occupies its admission quota
+indefinitely. Documentation SHALL state this directly rather than implying that
+every queued message eventually resolves, SHALL point operators to the
+undelivered-queue inscriptions as the way to observe it, and SHALL explain that
+per-target admission quota is what bounds the consequence.
+
+Documentation SHALL state the two bounds that genuinely do not exist: durability
+across a relay crash, and completeness of resolution for `Pending` entries.
 
 #### Scenario: Document the bounds that apply to async delivery
 
 - **WHEN** operator-facing documentation is updated for async delivery mode
-- **THEN** it describes relay-side residency as the setting that governs how long
-  a delivery may wait for a target
-- **AND** it describes that bound as applying to every transport rather than
-  naming transports that remain unbounded
+- **THEN** it states that no setting bounds how long a delivery waits for its
+  target, on any transport
+- **AND** it describes `submission-timeout-ms` as bounding the relay's own
+  post-authorization execution rather than the wait for a target
 - **AND** it does not reference a `quiescence_timeout_ms`, a per-coder
   `prime-timeout-ms`, or a per-coder `readiness-timeout-ms` setting
+
+#### Scenario: Document that a pending entry may never resolve
+
+- **WHEN** operator-facing documentation describes queue growth
+- **THEN** it states that a message queued for a target that never becomes ready
+  remains queued and holds its admission quota indefinitely
+- **AND** it names per-target admission quota as what bounds the consequence, and
+  the undelivered-queue inscriptions as how to observe it
+- **AND** it does not claim that every queued message eventually reaches a
+  terminal outcome
 
 ### Requirement: Quiescence Documentation
 
@@ -526,8 +647,9 @@ longer exists.
 - **THEN** it includes a warning that continuously changing output sources
   (for example clock-style statusline content) can prevent quiescence
   detection from succeeding
-- **AND** it states that such a target's messages resolve `expired` at residency
-  rather than waiting indefinitely
+- **AND** it states that such a target's messages wait indefinitely rather than
+  resolving, and that the undelivered-queue inscriptions are how an operator
+  notices
 
 ## ADDED Requirements
 
@@ -552,9 +674,10 @@ After authorization the relay SHALL NOT reclaim the message, SHALL NOT retry it,
 and SHALL NOT assert non-delivery by inference. Positive evidence of
 non-submission remains reportable.
 
-**The relay's invocation of the transport is fallible.** Relay residency reserves
-count and bytes in the relay's own queue and reserves nothing about a transport's
-channel, its live worker generation, or any target resource. A post-authorization
+**The relay's invocation of the transport is fallible.** The relay's admission
+quota reserves count and bytes in the relay's own queue and reserves nothing about
+a transport's channel, its live worker generation, or any target resource. A
+post-authorization
 refusal SHALL therefore be treated as a terminal evidence result, not a reclaim.
 
 **The governing invariant:** no transition to `Authorized` SHALL occur unless an
@@ -565,9 +688,23 @@ SHALL wait in a relay or transport staging queue; a batch sitting behind an
 in-flight turn before partition is a post-authorization wait wearing a queue's
 clothing.
 
-Every accepted member SHALL resolve **exactly once** in a surviving relay
-process, including when a transport, worker, or collector panics. This SHALL be
-enforced by a **relay-owned authorization guard** owned outside every worker,
+Resolution SHALL be scoped precisely, because an indefinite `Pending` wait means
+completeness does not hold for every accepted member. The three claims are
+distinct and SHALL NOT be collapsed into a blanket "resolves exactly once":
+
+- **Uniqueness** — any member that reaches a terminal state SHALL do so **exactly
+  once**, in a surviving relay process, including when a transport, worker, or
+  collector panics.
+- **Bounded completeness for `Authorized` members** — every `Authorized` member
+  SHALL reach a terminal state within `[delivery].submission-timeout-ms` plus
+  twice `[delivery].fence-observation-timeout-ms`, on a positive and a negative
+  fence verdict alike.
+- **No completeness for `Pending` members** — a `Pending` member MAY never reach a
+  terminal state while the relay and its target both remain live, and no mechanism
+  SHALL manufacture one for it.
+
+Uniqueness SHALL be enforced by a **relay-owned authorization guard** owned
+outside every worker,
 collector, and transport task. A keyed map plus a compare-and-set is not
 sufficient on its own, because it cannot observe a detached thread, a worker-task
 panic, a collector panic, or a generation replacement.
