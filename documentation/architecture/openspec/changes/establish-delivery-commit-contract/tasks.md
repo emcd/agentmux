@@ -24,7 +24,8 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Implement the single terminal CAS, releasing admission quota on that transition and nowhere else
 - [ ] Implement the guard resolution order once: unit record if present, else `not_submitted` for a member never bound to a unit, else `submission_unknown`
 - [ ] Implement the mandatory post-authorization execution watchdog bounded by `[delivery].submission-timeout-ms`, anchored at authorization
-- [ ] On elapse, resolve every unresolved member through the guard's evidence order and initiate the generation fence; record `submission_unknown` only where no stronger evidence exists
+- [ ] On elapse, initiate the generation fence and terminalize nothing yet; keep accepting unit evidence through the fence windows and terminalize every still-unresolved member through the evidence order at the fence verdict
+- [ ] Release quota and outcome barriers at terminalization, but release the target's FIFO, raw barrier, and replacement only on a positive fence verdict
 - [ ] Make unwind, channel closure, task or thread exit, generation replacement, and graceful shutdown all route through that one order; no lifecycle path selects an outcome of its own
 - [ ] Make collectors carry guard keys rather than own resolution; remove the `JoinError` branch in `src/relay/delivery/dispatch/outcomes.rs` that returns without producing an outcome
 - [ ] Ensure outcome-notification failure is counted and recorded without blocking the terminal transition or the quota release
@@ -60,12 +61,13 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 ### Fencing
 
 - [ ] Retain every generation-owned submission and permission executor handle
-- [ ] Implement fence acknowledgment as terminate-then-join, in that order
-- [ ] Implement the five-step fence state machine: cooperative stop request, bounded cessation observation, non-blocking forced termination, second bounded observation, verdict
+- [ ] Implement the five-step fence state machine as the only fence protocol: cooperative stop request, bounded cessation observation, non-blocking forced termination, second bounded observation, verdict
 - [ ] Keep steps 1 and 3 distinct, so a cooperatively stoppable executor is never force-terminated
-- [ ] Make both observations non-blocking with their own clock, never a blocking join, each bounded by `[delivery].fence-join-timeout-ms`
-- [ ] Add a generation termination primitive to the transport contract, contracted to positively cease every generation-owned effect path, and require its invocation to return without blocking
-- [ ] Implement it per transport: ACP and Pty reap the generation's child; Tmux terminates only its owned client invocations, never the server; UI drops the generation's broadcaster handle and subscriber senders
+- [ ] Make both observations non-blocking with their own clock, never a blocking join, each bounded by `[delivery].fence-observation-timeout-ms`
+- [ ] Add a generation termination primitive to the transport contract, contracted to *initiate* cessation of every generation-owned effect path and return without blocking
+- [ ] Implement step 3 per transport as initiation only: ACP and Pty signal the child to terminate; Tmux signals its owned client invocations, never the server; UI drops the generation's broadcaster handle and subscriber senders
+- [ ] Observe the results in step 4 — child reaped, invocations exited, executor returned — never inside the step 3 call
+- [ ] Make a successful primitive invocation not itself acknowledge the fence; only observed cessation does
 - [ ] Make the fence positive only on observed cessation, and route both timeout and failure to the negative branch
 - [ ] Keep the fence negative when cessation is not observed: admit no replacement for that target, hold its raw barrier, record the condition, and still resolve every member through the guard
 - [ ] Block replacement and normal-raw ordering barriers until the fence is positive, while allowing `submission_unknown` to terminalize before it
@@ -110,8 +112,8 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Remove `#[ignore]` from `pty_envelope_absorbed_during_wait_reaches_the_master`; it passing is the `agentmux:issues/relay/62` acceptance criterion
 - [ ] Cover exactly-once resolution under worker panic, collector panic, transport panic mid-partition and after partial submission, closed outcome channel, generation replacement in flight, and graceful shutdown with mixed `Pending`/`Authorized`
 - [ ] Cover that quota returns to zero after each of those, and that the per-target FIFO still makes progress
-- [ ] Cover fence acknowledgment ordering: a join without termination authority does not complete, and one with it does
-- [ ] Cover the execution watchdog: an executor that stays alive and blocked past `submission-timeout-ms` resolves through the guard, releases quota, unblocks the target FIFO, and initiates the fence
+- [ ] Cover fence acknowledgment ordering: against an executor blocked in a primitive that observes no flag, the first observation window does not complete, and cessation is observed only after the termination primitive has been invoked
+- [ ] Cover the execution watchdog: an executor that stays alive and blocked past `submission-timeout-ms` initiates the fence and terminalizes nothing at the bound; still-unresolved members terminalize through the guard at the verdict, releasing quota there, and the target's FIFO stays blocked unless that verdict is positive
 - [ ] Cover that the watchdog does not override stronger evidence, and that it produces no failure spelling and no target-health inference
 - [ ] Cover the cooperative path: an executor that observes the fenced flag ceases in the first window and the termination primitive never fires
 - [ ] Cover the escalation path: the first window elapses, the termination primitive fires, cessation is observed within the second window, and the fence becomes positive

@@ -565,20 +565,20 @@ step is distinct, and no step blocks:
 1. **Cooperative stop request** — mark the generation fenced. An executor that
    checks the flag stops at its next check. This step is a signal, not a wait.
 2. **First bounded cessation observation** — observe for up to
-   `[delivery].fence-join-timeout-ms` whether every generation-owned executor has
+   `[delivery].fence-observation-timeout-ms` whether every generation-owned executor has
    ceased. If all have, go to step 5 positive.
 3. **Forced generation termination** — invoke the transport's generation
    termination primitive. **The invocation SHALL be non-blocking**: it initiates
    termination and returns, consuming none of the acknowledgment budget. Waiting
    for its effect belongs to step 4, not to the call.
 4. **Second bounded cessation observation** — observe for a further
-   `[delivery].fence-join-timeout-ms`.
+   `[delivery].fence-observation-timeout-ms`.
 5. **Verdict** — **positive** if every generation-owned executor has been
    observed to cease; **negative** otherwise. Timeout and failure both route to
    negative; there is no third outcome.
 
 Total acknowledgment is therefore bounded by **twice**
-`fence-join-timeout-ms`, because steps 1 and 3 are non-blocking and only steps 2
+`fence-observation-timeout-ms`, because steps 1 and 3 are non-blocking and only steps 2
 and 4 consume time.
 
 **Neither observation SHALL be a blocking join.** No runtime primitive can force
@@ -597,33 +597,31 @@ A generation supervisor SHALL retain the termination primitive **plus every
 submission and permission executor handle it owns**. An executor whose handle is
 discarded cannot be observed and cannot be fenced.
 
-**The join SHALL be bounded.** Because replacement and ordering barriers may not
-proceed until the fence is positive, an unbounded join would reintroduce exactly
-the unbounded wait this capability exists to remove. The bound SHALL be relay
-configuration (`[delivery].fence-join-timeout-ms`).
-
 **The escalation action is fixed, not configurable**, because only one class of
-action can establish what the fence needs. When the bound elapses the supervisor
-SHALL invoke the **generation termination primitive** that the transport declares.
+action can unblock an executor that observes nothing. Step 3 SHALL invoke the
+**generation termination primitive** that the transport declares.
 
-Every transport SHALL declare such a primitive, and its contract is the same on
-all of them: **positively cease every effect path the generation owns.** It is
-not "kill the child" — that is one implementation of it, and it does not
-generalise. A transport owning no child process, or reaching its target through a
-process it does not own, still owes the same guarantee:
+Every transport SHALL declare such a primitive. Its contract is to **initiate
+cessation of every effect path the generation owns, and to return without
+blocking.** It is not "kill the child" — that is one implementation, and it does
+not generalise to a transport owning no child process or reaching its target
+through a process it does not own:
 
-| Transport | Generation termination primitive |
-|---|---|
-| ACP, Pty | terminate and reap the generation's child process, closing the stdin pipe or pty master it was being written to |
-| Tmux | terminate the generation's owned `tmux` client invocations. The tmux **server** is not owned by the generation and SHALL NOT be terminated — doing so would destroy the operator's sessions |
-| UI | drop the generation's broadcaster handle and subscriber senders, so no further frame can be emitted |
+| Transport | Step 3 initiates | Step 4 observes |
+|---|---|---|
+| ACP, Pty | signal the generation's child to terminate, closing the stdin pipe or pty master being written to | the child reaped and the executor returned |
+| Tmux | signal the generation's owned `tmux` client invocations to terminate. The tmux **server** is not owned by the generation and SHALL NOT be terminated — doing so would destroy the operator's sessions | those invocations exited and the executor returned |
+| UI | drop the generation's broadcaster handle and subscriber senders | no further frame emitted and the executor returned |
 
-A timeout that merely stops waiting establishes nothing and cannot release a
-barrier. The primitive is what makes escalation sound: it both unblocks an
-executor blocked writing into the terminated path and positively establishes that
-no in-flight primitive can still reach the target. That is a stronger fact than
-joining an executor, and it is the fact the raw barrier and generation
-replacement actually require.
+**A successful primitive invocation does not acknowledge the fence.** Only
+*observed cessation* does. The primitive initiates; step 4 observes. Reaping a
+child and confirming an executor returned are observations, and they belong to
+step 4 where they are bounded — putting them inside step 3 would place unbounded
+waiting inside a call the bound does not cover.
+
+The primitive is what makes escalation effective rather than what makes it sound:
+it unblocks an executor blocked writing into the terminated path, so that
+step 4's observation can succeed where step 2's could not.
 
 When the verdict is **negative**, the supervisor SHALL NOT admit a replacement
 generation for that target, SHALL NOT release its raw barrier, and SHALL record
@@ -654,31 +652,32 @@ until it is.
 A submission stopped by the fence before producing its effect SHALL resolve
 `not_submitted`, since the fence is positive evidence that nothing was written.
 
-#### Scenario: An acknowledged fence stops the old generation
+#### Scenario: A positive fence stops the old generation
 
-- **WHEN** a generation is fenced and its executors are terminated and joined
+- **WHEN** a generation's fence reaches a positive verdict
 - **THEN** no member of that generation is submitted afterwards
-- **AND** its `Authorized` entries resolve through the guard
+- **AND** replacement and the raw barrier are released
 
-#### Scenario: A marked but unacknowledged generation is not fenced
+#### Scenario: A marked but unobserved generation is not fenced
 
 - **WHEN** a generation is marked fenced and its members are resolved without
-  joining its executors
+  cessation having been observed
 - **THEN** an in-flight submission may still produce a target-side effect
 - **AND** this SHALL NOT be treated as a fenced generation
 
-#### Scenario: Termination precedes the join
+#### Scenario: A successful primitive invocation is not an acknowledgment
 
-- **WHEN** an executor is blocked in a submission primitive that observes no
-  fence flag
-- **THEN** joining it alone does not complete the fence
-- **AND** applying termination authority allows the join to complete
+- **WHEN** the generation termination primitive returns successfully
+- **AND** cessation has not yet been observed
+- **THEN** the fence is not yet positive
+- **AND** replacement and the raw barrier remain held until step 4 observes
+  cessation
 
 #### Scenario: A discarded executor handle cannot be fenced
 
 - **WHEN** a transport spawns a submission or permission executor without
   retaining its handle
-- **THEN** the generation supervisor cannot acknowledge a fence for it
+- **THEN** the generation supervisor cannot observe its cessation
 - **AND** the transport does not satisfy this requirement
 
 #### Scenario: A cooperative stop is tried before forced termination
@@ -691,7 +690,7 @@ A submission stopped by the fence before producing its effect SHALL resolve
 
 #### Scenario: The first observation is bounded and escalates
 
-- **WHEN** `[delivery].fence-join-timeout-ms` elapses without every
+- **WHEN** `[delivery].fence-observation-timeout-ms` elapses without every
   generation-owned executor having ceased
 - **THEN** the supervisor invokes the transport's generation termination
   primitive

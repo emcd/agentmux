@@ -152,8 +152,14 @@ precede. The correct rule:
   none of them, so its quota would leak and its target's FIFO would stay blocked
   forever. Operator confirmed making it mandatory on 2026-08-04.
 
-  On elapse the relay resolves every unresolved member through the guard's
-  evidence order and initiates the generation fence. The bound is an **execution
+  On elapse the relay **initiates the generation fence and terminalizes nothing
+  at that moment**. Unit evidence stays admissible through both bounded fence
+  windows, and every still-unresolved member is terminalized through the guard's
+  evidence order at the verdict — the single resolution cut. Quota and
+  outcome-level barriers release with that terminalization; the target's FIFO,
+  raw barrier, and replacement release only on a **positive** verdict, so a
+  negative one leaves that target fail-stop while every other target keeps
+  progressing. The bound is an **execution
   watchdog over the relay's own supervised code**: it states that our execution
   overran the time we allow it, not that the target failed. That is what makes it
   categorically different from the timers being retired, which inferred target
@@ -398,24 +404,33 @@ Fencing needs supervision the transports do not currently have. ACP moves its
 client and child into a thread whose `JoinHandle` is **discarded**
 (`src/acp/transport.rs:260-303`), respawn drops channels and can start a
 replacement (`src/acp/worker_driver.rs:328-404`), and permission responders are
-detached too. So the generation supervisor SHALL retain **child termination
-authority plus every submission and permission executor handle** it owns, and:
+detached too. So the generation supervisor SHALL retain **every submission and
+permission executor handle it owns**, plus the ability to invoke its transport's
+generation termination primitive, and:
 
-- **fence acknowledgment is ordered**: terminate first, then join every
-  generation-owned executor. The spike settled this — against an executor blocked
-  in a primitive that observes no flag, a join alone never completes, and the
-  termination is what lets it complete. An earlier draft stated the two halves as
-  an unordered conjunction;
-- **the join is bounded** by `[delivery].fence-join-timeout-ms`, because
-  replacement waits on the fence and an unbounded join would reintroduce the
-  unbounded wait this change removes;
+- **fence acknowledgment is a five-step state machine**: cooperative stop
+  request, bounded cessation observation, non-blocking forced termination, second
+  bounded observation, verdict. The spike settled the ordering — against an
+  executor blocked in a primitive that observes no flag, observation alone never
+  succeeds, and the forced termination is what lets it succeed. Two earlier
+  drafts got this wrong: one stated the halves as an unordered conjunction, the
+  other described it as terminate-then-*join*, which smuggled an unbounded wait
+  back in;
+- **each cessation observation is bounded** by
+  `[delivery].fence-observation-timeout-ms`, and **neither may be a blocking
+  join** — no runtime primitive can force a thread blocked in a syscall to
+  return, so a join would reintroduce the unbounded wait this change removes.
+  The termination primitive *initiates* and returns; step 4 observes. A
+  successful invocation does not acknowledge the fence; observed cessation does;
 - **the escalation is fixed**: invoke the transport's **generation termination
-  primitive**, whose contract is positive cessation of every effect path the
-  generation owns. Reaping a child is ACP's and Pty's implementation of it, not
-  the universal action — UI owns no child, and Tmux reaches its target through a
-  server it must not kill. A timeout that only stops waiting establishes nothing;
-  the primitive both unblocks an executor blocked writing into the terminated
-  path and proves nothing in flight can still reach the target;
+  primitive**, whose contract is to *initiate* cessation of every effect path the
+  generation owns and return without blocking. Reaping a child is ACP's and Pty's
+  implementation of it, not the universal action — UI owns no child, and Tmux
+  reaches its target through a server it must not kill. The primitive unblocks an
+  executor blocked writing into the terminated path, but it establishes nothing on
+  its own: only the step-4 observation does, which is why a successful invocation
+  never acknowledges the fence. A reap or a join MAY follow as cleanup once
+  cessation has been observed; neither is the observation mechanism;
 - **acknowledgment is bounded end to end**, not only before escalation. After
   the primitive is invoked the supervisor observes for cessation within a second
   window of the same configured duration, so the total is bounded by twice it.
@@ -426,8 +441,10 @@ authority plus every submission and permission executor handle** it owns, and:
   Timeout and failure both route here — there is no third outcome. Fail-stop is
   the right trade: a stuck target is operator-recoverable, an old generation
   writing alongside a new one is not;
-- `submission_unknown` MAY terminalize before the fence is positive — outcome
-  terminality does not require it, so a negative fence strands no message;
+- **terminalization does not require a *positive* verdict** — a negative verdict
+  still terminalizes every still-unresolved member through the evidence order, so
+  fail-stop strands no message. What a negative verdict withholds is the target's
+  ordering barrier and its replacement, not the members' outcomes;
 - **replacement and normal ordering barriers SHALL NOT proceed** until the fence
   is positive.
 
@@ -563,7 +580,7 @@ distinction an earlier draft collapsed. **Three facts are separate:**
 | Fact | Established by | Releases |
 |---|---|---|
 | **Outcome terminal** | ledger CAS to a terminal spelling | admission quota, receipts, outcome-level barriers |
-| **Execution ceased** | fence/join/generation replacement | nothing on its own |
+| **Execution ceased** | **positively observed cessation** within a bounded fence window | nothing on its own |
 | **Target-side ordering safe** | execution ceased **and** no in-flight primitive can still take effect | the raw barrier |
 
 `submission_unknown` is **terminal**. It resolves the member, releases quota, and

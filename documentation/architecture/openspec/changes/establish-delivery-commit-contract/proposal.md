@@ -291,7 +291,7 @@ text, so it takes no delta; reconciled as a sync/archive task.
   not a TOML key, so retiring it is a code deletion rather than a config break.
 - **Configuration — additive, relay-level.** A `[delivery]` table in `relay.toml`
   replaces them: `residency-ms`, `submission-timeout-ms`,
-  `scheduling-quantum-bytes`, `fence-join-timeout-ms`, and the four
+  `scheduling-quantum-bytes`, `fence-observation-timeout-ms`, and the four
   admission-quota keys. `submission-timeout-ms` is an **execution watchdog** over
   the relay's own supervised code, mandatory per the operator's 2026-08-04 call:
   it bounds how long an authorized submission may run, states nothing about

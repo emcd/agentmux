@@ -16,8 +16,8 @@ file SHALL use kebab-case TOML keys and MAY contain:
   |---|---|---|---|
   | `residency-ms` | `900_000` | `30_000..=3_600_000` | how long a `Pending` entry may wait before resolving `expired` |
   | `scheduling-quantum-bytes` | `262_144` | `65_536..=16_777_216` | a target's credit per rotation visit, in canonical payload bytes |
-  | `submission-timeout-ms` | `30_000` | `1_000..=300_000` | how long an authorized batch's execution may run before the relay resolves it through the guard and initiates the fence |
-  | `fence-join-timeout-ms` | `5_000` | `100..=60_000` | the budget for each of the generation fence's two cessation observations, so total acknowledgment is bounded by twice this value |
+  | `submission-timeout-ms` | `5_000` | `500..=60_000` | how long an authorized batch's ingestion may run before the relay initiates the generation fence |
+  | `fence-observation-timeout-ms` | `5_000` | `100..=60_000` | the budget for each of the generation fence's two cessation observations, so total acknowledgment is bounded by twice this value |
   | `queued-envelopes-max` | `10_000` | `1..=1_000_000` | relay-global admission quota, envelope count |
   | `queued-bytes-max` | `268_435_456` | `1_048_576..=4_294_967_296` | relay-global admission quota, canonical payload bytes |
   | `queued-envelopes-per-target-max` | `1_000` | `1..=1_000_000` | per-target admission quota, envelope count |
@@ -39,19 +39,35 @@ single turn, and the upper bound SHALL keep the setting from re-creating an
 effectively unbounded wait.
 
 `residency-ms` and `submission-timeout-ms` bound different things and SHALL NOT
-be conflated. Residency bounds how long the relay is willing to *wait to start*,
-and expires a message that was never authorized. The submission timeout bounds
-how long the relay lets its own already-started execution run. Their appropriate
-durations differ by orders of magnitude — a pending wait legitimately spans an
-agent's whole turn, while an authorized submission is a short write — which is
-why one setting cannot serve both.
+be conflated. They separate on the authorization line:
+
+| | `residency-ms` | `submission-timeout-ms` |
+|---|---|---|
+| Bounds | waiting *for* readiness | *ingestion*, after readiness was believed |
+| Side | pre-authorization | post-authorization |
+| Outcome | `expired` | resolution at the fence verdict |
+| States | "we never started" | "we started and do not know" |
+
+**`submission-timeout-ms` bounds ingestion, not readiness.** A batch is
+authorized only once the relay has observed the target ready, and no transport
+may wait on readiness afterwards, so the clock never covers a readiness wait.
+What it covers is the transport consuming the bytes — in practice a single write
+into a pty master, a child's stdin, or a subscriber channel.
+
+Because readiness is advisory and can go stale between check and authorization,
+**stale readiness is precisely how ingestion stalls**: the relay believed the
+target was draining, began pushing bytes, and the target stopped. This is why the
+default is small. Ingestion into a genuinely draining target completes in
+microseconds; seconds of blocked ingestion mean the reader is not draining, not
+that the write is large.
 
 **Zero is not a permitted value for any `[delivery]` key, and no value denotes
 "unlimited."** Every range above excludes zero, and a zero SHALL be rejected with
 the same structured range error as any other out-of-range value. A zero quota
-would reject every message and a zero fence-join bound would reap a child before
-any executor could be joined, so overloading zero as "no limit" would make the
-two most dangerous misconfigurations indistinguishable from the safest intent.
+would reject every message and a zero fence observation budget would declare a
+negative fence before any executor could be observed, so overloading zero as "no
+limit" would make the two most dangerous misconfigurations indistinguishable from
+the safest intent.
 
 **Per-target quota SHALL NOT exceed relay-global quota in either dimension.**
 `queued-envelopes-per-target-max` greater than `queued-envelopes-max`, or
@@ -102,8 +118,10 @@ and pre-flight configuration validation with structured validation errors.
 
 - **WHEN** `relay.toml` sets `[delivery].submission-timeout-ms` within the
   permitted range
-- **THEN** an authorized batch whose execution exceeds it is resolved through the
-  guard's evidence order and its generation fence is initiated
+- **THEN** the relay initiates that batch's generation fence and terminalizes no
+  member at the bound
+- **AND** every still-unresolved member is terminalized through the guard's
+  evidence order at the fence verdict, not at the bound
 - **AND** the setting is documented as an execution watchdog over the relay's own
   code, not as a judgement about target health
 

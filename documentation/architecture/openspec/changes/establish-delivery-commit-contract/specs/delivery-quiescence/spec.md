@@ -632,14 +632,27 @@ authorization line.
 **The relay SHALL therefore bound post-authorization execution.** A batch's
 execution SHALL be bounded by `[delivery].submission-timeout-ms`, anchored at
 authorization. When that bound elapses and the batch has not fully resolved, the
-relay SHALL:
+relay SHALL **initiate the generation fence**, and SHALL NOT terminalize its
+members at that moment.
 
-1. resolve every unresolved member **through the guard's evidence order** — a
-   unit that recorded `Submitted` still resolves `delivered`, a member never
-   bound to a packing unit still resolves `not_submitted`, and only members with
-   no stronger evidence resolve `submission_unknown`;
-2. initiate the generation fence, which then follows its own bounded
-   positive-or-negative path.
+**There is exactly one resolution cut, and it is the fence verdict.** Unit
+evidence SHALL continue to be accepted throughout the bounded fence windows, and
+every still-unresolved member SHALL be terminalized through the guard's evidence
+order at the positive-or-negative verdict.
+
+Terminalizing at the bound instead would destroy evidence the fence is about to
+produce. A bound member with no record would win `submission_unknown`; if the
+cooperative stop then halted it before any effect and recorded `NotSubmitted`,
+the terminal CAS could no longer accept that stronger evidence, and the sender
+would be told "this may have arrived" about a message the system had just proven
+never left. One cut at the verdict preserves the evidence order rather than
+racing it.
+
+Evidence that arrives normally, before the bound elapses, SHALL still terminalize
+its members as it does today. The cut governs what is *left* unresolved.
+
+Total resolution therefore remains bounded, by `submission-timeout-ms` plus twice
+the fence observation budget.
 
 **This bound is not a reintroduction of the timers this change retires, and the
 distinction is the whole basis of the change.** A retired timer concluded that
@@ -659,24 +672,45 @@ change removed.
 
 - **WHEN** an authorized batch's executor remains alive and blocked past
   `[delivery].submission-timeout-ms`
-- **THEN** every unresolved member resolves through the guard's evidence order
-- **AND** each member's admission quota is released
-- **AND** the target's FIFO resumes scheduling
-- **AND** the generation fence is initiated
+- **THEN** the generation fence is initiated
+- **AND** no member is terminalized at that moment
+- **AND** every still-unresolved member is terminalized through the guard's
+  evidence order at the fence verdict
+
+#### Scenario: Fence evidence still wins after the bound elapses
+
+- **WHEN** the execution bound elapses and the fence's cooperative stop halts a
+  bound member's unit before it produces any effect
+- **AND** that unit records `NotSubmitted`
+- **THEN** the member resolves `not_submitted` at the verdict
+- **AND** it does not resolve `submission_unknown`
+- **BECAUSE** the single resolution cut is the verdict, so evidence the fence
+  produces is still admissible
 
 #### Scenario: The execution bound does not override stronger evidence
 
 - **WHEN** the execution bound elapses for a batch in which one unit already
   recorded `Submitted`
 - **THEN** that unit's members resolve `delivered`
-- **AND** only members with no stronger evidence resolve `submission_unknown`
+- **AND** only bound members lacking stronger evidence at the cut resolve
+  `submission_unknown`
+
+#### Scenario: Quota is released at terminalization, target barriers at the fence
+
+- **WHEN** members are terminalized at the fence verdict
+- **THEN** their admission quota and outcome-level barriers are released
+- **AND** the target's FIFO, raw barrier, and generation replacement are released
+  only on a **positive** verdict
+- **AND** on a negative verdict other targets continue to progress while this one
+  remains fail-stop
 
 #### Scenario: The execution bound asserts nothing about the target
 
 - **WHEN** the execution bound elapses
-- **THEN** the outcome recorded is `submission_unknown`
-- **AND** no member resolves to a failure spelling, and no target-health state is
-  inferred
+- **THEN** no member resolves to a failure spelling, and no target-health state
+  is inferred
+- **AND** a bound member lacking stronger evidence at the cut resolves
+  `submission_unknown`
 - **BECAUSE** the bound reports that the relay's own execution overran, not that
   the target is unhealthy
 
