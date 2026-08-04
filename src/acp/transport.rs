@@ -98,6 +98,34 @@ struct AcpSharedState {
     /// and the `on_dispatched` closure reach it through the shared `Arc`. `None`
     /// in tests constructed without a relay registry.
     mirror_state: Option<ReadinessMirror>,
+    /// Handles for the permission resolver threads this generation has spawned.
+    ///
+    /// Retained rather than detached: a permission resolver blocks on an
+    /// operator decision and can outlive the turn that raised it, so an executor
+    /// whose handle was dropped would be invisible to cessation observation —
+    /// and a generation cannot be fenced on executors it cannot see.
+    permission_executors: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl AcpSharedState {
+    /// Records a permission resolver's handle, dropping any that have already
+    /// finished so a long-lived generation does not accumulate one per decision
+    /// it ever made. Only live executors need observing.
+    fn note_permission_executor(&self, handle: JoinHandle<()>) {
+        let mut executors = self
+            .permission_executors
+            .lock()
+            .expect("permission executors mutex");
+        executors.retain(|handle| !handle.is_finished());
+        executors.push(handle);
+    }
+
+    fn permission_executors_ceased(&self) -> bool {
+        self.permission_executors
+            .lock()
+            .map(|executors| executors.iter().all(JoinHandle::is_finished))
+            .unwrap_or(false)
+    }
 }
 
 /// Channel capacity for the internal ACP delivery task's write queue.
@@ -192,6 +220,7 @@ impl AcpTransport {
                 readiness: Mutex::new(WorkerReadinessState::Initializing),
                 replay: Mutex::new(None),
                 mirror_state,
+                permission_executors: Mutex::new(Vec::new()),
             }),
             write_tx: None,
             shutdown_tx: None,
@@ -406,7 +435,7 @@ impl GenerationFence for AcpTransport {
             .runtime
             .as_ref()
             .is_none_or(|runtime| runtime.client.reader_ceased());
-        delivery_task_ceased && client_ceased
+        delivery_task_ceased && client_ceased && self.shared.permission_executors_ceased()
     }
 }
 
@@ -1238,8 +1267,13 @@ fn submit_envelope_turn(
             target_session: ctx.target_session.to_string(),
             decider_sessions: decider_sessions.to_vec(),
         };
-        let mut inner =
-            build_acp_permission_handler(chooser.clone(), correlation, Arc::clone(&pending_choice));
+        let shared_for_executors = Arc::clone(ctx.shared);
+        let mut inner = build_acp_permission_handler(
+            chooser.clone(),
+            correlation,
+            Arc::clone(&pending_choice),
+            Arc::new(move |handle| shared_for_executors.note_permission_executor(handle)),
+        );
         let raised_flag = Arc::clone(&permission_was_raised);
         let wrapped: PermissionHandler = Box::new(move |req, responder| {
             raised_flag.store(true, Ordering::Release);
