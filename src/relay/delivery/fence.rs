@@ -81,49 +81,84 @@ pub async fn acknowledge_fence<G>(generation: &mut G, observation: Duration) -> 
 where
     G: GenerationFence + ?Sized,
 {
-    generation.fence_generation();
-    if observe_cessation(generation, observation).await {
-        return FenceOutcome {
-            verdict: FenceVerdict::Positive,
-            resolution: FenceResolution::Cooperative,
-        };
-    }
-
-    // The primitive initiates and returns. Its success is not an
-    // acknowledgment — it exists so the observation below can succeed where the
-    // one above could not.
-    generation.terminate_generation();
-    if observe_cessation(generation, observation).await {
-        return FenceOutcome {
-            verdict: FenceVerdict::Positive,
-            resolution: FenceResolution::Forced,
-        };
-    }
-
-    FenceOutcome {
-        verdict: FenceVerdict::Negative,
-        resolution: FenceResolution::Unobserved,
+    let mut fence = FenceInProgress::begin(generation, observation);
+    let interval = Duration::from_millis(OBSERVATION_POLL_INTERVAL_MS);
+    loop {
+        if let Some(outcome) = fence.advance(generation, Instant::now()) {
+            return outcome;
+        }
+        tokio::time::sleep(interval).await;
     }
 }
 
-/// Observes for cessation for up to `budget`, polling rather than joining.
+/// A fence acknowledgment in progress, advanced by its owner rather than
+/// awaited.
 ///
-/// Checks once before sleeping so a generation that has already ceased costs no
-/// wall time — which is what keeps the common case, where nothing was executing
-/// in the first place, from paying an observation window it does not need.
-async fn observe_cessation<G>(generation: &G, budget: Duration) -> bool
-where
-    G: GenerationFence + ?Sized,
-{
-    let deadline = Instant::now() + budget;
-    let interval = Duration::from_millis(OBSERVATION_POLL_INTERVAL_MS);
-    loop {
+/// The step-driven shape exists because unit evidence stays admissible through
+/// both observation windows: a caller that awaited the fence as one future would
+/// stop collecting the very outcomes the fence is supposed to let it keep
+/// collecting. [`acknowledge_fence`] is the thin awaiting driver over this, so
+/// there is exactly one implementation of the protocol.
+#[derive(Debug)]
+pub struct FenceInProgress {
+    observation: Duration,
+    /// End of the window currently being observed.
+    deadline: Instant,
+    /// Whether forced termination has already been invoked, which is what
+    /// distinguishes the first window from the second.
+    escalated: bool,
+}
+
+impl FenceInProgress {
+    /// Performs step 1 — the cooperative stop request — and opens the first
+    /// observation window.
+    pub fn begin<G>(generation: &mut G, observation: Duration) -> Self
+    where
+        G: GenerationFence + ?Sized,
+    {
+        generation.fence_generation();
+        Self {
+            observation,
+            deadline: Instant::now() + observation,
+            escalated: false,
+        }
+    }
+
+    /// Advances the fence, returning its outcome once one is established.
+    ///
+    /// `None` means the fence is still observing and the caller should keep
+    /// doing its own work — collecting outcomes above all — and call again.
+    /// Observing is a poll rather than a join because no runtime primitive can
+    /// force a thread blocked in a syscall to return.
+    pub fn advance<G>(&mut self, generation: &mut G, now: Instant) -> Option<FenceOutcome>
+    where
+        G: GenerationFence + ?Sized,
+    {
         if generation.generation_ceased() {
-            return true;
+            return Some(FenceOutcome {
+                verdict: FenceVerdict::Positive,
+                resolution: if self.escalated {
+                    FenceResolution::Forced
+                } else {
+                    FenceResolution::Cooperative
+                },
+            });
         }
-        if Instant::now() >= deadline {
-            return false;
+        if now < self.deadline {
+            return None;
         }
-        tokio::time::sleep(interval.min(deadline.saturating_duration_since(Instant::now()))).await;
+        if self.escalated {
+            return Some(FenceOutcome {
+                verdict: FenceVerdict::Negative,
+                resolution: FenceResolution::Unobserved,
+            });
+        }
+        // The first window elapsed without cessation. The primitive initiates
+        // and returns; its success acknowledges nothing. It exists so the second
+        // window's observation can succeed where the first could not.
+        generation.terminate_generation();
+        self.escalated = true;
+        self.deadline = now + self.observation;
+        None
     }
 }

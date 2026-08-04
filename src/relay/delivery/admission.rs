@@ -115,7 +115,7 @@ pub fn configure_delivery(configuration: DeliveryConfiguration) {
 /// The published `[delivery]` table, or the documented defaults before startup
 /// publishes one.
 #[must_use]
-fn delivery_configuration() -> DeliveryConfiguration {
+pub(in crate::relay) fn delivery_configuration() -> DeliveryConfiguration {
     DELIVERY_CONFIGURATION.get().copied().unwrap_or_default()
 }
 

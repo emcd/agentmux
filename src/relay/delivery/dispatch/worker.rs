@@ -1,4 +1,10 @@
-use std::{collections::HashMap, sync::OnceLock, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
+
+use serde_json::json;
 
 use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver, task::JoinSet};
 
@@ -20,7 +26,9 @@ use super::payload::{
 use crate::transports::{OutcomeFuture, SingleDeliveryOutcome, TransportImpl};
 
 use super::super::async_worker::AsyncWorkerKey;
+use super::super::fence::{FenceInProgress, FenceResolution, FenceVerdict};
 use super::super::guard::{BatchId, GuardTrigger, TransportGeneration};
+use crate::runtime::inscriptions::emit_inscription;
 
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
 
@@ -40,6 +48,15 @@ pub(super) struct InflightMember {
     /// Whether a successful delivery should clear startup failures: `true` for
     /// coder transports, `false` for UI.
     pub(super) record_served: bool,
+    /// When this member was authorized, which is what the execution watchdog
+    /// measures against.
+    ///
+    /// Anchored at authorization rather than at the write, because the bound is
+    /// over the relay's own supervised execution and that execution begins the
+    /// moment responsibility transfers. It never measures how long a target took
+    /// to become ready — all of that waiting happens before authorization, on
+    /// the `Pending` side, where it is deliberately unbounded.
+    pub(super) authorized_at: Instant,
 }
 
 #[derive(Clone)]
@@ -154,6 +171,12 @@ async fn run_async_delivery_worker(
     // still leaves the relay able to name — and therefore resolve — its member.
     let mut inflight_members: HashMap<tokio::task::Id, InflightMember> = HashMap::new();
     let mut senders_dropped = false;
+    // The post-authorization execution watchdog and the fence it initiates. The
+    // bounds are the relay's own `[delivery]` settings, read once per worker.
+    let delivery = super::super::admission::delivery_configuration();
+    let submission_timeout = Duration::from_millis(delivery.submission_timeout_ms);
+    let fence_observation = Duration::from_millis(delivery.fence_observation_timeout_ms);
+    let mut fence: Option<FenceInProgress> = None;
 
     loop {
         if shutdown_requested() {
@@ -182,8 +205,25 @@ async fn run_async_delivery_worker(
             // No more producers and nothing in flight: the worker is unreachable.
             break;
         }
+        // The watchdog runs before the select so an elapsed member is noticed on
+        // the same tick that observes it, and the fence advances even while the
+        // worker is otherwise idle.
+        if let Some(transport) = transport.as_mut() {
+            advance_execution_watchdog(
+                &key,
+                transport,
+                &mut fence,
+                &mut inflight,
+                &mut inflight_members,
+                pending.as_ref(),
+                submission_timeout,
+                fence_observation,
+            );
+        }
         tokio::select! {
-            maybe_task = receiver.recv(), if !senders_dropped => {
+            // A fenced generation accepts no new submissions: the whole point of
+            // the fence is that this generation stops producing effects.
+            maybe_task = receiver.recv(), if !senders_dropped && fence.is_none() => {
                 match maybe_task {
                     Some(task) => {
                         if shutdown_requested() {
@@ -290,8 +330,98 @@ fn submit_task(
         InflightMember {
             task,
             record_served,
+            authorized_at: Instant::now(),
         },
     );
+}
+
+/// Drives the post-authorization execution watchdog and, once it has fired, the
+/// generation fence it initiated.
+///
+/// The bound is an **execution watchdog over the relay's own supervised code**.
+/// It states that our execution overran the time we allow it — not that the
+/// target failed. That is what makes it categorically different from the absence
+/// timers this change retires, which inferred target failure from an unchanged
+/// screen. Every other trigger the guard has is an event; an executor that stays
+/// alive and blocked produces none of them, so without this its quota would leak
+/// and its target's ordering position would be held forever.
+#[allow(clippy::too_many_arguments)]
+fn advance_execution_watchdog(
+    key: &AsyncWorkerKey,
+    transport: &mut TransportImpl,
+    fence: &mut Option<FenceInProgress>,
+    inflight: &mut JoinSet<InflightOutcome>,
+    inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
+    pending: &std::sync::atomic::AtomicUsize,
+    submission_timeout: Duration,
+    fence_observation: Duration,
+) {
+    let now = Instant::now();
+    let Some(in_progress) = fence.as_mut() else {
+        let overrun = inflight_members
+            .values()
+            .any(|member| now.duration_since(member.authorized_at) >= submission_timeout);
+        if overrun {
+            emit_inscription(
+                "relay.delivery.watchdog.elapsed",
+                &json!({
+                    "namespace": key.namespace,
+                    "target_session": key.target_session,
+                    "submission_timeout_ms": submission_timeout.as_millis() as u64,
+                    "unresolved_members": inflight_members.len(),
+                }),
+            );
+            *fence = Some(FenceInProgress::begin(transport, fence_observation));
+        }
+        return;
+    };
+
+    // Nothing is terminalized at the bound itself: unit evidence stays
+    // admissible through both fence windows, and the collect arm keeps running
+    // alongside this. Only the verdict is the resolution cut.
+    let Some(outcome) = in_progress.advance(transport, now) else {
+        return;
+    };
+    *fence = None;
+
+    emit_inscription(
+        "relay.delivery.fence.verdict",
+        &json!({
+            "namespace": key.namespace,
+            "target_session": key.target_session,
+            "verdict": match outcome.verdict {
+                FenceVerdict::Positive => "positive",
+                FenceVerdict::Negative => "negative",
+            },
+            "resolution": match outcome.resolution {
+                FenceResolution::Cooperative => "cooperative",
+                FenceResolution::Forced => "forced",
+                FenceResolution::Unobserved => "unobserved",
+            },
+            "unresolved_members": inflight_members.len(),
+        }),
+    );
+
+    // The single resolution cut. Every member still unresolved terminalizes
+    // through the guard's evidence order, from either verdict — a negative fence
+    // withholds the target's replacement, never a member's outcome. A collector
+    // resolving concurrently races this, and the guard's compare-and-swap is
+    // what makes exactly one of them report.
+    inflight.abort_all();
+    for (_, member) in inflight_members.drain() {
+        super::super::async_worker::complete_task_outcome_from_trigger(
+            &member.task,
+            GuardTrigger::FenceVerdict,
+        );
+        super::super::async_worker::release_pending_slot(pending);
+    }
+
+    if outcome.verdict == FenceVerdict::Negative {
+        // Fail-stop. A target that admits no new generation is recoverable by
+        // operator action; one whose old generation might still be writing while
+        // a replacement runs is not.
+        super::super::async_worker::mark_generation_fence_negative(key);
+    }
 }
 
 /// Performs the `Pending` to `Authorized` transition for one member, minting its

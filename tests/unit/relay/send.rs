@@ -764,6 +764,81 @@ fn a_member_produces_exactly_one_terminal_record() {
     );
 }
 
+/// The post-authorization execution watchdog, end to end.
+///
+/// A UI target with no UI connected holds its member for the full 30s reconnect
+/// wait, which is far longer than any bound the relay allows its own execution.
+/// With the watchdog armed, that member does not wait: the bound elapses, the
+/// relay initiates the generation fence, the fence's cooperative stop reaches
+/// the UI executor, and the member resolves through the guard's evidence order.
+///
+/// The outcome is the load-bearing assertion. `not_submitted` is a *sound
+/// assertion of non-delivery* produced by the transport proving it emitted
+/// nothing — not a timeout spelling, and not an inference from elapsed time. An
+/// elapsed watchdog says our execution overran the time we allow it; it says
+/// nothing about the target, which is what separates this bound from the absence
+/// timers this change retires.
+#[test]
+fn the_execution_watchdog_fences_an_overrunning_member_instead_of_waiting() {
+    use agentmux::relay::{DeliveryConfiguration, configure_delivery};
+
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    configure_delivery(DeliveryConfiguration {
+        submission_timeout_ms: 500,
+        fence_observation_timeout_ms: 100,
+        ..DeliveryConfiguration::default()
+    });
+
+    let started = std::time::Instant::now();
+    dispatch_request(
+        RelayRequest::Send {
+            request_id: None,
+            requester_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["user@GLOBAL".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(1),
+            on_behalf_of: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect("send response");
+
+    let completed = await_inscription(&inscriptions, "relay.send.async.completed");
+    let elapsed = started.elapsed();
+
+    assert!(
+        completed.contains("\"outcome\":\"not_submitted\""),
+        "the fenced member resolves from evidence, not a timeout spelling: {completed}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "the watchdog must resolve this well inside the 30s UI reconnect wait: {elapsed:?}"
+    );
+    assert_eq!(
+        count_inscriptions(&inscriptions, "relay.delivery.watchdog.elapsed"),
+        1,
+        "the bound elapsing is recorded once for this target"
+    );
+    let verdict = await_inscription(&inscriptions, "relay.delivery.fence.verdict");
+    assert!(
+        verdict.contains("\"verdict\":\"positive\""),
+        "an executor that observes the fenced flag ceases and the fence goes positive: {verdict}"
+    );
+    assert!(
+        verdict.contains("\"resolution\":\"cooperative\""),
+        "it ceased on the cooperative request, so forced termination never ran: {verdict}"
+    );
+}
+
 /// Polls for the first inscription line for `event`. The terminal record is
 /// written by the delivery worker task rather than on the request path, so it is
 /// not present when the send response returns.

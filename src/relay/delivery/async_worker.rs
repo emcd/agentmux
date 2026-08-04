@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{
         Arc, Mutex, OnceLock,
         atomic::{AtomicUsize, Ordering},
@@ -229,6 +229,35 @@ pub(super) fn register_worker_if_absent(
         },
     );
     Ok(true)
+}
+
+/// Targets whose generation fence reached a negative verdict.
+///
+/// Separate from the worker registry because it has to outlive the worker: the
+/// whole point is that no *replacement* generation may be admitted for this
+/// target, and the worker whose fence failed unregisters itself on the way out.
+/// An entry here is deliberately permanent for the process lifetime — clearing
+/// it is operator recovery, not something the relay may decide on its own.
+static FENCE_NEGATIVE_TARGETS: OnceLock<Mutex<HashSet<AsyncWorkerKey>>> = OnceLock::new();
+
+fn fence_negative_targets() -> &'static Mutex<HashSet<AsyncWorkerKey>> {
+    FENCE_NEGATIVE_TARGETS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Records that a target's generation could not be proven to have stopped
+/// executing, so no replacement may be admitted for it.
+pub(super) fn mark_generation_fence_negative(key: &AsyncWorkerKey) {
+    if let Ok(mut targets) = fence_negative_targets().lock() {
+        targets.insert(key.clone());
+    }
+}
+
+/// Whether a target is fenced negative and therefore admits no new generation.
+pub(super) fn generation_fence_is_negative(key: &AsyncWorkerKey) -> bool {
+    fence_negative_targets()
+        .lock()
+        .map(|targets| targets.contains(key))
+        .unwrap_or(false)
 }
 
 /// Marks a worker as closing so it bounces new sends while its entry stays

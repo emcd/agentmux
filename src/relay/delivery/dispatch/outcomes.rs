@@ -104,6 +104,7 @@ pub(super) fn collect_outcome(
     let Some(InflightMember {
         task,
         record_served,
+        ..
     }) = inflight_members.remove(&task_id)
     else {
         // No member for this collector: it was already removed, so nothing is

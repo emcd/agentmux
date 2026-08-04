@@ -212,7 +212,21 @@ exported from `src/relay/mod.rs`.
     exists to close. Timeout and failure both route to a negative verdict, which
     is fail-stop by choice — a target that admits no new generation is
     operator-recoverable, and one whose old generation writes alongside a new one
-    is not.
+    is not. The protocol is step-driven rather than awaited, because unit
+    evidence stays admissible through both windows: a caller that awaited the
+    fence as one future would stop collecting the very outcomes the fence exists
+    to let it keep collecting. `acknowledge_fence` is a thin awaiting driver over
+    the same state machine, so there is one implementation.
+  - The **execution watchdog** lives in `dispatch/worker.rs`, anchored at
+    authorization and bounded by `[delivery].submission-timeout-ms`. It is a
+    bound over the relay's own supervised code — it says our execution overran
+    the time we allow it, never that the target failed, which is what separates
+    it from the absence timers this change retires. On elapse it initiates the
+    fence and terminalizes nothing; the verdict is the single resolution cut,
+    and every still-unresolved member terminalizes there through the guard's
+    evidence order from *either* verdict. A negative verdict withholds the
+    target's replacement (further sends are refused
+    `runtime_target_fence_negative`), never a member's outcome.
   - `dispatch/mod.rs`: delivery dispatch re-export hub.
   - `dispatch/orchestration.rs`: delivery startup, ACP target priming, and the
     enqueue path that registers/feeds the per-target worker.
