@@ -126,7 +126,12 @@ So the rule is structural, not incidental:
 
 - **All target-readiness and quiescence waiting happens in `Pending`**, before
   authorization: prompt-readiness matching, quiescence observation, and — on ACP
-  — completion and operator-choice resolution of an **older** turn.
+  — completion and operator-choice resolution of an **older** turn. This says
+  *when* the waiting happens, not who evaluates it. The relay owns the wait
+  because it owns the queue; each transport owns the *determination* and reports
+  it through `can_accept_handover`, since readiness is transport-specific by
+  nature and does not generalise across a pane, a wire protocol, and a subscriber
+  list (*Decision 3*).
 - **Authorization starts exactly one immediate submission attempt.**
   Post-authorization execution SHALL NOT wait on prompt readiness, target turn
   completion, target output, or an operator decision.

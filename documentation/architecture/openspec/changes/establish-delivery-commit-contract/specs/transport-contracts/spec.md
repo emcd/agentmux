@@ -16,16 +16,32 @@ inspected non-empty tail lines of pane output. The "pane output" source is
 transport-specific: Tmux reads from `capture-pane`; Pty reads from
 `Formatter::format_alloc(Format::Plain)` via the `PtyOutputView` look path.
 
-When `input_idle_cursor_column` is configured, relay SHALL treat the target as
-prompt-ready only when the transport reports the cursor at that configured
-column.
+When `input_idle_cursor_column` is configured, the transport SHALL report itself
+unable to accept a handover unless the cursor is at that configured column.
 
-**The template gates authorization, and it gates it for every transport
-uniformly.** Prompt-readiness is evaluated relay-side while the entry is
-`Pending`, and a target that is not prompt-ready SHALL NOT have a batch
-authorized for it. This is a change in what the template does: it previously
-gated injection on Tmux but on Pty only decided what the sender was told, because
-Pty had already written the bytes.
+**The template gates authorization, and it gates it for every transport that has
+one.** A target that is not prompt-ready SHALL NOT have a batch authorized for
+it. This is a change in what the template does: it previously gated injection on
+Tmux but on Pty only decided what the sender was told, because Pty had already
+written the bytes.
+
+**The template SHALL be evaluated by the transport that owns the target, never by
+the relay.** The relay learns the result only as the level it reads through
+`can_accept_handover`, and MUST NOT interpret `prompt_regex`, inspect pane
+output, or compare a cursor column itself.
+
+This is a decoupling boundary, not an implementation preference. Readiness
+*determination* is transport-specific by nature and does not generalise: a prompt
+regex over a pane tail is meaningless for ACP, whose readiness is the completion
+of an earlier turn arriving on the wire protocol with no snapshot to inspect, and
+meaningless again for UI, whose readiness is subscriber connectivity. A relay
+that evaluated the template would be a relay that knows what a pane is, which the
+`transport-abstraction` capability's `Transport Module Boundaries` requirement
+forbids.
+
+Readiness *scheduling* — deciding which target to visit, in what order, and when
+to authorize — remains relay-owned and is transport-agnostic. The two are
+separate concerns and only the second belongs to the relay.
 
 A readiness failure SHALL be distinguished by its cause. A **frame mismatch**
 (`prompt_regex` did not match the inspected tail) means the target has settled on
@@ -57,6 +73,22 @@ the `delivery-quiescence` capability's undelivered-queue inscriptions.
 - **AND** `prompt_regex` matches the inspected multiline tail text
 - **THEN** relay authorizes the batch and the transport injects the message
 
+#### Scenario: The relay never evaluates the template itself
+
+- **WHEN** a target member has a prompt-readiness template
+- **THEN** the relay delivery subsystem does not compile `prompt_regex`, read
+  pane output, or compare a cursor column
+- **AND** it authorizes solely on the level the transport reports through
+  `can_accept_handover`
+
+#### Scenario: A transport with no pane has no template to evaluate
+
+- **WHEN** the target's transport observes readiness from a wire protocol or
+  subscriber connectivity rather than pane output
+- **THEN** it reports `can_accept_handover` from that observation
+- **AND** the relay authorizes on the same level it reads for every other
+  transport, with no transport-specific branch
+
 #### Scenario: A frame mismatch is not a failure on any transport
 
 - **WHEN** a target's output is quiescent and `prompt_regex` does not match
@@ -75,7 +107,8 @@ the `delivery-quiescence` capability's undelivered-queue inscriptions.
 
 - **WHEN** target member uses one regex that spans prompt and status lines
 - **AND** pane output tail contains those lines in order
-- **THEN** relay treats target as prompt-ready
+- **THEN** the transport reports itself able to accept a handover
+- **AND** relay authorizes a batch for that target
 
 #### Scenario: Require idle input column before injection
 
