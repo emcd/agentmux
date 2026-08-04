@@ -51,7 +51,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Readiness
 
-- [ ] Add the level-triggered `can_accept_handover` state to the transport contract, readable on demand
+- [x] Add the level-triggered `can_accept_handover` state to the transport contract, readable on demand
 - [x] Add static maximum handover dimensions in envelope count and canonical payload bytes
 - [ ] Move prompt-readiness matching and quiescence observation relay-side, into the `Pending` phase
 - [ ] Wire the readiness notification as a relay-provided closure, with subscribe-before-check and a bounded poll backstop
@@ -67,15 +67,15 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Fencing
 
-- [ ] Retain every generation-owned submission and permission executor handle
-- [ ] Implement the five-step fence state machine as the only fence protocol: cooperative stop request, bounded cessation observation, non-blocking forced termination, second bounded observation, verdict
-- [ ] Keep steps 1 and 3 distinct, so a cooperatively stoppable executor is never force-terminated
-- [ ] Make both observations non-blocking with their own clock, never a blocking join, each bounded by `[delivery].fence-observation-timeout-ms`
-- [ ] Add a generation termination primitive to the transport contract, contracted to *initiate* cessation of every generation-owned effect path and return without blocking
-- [ ] Implement step 3 per transport as initiation only: ACP and Pty signal the child to terminate; Tmux signals its owned client invocations, never the server; UI drops the generation's broadcaster handle and subscriber senders
-- [ ] Observe the results in step 4 — child reaped, invocations exited, executor returned — never inside the step 3 call
-- [ ] Make a successful primitive invocation not itself acknowledge the fence; only observed cessation does
-- [ ] Make the fence positive only on observed cessation, and route both timeout and failure to the negative branch
+- [x] Retain every generation-owned submission and permission executor handle
+- [x] Implement the five-step fence state machine as the only fence protocol: cooperative stop request, bounded cessation observation, non-blocking forced termination, second bounded observation, verdict
+- [x] Keep steps 1 and 3 distinct, so a cooperatively stoppable executor is never force-terminated
+- [x] Make both observations non-blocking with their own clock, never a blocking join, each bounded by `[delivery].fence-observation-timeout-ms`
+- [x] Add a generation termination primitive to the transport contract, contracted to *initiate* cessation of every generation-owned effect path and return without blocking
+- [x] Implement step 3 per transport as initiation only: ACP and Pty signal the child to terminate; Tmux signals its owned client invocations, never the server; UI drops the generation's broadcaster handle and subscriber senders
+- [x] Observe the results in step 4 — child reaped, invocations exited, executor returned — never inside the step 3 call
+- [x] Make a successful primitive invocation not itself acknowledge the fence; only observed cessation does
+- [x] Make the fence positive only on observed cessation, and route both timeout and failure to the negative branch
 - [ ] Keep the fence negative when cessation is not observed: admit no replacement for that target, hold its raw barrier, record the condition, and still resolve every member through the guard
 - [ ] Block replacement and normal-raw ordering barriers until the fence is positive, while allowing `submission_unknown` to terminalize before it
 - [ ] Resolve a submission stopped by the fence before any effect as `not_submitted`

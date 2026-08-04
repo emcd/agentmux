@@ -51,9 +51,9 @@ use tokio::sync::{mpsc, oneshot};
 use crate::configuration::BundleMember;
 use crate::configuration::TermProtocol;
 use crate::transports::{
-    DeliveryDiagnosticContext, DeliveryEnvelope, OutcomeFuture, OutputView, SingleDeliveryOutcome,
-    StartupContext, Transport, TransportError, TransportReadiness, TransportStatus, WedgeProbe,
-    WorkerReadinessState,
+    DeliveryDiagnosticContext, DeliveryEnvelope, GenerationFence, OutcomeFuture, OutputView,
+    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportReadiness,
+    TransportStatus, WedgeProbe, WorkerReadinessState,
 };
 
 /// Mirrors the worker readiness state into the relay's global registry.
@@ -664,6 +664,40 @@ impl Drop for StartupGuard {
         if let Some(handle) = self.worker_handle.take() {
             let _ = handle.join();
         }
+    }
+}
+
+impl GenerationFence for PtyTransport {
+    fn fence_generation(&mut self) {
+        self.shutdown_flag.store(true, Ordering::Release);
+    }
+
+    fn terminate_generation(&mut self) {
+        // Signal the child and return. Killing it closes the pty master, which
+        // is what wakes an executor blocked in a `write_all` into that master —
+        // the case the cooperative flag cannot reach, because a thread parked in
+        // a syscall checks nothing.
+        //
+        // Deliberately no `wait()` here, unlike `shutdown`: reaping is an
+        // observation, and observations belong to the bounded step that follows
+        // rather than inside a call contracted to return without blocking.
+        if let Some(child_arc) = self.child.as_ref()
+            && let Ok(mut child) = child_arc.lock()
+        {
+            let _ = child.kill();
+        }
+        self.write_tx = None;
+        self.bytes_tx = None;
+    }
+
+    fn generation_ceased(&self) -> bool {
+        self.worker_handle
+            .as_ref()
+            .is_none_or(thread::JoinHandle::is_finished)
+            && self
+                .reader_handle
+                .as_ref()
+                .is_none_or(thread::JoinHandle::is_finished)
     }
 }
 

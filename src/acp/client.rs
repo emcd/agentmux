@@ -470,6 +470,29 @@ impl AcpStdioClient {
         self.child.stderr.take()
     }
 
+    /// Initiates child termination and returns immediately.
+    ///
+    /// The fence's forced step, distinct from [`shutdown`](Self::shutdown),
+    /// which also reaps and joins. Killing the child closes its stdio, which
+    /// unblocks a reader parked in `read_line` and a writer parked on its stdin
+    /// — the executors a cooperative flag cannot reach. Reaping and confirming
+    /// they returned are *observations*, and they belong to the bounded step
+    /// after this one rather than inside a call contracted not to block.
+    pub fn initiate_termination(&mut self) {
+        let _ = self.child.kill();
+    }
+
+    /// Whether the reader thread this client owns has exited.
+    ///
+    /// `true` when no reader was ever spawned or its handle has already been
+    /// taken: in both cases this client owns no running executor.
+    #[must_use]
+    pub fn reader_ceased(&self) -> bool {
+        self.reader_handle
+            .as_ref()
+            .is_none_or(std::thread::JoinHandle::is_finished)
+    }
+
     pub fn shutdown(&mut self) {
         // Killing the child closes its stdout, which makes the reader's
         // blocking `read_line` return EOF (Ok(0)) and exit the loop. The

@@ -199,6 +199,20 @@ exported from `src/relay/mod.rs`.
     an outcome, so a member the relay can prove was never handed to a transport
     resolves `not_submitted` instead of being smeared into `submission_unknown`
     by whichever event happened to fire.
+  - `fence.rs`: the five-step generation fence — cooperative stop request,
+    bounded observation, non-blocking forced termination, second bounded
+    observation, verdict. It answers only *has execution ceased?*, which is not
+    the same question as *has this member resolved?*: a member may terminalize
+    `submission_unknown` long before its generation is fenced, while replacement
+    and the target's ordering barriers stay held until the verdict is positive.
+    Steps 1 and 3 are kept distinct because step 3 is destructive — collapsing
+    them would tear down a child that was about to stop on its own. Neither
+    observation is a join: no runtime primitive can force a thread blocked in a
+    syscall to return, so a join would reintroduce the unbounded wait the bound
+    exists to close. Timeout and failure both route to a negative verdict, which
+    is fail-stop by choice — a target that admits no new generation is
+    operator-recoverable, and one whose old generation writes alongside a new one
+    is not.
   - `dispatch/mod.rs`: delivery dispatch re-export hub.
   - `dispatch/orchestration.rs`: delivery startup, ACP target priming, and the
     enqueue path that registers/feeds the per-target worker.

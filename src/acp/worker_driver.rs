@@ -30,8 +30,8 @@ use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
-    Chooser, DeliveryEnvelope, OutputView, StartupContext, Transport, TransportError,
-    TransportStatus, WorkerFailureReason, WorkerReadinessState,
+    Chooser, DeliveryEnvelope, GenerationFence, OutputView, StartupContext, Transport,
+    TransportError, TransportStatus, WorkerFailureReason, WorkerReadinessState,
 };
 
 use super::{AcpBootstrapError, AcpTransport, bootstrap_acp_worker_runtime};
@@ -240,6 +240,20 @@ impl AcpWorkerDriver {
             runtime_directory,
             target_member,
         ));
+    }
+}
+
+impl GenerationFence for AcpWorkerDriver {
+    fn fence_generation(&mut self) {
+        self.lock_transport().fence_generation();
+    }
+
+    fn terminate_generation(&mut self) {
+        self.lock_transport().terminate_generation();
+    }
+
+    fn generation_ceased(&self) -> bool {
+        self.lock_transport().generation_ceased()
     }
 }
 

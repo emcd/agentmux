@@ -45,9 +45,9 @@ use crate::envelope::PromptBatchSettings;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
-    ChoiceMade, DeliveryDiagnosticContext, DeliveryEnvelope, LookMode, LookSnapshotPayload,
-    OutputView, SingleDeliveryOutcome, StartupContext, Transport, TransportError,
-    TransportReadiness, TransportStatus, emit_delivery_progress,
+    ChoiceMade, DeliveryDiagnosticContext, DeliveryEnvelope, GenerationFence, LookMode,
+    LookSnapshotPayload, OutputView, SingleDeliveryOutcome, StartupContext, Transport,
+    TransportError, TransportReadiness, TransportStatus, emit_delivery_progress,
 };
 use crate::transports::{SendOutcome, WorkerReadinessState};
 
@@ -377,6 +377,36 @@ impl AcpTransport {
             "ACP transport unavailable (no runtime)",
             None,
         )
+    }
+}
+
+impl GenerationFence for AcpTransport {
+    fn fence_generation(&mut self) {
+        // Dropping the shutdown sender is the delivery task's cooperative stop
+        // signal: it drains what it holds and exits at its next check.
+        self.shutdown_tx = None;
+    }
+
+    fn terminate_generation(&mut self) {
+        // Signal the child and return. This unblocks an executor parked writing
+        // into the child's stdin, which is exactly the case step 1 cannot reach.
+        // Reaping happens in the observation that follows, not here.
+        if let Some(runtime) = self.runtime.as_mut() {
+            runtime.client.initiate_termination();
+        }
+        self.write_tx = None;
+    }
+
+    fn generation_ceased(&self) -> bool {
+        let delivery_task_ceased = self
+            .delivery_task_handle
+            .as_ref()
+            .is_none_or(JoinHandle::is_finished);
+        let client_ceased = self
+            .runtime
+            .as_ref()
+            .is_none_or(|runtime| runtime.client.reader_ceased());
+        delivery_task_ceased && client_ceased
     }
 }
 

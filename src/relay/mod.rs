@@ -41,6 +41,7 @@ pub use self::delivery::admission::{
     UndeliveredReporting, configure_delivery, configured_undelivered_reporting,
     report_undelivered_queue,
 };
+pub use self::delivery::fence::{FenceOutcome, FenceResolution, FenceVerdict, acknowledge_fence};
 pub use self::delivery::install_pending_choice_request_for_testing;
 pub use self::delivery::observability::{
     ChoicesQueueEvent, subscribe_choices_queue_events, subscribe_worker_readiness,

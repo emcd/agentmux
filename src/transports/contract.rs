@@ -94,7 +94,60 @@ pub type OutcomeFuture = oneshot::Receiver<SingleDeliveryOutcome>;
 /// its own internal delivery task and `spawn_blocking`. They are the relay's
 /// only delivery seam — the legacy synchronous `deliver`/`prepare_delivery`/
 /// `raw_write` methods have been removed.
-pub trait Transport {
+/// The three actions a generation supervisor needs to fence a transport
+/// generation, split out of [`Transport`] so the fence protocol can be driven
+/// against anything that can be stopped and observed.
+///
+/// A generation SHALL be torn down and fenced before its replacement begins, so
+/// an old generation cannot submit after its `Authorized` entries were resolved
+/// against it. Without that, "resolved unknown" and "still able to act" coexist,
+/// which is a target-side ordering hazard.
+///
+/// **Marking a generation fenced is not a fence.** A submission already past its
+/// check will still produce its effect. Only *observed cessation* — through
+/// [`generation_ceased`](Self::generation_ceased) — establishes that execution
+/// has stopped.
+///
+/// None of the three has a default body. A defaulted
+/// [`generation_ceased`](Self::generation_ceased) is the dangerous one: `true`
+/// would acknowledge a fence no one observed, releasing a replacement while the
+/// old generation can still write, and `false` would make every fence negative
+/// and every target permanently unreplaceable. Neither is a safe thing to get by
+/// forgetting to implement it.
+pub trait GenerationFence {
+    /// Step 1 — cooperative stop request. Marks the generation fenced so an
+    /// executor that checks the flag stops at its next check.
+    ///
+    /// A signal, not a wait. It costs nothing when it works, which is why it is
+    /// tried before the destructive step 3: escalating straight to termination
+    /// would destroy a child that was about to stop on its own.
+    fn fence_generation(&mut self);
+
+    /// Step 3 — forced generation termination. Initiates cessation of every
+    /// effect path this generation owns and returns **without blocking**.
+    ///
+    /// Not "kill the child": that is one implementation and does not generalise
+    /// to a transport owning no child, or one reaching its target through a
+    /// process it does not own. Tmux in particular SHALL NOT terminate the tmux
+    /// server, which belongs to the operator rather than to the generation.
+    ///
+    /// Invoking it successfully does **not** acknowledge the fence. It initiates;
+    /// step 4 observes. Its value is that it unblocks an executor blocked writing
+    /// into the terminated path, so step 4's observation can succeed where step
+    /// 2's could not.
+    fn terminate_generation(&mut self);
+
+    /// Steps 2 and 4 — the cessation observation. Whether every
+    /// generation-owned executor has been observed to cease.
+    ///
+    /// Non-blocking, and deliberately not a join: no runtime primitive can force
+    /// a thread blocked in a syscall to return, so a blocking join would
+    /// reintroduce the unbounded wait the fence bound exists to close. The
+    /// supervisor polls this and gives up on its own clock.
+    fn generation_ceased(&self) -> bool;
+}
+
+pub trait Transport: GenerationFence {
     /// Establishes (or re-establishes, on respawn) the transport runtime for a
     /// target. On respawn the transport may publish a fresh [`OutputView`]; the
     /// worker re-calls [`give_output`] afterward to pick up the new handle.
@@ -154,6 +207,23 @@ pub trait Transport {
     ///
     /// [`startup`]: Transport::startup
     fn give_output(&self) -> Option<Arc<dyn OutputView>>;
+}
+
+/// Lets the fence protocol drive a [`TransportImpl`] through the same seam it
+/// drives any other generation, so the supervisor holds no knowledge of which
+/// transport it is fencing.
+impl GenerationFence for TransportImpl {
+    fn fence_generation(&mut self) {
+        TransportImpl::fence_generation(self);
+    }
+
+    fn terminate_generation(&mut self) {
+        TransportImpl::terminate_generation(self);
+    }
+
+    fn generation_ceased(&self) -> bool {
+        TransportImpl::generation_ceased(self)
+    }
 }
 
 /// A concurrently-readable view of a transport's output for the `look` request
@@ -541,6 +611,55 @@ impl TransportImpl {
             Self::Pty(transport) => transport.can_accept_handover(),
             #[cfg(not(feature = "pty"))]
             Self::Pty => false,
+        }
+    }
+
+    /// Requests a cooperative stop; see [`GenerationFence::fence_generation`].
+    pub fn fence_generation(&mut self) {
+        match self {
+            Self::Acp(transport) => transport.fence_generation(),
+            Self::Tmux(transport) => transport.fence_generation(),
+            Self::Ui(transport) => transport.fence_generation(),
+            // The `Pubsub` stub is refused at admission, so it never owns a
+            // generation to fence. The same holds for a `Pty` that the feature
+            // gate leaves unconstructible.
+            Self::Pubsub => {}
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.fence_generation(),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => {}
+        }
+    }
+
+    /// Initiates forced termination; see [`GenerationFence::terminate_generation`].
+    pub fn terminate_generation(&mut self) {
+        match self {
+            Self::Acp(transport) => transport.terminate_generation(),
+            Self::Tmux(transport) => transport.terminate_generation(),
+            Self::Ui(transport) => transport.terminate_generation(),
+            Self::Pubsub => {}
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.terminate_generation(),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => {}
+        }
+    }
+
+    /// Observes cessation; see [`GenerationFence::generation_ceased`].
+    pub fn generation_ceased(&self) -> bool {
+        match self {
+            Self::Acp(transport) => transport.generation_ceased(),
+            Self::Tmux(transport) => transport.generation_ceased(),
+            Self::Ui(transport) => transport.generation_ceased(),
+            // A stub that owns no executor has trivially ceased. This is the one
+            // place `true` is the honest answer rather than the dangerous
+            // default the trait refuses to provide: there is nothing here that
+            // could still write to a target.
+            Self::Pubsub => true,
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.generation_ceased(),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => true,
         }
     }
 

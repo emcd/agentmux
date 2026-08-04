@@ -8,6 +8,8 @@ mod acp_transport;
 mod association;
 #[path = "unit/config/mod.rs"]
 mod config;
+#[path = "unit/delivery_fence.rs"]
+mod delivery_fence;
 #[path = "unit/delivery_message.rs"]
 mod delivery_message;
 #[path = "unit/envelope.rs"]

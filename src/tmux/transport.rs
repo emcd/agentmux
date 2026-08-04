@@ -35,9 +35,9 @@ use crate::configuration::TargetConfiguration;
 use crate::envelope::{PromptBatchSettings, batch_envelope_groups};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::transports::{
-    DeliveryEnvelope, DeliveryWaitError, LookMode, LookSnapshotPayload, OutcomeFuture, OutputView,
-    SendOutcome, SingleDeliveryOutcome, StartupContext, Transport, TransportError,
-    TransportReadiness, TransportStatus,
+    DeliveryEnvelope, DeliveryWaitError, GenerationFence, LookMode, LookSnapshotPayload,
+    OutcomeFuture, OutputView, SendOutcome, SingleDeliveryOutcome, StartupContext, Transport,
+    TransportError, TransportReadiness, TransportStatus,
 };
 
 /// Default tmux look window applied when the caller omits a window size.
@@ -207,6 +207,34 @@ impl TmuxTransport {
                 details: None,
             });
         }
+    }
+}
+
+impl GenerationFence for TmuxTransport {
+    fn fence_generation(&mut self) {
+        // The delivery thread already checks this flag between write items, so
+        // marking it is the whole cooperative request.
+        self.shutdown_flag.store(true, Ordering::Release);
+    }
+
+    fn terminate_generation(&mut self) {
+        // Dropping the sender closes the delivery thread's channel, so a thread
+        // parked waiting for its next item returns rather than waiting forever.
+        // That is the only effect path this generation owns which the relay can
+        // initiate cessation of.
+        //
+        // The tmux **server** is deliberately untouched. It is not owned by this
+        // generation — it holds the operator's sessions, and terminating it to
+        // fence one delivery would destroy work the fence exists to protect.
+        self.sender = None;
+    }
+
+    fn generation_ceased(&self) -> bool {
+        // A generation that never started a delivery thread owns no executor and
+        // has trivially ceased.
+        self.task_handle
+            .as_ref()
+            .is_none_or(thread::JoinHandle::is_finished)
     }
 }
 
