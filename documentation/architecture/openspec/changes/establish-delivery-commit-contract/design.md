@@ -797,6 +797,69 @@ it needs no new outcome spelling. **Work SHALL NOT be authorized merely to
 discover the stub.** It is inside the uniform contract with a defined answer,
 rather than silently outside it.
 
+## Rollout Ordering
+
+The decisions above describe an end state. Reaching it across five transports
+needs an order, and the phase line in `tasks.md` does not supply one: it is drawn
+on quota-leak grounds — the guard cannot be deferred past `Authorized` — which
+says what must be in the core, not what may land before a transport has migrated.
+
+The relevant property is narrower than "does this transport implement the
+contract yet". **There is exactly one boundary at which the new core and a
+transport's existing prime/wedge/quiescence logic cannot coexist**, and it is
+smaller than any transport's task list. Three tiers follow.
+
+**Tier A — relay-local, coexistence-safe.** The queue entry state model,
+admission and its quotas, per-target FIFO, byte-budgeted round-robin, the guard
+and terminal CAS, typed submission evidence, and undelivered-queue reporting are
+bookkeeping the relay performs over whatever the transport does. A transport that
+still waits internally is not wrong under them; its entry simply holds `Authorized`
+for the duration of that wait, which costs quota residency and nothing else. The
+whole of Tier A may land before any transport changes, on one condition: the
+`submission-timeout-ms` watchdog is not yet armed.
+
+**Tier B — the cutover, and it must be simultaneous.** Arming the watchdog
+requires that no transport waits for readiness inside its write seam. This is not
+a sequencing preference; it is what the bound means. *Decision 5* and the
+`runtime-bootstrap` capability both state that the bound covers ingestion and not
+readiness, and they can only state it because authorization already implies
+observed readiness. Arm it against a transport that still waits internally and it
+fences healthy deliveries: Tmux's in-task quiescence wait is bounded by
+`readiness_timeout_ms`, defaulting to fifteen minutes, and UI's reconnect wait to
+thirty seconds, against a five-second watchdog. Pty fails the same boundary from
+the other side — it writes before its prime wait, so it trips on evidence timing
+rather than on readiness gating — and needs the same relocation.
+
+No per-transport stub can defer this the way `mailw`'s additions-only default
+deferred the write seam. `can_accept_handover` has no safe default, because the
+surfaces that could supply one are exactly the surfaces *Decision 3* rejected:
+Tmux's `is_ready` is always true, and ACP and Pty count `Busy` as ready. A default
+of `true` authorizes a busy target straight into the watchdog; a default of `false`
+strands it permanently, since *Decision 5* leaves `Pending` unbounded. The
+transport must answer for itself or not participate.
+
+What must land simultaneously is only that: `can_accept_handover` plus deletion of
+the internal readiness wait, on every transport, together with the watchdog. The
+rest of each transport's work — evidence recording, partition placement, prime and
+turn-timer deletion, ACP's staging queue — sequences independently.
+
+**Tier C — fencing, coexistence-safe in the degraded direction only.** A
+transport that cannot yet produce cessation evidence sits fence-negative, which
+*Decision 6* makes safe by construction: no replacement is admitted, the raw
+barrier holds, and every member still resolves through the guard. Safe is not the
+same as recoverable. A negative fence is not a window that closes — for a
+transport that can never observe cessation it is permanent, and blocked
+replacement means that target can never be respawned. ACP is in exactly that
+position while it discards its client/child handle (`agentmux:todos/relay/128`),
+and the fence becomes reachable precisely when a target has wedged, which is when
+respawn is the recovery path. **Retaining that handle therefore lands with Tier B,
+not after it.**
+
+Non-uniformity across transports inside one phase is already contemplated: `Ui`
+carries its reconnect timer through Phase 1 by the interim exception in
+`tasks.md`. The tiers above say which further non-uniformity is admissible and
+which is not.
+
 ## Risks / Trade-offs
 
 - **`submission_unknown` is pessimistic**, covering both "never started" and
@@ -842,9 +905,13 @@ rather than silently outside it.
   ACP paths validated independently; this exact failure mode escaped four commits
   and three review rounds on the predecessor change.
 
-- **Five config keys deleted across the three coder transports.** → Coordinator
-  prepares both `coders.toml` files against the settled list before any restart.
-  UI adds nothing to that list: its reconnect timeout is a constant plus builder
+- **Five config keys deleted across the three coder transports.** → The key list
+  is settled here, but the `coders.toml` edits SHALL be made in the same window as
+  the binary swap, not prepared ahead of it. There is no overlap: the running
+  binary requires the keys, and the new one rejects them through
+  `deny_unknown_fields`, which is the whole retirement mechanism. Editing early
+  breaks the live relay; editing late fails the new binary's load. UI adds nothing
+  to the list: its reconnect timeout is a constant plus builder
   (`src/transports/ui.rs:129-147`), not a TOML key, so retiring it is a code
   deletion rather than a config break.
 
