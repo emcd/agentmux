@@ -126,6 +126,13 @@ pub struct AcpWorkerDriver {
     runtime_directory: PathBuf,
     target_member: BundleMember,
     services: AcpDriverServices,
+    /// The driver-owned respawn monitor.
+    ///
+    /// Retained rather than detached: the monitor can install a replacement
+    /// runtime, so it is a generation-owned executor like any other, and one
+    /// whose handle is discarded can be neither terminated nor observed. Absent
+    /// until bootstrap spawns it.
+    respawn_monitor: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl AcpWorkerDriver {
@@ -147,6 +154,7 @@ impl AcpWorkerDriver {
             runtime_directory,
             target_member,
             services,
+            respawn_monitor: None,
         }
     }
 
@@ -224,14 +232,14 @@ impl AcpWorkerDriver {
     /// Spawns the driver-owned async respawn monitor. It subscribes to the
     /// transport's stable respawn-needed signal and drives respawn off the relay
     /// worker loop, sharing the transport via `Arc<Mutex<…>>`.
-    fn spawn_respawn_monitor(&self) {
+    fn spawn_respawn_monitor(&mut self) {
         let transport = Arc::clone(&self.transport);
         let respawn_needed = self.lock_transport().respawn_needed_subscribe();
         let services = self.services.clone();
         let namespace = self.namespace.clone();
         let runtime_directory = self.runtime_directory.clone();
         let target_member = self.target_member.clone();
-        tokio::spawn(acp_respawn_monitor(
+        self.respawn_monitor = Some(tokio::spawn(acp_respawn_monitor(
             transport,
             respawn_needed,
             services,
@@ -239,21 +247,34 @@ impl AcpWorkerDriver {
             namespace,
             runtime_directory,
             target_member,
-        ));
+        )));
     }
 }
 
 impl GenerationFence for AcpWorkerDriver {
     fn fence_generation(&mut self) {
+        // Marking the transport fenced is also the monitor's cooperative stop
+        // request: it reads the same flag between polls and returns.
         self.lock_transport().fence_generation();
     }
 
     fn terminate_generation(&mut self) {
         self.lock_transport().terminate_generation();
+        // The monitor can be parked in a bootstrap that will not return inside
+        // any window the fence allows. Aborting is the destructive step for a
+        // task that observes nothing; the runtime such a bootstrap would have
+        // produced is refused at the install anyway, under the fenced check.
+        if let Some(monitor) = self.respawn_monitor.as_ref() {
+            monitor.abort();
+        }
     }
 
     fn generation_ceased(&self) -> bool {
-        self.lock_transport().generation_ceased()
+        let monitor_ceased = self
+            .respawn_monitor
+            .as_ref()
+            .is_none_or(tokio::task::JoinHandle::is_finished);
+        monitor_ceased && self.lock_transport().generation_ceased()
     }
 }
 
@@ -315,6 +336,16 @@ async fn acp_respawn_monitor(
             _ = tokio::time::sleep(poll) => {}
         }
         if shutdown_requested() {
+            return;
+        }
+        // The fence's cooperative request. A fenced generation admits no
+        // replacement, so there is nothing left for this monitor to do and
+        // continuing would only race the install check.
+        if transport
+            .lock()
+            .expect("acp transport mutex poisoned")
+            .generation_is_fenced()
+        {
             return;
         }
         if !*respawn_needed.borrow_and_update() {
@@ -414,11 +445,26 @@ async fn run_acp_respawn(
         match bootstrap_result {
             Ok(runtime) => {
                 // Install under a brief lock; the published handle stays valid
-                // (install repoints its replay slot).
-                transport
+                // (install repoints its replay slot). A fence that began while
+                // this bootstrap was running refuses the install and hands the
+                // runtime back, because a generation declared stopped must not
+                // acquire a fresh agent.
+                let refused = transport
                     .lock()
                     .expect("acp transport mutex poisoned")
-                    .install_runtime(runtime);
+                    .install_runtime_unless_fenced(runtime);
+                if let Some(mut refused) = refused {
+                    refused.client.shutdown();
+                    emit_inscription(
+                        "relay.acp.respawn.refused_after_fence",
+                        &json!({
+                            "namespace": namespace,
+                            "target_session": target_session,
+                            "attempt": respawn_state.attempt,
+                        }),
+                    );
+                    return;
+                }
                 (services.mirror_state)(WorkerReadinessState::Available);
                 emit_inscription(
                     "relay.acp.respawn.succeeded",

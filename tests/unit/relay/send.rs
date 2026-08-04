@@ -722,13 +722,6 @@ fn a_terminal_outcome_names_the_authorization_it_resolved_under() {
             .is_some(),
         "an authorized member's terminal record carries its attempt id: {completed}"
     );
-    assert_eq!(
-        payload
-            .get("transport_generation")
-            .and_then(serde_json::Value::as_u64),
-        Some(0),
-        "the generation a member was authorized against: {completed}"
-    );
 }
 
 /// One member, one terminal record. The guard's compare-and-swap is what makes

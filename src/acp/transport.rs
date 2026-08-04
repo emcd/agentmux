@@ -205,6 +205,14 @@ pub struct AcpTransport {
     /// observation vacuously true, since both looked at a field that is `None`
     /// for the whole steady state.
     generation: Option<AcpGenerationHandle>,
+    /// Whether this generation has been fenced.
+    ///
+    /// One-way, and read by everything that could otherwise install a
+    /// replacement runtime behind the fence's back. The respawn monitor runs
+    /// asynchronously and can be mid-bootstrap when a fence begins, so the
+    /// decision to install has to be taken against this flag under the same lock
+    /// as the install itself.
+    fenced: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for AcpTransport {
@@ -238,6 +246,7 @@ impl AcpTransport {
             respawn_needed_tx: tokio::sync::watch::channel(false).0,
             delivery_task_handle: None,
             generation: None,
+            fenced: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -390,6 +399,33 @@ impl AcpTransport {
     /// internal delivery task. Brief and lock-safe — the blocking child spawn
     /// already happened in `bootstrap_acp_worker_runtime`, so the respawn monitor
     /// holds the transport lock only for these fast field updates.
+    /// Whether this generation has been fenced.
+    #[must_use]
+    pub(crate) fn generation_is_fenced(&self) -> bool {
+        self.fenced.load(Ordering::Acquire)
+    }
+
+    /// Installs `runtime` unless this generation has been fenced, in which case
+    /// it is handed back for the caller to tear down.
+    ///
+    /// The check and the install happen under one lock on purpose. A bootstrap
+    /// runs off the lock and takes seconds, so a fence can begin while one is in
+    /// flight; deciding separately from installing would leave the window where
+    /// a replacement runtime is installed into a generation already declared
+    /// stopped — a second live agent for one target, which is exactly what the
+    /// fence exists to prevent.
+    #[must_use = "a refused runtime owns a live child and must be shut down"]
+    pub(crate) fn install_runtime_unless_fenced(
+        &mut self,
+        runtime: PersistentAcpWorkerRuntime,
+    ) -> Option<PersistentAcpWorkerRuntime> {
+        if self.generation_is_fenced() {
+            return Some(runtime);
+        }
+        self.install_runtime(runtime);
+        None
+    }
+
     pub(crate) fn install_runtime(&mut self, runtime: PersistentAcpWorkerRuntime) {
         // Repoint the published handle's replay slot at the new runtime's buffer
         // before marking ready, so a look that was prime-waiting through the
@@ -424,7 +460,10 @@ impl AcpTransport {
 impl GenerationFence for AcpTransport {
     fn fence_generation(&mut self) {
         // Dropping the shutdown sender is the delivery task's cooperative stop
-        // signal: it drains what it holds and exits at its next check.
+        // signal: it drains what it holds and exits at its next check. Marking
+        // the generation fenced is the same request to the respawn monitor, and
+        // it is what makes a bootstrap already in flight refuse to install.
+        self.fenced.store(true, Ordering::Release);
         self.shutdown_tx = None;
     }
 

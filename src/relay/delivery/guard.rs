@@ -153,17 +153,21 @@ pub(in crate::relay) fn resolve_from_evidence(
 
 /// The identities a member carries from authorization to resolution.
 ///
-/// All three are assigned at authorization and never reassigned. `batch` is the
-/// unit of authorization, `member` the entry itself, and `attempt` distinguishes
-/// one authorization from any other for the same member — which is what lets the
-/// relay claim *at most one relay-authorized injection attempt* rather than the
-/// stronger at-most-once-delivered claim it cannot support, since transports do
-/// not deduplicate attempt ids.
+/// Both are assigned at authorization and never reassigned. `batch` is the unit
+/// of authorization, and `attempt` distinguishes one authorization from any
+/// other for the same member — which is what lets the relay claim *at most one
+/// relay-authorized injection attempt* rather than the stronger
+/// at-most-once-delivered claim it cannot support, since transports do not
+/// deduplicate attempt ids.
+///
+/// There is deliberately no generation component. A generation is the worker
+/// that owns a transport for its lifetime, and a fence verdict ends both
+/// together — so a member cannot outlive the generation it was authorized
+/// against, and a key naming one would only ever carry a constant.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(in crate::relay) struct GuardKey {
     pub(in crate::relay) batch: BatchId,
     pub(in crate::relay) attempt: AttemptId,
-    pub(in crate::relay) generation: TransportGeneration,
 }
 
 /// The unit of authorization. Authorizing a batch authorizes every member in it
@@ -174,21 +178,6 @@ pub(in crate::relay) struct BatchId(u64);
 /// One authorization of one member, distinct from every other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(in crate::relay) struct AttemptId(u64);
-
-/// The transport generation a member was authorized against.
-///
-/// Carried on the guard key so a replacement generation can be told apart from
-/// the one that owned a member: resolving an outcome and proving the old
-/// generation stopped executing are different events, and only the second may
-/// admit a replacement.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(in crate::relay) struct TransportGeneration(u64);
-
-impl TransportGeneration {
-    pub(in crate::relay) fn value(self) -> u64 {
-        self.0
-    }
-}
 
 static NEXT_BATCH_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);

@@ -27,7 +27,7 @@ use crate::transports::{OutcomeFuture, SingleDeliveryOutcome, TransportImpl};
 
 use super::super::async_worker::AsyncWorkerKey;
 use super::super::fence::{FenceInProgress, FenceResolution, FenceVerdict};
-use super::super::guard::{BatchId, GuardTrigger, TransportGeneration};
+use super::super::guard::{BatchId, GuardTrigger};
 use crate::runtime::inscriptions::emit_inscription;
 
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
@@ -527,11 +527,7 @@ fn drain_sealed_queue(
 /// and the guard key carries the component now so that work has somewhere to put
 /// it rather than reshaping every key.
 fn authorize_member(task: &AsyncDeliveryTask) {
-    super::super::admission::authorize(
-        task.message_id.as_str(),
-        BatchId::mint(),
-        TransportGeneration::default(),
-    );
+    super::super::admission::authorize(task.message_id.as_str(), BatchId::mint());
 }
 
 /// Builds a coder task's structured payload and submits it via the non-blocking

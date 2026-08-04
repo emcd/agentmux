@@ -35,8 +35,7 @@ use std::{
 use serde_json::json;
 
 use super::guard::{
-    AttemptId, BatchId, GuardKey, QueueEntryState, SubmissionEvidence, TransportGeneration,
-    resolve_from_evidence,
+    AttemptId, BatchId, GuardKey, QueueEntryState, SubmissionEvidence, resolve_from_evidence,
 };
 use crate::configuration::{BundleConfiguration, SessionType};
 use crate::relay::DeliveryConfiguration;
@@ -387,11 +386,7 @@ pub(in crate::relay) fn rollback_admission(message_id: &str) {
 /// Returns the guard key on success. An entry already past `Pending` is not
 /// re-authorized and yields `None`: authorization is irrevocable, so a second
 /// one would be a second attempt at a member the relay has already committed.
-pub(in crate::relay) fn authorize(
-    message_id: &str,
-    batch: BatchId,
-    generation: TransportGeneration,
-) -> Option<GuardKey> {
+pub(in crate::relay) fn authorize(message_id: &str, batch: BatchId) -> Option<GuardKey> {
     let mut state = lock_ledger().ok()?;
     let entry = state.entries.get_mut(message_id)?;
     if entry.state != QueueEntryState::Pending {
@@ -400,7 +395,6 @@ pub(in crate::relay) fn authorize(
     let key = GuardKey {
         batch,
         attempt: AttemptId::mint(),
-        generation,
     };
     entry.state = QueueEntryState::Authorized;
     entry.guard = Some(key);

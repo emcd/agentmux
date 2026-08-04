@@ -28,6 +28,13 @@ use super::helpers::*;
 /// The load-bearing assertion is the dead child. A positive verdict alone would
 /// not discriminate: the failure mode produces one too, by observing an executor
 /// set it never had.
+///
+/// The second half asserts the invariant that lets the guard key drop its
+/// generation component: a fenced generation admits no replacement. The dying
+/// agent signals respawn-needed, and the driver-owned monitor would answer it by
+/// bootstrapping a fresh one — a second live agent for a target the relay has
+/// just declared stopped. Counting the agents the stub ever started is what
+/// catches that, because the relay's own account of a generation cannot.
 #[test]
 fn a_fenced_acp_generation_leaves_no_surviving_child() {
     let temporary = TempDir::new().expect("temporary");
@@ -68,9 +75,23 @@ fn a_fenced_acp_generation_leaves_no_surviving_child() {
          reach it and the destructive step is always required: {verdict}"
     );
 
-    for pid in child_pids {
+    for pid in child_pids.iter().copied() {
         await_process_gone(pid);
     }
+
+    // Settle past the monitor's poll interval and a respawn's backoff, so a
+    // replacement that was going to be installed would have appeared by now.
+    std::thread::sleep(Duration::from_secs(2));
+    let after = std::fs::read_to_string(&pid_path).unwrap_or_default();
+    let started_total = after
+        .lines()
+        .filter(|line| line.trim().parse::<i32>().is_ok())
+        .count();
+    assert_eq!(
+        started_total,
+        child_pids.len(),
+        "a fenced generation must admit no replacement agent; pid log: {after:?}"
+    );
 }
 
 /// Polls until the stub has recorded at least one child pid.

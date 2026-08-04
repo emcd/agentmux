@@ -645,7 +645,6 @@ fn report_terminal_outcome(
                     "details": result.details,
                     "batch_id": guard.map(|key| key.batch.value()),
                     "attempt_id": guard.map(|key| key.attempt.value()),
-                    "transport_generation": guard.map(|key| key.generation.value()),
                 }),
             );
         }
