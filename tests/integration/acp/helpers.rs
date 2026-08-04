@@ -38,6 +38,10 @@ pub(super) struct AcpStubOptions {
     pub(super) prompt_capability: bool,
     pub(super) stop_reason: String,
     pub(super) prompt_delay_sec: u64,
+    /// Leave the turn in flight forever without spawning a helper process. A
+    /// `sleep`-based delay would inherit the child's stdout, so killing the
+    /// agent would leave the pipe open and no reader could observe EOF.
+    pub(super) never_respond_to_prompt: bool,
     pub(super) update_count: usize,
     pub(super) update_line_prefix: String,
     pub(super) update_after_response: bool,
@@ -63,6 +67,7 @@ impl Default for AcpStubOptions {
             prompt_capability: true,
             stop_reason: "end_turn".to_string(),
             prompt_delay_sec: 0,
+            never_respond_to_prompt: false,
             update_count: 0,
             update_line_prefix: "ACP".to_string(),
             update_after_response: false,
@@ -79,11 +84,22 @@ impl Default for AcpStubOptions {
     }
 }
 
+/// Where the ACP stub appends the pid of every child it spawns, so a test can
+/// assert on the fate of the real process rather than on the relay's account of
+/// it.
+pub(super) fn acp_child_pid_path(root: &Path) -> PathBuf {
+    root.join("acp_child_pids.txt")
+}
+
 pub(super) fn write_acp_stub(path: &Path) {
     let script = r#"#!/bin/sh
 set -eu
 
 log_file="${ACP_LOG_FILE:?}"
+pid_file="${ACP_PID_FILE:-}"
+if [ -n "$pid_file" ]; then
+  printf '%s\n' "$$" >> "$pid_file"
+fi
 fail_initialize="${FAIL_INITIALIZE:-0}"
 fail_load="${FAIL_LOAD:-0}"
 fail_new="${FAIL_NEW:-0}"
@@ -92,6 +108,7 @@ load_capability="${LOAD_CAPABILITY:-true}"
 prompt_capability="${PROMPT_CAPABILITY:-true}"
 stop_reason="${STOP_REASON:-end_turn}"
 prompt_delay_sec="${PROMPT_DELAY_SEC:-0}"
+never_respond_to_prompt="${NEVER_RESPOND_TO_PROMPT:-0}"
 update_count="${UPDATE_COUNT:-0}"
 update_line_prefix="${UPDATE_LINE_PREFIX:-ACP}"
 update_after_response="${UPDATE_AFTER_RESPONSE:-0}"
@@ -146,6 +163,9 @@ while IFS= read -r line; do
       fi
       if [ "$disconnect_on_prompt" = "before_activity" ]; then
         exit 0
+      fi
+      if [ "$never_respond_to_prompt" = "1" ]; then
+        continue
       fi
       prompt_session_id=$(printf '%s\n' "$line" | sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p')
       if [ -z "$prompt_session_id" ]; then
@@ -226,6 +246,10 @@ pub(super) fn write_configuration(
     let env_entries: Vec<(&str, String)> = vec![
         ("ACP_LOG_FILE", log_path.display().to_string()),
         (
+            "ACP_PID_FILE",
+            acp_child_pid_path(root).display().to_string(),
+        ),
+        (
             "FAIL_INITIALIZE",
             if options.fail_initialize { "1" } else { "0" }.to_string(),
         ),
@@ -268,6 +292,15 @@ pub(super) fn write_configuration(
         ),
         ("STOP_REASON", options.stop_reason.clone()),
         ("PROMPT_DELAY_SEC", options.prompt_delay_sec.to_string()),
+        (
+            "NEVER_RESPOND_TO_PROMPT",
+            if options.never_respond_to_prompt {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string(),
+        ),
         ("UPDATE_COUNT", options.update_count.to_string()),
         ("UPDATE_LINE_PREFIX", options.update_line_prefix.clone()),
         (

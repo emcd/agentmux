@@ -32,7 +32,7 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use crate::acp::client::SharedReplay;
+use crate::acp::client::{AcpGenerationHandle, SharedReplay};
 use crate::acp::permission::{ChoiceCorrelation, build_acp_permission_handler};
 use crate::acp::persistent_runtime::{PersistentAcpWorkerRuntime, bootstrap_acp_worker_runtime};
 use crate::acp::state::{AcpLookSnapshot, derive_acp_look_snapshot};
@@ -197,6 +197,14 @@ pub struct AcpTransport {
     /// when `spawn_delivery_task` re-spawns, leaving the previous task's thread
     /// to exit on its own; only `take` clears the field.
     delivery_task_handle: Option<JoinHandle<()>>,
+    /// Fencing surface of the generation whose client the delivery task owns.
+    ///
+    /// Taken from the client at the moment it is moved into that task, because
+    /// `self.runtime` is emptied by the same move: reading termination and
+    /// cessation off the runtime made step 3 a no-op and made the reader
+    /// observation vacuously true, since both looked at a field that is `None`
+    /// for the whole steady state.
+    generation: Option<AcpGenerationHandle>,
 }
 
 impl std::fmt::Debug for AcpTransport {
@@ -229,6 +237,7 @@ impl AcpTransport {
             target_session: String::new(),
             respawn_needed_tx: tokio::sync::watch::channel(false).0,
             delivery_task_handle: None,
+            generation: None,
         }
     }
 
@@ -325,6 +334,9 @@ impl AcpTransport {
         };
 
         let runtime = self.runtime.take().expect("runtime present at task spawn");
+        // Before the move, not after: this is the last point at which the
+        // transport can still reach the client it is about to hand away.
+        self.generation = Some(runtime.client.generation_handle());
         let client = runtime.client;
         let session_id = runtime.session_id;
 
@@ -420,8 +432,8 @@ impl GenerationFence for AcpTransport {
         // Signal the child and return. This unblocks an executor parked writing
         // into the child's stdin, which is exactly the case step 1 cannot reach.
         // Reaping happens in the observation that follows, not here.
-        if let Some(runtime) = self.runtime.as_mut() {
-            runtime.client.initiate_termination();
+        if let Some(generation) = self.generation.as_ref() {
+            generation.initiate_termination();
         }
         self.write_tx = None;
     }
@@ -432,9 +444,9 @@ impl GenerationFence for AcpTransport {
             .as_ref()
             .is_none_or(JoinHandle::is_finished);
         let client_ceased = self
-            .runtime
+            .generation
             .as_ref()
-            .is_none_or(|runtime| runtime.client.reader_ceased());
+            .is_none_or(AcpGenerationHandle::reader_ceased);
         delivery_task_ceased && client_ceased && self.shared.permission_executors_ceased()
     }
 }
