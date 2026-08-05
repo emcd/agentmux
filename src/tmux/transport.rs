@@ -154,7 +154,17 @@ pub struct TmuxTransport {
     observer_invocation: TmuxInvocationSlot,
     /// Handle to the observer thread, for cessation observation and shutdown.
     observer_handle: Option<thread::JoinHandle<()>>,
+    /// Relay-provided closure the observer invokes when its observation changes.
+    ///
+    /// An opaque `Arc<dyn Fn>` supplied at construction, the same shape Pty uses
+    /// for `mirror_state`, so this module names no relay type. Correctness never
+    /// depends on it: the authoritative state is the level the relay reads, and a
+    /// lost invocation only delays a delivery to the next poll.
+    readiness_notifier: Option<ReadinessNotifier>,
 }
+
+/// Relay-provided wakeup invoked when a transport's observed level changes.
+pub type ReadinessNotifier = Arc<dyn Fn() + Send + Sync>;
 
 /// The most recent thing the observer thread learned about the pane.
 #[derive(Clone, Copy, Debug)]
@@ -168,6 +178,25 @@ enum PaneObservation {
     Unreachable,
     /// The pane was inspected, and this is what it said.
     Observed { ready: bool },
+}
+
+impl PaneObservation {
+    /// Whether replacing `self` with `next` changes either axis the relay reads.
+    fn differs_from(self, next: Self) -> bool {
+        !matches!(
+            (self, next),
+            (Self::Pending, Self::Pending)
+                | (Self::Unreachable, Self::Unreachable)
+                | (
+                    Self::Observed { ready: true },
+                    Self::Observed { ready: true }
+                )
+                | (
+                    Self::Observed { ready: false },
+                    Self::Observed { ready: false }
+                )
+        )
+    }
 }
 
 impl std::fmt::Debug for TmuxTransport {
@@ -200,7 +229,16 @@ impl TmuxTransport {
             observation: Arc::new(Mutex::new(PaneObservation::Pending)),
             observer_invocation: TmuxInvocationSlot::default(),
             observer_handle: None,
+            readiness_notifier: None,
         }
+    }
+
+    /// Installs the relay's wakeup closure.
+    ///
+    /// A setter rather than a constructor parameter so `new` keeps its shape for
+    /// the callers that build a transport without a relay behind it.
+    pub fn set_readiness_notifier(&mut self, notifier: ReadinessNotifier) {
+        self.readiness_notifier = Some(notifier);
     }
 
     /// Starts the observer thread if it is not already running.
@@ -227,6 +265,7 @@ impl TmuxTransport {
         let slot = Arc::clone(&self.observer_invocation);
         let shutdown_flag = Arc::clone(&self.shutdown_flag);
         let target_session = context.target_session.clone();
+        let notifier = self.readiness_notifier.clone();
         self.observer_handle = Some(thread::spawn(move || {
             // Publish before the first invocation, so every tmux client this
             // thread spawns is reachable by the fence.
@@ -241,7 +280,18 @@ impl TmuxTransport {
                     Some(ready) => PaneObservation::Observed { ready },
                     None => PaneObservation::Unreachable,
                 };
-                *observation.lock().expect("tmux observation mutex") = next;
+                // Notify on the edge only. A wakeup per tick would make the
+                // closure a second poll rather than a substitute for one, and the
+                // relay re-reads the level itself on waking.
+                let changed = {
+                    let mut current = observation.lock().expect("tmux observation mutex");
+                    let changed = current.differs_from(next);
+                    *current = next;
+                    changed
+                };
+                if changed && let Some(notifier) = notifier.as_ref() {
+                    notifier();
+                }
                 thread::sleep(Duration::from_millis(OBSERVER_INTERVAL_MS));
             }
         }));
@@ -975,6 +1025,36 @@ fn observe_pane_once(
         .next_evaluation()
         .ok()
         .map(|evaluation| evaluation.ready)
+}
+
+#[cfg(test)]
+mod observation_edge_tests {
+    use super::PaneObservation;
+
+    /// The notifier fires on change, so what counts as a change is the contract.
+    ///
+    /// Firing every tick would make the closure a second poll rather than a
+    /// substitute for one; never firing on a real transition would leave a held
+    /// member waiting out the backstop interval it exists to avoid.
+    #[test]
+    fn an_observation_differs_only_when_an_axis_the_relay_reads_moves() {
+        let states = [
+            PaneObservation::Pending,
+            PaneObservation::Unreachable,
+            PaneObservation::Observed { ready: false },
+            PaneObservation::Observed { ready: true },
+        ];
+        for (index, current) in states.iter().enumerate() {
+            for (other, next) in states.iter().enumerate() {
+                assert_eq!(
+                    current.differs_from(*next),
+                    index != other,
+                    "{current:?} -> {next:?} should {} a change",
+                    if index == other { "not be" } else { "be" }
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

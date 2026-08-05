@@ -666,6 +666,21 @@ impl TransportImpl {
         }
     }
 
+    /// Installs the relay's readiness wakeup on transports that publish one.
+    ///
+    /// Not on the [`Transport`] trait: it is relay-to-transport plumbing rather
+    /// than part of the delivery contract, and the contract deliberately does not
+    /// require a transport to have a notification path at all. Correctness never
+    /// depends on one — the level the relay reads is authoritative, and a lost
+    /// wakeup only delays a delivery to the next poll.
+    pub fn set_readiness_notifier(&mut self, notifier: crate::tmux::ReadinessNotifier) {
+        // ACP and Pty already mirror their readiness transitions into the relay
+        // registry; wiring them onto this seam as well is follow-on.
+        if let Self::Tmux(transport) = self {
+            transport.set_readiness_notifier(notifier);
+        }
+    }
+
     /// Reports whether the selected transport can reach its target; see
     /// [`Transport::health`].
     #[must_use]

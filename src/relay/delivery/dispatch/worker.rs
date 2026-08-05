@@ -182,6 +182,16 @@ async fn run_async_delivery_worker(
     // target's FIFO order survives the wait. At most one: taking a second member
     // off the channel while this one waits would reorder the target's queue.
     let mut held: Option<AsyncDeliveryTask> = None;
+    // Subscribed before any level is read, and before the transport that will
+    // poke it exists. The contract requires subscribe-before-check precisely so
+    // a change occurring between the check and the subscription cannot be missed;
+    // creating this first makes that ordering unrepresentable rather than
+    // merely observed.
+    //
+    // Correctness never depends on it. The authoritative state is the level the
+    // worker reads, and a lost wakeup only delays a delivery to the next poll
+    // below.
+    let readiness_changed = std::sync::Arc::new(tokio::sync::Notify::new());
     // Graceful shutdown is the only thing that fences a generation today. The
     // bound is the relay's own `[delivery]` setting, read once per worker.
     let delivery = super::super::admission::delivery_configuration();
@@ -189,6 +199,7 @@ async fn run_async_delivery_worker(
     let submit_context = SubmitContext {
         key: &key,
         batch_settings,
+        readiness_changed: &readiness_changed,
         unreachable_dwell: Duration::from_millis(delivery.unreachable_dwell_ms),
     };
 
@@ -277,8 +288,14 @@ async fn run_async_delivery_worker(
                     collect_outcome(joined, &mut inflight_members, pending.as_ref());
                 }
             }
+            _ = readiness_changed.notified(), if held.is_some() => {
+                // A transport reported that its observed level moved. Only
+                // interesting while a member is waiting on one; otherwise the
+                // loop has nothing to re-evaluate.
+            }
             _ = tokio::time::sleep(poll_interval) => {
-                // Poll tick: re-evaluate the shutdown gate even while idle.
+                // Poll tick: re-evaluate the shutdown gate even while idle, and
+                // the lost-wakeup backstop for the notification above.
             }
         }
     }
@@ -293,6 +310,9 @@ async fn run_async_delivery_worker(
 struct SubmitContext<'a> {
     key: &'a AsyncWorkerKey,
     batch_settings: PromptBatchSettings,
+    /// Handed to each transport as it is constructed, so a level change wakes the
+    /// worker instead of waiting out a poll interval.
+    readiness_changed: &'a std::sync::Arc<tokio::sync::Notify>,
     /// How long a target may be *continuously* unreachable before a held member
     /// resolves rather than keeping its place in the queue.
     unreachable_dwell: Duration,
@@ -347,7 +367,11 @@ fn submit_task(
 ) -> Option<AsyncDeliveryTask> {
     if transport.is_none() {
         match build_worker_transport(&task, context.key, context.batch_settings) {
-            Ok(built) => *transport = Some(built),
+            Ok(mut built) => {
+                let notify = std::sync::Arc::clone(context.readiness_changed);
+                built.set_readiness_notifier(std::sync::Arc::new(move || notify.notify_waiters()));
+                *transport = Some(built);
+            }
             Err(error) => {
                 super::super::async_worker::complete_task_outcome(&task, Err(error));
                 super::super::async_worker::release_pending_slot(pending);

@@ -24,5 +24,6 @@ pub use quiescence_probe::{
     PaneQuiescenceProbe, PromptReadinessEvaluation, wait_for_quiescent_pane_three_state,
 };
 pub use transport::{
-    TmuxOutputView, TmuxTransport, render_paste_text, wait_error_to_outcome_for_test,
+    ReadinessNotifier, TmuxOutputView, TmuxTransport, render_paste_text,
+    wait_error_to_outcome_for_test,
 };

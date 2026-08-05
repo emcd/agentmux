@@ -63,7 +63,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Report health from each transport without a relay dependency: Tmux distinguishes a failed pane observation from an observed non-prompt frame; ACP reads its permanence signal (`is_permanent` / respawn give-up) rather than treating every `Unavailable` as unreachable, so a recoverable respawn gap does not bounce
 - [ ] Carry the health level in `look` responses and keep `look` served on an unreachable target; `raww` inherits the write gate through the shared ordered channel
 - [ ] Construct the worker's transport at worker spawn rather than on first write, passing the target member the spawn site already holds, and resolve the triggering task if construction fails
-- [ ] Wire the readiness notification as a relay-provided closure the transport invokes, with subscribe-before-check and a bounded poll backstop
+- [x] Wire the readiness notification as a relay-provided closure the transport invokes, with subscribe-before-check and a bounded poll backstop
 - [ ] Delete the shared wedge/prime classifier once every transport determines its own readiness, and with it the relay's dependence on a cross-transport quiescence state machine
 
 ### Submission evidence
