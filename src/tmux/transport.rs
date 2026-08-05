@@ -15,9 +15,12 @@
 //! If the group grows, quiescence is re-checked before pasting.
 //!
 //! Tmux sessions are created and owned by the [`lifecycle`](super::lifecycle)
-//! primitives (driven by relay bundle reconcile/startup), so the transport has
-//! no startup/shutdown lifecycle of its own. The internal task resolves the
-//! active pane per flush group against the runtime's tmux socket.
+//! primitives (driven by relay bundle reconcile/startup), so the transport owns
+//! no session lifecycle. What [`startup`](Transport::startup) does own is the
+//! internal delivery task, which it establishes eagerly so the transport can
+//! answer [`is_ready_for_handover`](Transport::is_ready_for_handover) before it
+//! has been written to. The internal task resolves the active pane per flush
+//! group against the runtime's tmux socket.
 
 use std::{
     path::{Path, PathBuf},
@@ -260,6 +263,16 @@ impl Transport for TmuxTransport {
             runtime_directory: context.runtime_directory,
             target_member: context.target_member,
         });
+        // Start the delivery task here rather than on the first write. Readiness
+        // is now read before anything is submitted, and a transport whose runtime
+        // only appears when written to cannot answer that question: it would
+        // report unready forever, and the write that would have started the task
+        // is exactly what the readiness gate withholds.
+        self.ensure_task_running().map_err(|code| TransportError {
+            code: code.to_string(),
+            reason: "tmux delivery task could not be established at startup".to_string(),
+            details: None,
+        })?;
         Ok(TransportStatus {
             readiness: TransportReadiness::Ready,
         })
