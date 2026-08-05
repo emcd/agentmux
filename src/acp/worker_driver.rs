@@ -44,20 +44,21 @@ const RESPAWN_BACKOFF_MAX_MS_ENVVAR: &str = "AGENTMUX_RELAY_ACP_RESPAWN_BACKOFF_
 const RESPAWN_SLEEP_POLL_MS: u64 = 50;
 const RESPAWN_BACKOFF_INITIAL_MS: u64 = 1_000;
 const RESPAWN_BACKOFF_CAP_DEFAULT_MS: u64 = 30_000;
-// How many times the same bootstrap failure may repeat before the respawn
-// monitor gives up and settles the worker Unavailable. This is stage-agnostic:
-// any non-permanent bootstrap failure (spawn, initialize, session/load,
-// session/new, persist) counts, keyed on its (code, reason) signature. A
-// deterministic failure that reproduces identically across this many
-// backoff-spaced attempts is not going to self-resolve, so we surface it to
-// operators rather than loop forever -- a genuinely transient failure that
-// changes signature or succeeds within the window resets the counter and keeps
-// recovering. Permanent failures (missing capability) short-circuit this via
-// AcpBootstrapError::is_permanent before the count is even consulted. Before
-// this was stage-agnostic, only repeated `initialize` failures could give up,
-// so a coder whose session/load or session/new deterministically failed
-// respawned forever and never published a terminal Unavailable.
-const RESPAWN_REPEATED_FAILURE_THRESHOLD: u32 = 3;
+/// Attempts one worker may consume before respawn gives up, counted across every
+/// trigger rather than per burst and cleared only by a successful re-establish.
+///
+/// Deliberately blind to *which* failure occurred. The predecessor counted
+/// consecutive **identical** failure signatures, which stopped fast on a
+/// deterministic fault and never stopped at all on an alternating one — a worker
+/// failing A, B, A, B reset the counter every time and retried forever. Stopping
+/// sooner on the deterministic case was a latency optimisation; failing to stop
+/// on the alternating case was the bug.
+///
+/// This bound matters more than it used to. Recovery used to be driven by
+/// delivery attempts, so a hopeless target stopped being retried once senders
+/// gave up on it — traffic was an accidental circuit breaker. The monitor now
+/// re-signals itself, so nothing else bounds the loop.
+const RESPAWN_ATTEMPT_LIMIT: u32 = 6;
 /// Idle poll interval for the respawn monitor's shutdown gate.
 const RESPAWN_MONITOR_POLL_MS: u64 = 100;
 /// Generic respawn trigger label. The internal delivery task signals a boolean
@@ -539,7 +540,29 @@ async fn acp_respawn_monitor(
         {
             return;
         }
-        if !*respawn_needed.borrow_and_update() {
+        // The monitor decides for itself whether a respawn is owed, rather than
+        // waiting to be told. The signal is still honoured — it is the prompt
+        // edge — but an `Unavailable` runtime is sufficient on its own.
+        //
+        // It has to be. Re-signalling used to happen inside `mailw`/`raww`, so a
+        // dead worker was revived only because something tried to write to it.
+        // With authorization gated on readiness, nothing writes to an unready
+        // target, and a worker that died would have stayed dead with its members
+        // waiting on a recovery that recovery-by-traffic could no longer start.
+        //
+        // A target whose respawn has been abandoned is excluded: it is past
+        // recovery, and retrying it is the crash loop `RESPAWN_ATTEMPT_LIMIT`
+        // exists to stop.
+        let respawn_owed = *respawn_needed.borrow_and_update()
+            || (!respawn_abandoned.load(Ordering::Acquire)
+                && matches!(
+                    transport
+                        .lock()
+                        .expect("acp transport mutex poisoned")
+                        .readiness(),
+                    WorkerReadinessState::Unavailable
+                ));
+        if !respawn_owed {
             continue;
         }
         run_acp_respawn(
@@ -670,7 +693,6 @@ async fn run_acp_respawn(
                 return;
             }
             BootstrapDisposition::Failed(error) => {
-                respawn_state.record_failure(&error);
                 emit_inscription(
                     "relay.acp.respawn.attempt_failed",
                     &json!({
@@ -750,8 +772,6 @@ fn respawn_backoff_cap_ms() -> u64 {
 struct AcpRespawnState {
     attempt: u32,
     next_backoff_ms: u64,
-    last_failure_signature: Option<(String, String)>,
-    consecutive_identical_failures: u32,
 }
 
 impl AcpRespawnState {
@@ -759,8 +779,6 @@ impl AcpRespawnState {
         Self {
             attempt: 0,
             next_backoff_ms: 0,
-            last_failure_signature: None,
-            consecutive_identical_failures: 0,
         }
     }
 
@@ -776,25 +794,12 @@ impl AcpRespawnState {
         Duration::from_millis(backoff)
     }
 
-    fn record_failure(&mut self, error: &AcpBootstrapError) {
-        let signature = (error.code.clone(), error.reason.clone());
-        if self.last_failure_signature.as_ref() == Some(&signature) {
-            self.consecutive_identical_failures =
-                self.consecutive_identical_failures.saturating_add(1);
-        } else {
-            self.last_failure_signature = Some(signature);
-            self.consecutive_identical_failures = 1;
-        }
-    }
-
     fn should_give_up(&self) -> bool {
-        self.consecutive_identical_failures >= RESPAWN_REPEATED_FAILURE_THRESHOLD
+        self.attempt >= RESPAWN_ATTEMPT_LIMIT
     }
 
     fn reset_on_success(&mut self) {
         self.attempt = 0;
         self.next_backoff_ms = 0;
-        self.last_failure_signature = None;
-        self.consecutive_identical_failures = 0;
     }
 }

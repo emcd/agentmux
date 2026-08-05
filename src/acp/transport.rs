@@ -404,18 +404,6 @@ impl AcpTransport {
         let _ = self.respawn_needed_tx.send(true);
     }
 
-    /// Re-primes the respawn signal when a write arrives but no runtime is live
-    /// and the worker has settled Unavailable. This preserves the prior
-    /// "every delivery to a dead worker re-attempts recovery" behavior: a
-    /// recoverable worker recovers, and a permanently-dead one re-publishes its
-    /// Unavailable transition for observers. A transient respawn window
-    /// (Recovering) is skipped so an in-flight respawn is not disturbed.
-    fn resignal_respawn_if_dead(&self) {
-        if matches!(self.readiness(), WorkerReadinessState::Unavailable) {
-            self.signal_respawn();
-        }
-    }
-
     /// Takes and clears the most recent delivery task's [`JoinHandle`].
     /// A generation supervisor binds the handle so it can join the thread
     /// and observe cessation as part of fence acknowledgment. Returns `None`
@@ -718,7 +706,6 @@ impl Transport for AcpTransport {
                 let _ = outcome_tx.send(self.unavailable_outcome_with_id(&envelope.message_id));
             }
         } else {
-            self.resignal_respawn_if_dead();
             let _ = outcome_tx.send(self.unavailable_outcome_with_id(&envelope.message_id));
         }
         outcome_rx
@@ -740,7 +727,6 @@ impl Transport for AcpTransport {
                 let _ = outcome_tx.send(self.unavailable_outcome_with_id(""));
             }
         } else {
-            self.resignal_respawn_if_dead();
             let _ = outcome_tx.send(self.unavailable_outcome_with_id(""));
         }
         outcome_rx
