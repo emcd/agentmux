@@ -27,7 +27,7 @@ written the bytes.
 
 **The template SHALL be evaluated by the transport that owns the target, never by
 the relay.** The relay learns the result only as the level it reads through
-`can_accept_handover`, and MUST NOT interpret `prompt_regex`, inspect pane
+`is_ready_for_handover`, and MUST NOT interpret `prompt_regex`, inspect pane
 output, or compare a cursor column itself.
 
 This is a decoupling boundary, not an implementation preference. Readiness
@@ -79,13 +79,13 @@ the `delivery-quiescence` capability's undelivered-queue inscriptions.
 - **THEN** the relay delivery subsystem does not compile `prompt_regex`, read
   pane output, or compare a cursor column
 - **AND** it authorizes solely on the level the transport reports through
-  `can_accept_handover`
+  `is_ready_for_handover`
 
 #### Scenario: A transport with no pane has no template to evaluate
 
 - **WHEN** the target's transport observes readiness from a wire protocol or
   subscriber connectivity rather than pane output
-- **THEN** it reports `can_accept_handover` from that observation
+- **THEN** it reports `is_ready_for_handover` from that observation
 - **AND** the relay authorizes on the same level it reads for every other
   transport, with no transport-specific branch
 

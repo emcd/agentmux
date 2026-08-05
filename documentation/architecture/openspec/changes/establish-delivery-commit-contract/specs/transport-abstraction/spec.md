@@ -122,7 +122,7 @@ inspect, and meaningless again for UI, whose readiness is subscriber
 connectivity. Conflating them is what would put pane semantics inside the relay.
 
 The relay SHALL learn readiness only as the level it reads through
-`can_accept_handover`, refreshed by the transport-invoked notification closure
+`is_ready_for_handover`, refreshed by the transport-invoked notification closure
 described in the `Transport Handover Capacity and Readiness` requirement. Only
 the transport can render target text and count its tokens, so `prompt_tokens_max`
 likewise remains an internal packing-unit limit invisible to the relay.
@@ -186,7 +186,7 @@ transport construction.
 - **THEN** they find it in the owning transport module
 - **AND** `src/relay/delivery/` contains no prompt-regex matching, pane
   inspection, or cursor-column comparison
-- **AND** the relay reads only the `can_accept_handover` level
+- **AND** the relay reads only the `is_ready_for_handover` level
 
 ### Requirement: Synchronous Delivery Completion
 
@@ -781,7 +781,7 @@ separate:
 |---|---|---|
 | **Admission quota** | relay | how much may be queued per target and relay-global; enforced at admission |
 | **Maximum handover dimensions** | transport, static | the largest batch a transport will accept |
-| **Acceptance capacity** | transport, dynamic | whether it can accept right now; surfaced as `can_accept_handover` |
+| **Acceptance capacity** | transport, dynamic | whether it can accept right now; surfaced as `is_ready_for_handover` |
 
 All relay-facing quantities SHALL be expressed in units the relay can evaluate
 without packing: **envelope count and canonical payload bytes**, where canonical
@@ -789,9 +789,22 @@ bytes means the serialized envelope payload the relay already holds, not rendere
 target text. Declaring them in tokens would be circular, since only the transport
 can render and count those.
 
-`can_accept_handover` SHALL be **level-triggered** and readable on demand.
-Existing surfaces cannot serve it: Tmux `is_ready` is always true, and ACP and
-Pty count `Busy` as ready. It is **advisory** — a stale reading yields a fallible
+`is_ready_for_handover` SHALL be **level-triggered**, readable on demand, and the
+transport contract's **only** readiness predicate. It SHALL have no default
+implementation: a default of `true` would authorize a busy target, and a default
+of `false` would strand it permanently, so a transport answers for itself or does
+not participate in delivery.
+
+An earlier `is_ready` answered the weaker question of whether a transport's
+machinery existed — Tmux answered it unconditionally true, and ACP and Pty
+counted `Busy` as ready — which is why it could not serve handover readiness. It
+has been **removed from the contract rather than redefined**, because two
+readiness predicates were confusable precisely under a name that does not say
+what it is ready *for*. A transport MAY keep an equivalent lifecycle predicate
+privately, and Pty does, gating its `OutputView` on the runtime existing so that
+`look` still reaches a target that is mid-turn.
+
+`is_ready_for_handover` is **advisory** — a stale reading yields a fallible
 invocation, not a guarantee.
 
 **No transport → relay back-edge.** The relay calls transports; transports SHALL
@@ -805,7 +818,7 @@ delivery until the next poll; it cannot lose one or resolve it without evidence.
 #### Scenario: Readiness is readable as a level
 
 - **WHEN** the relay needs to decide whether handover is useful
-- **THEN** it reads `can_accept_handover` directly
+- **THEN** it reads `is_ready_for_handover` directly
 - **AND** does not rely on having observed a transition
 
 #### Scenario: A lost notification only delays

@@ -51,10 +51,11 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Readiness
 
-- [x] Add the level-triggered `can_accept_handover` state to the transport contract, readable on demand
+- [x] Add the level-triggered `is_ready_for_handover` state to the transport contract, readable on demand
 - [x] Add static maximum handover dimensions in envelope count and canonical payload bytes
-- [ ] Gate authorization on `can_accept_handover` during the `Pending` phase, so no batch is authorized for a target that cannot take a handover
-- [ ] Keep prompt-readiness evaluation inside each owning transport, feeding `can_accept_handover`; the relay compiles no `prompt_regex`, inspects no pane output, and compares no cursor column
+- [x] Remove the weaker `is_ready` predicate from the transport contract so one readiness question remains, and drop the default body that could answer it wrongly
+- [ ] Gate authorization on `is_ready_for_handover` during the `Pending` phase, so no batch is authorized for a target that cannot take a handover
+- [ ] Keep prompt-readiness evaluation inside each owning transport, feeding `is_ready_for_handover`; the relay compiles no `prompt_regex`, inspects no pane output, and compares no cursor column
 - [ ] Wire the readiness notification as a relay-provided closure the transport invokes, with subscribe-before-check and a bounded poll backstop
 - [ ] Delete the shared wedge/prime classifier once every transport determines its own readiness, and with it the relay's dependence on a cross-transport quiescence state machine
 

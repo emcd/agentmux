@@ -280,7 +280,7 @@ fn session_ready_for_list(
             runtime_directory,
             member.id.as_str(),
         ),
-        // Pty readiness mirrors the transport's `is_ready` signal; the
+        // Pty readiness mirrors the transport's readiness signal; the
         // bootstrap path (per-coder config parser) is responsible for
         // constructing the Pty transport. For v1 the relay treats Pty
         // readiness as a worker-side signal that the dispatcher reads

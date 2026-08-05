@@ -16,13 +16,18 @@
 //!
 //! ## Readiness
 //!
-//! The transport owns an [`WorkerReadinessState`] signal for [`is_ready`] and
-//! the [`OutputView`] prime-wait, because it cannot call relay's
-//! `set_worker_readiness`. The `AcpWorkerDriver` mirrors transitions into the
-//! global worker-state registry (which external observers and respawn/startup
-//! gating still read).
+//! The transport owns an [`WorkerReadinessState`] signal for
+//! [`is_ready_for_handover`] and the [`OutputView`] prime-wait, because it
+//! cannot call relay's `set_worker_readiness`. The `AcpWorkerDriver` mirrors
+//! transitions into the global worker-state registry (which external observers
+//! and respawn/startup gating still read).
 //!
-//! [`is_ready`]: Transport::is_ready
+//! Handover readiness is the narrow question: only `Available` qualifies, since
+//! a `Busy` worker is mid-turn and cannot take another. The wider
+//! "runtime exists" reading that `Busy` also satisfies is what the mirrored
+//! registry state carries for those other observers.
+//!
+//! [`is_ready_for_handover`]: Transport::is_ready_for_handover
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -741,14 +746,7 @@ impl Transport for AcpTransport {
         outcome_rx
     }
 
-    fn is_ready(&self) -> bool {
-        matches!(
-            self.readiness(),
-            WorkerReadinessState::Available | WorkerReadinessState::Busy
-        )
-    }
-
-    fn can_accept_handover(&self) -> bool {
+    fn is_ready_for_handover(&self) -> bool {
         matches!(self.readiness(), WorkerReadinessState::Available)
     }
 
@@ -2164,7 +2162,7 @@ mod handover_readiness_tests {
     use super::*;
 
     #[test]
-    fn can_accept_handover_readiness_matrix_and_delivery_task_handle_retention() {
+    fn handover_readiness_matrix_and_delivery_task_handle_retention() {
         let mut transport = AcpTransport::new(PromptBatchSettings::default(), None);
 
         // Initial state is `Initializing` — not ready for handover.
@@ -2172,28 +2170,26 @@ mod handover_readiness_tests {
             transport.readiness(),
             crate::transports::WorkerReadinessState::Initializing
         );
-        assert!(!transport.can_accept_handover());
+        assert!(!transport.is_ready_for_handover());
 
         // The single state that returns true: only when the transport is
         // actually idle and able to take a batch right now.
         transport.set_readiness(crate::transports::WorkerReadinessState::Available);
-        assert!(transport.can_accept_handover());
+        assert!(transport.is_ready_for_handover());
 
         // `Busy` is intentionally NOT a handover-ready state — accepting
         // another batch while a turn is in flight would dispatch the wrong
         // message to the same turn. The readiness signal still exists
-        // through the injected mirror closure.
+        // through the injected mirror closure, which is where observers
+        // wanting the wider "runtime exists" reading read it.
         transport.set_readiness(crate::transports::WorkerReadinessState::Busy);
-        assert!(!transport.can_accept_handover());
-        // `is_ready` keeps its pre-existing semantic and continues to
-        // include `Busy`; the two surfaces now differ by design.
-        assert!(transport.is_ready());
+        assert!(!transport.is_ready_for_handover());
 
         // `Recovering` and `Unavailable` are also not ready.
         transport.set_readiness(crate::transports::WorkerReadinessState::Recovering);
-        assert!(!transport.can_accept_handover());
+        assert!(!transport.is_ready_for_handover());
         transport.set_readiness(crate::transports::WorkerReadinessState::Unavailable);
-        assert!(!transport.can_accept_handover());
+        assert!(!transport.is_ready_for_handover());
 
         // No delivery task has been spawned yet, so there is no handle
         // for a generation supervisor to take — the field starts empty

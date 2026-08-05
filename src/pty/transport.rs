@@ -182,7 +182,7 @@ pub struct PtyTransport {
     /// Live handle to the spawned child. `shutdown` kills and reaps.
     child: Option<Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>,
     /// Per-transport readiness state. The relay thread reads it via
-    /// `is_ready`; the worker thread mutates it via the cloned
+    /// `is_ready_for_handover`; the worker thread mutates it via the cloned
     /// `Arc` after each lifecycle transition (Busy / Available /
     /// Unavailable). The relay-side guard `startup` consults the
     /// `Available` / `Busy` variants to skip re-init.
@@ -219,8 +219,8 @@ impl PtyTransport {
     /// per-turn readiness transitions into the relay's global
     /// worker-state registry. Pass `None` in tests constructed
     /// without a relay registry; the transport's internal readiness
-    /// state still advances so `is_ready()` can drive the lifecycle
-    /// locally.
+    /// state still advances so the readiness predicates can drive the
+    /// lifecycle locally.
     #[must_use]
     pub fn new(
         target_member: BundleMember,
@@ -295,11 +295,27 @@ impl PtyTransport {
         publish(&self.readiness, self.mirror_state.as_ref(), state);
     }
 
-    /// Read the current readiness state. Used by `is_ready` and by
-    /// tests asserting lifecycle transitions.
+    /// Read the current readiness state. Used by
+    /// [`has_live_runtime`](Self::has_live_runtime), by
+    /// [`Transport::is_ready_for_handover`], and by tests asserting lifecycle
+    /// transitions.
     #[must_use]
     pub fn readiness(&self) -> WorkerReadinessState {
         *self.readiness.lock().expect("pty readiness mutex")
+    }
+
+    /// Whether the worker runtime exists and is usable, which `Busy` satisfies:
+    /// a pty mid-turn still has a live master to snapshot.
+    ///
+    /// Deliberately not the handover question. [`Transport::is_ready_for_handover`]
+    /// asks whether the target can take a turn *now* and excludes `Busy`; gating
+    /// the output view on that stricter reading would withhold the `look` surface
+    /// from exactly the target most worth looking at.
+    fn has_live_runtime(&self) -> bool {
+        matches!(
+            self.readiness(),
+            WorkerReadinessState::Available | WorkerReadinessState::Busy
+        )
     }
 
     /// Update the prompt-readiness settings after construction. Used
@@ -858,14 +874,7 @@ impl Transport for PtyTransport {
         outcome_rx
     }
 
-    fn is_ready(&self) -> bool {
-        matches!(
-            self.readiness(),
-            WorkerReadinessState::Available | WorkerReadinessState::Busy
-        )
-    }
-
-    fn can_accept_handover(&self) -> bool {
+    fn is_ready_for_handover(&self) -> bool {
         if self.write_tx.is_none()
             || self.shared.child_exited.load(Ordering::Acquire)
             || !matches!(self.readiness(), WorkerReadinessState::Available)
@@ -919,7 +928,7 @@ impl Transport for PtyTransport {
     }
 
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {
-        if !self.is_ready() {
+        if !self.has_live_runtime() {
             return None;
         }
         Some(Arc::new(PtyOutputView::new(self.shared.clone())))
@@ -982,8 +991,8 @@ fn run_worker(
     // the transport-local + relay-global readiness state is already
     // `Available`. The `startup` guard (which checks for `Available` /
     // `Busy`) sees a consistent post-init snapshot, and a caller
-    // racing `is_ready` after `startup` returns sees `true` rather
-    // than the brief `Initializing` window before the worker
+    // racing a readiness read after `startup` returns sees `true`
+    // rather than the brief `Initializing` window before the worker
     // publishes.
     publish(
         &readiness,

@@ -16,7 +16,7 @@ are documented in `documentation/development/README.md` Zig-free Pty Builds.
 - `delivery` — worker-thread target writes and outcome resolution. The Pty
   worker is the only thread that can apply bytes to the libghostty-vt
   terminal (the terminal is `!Send + !Sync`); handover readiness is observed
-  on demand through `PtyTransport::can_accept_handover` before authorization,
+  on demand through `PtyTransport::is_ready_for_handover` before authorization,
   and an authorized write resolves from its master-write result.
 - `state` — cross-thread shared state (`PtyShared`, `PtyConfigSnapshot`,
   `SnapshotRequest`/`SnapshotResponse`) plus the per-thread look / probe

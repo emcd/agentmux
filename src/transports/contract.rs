@@ -189,16 +189,23 @@ pub trait Transport: GenerationFence {
         unimplemented!("raww lands with the per-transport internal delivery task")
     }
 
-    /// Reports whether the transport is ready to accept delivery.
-    fn is_ready(&self) -> bool;
-
     /// Reports whether the transport can accept a handover now.
     ///
     /// This is a level-triggered, advisory observation. A caller must still
     /// handle a fallible delivery attempt after reading it.
-    fn can_accept_handover(&self) -> bool {
-        self.is_ready()
-    }
+    ///
+    /// The contract's only readiness predicate, deliberately. An earlier
+    /// `is_ready` answered a weaker question — whether the transport's machinery
+    /// existed — and the two were easy to confuse precisely because "ready" does
+    /// not say what for. Each transport still keeps whatever lifecycle predicate
+    /// it needs privately; what does not belong here is a second contract-level
+    /// answer competing for the same word.
+    ///
+    /// It has no default body, and no surface here could supply one: a default
+    /// of `true` authorizes a busy target straight into the watchdog, and a
+    /// default of `false` strands it permanently, since `Pending` is unbounded. A
+    /// transport answers for itself or does not participate in delivery.
+    fn is_ready_for_handover(&self) -> bool;
 
     /// Tears down the transport runtime, releasing its resources.
     fn shutdown(&mut self);
@@ -586,35 +593,21 @@ impl TransportImpl {
         }
     }
 
-    /// Reports delivery readiness; see [`Transport::is_ready`].
+    /// Reports whether the selected transport can accept a handover now; see
+    /// [`Transport::is_ready_for_handover`].
     #[must_use]
-    pub fn is_ready(&self) -> bool {
+    pub fn is_ready_for_handover(&self) -> bool {
         match self {
-            Self::Acp(transport) => transport.is_ready(),
-            Self::Tmux(transport) => transport.is_ready(),
-            Self::Ui(transport) => transport.is_ready(),
+            Self::Acp(transport) => transport.is_ready_for_handover(),
+            Self::Tmux(transport) => transport.is_ready_for_handover(),
+            Self::Ui(transport) => transport.is_ready_for_handover(),
             // The delivery worker latches a `Pubsub` stub for a configured Pubsub
             // target (delivery is guarded and answered with a not-implemented
             // outcome), so its query/lifecycle delegates must not panic. It is
             // never ready to deliver.
             Self::Pubsub => false,
             #[cfg(feature = "pty")]
-            Self::Pty(transport) => transport.is_ready(),
-            #[cfg(not(feature = "pty"))]
-            Self::Pty => false,
-        }
-    }
-
-    /// Reports whether the selected transport can accept a handover now.
-    #[must_use]
-    pub fn can_accept_handover(&self) -> bool {
-        match self {
-            Self::Acp(transport) => transport.can_accept_handover(),
-            Self::Tmux(transport) => transport.can_accept_handover(),
-            Self::Ui(transport) => transport.can_accept_handover(),
-            Self::Pubsub => false,
-            #[cfg(feature = "pty")]
-            Self::Pty(transport) => transport.can_accept_handover(),
+            Self::Pty(transport) => transport.is_ready_for_handover(),
             #[cfg(not(feature = "pty"))]
             Self::Pty => false,
         }

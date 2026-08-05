@@ -39,7 +39,7 @@ const TEST_PANE_TARGET: &str = "%0";
 fn tmux_handover_is_not_accepted_before_startup() {
     let transport = agentmux::tmux::TmuxTransport::new(PromptBatchSettings::default());
 
-    assert!(!transport.can_accept_handover());
+    assert!(!transport.is_ready_for_handover());
 }
 
 fn diagnostic_context() -> DeliveryDiagnosticContext<'static> {

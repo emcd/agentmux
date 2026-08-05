@@ -309,11 +309,7 @@ impl Transport for TmuxTransport {
         receiver
     }
 
-    fn is_ready(&self) -> bool {
-        true
-    }
-
-    fn can_accept_handover(&self) -> bool {
+    fn is_ready_for_handover(&self) -> bool {
         let Some(sender) = self.sender.as_ref() else {
             return false;
         };

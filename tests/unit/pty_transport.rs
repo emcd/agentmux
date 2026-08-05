@@ -2316,7 +2316,7 @@ fn pty_transport_busy_available_cycle_records_via_mirror() {
 }
 
 /// Readiness is an advisory handover level, not delivery evidence. A prompt
-/// mismatch keeps `can_accept_handover` false, but a forced handover still
+/// mismatch keeps `is_ready_for_handover` false, but a forced handover still
 /// resolves from the successful PTY write and leaves the worker available.
 #[cfg(feature = "pty")]
 #[test]
@@ -2374,7 +2374,7 @@ fn pty_transport_readiness_does_not_infer_delivery_failure() {
         is_receipt: false,
     };
 
-    assert!(!transport.can_accept_handover());
+    assert!(!transport.is_ready_for_handover());
     let outcome = recv_bounded_for(transport.mailw(envelope), Duration::from_secs(5))
         .expect("handover outcome should arrive within 5 s");
     assert!(

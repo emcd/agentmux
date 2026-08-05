@@ -23,7 +23,7 @@ introduced.
 - `pane` — pane operations: resolve active pane target, inject literal
   text into the pane, capture pane tail lines.
 - `quiescence_probe` — the pane-readiness probe used by
-  [`TmuxTransport::can_accept_handover`] and the transport-level classifier
+  [`TmuxTransport::is_ready_for_handover`] and the transport-level classifier
   tests. Implements [`PaneQuiescenceProbe`].
 
   OpenCode readiness has a second, private compose-region gate. It recognizes
@@ -38,7 +38,7 @@ introduced.
    coder from a permission dialog awaiting an operator, a compose box
    holding typed input, or a coder working without terminal output. The
    delivery task therefore pastes immediately after handover; the relay
-   reads `can_accept_handover` as an advisory pane-readiness level before
+   reads `is_ready_for_handover` as an advisory pane-readiness level before
    authorization, while the classifier remains available to its focused
    probe tests.
 

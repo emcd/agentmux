@@ -129,7 +129,7 @@ So the rule is structural, not incidental:
   — completion and operator-choice resolution of an **older** turn. This says
   *when* the waiting happens, not who evaluates it. The relay owns the wait
   because it owns the queue; each transport owns the *determination* and reports
-  it through `can_accept_handover`, since readiness is transport-specific by
+  it through `is_ready_for_handover`, since readiness is transport-specific by
   nature and does not generalise across a pane, a wire protocol, and a subscriber
   list (*Decision 3*).
 - **Authorization starts exactly one immediate submission attempt.**
@@ -259,9 +259,12 @@ rename; operator has agreed.
 
 The relay needs to know when handing over is *useful*, not when it is *permitted*.
 
-- Add a **level-triggered** `can_accept_handover` capacity/readiness state.
-  Existing surfaces cannot serve: Tmux `is_ready` is always true, and ACP and Pty
-  count `Busy` as ready.
+- Add a **level-triggered** `is_ready_for_handover` capacity/readiness state, and
+  make it the transport contract's only readiness predicate. The earlier
+  `is_ready` could not serve — Tmux answered it unconditionally true, and ACP and
+  Pty counted `Busy` as ready — so it is **removed rather than redefined**. Two
+  predicates were confusable exactly because "ready" does not say what for; each
+  transport keeps whatever lifecycle predicate it needs privately instead.
 - The injected closure (*Decision 4*) delivers only an **edge**. The relay
   therefore MUST subscribe-before-check or re-check after subscribing, MUST poll
   at a bounded cadence as a backstop, and MUST re-read the level on every
@@ -303,7 +306,7 @@ now separate:**
 |---|---|---|
 | **Admission quota** | relay | how much may be queued per target and relay-global; enforced at admission |
 | **Maximum handover dimensions** | transport, static | the largest batch a transport will accept, in relay-evaluable units |
-| **Acceptance capacity** | transport, dynamic | whether it can accept *right now*; surfaced as `can_accept_handover`, and **advisory** — a stale reading yields a fallible invocation per *Decision 1*, not a guarantee |
+| **Acceptance capacity** | transport, dynamic | whether it can accept *right now*; surfaced as `is_ready_for_handover`, and **advisory** — a stale reading yields a fallible invocation per *Decision 1*, not a guarantee |
 
 All relay-facing quantities are expressed in units the relay can evaluate without
 packing: **envelope count and canonical payload bytes**, where canonical bytes
@@ -335,7 +338,7 @@ on its own is rejected at admission rather than queued unsendable.
     exceeding the transport's maximum handover dimensions, every admissible item
     fits within one quantum;
   - **eligible rotation** — only targets with pending work and a transport
-    reporting `can_accept_handover` are visited; ineligible targets are skipped.
+    reporting `is_ready_for_handover` are visited; ineligible targets are skipped.
 
   **A deficit counter was specified here and has been removed.** Classical DRR
   accumulates unspent quantum so an item larger than one quantum can eventually
@@ -836,15 +839,20 @@ the other side — it writes before its prime wait, so it trips on evidence timi
 rather than on readiness gating — and needs the same relocation.
 
 No per-transport stub can defer this the way `mailw`'s additions-only default
-deferred the write seam. `can_accept_handover` has no safe default, because the
-surfaces that could supply one are exactly the surfaces *Decision 3* rejected:
-Tmux's `is_ready` is always true, and ACP and Pty count `Busy` as ready. A default
-of `true` authorizes a busy target straight into the watchdog; a default of `false`
-strands it permanently, since *Decision 5* leaves `Pending` unbounded. The
+deferred the write seam. `is_ready_for_handover` has no safe default: a default of
+`true` authorizes a busy target straight into the watchdog, and a default of
+`false` strands it permanently, since *Decision 5* leaves `Pending` unbounded. The
 transport must answer for itself or not participate.
 
-What must land simultaneously is only that: `can_accept_handover` plus deletion of
-the internal readiness wait, on every transport, together with the watchdog. The
+The lifecycle predicates that could have supplied a default are exactly the ones
+*Decision 3* rejected, which is why the contract no longer carries one. Each
+transport keeps its own privately where it still needs one — Pty gates its
+`OutputView` on the runtime existing, a question `Busy` answers affirmatively and
+handover readiness does not — so the wrong answer is no longer reachable through
+the contract at all.
+
+What must land simultaneously is only that: `is_ready_for_handover` plus deletion
+of the internal readiness wait, on every transport, together with the watchdog. The
 rest of each transport's work — evidence recording, partition placement, prime and
 turn-timer deletion, ACP's staging queue — sequences independently.
 
