@@ -14,6 +14,7 @@ use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
 use super::super::async_worker::{WorkerDispatch, get_worker_failure, get_worker_readiness};
 use super::worker::{AcpWorkerBootstrap, spawn_async_delivery_worker};
+use crate::runtime::signals::shutdown_requested;
 use crate::transports::{WorkerFailureReason, WorkerReadinessState};
 
 pub(in crate::relay) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
@@ -81,6 +82,20 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
     }
     let deadline = Instant::now() + Duration::from_millis(ACP_STARTUP_PRIME_TIMEOUT_MS);
     loop {
+        // A worker told to stop will not become ready, and it deregisters as it
+        // drains — taking the readiness this poll reads with it, so the wait
+        // would run its full timeout against an answer that can no longer
+        // change. Signalled during a multi-member startup, that cost the relay
+        // its whole timeout for every member still to come.
+        if shutdown_requested() {
+            return Err((
+                "runtime_startup_interrupted".to_string(),
+                "relay shutdown requested during ACP worker startup".to_string(),
+                Some(json!({
+                    "target_session": target_member.id,
+                })),
+            ));
+        }
         let readiness =
             get_worker_readiness(namespace, runtime_directory, target_member.id.as_str());
         match readiness {

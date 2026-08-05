@@ -152,6 +152,12 @@ pub trait Transport: GenerationFence {
     /// target. On respawn the transport may publish a fresh [`OutputView`]; the
     /// worker re-calls [`give_output`] afterward to pick up the new handle.
     ///
+    /// Establishing synchronously here is a choice, not an obligation. A
+    /// transport whose establish is unbounded work that owns a child process —
+    /// ACP spawns an agent and completes a protocol handshake — supervises it as
+    /// its own task instead, and declines this call rather than offering a second
+    /// route to the same child that no supervisor is watching.
+    ///
     /// [`give_output`]: Transport::give_output
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError>;
 

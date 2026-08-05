@@ -68,6 +68,8 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Fencing
 
+- [x] Supervise the initial ACP bootstrap as its own task rather than awaiting it ahead of the delivery loop, so a worker whose agent never finishes its handshake still reaches its shutdown gate and emits a verdict; give every bootstrap ownership of the runtime it produces from creation through install-or-teardown and readiness publication, since aborting the awaiting task cancels none of that; drop the second, unsupervised establish route on `AcpTransport::startup`
+- [x] Break the ACP startup readiness poll on a shutdown request, so a signal mid-startup does not cost the relay its full prime timeout for every member still to come
 - [ ] Retain every generation-owned submission and permission executor handle. A running ACP bootstrap is now *observed*, so it can no longer be mistaken for a stopped generation, but it is still not *terminable*: aborting the async wrapper does not cancel the `spawn_blocking` closure, so a fence that finds one can only report negative and wait it out
 - [x] Implement the five-step fence state machine as the only fence protocol: cooperative stop request, bounded cessation observation, non-blocking forced termination, second bounded observation, verdict
 - [x] Keep steps 1 and 3 distinct, so a cooperatively stoppable executor is never force-terminated

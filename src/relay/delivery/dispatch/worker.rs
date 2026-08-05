@@ -135,6 +135,16 @@ async fn run_async_delivery_worker(
     let batch_settings = super::prompt_batch_settings();
     // `None` until the transport is constructed: eagerly for ACP (bootstrap),
     // lazily from the first task's `session_type()` for every other target.
+    //
+    // An ACP worker starts its bootstrap here but does not wait on it. Awaiting
+    // it made the loop below — and therefore this worker's shutdown gate —
+    // unreachable for as long as the bootstrap took, which for an agent parked
+    // in its `initialize` handshake is forever: no fence ever began and no
+    // verdict was ever emitted, not even the honest negative one. The queue is
+    // still held until the bootstrap settles, so delivery semantics are
+    // unchanged; what the loop gains is the ability to observe shutdown while
+    // that wait is happening.
+    let mut bootstrap_settled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>> = None;
     let mut transport: Option<TransportImpl> = match bootstrap {
         Some(bootstrap) => {
             let services = build_acp_driver_services(&key, &bootstrap);
@@ -146,7 +156,7 @@ async fn run_async_delivery_worker(
                 batch_settings,
             );
             if let TransportImpl::Acp(driver) = &mut transport {
-                driver.bootstrap().await;
+                bootstrap_settled = Some(driver.start_bootstrap());
             }
             Some(transport)
         }
@@ -198,8 +208,14 @@ async fn run_async_delivery_worker(
             // No more producers and nothing in flight: the worker is unreachable.
             break;
         }
+        // A target whose bootstrap has not settled has no runtime to submit
+        // into, so its queue stays untouched; the poll arm below re-evaluates
+        // this every tick.
+        let bootstrap_settled_now = bootstrap_settled
+            .as_ref()
+            .is_none_or(|settled| settled.load(std::sync::atomic::Ordering::Acquire));
         tokio::select! {
-            maybe_task = receiver.recv(), if !senders_dropped => {
+            maybe_task = receiver.recv(), if !senders_dropped && bootstrap_settled_now => {
                 match maybe_task {
                     Some(task) => {
                         if shutdown_requested() {

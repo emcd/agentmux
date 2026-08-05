@@ -42,12 +42,15 @@ pub(super) struct AcpStubOptions {
     /// `sleep`-based delay would inherit the child's stdout, so killing the
     /// agent would leave the pipe open and no reader could observe EOF.
     pub(super) never_respond_to_prompt: bool,
-    /// Make every agent after the first hang inside `initialize`, by blocking on
-    /// a fifo that never gets a writer.
+    /// Make every agent from this one onward (counting from zero, across the
+    /// whole bundle) hang inside `initialize`, by blocking on a fifo that has no
+    /// writer until a test opens one.
     ///
-    /// Holds a respawn's bootstrap in flight so a fence can land while it runs —
-    /// the state in which the relay must not report the generation ceased.
-    pub(super) hang_initialize_on_respawn: bool,
+    /// Holds a bootstrap in flight so a fence can land while it runs — the state
+    /// in which the relay must not report the generation ceased. `Some(0)` hangs
+    /// the very first agent, which is a target's *initial* bootstrap; `Some(1)`
+    /// leaves the first agent healthy and hangs every respawn after it.
+    pub(super) hang_initialize_from_agent: Option<usize>,
     pub(super) update_count: usize,
     pub(super) update_line_prefix: String,
     pub(super) update_after_response: bool,
@@ -74,7 +77,7 @@ impl Default for AcpStubOptions {
             stop_reason: "end_turn".to_string(),
             prompt_delay_sec: 0,
             never_respond_to_prompt: false,
-            hang_initialize_on_respawn: false,
+            hang_initialize_from_agent: None,
             update_count: 0,
             update_line_prefix: "ACP".to_string(),
             update_after_response: false,
@@ -119,6 +122,7 @@ stop_reason="${STOP_REASON:-end_turn}"
 prompt_delay_sec="${PROMPT_DELAY_SEC:-0}"
 never_respond_to_prompt="${NEVER_RESPOND_TO_PROMPT:-0}"
 hang_initialize_fifo="${ACP_HANG_INITIALIZE_FIFO:-}"
+hang_initialize_from_agent="${ACP_HANG_INITIALIZE_FROM_AGENT:-}"
 update_count="${UPDATE_COUNT:-0}"
 update_line_prefix="${UPDATE_LINE_PREFIX:-ACP}"
 update_after_response="${UPDATE_AFTER_RESPONSE:-0}"
@@ -139,10 +143,9 @@ while IFS= read -r line; do
   fi
   case "$line" in
     *'"method":"initialize"'*)
-      if [ -n "$hang_initialize_fifo" ] && [ "$prior_agents" -ge 1 ]; then
+      if [ -n "$hang_initialize_from_agent" ] && [ "$prior_agents" -ge "$hang_initialize_from_agent" ]; then
         [ -p "$hang_initialize_fifo" ] || mkfifo "$hang_initialize_fifo"
-        read hung < "$hang_initialize_fifo"
-        continue
+        read hung < "$hang_initialize_fifo" || true
       fi
       if [ "$fail_initialize" = "1" ]; then
         printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"initialize failed"}}\n' "$id"
@@ -309,11 +312,14 @@ pub(super) fn write_configuration(
         ("PROMPT_DELAY_SEC", options.prompt_delay_sec.to_string()),
         (
             "ACP_HANG_INITIALIZE_FIFO",
-            if options.hang_initialize_on_respawn {
-                root.join("acp_hang_initialize.fifo").display().to_string()
-            } else {
-                String::new()
-            },
+            root.join("acp_hang_initialize.fifo").display().to_string(),
+        ),
+        (
+            "ACP_HANG_INITIALIZE_FROM_AGENT",
+            options
+                .hang_initialize_from_agent
+                .map(|from| from.to_string())
+                .unwrap_or_default(),
         ),
         (
             "NEVER_RESPOND_TO_PROMPT",

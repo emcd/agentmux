@@ -34,7 +34,7 @@ use tokio::sync::mpsc;
 
 use crate::acp::client::{AcpGenerationHandle, SharedReplay};
 use crate::acp::permission::{ChoiceCorrelation, build_acp_permission_handler};
-use crate::acp::persistent_runtime::{PersistentAcpWorkerRuntime, bootstrap_acp_worker_runtime};
+use crate::acp::persistent_runtime::PersistentAcpWorkerRuntime;
 use crate::acp::state::{AcpLookSnapshot, derive_acp_look_snapshot};
 use crate::acp::{
     AcpStdioClient, DispatchHandler, PermissionHandler, PermissionResponder, PromptCompletion,
@@ -47,7 +47,7 @@ use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
     ChoiceMade, DeliveryDiagnosticContext, DeliveryEnvelope, GenerationFence, LookMode,
     LookSnapshotPayload, OutputView, SingleDeliveryOutcome, StartupContext, Transport,
-    TransportError, TransportReadiness, TransportStatus, emit_delivery_progress,
+    TransportError, TransportStatus, emit_delivery_progress,
 };
 use crate::transports::{SendOutcome, WorkerReadinessState};
 
@@ -418,11 +418,6 @@ impl AcpTransport {
         self.write_tx = None;
     }
 
-    /// Installs a freshly bootstrapped runtime: repoints the published replay
-    /// handle at the new buffer, marks the transport Available, and spawns the
-    /// internal delivery task. Brief and lock-safe — the blocking child spawn
-    /// already happened in `bootstrap_acp_worker_runtime`, so the respawn monitor
-    /// holds the transport lock only for these fast field updates.
     /// Registers a bootstrap as running until the returned guard drops.
     #[must_use]
     pub(crate) fn begin_bootstrap(&self) -> BootstrapInFlight {
@@ -457,7 +452,17 @@ impl AcpTransport {
         None
     }
 
-    pub(crate) fn install_runtime(&mut self, runtime: PersistentAcpWorkerRuntime) {
+    /// Installs a freshly bootstrapped runtime: repoints the published replay
+    /// handle at the new buffer, marks the transport Available, and spawns the
+    /// internal delivery task. Brief and lock-safe — the blocking child spawn
+    /// already happened in `bootstrap_acp_worker_runtime`, so a bootstrap holds
+    /// the transport lock only for these fast field updates.
+    ///
+    /// Private because the fenced check and the install belong together; every
+    /// caller goes through [`install_runtime_unless_fenced`].
+    ///
+    /// [`install_runtime_unless_fenced`]: Self::install_runtime_unless_fenced
+    fn install_runtime(&mut self, runtime: PersistentAcpWorkerRuntime) {
         // Repoint the published handle's replay slot at the new runtime's buffer
         // before marking ready, so a look that was prime-waiting through the
         // (re-)establish returns the fresh buffer.
@@ -526,29 +531,22 @@ impl GenerationFence for AcpTransport {
 }
 
 impl Transport for AcpTransport {
-    fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
-        self.prepare_for_startup(
-            context.choose,
-            context.namespace,
-            context.target_member.id.clone(),
-        );
-        self.set_readiness(WorkerReadinessState::Initializing);
-        match bootstrap_acp_worker_runtime(&context.runtime_directory, &context.target_member) {
-            Ok(runtime) => {
-                self.install_runtime(runtime);
-                Ok(TransportStatus {
-                    readiness: TransportReadiness::Ready,
-                })
-            }
-            Err(error) => {
-                self.mark_runtime_unavailable();
-                Err(TransportError {
-                    code: error.code,
-                    reason: error.reason,
-                    details: None,
-                })
-            }
-        }
+    /// ACP establishes its runtime through the driver's supervised bootstrap, not
+    /// here.
+    ///
+    /// This used to bootstrap synchronously on the caller's thread: a second
+    /// route that spawned and owned an agent child while being counted by
+    /// nothing, so a fence could see an empty in-flight count with a live child
+    /// coming up behind it. Every production ACP path goes through
+    /// [`AcpWorkerDriver::start_bootstrap`], so the route is gone rather than
+    /// duplicated under the supervisor.
+    fn startup(&mut self, _context: StartupContext) -> Result<TransportStatus, TransportError> {
+        Err(TransportError {
+            code: "internal_unexpected_failure".to_string(),
+            reason: "ACP runtimes are established by the worker driver's supervised bootstrap"
+                .to_string(),
+            details: None,
+        })
     }
 
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {

@@ -207,7 +207,7 @@ fn a_fence_does_not_report_cessation_while_a_bootstrap_runs() {
 
     let options = AcpStubOptions {
         disconnect_on_prompt: Some("before_activity".to_string()),
-        hang_initialize_on_respawn: true,
+        hang_initialize_from_agent: Some(1),
         ..AcpStubOptions::default()
     };
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
@@ -253,6 +253,103 @@ fn a_fence_does_not_report_cessation_while_a_bootstrap_runs() {
     release_hung_initialize(temporary.path());
 }
 
+/// A hung *initial* bootstrap must still reach the fence.
+///
+/// The respawn case above is the easy half: by then a worker is running its
+/// loop, so a fence begins and reports what it can see. The initial bootstrap
+/// used to run before that loop was ever entered — the worker awaited it — so an
+/// agent parked in its `initialize` handshake left the worker with no shutdown
+/// gate at all. No fence began, no verdict was emitted, and the relay's account
+/// of that target on the way out was silence rather than a finding. The host
+/// process gives up after its own timeout and exits, which is not fencing, and
+/// is no help at all to an embedded runtime that keeps running.
+///
+/// The verdict being *negative* is not what this test is about — that is the
+/// established honest answer for a bootstrap still in flight. What it asserts is
+/// that a verdict exists. Reverting the concurrent start makes this time out
+/// waiting for an inscription that is never written.
+#[test]
+fn a_hung_initial_bootstrap_still_reaches_the_fence() {
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+
+    // From the very first agent: the target this asserts on has never had a
+    // runtime, so the bootstrap in flight is its initial one.
+    let options = AcpStubOptions {
+        hang_initialize_from_agent: Some(0),
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    configure_delivery(DeliveryConfiguration {
+        fence_observation_timeout_ms: 500,
+        ..DeliveryConfiguration::default()
+    });
+
+    // Startup polls readiness for a target that will never report any, so it
+    // runs on its own thread; this test is about what the worker does while that
+    // wait is happening.
+    let (dispatch_done, dispatch_finished) = std::sync::mpsc::channel();
+    let dispatch_roots = config_root.clone();
+    let dispatch_socket = tmux_socket.clone();
+    let dispatcher = std::thread::spawn(move || {
+        let _ = dispatch_send_result(&dispatch_roots, &dispatch_socket);
+        let _ = dispatch_done.send(());
+    });
+
+    // The agent is up and parked in `initialize`: `alpha` is the first member
+    // the bundle starts, so this pid is its initial bootstrap's child, and that
+    // bootstrap will not return until this test releases it.
+    let pid_path = acp_child_pid_path(temporary.path());
+    let _child_pids = await_recorded_child_pids(&pid_path);
+
+    let _signal_guard = agentmux::runtime::signals::install_shutdown_signal_handlers()
+        .expect("install shutdown signal handlers");
+    let self_pid = i32::try_from(std::process::id()).expect("pid fits i32");
+    assert_eq!(
+        unsafe { libc::kill(self_pid, libc::SIGTERM) },
+        0,
+        "failed to signal this process"
+    );
+
+    let verdict = await_inscription(
+        &inscriptions,
+        "relay.delivery.fence.verdict",
+        "\"target_session\":\"alpha\"",
+    );
+    assert!(
+        verdict.contains("\"verdict\":\"negative\""),
+        "a generation whose initial bootstrap is still running has not been \
+         observed to cease: {verdict}"
+    );
+
+    // Release every agent parked in `initialize` so the startup thread returns
+    // and its children exit with it, rather than being orphaned on the fifo.
+    await_dispatch_thread(&dispatch_finished, temporary.path());
+    dispatcher.join().expect("startup thread");
+}
+
+/// Waits for the startup thread to finish, releasing hung agents as they appear.
+///
+/// One writer opens releases one reader, and the bundle brings its members up
+/// one at a time, so this has to keep offering rather than release once.
+fn await_dispatch_thread(finished: &std::sync::mpsc::Receiver<()>, root: &Path) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        release_hung_initialize(root);
+        match finished.recv_timeout(Duration::from_millis(100)) {
+            Ok(()) => return,
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => assert!(
+                Instant::now() < deadline,
+                "the startup thread did not return within 30s"
+            ),
+        }
+    }
+}
+
 /// Polls until the stub has recorded at least `count` agents.
 fn await_recorded_agents(path: &Path, count: usize) {
     let deadline = Instant::now() + Duration::from_secs(20);
@@ -273,11 +370,24 @@ fn await_recorded_agents(path: &Path, count: usize) {
     }
 }
 
-/// Opens the hang fifo for writing, which is what unblocks an agent parked in
-/// `initialize`.
+/// Offers one writer to the hang fifo, releasing one agent parked in
+/// `initialize` so its handshake proceeds.
+///
+/// Non-blocking, because opening a fifo for writing with no reader waiting on
+/// the other end blocks the opener — which for a caller that polls would be the
+/// test thread. A line is written rather than the handle merely closed, so the
+/// agent's `read` succeeds and it answers `initialize` instead of taking an EOF
+/// and dying under `set -e`.
 fn release_hung_initialize(root: &Path) {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+
     let fifo = root.join("acp_hang_initialize.fifo");
-    if fifo.exists() {
-        let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+    if let Ok(mut writer) = std::fs::OpenOptions::new()
+        .write(true)
+        .custom_flags(libc::O_NONBLOCK)
+        .open(&fifo)
+    {
+        let _ = writer.write_all(b"go\n");
     }
 }
