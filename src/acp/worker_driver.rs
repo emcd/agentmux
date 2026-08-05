@@ -510,6 +510,16 @@ async fn initial_acp_bootstrap(
 /// Grouped rather than passed as three parallel parameters: they are one
 /// cohesive identity — which target, where its runtime lives, and how it is
 /// configured — and every re-establish attempt needs all three together.
+/// Whether the monitor owes this target a respawn attempt.
+///
+/// Extracted from the monitor loop because the interesting cases are
+/// *combinations* — a signal without an `Unavailable` runtime, an `Unavailable`
+/// runtime without a signal — and staging those against a live monitor means
+/// racing a respawn to observe a state it is about to leave.
+fn respawn_is_owed(signalled: bool, abandoned: bool, readiness: WorkerReadinessState) -> bool {
+    signalled && !abandoned && matches!(readiness, WorkerReadinessState::Unavailable)
+}
+
 /// The health signals a respawn writes when it gives up on a target.
 ///
 /// Paired rather than passed separately because they are one fact recorded in
@@ -583,15 +593,14 @@ async fn acp_respawn_monitor(
         // standing and the monitor retries on its own clock. Re-priming from
         // `mailw` — recovery only because something tried to write — is what
         // that replaces.
-        let respawn_owed = *respawn_needed.borrow_and_update()
-            && !respawn_abandoned.load(Ordering::Acquire)
-            && matches!(
-                transport
-                    .lock()
-                    .expect("acp transport mutex poisoned")
-                    .readiness(),
-                WorkerReadinessState::Unavailable
-            );
+        let respawn_owed = respawn_is_owed(
+            *respawn_needed.borrow_and_update(),
+            respawn_abandoned.load(Ordering::Acquire),
+            transport
+                .lock()
+                .expect("acp transport mutex poisoned")
+                .readiness(),
+        );
         if !respawn_owed {
             continue;
         }
@@ -858,5 +867,61 @@ impl AcpRespawnState {
     fn reset_on_success(&mut self) {
         self.attempt = 0;
         self.next_backoff_ms = 0;
+    }
+}
+
+#[cfg(test)]
+mod respawn_owed_tests {
+    use super::{WorkerReadinessState, respawn_is_owed};
+
+    /// The three conditions each exclude something the others cannot, so the
+    /// matrix is the assertion.
+    ///
+    /// Crate-private by design: the owed condition is monitor internals with no
+    /// public consumer, and widening it to reach from `tests/unit` would add API
+    /// surface that exists only for this check.
+    #[test]
+    fn a_respawn_is_owed_only_when_signal_level_and_budget_agree() {
+        // The positive case: a failure that warranted a respawn, a runtime still
+        // dead, and a budget that has not run out.
+        assert!(respawn_is_owed(
+            true,
+            false,
+            WorkerReadinessState::Unavailable
+        ));
+
+        // A stale edge. A producer's signal can arrive after the runtime it
+        // described has already been replaced; acting on it would tear down a
+        // healthy generation to recover from a failure that is already over. The
+        // level is what makes the edge safe to receive late.
+        for recovered in [
+            WorkerReadinessState::Available,
+            WorkerReadinessState::Busy,
+            WorkerReadinessState::Recovering,
+            WorkerReadinessState::Initializing,
+        ] {
+            assert!(
+                !respawn_is_owed(true, false, recovered),
+                "a signal must not respawn a runtime that is no longer Unavailable: {recovered:?}"
+            );
+        }
+
+        // An Unavailable runtime with no signal. Not every Unavailable warrants a
+        // respawn -- `outcome_requires_respawn` deliberately excludes
+        // serialization failure, which sets Unavailable and is not fixed by
+        // restarting the agent. The signal is where that judgement lives, so a
+        // level-only trigger would override it.
+        assert!(
+            !respawn_is_owed(false, false, WorkerReadinessState::Unavailable),
+            "an Unavailable the transport did not signal for is not a respawn"
+        );
+
+        // Abandoned: past recovery whatever else is true. This is the crash loop
+        // `RESPAWN_ATTEMPT_LIMIT` exists to stop.
+        assert!(!respawn_is_owed(
+            true,
+            true,
+            WorkerReadinessState::Unavailable
+        ));
     }
 }
