@@ -24,17 +24,17 @@
 //!
 //! [`is_ready`]: Transport::is_ready
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
-use crate::acp::client::SharedReplay;
+use crate::acp::client::{AcpGenerationHandle, SharedReplay};
 use crate::acp::permission::{ChoiceCorrelation, build_acp_permission_handler};
-use crate::acp::persistent_runtime::{PersistentAcpWorkerRuntime, bootstrap_acp_worker_runtime};
+use crate::acp::persistent_runtime::PersistentAcpWorkerRuntime;
 use crate::acp::state::{AcpLookSnapshot, derive_acp_look_snapshot};
 use crate::acp::{
     AcpStdioClient, DispatchHandler, PermissionHandler, PermissionResponder, PromptCompletion,
@@ -45,9 +45,9 @@ use crate::envelope::PromptBatchSettings;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
-    ChoiceMade, DeliveryDiagnosticContext, DeliveryEnvelope, LookMode, LookSnapshotPayload,
-    OutputView, SingleDeliveryOutcome, StartupContext, Transport, TransportError,
-    TransportReadiness, TransportStatus, emit_delivery_progress,
+    ChoiceMade, DeliveryDiagnosticContext, DeliveryEnvelope, GenerationFence, LookMode,
+    LookSnapshotPayload, OutputView, SingleDeliveryOutcome, StartupContext, Transport,
+    TransportError, TransportStatus, emit_delivery_progress,
 };
 use crate::transports::{SendOutcome, WorkerReadinessState};
 
@@ -98,6 +98,34 @@ struct AcpSharedState {
     /// and the `on_dispatched` closure reach it through the shared `Arc`. `None`
     /// in tests constructed without a relay registry.
     mirror_state: Option<ReadinessMirror>,
+    /// Handles for the permission resolver threads this generation has spawned.
+    ///
+    /// Retained rather than detached: a permission resolver blocks on an
+    /// operator decision and can outlive the turn that raised it, so an executor
+    /// whose handle was dropped would be invisible to cessation observation —
+    /// and a generation cannot be fenced on executors it cannot see.
+    permission_executors: Mutex<Vec<JoinHandle<()>>>,
+}
+
+impl AcpSharedState {
+    /// Records a permission resolver's handle, dropping any that have already
+    /// finished so a long-lived generation does not accumulate one per decision
+    /// it ever made. Only live executors need observing.
+    fn note_permission_executor(&self, handle: JoinHandle<()>) {
+        let mut executors = self
+            .permission_executors
+            .lock()
+            .expect("permission executors mutex");
+        executors.retain(|handle| !handle.is_finished());
+        executors.push(handle);
+    }
+
+    fn permission_executors_ceased(&self) -> bool {
+        self.permission_executors
+            .lock()
+            .map(|executors| executors.iter().all(JoinHandle::is_finished))
+            .unwrap_or(false)
+    }
 }
 
 /// Channel capacity for the internal ACP delivery task's write queue.
@@ -158,10 +186,162 @@ pub struct AcpTransport {
     target_session: String,
     /// Stable respawn-needed signal. Created once at construction (not per
     /// delivery task) so the driver-owned async respawn monitor can hold a single
-    /// long-lived subscription across respawns. The internal delivery task holds a
-    /// clone and sets it `true` when a turn ends Unavailable; the monitor awaits
-    /// the change, drives the respawn, then resets it to `false`.
+    /// long-lived subscription across respawns. Driven exclusively from the
+    /// transport (bootstrap failure, write-without-runtime paths); readiness
+    /// latches no longer promote themselves into respawn signals. The monitor
+    /// awaits the change, drives the respawn, then resets it to `false`.
     respawn_needed_tx: tokio::sync::watch::Sender<bool>,
+    /// `JoinHandle` for the most recent delivery task thread. Retained so a
+    /// generation supervisor can observe the task's cessation (the binding the
+    /// fence requires) and detach it cleanly on `take`. The handle is replaced
+    /// when `spawn_delivery_task` re-spawns, leaving the previous task's thread
+    /// to exit on its own; only `take` clears the field.
+    delivery_task_handle: Option<JoinHandle<()>>,
+    /// Fencing surface of the generation whose client the delivery task owns.
+    ///
+    /// Taken from the client at the moment it is moved into that task, because
+    /// `self.runtime` is emptied by the same move: reading termination and
+    /// cessation off the runtime made step 3 a no-op and made the reader
+    /// observation vacuously true, since both looked at a field that is `None`
+    /// for the whole steady state.
+    generation: Option<AcpGenerationHandle>,
+    /// Whether this generation has been fenced.
+    ///
+    /// One-way, and read by everything that could otherwise install a
+    /// replacement runtime behind the fence's back. The respawn monitor runs
+    /// asynchronously and can be mid-bootstrap when a fence begins, so the
+    /// decision to install has to be taken against this flag under the same lock
+    /// as the install itself.
+    fenced: Arc<AtomicBool>,
+    /// The bootstraps this generation currently has running, and the agent child
+    /// each one owns.
+    ///
+    /// A bootstrap spawns and owns an agent child, so it is a generation-owned
+    /// executor — but it runs on a blocking pool, and aborting the async task
+    /// awaiting it does not cancel the closure. Observing the wrapper therefore
+    /// says nothing about whether the executor stopped, and it offers the fence
+    /// nothing to signal either; the child is what both steps have to reach.
+    ///
+    /// A list rather than a single slot, for the same reason this was a count
+    /// before it carried handles: an initial bootstrap and a respawn can overlap,
+    /// and neither may clear or terminate the other's state.
+    bootstraps: Arc<BootstrapRegistry>,
+}
+
+/// The in-flight bootstraps of one generation, and whether that generation has
+/// been told to end.
+///
+/// The latch belongs here rather than beside the traversal because a bootstrap's
+/// child is published from inside the closure that spawned it, at a moment
+/// nothing coordinates with the fence. Reading the list once and signalling what
+/// it happened to hold made termination a *moment*: a child published a
+/// microsecond later was never signalled at all, and the closure went on to park
+/// in a handshake with a live agent behind it. As a latched state, the ordering
+/// stops mattering — publication either finds it already set, or is found by the
+/// traversal.
+#[derive(Debug, Default)]
+struct BootstrapRegistry {
+    records: Mutex<Vec<BootstrapRecord>>,
+    /// Set once and never cleared: a generation told to end does not resume.
+    terminating: AtomicBool,
+}
+
+impl BootstrapRegistry {
+    fn records(&self) -> std::sync::MutexGuard<'_, Vec<BootstrapRecord>> {
+        self.records.lock().expect("bootstrap registry mutex")
+    }
+
+    fn is_terminating(&self) -> bool {
+        self.terminating.load(Ordering::Acquire)
+    }
+
+    /// Latches termination and makes one non-blocking pass over *every* record.
+    ///
+    /// Idempotent, and registry-wide on purpose. A per-record handoff is not
+    /// enough here: this registry exists because an initial bootstrap and a
+    /// respawn can overlap, so the holder that defeats a traversal attempt is
+    /// generally not the owner of the records that attempt would have reached.
+    /// A publisher that served only itself left every other live bootstrap
+    /// unsignalled with nothing scheduled to look again.
+    fn initiate_termination(&self) {
+        self.terminating.store(true, Ordering::Release);
+        // Attempted, never taken: step 3 is contracted to block nowhere. What
+        // this cannot reach is reached by whoever is holding the lock, when they
+        // release it.
+        if let Ok(records) = self.records.try_lock() {
+            for record in records.iter() {
+                if let Some(generation) = record.generation.as_ref() {
+                    generation.initiate_termination();
+                }
+            }
+        }
+    }
+
+    /// Called by every mutating holder of the records lock, after releasing it.
+    ///
+    /// This is the other half of the handoff. Reading the latch only while
+    /// holding the lock leaves the window where a requester latches, loses its
+    /// attempt to this holder, and the holder then releases without looking
+    /// again — so the read happens here, after release, and it re-runs the whole
+    /// traversal rather than serving one record.
+    fn serve_pending_termination(&self) {
+        if self.is_terminating() {
+            self.initiate_termination();
+        }
+    }
+}
+
+/// One in-flight bootstrap: its guard's identity, and the agent child it owns
+/// once the spawn has happened.
+#[derive(Debug)]
+struct BootstrapRecord {
+    id: u64,
+    generation: Option<AcpGenerationHandle>,
+}
+
+static NEXT_BOOTSTRAP_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Marks a bootstrap as running for as long as it is held, and is how that
+/// bootstrap hands its agent child to the fence.
+///
+/// Moved into the blocking closure itself, not held beside it: the closure
+/// outlives any abort of the task awaiting it, so only something dropped by the
+/// closure can say when that executor actually stopped.
+#[derive(Debug)]
+pub(crate) struct BootstrapInFlight {
+    id: u64,
+    bootstraps: Arc<BootstrapRegistry>,
+}
+
+impl BootstrapInFlight {
+    /// Publishes the agent child this bootstrap owns, making it reachable by the
+    /// fence's forced step for as long as this guard lives — and ends it here if
+    /// the forced step has already gone past.
+    ///
+    /// The handoff after the release is registry-wide, not this record alone: a
+    /// traversal that lost its attempt to this holder was trying to reach every
+    /// live bootstrap, and serving only the one published here would leave the
+    /// rest of them alive with nothing scheduled to look again.
+    pub(crate) fn publish_generation(&self, generation: AcpGenerationHandle) {
+        {
+            let mut records = self.bootstraps.records();
+            if let Some(record) = records.iter_mut().find(|record| record.id == self.id) {
+                record.generation = Some(generation);
+            }
+        }
+        self.bootstraps.serve_pending_termination();
+    }
+}
+
+impl Drop for BootstrapInFlight {
+    fn drop(&mut self) {
+        self.bootstraps
+            .records()
+            .retain(|record| record.id != self.id);
+        // A dropping guard holds the same lock a traversal attempt can lose to,
+        // so it owes the same handoff a publisher does.
+        self.bootstraps.serve_pending_termination();
+    }
 }
 
 impl std::fmt::Debug for AcpTransport {
@@ -185,6 +365,7 @@ impl AcpTransport {
                 readiness: Mutex::new(WorkerReadinessState::Initializing),
                 replay: Mutex::new(None),
                 mirror_state,
+                permission_executors: Mutex::new(Vec::new()),
             }),
             write_tx: None,
             shutdown_tx: None,
@@ -192,6 +373,10 @@ impl AcpTransport {
             namespace: String::new(),
             target_session: String::new(),
             respawn_needed_tx: tokio::sync::watch::channel(false).0,
+            delivery_task_handle: None,
+            generation: None,
+            fenced: Arc::new(AtomicBool::new(false)),
+            bootstraps: Arc::new(BootstrapRegistry::default()),
         }
     }
 
@@ -224,6 +409,15 @@ impl AcpTransport {
         if matches!(self.readiness(), WorkerReadinessState::Unavailable) {
             self.signal_respawn();
         }
+    }
+
+    /// Takes and clears the most recent delivery task's [`JoinHandle`].
+    /// A generation supervisor binds the handle so it can join the thread
+    /// and observe cessation as part of fence acknowledgment. Returns `None`
+    /// when the transport has never spawned a delivery task or the handle
+    /// has already been taken for the current generation.
+    pub fn take_delivery_task_handle(&mut self) -> Option<JoinHandle<()>> {
+        self.delivery_task_handle.take()
     }
 
     /// Current readiness, mirrored by the `AcpWorkerDriver` into the global registry.
@@ -262,9 +456,10 @@ impl AcpTransport {
     /// ACP runtime. Called from [`Transport::startup`] after the runtime is
     /// established. Takes the client and session_id from the runtime so the task
     /// owns them exclusively — the transport only needs the shared replay handle
-    /// and readiness state after startup. The task holds a clone of the stable
-    /// respawn-needed sender, which it sets `true` when a turn ends Unavailable so
-    /// the driver-owned respawn monitor can react.
+    /// and readiness state after startup. The task's [`JoinHandle`] is retained
+    /// on the transport so a generation supervisor can join it and observe
+    /// cessation as the fence requires; the previous generation's handle, if
+    /// any, is replaced — its thread is left to exit on its own.
     fn spawn_delivery_task(&mut self) {
         let (tx, rx) = mpsc::channel::<WriteItem>(ACP_WRITE_CHANNEL_CAPACITY);
         let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
@@ -278,26 +473,33 @@ impl AcpTransport {
         };
 
         let runtime = self.runtime.take().expect("runtime present at task spawn");
+        // Before the move, not after: this is the last point at which the
+        // transport can still reach the client it is about to hand away.
+        self.generation = Some(runtime.client.generation_handle());
         let client = runtime.client;
         let session_id = runtime.session_id;
 
-        std::thread::spawn(move || {
-            let channels = DeliveryChannels {
-                rx,
-                shutdown_rx,
-                respawn_needed_tx,
-            };
-            acp_delivery_task(
-                channels,
-                client,
-                session_id,
-                shared,
-                chooser,
-                batch_settings,
-                identity,
-            );
-        });
+        let handle = thread::Builder::new()
+            .name("agentmux-acp-delivery".into())
+            .spawn(move || {
+                let channels = DeliveryChannels {
+                    rx,
+                    shutdown_rx,
+                    respawn_needed_tx,
+                };
+                acp_delivery_task(
+                    channels,
+                    client,
+                    session_id,
+                    shared,
+                    chooser,
+                    batch_settings,
+                    identity,
+                );
+            })
+            .expect("spawn ACP delivery task thread");
 
+        self.delivery_task_handle = Some(handle);
         self.write_tx = Some(tx);
         self.shutdown_tx = Some(shutdown_tx);
     }
@@ -322,12 +524,71 @@ impl AcpTransport {
         self.write_tx = None;
     }
 
+    /// Registers a bootstrap as running until the returned guard drops.
+    ///
+    /// A bootstrap begun behind an already-terminating generation is registered
+    /// like any other rather than refused: it inherits the latch, so the child it
+    /// is about to spawn is ended at publication. Refusing here instead would
+    /// leave the caller holding no guard and the fence with nothing counting it.
+    #[must_use]
+    pub(crate) fn begin_bootstrap(&self) -> BootstrapInFlight {
+        let id = NEXT_BOOTSTRAP_ID.fetch_add(1, Ordering::Relaxed);
+        {
+            self.bootstraps.records().push(BootstrapRecord {
+                id,
+                generation: None,
+            });
+        }
+        // The third registry writer, and it owes the same handoff as the other
+        // two. Registration holds the lock a traversal attempt can lose to, and
+        // this holder's own record is empty — so serving only itself would serve
+        // nothing, while every already-published bootstrap waited on a pass that
+        // would not happen until this one reached publication.
+        self.bootstraps.serve_pending_termination();
+        BootstrapInFlight {
+            id,
+            bootstraps: Arc::clone(&self.bootstraps),
+        }
+    }
+
+    /// Whether this generation has been fenced.
+    #[must_use]
+    pub(crate) fn generation_is_fenced(&self) -> bool {
+        self.fenced.load(Ordering::Acquire)
+    }
+
+    /// Installs `runtime` unless this generation has been fenced, in which case
+    /// it is handed back for the caller to tear down.
+    ///
+    /// The check and the install happen under one lock on purpose. A bootstrap
+    /// runs off the lock and takes seconds, so a fence can begin while one is in
+    /// flight; deciding separately from installing would leave the window where
+    /// a replacement runtime is installed into a generation already declared
+    /// stopped — a second live agent for one target, which is exactly what the
+    /// fence exists to prevent.
+    #[must_use = "a refused runtime owns a live child and must be shut down"]
+    pub(crate) fn install_runtime_unless_fenced(
+        &mut self,
+        runtime: PersistentAcpWorkerRuntime,
+    ) -> Option<PersistentAcpWorkerRuntime> {
+        if self.generation_is_fenced() {
+            return Some(runtime);
+        }
+        self.install_runtime(runtime);
+        None
+    }
+
     /// Installs a freshly bootstrapped runtime: repoints the published replay
     /// handle at the new buffer, marks the transport Available, and spawns the
     /// internal delivery task. Brief and lock-safe — the blocking child spawn
-    /// already happened in `bootstrap_acp_worker_runtime`, so the respawn monitor
-    /// holds the transport lock only for these fast field updates.
-    pub(crate) fn install_runtime(&mut self, runtime: PersistentAcpWorkerRuntime) {
+    /// already happened in `bootstrap_acp_worker_runtime`, so a bootstrap holds
+    /// the transport lock only for these fast field updates.
+    ///
+    /// Private because the fenced check and the install belong together; every
+    /// caller goes through [`install_runtime_unless_fenced`].
+    ///
+    /// [`install_runtime_unless_fenced`]: Self::install_runtime_unless_fenced
+    fn install_runtime(&mut self, runtime: PersistentAcpWorkerRuntime) {
         // Repoint the published handle's replay slot at the new runtime's buffer
         // before marking ready, so a look that was prime-waiting through the
         // (re-)establish returns the fresh buffer.
@@ -358,30 +619,78 @@ impl AcpTransport {
     }
 }
 
-impl Transport for AcpTransport {
-    fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
-        self.prepare_for_startup(
-            context.choose,
-            context.namespace,
-            context.target_member.id.clone(),
-        );
-        self.set_readiness(WorkerReadinessState::Initializing);
-        match bootstrap_acp_worker_runtime(&context.runtime_directory, &context.target_member) {
-            Ok(runtime) => {
-                self.install_runtime(runtime);
-                Ok(TransportStatus {
-                    readiness: TransportReadiness::Ready,
-                })
-            }
-            Err(error) => {
-                self.mark_runtime_unavailable();
-                Err(TransportError {
-                    code: error.code,
-                    reason: error.reason,
-                    details: None,
-                })
-            }
+impl GenerationFence for AcpTransport {
+    fn fence_generation(&mut self) {
+        // Dropping the shutdown sender is the delivery task's cooperative stop
+        // signal: it drains what it holds and exits at its next check. Marking
+        // the generation fenced is the same request to the respawn monitor, and
+        // it is what makes a bootstrap already in flight refuse to install.
+        self.fenced.store(true, Ordering::Release);
+        self.shutdown_tx = None;
+    }
+
+    fn terminate_generation(&mut self) {
+        // Signal the child and return. This unblocks an executor parked writing
+        // into the child's stdin, which is exactly the case step 1 cannot reach.
+        // Reaping happens in the observation that follows, not here.
+        if let Some(generation) = self.generation.as_ref() {
+            generation.initiate_termination();
         }
+        // Every bootstrap still running owns an agent child of its own, and a
+        // bootstrap is held where it is by that child failing to answer. Killing
+        // it closes the stdio the handshake is waiting on, so the request fails,
+        // the client drops, and the executor returns — where before, step 3 had
+        // nothing to say to it and the fence could only wait out an operation
+        // timeout it does not control.
+        //
+        // Latches and attempts one registry-wide pass, blocking nowhere. A
+        // record this attempt cannot see, or cannot reach because someone holds
+        // the lock, is reached when that holder releases and runs the same pass.
+        self.bootstraps.initiate_termination();
+        self.write_tx = None;
+    }
+
+    fn generation_ceased(&self) -> bool {
+        let delivery_task_ceased = self
+            .delivery_task_handle
+            .as_ref()
+            .is_none_or(JoinHandle::is_finished);
+        let client_ceased = self
+            .generation
+            .as_ref()
+            .is_none_or(AcpGenerationHandle::reader_ceased);
+        // A record outlives its bootstrap's disposal of the child it owns. On
+        // every path that produced no live runtime the client has been dropped
+        // by the time the guard goes, and dropping it kills *and waits* the
+        // child; on the path that succeeded, that child has become this
+        // generation's steady-state one, which the conjunct above observes.
+        // Either way an empty registry means reaped or accounted for, never
+        // merely signalled.
+        let no_bootstrap_running = self.bootstraps.records().is_empty();
+        delivery_task_ceased
+            && client_ceased
+            && no_bootstrap_running
+            && self.shared.permission_executors_ceased()
+    }
+}
+
+impl Transport for AcpTransport {
+    /// ACP establishes its runtime through the driver's supervised bootstrap, not
+    /// here.
+    ///
+    /// This used to bootstrap synchronously on the caller's thread: a second
+    /// route that spawned and owned an agent child while being counted by
+    /// nothing, so a fence could see an empty in-flight count with a live child
+    /// coming up behind it. Every production ACP path goes through
+    /// [`AcpWorkerDriver::start_bootstrap`], so the route is gone rather than
+    /// duplicated under the supervisor.
+    fn startup(&mut self, _context: StartupContext) -> Result<TransportStatus, TransportError> {
+        Err(TransportError {
+            code: "internal_unexpected_failure".to_string(),
+            reason: "ACP runtimes are established by the worker driver's supervised bootstrap"
+                .to_string(),
+            details: None,
+        })
     }
 
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
@@ -437,6 +746,10 @@ impl Transport for AcpTransport {
             self.readiness(),
             WorkerReadinessState::Available | WorkerReadinessState::Busy
         )
+    }
+
+    fn can_accept_handover(&self) -> bool {
+        matches!(self.readiness(), WorkerReadinessState::Available)
     }
 
     fn shutdown(&mut self) {
@@ -676,7 +989,6 @@ fn acp_delivery_task(
             &mut client,
             &ctx,
             &batch_settings,
-            &shared,
             &respawn_needed_tx,
             &mut rx,
             &mut shutdown_rx,
@@ -696,17 +1008,6 @@ fn resolve_head_as_shutdown(head: WriteItem) {
         WriteItem::Raw { outcome_tx, .. } => outcome_tx,
     };
     let _ = outcome_tx.send(dropped_on_shutdown_outcome());
-}
-
-/// Signals the driver if the transport's readiness is Unavailable after a turn.
-fn signal_respawn_if_needed(
-    shared: &Arc<AcpSharedState>,
-    respawn_needed_tx: &tokio::sync::watch::Sender<bool>,
-) {
-    let readiness = *shared.readiness.lock().expect("readiness mutex");
-    if matches!(readiness, WorkerReadinessState::Unavailable) {
-        let _ = respawn_needed_tx.send(true);
-    }
 }
 
 /// Drains all remaining items from the write channel and resolves their outcome
@@ -748,19 +1049,16 @@ fn dropped_on_shutdown_outcome() -> SingleDeliveryOutcome {
 /// unused on ACP and the relay's `build_coder_envelope` zeros it for
 /// receipts addressed to an ACP sender so the receipt-bypasses-quiescence
 /// invariant holds at the envelope seam.
-#[allow(clippy::too_many_arguments)]
 fn submit_singleton_envelope(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
     batch_settings: &PromptBatchSettings,
-    shared: &Arc<AcpSharedState>,
     respawn_needed_tx: &tokio::sync::watch::Sender<bool>,
     envelope: Box<DeliveryEnvelope>,
     outcome_tx: tokio::sync::oneshot::Sender<SingleDeliveryOutcome>,
 ) {
     let mut batch = EnvelopeBatch::from_head(&envelope, outcome_tx);
-    flush_envelope_group(client, ctx, batch_settings, &mut batch);
-    signal_respawn_if_needed(shared, respawn_needed_tx);
+    flush_envelope_group(client, ctx, batch_settings, respawn_needed_tx, &mut batch);
 }
 
 /// True when the write item is an envelope flagged as a terminal-outcome
@@ -780,6 +1078,27 @@ fn is_receipt_envelope(item: &WriteItem) -> bool {
 /// tested alongside `is_receipt_envelope`.
 fn is_raw_write_item(item: &WriteItem) -> bool {
     matches!(item, WriteItem::Raw { .. })
+}
+
+/// True when a settled [`SingleDeliveryOutcome`] indicates the underlying
+/// agent has died and the worker should respawn. The decision rides on the
+/// observable failure (the outcome's `reason_code`) rather than the
+/// transport's readiness state. `SerializationFailed` is intentionally NOT
+/// a respawn trigger: a bad message cannot be retried by respawning the
+/// agent.
+///
+/// On an ACP settlement, the only `SendOutcome::Timeout` source is the
+/// per-turn prime timer; treating it as a respawn trigger preserves the
+/// prior readiness-latch behavior on that path.
+fn outcome_requires_respawn(outcome: &SingleDeliveryOutcome) -> bool {
+    match outcome.outcome {
+        SendOutcome::Timeout => true,
+        SendOutcome::Failed => matches!(
+            outcome.reason_code.as_deref(),
+            Some(ACP_ERROR_CODE_CONNECTION_CLOSED) | Some(ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE),
+        ),
+        _ => false,
+    }
 }
 
 /// The ordered actions `acp_delivery_task` must execute after receiving
@@ -1000,7 +1319,6 @@ fn execute_delivery_plan(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
     batch_settings: &PromptBatchSettings,
-    shared: &Arc<AcpSharedState>,
     respawn_needed_tx: &tokio::sync::watch::Sender<bool>,
     rx: &mut mpsc::Receiver<WriteItem>,
     shutdown_rx: &mut tokio::sync::oneshot::Receiver<()>,
@@ -1026,8 +1344,7 @@ fn execute_delivery_plan(
             drain_and_resolve_shutdown(rx);
             return;
         }
-        flush_envelope_group(client, ctx, batch_settings, &mut batch);
-        signal_respawn_if_needed(shared, respawn_needed_tx);
+        flush_envelope_group(client, ctx, batch_settings, respawn_needed_tx, &mut batch);
     }
 
     // Execute the boundary action.
@@ -1046,7 +1363,6 @@ fn execute_delivery_plan(
                 client,
                 ctx,
                 batch_settings,
-                shared,
                 respawn_needed_tx,
                 envelope,
                 outcome_tx,
@@ -1063,13 +1379,13 @@ fn execute_delivery_plan(
                 return;
             }
             let result = submit_raw_turn(client, ctx, content.as_str(), append_enter);
-            let _ = outcome_tx.send(result);
-            // A raw turn can leave readiness `Unavailable` (the same
-            // way an envelope turn can); the driver-owned respawn
-            // monitor relies on this signal to react. Symmetric with the
-            // post-envelope signal that `flush_envelope_group`'s callers
-            // emit via `signal_respawn_if_needed`.
-            signal_respawn_if_needed(shared, respawn_needed_tx);
+            let _ = outcome_tx.send(result.clone());
+            // The raw path runs through `submit_envelope_turn`, so the
+            // outcome is a settled `SingleDeliveryOutcome` and the same
+            // observable-event rule applies.
+            if outcome_requires_respawn(&result) {
+                let _ = respawn_needed_tx.send(true);
+            }
         }
     }
 }
@@ -1088,6 +1404,7 @@ fn flush_envelope_group(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
     batch_settings: &PromptBatchSettings,
+    respawn_needed_tx: &tokio::sync::watch::Sender<bool>,
     batch: &mut EnvelopeBatch,
 ) {
     let groups = crate::envelope::batch_envelope_groups(&batch.rendered, *batch_settings);
@@ -1097,6 +1414,7 @@ fn flush_envelope_group(
     let mut decider_sessions = batch.decider_sessions.drain(..);
     let mut outcome_senders = batch.outcome_senders.drain(..);
 
+    let mut last_outcome: Option<SingleDeliveryOutcome> = None;
     for group in groups {
         let group_msg_ids: Vec<String> = message_ids.by_ref().take(group.member_count).collect();
         let group_deciders: Vec<Vec<String>> =
@@ -1119,6 +1437,16 @@ fn flush_envelope_group(
             sender_outcome.message_id = sender_msg_id;
             let _ = tx.send(sender_outcome);
         }
+        last_outcome = Some(outcome);
+    }
+
+    // The signal flows from the observable outcome (the reason a turn did
+    // not land cleanly), not from the readiness state. The driver-owned
+    // respawn monitor reads this and drives replacement.
+    if let Some(outcome) = last_outcome
+        && outcome_requires_respawn(&outcome)
+    {
+        let _ = respawn_needed_tx.send(true);
     }
 }
 
@@ -1130,10 +1458,11 @@ fn flush_envelope_group(
 /// once per group, so there are no internal coalesce iterations to reset on).
 /// On prime-timer fire the loop exits with `SendOutcome::Timeout` +
 /// `reason_code = "acp_turn_timeout"`, latches per-target readiness to
-/// `Unavailable`, emits a `delivery_prime_timeout` inscription, and signals
-/// respawn-needed. When `None`, the prime timer is unbounded (today's default
-/// behavior) and the loop exits only on completion, shutdown, or transport
-/// failure.
+/// `Unavailable`, and emits a `delivery_prime_timeout` inscription. The
+/// returned `SendOutcome::Timeout` is the signal that `flush_envelope_group`
+/// uses, via `outcome_requires_respawn`, to publish the respawn-need the
+/// monitor consumes. When `None`, the prime timer is unbounded and the
+/// loop exits only on completion, shutdown, or transport failure.
 #[allow(clippy::too_many_arguments)]
 fn submit_envelope_turn(
     client: &mut AcpStdioClient,
@@ -1166,8 +1495,13 @@ fn submit_envelope_turn(
             target_session: ctx.target_session.to_string(),
             decider_sessions: decider_sessions.to_vec(),
         };
-        let mut inner =
-            build_acp_permission_handler(chooser.clone(), correlation, Arc::clone(&pending_choice));
+        let shared_for_executors = Arc::clone(ctx.shared);
+        let mut inner = build_acp_permission_handler(
+            chooser.clone(),
+            correlation,
+            Arc::clone(&pending_choice),
+            Arc::new(move |handle| shared_for_executors.note_permission_executor(handle)),
+        );
         let raised_flag = Arc::clone(&permission_was_raised);
         let wrapped: PermissionHandler = Box::new(move |req, responder| {
             raised_flag.store(true, Ordering::Release);
@@ -1222,10 +1556,10 @@ fn submit_envelope_turn(
                 // should not assume the server honors cancellation; the
                 // transport resolves this flush group and the relay does not
                 // inject further messages until the worker respawns. The
-                // outer `acp_delivery_task` loop's `signal_respawn_if_needed`
-                // call publishes the respawn-needed signal once it observes
-                // `readiness == Unavailable` after this `submit_envelope_turn`
-                // returns, so no separate publish is needed here.
+                // accompanying `SendOutcome::Timeout` outcome is observed by
+                // `outcome_requires_respawn` in `flush_envelope_group`, which
+                // publishes the respawn signal the monitor consumes —
+                // replacing the prior readiness-latch path.
                 //
                 // The leaked `last_prompt_signal` on the client is cleaned up
                 // by the next `client.prompt` (it overwrites the slot) or by
@@ -1822,5 +2156,49 @@ mod delivery_plan_tests {
         );
         assert_eq!(peer_ids(&plan), vec!["p1", "p2"]);
         assert!(matches!(plan.boundary, BoundaryAction::ReturnToOuterLoop));
+    }
+}
+
+#[cfg(test)]
+mod handover_readiness_tests {
+    use super::*;
+
+    #[test]
+    fn can_accept_handover_readiness_matrix_and_delivery_task_handle_retention() {
+        let mut transport = AcpTransport::new(PromptBatchSettings::default(), None);
+
+        // Initial state is `Initializing` — not ready for handover.
+        assert_eq!(
+            transport.readiness(),
+            crate::transports::WorkerReadinessState::Initializing
+        );
+        assert!(!transport.can_accept_handover());
+
+        // The single state that returns true: only when the transport is
+        // actually idle and able to take a batch right now.
+        transport.set_readiness(crate::transports::WorkerReadinessState::Available);
+        assert!(transport.can_accept_handover());
+
+        // `Busy` is intentionally NOT a handover-ready state — accepting
+        // another batch while a turn is in flight would dispatch the wrong
+        // message to the same turn. The readiness signal still exists
+        // through the injected mirror closure.
+        transport.set_readiness(crate::transports::WorkerReadinessState::Busy);
+        assert!(!transport.can_accept_handover());
+        // `is_ready` keeps its pre-existing semantic and continues to
+        // include `Busy`; the two surfaces now differ by design.
+        assert!(transport.is_ready());
+
+        // `Recovering` and `Unavailable` are also not ready.
+        transport.set_readiness(crate::transports::WorkerReadinessState::Recovering);
+        assert!(!transport.can_accept_handover());
+        transport.set_readiness(crate::transports::WorkerReadinessState::Unavailable);
+        assert!(!transport.can_accept_handover());
+
+        // No delivery task has been spawned yet, so there is no handle
+        // for a generation supervisor to take — the field starts empty
+        // and a second `take` after the first stays empty.
+        assert!(transport.take_delivery_task_handle().is_none());
+        assert!(transport.take_delivery_task_handle().is_none());
     }
 }

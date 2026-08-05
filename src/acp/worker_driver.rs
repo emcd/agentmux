@@ -18,7 +18,10 @@
 
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -30,8 +33,8 @@ use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
-    Chooser, DeliveryEnvelope, OutputView, StartupContext, Transport, TransportError,
-    TransportStatus, WorkerFailureReason, WorkerReadinessState,
+    Chooser, DeliveryEnvelope, GenerationFence, OutputView, StartupContext, Transport,
+    TransportError, TransportStatus, WorkerFailureReason, WorkerReadinessState,
 };
 
 use super::{AcpBootstrapError, AcpTransport, bootstrap_acp_worker_runtime};
@@ -115,7 +118,8 @@ impl std::fmt::Debug for AcpDriverServices {
 ///
 /// Held by `TransportImpl::Acp`. Delivery trait methods delegate to the inner
 /// [`AcpTransport`] under a brief lock. The transport is shared with the
-/// driver-owned async respawn monitor (spawned in [`bootstrap`](Self::bootstrap))
+/// driver-owned async respawn monitor (spawned in
+/// [`start_bootstrap`](Self::start_bootstrap))
 /// via `Arc<Mutex<…>>`, so respawn runs off the relay worker loop: the monitor
 /// drives recovery while the worker keeps submitting writes. The monitor never
 /// holds the lock across `.await` or the blocking child spawn, so a concurrent
@@ -126,6 +130,24 @@ pub struct AcpWorkerDriver {
     runtime_directory: PathBuf,
     target_member: BundleMember,
     services: AcpDriverServices,
+    /// The driver-owned respawn monitor.
+    ///
+    /// Retained rather than detached: the monitor can install a replacement
+    /// runtime, so it is a generation-owned executor like any other, and one
+    /// whose handle is discarded can be neither terminated nor observed. Absent
+    /// until bootstrap spawns it.
+    respawn_monitor: Option<tokio::task::JoinHandle<()>>,
+    /// The driver-owned initial-bootstrap task.
+    ///
+    /// The initial bootstrap runs as a supervised task rather than inline in the
+    /// relay worker's startup, because a worker awaiting it cannot reach its own
+    /// shutdown gate: an agent parked in `initialize` meant the worker never
+    /// entered its loop, never began a fence, and never emitted a verdict at all
+    /// — not even the honest negative one. Retained for the same reason the
+    /// respawn monitor is: it spawns and owns an agent child, so it is a
+    /// generation-owned executor, and one whose handle is discarded can be
+    /// neither terminated nor observed.
+    bootstrap_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl AcpWorkerDriver {
@@ -147,11 +169,9 @@ impl AcpWorkerDriver {
             runtime_directory,
             target_member,
             services,
+            respawn_monitor: None,
+            bootstrap_task: None,
         }
-    }
-
-    fn target_session(&self) -> &str {
-        self.target_member.id.as_str()
     }
 
     /// Locks the shared transport. Locks are brief by construction (the respawn
@@ -160,14 +180,23 @@ impl AcpWorkerDriver {
         self.transport.lock().expect("acp transport mutex poisoned")
     }
 
-    /// Establishes the ACP runtime when the worker starts and spawns the
-    /// driver-owned respawn monitor. Mirrors the readiness transitions and
-    /// publishes the look handle before bootstrap runs, so a `look` in the
-    /// initial-startup window finds the handle. The blocking child spawn runs off
-    /// the transport lock (via `spawn_blocking`); the fast install happens under a
-    /// brief lock. On initial-bootstrap failure the transport is signalled for
-    /// respawn so the monitor retries with backoff.
-    pub async fn bootstrap(&mut self) {
+    /// Starts establishing the ACP runtime and returns the flag the relay worker
+    /// gates task admission on.
+    ///
+    /// Everything that must be true before the worker's loop runs happens here,
+    /// synchronously: readiness reads Initializing, the look handle is published
+    /// (so a `look` in the initial-startup window finds it), and the
+    /// chooser/target identity is set. Only the part that can block for an
+    /// unbounded time — spawning the agent and completing the ACP handshake —
+    /// is handed to a supervised task.
+    ///
+    /// The returned flag reads `true` once that task has settled, whichever way
+    /// it settled. The worker holds its queue until then, which preserves the
+    /// delivery semantics of the awaited bootstrap this replaces: no submission
+    /// reaches a transport that has no runtime yet. What changes is that the
+    /// waiting now happens inside a loop whose shutdown gate stays reachable, so
+    /// a bootstrap that never returns still reaches the fence.
+    pub fn start_bootstrap(&mut self) -> Arc<AtomicBool> {
         (self.services.mirror_state)(WorkerReadinessState::Initializing);
         let handle = self.lock_transport().give_output();
         (self.services.publish_output)(handle);
@@ -180,58 +209,35 @@ impl AcpWorkerDriver {
             self.target_member.id.clone(),
         );
 
-        let runtime_directory = self.runtime_directory.clone();
-        let target_member = self.target_member.clone();
-        let bootstrap_result = tokio::task::spawn_blocking(move || {
-            bootstrap_acp_worker_runtime(&runtime_directory, &target_member)
-        })
-        .await
-        .expect("ACP worker bootstrap task panicked");
-
-        match bootstrap_result {
-            Ok(runtime) => {
-                self.lock_transport().install_runtime(runtime);
-                (self.services.mirror_state)(WorkerReadinessState::Available);
-            }
-            Err(error) => {
-                self.lock_transport().mark_runtime_unavailable();
-                // Record the failure before the readiness transition so the
-                // startup poller, which acts the moment it observes Unavailable,
-                // finds the true cause already stored.
-                (self.services.record_failure)(WorkerFailureReason {
-                    code: error.code.clone(),
-                    reason: error.reason.clone(),
-                });
-                (self.services.mirror_state)(WorkerReadinessState::Unavailable);
-                emit_inscription(
-                    "relay.acp.worker.bootstrap_failed",
-                    &json!({
-                        "namespace": self.namespace,
-                        "target_session": self.target_session(),
-                        "error_code": error.code,
-                        "reason": error.reason,
-                    }),
-                );
-                // No delivery task is running to emit the respawn-needed signal,
-                // so prime it directly: the monitor will retry with backoff.
-                self.lock_transport().signal_respawn();
-            }
-        }
-
+        // Spawned before the bootstrap it supervises, rather than after it
+        // returns: the monitor is idle until the transport signals
+        // respawn-needed, and a bootstrap that never returns must not be the
+        // reason the target has no supervisor.
         self.spawn_respawn_monitor();
+
+        let settled = Arc::new(AtomicBool::new(false));
+        self.bootstrap_task = Some(tokio::spawn(initial_acp_bootstrap(
+            Arc::clone(&self.transport),
+            self.services.clone(),
+            self.namespace.clone(),
+            self.runtime_directory.clone(),
+            self.target_member.clone(),
+            Arc::clone(&settled),
+        )));
+        settled
     }
 
     /// Spawns the driver-owned async respawn monitor. It subscribes to the
     /// transport's stable respawn-needed signal and drives respawn off the relay
     /// worker loop, sharing the transport via `Arc<Mutex<…>>`.
-    fn spawn_respawn_monitor(&self) {
+    fn spawn_respawn_monitor(&mut self) {
         let transport = Arc::clone(&self.transport);
         let respawn_needed = self.lock_transport().respawn_needed_subscribe();
         let services = self.services.clone();
         let namespace = self.namespace.clone();
         let runtime_directory = self.runtime_directory.clone();
         let target_member = self.target_member.clone();
-        tokio::spawn(acp_respawn_monitor(
+        self.respawn_monitor = Some(tokio::spawn(acp_respawn_monitor(
             transport,
             respawn_needed,
             services,
@@ -239,7 +245,43 @@ impl AcpWorkerDriver {
             namespace,
             runtime_directory,
             target_member,
-        ));
+        )));
+    }
+}
+
+impl GenerationFence for AcpWorkerDriver {
+    fn fence_generation(&mut self) {
+        // Marking the transport fenced is also the monitor's cooperative stop
+        // request: it reads the same flag between polls and returns.
+        self.lock_transport().fence_generation();
+    }
+
+    fn terminate_generation(&mut self) {
+        self.lock_transport().terminate_generation();
+        // Either task can be parked in a bootstrap that will not return inside
+        // any window the fence allows. Aborting is the destructive step for a
+        // task that observes nothing; the runtime such a bootstrap would have
+        // produced is refused at the install anyway, under the fenced check, and
+        // is torn down by the closure that owns it rather than left to whichever
+        // task was awaiting the result.
+        if let Some(monitor) = self.respawn_monitor.as_ref() {
+            monitor.abort();
+        }
+        if let Some(bootstrap) = self.bootstrap_task.as_ref() {
+            bootstrap.abort();
+        }
+    }
+
+    fn generation_ceased(&self) -> bool {
+        let monitor_ceased = self
+            .respawn_monitor
+            .as_ref()
+            .is_none_or(tokio::task::JoinHandle::is_finished);
+        let bootstrap_ceased = self
+            .bootstrap_task
+            .as_ref()
+            .is_none_or(tokio::task::JoinHandle::is_finished);
+        monitor_ceased && bootstrap_ceased && self.lock_transport().generation_ceased()
     }
 }
 
@@ -260,6 +302,10 @@ impl Transport for AcpWorkerDriver {
         self.lock_transport().is_ready()
     }
 
+    fn can_accept_handover(&self) -> bool {
+        self.lock_transport().can_accept_handover()
+    }
+
     fn shutdown(&mut self) {
         self.lock_transport().shutdown();
     }
@@ -267,6 +313,154 @@ impl Transport for AcpWorkerDriver {
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {
         self.lock_transport().give_output()
     }
+}
+
+/// What one bootstrap attempt did with the runtime it produced.
+enum BootstrapDisposition {
+    /// The runtime is live and installed on the transport.
+    Installed,
+    /// A fence began while the bootstrap was running, so the runtime was refused
+    /// and shut down inside the bootstrap closure.
+    RefusedAfterFence,
+    /// No runtime was produced.
+    Failed(AcpBootstrapError),
+}
+
+/// Runs one bootstrap on the blocking pool, disposes of the runtime it produces
+/// — installing it, or tearing it down when a fence refuses it — and publishes
+/// the readiness that disposal leaves behind, all inside that same closure.
+///
+/// None of that can be left to the task awaiting the result. A bootstrap runs on
+/// a blocking pool, and `tokio`'s abort cancels only the awaiting task, never
+/// the closure; a bootstrap that finishes after such an abort would hand a live
+/// agent child to nobody and would leave the target advertising a runtime that
+/// is still on its way. So the split is by what the work belongs to rather than
+/// by what is convenient: everything that must happen no matter who is still
+/// listening lives here, and only the retry policy — backoff state, per-attempt
+/// inscriptions — stays with the caller. Owning creation through
+/// install-or-teardown here is also what makes the in-flight count mean
+/// something: it spans the runtime's whole exposure rather than stopping at the
+/// moment it was constructed, when nothing had yet decided the child's fate.
+///
+/// A failed attempt publishes nothing, because whether it is terminal is exactly
+/// the retry policy's question.
+///
+/// The transport lock is taken only for the install decision, which is a few
+/// field updates and a thread spawn — never across the child spawn or the ACP
+/// handshake, so a concurrent `mailw` is not stalled by a bootstrap.
+async fn run_one_bootstrap(
+    transport: &Arc<Mutex<AcpTransport>>,
+    mirror_state: &MirrorStateFn,
+    runtime_directory: PathBuf,
+    target_member: BundleMember,
+) -> BootstrapDisposition {
+    let in_flight = transport
+        .lock()
+        .expect("acp transport mutex poisoned")
+        .begin_bootstrap();
+    let transport = Arc::clone(transport);
+    let mirror_state = Arc::clone(mirror_state);
+    tokio::task::spawn_blocking(move || {
+        let publish = |generation| in_flight.publish_generation(generation);
+        match bootstrap_acp_worker_runtime(&runtime_directory, &target_member, &publish) {
+            Ok(runtime) => {
+                // The check and the install happen under one lock: a fence that
+                // began while this bootstrap ran must not find a fresh agent
+                // installed into a generation it has already declared stopped.
+                let refused = transport
+                    .lock()
+                    .expect("acp transport mutex poisoned")
+                    .install_runtime_unless_fenced(runtime);
+                match refused {
+                    Some(mut refused) => {
+                        refused.client.shutdown();
+                        // The target has no runtime and a fenced generation
+                        // admits no replacement, so Unavailable is the accurate
+                        // terminal state. Leaving it Initializing or Recovering
+                        // told every observer — the TUI, the startup poller, a
+                        // `list` — that a runtime was still on its way.
+                        mirror_state(WorkerReadinessState::Unavailable);
+                        BootstrapDisposition::RefusedAfterFence
+                    }
+                    None => {
+                        mirror_state(WorkerReadinessState::Available);
+                        BootstrapDisposition::Installed
+                    }
+                }
+            }
+            Err(error) => BootstrapDisposition::Failed(error),
+        }
+    })
+    .await
+    .expect("ACP bootstrap task panicked")
+}
+
+/// The driver-owned initial bootstrap: establishes the first runtime for a
+/// target and reports the outcome through the relay touchpoints.
+///
+/// Runs as its own task so the relay worker's loop — and therefore its shutdown
+/// gate — is reachable throughout. `settled` is raised on every path that
+/// returns, so the worker knows when its queue may start flowing; a bootstrap
+/// aborted by a fence never raises it, which is correct, because that worker is
+/// draining rather than delivering.
+async fn initial_acp_bootstrap(
+    transport: Arc<Mutex<AcpTransport>>,
+    services: AcpDriverServices,
+    namespace: String,
+    runtime_directory: PathBuf,
+    target_member: BundleMember,
+    settled: Arc<AtomicBool>,
+) {
+    let target_session = target_member.id.clone();
+    let disposition = run_one_bootstrap(
+        &transport,
+        &services.mirror_state,
+        runtime_directory,
+        target_member,
+    )
+    .await;
+    match disposition {
+        BootstrapDisposition::Installed => {}
+        BootstrapDisposition::RefusedAfterFence => {
+            emit_inscription(
+                "relay.acp.worker.bootstrap_refused_after_fence",
+                &json!({
+                    "namespace": namespace,
+                    "target_session": target_session,
+                }),
+            );
+        }
+        BootstrapDisposition::Failed(error) => {
+            transport
+                .lock()
+                .expect("acp transport mutex poisoned")
+                .mark_runtime_unavailable();
+            // Record the failure before the readiness transition so the startup
+            // poller, which acts the moment it observes Unavailable, finds the
+            // true cause already stored.
+            (services.record_failure)(WorkerFailureReason {
+                code: error.code.clone(),
+                reason: error.reason.clone(),
+            });
+            (services.mirror_state)(WorkerReadinessState::Unavailable);
+            emit_inscription(
+                "relay.acp.worker.bootstrap_failed",
+                &json!({
+                    "namespace": namespace,
+                    "target_session": target_session,
+                    "error_code": error.code,
+                    "reason": error.reason,
+                }),
+            );
+            // No delivery task is running to emit the respawn-needed signal, so
+            // prime it directly: the monitor will retry with backoff.
+            transport
+                .lock()
+                .expect("acp transport mutex poisoned")
+                .signal_respawn();
+        }
+    }
+    settled.store(true, Ordering::Release);
 }
 
 /// Driver-owned async respawn monitor. Subscribes to the transport's stable
@@ -297,6 +491,16 @@ async fn acp_respawn_monitor(
             _ = tokio::time::sleep(poll) => {}
         }
         if shutdown_requested() {
+            return;
+        }
+        // The fence's cooperative request. A fenced generation admits no
+        // replacement, so there is nothing left for this monitor to do and
+        // continuing would only race the install check.
+        if transport
+            .lock()
+            .expect("acp transport mutex poisoned")
+            .generation_is_fenced()
+        {
             return;
         }
         if !*respawn_needed.borrow_and_update() {
@@ -384,24 +588,31 @@ async fn run_acp_respawn(
                 target_member.id.clone(),
             );
 
-        // Bootstrap the new runtime OFF the lock (blocking child spawn).
-        let bootstrap_dir = runtime_directory.to_path_buf();
-        let bootstrap_member = target_member.clone();
-        let bootstrap_result = tokio::task::spawn_blocking(move || {
-            bootstrap_acp_worker_runtime(&bootstrap_dir, &bootstrap_member)
-        })
-        .await
-        .expect("ACP respawn bootstrap task panicked");
+        // Bootstrap the new runtime OFF the lock (blocking child spawn). The
+        // install happens inside that same closure, so the published handle
+        // stays valid (install repoints its replay slot) and a fence that began
+        // mid-bootstrap refuses the runtime and tears it down there.
+        let disposition = run_one_bootstrap(
+            transport,
+            &services.mirror_state,
+            runtime_directory.to_path_buf(),
+            target_member.clone(),
+        )
+        .await;
 
-        match bootstrap_result {
-            Ok(runtime) => {
-                // Install under a brief lock; the published handle stays valid
-                // (install repoints its replay slot).
-                transport
-                    .lock()
-                    .expect("acp transport mutex poisoned")
-                    .install_runtime(runtime);
-                (services.mirror_state)(WorkerReadinessState::Available);
+        match disposition {
+            BootstrapDisposition::RefusedAfterFence => {
+                emit_inscription(
+                    "relay.acp.respawn.refused_after_fence",
+                    &json!({
+                        "namespace": namespace,
+                        "target_session": target_session,
+                        "attempt": respawn_state.attempt,
+                    }),
+                );
+                return;
+            }
+            BootstrapDisposition::Installed => {
                 emit_inscription(
                     "relay.acp.respawn.succeeded",
                     &json!({
@@ -420,7 +631,7 @@ async fn run_acp_respawn(
                 respawn_state.reset_on_success();
                 return;
             }
-            Err(error) => {
+            BootstrapDisposition::Failed(error) => {
                 respawn_state.record_failure(&error);
                 emit_inscription(
                     "relay.acp.respawn.attempt_failed",

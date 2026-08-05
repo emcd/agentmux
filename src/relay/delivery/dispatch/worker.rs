@@ -1,4 +1,10 @@
-use std::{sync::OnceLock, time::Duration};
+use std::{
+    collections::HashMap,
+    sync::OnceLock,
+    time::{Duration, Instant},
+};
+
+use serde_json::json;
 
 use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver, task::JoinSet};
 
@@ -19,16 +25,30 @@ use super::payload::{
 
 use crate::transports::{OutcomeFuture, SingleDeliveryOutcome, TransportImpl};
 
-use super::super::async_worker::AsyncWorkerKey;
+use super::super::async_worker::{AsyncWorkerKey, WorkerOwner};
+use super::super::fence::{FenceInProgress, FenceResolution, FenceVerdict};
+use super::super::guard::{BatchId, GuardTrigger};
+use crate::runtime::inscriptions::emit_inscription;
 
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
 
-/// One in-flight write awaiting its transport [`OutcomeFuture`]. Carries the
-/// originating task and whether a successful delivery should clear startup
-/// failures (`true` for coder transports, `false` for UI), so the collect site
-/// can map the resolved outcome onto a `SendResult` and complete the task. The
-/// outcome is `None` if the future was dropped before resolving.
-type InflightOutcome = (AsyncDeliveryTask, bool, Option<SingleDeliveryOutcome>);
+/// What one in-flight collector task yields: the resolved transport outcome, or
+/// `None` if the outcome future was dropped before resolving.
+///
+/// Deliberately carries no task and no outcome *interpretation*. The member's
+/// identity lives in the worker's [`InflightMember`] table instead, so a
+/// collector that panics does not take its member's identity with it — which is
+/// what lets the guard resolve that member rather than strand it.
+type InflightOutcome = Option<SingleDeliveryOutcome>;
+
+/// The worker-side record for one in-flight member, held outside the collector
+/// task that carries its write.
+pub(super) struct InflightMember {
+    pub(super) task: AsyncDeliveryTask,
+    /// Whether a successful delivery should clear startup failures: `true` for
+    /// coder transports, `false` for UI.
+    pub(super) record_served: bool,
+}
 
 #[derive(Clone)]
 pub(super) struct AcpWorkerBootstrap {
@@ -50,12 +70,13 @@ pub(super) struct AcpWorkerBootstrap {
 /// `shutdown_requested()` polled between receives.
 pub(super) fn spawn_async_delivery_worker(
     key: AsyncWorkerKey,
+    owner: WorkerOwner,
     receiver: UnboundedReceiver<AsyncDeliveryTask>,
     pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     bootstrap: Option<AcpWorkerBootstrap>,
 ) {
     delivery_runtime_handle().spawn(async move {
-        run_async_delivery_worker(key, receiver, pending, bootstrap).await;
+        run_async_delivery_worker(key, owner, receiver, pending, bootstrap).await;
     });
 }
 
@@ -89,6 +110,7 @@ fn delivery_runtime_handle() -> Handle {
 
 async fn run_async_delivery_worker(
     key: AsyncWorkerKey,
+    owner: WorkerOwner,
     mut receiver: UnboundedReceiver<AsyncDeliveryTask>,
     pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
     bootstrap: Option<AcpWorkerBootstrap>,
@@ -113,6 +135,16 @@ async fn run_async_delivery_worker(
     let batch_settings = super::prompt_batch_settings();
     // `None` until the transport is constructed: eagerly for ACP (bootstrap),
     // lazily from the first task's `session_type()` for every other target.
+    //
+    // An ACP worker starts its bootstrap here but does not wait on it. Awaiting
+    // it made the loop below — and therefore this worker's shutdown gate —
+    // unreachable for as long as the bootstrap took, which for an agent parked
+    // in its `initialize` handshake is forever: no fence ever began and no
+    // verdict was ever emitted, not even the honest negative one. The queue is
+    // still held until the bootstrap settles, so delivery semantics are
+    // unchanged; what the loop gains is the ability to observe shutdown while
+    // that wait is happening.
+    let mut bootstrap_settled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>> = None;
     let mut transport: Option<TransportImpl> = match bootstrap {
         Some(bootstrap) => {
             let services = build_acp_driver_services(&key, &bootstrap);
@@ -124,7 +156,7 @@ async fn run_async_delivery_worker(
                 batch_settings,
             );
             if let TransportImpl::Acp(driver) = &mut transport {
-                driver.bootstrap().await;
+                bootstrap_settled = Some(driver.start_bootstrap());
             }
             Some(transport)
         }
@@ -137,7 +169,15 @@ async fn run_async_delivery_worker(
     // the transport's internal channel, into which the produce arm enqueues in
     // receive order.
     let mut inflight: JoinSet<InflightOutcome> = JoinSet::new();
+    // Member identities for the in-flight writes, keyed by their collector task's
+    // id. Held here rather than inside the collector so a panicked collector
+    // still leaves the relay able to name — and therefore resolve — its member.
+    let mut inflight_members: HashMap<tokio::task::Id, InflightMember> = HashMap::new();
     let mut senders_dropped = false;
+    // Graceful shutdown is the only thing that fences a generation today. The
+    // bound is the relay's own `[delivery]` setting, read once per worker.
+    let delivery = super::super::admission::delivery_configuration();
+    let fence_observation = Duration::from_millis(delivery.fence_observation_timeout_ms);
 
     loop {
         if shutdown_requested() {
@@ -151,12 +191,15 @@ async fn run_async_delivery_worker(
             // the shutdown-barrier worker count still counts this still-draining
             // worker; the final unregister below drops it. Anything already queued
             // before this point is still drained.
-            super::super::async_worker::close_worker(&key);
+            super::super::async_worker::close_worker(&key, owner);
             shutdown_drain(
+                &key,
                 transport.as_mut(),
                 &mut inflight,
+                &mut inflight_members,
                 &mut receiver,
                 pending.as_ref(),
+                fence_observation,
             )
             .await;
             break;
@@ -165,8 +208,14 @@ async fn run_async_delivery_worker(
             // No more producers and nothing in flight: the worker is unreachable.
             break;
         }
+        // A target whose bootstrap has not settled has no runtime to submit
+        // into, so its queue stays untouched; the poll arm below re-evaluates
+        // this every tick.
+        let bootstrap_settled_now = bootstrap_settled
+            .as_ref()
+            .is_none_or(|settled| settled.load(std::sync::atomic::Ordering::Acquire));
         tokio::select! {
-            maybe_task = receiver.recv(), if !senders_dropped => {
+            maybe_task = receiver.recv(), if !senders_dropped && bootstrap_settled_now => {
                 match maybe_task {
                     Some(task) => {
                         if shutdown_requested() {
@@ -180,15 +229,16 @@ async fn run_async_delivery_worker(
                             &mut transport,
                             batch_settings,
                             &mut inflight,
+                            &mut inflight_members,
                             pending.as_ref(),
                         );
                     }
                     None => senders_dropped = true,
                 }
             }
-            joined = inflight.join_next(), if !inflight.is_empty() => {
+            joined = inflight.join_next_with_id(), if !inflight.is_empty() => {
                 if let Some(joined) = joined {
-                    collect_outcome(joined, pending.as_ref());
+                    collect_outcome(joined, &mut inflight_members, pending.as_ref());
                 }
             }
             _ = tokio::time::sleep(poll_interval) => {
@@ -196,7 +246,7 @@ async fn run_async_delivery_worker(
             }
         }
     }
-    super::super::async_worker::unregister_worker(&key);
+    super::super::async_worker::unregister_worker(&key, owner);
 }
 
 /// Submits one task to its transport via the non-blocking write seam and spawns
@@ -213,6 +263,7 @@ fn submit_task(
     transport: &mut Option<TransportImpl>,
     batch_settings: PromptBatchSettings,
     inflight: &mut JoinSet<InflightOutcome>,
+    inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
     if transport.is_none() {
@@ -229,6 +280,14 @@ fn submit_task(
         .as_mut()
         .expect("worker transport constructed above");
 
+    // Authorization is the linearization point and the watchdog's anchor, so it
+    // happens once, before any transport-specific branch, and the clock starts
+    // with it. Starting the clock after the write would exclude the synchronous
+    // rendering and submission work the bound is supposed to cover.
+    if !matches!(transport, TransportImpl::Pubsub) {
+        authorize_member(&task);
+    }
+
     let (future, record_served) = if matches!(transport, TransportImpl::Pubsub) {
         // Forward-declared stub: not deliverable. Its `mailw`/`raww` are
         // `unimplemented!`, so produce an explicit terminal outcome instead of
@@ -243,11 +302,24 @@ fn submit_task(
         super::super::async_worker::release_pending_slot(pending);
         return;
     } else if matches!(transport, TransportImpl::Ui(_)) {
-        (transport.mailw(build_ui_envelope(&task)), false)
+        let envelope = build_ui_envelope(&task);
+        // Recorded immediately before the call that can produce an effect, and
+        // never earlier: the gap between authorization and this point is exactly
+        // the window in which the guard can still prove nothing was written.
+        super::super::admission::note_handed_to_transport(task.message_id.as_str());
+        (transport.mailw(envelope), false)
     } else {
+        // Every coder submission marks handover too. Omitting it here let a
+        // coder member that panicked *after* its write resolve `not_submitted` —
+        // a positive claim that nothing reached the target — when bytes may well
+        // have landed. That is the exact inversion the evidence order exists to
+        // prevent.
         match prepare_coder_write(&task, transport) {
             Ok(future) => (future, true),
             Err(error) => {
+                // Refused before any target-side effect: the member was never
+                // handed over, so the guard's evidence order can prove
+                // `not_submitted` rather than inferring the weaker unknown.
                 super::super::async_worker::complete_task_outcome(&task, Err(error));
                 super::super::async_worker::release_pending_slot(pending);
                 return;
@@ -255,7 +327,24 @@ fn submit_task(
         }
     };
 
-    inflight.spawn(async move { (task, record_served, future.await.ok()) });
+    let handle = inflight.spawn(async move { future.await.ok() });
+    inflight_members.insert(
+        handle.id(),
+        InflightMember {
+            task,
+            record_served,
+        },
+    );
+}
+
+/// Performs the `Pending` to `Authorized` transition for one member, minting its
+/// batch and guard identities.
+///
+/// One member per batch today: the worker submits tasks one at a time, so a
+/// batch is a batch of one until byte-budgeted round-robin lands and starts
+/// forming real ones.
+fn authorize_member(task: &AsyncDeliveryTask) {
+    super::super::admission::authorize(task.message_id.as_str(), BatchId::mint());
 }
 
 /// Builds a coder task's structured payload and submits it via the non-blocking
@@ -272,31 +361,106 @@ fn prepare_coder_write(
             let target_member = resolve_target_member(task)?;
             let message = build_delivery_message(task, target_member, now_rfc3339().as_str());
             emit_envelope_metadata_inscription(&message, task.message_id.as_str());
-            Ok(transport.mailw(build_coder_envelope(task, message)))
+            let envelope = build_coder_envelope(task, message);
+            // Marked immediately before the call that can produce a target-side
+            // effect. Everything above this line is relay-local rendering, so a
+            // failure there is still provably non-delivery.
+            super::super::admission::note_handed_to_transport(task.message_id.as_str());
+            Ok(transport.mailw(envelope))
         }
         DeliveryPayloadMode::RawInput => {
+            super::super::admission::note_handed_to_transport(task.message_id.as_str());
             Ok(transport.raww(task.message.clone(), task.append_enter))
         }
     }
 }
 
-/// Drains the worker on relay shutdown: signals the transport so its internal
-/// delivery task resolves every in-flight write terminally, collects those
-/// resolutions to completion, then drops the not-yet-submitted queued tasks. The
-/// transport contract guarantees prompt terminal resolution on shutdown, so the
-/// `join_next` drain does not park indefinitely. The transport is `None` if no
-/// task ever arrived to construct it.
+/// Drains the worker on relay shutdown, bounded by the same fence the watchdog
+/// uses.
+///
+/// Graceful shutdown ends a generation, so it establishes cessation the way
+/// every other generation ending does — and it carries a bound for the same
+/// reason. Waiting on collectors until they happened to finish made the relay's
+/// exit hostage to an executor blocked in a syscall, which is exactly the class
+/// of wait the fence exists to replace: no runtime primitive can force such a
+/// thread to return, so *observing* it is the only sound move and observing has
+/// to be budgeted.
+///
+/// Collection runs alongside both observation windows rather than after the
+/// verdict, so a member whose transport resolves in time still reports its own
+/// evidence instead of a shutdown-shaped guess. The verdict is the cut; whatever
+/// is unresolved at it terminalizes through the guard's evidence order.
+///
+/// The transport's own teardown follows the verdict rather than preceding it,
+/// and only on a positive one. The fence's cooperative step is already every
+/// transport's stop signal — the dropped shutdown channel, the shutdown flag,
+/// the fenced generation — so tearing resources down first would be the
+/// destructive action before the polite one, and would strip the effect paths
+/// the observation reads.
+///
+/// A negative verdict skips teardown entirely. `shutdown` reaps children and
+/// joins threads, and a negative verdict is precisely the finding that those
+/// threads were not observed to stop — so calling it there would run the bounded
+/// fence straight into the unbounded wait it exists to replace. Cessation has
+/// already been initiated by the fence's forced step; what is abandoned is the
+/// waiting, and the process is exiting anyway. The transport is `None` if no task
+/// ever arrived to construct it.
 async fn shutdown_drain(
+    key: &AsyncWorkerKey,
     transport: Option<&mut TransportImpl>,
     inflight: &mut JoinSet<InflightOutcome>,
+    inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
     receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
     pending: &std::sync::atomic::AtomicUsize,
+    fence_observation: Duration,
 ) {
     if let Some(transport) = transport {
-        transport.shutdown();
+        let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
+        let mut fence = FenceInProgress::begin(transport, fence_observation);
+        let outcome = loop {
+            if let Some(outcome) = fence.advance(transport, Instant::now()) {
+                break outcome;
+            }
+            tokio::select! {
+                joined = inflight.join_next_with_id(), if !inflight.is_empty() => {
+                    if let Some(joined) = joined {
+                        collect_outcome(joined, inflight_members, pending);
+                    }
+                }
+                _ = tokio::time::sleep(poll_interval) => {}
+            }
+        };
+        emit_inscription(
+            "relay.delivery.fence.verdict",
+            &json!({
+                "namespace": key.namespace,
+                "target_session": key.target_session,
+                "trigger": "graceful_shutdown",
+                "verdict": match outcome.verdict {
+                    FenceVerdict::Positive => "positive",
+                    FenceVerdict::Negative => "negative",
+                },
+                "resolution": match outcome.resolution {
+                    FenceResolution::Cooperative => "cooperative",
+                    FenceResolution::Forced => "forced",
+                    FenceResolution::Unobserved => "unobserved",
+                },
+                "unresolved_members": inflight_members.len(),
+            }),
+        );
+        if outcome.verdict == FenceVerdict::Positive {
+            transport.shutdown();
+        }
     }
-    while let Some(joined) = inflight.join_next().await {
-        collect_outcome(joined, pending);
+    // Any member still in the table was never joined — its collector neither
+    // resolved nor panicked, so the drain left it unresolved. Terminalize it
+    // through the guard rather than dropping it: shutdown is a trigger like any
+    // other, and the evidence order still knows whether it reached a transport.
+    for (_, member) in inflight_members.drain() {
+        super::super::async_worker::complete_task_outcome_from_trigger(
+            &member.task,
+            GuardTrigger::GracefulShutdown,
+        );
     }
     super::super::async_worker::drop_pending_async_tasks_on_shutdown(receiver, pending);
 }

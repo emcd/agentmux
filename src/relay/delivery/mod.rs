@@ -1,6 +1,9 @@
+pub(crate) mod admission;
 mod async_worker;
 mod choice_state;
 mod dispatch;
+pub(in crate::relay) mod fence;
+pub(in crate::relay) mod guard;
 pub(in crate::relay) mod observability;
 mod quiescence;
 

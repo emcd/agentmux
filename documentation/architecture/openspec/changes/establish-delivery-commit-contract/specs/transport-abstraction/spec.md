@@ -101,18 +101,31 @@ code SHALL reside in `src/tmux/`. Pty-specific delivery code SHALL reside in
 `src/pty/`. UI stream-broadcast delivery code SHALL reside in its own transport
 module (`UiTransport`), not in the relay delivery subsystem.
 
-The boundary SHALL distinguish three concerns that were previously conflated:
+The boundary SHALL distinguish four concerns that were previously conflated:
 
 | Concern | Owner |
 |---|---|
 | **Queueing** — what is pending for a target, in what order, and for how long | **relay** |
-| **Readiness scheduling** — observing quiescence and deciding when handover is useful | **relay** |
+| **Readiness scheduling** — which target to visit, in what order, and when to authorize | **relay** |
+| **Readiness determination** — observing the target and deciding whether a handover can be taken now | **transport** |
 | **Rendering and packing** — target representation and partition into packing units | **transport** |
 
-Queueing and readiness scheduling SHALL move relay-side. Rendering and packing
-SHALL remain transport-owned: only the transport can render target text and count
-its tokens, so `prompt_tokens_max` remains an internal packing-unit limit that is
-invisible to the relay.
+Queueing and readiness scheduling SHALL move relay-side. Readiness determination,
+rendering, and packing SHALL remain transport-owned.
+
+**Readiness scheduling and readiness determination are different concerns and are
+owned by different sides.** Scheduling is transport-agnostic: it reasons about
+queues, order, and quota. Determination is transport-specific by nature and does
+not generalise — a prompt regex over a pane tail is meaningless for ACP, whose
+readiness is an earlier turn completing on the wire protocol with no snapshot to
+inspect, and meaningless again for UI, whose readiness is subscriber
+connectivity. Conflating them is what would put pane semantics inside the relay.
+
+The relay SHALL learn readiness only as the level it reads through
+`can_accept_handover`, refreshed by the transport-invoked notification closure
+described in the `Transport Handover Capacity and Readiness` requirement. Only
+the transport can render target text and count its tokens, so `prompt_tokens_max`
+likewise remains an internal packing-unit limit invisible to the relay.
 
 The relay delivery subsystem SHALL NOT contain transport-specific logic; all
 transport dispatch SHALL go through `TransportImpl`. Specifically, the relay
@@ -120,6 +133,8 @@ delivery subsystem SHALL NOT contain:
 
 - batch-combining or prompt-packing logic,
 - pane-envelope rendering for coder transports,
+- prompt-readiness evaluation: no `prompt_regex` compilation or matching, no pane
+  output inspection, and no cursor-column comparison,
 - per-transport `TargetConfiguration` dispatch arms for delivery, nor a
   relay-internal UI delivery path.
 
@@ -163,6 +178,15 @@ transport construction.
 - **WHEN** a developer looks for the pending queue for a target
 - **THEN** they find one relay-owned queue rather than a per-transport buffer
 - **AND** no transport retains envelopes awaiting a readiness condition
+
+#### Scenario: Readiness determination stays with the transport
+
+- **WHEN** a developer looks for the logic that decides whether a target can take
+  a handover now
+- **THEN** they find it in the owning transport module
+- **AND** `src/relay/delivery/` contains no prompt-regex matching, pane
+  inspection, or cursor-column comparison
+- **AND** the relay reads only the `can_accept_handover` level
 
 ### Requirement: Synchronous Delivery Completion
 

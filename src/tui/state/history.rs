@@ -529,6 +529,8 @@ fn map_chat_result_outcome(outcome: &SendOutcome) -> (&'static str, Option<&'sta
         SendOutcome::DroppedOnShutdown => ("failed", Some("dropped_on_shutdown")),
         SendOutcome::Failed => ("failed", None),
         SendOutcome::PeerUnavailable => ("failed", Some("peer_unavailable")),
+        SendOutcome::NotSubmitted => ("not_submitted", None),
+        SendOutcome::SubmissionUnknown => ("submission_unknown", None),
     }
 }
 

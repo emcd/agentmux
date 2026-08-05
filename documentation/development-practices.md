@@ -166,6 +166,28 @@ Pre-commit hooks and CI also use `cargo nextest run --locked
 --config-file ...`; if you only have `cargo test` installed, hooks
 will fail.
 
+Some tests are `#[ignore]`d because they are slow by nature rather than
+broken -- holding a generation's bootstrap open across a signal takes
+tens of seconds, and that is too much to pay on every commit. Those run
+at pre-push via the `cargo-nextest-generation-fence` hook, selected by
+module so a slow test added beside them is picked up automatically. Run
+them by hand with:
+
+```shell
+cargo nextest run --locked --config-file .auxiliary/configuration/nextest.toml \
+  --run-ignored ignored-only -E 'test(/^acp::generation_fence::/)'
+```
+
+Do not widen that to `--run-ignored ignored-only` across the whole
+suite: most `#[ignore]`s in this repository mark work that is blocked or
+unimplemented, not work that is slow, and running those would fail every
+push. The Pty fence tests are a third category again -- they need Zig
+0.15.x and the `pty` feature:
+
+```shell
+cargo nextest run --features pty --run-ignored all -E 'test(/^pty_transport::/)'
+```
+
 - Prefer tests under `tests/unit` and `tests/integration` over inline
   `#[cfg(test)]` modules in `src/**`.
 - Prefer tests that exercise public interfaces; avoid source-inclusion

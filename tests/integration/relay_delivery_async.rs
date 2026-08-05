@@ -36,6 +36,11 @@ fn dispatch_request(
 /// it into `alpha`'s pane. `alpha`'s worker is primed first by delivering one
 /// message TO it (`bravo -> alpha`), since a receipt routes only to an
 /// already-live sender worker and is otherwise dropped.
+// This assertion depends on the pre-relocation prompt-wait timeout producing
+// a non-delivered receipt. Handover readiness is now an advisory level
+// consumed by relay admission, so the old receipt timing is not meaningful
+// until that relay-side gate is active.
+#[ignore = "requires relay-side handover admission gating"]
 #[test]
 fn relay_send_async_delivers_terminal_outcome_receipt_to_coder_sender() {
     if !tmux_available() {

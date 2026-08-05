@@ -25,6 +25,19 @@ pub enum SendOutcome {
     Timeout,
     DroppedOnShutdown,
     Failed,
+    /// Positive evidence that no target-side effect occurred: the member was
+    /// never handed to a transport, or a primitive that can prove nothing was
+    /// written reported so. Soundly asserts non-delivery, unlike
+    /// [`SubmissionUnknown`](Self::SubmissionUnknown).
+    NotSubmitted,
+    /// A target-side effect cannot be excluded. Terminal, and deliberately not a
+    /// failure spelling — not knowing is what actually happened, and reporting a
+    /// failure would assert a non-delivery the relay cannot support. An
+    /// undifferentiated error maps here rather than to
+    /// [`NotSubmitted`](Self::NotSubmitted), because a Tmux paste (body write
+    /// then Enter) and a Pty unit (several writes) can both fail after partial
+    /// effect.
+    SubmissionUnknown,
     /// A cross-relay (bang-path) target whose peer relay could not be reached or
     /// whose Hello handshake failed. Distinct from a local delivery `Failed` and
     /// from the `relay_unavailable` error code (which names *this* relay being

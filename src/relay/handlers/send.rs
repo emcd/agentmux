@@ -14,6 +14,10 @@ use super::super::authorization::{
     load_authorization_context, reject_cross_relay_ingress,
 };
 use super::super::connection::BundleCatalog;
+use super::super::delivery::admission::{
+    AdmissionTargetKey, admit, canonical_payload_bytes, resolve_target_session_type,
+    rollback_admission,
+};
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
 use super::super::identity::{PrincipalType, classify_principal_id};
 use super::super::lifecycle::load_hosted_bundle;
@@ -423,11 +427,18 @@ fn execute_send(
             .filter(|target| target.is_cross_relay())
             .map(cross_relay_target_label),
     );
+    // Admission precedes every queue entry in this request. Reserving the whole
+    // request's quota up front is what makes a refusal clean: a request that
+    // cannot be admitted holds nothing and queues nothing, rather than leaving a
+    // half-admitted send behind for the caller to reason about.
+    let admitted = admit_request_targets(&groups, message)?;
+    let mut admitted_index = 0usize;
     for group in &groups {
         for target in &group.targets {
-            let message_id = Uuid::new_v4().to_string();
+            let message_id = admitted[admitted_index].clone();
             let task = AsyncDeliveryTask {
                 bundle: group.bundle.clone(),
+                admitted: true,
                 sender_namespace: home_namespace.to_string(),
                 sender: sender_member.clone(),
                 authenticated_identity: authenticated_identity.clone(),
@@ -444,7 +455,17 @@ fn execute_send(
                 is_receipt: false,
                 sender_return_route: sender_return_route.clone(),
             };
-            enqueue_async_delivery(task)?;
+            if let Err(error) = enqueue_async_delivery(task) {
+                // This entry never became a queue entry, and neither will the
+                // ones behind it in this request. Release every reservation with
+                // no task to terminalize it; entries already queued are live and
+                // release on their own terminal transition.
+                for orphaned in &admitted[admitted_index..] {
+                    rollback_admission(orphaned);
+                }
+                return Err(error);
+            }
+            admitted_index += 1;
             emit_inscription(
                 "relay.send.async.queued",
                 &json!({
@@ -524,6 +545,54 @@ fn execute_send(
         );
     }
     Ok(response)
+}
+
+/// Reserves admission quota for every local target of this request, returning
+/// each entry's message id in group-then-target iteration order so the queueing
+/// pass can pair them back up.
+///
+/// All-or-nothing. The first refusal — a Pubsub target, an envelope larger than
+/// the target's transport will ever accept, or exhausted quota — releases
+/// everything this request already reserved and surfaces the structured error to
+/// the caller, so nothing is queued for a send the relay did not accept whole.
+///
+/// Cross-relay targets are not admitted here: they are forwarded to their peer
+/// relay rather than queued locally, and the peer admits them against its own
+/// quota.
+fn admit_request_targets(
+    groups: &[DeliveryGroup],
+    message: &str,
+) -> Result<Vec<String>, RelayError> {
+    let canonical_bytes = canonical_payload_bytes(message);
+    let mut admitted: Vec<String> = Vec::new();
+    for group in groups {
+        for target in &group.targets {
+            let message_id = Uuid::new_v4().to_string();
+            let admission = resolve_target_session_type(&group.bundle, target.session_id.as_str())
+                .and_then(|session_type| {
+                    admit(
+                        message_id.as_str(),
+                        AdmissionTargetKey::new(
+                            group.bundle.bundle_name.as_str(),
+                            group.runtime_directory.as_path(),
+                            target.session_id.as_str(),
+                        ),
+                        session_type,
+                        canonical_bytes,
+                    )
+                });
+            match admission {
+                Ok(()) => admitted.push(message_id),
+                Err(error) => {
+                    for reserved in &admitted {
+                        rollback_admission(reserved);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
+    Ok(admitted)
 }
 
 /// The origin-facing canonical id for a cross-relay target: the foreign

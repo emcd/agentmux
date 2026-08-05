@@ -39,17 +39,24 @@ pub(crate) struct ChoiceCorrelation {
 /// ordering invariant the previous in-line handler held: the completion path
 /// reads the shared slot when building the terminal outcome, and a fast agent
 /// reply could otherwise race ahead of the outcome record.
+///
+/// The resolver's handle is handed to `retain_executor` rather than dropped. A
+/// resolver blocks on an operator decision and can outlive the turn that raised
+/// it, so a detached one would be an effect path the generation supervisor
+/// cannot observe — and a generation cannot be fenced on executors it cannot
+/// see.
 pub(crate) fn build_acp_permission_handler(
     chooser: Chooser,
     correlation: ChoiceCorrelation,
     pending_choice_outcome: Arc<Mutex<Option<ChoiceMade>>>,
+    retain_executor: RetainExecutorFn,
 ) -> PermissionHandler {
     Box::new(
         move |permission_request: PermissionRequest, mut responder| {
             let chooser = Arc::clone(&chooser);
             let correlation = correlation.clone();
             let writer = Arc::clone(&pending_choice_outcome);
-            std::thread::Builder::new()
+            let handle = std::thread::Builder::new()
                 .name("acp-permission-resolver".to_string())
                 .spawn(move || {
                     let choice = build_choice_to_make(&correlation, &permission_request);
@@ -62,9 +69,14 @@ pub(crate) fn build_acp_permission_handler(
                     responder.respond(response_option_id);
                 })
                 .expect("spawn ACP permission resolver thread");
+            retain_executor(handle);
         },
     )
 }
+
+/// Hands a spawned permission resolver's handle to whatever owns the
+/// generation's executor set.
+pub(crate) type RetainExecutorFn = Arc<dyn Fn(std::thread::JoinHandle<()>) + Send + Sync>;
 
 fn build_choice_to_make(
     correlation: &ChoiceCorrelation,

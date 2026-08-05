@@ -100,15 +100,125 @@ struct ActivePrompt {
 type SharedActivePrompt = Arc<Mutex<Option<Arc<ActivePrompt>>>>;
 
 pub struct AcpStdioClient {
-    child: Child,
+    child: SharedChild,
     stdin: SharedStdin,
     replay_buffer: SharedReplay,
     pending_tool_calls: SharedPendingToolCalls,
     pending_responses: SharedPending,
     active_prompt: SharedActivePrompt,
     reader_handle: Option<JoinHandle<()>>,
+    /// Set when the reader thread leaves its loop, by normal exit or by panic.
+    ///
+    /// Shared rather than derived from `reader_handle` because the client is
+    /// moved into the delivery thread that owns it, taking the handle out of
+    /// reach of the transport that has to observe cessation. A flag survives the
+    /// move; a `JoinHandle` does not.
+    reader_ceased: Arc<AtomicBool>,
     next_id: u64,
     last_prompt_signal: Mutex<Option<mpsc::Receiver<()>>>,
+}
+
+/// The agent child, and the latch saying it has been told to end.
+///
+/// The two live together because the latch's whole purpose is to be honoured by
+/// whoever holds the child: a termination request that arrives while the lock is
+/// taken must not be dropped just because it could not be served at that instant.
+#[derive(Debug)]
+struct SupervisedChild {
+    child: Mutex<Child>,
+    /// Set once and never cleared. Read *after* every release of the child lock,
+    /// so a request that lost a `try_lock` is served by whoever was holding it
+    /// rather than lost.
+    terminating: AtomicBool,
+}
+
+type SharedChild = Arc<SupervisedChild>;
+
+impl SupervisedChild {
+    /// Runs `action` against the child, then serves any termination request that
+    /// arrived while the lock was held.
+    ///
+    /// Every lock of the child goes through here. Step 3 is contracted
+    /// non-blocking, so it can only ever *try* for the lock, and something has to
+    /// answer for the attempts that fail.
+    ///
+    /// The latch is read after the guard is dropped, and that ordering is the
+    /// whole mechanism. Reading it while still holding the lock leaves a window
+    /// nothing covers: the holder sees `false`, the request is latched, its
+    /// `try_lock` fails against the holder that has already looked, and the
+    /// holder then releases without looking again. Both sides have to be able to
+    /// serve the request for either to be allowed to give up on it — hence: if
+    /// the store lands before the release, this read sees it; if it lands after,
+    /// the requester's own attempt finds the lock free.
+    fn with_child<R>(&self, action: impl FnOnce(&mut Child) -> R) -> Option<R> {
+        let outcome = {
+            let mut child = self.child.lock().ok()?;
+            action(&mut child)
+        };
+        if self.terminating.load(Ordering::Acquire) {
+            self.initiate_termination();
+        }
+        Some(outcome)
+    }
+
+    /// Latches the termination request, then makes one non-blocking attempt to
+    /// serve it. A failed attempt is not a failure: whoever holds the lock reads
+    /// the latch as it releases and serves it there.
+    ///
+    /// Idempotent, so the release-point handoff can simply call it again.
+    fn initiate_termination(&self) {
+        self.terminating.store(true, Ordering::Release);
+        if let Ok(mut child) = self.child.try_lock() {
+            let _ = child.kill();
+        }
+    }
+}
+
+/// The fencing surface of one ACP generation, detached from the client that
+/// owns it.
+///
+/// Exists because ownership and supervision diverge here: the client is moved
+/// into the delivery thread it drives, so the transport that must terminate and
+/// observe the generation no longer holds it. Everything the fence needs — the
+/// child to signal, the reader's cessation to read — is shared state, so a
+/// handle taken before the move keeps both steps reaching the real process.
+#[derive(Clone, Debug)]
+pub struct AcpGenerationHandle {
+    child: SharedChild,
+    reader_ceased: Arc<AtomicBool>,
+}
+
+impl AcpGenerationHandle {
+    /// The fence's forced step: signals the child and returns. Killing it closes
+    /// its stdio, which unblocks a reader parked in `read_line` and a writer
+    /// parked on its stdin — the executors a cooperative flag cannot reach.
+    ///
+    /// Latches the request before attempting it, and never blocks. Taking the
+    /// lock outright would have parked step 3 behind a teardown holding it
+    /// across `wait`, which is exactly the blocking the step is contracted not
+    /// to do.
+    pub fn initiate_termination(&self) {
+        self.child.initiate_termination();
+    }
+
+    /// Whether the reader thread of this generation has left its loop.
+    #[must_use]
+    pub fn reader_ceased(&self) -> bool {
+        self.reader_ceased.load(Ordering::Acquire)
+    }
+}
+
+/// Marks a reader thread ceased when it leaves, however it leaves.
+///
+/// A drop guard rather than a store at the end of the loop: a reader that
+/// panicked is no longer executing either, and a fence that waited for it to
+/// tidily set a flag would never go positive.
+struct CeasedOnDrop(Arc<AtomicBool>);
+
+impl Drop for CeasedOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
 }
 
 pub(super) fn write_line_to_stdin(stdin: &SharedStdin, payload: &str) -> io::Result<()> {
@@ -211,6 +321,7 @@ impl AcpStdioClient {
         let pending_responses: SharedPending = Arc::new(Mutex::new(HashMap::new()));
         let active_prompt: SharedActivePrompt = Arc::new(Mutex::new(None));
 
+        let reader_ceased = Arc::new(AtomicBool::new(false));
         let reader_handle = spawn_reader_thread(
             BufReader::new(stdout),
             Arc::clone(&stdin),
@@ -218,16 +329,21 @@ impl AcpStdioClient {
             Arc::clone(&pending_tool_calls),
             Arc::clone(&pending_responses),
             Arc::clone(&active_prompt),
+            Arc::clone(&reader_ceased),
         );
 
         Ok(Self {
-            child,
+            child: Arc::new(SupervisedChild {
+                child: Mutex::new(child),
+                terminating: AtomicBool::new(false),
+            }),
             stdin,
             replay_buffer,
             pending_tool_calls,
             pending_responses,
             active_prompt,
             reader_handle: Some(reader_handle),
+            reader_ceased,
             next_id: 1,
             last_prompt_signal: Mutex::new(None),
         })
@@ -467,7 +583,18 @@ impl AcpStdioClient {
     }
 
     pub fn child_stderr(&mut self) -> Option<std::process::ChildStderr> {
-        self.child.stderr.take()
+        self.child.with_child(|child| child.stderr.take())?
+    }
+
+    /// Hands out this generation's fencing surface, so a supervisor can keep
+    /// terminating and observing it after the client is moved into the delivery
+    /// thread it drives.
+    #[must_use]
+    pub fn generation_handle(&self) -> AcpGenerationHandle {
+        AcpGenerationHandle {
+            child: Arc::clone(&self.child),
+            reader_ceased: Arc::clone(&self.reader_ceased),
+        }
     }
 
     pub fn shutdown(&mut self) {
@@ -476,8 +603,10 @@ impl AcpStdioClient {
         // reader then drops its clones of the shared stdin, replay buffer,
         // and pending-response registry; pending senders dropped in the
         // registry signal `Disconnected` to any waiters in `prompt`/`request`.
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.child.with_child(|child| {
+            let _ = child.kill();
+            let _ = child.wait();
+        });
         if let Some(handle) = self.reader_handle.take() {
             let _ = handle.join();
         }
@@ -547,10 +676,12 @@ fn spawn_reader_thread(
     pending_tool_calls: SharedPendingToolCalls,
     pending_responses: SharedPending,
     active_prompt: SharedActivePrompt,
+    reader_ceased: Arc<AtomicBool>,
 ) -> JoinHandle<()> {
     thread::Builder::new()
         .name("acp-reader".to_string())
         .spawn(move || {
+            let _ceased = CeasedOnDrop(reader_ceased);
             run_reader_loop(
                 reader,
                 &stdin,

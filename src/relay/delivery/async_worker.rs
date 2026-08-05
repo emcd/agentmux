@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex, OnceLock,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -17,6 +17,9 @@ use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
 use crate::tmux::TmuxOutputView;
 use crate::transports::{OutputView, WorkerFailureReason, WorkerReadinessState};
+
+use super::admission::TerminalTransition;
+use super::guard::{GuardKey, GuardTrigger, SubmissionEvidence};
 
 use super::super::stream::{RelayStreamEvent, send_event_to_registered_ui};
 use super::super::{
@@ -45,6 +48,13 @@ pub(super) struct AsyncDeliveryRegistry {
 }
 
 pub(super) struct AsyncWorkerEntry {
+    /// Identifies the worker that installed this entry.
+    ///
+    /// Registry keys are per-target and outlive individual workers, so a key
+    /// alone cannot say *which* worker an entry belongs to. Without that, a
+    /// worker exiting could remove a successor's entry and strand a live
+    /// worker's only sender.
+    pub owner: WorkerOwner,
     pub sender: UnboundedSender<AsyncDeliveryTask>,
     pub pending: std::sync::Arc<AtomicUsize>,
     pub bounded_acp_queue: bool,
@@ -175,16 +185,32 @@ pub(super) fn try_existing_worker(
     Ok(WorkerDispatch::Missing(task))
 }
 
+/// Identifies one worker installation, distinct from every other for the same
+/// target. Minted by whichever caller wins the registry insert.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) struct WorkerOwner(u64);
+
+static NEXT_WORKER_OWNER: AtomicU64 = AtomicU64::new(1);
+
+impl WorkerOwner {
+    fn mint() -> Self {
+        Self(NEXT_WORKER_OWNER.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+#[cfg(test)]
 pub(super) fn register_worker(
     key: AsyncWorkerKey,
     sender: UnboundedSender<AsyncDeliveryTask>,
     pending: std::sync::Arc<AtomicUsize>,
     bounded_acp_queue: bool,
-) {
+) -> WorkerOwner {
+    let owner = WorkerOwner::mint();
     if let Ok(mut workers) = async_delivery_registry().workers.lock() {
         workers.insert(
             key,
             AsyncWorkerEntry {
+                owner,
                 sender,
                 pending,
                 bounded_acp_queue,
@@ -195,6 +221,7 @@ pub(super) fn register_worker(
             },
         );
     }
+    owner
 }
 
 pub(super) fn register_worker_if_absent(
@@ -202,7 +229,7 @@ pub(super) fn register_worker_if_absent(
     sender: UnboundedSender<AsyncDeliveryTask>,
     pending: std::sync::Arc<AtomicUsize>,
     bounded_acp_queue: bool,
-) -> Result<bool, RelayError> {
+) -> Result<Option<WorkerOwner>, RelayError> {
     let mut workers = async_delivery_registry().workers.lock().map_err(|_| {
         super::super::relay_error(
             "internal_unexpected_failure",
@@ -211,11 +238,13 @@ pub(super) fn register_worker_if_absent(
         )
     })?;
     if workers.contains_key(&key) {
-        return Ok(false);
+        return Ok(None);
     }
+    let owner = WorkerOwner::mint();
     workers.insert(
         key,
         AsyncWorkerEntry {
+            owner,
             sender,
             pending,
             bounded_acp_queue,
@@ -225,16 +254,17 @@ pub(super) fn register_worker_if_absent(
             closing: false,
         },
     );
-    Ok(true)
+    Ok(Some(owner))
 }
 
 /// Marks a worker as closing so it bounces new sends while its entry stays
 /// registered, preserving the shutdown-barrier worker count until the worker
 /// finishes draining and unregisters. Called at the start of the shutdown drain
 /// to close the accept-after-drain race without dropping the count early.
-pub(super) fn close_worker(key: &AsyncWorkerKey) {
+pub(super) fn close_worker(key: &AsyncWorkerKey, owner: WorkerOwner) {
     if let Ok(mut workers) = async_delivery_registry().workers.lock()
         && let Some(entry) = workers.get_mut(key)
+        && entry.owner == owner
     {
         entry.closing = true;
     }
@@ -384,8 +414,17 @@ pub(in crate::relay) fn acp_session_ready_for_startup(
     )
 }
 
-pub(super) fn unregister_worker(key: &AsyncWorkerKey) {
-    if let Ok(mut workers) = async_delivery_registry().workers.lock() {
+/// Removes this target's registry entry, but only if `owner` still holds it.
+///
+/// The ownership check is what keeps an exiting worker from deleting a
+/// successor's entry. A worker that lost a registration race, or whose entry was
+/// already replaced, finds a different owner here and leaves it alone — removing
+/// it would drop the only sender for a live worker and silently strand every
+/// subsequent send to that target.
+pub(super) fn unregister_worker(key: &AsyncWorkerKey, owner: WorkerOwner) {
+    if let Ok(mut workers) = async_delivery_registry().workers.lock()
+        && workers.get(key).is_some_and(|entry| entry.owner == owner)
+    {
         workers.remove(key);
     }
 }
@@ -456,9 +495,121 @@ pub(super) fn complete_task_on_shutdown(task: &AsyncDeliveryTask) {
     );
 }
 
+/// Attempts the terminal transition and decides whether this caller may report.
+///
+/// `None` means stay silent: either another caller already won the transition,
+/// or no reservation exists for a task that *should* have had one — which means
+/// the winner already terminalized it and cleaned the ledger entry up.
+///
+/// The winning transition removes the ledger entry, so absence cannot by itself
+/// distinguish "already resolved by someone else" from "never admitted". Only
+/// the task can: a relay-originated receipt is the one thing that legitimately
+/// bypasses admission. Reporting on absence alone is what let two competing
+/// resolvers each emit an outcome for a single accepted member.
+///
+/// `Some((None, _))` is the receipt case — reportable, with no recorded evidence
+/// because nothing was ever admitted to record any against.
+fn resolve_terminal_transition(
+    task: &AsyncDeliveryTask,
+) -> Option<(Option<SubmissionEvidence>, Option<GuardKey>)> {
+    match super::admission::terminalize(task.message_id.as_str()) {
+        TerminalTransition::Won { evidence, guard } => Some((Some(evidence), guard)),
+        TerminalTransition::AlreadyTerminal => None,
+        // Never admitted, so nothing else can be racing to resolve it.
+        TerminalTransition::NoReservation if !task.admitted => Some((None, None)),
+        // Admitted, but its reservation is gone: the winner already terminalized
+        // it and cleaned up. Reporting here would be the duplicate.
+        TerminalTransition::NoReservation => None,
+    }
+}
+
+/// Terminalizes one member because a lifecycle trigger fired, with no outcome of
+/// its own to report.
+///
+/// The trigger does not choose the outcome — the guard's evidence order does.
+/// That separation is the point: a collector panic on a member that was never
+/// handed to a transport resolves `not_submitted`, because the relay can prove
+/// it, while the same panic after handover resolves `submission_unknown`.
+pub(super) fn complete_task_outcome_from_trigger(task: &AsyncDeliveryTask, trigger: GuardTrigger) {
+    let Some((evidence, guard)) = resolve_terminal_transition(task) else {
+        return;
+    };
+    // A receipt carries no recorded evidence, so a trigger on one can only be
+    // reported honestly as unknown.
+    let evidence = evidence.unwrap_or(SubmissionEvidence::SubmissionUnknown);
+    report_terminal_outcome(
+        task,
+        Ok(SendResult {
+            target_session: task.target_session.clone(),
+            message_id: task.message_id.clone(),
+            outcome: evidence.outcome(),
+            reason_code: Some(evidence.reason_code().to_string()),
+            reason: Some(trigger.reason().to_string()),
+            details: None,
+        }),
+        guard,
+    );
+}
+
 pub(super) fn complete_task_outcome(
     task: &AsyncDeliveryTask,
     outcome: Result<SendResult, RelayError>,
+) {
+    // The single terminal transition, and the one place admission quota is
+    // released. Every path that can finish a member routes through here, so
+    // being told to stay silent means another path already resolved this member:
+    // emitting anything below would be the duplicate resolution the guard exists
+    // to prevent.
+    let Some((evidence, guard)) = resolve_terminal_transition(task) else {
+        return;
+    };
+    // The transport's outcome is the evidence, so it is reported as given —
+    // except where the recorded evidence is strictly more honest than the
+    // spelling the transport chose. An undifferentiated failure cannot support a
+    // claim of non-delivery, so it surfaces as `submission_unknown` rather than
+    // as `failed` or `timeout`.
+    let outcome = outcome.map(|result| match evidence {
+        Some(evidence) => reconcile_with_evidence(result, evidence),
+        None => result,
+    });
+    report_terminal_outcome(task, outcome, guard);
+}
+
+/// Replaces a reported outcome's spelling with the guard's recorded evidence
+/// where the evidence says something the spelling cannot support.
+///
+/// `Delivered` and `NotSubmitted` are positive claims a transport is entitled to
+/// make and are left alone. Everything else is an undifferentiated failure from
+/// the guard's point of view: partial effect cannot be excluded, so reporting it
+/// as a failure would assert a non-delivery the relay cannot stand behind.
+/// `dropped_on_shutdown` is preserved as its own spelling, because it names when
+/// the relay stopped rather than what happened at the target.
+fn reconcile_with_evidence(result: SendResult, evidence: SubmissionEvidence) -> SendResult {
+    if evidence != SubmissionEvidence::SubmissionUnknown
+        || matches!(
+            result.outcome,
+            SendOutcome::Delivered | SendOutcome::NotSubmitted | SendOutcome::DroppedOnShutdown
+        )
+    {
+        return result;
+    }
+    SendResult {
+        outcome: SendOutcome::SubmissionUnknown,
+        reason_code: result
+            .reason_code
+            .or_else(|| Some(evidence.reason_code().to_string())),
+        ..result
+    }
+}
+
+/// Emits the observability floor for a resolved member and routes its receipt.
+///
+/// Reached only after the terminal transition has been won, so everything it
+/// emits happens exactly once per member.
+fn report_terminal_outcome(
+    task: &AsyncDeliveryTask,
+    outcome: Result<SendResult, RelayError>,
+    guard: Option<GuardKey>,
 ) {
     // The terminal outcome (and its reason), independent of the Ok/Err shape, so a
     // non-delivered outcome can be routed back to the sender as a receipt after the
@@ -499,6 +650,8 @@ pub(super) fn complete_task_outcome(
                     "reason_code": result.reason_code,
                     "reason": result.reason,
                     "details": result.details,
+                    "batch_id": guard.map(|key| key.batch.value()),
+                    "attempt_id": guard.map(|key| key.attempt.value()),
                 }),
             );
         }
@@ -550,7 +703,16 @@ const TERMINAL_RECEIPT_SENDER_ID: &str = "relay";
 fn is_non_delivered_outcome(outcome: &SendOutcome) -> bool {
     matches!(
         outcome,
-        SendOutcome::Failed | SendOutcome::Timeout | SendOutcome::DroppedOnShutdown
+        SendOutcome::Failed
+            | SendOutcome::Timeout
+            | SendOutcome::DroppedOnShutdown
+            // Both are terminal non-delivery outcomes and owe the sender a
+            // receipt exactly as much as the others do. `not_submitted` is a
+            // sound assertion that nothing arrived; `submission_unknown` is the
+            // absence of one, which a sender arguably needs to hear about more
+            // urgently than a plain failure, not less.
+            | SendOutcome::NotSubmitted
+            | SendOutcome::SubmissionUnknown
     )
 }
 
@@ -618,6 +780,9 @@ fn build_terminal_outcome_receipt(
     };
     AsyncDeliveryTask {
         bundle,
+        // A receipt bypasses admission entirely: nothing was accepted for it, so
+        // it holds no reservation and stays reportable on its own terms.
+        admitted: false,
         // Relay/system origin (`relay@RELAY`), not a peer principal.
         sender_namespace: RELAY_NAMESPACE.to_string(),
         sender: relay_system_sender_member(),
@@ -711,6 +876,12 @@ pub(super) fn emit_sender_delivery_outcome_event(
         // send response, never through this local async terminal-outcome path; the
         // arm is defensive so the outcome maps honestly if it ever reaches here.
         SendOutcome::PeerUnavailable => ("failed", Some("peer_unavailable")),
+        // Both terminal, and both distinct from `failed`. `not_submitted` is a
+        // sound assertion of non-delivery; `submission_unknown` is the absence of
+        // one, so neither may be collapsed into a failure spelling that would
+        // claim more than the evidence supports.
+        SendOutcome::NotSubmitted => ("not_submitted", Some("not_submitted")),
+        SendOutcome::SubmissionUnknown => ("submission_unknown", Some("submission_unknown")),
         SendOutcome::Queued => ("routed", None),
     };
     let mut payload = serde_json::Map::new();
@@ -813,7 +984,7 @@ mod tests {
         );
         let (sender_tx, mut sender_rx) =
             tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        register_worker(
+        let sender_owner = register_worker(
             sender_key.clone(),
             sender_tx,
             Arc::new(AtomicUsize::new(0)),
@@ -823,7 +994,7 @@ mod tests {
             build_worker_key(target_namespace, Path::new(target_runtime), target_session);
         let (target_tx, mut target_rx) =
             tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        register_worker(
+        let owner = register_worker(
             target_key.clone(),
             target_tx,
             Arc::new(AtomicUsize::new(0)),
@@ -833,6 +1004,8 @@ mod tests {
         // The task's delivery context (bundle + runtime) is the target's; its
         // return route is the sender's, with a runtime distinct from the target's.
         let task = AsyncDeliveryTask {
+            // Test fixture: constructed directly, never admitted.
+            admitted: false,
             bundle: BundleConfiguration {
                 schema_version: SCHEMA_VERSION.to_string(),
                 bundle_name: target_namespace.to_string(),
@@ -897,8 +1070,8 @@ mod tests {
             "the receipt must not route to a worker at the target key"
         );
 
-        unregister_worker(&sender_key);
-        unregister_worker(&target_key);
+        unregister_worker(&sender_key, sender_owner);
+        unregister_worker(&target_key, owner);
     }
 
     /// A receipt's own terminal outcome spawns no further receipt (non-recursion).
@@ -922,7 +1095,7 @@ mod tests {
         );
         let (sender_tx, mut sender_rx) =
             tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        register_worker(
+        let owner = register_worker(
             sender_key.clone(),
             sender_tx,
             Arc::new(AtomicUsize::new(0)),
@@ -933,6 +1106,8 @@ mod tests {
         // resolves to a non-delivered outcome — the case that, but for the gate,
         // would recurse.
         let task = AsyncDeliveryTask {
+            // Test fixture: constructed directly, never admitted.
+            admitted: false,
             bundle: BundleConfiguration {
                 schema_version: SCHEMA_VERSION.to_string(),
                 bundle_name: sender_namespace.to_string(),
@@ -982,6 +1157,6 @@ mod tests {
              would mean the worker was never live, voiding the proof)"
         );
 
-        unregister_worker(&sender_key);
+        unregister_worker(&sender_key, owner);
     }
 }

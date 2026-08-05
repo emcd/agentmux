@@ -69,7 +69,9 @@ use serde_json::{Value, json};
 use crate::runtime::{
     inscriptions::emit_delivery_diagnostic as emit_diagnostic, signals::shutdown_requested,
 };
-use crate::transports::contract::{DeliveryEnvelope, DeliveryWaitError, ReadinessTimeoutReason};
+#[cfg(test)]
+use crate::transports::contract::DeliveryEnvelope;
+use crate::transports::contract::{DeliveryWaitError, ReadinessTimeoutReason};
 
 /// Maximum message ids carried by one delivery-progress inscription.
 pub const DIAGNOSTIC_MESSAGE_IDS_MAXIMUM: usize = 32;
@@ -467,6 +469,7 @@ impl QuiescenceBounds {
     /// inline test at the bottom of this module rather than one in
     /// `tests/unit`, which would require widening this to `pub` — publishing an
     /// internal grouping rule as API to observe it.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn from_group<'a>(
         envelopes: impl IntoIterator<Item = &'a DeliveryEnvelope>,

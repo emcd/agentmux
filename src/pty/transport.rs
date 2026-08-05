@@ -51,9 +51,9 @@ use tokio::sync::{mpsc, oneshot};
 use crate::configuration::BundleMember;
 use crate::configuration::TermProtocol;
 use crate::transports::{
-    DeliveryDiagnosticContext, DeliveryEnvelope, OutcomeFuture, OutputView, SingleDeliveryOutcome,
-    StartupContext, Transport, TransportError, TransportReadiness, TransportStatus,
-    WorkerReadinessState,
+    DeliveryDiagnosticContext, DeliveryEnvelope, GenerationFence, OutcomeFuture, OutputView,
+    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportReadiness,
+    TransportStatus, WedgeProbe, WorkerReadinessState,
 };
 
 /// Mirrors the worker readiness state into the relay's global registry.
@@ -69,7 +69,8 @@ pub type PtyMirrorStateFn = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
 
 use super::command::program_and_args;
 use super::state::{
-    PtyConfigSnapshot, PtyOutputView, PtyShared, SnapshotRequest, SnapshotResponse,
+    PtyConfigSnapshot, PtyOutputView, PtyQuiescenceProbe, PtyShared, SnapshotRequest,
+    SnapshotResponse,
 };
 
 /// Default pty cols when the per-coder config does not set them.
@@ -666,6 +667,67 @@ impl Drop for StartupGuard {
     }
 }
 
+impl PtyTransport {
+    /// Whether this generation's child has been reaped, which the fence's second
+    /// observation requires alongside the executors having returned.
+    ///
+    /// The threads returning is not the whole answer: a live child still holds
+    /// the pty and can still write to it, so a generation whose child survives
+    /// has not ceased in the sense the fence asks about. Nothing before forced
+    /// termination can make this true, which is why a Pty fence always escalates
+    /// — the honest reading of what is still running, not a missing cooperative
+    /// path.
+    ///
+    /// `try_wait` reaps without blocking and `try_lock` keeps the observation
+    /// itself non-blocking: a lock held by a concurrent teardown reads as
+    /// not-yet-ceased, and the next poll asks again.
+    fn child_reaped(&self) -> bool {
+        let Some(child) = self.child.as_ref() else {
+            return true;
+        };
+        let Ok(mut child) = child.try_lock() else {
+            return false;
+        };
+        matches!(child.try_wait(), Ok(Some(_)))
+    }
+}
+
+impl GenerationFence for PtyTransport {
+    fn fence_generation(&mut self) {
+        self.shutdown_flag.store(true, Ordering::Release);
+    }
+
+    fn terminate_generation(&mut self) {
+        // Signal the child and return. Killing it closes the pty master, which
+        // is what wakes an executor blocked in a `write_all` into that master —
+        // the case the cooperative flag cannot reach, because a thread parked in
+        // a syscall checks nothing.
+        //
+        // Deliberately no `wait()` here, unlike `shutdown`: reaping is an
+        // observation, and observations belong to the bounded step that follows
+        // rather than inside a call contracted to return without blocking.
+        if let Some(child_arc) = self.child.as_ref()
+            && let Ok(mut child) = child_arc.lock()
+        {
+            let _ = child.kill();
+        }
+        self.write_tx = None;
+        self.bytes_tx = None;
+    }
+
+    fn generation_ceased(&self) -> bool {
+        let executors_returned = self
+            .worker_handle
+            .as_ref()
+            .is_none_or(thread::JoinHandle::is_finished)
+            && self
+                .reader_handle
+                .as_ref()
+                .is_none_or(thread::JoinHandle::is_finished);
+        executors_returned && self.child_reaped()
+    }
+}
+
 impl Transport for PtyTransport {
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
         // Re-init is gated by the `started` flag + readiness state.
@@ -801,6 +863,19 @@ impl Transport for PtyTransport {
             self.readiness(),
             WorkerReadinessState::Available | WorkerReadinessState::Busy
         )
+    }
+
+    fn can_accept_handover(&self) -> bool {
+        if self.write_tx.is_none()
+            || self.shared.child_exited.load(Ordering::Acquire)
+            || !matches!(self.readiness(), WorkerReadinessState::Available)
+        {
+            return false;
+        }
+        let mut probe = PtyQuiescenceProbe::new(self.shared.clone());
+        probe
+            .observe()
+            .is_ok_and(|observation| observation.is_prompt_ready)
     }
 
     fn shutdown(&mut self) {
@@ -953,7 +1028,6 @@ fn run_worker(
     // two paths to stay independent.
     let mut delivery: Option<super::delivery::Delivery> = None;
     let mut pending_raw: Option<super::delivery::PendingRaw> = None;
-    let mut wait_in_progress = false;
 
     while !shutdown_flag.load(Ordering::Acquire) {
         // 0. Detect child-exit BEFORE servicing any other channel.
@@ -1006,7 +1080,6 @@ fn run_worker(
                         WorkerReadinessState::Busy,
                     );
                     delivery = Some(d);
-                    wait_in_progress = false;
                     continue;
                 }
                 Err(_) => {
@@ -1017,11 +1090,7 @@ fn run_worker(
             }
         }
 
-        // 3. If a delivery is in progress, drive the state machine
-        // one step. The step may resolve (Done), in which case we
-        // drop the run and return to idle. A batch barrier during
-        // the wait stashes the raw in `pending_raw` for the next
-        // iteration.
+        // 3. If a delivery is in progress, resolve its write result.
         if let Some(d) = delivery.as_mut() {
             let diagnostics = DeliveryDiagnosticContext::without_messages(
                 namespace.as_str(),
@@ -1036,19 +1105,6 @@ fn run_worker(
                 &mut pending_raw,
             ) {
                 super::delivery::DeliveryStep::Continue => {
-                    // The wait is in progress. Sleep briefly to
-                    // bound the wait-poll frequency; the outer
-                    // loop will service snapshot_rx on the next
-                    // iteration before the next step.
-                    if wait_in_progress {
-                        thread::sleep(super::delivery::WAIT_POLL_INTERVAL);
-                    } else {
-                        // First wait iteration just set up the
-                        // wait; the next step will do the first
-                        // poll. Brief sleep to avoid busy-looping.
-                        thread::sleep(super::delivery::WAIT_POLL_INTERVAL);
-                    }
-                    wait_in_progress = true;
                     continue;
                 }
                 super::delivery::DeliveryStep::Done { wedged } => {
@@ -1069,7 +1125,6 @@ fn run_worker(
                     };
                     publish(&readiness, mirror_state.as_ref(), next);
                     delivery = None;
-                    wait_in_progress = false;
                     continue;
                 }
             }
@@ -1106,7 +1161,6 @@ fn run_worker(
                         WorkerReadinessState::Busy,
                     );
                     delivery = Some(d);
-                    wait_in_progress = false;
                     continue;
                 }
                 Err(failure) => {

@@ -59,7 +59,7 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 
 use crate::acp::{AcpDriverServices, AcpWorkerDriver};
-use crate::configuration::BundleMember;
+use crate::configuration::{BundleMember, SessionType};
 use crate::tmux::TmuxTransport;
 use crate::transports::ui::{UiTransport, UiTransportServices};
 // Re-export the configuration prompt-readiness template into the transport
@@ -94,10 +94,69 @@ pub type OutcomeFuture = oneshot::Receiver<SingleDeliveryOutcome>;
 /// its own internal delivery task and `spawn_blocking`. They are the relay's
 /// only delivery seam — the legacy synchronous `deliver`/`prepare_delivery`/
 /// `raw_write` methods have been removed.
-pub trait Transport {
+/// The three actions a generation supervisor needs to fence a transport
+/// generation, split out of [`Transport`] so the fence protocol can be driven
+/// against anything that can be stopped and observed.
+///
+/// A generation SHALL be torn down and fenced before its replacement begins, so
+/// an old generation cannot submit after its `Authorized` entries were resolved
+/// against it. Without that, "resolved unknown" and "still able to act" coexist,
+/// which is a target-side ordering hazard.
+///
+/// **Marking a generation fenced is not a fence.** A submission already past its
+/// check will still produce its effect. Only *observed cessation* — through
+/// [`generation_ceased`](Self::generation_ceased) — establishes that execution
+/// has stopped.
+///
+/// None of the three has a default body. A defaulted
+/// [`generation_ceased`](Self::generation_ceased) is the dangerous one: `true`
+/// would acknowledge a fence no one observed, releasing a replacement while the
+/// old generation can still write, and `false` would make every fence negative
+/// and every target permanently unreplaceable. Neither is a safe thing to get by
+/// forgetting to implement it.
+pub trait GenerationFence {
+    /// Step 1 — cooperative stop request. Marks the generation fenced so an
+    /// executor that checks the flag stops at its next check.
+    ///
+    /// A signal, not a wait. It costs nothing when it works, which is why it is
+    /// tried before the destructive step 3: escalating straight to termination
+    /// would destroy a child that was about to stop on its own.
+    fn fence_generation(&mut self);
+
+    /// Step 3 — forced generation termination. Initiates cessation of every
+    /// effect path this generation owns and returns **without blocking**.
+    ///
+    /// Not "kill the child": that is one implementation and does not generalise
+    /// to a transport owning no child, or one reaching its target through a
+    /// process it does not own. Tmux in particular SHALL NOT terminate the tmux
+    /// server, which belongs to the operator rather than to the generation.
+    ///
+    /// Invoking it successfully does **not** acknowledge the fence. It initiates;
+    /// step 4 observes. Its value is that it unblocks an executor blocked writing
+    /// into the terminated path, so step 4's observation can succeed where step
+    /// 2's could not.
+    fn terminate_generation(&mut self);
+
+    /// Steps 2 and 4 — the cessation observation. Whether every
+    /// generation-owned executor has been observed to cease.
+    ///
+    /// Non-blocking, and deliberately not a join: no runtime primitive can force
+    /// a thread blocked in a syscall to return, so a blocking join would
+    /// reintroduce the unbounded wait the fence bound exists to close. The
+    /// supervisor polls this and gives up on its own clock.
+    fn generation_ceased(&self) -> bool;
+}
+
+pub trait Transport: GenerationFence {
     /// Establishes (or re-establishes, on respawn) the transport runtime for a
     /// target. On respawn the transport may publish a fresh [`OutputView`]; the
     /// worker re-calls [`give_output`] afterward to pick up the new handle.
+    ///
+    /// Establishing synchronously here is a choice, not an obligation. A
+    /// transport whose establish is unbounded work that owns a child process —
+    /// ACP spawns an agent and completes a protocol handshake — supervises it as
+    /// its own task instead, and declines this call rather than offering a second
+    /// route to the same child that no supervisor is watching.
     ///
     /// [`give_output`]: Transport::give_output
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError>;
@@ -133,6 +192,14 @@ pub trait Transport {
     /// Reports whether the transport is ready to accept delivery.
     fn is_ready(&self) -> bool;
 
+    /// Reports whether the transport can accept a handover now.
+    ///
+    /// This is a level-triggered, advisory observation. A caller must still
+    /// handle a fallible delivery attempt after reading it.
+    fn can_accept_handover(&self) -> bool {
+        self.is_ready()
+    }
+
     /// Tears down the transport runtime, releasing its resources.
     fn shutdown(&mut self);
 
@@ -146,6 +213,23 @@ pub trait Transport {
     ///
     /// [`startup`]: Transport::startup
     fn give_output(&self) -> Option<Arc<dyn OutputView>>;
+}
+
+/// Lets the fence protocol drive a [`TransportImpl`] through the same seam it
+/// drives any other generation, so the supervisor holds no knowledge of which
+/// transport it is fencing.
+impl GenerationFence for TransportImpl {
+    fn fence_generation(&mut self) {
+        TransportImpl::fence_generation(self);
+    }
+
+    fn terminate_generation(&mut self) {
+        TransportImpl::terminate_generation(self);
+    }
+
+    fn generation_ceased(&self) -> bool {
+        TransportImpl::generation_ceased(self)
+    }
 }
 
 /// A concurrently-readable view of a transport's output for the `look` request
@@ -163,6 +247,112 @@ pub trait Transport {
 pub trait OutputView: Send + Sync {
     /// Captures a snapshot of the target's current output.
     fn look(&self, mode: LookMode) -> Result<LookSnapshotPayload, TransportError>;
+}
+
+/// The largest handover a transport will accept, declared statically per
+/// transport and expressed in the two units the relay can evaluate without
+/// packing: envelope count and canonical payload bytes.
+///
+/// "Canonical payload bytes" means the serialized envelope payload the relay
+/// already holds, not the text a transport would render for its target.
+/// Declaring the maxima in tokens would be circular, since only the transport can
+/// render and count those.
+///
+/// These are distinct from admission quota (relay-owned, how much may be queued)
+/// and from acceptance capacity (dynamic, whether the transport can accept right
+/// now). The relay uses them for two things: rejecting at admission an envelope
+/// no partition could ever carry, and stopping batch formation at whichever
+/// component binds first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HandoverDimensions {
+    /// Most envelopes one handover may carry.
+    pub envelopes_max: usize,
+    /// Most canonical payload bytes one handover may carry.
+    pub canonical_bytes_max: u64,
+}
+
+/// The canonical-payload-byte ceiling every delivering transport declares.
+///
+/// One value rather than five because the differences between these transports
+/// are not byte ceilings: a tmux pane, a child's stdin, a pty master, and a
+/// broadcast channel all accept far more than any envelope a relay peer should be
+/// sending, and each transport's real constraint binds elsewhere and later —
+/// tmux and pty against the rendered prompt's token budget, ACP against its
+/// framing. What this value is for is the line past which an envelope is not a
+/// large message but a mistake, so that admission rejects it at the request
+/// boundary instead of queueing something no partition could carry.
+///
+/// It equals the default `[delivery].scheduling-quantum-bytes`, which the spec
+/// requires to be at least the largest declared byte component. Equality is the
+/// intended relationship: a rotation visit's credit exactly covers one maximal
+/// handover.
+const HANDOVER_CANONICAL_BYTES_MAX: u64 = 262_144;
+
+/// Most envelopes one handover may carry on a transport that coalesces a group
+/// into a single turn (tmux, ACP, pty). Matches the ACP worker's existing pending
+/// bound so batch formation admits nothing looser than what that queue already
+/// allowed.
+const HANDOVER_ENVELOPES_MAX_COALESCING: usize = 64;
+
+impl HandoverDimensions {
+    /// The maxima declared by the transport implementing `session_type`, or
+    /// `None` for a session type with no delivery path.
+    ///
+    /// `Pubsub` returns `None`: it is a forward-declared stub rejected
+    /// synchronously at admission, so it never reaches batch formation and has no
+    /// dimensions to declare. `None` therefore means "cannot accept a handover at
+    /// all", not "unbounded".
+    #[must_use]
+    pub fn for_session_type(session_type: SessionType) -> Option<Self> {
+        match session_type {
+            SessionType::Tmux | SessionType::Acp | SessionType::Pty => Some(Self {
+                envelopes_max: HANDOVER_ENVELOPES_MAX_COALESCING,
+                canonical_bytes_max: HANDOVER_CANONICAL_BYTES_MAX,
+            }),
+            // UI broadcasts one stream event per envelope and coalesces nothing,
+            // so a handover is exactly one envelope.
+            SessionType::Ui => Some(Self {
+                envelopes_max: 1,
+                canonical_bytes_max: HANDOVER_CANONICAL_BYTES_MAX,
+            }),
+            SessionType::Pubsub => None,
+        }
+    }
+
+    /// The largest canonical-payload-byte component any transport declares, with
+    /// the session type that declared it.
+    ///
+    /// This is what `[delivery].scheduling-quantum-bytes` must be at least: a
+    /// rotation visit whose credit is smaller than some transport's maximal
+    /// handover could never grant enough to submit one, and that target would be
+    /// visited forever without progressing.
+    ///
+    /// Session types with no delivery path contribute nothing — they accept no
+    /// handover, so no quantum is too small for them.
+    #[must_use]
+    pub fn largest_declared_canonical_bytes() -> (SessionType, u64) {
+        const ALL: [SessionType; 5] = [
+            SessionType::Tmux,
+            SessionType::Acp,
+            SessionType::Pty,
+            SessionType::Ui,
+            SessionType::Pubsub,
+        ];
+        ALL.into_iter()
+            .filter_map(|session_type| {
+                Self::for_session_type(session_type)
+                    .map(|dimensions| (session_type, dimensions.canonical_bytes_max))
+            })
+            // Folded rather than `max_by_key` so a tie keeps the first declaring
+            // session type: every transport declares the same byte component
+            // today, and a rejection that names them in declaration order reads
+            // less arbitrarily than one naming whichever landed last.
+            .fold(None, |largest, candidate| match largest {
+                Some((_, bytes)) if candidate.1 <= bytes => largest,
+                _ => Some(candidate),
+            })
+            .expect("at least one session type declares handover dimensions")
+    }
 }
 
 /// Static dispatch over the fixed transport set.
@@ -321,6 +511,31 @@ impl TransportImpl {
         }
     }
 
+    /// The largest handover this transport accepts; see [`HandoverDimensions`].
+    ///
+    /// Delegates to the session-type function so the live-instance answer and the
+    /// one the relay reads at admission — where no transport exists yet — cannot
+    /// diverge.
+    #[must_use]
+    pub fn maximum_handover_dimensions(&self) -> Option<HandoverDimensions> {
+        HandoverDimensions::for_session_type(self.session_type())
+    }
+
+    /// The session type this transport implements.
+    #[must_use]
+    pub fn session_type(&self) -> SessionType {
+        match self {
+            Self::Acp(_) => SessionType::Acp,
+            Self::Tmux(_) => SessionType::Tmux,
+            Self::Ui(_) => SessionType::Ui,
+            Self::Pubsub => SessionType::Pubsub,
+            #[cfg(feature = "pty")]
+            Self::Pty(_) => SessionType::Pty,
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => SessionType::Pty,
+        }
+    }
+
     /// Establishes the transport runtime; see [`Transport::startup`].
     pub fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
         match self {
@@ -387,6 +602,70 @@ impl TransportImpl {
             Self::Pty(transport) => transport.is_ready(),
             #[cfg(not(feature = "pty"))]
             Self::Pty => false,
+        }
+    }
+
+    /// Reports whether the selected transport can accept a handover now.
+    #[must_use]
+    pub fn can_accept_handover(&self) -> bool {
+        match self {
+            Self::Acp(transport) => transport.can_accept_handover(),
+            Self::Tmux(transport) => transport.can_accept_handover(),
+            Self::Ui(transport) => transport.can_accept_handover(),
+            Self::Pubsub => false,
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.can_accept_handover(),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => false,
+        }
+    }
+
+    /// Requests a cooperative stop; see [`GenerationFence::fence_generation`].
+    pub fn fence_generation(&mut self) {
+        match self {
+            Self::Acp(transport) => transport.fence_generation(),
+            Self::Tmux(transport) => transport.fence_generation(),
+            Self::Ui(transport) => transport.fence_generation(),
+            // The `Pubsub` stub is refused at admission, so it never owns a
+            // generation to fence. The same holds for a `Pty` that the feature
+            // gate leaves unconstructible.
+            Self::Pubsub => {}
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.fence_generation(),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => {}
+        }
+    }
+
+    /// Initiates forced termination; see [`GenerationFence::terminate_generation`].
+    pub fn terminate_generation(&mut self) {
+        match self {
+            Self::Acp(transport) => transport.terminate_generation(),
+            Self::Tmux(transport) => transport.terminate_generation(),
+            Self::Ui(transport) => transport.terminate_generation(),
+            Self::Pubsub => {}
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.terminate_generation(),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => {}
+        }
+    }
+
+    /// Observes cessation; see [`GenerationFence::generation_ceased`].
+    pub fn generation_ceased(&self) -> bool {
+        match self {
+            Self::Acp(transport) => transport.generation_ceased(),
+            Self::Tmux(transport) => transport.generation_ceased(),
+            Self::Ui(transport) => transport.generation_ceased(),
+            // A stub that owns no executor has trivially ceased. This is the one
+            // place `true` is the honest answer rather than the dangerous
+            // default the trait refuses to provide: there is nothing here that
+            // could still write to a target.
+            Self::Pubsub => true,
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.generation_ceased(),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => true,
         }
     }
 

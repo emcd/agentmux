@@ -38,6 +38,19 @@ pub(super) struct AcpStubOptions {
     pub(super) prompt_capability: bool,
     pub(super) stop_reason: String,
     pub(super) prompt_delay_sec: u64,
+    /// Leave the turn in flight forever without spawning a helper process. A
+    /// `sleep`-based delay would inherit the child's stdout, so killing the
+    /// agent would leave the pipe open and no reader could observe EOF.
+    pub(super) never_respond_to_prompt: bool,
+    /// Make every agent from this one onward (counting from zero, across the
+    /// whole bundle) hang inside `initialize`, by blocking on a fifo that has no
+    /// writer until a test opens one.
+    ///
+    /// Holds a bootstrap in flight so a fence can land while it runs — the state
+    /// in which the relay must not report the generation ceased. `Some(0)` hangs
+    /// the very first agent, which is a target's *initial* bootstrap; `Some(1)`
+    /// leaves the first agent healthy and hangs every respawn after it.
+    pub(super) hang_initialize_from_agent: Option<usize>,
     pub(super) update_count: usize,
     pub(super) update_line_prefix: String,
     pub(super) update_after_response: bool,
@@ -63,6 +76,8 @@ impl Default for AcpStubOptions {
             prompt_capability: true,
             stop_reason: "end_turn".to_string(),
             prompt_delay_sec: 0,
+            never_respond_to_prompt: false,
+            hang_initialize_from_agent: None,
             update_count: 0,
             update_line_prefix: "ACP".to_string(),
             update_after_response: false,
@@ -79,11 +94,31 @@ impl Default for AcpStubOptions {
     }
 }
 
+/// Where the ACP stub appends the pid of every child it spawns, so a test can
+/// assert on the fate of the real process rather than on the relay's account of
+/// it.
+pub(super) fn acp_child_pid_path(root: &Path) -> PathBuf {
+    root.join("acp_child_pids.txt")
+}
+
 pub(super) fn write_acp_stub(path: &Path) {
     let script = r#"#!/bin/sh
 set -eu
 
 log_file="${ACP_LOG_FILE:?}"
+pid_file="${ACP_PID_FILE:-}"
+session="${AGENTMUX_SESSION:-unknown}"
+# How many agents THIS target has already started. Counted per session, not
+# across the file: every member of the bundle appends here, so a global count
+# makes "the second agent" mean whichever member happened to start second, and
+# a member's *initial* bootstrap can be mistaken for a respawn.
+prior_agents=0
+if [ -n "$pid_file" ]; then
+  if [ -f "$pid_file" ]; then
+    prior_agents=$(grep -c "^${session} " "$pid_file" || true)
+  fi
+  printf '%s %s\n' "$session" "$$" >> "$pid_file"
+fi
 fail_initialize="${FAIL_INITIALIZE:-0}"
 fail_load="${FAIL_LOAD:-0}"
 fail_new="${FAIL_NEW:-0}"
@@ -92,6 +127,9 @@ load_capability="${LOAD_CAPABILITY:-true}"
 prompt_capability="${PROMPT_CAPABILITY:-true}"
 stop_reason="${STOP_REASON:-end_turn}"
 prompt_delay_sec="${PROMPT_DELAY_SEC:-0}"
+never_respond_to_prompt="${NEVER_RESPOND_TO_PROMPT:-0}"
+hang_initialize_fifo="${ACP_HANG_INITIALIZE_FIFO:-}"
+hang_initialize_from_agent="${ACP_HANG_INITIALIZE_FROM_AGENT:-}"
 update_count="${UPDATE_COUNT:-0}"
 update_line_prefix="${UPDATE_LINE_PREFIX:-ACP}"
 update_after_response="${UPDATE_AFTER_RESPONSE:-0}"
@@ -112,6 +150,10 @@ while IFS= read -r line; do
   fi
   case "$line" in
     *'"method":"initialize"'*)
+      if [ -n "$hang_initialize_from_agent" ] && [ "$prior_agents" -ge "$hang_initialize_from_agent" ]; then
+        [ -p "$hang_initialize_fifo" ] || mkfifo "$hang_initialize_fifo"
+        read hung < "$hang_initialize_fifo" || true
+      fi
       if [ "$fail_initialize" = "1" ]; then
         printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"initialize failed"}}\n' "$id"
       else
@@ -146,6 +188,9 @@ while IFS= read -r line; do
       fi
       if [ "$disconnect_on_prompt" = "before_activity" ]; then
         exit 0
+      fi
+      if [ "$never_respond_to_prompt" = "1" ]; then
+        continue
       fi
       prompt_session_id=$(printf '%s\n' "$line" | sed -n 's/.*"sessionId":"\([^"]*\)".*/\1/p')
       if [ -z "$prompt_session_id" ]; then
@@ -226,6 +271,10 @@ pub(super) fn write_configuration(
     let env_entries: Vec<(&str, String)> = vec![
         ("ACP_LOG_FILE", log_path.display().to_string()),
         (
+            "ACP_PID_FILE",
+            acp_child_pid_path(root).display().to_string(),
+        ),
+        (
             "FAIL_INITIALIZE",
             if options.fail_initialize { "1" } else { "0" }.to_string(),
         ),
@@ -268,6 +317,26 @@ pub(super) fn write_configuration(
         ),
         ("STOP_REASON", options.stop_reason.clone()),
         ("PROMPT_DELAY_SEC", options.prompt_delay_sec.to_string()),
+        (
+            "ACP_HANG_INITIALIZE_FIFO",
+            root.join("acp_hang_initialize.fifo").display().to_string(),
+        ),
+        (
+            "ACP_HANG_INITIALIZE_FROM_AGENT",
+            options
+                .hang_initialize_from_agent
+                .map(|from| from.to_string())
+                .unwrap_or_default(),
+        ),
+        (
+            "NEVER_RESPOND_TO_PROMPT",
+            if options.never_respond_to_prompt {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string(),
+        ),
         ("UPDATE_COUNT", options.update_count.to_string()),
         ("UPDATE_LINE_PREFIX", options.update_line_prefix.clone()),
         (

@@ -14,6 +14,7 @@ use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
 use super::super::async_worker::{WorkerDispatch, get_worker_failure, get_worker_readiness};
 use super::worker::{AcpWorkerBootstrap, spawn_async_delivery_worker};
+use crate::runtime::signals::shutdown_requested;
 use crate::transports::{WorkerFailureReason, WorkerReadinessState};
 
 pub(in crate::relay) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
@@ -28,6 +29,14 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
 ) -> Result<(), (String, String, Option<serde_json::Value>)> {
     if !matches!(target_member.target, TargetConfiguration::Acp(_)) {
         return Ok(());
+    }
+    // Checked before the worker is created, not only while waiting on it:
+    // starting a target means spawning an agent process, and a relay on its way
+    // out has no use for one. Signalled part-way through a bundle, this is the
+    // difference between the remaining members never starting and each of them
+    // starting an agent for a fence to have to end.
+    if shutdown_requested() {
+        return Err(startup_interrupted_error(target_member.id.as_str()));
     }
     if target_member.working_directory.is_none() {
         return Err((
@@ -60,7 +69,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
             runtime_directory: runtime_directory.to_path_buf(),
             choices_pending_max,
         };
-        if super::super::async_worker::register_worker_if_absent(
+        if let Some(owner) = super::super::async_worker::register_worker_if_absent(
             key.clone(),
             sender,
             pending.clone(),
@@ -76,11 +85,19 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
                 })),
             )
         })? {
-            spawn_async_delivery_worker(key, receiver, pending, Some(bootstrap));
+            spawn_async_delivery_worker(key, owner, receiver, pending, Some(bootstrap));
         }
     }
     let deadline = Instant::now() + Duration::from_millis(ACP_STARTUP_PRIME_TIMEOUT_MS);
     loop {
+        // A worker told to stop will not become ready, and it deregisters as it
+        // drains — taking the readiness this poll reads with it, so the wait
+        // would run its full timeout against an answer that can no longer
+        // change. Signalled during a multi-member startup, that cost the relay
+        // its whole timeout for every member still to come.
+        if shutdown_requested() {
+            return Err(startup_interrupted_error(target_member.id.as_str()));
+        }
         let readiness =
             get_worker_readiness(namespace, runtime_directory, target_member.id.as_str());
         match readiness {
@@ -117,6 +134,17 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
             }
         }
     }
+}
+
+/// Reports a startup abandoned because the relay is shutting down.
+fn startup_interrupted_error(target_session: &str) -> (String, String, Option<serde_json::Value>) {
+    (
+        "runtime_startup_interrupted".to_string(),
+        "relay shutdown requested during ACP worker startup".to_string(),
+        Some(json!({
+            "target_session": target_session,
+        })),
+    )
 }
 
 /// Builds the startup failure tuple, preferring the worker's recorded structured
@@ -189,17 +217,59 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
             }
             let (sender, receiver) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
             let pending = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-            sender.send(task).map_err(|source| {
-                super::super::super::relay_error(
-                    "internal_unexpected_failure",
-                    "failed to enqueue async delivery task",
-                    Some(json!({"cause": source.to_string()})),
-                )
-            })?;
-            spawn_async_delivery_worker(key.clone(), receiver, pending.clone(), None);
-            super::super::async_worker::register_worker(key, sender, pending, false);
+            // The registry insert is the election, and it happens before anything
+            // is spawned. Two concurrent first sends both reach this arm; only the
+            // one that installs an entry owns the target, and only it starts a
+            // worker. Spawning first and registering after let both start, let the
+            // second registration orphan the first — which still held and executed
+            // a task — and then let that orphan's exit delete the survivor's entry.
+            match super::super::async_worker::register_worker_if_absent(
+                key.clone(),
+                sender.clone(),
+                pending.clone(),
+                false,
+            )? {
+                Some(owner) => {
+                    sender.send(task).map_err(|source| {
+                        super::super::super::relay_error(
+                            "internal_unexpected_failure",
+                            "failed to enqueue async delivery task",
+                            Some(json!({"cause": source.to_string()})),
+                        )
+                    })?;
+                    spawn_async_delivery_worker(key, owner, receiver, pending, None);
+                    Ok(())
+                }
+                // Lost the election: someone installed between the lookup above and
+                // this claim. Hand the task to the owner they installed rather than
+                // to the channel nothing will ever read.
+                None => dispatch_to_installed_owner(&key, task),
+            }
+        }
+    }
+}
+
+/// Dispatches a task to whichever worker won the registration race.
+///
+/// Deliberately not a retry loop. Reaching `Missing` here means the owner
+/// installed and vanished inside this window, which is not a condition the relay
+/// can resolve by trying again — reporting it names the state instead of
+/// spinning.
+fn dispatch_to_installed_owner(
+    key: &super::super::async_worker::AsyncWorkerKey,
+    task: AsyncDeliveryTask,
+) -> Result<(), RelayError> {
+    match super::super::async_worker::try_existing_worker(key, task)? {
+        WorkerDispatch::Accepted => Ok(()),
+        WorkerDispatch::Closing(task) => {
+            super::super::async_worker::complete_task_on_shutdown(&task);
             Ok(())
         }
+        WorkerDispatch::Missing(task) => Err(super::super::super::relay_error(
+            "internal_unexpected_failure",
+            "target worker was replaced while the delivery was being enqueued",
+            Some(json!({"target_session": task.target_session})),
+        )),
     }
 }
 
@@ -259,13 +329,13 @@ mod tests {
         let target_key =
             build_worker_key(target_namespace, Path::new(target_runtime), target_session);
         let (target_tx, mut target_rx) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        register_worker(
+        let target_owner = register_worker(
             target_key.clone(),
             target_tx,
             Arc::new(AtomicUsize::new(0)),
             false,
         );
-        close_worker(&target_key);
+        close_worker(&target_key, target_owner);
 
         // A live sender worker: the DroppedOnShutdown receipt should land here.
         let sender_key = build_worker_key(
@@ -274,7 +344,7 @@ mod tests {
             sender_member_id,
         );
         let (sender_tx, mut sender_rx) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        register_worker(
+        let owner = register_worker(
             sender_key.clone(),
             sender_tx,
             Arc::new(AtomicUsize::new(0)),
@@ -282,6 +352,8 @@ mod tests {
         );
 
         let task = AsyncDeliveryTask {
+            // Test fixture: constructed directly, never admitted.
+            admitted: false,
             bundle: BundleConfiguration {
                 schema_version: SCHEMA_VERSION.to_string(),
                 bundle_name: target_namespace.to_string(),
@@ -334,7 +406,7 @@ mod tests {
             receipt.message
         );
 
-        unregister_worker(&target_key);
-        unregister_worker(&sender_key);
+        unregister_worker(&target_key, target_owner);
+        unregister_worker(&sender_key, owner);
     }
 }

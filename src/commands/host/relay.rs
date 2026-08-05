@@ -20,8 +20,10 @@ use crate::{
     configuration::load_bundle_group_memberships,
     relay::{
         BundleCatalog, ConnectionDrainCoordinator, ConnectionServeContext, HostingIntent,
-        PeerConnectionManager, append_startup_failure, serve_connection, shutdown_bundle_runtime,
-        spawn_bundle_watcher, startup_bundle, wait_for_async_delivery_shutdown,
+        PeerConnectionManager, append_startup_failure, configure_delivery,
+        configured_undelivered_reporting, report_undelivered_queue, serve_connection,
+        shutdown_bundle_runtime, spawn_bundle_watcher, startup_bundle,
+        wait_for_async_delivery_shutdown,
     },
     runtime::{
         bootstrap::{
@@ -244,6 +246,10 @@ fn prepare_relay_host(
         cli_require_session_credentials,
     )
     .map_err(shared::map_relay_error)?;
+    // Published before anything can be admitted: the listener is not bound yet,
+    // so no request boundary has run and no entry can have reserved quota against
+    // the defaults.
+    configure_delivery(relay_configuration.delivery);
 
     let memberships = load_bundle_group_memberships(&roots.configuration_roots)
         .map_err(shared::map_bundle_load_error)?;
@@ -693,6 +699,13 @@ async fn run_relay_accept_loop(
         )
     })?;
     let metrics = Arc::new(RelayConnectionMetrics::new());
+    // The undelivered-queue report rides this loop rather than a task of its own:
+    // it is exactly relay-lifetime scoped, needs no shutdown coordination, and
+    // does no work worth a thread. The first tick fires immediately, so skip it —
+    // a relay that has just started has nothing queued to report.
+    let undelivered_reporting = configured_undelivered_reporting();
+    let mut undelivered_report = tokio::time::interval(undelivered_reporting.interval);
+    undelivered_report.tick().await;
 
     loop {
         if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
@@ -730,6 +743,9 @@ async fn run_relay_accept_loop(
                         ));
                     }
                 }
+            }
+            _ = undelivered_report.tick() => {
+                report_undelivered_queue(undelivered_reporting);
             }
             () = tokio::time::sleep(Duration::from_millis(RELAY_SHUTDOWN_POLL_INTERVAL_MS)) => {}
         }

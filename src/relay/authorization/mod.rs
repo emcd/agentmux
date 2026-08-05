@@ -27,8 +27,8 @@ pub(in crate::relay) use checks::{
 pub(in crate::relay) use context::AuthorizationContext;
 pub(in crate::relay) use loading::load_authorization_context;
 pub use loading::{
-    PeerConfiguration, RelayRuntimeConfiguration, load_relay_runtime_configuration,
-    parse_relay_bool_env_value, resolve_relay_bool_setting,
+    DeliveryConfiguration, PeerConfiguration, RelayRuntimeConfiguration,
+    load_relay_runtime_configuration, parse_relay_bool_env_value, resolve_relay_bool_setting,
 };
 pub(in crate::relay) use resolution::{
     choices_pending_max, choose_authorized_ui_sessions, has_ui_session, ui_session_display_name,

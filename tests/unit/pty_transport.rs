@@ -2315,24 +2315,17 @@ fn pty_transport_busy_available_cycle_records_via_mirror() {
     transport.shutdown();
 }
 
-/// Verifies the worker-readiness transition for a wedge-class
-/// delivery resolution. The prompt regex does not match the
-/// child's idle output, so the wedge counter fires and the
-/// delivery resolves to `Failed` + `pane_wedged`. The worker
-/// MUST then publish `Unavailable` via the relay-global mirror
-/// (the local-mutex is NOT consulted here — this asserts the
-/// actual seam). The delivery MUST also reach the
-/// `Unavailable` steady state and the retry guard MUST reject
-/// the next `startup()`.
+/// Readiness is an advisory handover level, not delivery evidence. A prompt
+/// mismatch keeps `can_accept_handover` false, but a forced handover still
+/// resolves from the successful PTY write and leaves the worker available.
 #[cfg(feature = "pty")]
 #[test]
-fn pty_transport_wedge_publishes_unavailable_via_mirror() {
-    use std::time::{Duration, Instant};
+fn pty_transport_readiness_does_not_infer_delivery_failure() {
+    use std::time::Duration;
 
     use agentmux::envelope::AddressIdentity;
     use agentmux::transports::{
-        DeliveryEnvelope, DeliveryMessage, SendOutcome, Transport, TransportError,
-        WorkerReadinessState,
+        DeliveryEnvelope, DeliveryMessage, SendOutcome, Transport, WorkerReadinessState,
     };
 
     let transitions = Arc::new(Mutex::new(Vec::<WorkerReadinessState>::new()));
@@ -2342,11 +2335,8 @@ fn pty_transport_wedge_publishes_unavailable_via_mirror() {
     });
 
     // /bin/cat produces no output until stdin is written, so the
-    // prompt regex "NEVER_MATCHES" stays unmatched across the
-    // wedge counter's N consecutive ticks. The wedge counter
-    // therefore fires and the delivery resolves to
-    // `Failed` + `pane_wedged`, triggering the `Wedged` →
-    // `Unavailable` worker transition.
+    // prompt regex remains unmatched and handover is not currently
+    // useful.
     let (mut transport, context) = make_pty_transport_for_lifecycle_test_with_prompt_and_mirror(
         "wedge-mirror",
         "/bin/cat",
@@ -2384,74 +2374,22 @@ fn pty_transport_wedge_publishes_unavailable_via_mirror() {
         is_receipt: false,
     };
 
-    let outcome_rx = transport.mailw(envelope);
-
-    // Wait up to 5 s for Unavailable to appear in the transitions
-    // vector (the wedge counter needs N consecutive ticks before
-    // firing; with default quiet-window/poll cadence this completes
-    // well under 1 s on a real system, but 5 s is the safe upper
-    // bound for a CI environment).
-    let deadline = Instant::now() + Duration::from_secs(5);
-    while Instant::now() < deadline {
-        let t = transitions.lock().unwrap();
-        if t.contains(&WorkerReadinessState::Unavailable) {
-            break;
-        }
-        drop(t);
-        thread::sleep(Duration::from_millis(50));
-    }
-
-    // Receive the wedge-class terminal outcome. This proves the
-    // wedge fired (Failed + reason_code = "pane_wedged") AND the
-    // `DeliveryStep::Done { wedged: true }` path produced the
-    // wedge-class resolution that the worker then mapped to the
-    // `Unavailable` publish (the wedge-result-to-readiness
-    // contract). Snapshot the transitions into an owned Vec,
-    // assert on the snapshot, then drop the guard before any
-    // operation that can publish readiness.
-    let outcome = recv_bounded_for(outcome_rx, Duration::from_secs(5))
-        .expect("wedge-class terminal outcome should arrive within 5 s");
+    assert!(!transport.can_accept_handover());
+    let outcome = recv_bounded_for(transport.mailw(envelope), Duration::from_secs(5))
+        .expect("handover outcome should arrive within 5 s");
     assert!(
-        matches!(outcome.outcome, SendOutcome::Failed),
-        "expected Failed wedge-class outcome, got {:?}",
+        matches!(outcome.outcome, SendOutcome::Delivered),
+        "expected successful write outcome, got {:?}",
         outcome.outcome,
     );
-    assert_eq!(
-        outcome.reason_code.as_deref(),
-        Some("pane_wedged"),
-        "wedge-class outcome must carry reason_code = pane_wedged, got {:?}",
-        outcome.reason_code,
-    );
-    let contains_unavailable = transitions
-        .lock()
-        .unwrap()
-        .clone()
-        .contains(&WorkerReadinessState::Unavailable);
+    let observed = transitions.lock().unwrap().clone();
     assert!(
-        contains_unavailable,
-        "wedge must publish Unavailable via the mirror",
+        observed.contains(&WorkerReadinessState::Busy),
+        "delivery must publish Busy via the mirror: {observed:?}",
     );
-
-    // The retry guard should now reject (the Unavailable steady
-    // state makes re-init unsupported until a teardown-then-restart
-    // path lands).
-    let (_, context2) = make_pty_transport_for_lifecycle_test_with_prompt_and_mirror(
-        "wedge-mirror",
-        "/bin/cat",
-        agentmux::configuration::TermProtocol::Xterm256Color,
-        Some("NEVER_MATCHES"),
-        None,
-    );
-    let result = transport.startup(context2);
     assert!(
-        matches!(
-            result,
-            Err(TransportError {
-                ref code, ..
-            }) if code == "pty_unavailable_restart_unsupported"
-        ),
-        "retry after wedge should be rejected, got {:?}",
-        result,
+        observed.contains(&WorkerReadinessState::Available),
+        "successful delivery must return to Available: {observed:?}",
     );
 
     transport.shutdown();
@@ -2841,4 +2779,129 @@ fn pty_envelope_absorbed_during_wait_reaches_the_master() {
         second.outcome,
         first.outcome,
     );
+}
+
+/// A Pty fence reaches a positive verdict only once its child is reaped.
+///
+/// Cessation for Pty requires the child reaped as well as the executors
+/// returned, because a live child still holds the pty and can still write to it.
+/// The discriminator is the child's own pid: with the conjunct, the observation
+/// that reports cessation is the same `try_wait` that reaps, so the pid is gone
+/// the instant `generation_ceased` turns true. Without it, cessation is reported
+/// off the threads alone and the child is left an unreaped zombie — still in the
+/// process table, and still answering `kill(pid, 0)`.
+///
+/// It also rules out the regression the conjunct risked, a Pty fence that could
+/// never go positive: the cooperative step alone suffices, because the worker
+/// dropping the master gives the child EOF.
+///
+/// Run with `cargo test --test unit pty_transport -- --ignored` once Zig 0.15.x
+/// is on PATH; skipped by default for the same reason as the round-trip test.
+#[test]
+#[ignore = "requires Zig 0.15.x + libghostty-vt built; run with --ignored"]
+fn a_pty_generation_ceases_only_once_its_child_is_reaped() {
+    use agentmux::configuration::{
+        BundleMember, PtyTargetConfiguration as PtyConfig, TermProtocol,
+    };
+    use agentmux::pty::PtyTargetConfiguration;
+    use agentmux::transports::{GenerationFence, StartupContext, Transport};
+
+    let temporary = tempfile::TempDir::new().expect("temporary");
+    let pid_path = temporary.path().join("child.pid");
+    // `exec` replaces the shell, so the recorded pid is the surviving process
+    // the transport owns rather than a wrapper that exits immediately.
+    let command = format!(
+        "/bin/sh -c 'echo $$ > {} ; exec /bin/cat'",
+        pid_path.display()
+    );
+
+    let pty_configuration = PtyConfig {
+        initial_command: command.clone(),
+        resume_command: command.clone(),
+        prompt_readiness: None,
+        prime_timeout_ms: Some(2000),
+        wedge_detection: true,
+        cols: 80,
+        rows: 24,
+        term_protocol: TermProtocol::Xterm256Color,
+    };
+    let target = BundleMember {
+        id: "fence-test".to_string(),
+        name: None,
+        working_directory: None,
+        target: agentmux::configuration::TargetConfiguration::Pty(pty_configuration),
+        coder_session_id: None,
+        policy_id: None,
+        environment: Vec::new(),
+    };
+    let mut transport = agentmux::pty::PtyTransport::new(
+        target.clone(),
+        PtyTargetConfiguration {
+            initial_command: command.clone(),
+            resume_command: command,
+            prompt_readiness: None,
+            cols: 80,
+            rows: 24,
+            prime_timeout_ms: Some(2000),
+            wedge_detection: true,
+            working_directory: None,
+            term_protocol: TermProtocol::Xterm256Color,
+        },
+        None,
+    );
+    transport
+        .startup(StartupContext {
+            namespace: "agentmux".to_string(),
+            runtime_directory: temporary.path().to_path_buf(),
+            target_member: target,
+            choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+                decided_by: "test".to_string(),
+                reason_code: "test_cancel".to_string(),
+                reason: None,
+            }),
+        })
+        .expect("pty startup (requires Zig 0.15.x + libghostty-vt)");
+
+    let child_pid = await_recorded_pid(&pid_path);
+    assert!(
+        !transport.generation_ceased(),
+        "a started generation owns a running child and running executors"
+    );
+
+    transport.fence_generation();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !transport.generation_ceased() {
+        assert!(
+            Instant::now() < deadline,
+            "the cooperative request did not cease the generation within 5s"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // The observation that reported cessation is the one that reaped. A child
+    // left unreaped would still be a zombie in the process table here.
+    assert_eq!(
+        unsafe { libc::kill(child_pid, 0) },
+        -1,
+        "cessation was reported while the child was still an unreaped zombie \
+         (pid {child_pid})"
+    );
+}
+
+/// Polls for the child to record its own pid, returning it.
+fn await_recorded_pid(path: &std::path::Path) -> i32 {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(pid) = std::fs::read_to_string(path)
+            .ok()
+            .and_then(|text| text.trim().parse::<i32>().ok())
+        {
+            return pid;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the pty child did not record its pid within 5s"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }

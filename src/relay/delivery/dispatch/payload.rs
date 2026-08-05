@@ -33,18 +33,18 @@ pub(super) fn resolve_target_member(
 }
 
 /// Whether a delivery task targets a relay-wide principal (delivered via the UI
-/// stream by principal id) rather than a bundle coder. Derived from the unified
-/// registry's binding for the target, falling back to namespace classification
-/// when the relay-wide principal has no entry yet (not yet connected). This
-/// replaces the `relay_wide_target` flag that the route used to carry through the
-/// delivery task.
+/// stream by principal id) rather than a bundle coder. This replaces the
+/// `relay_wide_target` flag that the route used to carry through the delivery
+/// task.
+///
+/// The task-shaped wrapper over the shared predicate admission uses; the
+/// judgement itself lives there because admission must reach it first, at the
+/// request boundary, where no task exists yet.
 pub(super) fn target_is_relay_wide(task: &AsyncDeliveryTask) -> bool {
-    let principal = canonical_session_id(
-        task.target_session.as_str(),
+    super::super::admission::target_is_relay_wide(
         task.bundle.bundle_name.as_str(),
-    );
-    super::super::super::stream::registry_target_is_relay_wide(principal.as_str())
-        .unwrap_or_else(|| task.bundle.bundle_name == super::super::super::GLOBAL_NAMESPACE)
+        task.target_session.as_str(),
+    )
 }
 
 /// Builds the structured, transport-neutral [`DeliveryMessage`] for one task from

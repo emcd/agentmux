@@ -27,6 +27,7 @@
 //! text.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -35,13 +36,15 @@ use tokio::sync::oneshot;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
-    DeliveryEnvelope, OutputView, SendOutcome, SingleDeliveryOutcome, StartupContext, Transport,
-    TransportError, TransportReadiness, TransportStatus,
+    DeliveryEnvelope, GenerationFence, OutputView, SendOutcome, SingleDeliveryOutcome,
+    StartupContext, Transport, TransportError, TransportReadiness, TransportStatus,
 };
 
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 const UI_RAW_WRITE_UNSUPPORTED_CODE: &str = "ui_raw_write_unsupported";
+const UI_GENERATION_FENCED_CODE: &str = "ui_generation_fenced";
+const UI_RECONNECT_ELAPSED_CODE: &str = "ui_reconnect_elapsed";
 const UI_RECONNECT_POLL_INTERVAL_MS: u64 = 100;
 /// Default cap on the UI reconnect wait when no UI endpoint is registered or the
 /// registered one is disconnected. Owned entirely by the UI transport — the
@@ -127,6 +130,43 @@ impl std::fmt::Debug for UiTransportServices {
 pub struct UiTransport {
     services: UiTransportServices,
     reconnect_timeout: Duration,
+    /// Shared with every delivery executor this generation spawns, so the
+    /// generation can be asked to stop and then stripped of its ability to emit.
+    generation: Arc<UiGeneration>,
+    /// Handles for the delivery executors this generation owns. Retained rather
+    /// than detached: an executor whose handle is discarded cannot be observed,
+    /// and therefore cannot be fenced.
+    executors: Vec<thread::JoinHandle<()>>,
+}
+
+/// The fencing state one UI generation shares with its delivery executors.
+///
+/// Two flags rather than one, because the fence's steps 1 and 3 are genuinely
+/// different actions. `fenced` asks an executor to stop at its next check and
+/// costs nothing when it works. `revoked` is the forced step: it strips the
+/// generation of its ability to emit, so an executor that proceeds anyway
+/// produces no further frame.
+#[derive(Debug, Default)]
+struct UiGeneration {
+    fenced: AtomicBool,
+    revoked: AtomicBool,
+}
+
+impl UiGeneration {
+    fn is_fenced(&self) -> bool {
+        self.fenced.load(Ordering::Acquire)
+    }
+
+    /// Whether this generation has been stripped of its ability to emit.
+    ///
+    /// Checked immediately before the broadcast that actually delivers the
+    /// message, which is the one emit that must not happen after forced
+    /// termination. It is the guard that matters for an executor blocked inside
+    /// a broadcast when the fence began: it will not have seen the cooperative
+    /// flag, but it cannot deliver once revoked.
+    fn is_revoked(&self) -> bool {
+        self.revoked.load(Ordering::Acquire)
+    }
 }
 
 impl UiTransport {
@@ -135,6 +175,8 @@ impl UiTransport {
         Self {
             services,
             reconnect_timeout: Duration::from_millis(UI_RECONNECT_TIMEOUT_MS_DEFAULT),
+            generation: Arc::new(UiGeneration::default()),
+            executors: Vec::new(),
         }
     }
 
@@ -146,6 +188,24 @@ impl UiTransport {
     pub fn with_reconnect_timeout(mut self, reconnect_timeout: Duration) -> Self {
         self.reconnect_timeout = reconnect_timeout;
         self
+    }
+}
+
+impl GenerationFence for UiTransport {
+    fn fence_generation(&mut self) {
+        self.generation.fenced.store(true, Ordering::Release);
+    }
+
+    fn terminate_generation(&mut self) {
+        // UI owns no child and holds no process to signal. Revoking the
+        // generation's ability to emit is the equivalent action: it drops the
+        // broadcaster's effect for every executor still running, which is what
+        // unblocks the observation below from succeeding.
+        self.generation.revoked.store(true, Ordering::Release);
+    }
+
+    fn generation_ceased(&self) -> bool {
+        self.executors.iter().all(thread::JoinHandle::is_finished)
     }
 }
 
@@ -181,10 +241,22 @@ impl Transport for UiTransport {
         };
         // Run the bounded reconnect wait off the async worker thread so `mailw`
         // stays non-blocking; resolve the future when it settles.
-        thread::spawn(move || {
-            let outcome = run_ui_delivery(&services, timeout, message_id, &incoming);
+        let generation = Arc::clone(&self.generation);
+        let handle = thread::spawn(move || {
+            let outcome = run_ui_delivery(
+                &services,
+                timeout,
+                message_id,
+                &incoming,
+                generation.as_ref(),
+            );
             let _ = sender.send(outcome);
         });
+        // Drop the handles of executors that have already finished, so a
+        // long-lived transport does not accumulate one per delivery it ever
+        // made. Only live executors need observing.
+        self.executors.retain(|handle| !handle.is_finished());
+        self.executors.push(handle);
         receiver
     }
 
@@ -206,6 +278,10 @@ impl Transport for UiTransport {
         true
     }
 
+    fn can_accept_handover(&self) -> bool {
+        true
+    }
+
     fn shutdown(&mut self) {}
 
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {
@@ -223,9 +299,23 @@ fn run_ui_delivery(
     timeout: Duration,
     message_id: String,
     incoming: &UiIncomingMessage,
+    generation: &UiGeneration,
 ) -> SingleDeliveryOutcome {
     let start = Instant::now();
     loop {
+        // The cooperative stop check. Reached at the top of every reconnect
+        // poll, so a fenced generation ceases within one poll interval without
+        // needing the destructive step. Resolving `not_submitted` is sound
+        // rather than conservative: no broadcast has been attempted on this
+        // iteration, so nothing can have reached a subscriber.
+        if generation.is_fenced() {
+            return terminal(
+                message_id,
+                SendOutcome::NotSubmitted,
+                Some(UI_GENERATION_FENCED_CODE.to_string()),
+                Some("UI generation was fenced before this delivery emitted".to_string()),
+            );
+        }
         if shutdown_requested() {
             let _ = (services.emit_phase)(UiOutcomePhase {
                 message_id: message_id.clone(),
@@ -263,6 +353,14 @@ fn run_ui_delivery(
             }
         }
 
+        if generation.is_revoked() {
+            return terminal(
+                message_id,
+                SendOutcome::NotSubmitted,
+                Some(UI_GENERATION_FENCED_CODE.to_string()),
+                Some("UI generation was terminated before this delivery emitted".to_string()),
+            );
+        }
         match (services.broadcast_incoming)(incoming) {
             UiBroadcastStatus::Delivered => {
                 let _ = (services.emit_phase)(UiOutcomePhase {
@@ -295,10 +393,17 @@ fn timeout_if_elapsed(
     timeout: Duration,
 ) -> Option<SingleDeliveryOutcome> {
     if start.elapsed() >= timeout {
+        // `not_submitted`, not `timeout`. The reconnect wait elapses only on the
+        // `NoUi` branch, which means no broadcast was ever attempted — so this is
+        // positive evidence that nothing reached a subscriber, and the transport
+        // is entitled to say so. Reporting elapsed time as its own outcome would
+        // be the absence-inferred spelling this delivery contract retires, and it
+        // would collapse into `submission_unknown` at the guard, understating
+        // what the transport actually knows.
         return Some(terminal(
             message_id.to_string(),
-            SendOutcome::Timeout,
-            None,
+            SendOutcome::NotSubmitted,
+            Some(UI_RECONNECT_ELAPSED_CODE.to_string()),
             Some(format!(
                 "ui relay stream was disconnected for {}ms",
                 start.elapsed().as_millis()

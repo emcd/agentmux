@@ -26,28 +26,31 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::Instant,
 };
 
 use serde_json::json;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::configuration::{PromptReadinessTemplate, TargetConfiguration};
+use crate::configuration::TargetConfiguration;
 use crate::envelope::{PromptBatchSettings, batch_envelope_groups};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::transports::{
-    DeliveryDiagnosticContext, DeliveryEnvelope, DeliveryWaitError, LookMode, LookSnapshotPayload,
-    OutcomeFuture, OutputView, QuiescenceBounds, SendOutcome, SingleDeliveryOutcome,
-    StartupContext, Transport, TransportError, TransportReadiness, TransportStatus,
+    DeliveryEnvelope, DeliveryWaitError, GenerationFence, LookMode, LookSnapshotPayload,
+    OutcomeFuture, OutputView, SendOutcome, SingleDeliveryOutcome, StartupContext, Transport,
+    TransportError, TransportReadiness, TransportStatus,
 };
 
 /// Default tmux look window applied when the caller omits a window size.
 const LOOK_LINES_DEFAULT: usize = 120;
 
-use super::pane::{capture_pane_tail_lines, inject_literal_text, resolve_active_pane_target};
-use super::quiescence_probe::{RealPaneQuiescenceProbe, wait_for_quiescent_pane_three_state};
+use super::pane::{
+    TmuxInvocationSlot, capture_pane_tail_lines, inject_literal_text, publish_tmux_invocations,
+    resolve_active_pane_target, terminate_published_invocation,
+};
+use super::quiescence_probe::{PaneQuiescenceProbe, RealPaneQuiescenceProbe};
 
 const TMUX_TARGET_UNAVAILABLE_CODE: &str = "tmux_target_unavailable";
+const TMUX_DELIVERY_THREAD_STOPPED_CODE: &str = "tmux_delivery_thread_stopped";
 
 /// Capacity of the internal write channel. Sized to absorb bursts from the
 /// relay worker without unbounded growth; the delivery task drains continuously.
@@ -96,8 +99,8 @@ enum WriteItem {
 }
 
 /// Context captured at `startup` for the internal delivery task.
+#[derive(Clone)]
 struct DeliveryTaskContext {
-    namespace: String,
     target_session: String,
     runtime_directory: PathBuf,
     target_member: crate::configuration::BundleMember,
@@ -112,8 +115,15 @@ struct DeliveryTaskContext {
 pub struct TmuxTransport {
     batch_settings: PromptBatchSettings,
     sender: Option<mpsc::Sender<WriteItem>>,
+    task_handle: Option<thread::JoinHandle<()>>,
     task_context: Option<DeliveryTaskContext>,
     shutdown_flag: Arc<AtomicBool>,
+    /// The tmux client invocation the delivery thread is currently waiting on.
+    ///
+    /// Retained so the fence's forced step has something to signal: dropping the
+    /// channel reaches a thread between items, and nothing else reaches one
+    /// parked in a tmux client call.
+    invocation: TmuxInvocationSlot,
 }
 
 impl std::fmt::Debug for TmuxTransport {
@@ -121,6 +131,13 @@ impl std::fmt::Debug for TmuxTransport {
         f.debug_struct("TmuxTransport")
             .field("batch_settings", &self.batch_settings)
             .field("sender", &self.sender.as_ref().map(|_| "..."))
+            .field(
+                "task_running",
+                &self
+                    .task_handle
+                    .as_ref()
+                    .map(|handle| !handle.is_finished()),
+            )
             .finish()
     }
 }
@@ -131,29 +148,54 @@ impl TmuxTransport {
         Self {
             batch_settings,
             sender: None,
+            task_handle: None,
             task_context: None,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
+            invocation: TmuxInvocationSlot::default(),
         }
     }
 
     /// Starts the internal delivery task if not already running and `startup()`
-    /// has been called. Returns `true` if the task is running (or just started).
-    fn ensure_task_running(&mut self) -> bool {
-        if self.sender.is_some() {
-            return true;
+    /// has been called. Returns an error when startup was omitted or the task
+    /// has stopped after startup.
+    fn ensure_task_running(&mut self) -> Result<(), &'static str> {
+        if let Some(handle) = self.task_handle.as_ref()
+            && handle.is_finished()
+        {
+            let handle = self
+                .task_handle
+                .take()
+                .expect("finished task handle must still be present");
+            let _ = handle.join();
+            self.sender = None;
+            return Err(TMUX_DELIVERY_THREAD_STOPPED_CODE);
         }
-        let ctx = match self.task_context.take() {
+        if let Some(handle) = self.task_handle.as_ref() {
+            if self.sender.is_some() && !handle.is_finished() {
+                return Ok(());
+            }
+            self.sender = None;
+            return Err(TMUX_DELIVERY_THREAD_STOPPED_CODE);
+        }
+        if self.sender.is_some() {
+            self.sender = None;
+            return Err(TMUX_DELIVERY_THREAD_STOPPED_CODE);
+        }
+        let ctx = match self.task_context.clone() {
             Some(ctx) => ctx,
-            None => return false,
+            None => return Err("transport_not_started"),
         };
         let (sender, receiver) = mpsc::channel(WRITE_CHANNEL_CAPACITY);
-        self.sender = Some(sender);
         let shutdown_flag = Arc::clone(&self.shutdown_flag);
         let batch_settings = self.batch_settings;
-        thread::spawn(move || {
+        let invocation = Arc::clone(&self.invocation);
+        let task_handle = thread::spawn(move || {
+            publish_tmux_invocations(invocation);
             run_delivery_task(receiver, ctx, shutdown_flag, batch_settings);
         });
-        true
+        self.sender = Some(sender);
+        self.task_handle = Some(task_handle);
+        Ok(())
     }
 
     /// Enqueues a write item on the channel. If the channel is full or closed,
@@ -180,10 +222,40 @@ impl TmuxTransport {
     }
 }
 
+impl GenerationFence for TmuxTransport {
+    fn fence_generation(&mut self) {
+        // The delivery thread already checks this flag between write items, so
+        // marking it is the whole cooperative request.
+        self.shutdown_flag.store(true, Ordering::Release);
+    }
+
+    fn terminate_generation(&mut self) {
+        // Two effect paths, and the channel only reaches one of them. Dropping
+        // the sender returns a thread parked waiting for its next item; it does
+        // nothing at all for one blocked inside a tmux client call, which is the
+        // case that made the cooperative step fail in the first place. Signalling
+        // the invocation is what unblocks that thread so the observation after
+        // this can succeed.
+        //
+        // The tmux **server** is deliberately untouched. It is not owned by this
+        // generation — it holds the operator's sessions, and terminating it to
+        // fence one delivery would destroy work the fence exists to protect.
+        terminate_published_invocation(&self.invocation);
+        self.sender = None;
+    }
+
+    fn generation_ceased(&self) -> bool {
+        // A generation that never started a delivery thread owns no executor and
+        // has trivially ceased.
+        self.task_handle
+            .as_ref()
+            .is_none_or(thread::JoinHandle::is_finished)
+    }
+}
+
 impl Transport for TmuxTransport {
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
         self.task_context = Some(DeliveryTaskContext {
-            namespace: context.namespace,
             target_session: context.target_member.id.clone(),
             runtime_directory: context.runtime_directory,
             target_member: context.target_member,
@@ -195,13 +267,18 @@ impl Transport for TmuxTransport {
 
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
         let (sender, receiver) = oneshot::channel();
-        if !self.ensure_task_running() {
+        if let Err(reason_code) = self.ensure_task_running() {
+            let reason = if reason_code == "transport_not_started" {
+                "mailw called before startup()"
+            } else {
+                "mailw called after the delivery thread stopped"
+            };
             let _ = sender.send(SingleDeliveryOutcome {
                 target_session: String::new(),
                 message_id: envelope.message_id.clone(),
                 outcome: SendOutcome::Failed,
-                reason_code: Some("transport_not_started".to_string()),
-                reason: Some("mailw called before startup()".to_string()),
+                reason_code: Some(reason_code.to_string()),
+                reason: Some(reason.to_string()),
                 details: None,
             });
             return receiver;
@@ -212,13 +289,18 @@ impl Transport for TmuxTransport {
 
     fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
         let (sender, receiver) = oneshot::channel();
-        if !self.ensure_task_running() {
+        if let Err(reason_code) = self.ensure_task_running() {
+            let reason = if reason_code == "transport_not_started" {
+                "raww called before startup()"
+            } else {
+                "raww called after the delivery thread stopped"
+            };
             let _ = sender.send(SingleDeliveryOutcome {
                 target_session: String::new(),
                 message_id: String::new(),
                 outcome: SendOutcome::Failed,
-                reason_code: Some("transport_not_started".to_string()),
-                reason: Some("raww called before startup()".to_string()),
+                reason_code: Some(reason_code.to_string()),
+                reason: Some(reason.to_string()),
                 details: None,
             });
             return receiver;
@@ -231,9 +313,40 @@ impl Transport for TmuxTransport {
         true
     }
 
+    fn can_accept_handover(&self) -> bool {
+        let Some(sender) = self.sender.as_ref() else {
+            return false;
+        };
+        let Some(handle) = self.task_handle.as_ref() else {
+            return false;
+        };
+        if handle.is_finished() || sender.is_closed() {
+            return false;
+        }
+        let Some(context) = self.task_context.as_ref() else {
+            return false;
+        };
+        let TargetConfiguration::Tmux(target) = &context.target_member.target else {
+            return false;
+        };
+        let socket = tmux_socket_path_for_runtime_directory(context.runtime_directory.as_path());
+        let Ok(mut probe) = RealPaneQuiescenceProbe::new(
+            socket.as_path(),
+            context.target_session.as_str(),
+            target.prompt_readiness.as_ref(),
+        ) else {
+            return false;
+        };
+        probe
+            .next_evaluation()
+            .is_ok_and(|evaluation| evaluation.ready)
+    }
+
     fn shutdown(&mut self) {
         self.shutdown_flag.store(true, Ordering::Release);
         self.sender = None;
+        self.task_handle = None;
+        self.task_context = None;
     }
 
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {
@@ -259,11 +372,6 @@ fn run_delivery_task(
 ) {
     let tmux_socket_path = tmux_socket_path_for_runtime_directory(ctx.runtime_directory.as_path());
 
-    let prompt_readiness = match &ctx.target_member.target {
-        TargetConfiguration::Tmux(tmux_target) => tmux_target.prompt_readiness.clone(),
-        _ => None,
-    };
-
     // Current envelope group. Accumulates contiguous envelopes; flushed
     // before each raw item (batch barrier) and at channel close / shutdown.
     let mut group: Vec<(DeliveryEnvelope, OutcomeSender)> = Vec::new();
@@ -285,10 +393,7 @@ fn run_delivery_task(
                     flush_and_resolve(
                         &mut group,
                         &tmux_socket_path,
-                        &ctx.namespace,
                         &ctx.target_session,
-                        prompt_readiness.as_ref(),
-                        &mut receiver,
                         &shutdown_flag,
                         batch_settings,
                     );
@@ -309,10 +414,7 @@ fn run_delivery_task(
                     flush_and_resolve(
                         &mut group,
                         &tmux_socket_path,
-                        &ctx.namespace,
                         &ctx.target_session,
-                        prompt_readiness.as_ref(),
-                        &mut receiver,
                         &shutdown_flag,
                         batch_settings,
                     );
@@ -340,10 +442,7 @@ fn run_delivery_task(
                         flush_and_resolve(
                             &mut group,
                             &tmux_socket_path,
-                            &ctx.namespace,
                             &ctx.target_session,
-                            prompt_readiness.as_ref(),
-                            &mut receiver,
                             &shutdown_flag,
                             batch_settings,
                         );
@@ -362,10 +461,7 @@ fn run_delivery_task(
                         flush_and_resolve(
                             &mut group,
                             &tmux_socket_path,
-                            &ctx.namespace,
                             &ctx.target_session,
-                            prompt_readiness.as_ref(),
-                            &mut receiver,
                             &shutdown_flag,
                             batch_settings,
                         );
@@ -378,10 +474,7 @@ fn run_delivery_task(
                         flush_and_resolve(
                             &mut group,
                             &tmux_socket_path,
-                            &ctx.namespace,
                             &ctx.target_session,
-                            prompt_readiness.as_ref(),
-                            &mut receiver,
                             &shutdown_flag,
                             batch_settings,
                         );
@@ -448,168 +541,15 @@ fn drain_group_as_dropped(
 fn flush_and_resolve(
     group: &mut Vec<(DeliveryEnvelope, OutcomeSender)>,
     tmux_socket_path: &Path,
-    namespace: &str,
     target_session: &str,
-    prompt_readiness: Option<&PromptReadinessTemplate>,
-    receiver: &mut mpsc::Receiver<WriteItem>,
     shutdown_flag: &AtomicBool,
     batch_settings: PromptBatchSettings,
 ) {
-    // Use the head envelope's quiescence hints for the entire group.
-    // `prime_timeout_ms` is the operator's opt-in prime window;
-    // `readiness_timeout_ms` is the unconditional bound on the whole wait.
-    //
-    // Both are anchored to the START OF THIS FLUSH GROUP and neither is
-    // reset across coalesce iterations (the spec requires the prime timer
-    // to be anchored to "delivery-task perspective (when flush begins, not
-    // enqueue time)" and to not reset on coalesce-during-wait, and requires
-    // the readiness bound to share that anchor). `QuiescenceBounds` derives
-    // both deadlines from one anchor instant, so a later envelope cannot
-    // extend either; the bounds are computed ONCE here, before the coalesce
-    // loop below, and threaded into every wait call.
-    //
-    // `None` here means the group is empty, which has nothing to deliver.
-    let Some(bounds) =
-        QuiescenceBounds::from_group(group.iter().map(|(envelope, _)| envelope), Instant::now())
-    else {
+    if shutdown_flag.load(Ordering::Acquire) {
+        drain_group_as_dropped(group, target_session);
         return;
-    };
-
-    // Deferred raw item from the post-quiescence drain. Carries across
-    // coalesce loop iterations so the re-check happens before paste.
-    let mut deferred_raw: Option<(String, bool, OutcomeSender)> = None;
-
-    // Coalesce-during-wait loop.
-    loop {
-        if shutdown_flag.load(Ordering::Acquire) {
-            for (envelope, sender) in group.drain(..) {
-                let _ = sender.send(make_dropped_on_shutdown(
-                    target_session,
-                    &envelope.message_id,
-                ));
-            }
-            return;
-        }
-
-        // Build a fresh probe for each wait iteration. The probe wraps
-        // the same tmux queries the legacy wait loop called directly;
-        // wrapping them in a trait object lets us inject scripted probes
-        // from tests.
-        let mut probe = match RealPaneQuiescenceProbe::new(
-            tmux_socket_path,
-            target_session,
-            prompt_readiness,
-        ) {
-            Ok(probe) => probe,
-            Err(error) => {
-                for (envelope, sender) in group.drain(..) {
-                    let _ = sender.send(wait_error_to_outcome(
-                        target_session,
-                        &error,
-                        &envelope.message_id,
-                    ));
-                }
-                return;
-            }
-        };
-
-        // Wait for quiescence (blocks). The same `bounds` is passed on every
-        // coalesce iteration, so absorbed envelopes extend neither the prime
-        // window nor the readiness bound.
-        // Group membership is fixed for this call: unlike Pty, Tmux absorbs
-        // new envelopes only after the wait returns, then starts a new
-        // coalesce iteration with a freshly built diagnostic context.
-        match wait_for_quiescent_pane_three_state(
-            &mut probe,
-            &DeliveryDiagnosticContext::new(
-                namespace,
-                target_session,
-                group
-                    .iter()
-                    .map(|(envelope, _)| envelope.message_id.as_str()),
-            ),
-            &bounds,
-        ) {
-            Ok(_) => {}
-            Err(DeliveryWaitError::Shutdown) => {
-                for (envelope, sender) in group.drain(..) {
-                    let _ = sender.send(make_dropped_on_shutdown(
-                        target_session,
-                        &envelope.message_id,
-                    ));
-                }
-                return;
-            }
-            Err(wait_error) => {
-                for (envelope, sender) in group.drain(..) {
-                    let _ = sender.send(wait_error_to_outcome(
-                        target_session,
-                        &wait_error,
-                        &envelope.message_id,
-                    ));
-                }
-                return;
-            }
-        }
-
-        // Absorb envelopes that arrived during the quiescence wait.
-        // Skip draining if a raw was deferred — the group is finalized
-        // (no more items should cross the raw barrier). Re-check
-        // quiescence for the enlarged group, then paste and deliver.
-        let mut absorbed = false;
-        if deferred_raw.is_none() {
-            loop {
-                match receiver.try_recv() {
-                    Ok(WriteItem::Envelope(env, sender)) => {
-                        group.push((*env, sender));
-                        absorbed = true;
-                    }
-                    Ok(WriteItem::Raw(content, append_enter, sender)) => {
-                        if absorbed {
-                            deferred_raw = Some((content, append_enter, sender));
-                            break;
-                        } else {
-                            paste_group(group, tmux_socket_path, target_session, batch_settings);
-                            let _ = sender.send(deliver_raw(
-                                tmux_socket_path,
-                                target_session,
-                                &content,
-                                append_enter,
-                            ));
-                            return;
-                        }
-                    }
-                    Err(mpsc::error::TryRecvError::Empty) => break,
-                    Err(mpsc::error::TryRecvError::Disconnected) => {
-                        paste_group(group, tmux_socket_path, target_session, batch_settings);
-                        drain_remaining_as_dropped(receiver, target_session);
-                        return;
-                    }
-                }
-            }
-        }
-
-        if absorbed {
-            // New envelopes arrived during quiescence. Re-check.
-            // deferred_raw (if any) carries over to the next iteration.
-            continue;
-        }
-
-        break; // No new envelopes. Ready to paste.
     }
-
-    // Paste the group. Each sender gets its own message_id.
     paste_group(group, tmux_socket_path, target_session, batch_settings);
-
-    // Deliver the deferred raw (batch barrier) if one was saved.
-    if let Some((content, append_enter, sender)) = deferred_raw {
-        let _ = sender.send(deliver_raw(
-            tmux_socket_path,
-            target_session,
-            &content,
-            append_enter,
-        ));
-    }
 }
 
 /// Renders the group's structured messages into pane-envelope text, combines
@@ -890,5 +830,61 @@ impl OutputView for TmuxOutputView {
             details: Some(json!({ "cause": reason })),
         })?;
         Ok(LookSnapshotPayload::Lines { snapshot_lines })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::envelope::AddressIdentity;
+
+    fn test_envelope() -> DeliveryEnvelope {
+        DeliveryEnvelope {
+            message_id: "stopped-thread-message".to_string(),
+            message: crate::transports::DeliveryMessage {
+                body: "test body".to_string(),
+                created_at: "2026-08-01T00:00:00Z".to_string(),
+                namespace: "test-ns".to_string(),
+                sender: AddressIdentity {
+                    session_name: "sender@test-ns".to_string(),
+                    display_name: None,
+                },
+                target: AddressIdentity {
+                    session_name: "target@test-ns".to_string(),
+                    display_name: None,
+                },
+                cc: Vec::new(),
+                authenticated_identity: None,
+                on_behalf_of: None,
+            },
+            append_enter: true,
+            choice_decider_sessions: Vec::new(),
+            quiet_window: std::time::Duration::from_millis(50),
+            prime_timeout_ms: None,
+            readiness_timeout_ms: None,
+            is_receipt: false,
+        }
+    }
+
+    #[test]
+    fn mailw_resolves_when_delivery_thread_has_stopped() {
+        let (sender, _receiver) = mpsc::channel(WRITE_CHANNEL_CAPACITY);
+        let task_handle = thread::spawn(|| {});
+        while !task_handle.is_finished() {
+            thread::yield_now();
+        }
+
+        let mut transport = TmuxTransport::new(PromptBatchSettings::default());
+        transport.sender = Some(sender);
+        transport.task_handle = Some(task_handle);
+
+        let outcome = Transport::mailw(&mut transport, test_envelope())
+            .blocking_recv()
+            .expect("stopped delivery thread must resolve mailw");
+        assert_eq!(outcome.outcome, SendOutcome::Failed);
+        assert_eq!(
+            outcome.reason_code.as_deref(),
+            Some("tmux_delivery_thread_stopped")
+        );
     }
 }

@@ -713,7 +713,7 @@ Guard identity SHALL be established in two atomic steps, because a packing unit
 does not exist at authorization:
 
 1. a guard is created at authorization bound to `(batch ID, member ID, attempt
-   ID, transport generation)`;
+   ID)`;
 2. when the transport records its partition, each guard is atomically bound to
    its `PackingUnit ID`.
 

@@ -10,6 +10,9 @@ use super::super::authorization::{
     load_authorization_context, reject_cross_relay_ingress,
 };
 use super::super::connection::BundleCatalog;
+use super::super::delivery::admission::{
+    AdmissionTargetKey, admit, canonical_payload_bytes, rollback_admission,
+};
 use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
 use super::super::identity::{PrincipalType, classify_principal_id};
 use super::super::routing::{
@@ -400,11 +403,26 @@ fn execute_raww(
         }
     };
     let message_id = Uuid::new_v4().to_string();
+    // Mail and raw are variants of one per-target FIFO, so raw input is admitted
+    // against the same per-target and relay-global quota. Its targets are always
+    // writable coder transports, the capability gate above having rejected the
+    // rest, so the not-implemented refusal is unreachable from here.
+    admit(
+        message_id.as_str(),
+        AdmissionTargetKey::new(
+            raww_bundle.bundle_name.as_str(),
+            raww_runtime_directory.as_path(),
+            target_member.id.as_str(),
+        ),
+        target_member.target.session_type(),
+        canonical_payload_bytes(text.as_str()),
+    )?;
     let sender_member = sender.to_bundle_member();
     let choice_decider_sessions =
         choose_authorized_ui_sessions(&target_authorization, &raww_bundle);
     let task = AsyncDeliveryTask {
         bundle: raww_bundle.clone(),
+        admitted: true,
         sender_namespace: home_namespace.to_string(),
         sender: sender_member,
         // Raw input does not carry verified sender attribution, and its targets
@@ -440,7 +458,12 @@ fn execute_raww(
         TargetConfiguration::Acp(_)
         | TargetConfiguration::Tmux(_)
         | TargetConfiguration::Pty(_) => {
-            enqueue_async_delivery(task)?;
+            if let Err(error) = enqueue_async_delivery(task) {
+                // No queue entry was created, so nothing will terminalize this
+                // reservation; release it here rather than leaking it.
+                rollback_admission(message_id.as_str());
+                return Err(error);
+            }
         }
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
             unreachable!("capability gate in prepare_raww rejects can_be_written = false targets")

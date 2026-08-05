@@ -158,6 +158,80 @@ exported from `src/relay/mod.rs`.
   - tmux/process adapters used by delivery and look paths.
 - `delivery/`
   - transport-specific delivery decomposition:
+  - `admission.rs`: the request-boundary admission gate and its quota ledger.
+    Every accepted entry reserves envelope count and canonical payload bytes
+    against a per-target and a relay-global limit, atomically across both, before
+    `queued` is returned; the reservation is released at terminalization and
+    nowhere else. Three refusals happen here rather than after queueing: an
+    exhausted quota, an envelope whose canonical payload exceeds its transport's
+    maximum handover dimensions, and a `Pubsub` target, which is refused
+    synchronously so no work is authorized merely to discover the
+    forward-declared stub. Also owns the shared "which transport will deliver
+    this target" judgement (`resolve_target_session_type`,
+    `target_is_relay_wide`), because admission is the first point that needs it
+    and the delivery worker delegates to it rather than deciding again.
+    Also owns undelivered-queue reporting, driven on an interval arm in the
+    relay host's accept loop: a periodic aggregate (suppressed entirely when
+    nothing is waiting, so an idle relay writes no recurring zero) and a
+    first-crossing warning per target. The warning is deduplicated per target
+    rather than per entry, because the condition an operator acts on is that a
+    target is not draining; re-arming is structural, since a target's usage
+    record — and with it the warned flag — is dropped when its last entry
+    terminalizes. Neither emission resolves an entry, releases quota, or changes
+    a scheduling position: this is the only duration-triggered mechanism left on
+    the waiting side, and it is sound because elapsing produces a record and
+    nothing else. Both the quota limits and the reporting intervals come from
+    `relay.toml`'s `[delivery]` table, published once during relay startup before
+    the listener binds; before that (in tests, and on any path that never hosts a
+    relay) reads fall back to the same defaults a missing `relay.toml` resolves
+    to.
+  - `guard.rs`: the queue entry state model (`Pending`/`Authorized`/`Terminal`),
+    the delivery identities (batch, attempt), the typed
+    submission evidence, and the guard's single evidence order. The types live
+    here but the state itself lives on the admission ledger's entries, under the
+    lock that also releases quota — the terminal transition and the release are
+    one atomic operation, and splitting them across two structures is exactly how
+    a released reservation could end up on a still-live entry. `Pending` is
+    unbounded by design and holds nothing but its own reservation; `Authorized`
+    holds the target's ordering position, which is why the bound belongs on that
+    side. Every lifecycle trigger — collector panic, closed channel, graceful
+    shutdown — terminalizes through the same evidence order rather than choosing
+    an outcome, so a member the relay can prove was never handed to a transport
+    resolves `not_submitted` instead of being smeared into `submission_unknown`
+    by whichever event happened to fire.
+  - `fence.rs`: the five-step generation fence — cooperative stop request,
+    bounded observation, non-blocking forced termination, second bounded
+    observation, verdict. It answers only *has execution ceased?*, which is not
+    the same question as *has this member resolved?*: a member may terminalize
+    `submission_unknown` long before its generation is fenced, while replacement
+    and the target's ordering barriers stay held until the verdict is positive.
+    Steps 1 and 3 are kept distinct because step 3 is destructive — collapsing
+    them would tear down a child that was about to stop on its own. Neither
+    observation is a join: no runtime primitive can force a thread blocked in a
+    syscall to return, so a join would reintroduce the unbounded wait the bound
+    exists to close. Timeout and failure both route to a negative verdict, which
+    is fail-stop by choice — a target that admits no new generation is
+    operator-recoverable, and one whose old generation writes alongside a new one
+    is not. The protocol is step-driven rather than awaited, because unit
+    evidence stays admissible through both windows: a caller that awaited the
+    fence as one future would stop collecting the very outcomes the fence exists
+    to let it keep collecting. `acknowledge_fence` is a thin awaiting driver over
+    the same state machine, so there is one implementation.
+    Graceful shutdown is the only thing that fences a generation today, in
+    `shutdown_drain`. The verdict is the resolution cut: still-unresolved members
+    terminalize there through the guard's evidence order from *either* verdict,
+    and only a positive one proceeds to the transport's own teardown — a negative
+    verdict is the finding that those executors were never observed to stop, so
+    reaping and joining them would run the bounded fence straight back into the
+    unbounded wait it exists to replace.
+
+    The **execution watchdog** that `[delivery].submission-timeout-ms` describes
+    is not armed. The bound is over the relay's own supervised code, and it only
+    *is* that once transports record submission evidence at write time: today
+    every coder transport resolves its outcome future after the target has
+    finished responding, so a bound anchored at authorization measures the
+    agent's inference and fences a healthy target mid-turn. Arming lands with the
+    transport-side submission-evidence work, not before it.
   - `dispatch/mod.rs`: delivery dispatch re-export hub.
   - `dispatch/orchestration.rs`: delivery startup, ACP target priming, and the
     enqueue path that registers/feeds the per-target worker.

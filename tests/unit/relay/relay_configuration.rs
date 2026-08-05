@@ -10,8 +10,8 @@ use agentmux::configuration::ConfigurationRoots;
 use std::path::Path;
 
 use agentmux::relay::{
-    PeerConfiguration, load_relay_runtime_configuration, parse_relay_bool_env_value,
-    resolve_relay_bool_setting,
+    DeliveryConfiguration, PeerConfiguration, load_relay_runtime_configuration,
+    parse_relay_bool_env_value, resolve_relay_bool_setting,
 };
 use tempfile::TempDir;
 
@@ -339,6 +339,218 @@ fn rejects_choices_pending_max_out_of_range() {
             .and_then(|field| field.as_str()),
         Some("choices.pending-max"),
     );
+}
+
+/// Reads one detail field off a structured loader rejection, so a test can name
+/// the exact key and bound the loader reported rather than only its error code.
+fn detail<'a>(error: &'a agentmux::relay::RelayError, key: &str) -> Option<&'a serde_json::Value> {
+    error.details.as_ref().and_then(|details| details.get(key))
+}
+
+fn load_delivery(contents: &str) -> Result<DeliveryConfiguration, agentmux::relay::RelayError> {
+    let temporary = TempDir::new().expect("temporary directory");
+    write_relay_toml(temporary.path(), contents);
+    load_relay_runtime_configuration(&ConfigurationRoots::single(temporary.path()), None, None)
+        .map(|configuration| configuration.delivery)
+}
+
+#[test]
+fn delivery_defaults_when_relay_toml_absent() {
+    let temporary = TempDir::new().expect("temporary directory");
+
+    let delivery =
+        load_relay_runtime_configuration(&ConfigurationRoots::single(temporary.path()), None, None)
+            .expect("load relay configuration")
+            .delivery;
+
+    assert_eq!(delivery.scheduling_quantum_bytes, 262_144);
+    assert_eq!(delivery.submission_timeout_ms, 5_000);
+    assert_eq!(delivery.fence_observation_timeout_ms, 5_000);
+    assert_eq!(delivery.queued_envelopes_max, 10_000);
+    assert_eq!(delivery.queued_bytes_max, 268_435_456);
+    assert_eq!(delivery.queued_envelopes_per_target_max, 1_000);
+    assert_eq!(delivery.queued_bytes_per_target_max, 33_554_432);
+    assert_eq!(delivery.undelivered_warning_ms, 1_800_000);
+    assert_eq!(delivery.undelivered_report_interval_ms, 300_000);
+}
+
+#[test]
+fn loads_explicit_delivery_settings() {
+    let delivery = load_delivery(
+        "[delivery]\n\
+         scheduling-quantum-bytes = 524288\n\
+         submission-timeout-ms = 1500\n\
+         fence-observation-timeout-ms = 2500\n\
+         queued-envelopes-max = 5000\n\
+         queued-bytes-max = 134217728\n\
+         queued-envelopes-per-target-max = 500\n\
+         queued-bytes-per-target-max = 16777216\n\
+         undelivered-warning-ms = 900000\n\
+         undelivered-report-interval-ms = 60000\n",
+    )
+    .expect("load delivery configuration");
+
+    assert_eq!(delivery.scheduling_quantum_bytes, 524_288);
+    assert_eq!(delivery.submission_timeout_ms, 1_500);
+    assert_eq!(delivery.fence_observation_timeout_ms, 2_500);
+    assert_eq!(delivery.queued_envelopes_max, 5_000);
+    assert_eq!(delivery.queued_bytes_max, 134_217_728);
+    assert_eq!(delivery.queued_envelopes_per_target_max, 500);
+    assert_eq!(delivery.queued_bytes_per_target_max, 16_777_216);
+    assert_eq!(delivery.undelivered_warning_ms, 900_000);
+    assert_eq!(delivery.undelivered_report_interval_ms, 60_000);
+}
+
+/// A partial `[delivery]` table takes the documented default for every key it
+/// omits, rather than zeroing them.
+#[test]
+fn partial_delivery_table_defaults_the_rest() {
+    let delivery = load_delivery("[delivery]\nsubmission-timeout-ms = 750\n")
+        .expect("load delivery configuration");
+
+    assert_eq!(delivery.submission_timeout_ms, 750);
+    assert_eq!(delivery.queued_envelopes_max, 10_000);
+    assert_eq!(delivery.undelivered_warning_ms, 1_800_000);
+}
+
+#[test]
+fn rejects_out_of_range_undelivered_warning() {
+    let error = load_delivery("[delivery]\nundelivered-warning-ms = 59999\n")
+        .expect_err("reject warning below the permitted minimum");
+
+    assert_eq!(error.code, "validation_invalid_arguments");
+    assert_eq!(
+        detail(&error, "field").and_then(serde_json::Value::as_str),
+        Some("delivery.undelivered-warning-ms"),
+    );
+    assert_eq!(
+        detail(&error, "value").and_then(serde_json::Value::as_u64),
+        Some(59_999),
+    );
+    assert_eq!(
+        detail(&error, "minimum").and_then(serde_json::Value::as_u64),
+        Some(60_000),
+    );
+    assert_eq!(
+        detail(&error, "maximum").and_then(serde_json::Value::as_u64),
+        Some(86_400_000),
+    );
+}
+
+/// Zero is out of range for every `[delivery]` key and carries no "unlimited"
+/// meaning; it is rejected with the same structured range error as any other
+/// out-of-range value rather than a bespoke one.
+#[test]
+fn rejects_zero_as_a_quota() {
+    let error =
+        load_delivery("[delivery]\nqueued-envelopes-max = 0\n").expect_err("reject a zero quota");
+
+    assert_eq!(error.code, "validation_invalid_arguments");
+    assert_eq!(
+        detail(&error, "field").and_then(serde_json::Value::as_str),
+        Some("delivery.queued-envelopes-max"),
+    );
+    assert_eq!(
+        detail(&error, "minimum").and_then(serde_json::Value::as_u64),
+        Some(1),
+    );
+}
+
+#[test]
+fn rejects_per_target_envelope_quota_above_global() {
+    let error = load_delivery(
+        "[delivery]\nqueued-envelopes-max = 100\nqueued-envelopes-per-target-max = 101\n",
+    )
+    .expect_err("reject unreachable per-target quota");
+
+    assert_eq!(error.code, "validation_invalid_arguments");
+    assert_eq!(
+        detail(&error, "field").and_then(serde_json::Value::as_str),
+        Some("delivery.queued-envelopes-per-target-max"),
+    );
+    assert_eq!(
+        detail(&error, "value").and_then(serde_json::Value::as_u64),
+        Some(101),
+    );
+    assert_eq!(
+        detail(&error, "global_field").and_then(serde_json::Value::as_str),
+        Some("delivery.queued-envelopes-max"),
+    );
+    assert_eq!(
+        detail(&error, "global_value").and_then(serde_json::Value::as_u64),
+        Some(100),
+    );
+}
+
+#[test]
+fn rejects_per_target_byte_quota_above_global() {
+    let error = load_delivery(
+        "[delivery]\nqueued-bytes-max = 2097152\nqueued-bytes-per-target-max = 4194304\n",
+    )
+    .expect_err("reject unreachable per-target byte quota");
+
+    assert_eq!(
+        detail(&error, "field").and_then(serde_json::Value::as_str),
+        Some("delivery.queued-bytes-per-target-max"),
+    );
+    assert_eq!(
+        detail(&error, "global_field").and_then(serde_json::Value::as_str),
+        Some("delivery.queued-bytes-max"),
+    );
+}
+
+/// Per-target quota equal to the relay-global quota is reachable and therefore
+/// permitted; only a strictly larger one is the mistake.
+#[test]
+fn accepts_per_target_quota_equal_to_global() {
+    let delivery = load_delivery(
+        "[delivery]\nqueued-envelopes-max = 100\nqueued-envelopes-per-target-max = 100\n",
+    )
+    .expect("accept per-target quota equal to global");
+
+    assert_eq!(delivery.queued_envelopes_per_target_max, 100);
+}
+
+/// A quantum inside its own numeric range can still be too small to carry one
+/// maximal handover, which is a stall rather than a slowdown, so the two bounds
+/// are checked independently.
+#[test]
+fn rejects_quantum_below_a_transport_handover_maximum() {
+    let error = load_delivery("[delivery]\nscheduling-quantum-bytes = 65536\n")
+        .expect_err("reject quantum below the largest declared handover payload");
+
+    assert_eq!(error.code, "validation_invalid_arguments");
+    assert_eq!(
+        detail(&error, "field").and_then(serde_json::Value::as_str),
+        Some("delivery.scheduling-quantum-bytes"),
+    );
+    assert_eq!(
+        detail(&error, "value").and_then(serde_json::Value::as_u64),
+        Some(65_536),
+    );
+    assert_eq!(
+        detail(&error, "canonical_bytes_max").and_then(serde_json::Value::as_u64),
+        Some(262_144),
+    );
+    assert!(detail(&error, "session_type").is_some());
+}
+
+/// The control for the rejection above: equality is the intended relationship, so
+/// a quantum exactly at the largest declared handover payload is accepted.
+#[test]
+fn accepts_quantum_equal_to_the_handover_maximum() {
+    let delivery = load_delivery("[delivery]\nscheduling-quantum-bytes = 262144\n")
+        .expect("accept quantum equal to the largest declared handover payload");
+
+    assert_eq!(delivery.scheduling_quantum_bytes, 262_144);
+}
+
+#[test]
+fn rejects_unknown_delivery_field() {
+    let error = load_delivery("[delivery]\nreadiness-timeout-ms = 1000\n")
+        .expect_err("reject unknown delivery key");
+
+    assert_eq!(error.code, "validation_invalid_arguments");
 }
 
 #[test]
