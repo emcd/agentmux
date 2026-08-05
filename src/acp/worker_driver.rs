@@ -163,7 +163,14 @@ pub struct AcpWorkerDriver {
     /// give-up and outlives no driver.
     respawn_abandoned: Arc<AtomicBool>,
     /// Latch for the health axis; see [`Transport::health`].
-    unreachable_since: UnreachableSince,
+    ///
+    /// Shared with the respawn monitor so the instant is recorded at the
+    /// give-up transition rather than at the first later `health()` call. The
+    /// dwell measures how long the target has been unreachable, not how long
+    /// since someone happened to ask: a member arriving well after a permanent
+    /// failure would otherwise wait a fresh full dwell for a target that was
+    /// already known to be gone.
+    unreachable_since: Arc<UnreachableSince>,
 }
 
 impl AcpWorkerDriver {
@@ -188,7 +195,7 @@ impl AcpWorkerDriver {
             respawn_monitor: None,
             bootstrap_task: None,
             respawn_abandoned: Arc::new(AtomicBool::new(false)),
-            unreachable_since: UnreachableSince::default(),
+            unreachable_since: Arc::new(UnreachableSince::default()),
         }
     }
 
@@ -266,6 +273,7 @@ impl AcpWorkerDriver {
                 member: target_member,
             },
             Arc::clone(&self.respawn_abandoned),
+            Arc::clone(&self.unreachable_since),
         )));
     }
 }
@@ -501,6 +509,17 @@ async fn initial_acp_bootstrap(
 /// Grouped rather than passed as three parallel parameters: they are one
 /// cohesive identity — which target, where its runtime lives, and how it is
 /// configured — and every re-establish attempt needs all three together.
+/// The health signals a respawn writes when it gives up on a target.
+///
+/// Paired rather than passed separately because they are one fact recorded in
+/// two places — that the target is past recovery, and when that became true —
+/// and separating them is exactly how the instant came to be stamped at first
+/// enquiry instead of at the transition.
+struct AbandonmentSignal<'a> {
+    abandoned: &'a AtomicBool,
+    unreachable_since: &'a UnreachableSince,
+}
+
 struct AcpRespawnTarget {
     namespace: String,
     runtime_directory: PathBuf,
@@ -514,6 +533,7 @@ async fn acp_respawn_monitor(
     mut respawn_state: AcpRespawnState,
     target: AcpRespawnTarget,
     respawn_abandoned: Arc<AtomicBool>,
+    unreachable_since: Arc<UnreachableSince>,
 ) {
     let poll = Duration::from_millis(RESPAWN_MONITOR_POLL_MS);
     loop {
@@ -572,7 +592,10 @@ async fn acp_respawn_monitor(
             target.namespace.as_str(),
             target.runtime_directory.as_path(),
             &target.member,
-            respawn_abandoned.as_ref(),
+            AbandonmentSignal {
+                abandoned: respawn_abandoned.as_ref(),
+                unreachable_since: unreachable_since.as_ref(),
+            },
         )
         .await;
         // Reset the signal so a later Unavailable turn re-triggers the monitor.
@@ -596,7 +619,7 @@ async fn run_acp_respawn(
     namespace: &str,
     runtime_directory: &Path,
     target_member: &BundleMember,
-    respawn_abandoned: &AtomicBool,
+    abandonment: AbandonmentSignal<'_>,
 ) {
     let target_session = target_member.id.as_str();
     // Release the dead runtime (joining its child + reader thread) but keep the
@@ -709,7 +732,15 @@ async fn run_acp_respawn(
                     // `Unavailable` is survivable, so this is the only signal
                     // that separates a target worth waiting for from one that
                     // will never come back.
-                    respawn_abandoned.store(true, Ordering::Release);
+                    // Both halves of the same fact, recorded together: that this
+                    // target is past recovery, and when that became true. Stamping
+                    // the instant here rather than leaving it to whenever a member
+                    // next asks is what keeps the dwell measuring how long the
+                    // target has been unreachable — starting the clock on first
+                    // enquiry would charge a late arrival a full fresh dwell for a
+                    // target already known to be gone.
+                    abandonment.abandoned.store(true, Ordering::Release);
+                    let _ = abandonment.unreachable_since.fold(false);
                     transport
                         .lock()
                         .expect("acp transport mutex poisoned")

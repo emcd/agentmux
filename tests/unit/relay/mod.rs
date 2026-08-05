@@ -66,6 +66,15 @@ fn configure_short_unreachable_dwell() {
     });
 }
 
+/// A dwell long enough that no test window reaches it, for asserting that an
+/// unreachable target is *held* rather than resolved.
+fn configure_long_unreachable_dwell() {
+    agentmux::relay::configure_delivery(agentmux::relay::DeliveryConfiguration {
+        unreachable_dwell_ms: 600_000,
+        ..Default::default()
+    });
+}
+
 fn write_tui_configuration(roots: &ConfigurationRoots, policy: &str) {
     std::fs::write(
         roots.base_layer().join("users.toml"),

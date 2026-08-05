@@ -892,3 +892,42 @@ fn await_path(path: &std::path::Path, message: &str) {
         std::thread::sleep(Duration::from_millis(20));
     }
 }
+
+/// A recovery clears the latch, so a later failure cannot claim the dwell using
+/// time during which the target was demonstrably reachable.
+///
+/// The dwell bounds *continuous* unreachability. If the latch survived an
+/// intervening successful observation, two brief unrelated outages separated by
+/// a healthy period would sum toward one threshold and bounce a target that was
+/// never unreachable for anything like that long — which is the failure mode the
+/// "sustained, never first-observation" rule exists to prevent, arriving by a
+/// different route.
+#[test]
+fn a_reachable_observation_clears_the_unreachable_latch() {
+    use agentmux::transports::{TransportHealth, UnreachableSince};
+
+    let latch = UnreachableSince::default();
+
+    let TransportHealth::Unreachable { since: first } = latch.fold(false) else {
+        panic!("an unreachable observation reports unreachable");
+    };
+    // Latched, not restarted: a clock that resets on every observation never
+    // elapses, so a continuous-unreachability bound would be unreachable.
+    let TransportHealth::Unreachable { since: still_first } = latch.fold(false) else {
+        panic!("a repeated unreachable observation stays unreachable");
+    };
+    assert_eq!(
+        first, still_first,
+        "the latch reports when unreachability began, not when it was last observed"
+    );
+
+    assert_eq!(latch.fold(true), TransportHealth::Healthy);
+
+    let TransportHealth::Unreachable { since: after } = latch.fold(false) else {
+        panic!("a later failure reports unreachable again");
+    };
+    assert!(
+        after > first,
+        "a failure after a recovery starts a fresh clock rather than resuming the old one"
+    );
+}

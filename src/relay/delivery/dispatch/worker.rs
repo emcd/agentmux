@@ -14,7 +14,9 @@ use crate::{
     runtime::signals::shutdown_requested,
 };
 
-use super::super::super::{AsyncDeliveryTask, DeliveryPayloadMode, RelayError};
+use super::super::super::{
+    AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendOutcome, SendResult,
+};
 use super::envelope::{
     build_acp_driver_services, build_coder_envelope, build_ui_envelope, build_worker_transport,
 };
@@ -299,18 +301,28 @@ struct SubmitContext<'a> {
 /// The outcome for a member whose target was unreachable for longer than the
 /// dwell allows.
 ///
-/// `not_submitted` in the guard's terms: the member was never authorized and
-/// never handed to a transport, so this is a positive claim that nothing reached
-/// the target rather than the weaker unknown.
-fn target_unreachable_error(target_session: &str, dwell: Duration) -> RelayError {
-    super::super::super::relay_error(
-        "delivery_target_unreachable",
-        "target could not be reached for longer than the configured dwell",
-        Some(json!({
-            "target_session": target_session,
+/// `not_submitted`, not `failed`. The member was never authorized and never
+/// handed to a transport, so nothing could have reached the target — that is
+/// positive evidence of non-delivery, which is exactly what `NotSubmitted`
+/// asserts and what `Failed` does not.
+///
+/// Returned as `Ok` rather than `Err` deliberately: the error branch of the
+/// terminal transition spells everything `Failed`, and only the `Ok` branch is
+/// reconciled against recorded evidence. A never-authorized member has no
+/// recorded evidence, so this spelling passes through as given.
+fn target_unreachable_result(task: &AsyncDeliveryTask, dwell: Duration) -> SendResult {
+    SendResult {
+        target_session: task.target_session.clone(),
+        message_id: task.message_id.clone(),
+        outcome: SendOutcome::NotSubmitted,
+        reason_code: Some("delivery_target_unreachable".to_string()),
+        reason: Some(
+            "target could not be reached for longer than the configured dwell".to_string(),
+        ),
+        details: Some(json!({
             "unreachable_dwell_ms": dwell.as_millis() as u64,
         })),
-    )
+    }
 }
 
 /// Submits one task to its transport via the non-blocking write seam and spawns
@@ -365,24 +377,29 @@ fn submit_task(
     // with no delivery path, so gating it would hold a member no transport can
     // ever accept; it is rejected synchronously below instead.
     if !matches!(transport, TransportImpl::Pubsub) {
-        // Health first, because it is what bounds the wait. A target that has
-        // been *continuously* unreachable past the dwell will not become ready
-        // by being waited on, and the member resolves rather than keeping a
-        // place in a queue nothing will drain. Under the dwell it falls through
-        // to the readiness check below and is held like any other unready
-        // target, so an unreachability that ends in time costs nothing.
-        if let TransportHealth::Unreachable { since } = transport.health()
-            && since.elapsed() >= context.unreachable_dwell
-        {
-            super::super::async_worker::complete_task_outcome(
-                &task,
-                Err(target_unreachable_error(
-                    task.target_session.as_str(),
-                    context.unreachable_dwell,
-                )),
-            );
-            super::super::async_worker::release_pending_slot(pending);
-            return None;
+        // Both axes are required, and neither substitutes for the other. Health
+        // is read first because it is what bounds the wait, and an unreachable
+        // target is never authorized whatever readiness says — a transport that
+        // cannot reach its target has nothing useful to report about whether that
+        // target is at a prompt.
+        match transport.health() {
+            // Continuously unreachable past the dwell. Waiting will not make this
+            // target ready, so the member resolves rather than keeping a place in
+            // a queue nothing will drain.
+            TransportHealth::Unreachable { since }
+                if since.elapsed() >= context.unreachable_dwell =>
+            {
+                super::super::async_worker::complete_task_outcome(
+                    &task,
+                    Ok(target_unreachable_result(&task, context.unreachable_dwell)),
+                );
+                super::super::async_worker::release_pending_slot(pending);
+                return None;
+            }
+            // Unreachable but not yet past the dwell: hold, exactly as an unready
+            // target is held. An unreachability that ends in time costs nothing.
+            TransportHealth::Unreachable { .. } => return Some(task),
+            TransportHealth::Healthy => {}
         }
         if !transport.is_ready_for_handover() {
             return Some(task);

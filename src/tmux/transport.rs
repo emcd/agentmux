@@ -359,7 +359,16 @@ impl Transport for TmuxTransport {
     }
 
     fn is_ready_for_handover(&self) -> bool {
-        self.observe_pane() == Some(true)
+        // Folds into the health latch as well as answering readiness. Every
+        // observation of this pane is evidence about reachability, and letting
+        // only `health()` fold left the latch able to survive an intervening
+        // successful observation — a later failure could then satisfy the dwell
+        // using time during which the pane was demonstrably reachable.
+        let observation = self.observe_pane();
+        // The latch update is the point here; the level it returns is `health`'s
+        // to report.
+        let _ = self.unreachable_since.fold(observation.is_some());
+        observation == Some(true)
     }
 
     fn health(&self) -> TransportHealth {

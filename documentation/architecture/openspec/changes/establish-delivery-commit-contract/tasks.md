@@ -54,13 +54,13 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Add the level-triggered `is_ready_for_handover` state to the transport contract, readable on demand
 - [x] Add static maximum handover dimensions in envelope count and canonical payload bytes
 - [x] Remove the weaker `is_ready` predicate from the transport contract so one readiness question remains, and drop the default body that could answer it wrongly
-- [ ] Gate authorization on `is_ready_for_handover` during the `Pending` phase, so no batch is authorized for a target that cannot take a handover
+- [x] Gate authorization on `is_ready_for_handover` during the `Pending` phase, so no batch is authorized for a target that cannot take a handover
 - [ ] Keep prompt-readiness evaluation inside each owning transport, feeding `is_ready_for_handover`; the relay compiles no `prompt_regex`, inspects no pane output, and compares no cursor column
-- [ ] Add `TransportHealth` to the transport contract as a level distinct from readiness, carrying the instant unreachability was first observed
-- [ ] Require both axes for a delivery attempt: `Healthy` and `is_ready_for_handover`, with healthy-but-unready leaving the member `Pending`
-- [ ] Add the `[delivery]` dwell threshold and resolve still-`Pending` members through the guard once their target has been continuously unreachable past it, releasing quota on that terminal transition
-- [ ] Reset the dwell on any return to `Healthy`, so a transient unreachability resolves nothing
-- [ ] Report health from each transport without a relay dependency: Tmux distinguishes a failed pane observation from an observed non-prompt frame; ACP reads its permanence signal (`is_permanent` / respawn give-up) rather than treating every `Unavailable` as unreachable, so a recoverable respawn gap does not bounce
+- [x] Add `TransportHealth` to the transport contract as a level distinct from readiness, carrying the instant unreachability was first observed
+- [x] Require both axes for a delivery attempt: `Healthy` and `is_ready_for_handover`, with healthy-but-unready leaving the member `Pending`
+- [x] Add the `[delivery]` dwell threshold and resolve still-`Pending` members through the guard once their target has been continuously unreachable past it, releasing quota on that terminal transition
+- [x] Reset the dwell on any return to `Healthy`, so a transient unreachability resolves nothing
+- [x] Report health from each transport without a relay dependency: Tmux distinguishes a failed pane observation from an observed non-prompt frame; ACP reads its permanence signal (`is_permanent` / respawn give-up) rather than treating every `Unavailable` as unreachable, so a recoverable respawn gap does not bounce
 - [ ] Carry the health level in `look` responses and keep `look` served on an unreachable target; `raww` inherits the write gate through the shared ordered channel
 - [ ] Construct the worker's transport at worker spawn rather than on first write, passing the target member the spawn site already holds, and resolve the triggering task if construction fails
 - [ ] Wire the readiness notification as a relay-provided closure the transport invokes, with subscribe-before-check and a bounded poll backstop
@@ -117,7 +117,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Delete the five per-coder keys and their loader, validation, and default machinery
 - [x] Add the `relay.toml` `[delivery]` table with submission timeout, quantum, fence-observation bound, the four admission-quota keys, and the two undelivered-reporting keys
 - [x] Validate `scheduling-quantum-bytes` at load against every registered transport's maximum handover dimension
-- [ ] Add the `[delivery]` unreachable-dwell key that bounds how long a target may be continuously unreachable before its `Pending` members resolve
+- [x] Add the `[delivery]` unreachable-dwell key that bounds how long a target may be continuously unreachable before its `Pending` members resolve
 - [ ] Delete `prime_timeout_ms` and `readiness_timeout_ms` from `DeliveryEnvelope`
 
 ### Documentation
