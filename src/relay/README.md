@@ -576,3 +576,65 @@ exported from `src/relay/mod.rs`.
   contract guarantees prompt terminal resolution on shutdown, so the drain is
   bounded; the relay binary additionally tears its runtime down with
   `Runtime::shutdown_timeout` as a final guarantee.
+
+### Connection lifecycle and shutdown
+
+The connection-write and shutdown paths are bounded by mechanisms that
+each came from a specific root-cause fix; both fixes are now canonical
+behavior rather than incidents.
+
+- **Half-open zombie socket.** Each connection's writer task
+  (`spawn_stream_writer`, `src/relay/stream/mod.rs:289-315`) wraps every
+  `write_all + flush` in `relay_connection_write_timeout`
+  (`src/relay/stream/mod.rs:323-330`). On timeout or write error the
+  writer exits and drops its receiver, so further `send` calls surface
+  `SendError`. **A bare writer break alone strands a half-open zombie**:
+  `OwnedWriteHalf::drop` issues `shutdown(Write)` on the socket while
+  the read loop remains parked on `read_line().await` with no
+  post-hello read timeout, so the relay keeps reading from a
+  half-closed peer and the peer's MSG_PEEK liveness check sees EOF
+  (`0` = "stale"). The fix is the read-vs-writer race in
+  `serve_connection` (`src/relay/connection/mod.rs:332-354`, a
+  `tokio::select!` over the frame loop, the writer handle, and the
+  per-connection revoke signal): a writer exit cancels the parked
+  read loop, the `RegistrationGuard` drop below unregisters the
+  stream, and the client observes a clean EOF on both halves and
+  reconnects. Landed in `c963e5d`; covered by the stalled-client,
+  idle-UI-flood, and `user@GLOBAL` cases in
+  `tests/unit/relay_stream/robustness.rs`.
+- **SIGTERM → 90s → SIGKILL shutdown hang.** Dropping the relay's
+  `#[tokio::main]` runtime blocks until every `spawn_blocking` task
+  finishes, and an unbounded `wait_for_prompt_complete()` pins its
+  blocking thread forever. The current shape layers three bounds:
+  (a) per-target ACP workers poll `shutdown_requested()` between
+  receives and the single-flight prompt wait is bounded
+  (`wait_for_prompt_complete(timeout)`, `src/acp/client.rs:443-458`),
+  so the blocking thread is interruptible across shutdown; (b) the
+  worker's shutdown drain
+  (`src/relay/delivery/dispatch/worker.rs:289-301`) explicitly calls
+  `transport.shutdown()` (`AcpStdioClient::shutdown()` at
+  `src/acp/client.rs:473-484` kills/reaps the child); `Drop for
+  AcpStdioClient` at `src/acp/client.rs:801-805` is the defensive
+  backstop that calls the same `shutdown()` method if the transport is
+  dropped without an explicit one; (c) the host's bounded
+  `wait_for_async_delivery_shutdown`
+  (`src/relay/delivery/async_worker.rs:102-114`) bounds the join
+  window, and the relay binary tears its runtime down with
+  `Runtime::shutdown_timeout` (`src/bin/agentmux.rs:11,47`, with a
+  5s `RELAY_HOST_SHUTDOWN_TIMEOUT` constant) as a final guarantee so
+  any residual stuck blocking task is abandoned within a bounded
+  window rather than hanging the process. Landed through the
+  transport-abstraction + prime-timeout slices and locked in by the
+  `fdec8a9` regression test (RG-approved), merged as `103b644`
+  (`--no-ff`).
+
+The cross-cutting theme is blocking/relayed work whose failure or
+shutdown handling was incomplete: the connection write-timeout's
+failure path was a half-open zombie (one half closed, the other
+pinned), and the delivery runtime's failure path was a pinned
+blocking thread on `Runtime::drop`. Both layers now collapse to
+clean teardown — the connection EOFs both halves and the worker
+returns + drops its child — so the runtime drop is not the single
+commit point. Delivery is unbounded by design (see Delivery above),
+so a stalled client fails that connection rather than throttling
+the relay.
