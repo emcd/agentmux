@@ -225,7 +225,70 @@ pub struct AcpTransport {
     /// A list rather than a single slot, for the same reason this was a count
     /// before it carried handles: an initial bootstrap and a respawn can overlap,
     /// and neither may clear or terminate the other's state.
-    bootstraps: Arc<Mutex<Vec<BootstrapRecord>>>,
+    bootstraps: Arc<BootstrapRegistry>,
+}
+
+/// The in-flight bootstraps of one generation, and whether that generation has
+/// been told to end.
+///
+/// The latch belongs here rather than beside the traversal because a bootstrap's
+/// child is published from inside the closure that spawned it, at a moment
+/// nothing coordinates with the fence. Reading the list once and signalling what
+/// it happened to hold made termination a *moment*: a child published a
+/// microsecond later was never signalled at all, and the closure went on to park
+/// in a handshake with a live agent behind it. As a latched state, the ordering
+/// stops mattering — publication either finds it already set, or is found by the
+/// traversal.
+#[derive(Debug, Default)]
+struct BootstrapRegistry {
+    records: Mutex<Vec<BootstrapRecord>>,
+    /// Set once and never cleared: a generation told to end does not resume.
+    terminating: AtomicBool,
+}
+
+impl BootstrapRegistry {
+    fn records(&self) -> std::sync::MutexGuard<'_, Vec<BootstrapRecord>> {
+        self.records.lock().expect("bootstrap registry mutex")
+    }
+
+    fn is_terminating(&self) -> bool {
+        self.terminating.load(Ordering::Acquire)
+    }
+
+    /// Latches termination and makes one non-blocking pass over *every* record.
+    ///
+    /// Idempotent, and registry-wide on purpose. A per-record handoff is not
+    /// enough here: this registry exists because an initial bootstrap and a
+    /// respawn can overlap, so the holder that defeats a traversal attempt is
+    /// generally not the owner of the records that attempt would have reached.
+    /// A publisher that served only itself left every other live bootstrap
+    /// unsignalled with nothing scheduled to look again.
+    fn initiate_termination(&self) {
+        self.terminating.store(true, Ordering::Release);
+        // Attempted, never taken: step 3 is contracted to block nowhere. What
+        // this cannot reach is reached by whoever is holding the lock, when they
+        // release it.
+        if let Ok(records) = self.records.try_lock() {
+            for record in records.iter() {
+                if let Some(generation) = record.generation.as_ref() {
+                    generation.initiate_termination();
+                }
+            }
+        }
+    }
+
+    /// Called by every mutating holder of the records lock, after releasing it.
+    ///
+    /// This is the other half of the handoff. Reading the latch only while
+    /// holding the lock leaves the window where a requester latches, loses its
+    /// attempt to this holder, and the holder then releases without looking
+    /// again — so the read happens here, after release, and it re-runs the whole
+    /// traversal rather than serving one record.
+    fn serve_pending_termination(&self) {
+        if self.is_terminating() {
+            self.initiate_termination();
+        }
+    }
 }
 
 /// One in-flight bootstrap: its guard's identity, and the agent child it owns
@@ -247,24 +310,37 @@ static NEXT_BOOTSTRAP_ID: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug)]
 pub(crate) struct BootstrapInFlight {
     id: u64,
-    bootstraps: Arc<Mutex<Vec<BootstrapRecord>>>,
+    bootstraps: Arc<BootstrapRegistry>,
 }
 
 impl BootstrapInFlight {
     /// Publishes the agent child this bootstrap owns, making it reachable by the
-    /// fence's forced step for as long as this guard lives.
+    /// fence's forced step for as long as this guard lives — and ends it here if
+    /// the forced step has already gone past.
+    ///
+    /// The handoff after the release is registry-wide, not this record alone: a
+    /// traversal that lost its attempt to this holder was trying to reach every
+    /// live bootstrap, and serving only the one published here would leave the
+    /// rest of them alive with nothing scheduled to look again.
     pub(crate) fn publish_generation(&self, generation: AcpGenerationHandle) {
-        let mut bootstraps = self.bootstraps.lock().expect("bootstrap registry mutex");
-        if let Some(record) = bootstraps.iter_mut().find(|record| record.id == self.id) {
-            record.generation = Some(generation);
+        {
+            let mut records = self.bootstraps.records();
+            if let Some(record) = records.iter_mut().find(|record| record.id == self.id) {
+                record.generation = Some(generation);
+            }
         }
+        self.bootstraps.serve_pending_termination();
     }
 }
 
 impl Drop for BootstrapInFlight {
     fn drop(&mut self) {
-        let mut bootstraps = self.bootstraps.lock().expect("bootstrap registry mutex");
-        bootstraps.retain(|record| record.id != self.id);
+        self.bootstraps
+            .records()
+            .retain(|record| record.id != self.id);
+        // A dropping guard holds the same lock a traversal attempt can lose to,
+        // so it owes the same handoff a publisher does.
+        self.bootstraps.serve_pending_termination();
     }
 }
 
@@ -300,7 +376,7 @@ impl AcpTransport {
             delivery_task_handle: None,
             generation: None,
             fenced: Arc::new(AtomicBool::new(false)),
-            bootstraps: Arc::new(Mutex::new(Vec::new())),
+            bootstraps: Arc::new(BootstrapRegistry::default()),
         }
     }
 
@@ -449,16 +525,26 @@ impl AcpTransport {
     }
 
     /// Registers a bootstrap as running until the returned guard drops.
+    ///
+    /// A bootstrap begun behind an already-terminating generation is registered
+    /// like any other rather than refused: it inherits the latch, so the child it
+    /// is about to spawn is ended at publication. Refusing here instead would
+    /// leave the caller holding no guard and the fence with nothing counting it.
     #[must_use]
     pub(crate) fn begin_bootstrap(&self) -> BootstrapInFlight {
         let id = NEXT_BOOTSTRAP_ID.fetch_add(1, Ordering::Relaxed);
-        self.bootstraps
-            .lock()
-            .expect("bootstrap registry mutex")
-            .push(BootstrapRecord {
+        {
+            self.bootstraps.records().push(BootstrapRecord {
                 id,
                 generation: None,
             });
+        }
+        // The third registry writer, and it owes the same handoff as the other
+        // two. Registration holds the lock a traversal attempt can lose to, and
+        // this holder's own record is empty — so serving only itself would serve
+        // nothing, while every already-published bootstrap waited on a pass that
+        // would not happen until this one reached publication.
+        self.bootstraps.serve_pending_termination();
         BootstrapInFlight {
             id,
             bootstraps: Arc::clone(&self.bootstraps),
@@ -556,16 +642,11 @@ impl GenerationFence for AcpTransport {
         // the client drops, and the executor returns — where before, step 3 had
         // nothing to say to it and the fence could only wait out an operation
         // timeout it does not control.
-        for record in self
-            .bootstraps
-            .lock()
-            .expect("bootstrap registry mutex")
-            .iter()
-        {
-            if let Some(generation) = record.generation.as_ref() {
-                generation.initiate_termination();
-            }
-        }
+        //
+        // Latches and attempts one registry-wide pass, blocking nowhere. A
+        // record this attempt cannot see, or cannot reach because someone holds
+        // the lock, is reached when that holder releases and runs the same pass.
+        self.bootstraps.initiate_termination();
         self.write_tx = None;
     }
 
@@ -585,11 +666,7 @@ impl GenerationFence for AcpTransport {
         // generation's steady-state one, which the conjunct above observes.
         // Either way an empty registry means reaped or accounted for, never
         // merely signalled.
-        let no_bootstrap_running = self
-            .bootstraps
-            .lock()
-            .expect("bootstrap registry mutex")
-            .is_empty();
+        let no_bootstrap_running = self.bootstraps.records().is_empty();
         delivery_task_ceased
             && client_ceased
             && no_bootstrap_running

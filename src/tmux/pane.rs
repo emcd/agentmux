@@ -6,8 +6,10 @@ use std::{
     process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Output, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    thread,
+    time::Duration,
 };
 
 const PASTE_BUFFER_NAME_PREFIX: &str = "agentmux-relay";
@@ -15,8 +17,11 @@ const LOOK_LINES_MAX: usize = 1000;
 
 static PASTE_BUFFER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
-/// The `tmux` client invocation a generation's executor currently owns, or
-/// `None` when it is between invocations.
+/// How often a reap re-checks a still-running invocation.
+const INVOCATION_REAP_POLL_MS: u64 = 10;
+
+/// The `tmux` client invocation a generation's executor currently owns, and
+/// whether that generation has been told to end.
 ///
 /// The [`Child`] itself, not its pid. A pid is only a safe thing to signal while
 /// the process it names is unreaped — once reaped, the number is free for the
@@ -24,7 +29,26 @@ static PASTE_BUFFER_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 /// unrelated process took it. Holding the unreaped `Child` here is what reserves
 /// the identity: reaping happens through this same slot, under this same lock,
 /// so there is no interval in which the slot names a process we no longer own.
-pub(crate) type TmuxInvocationSlot = Arc<Mutex<Option<Child>>>;
+///
+/// The latch sits beside it because an executor makes a *sequence* of
+/// invocations, and the slot is empty between them. Signalling whatever the slot
+/// happened to hold made termination a moment: it could land in a gap, find
+/// nothing, and let the very next invocation start and block unreachably. As a
+/// latched state, an invocation published afterwards ends at its publication.
+#[derive(Debug, Default)]
+pub(crate) struct TmuxInvocationOwner {
+    child: Mutex<Option<Child>>,
+    /// Set once and never cleared: a generation told to end does not resume.
+    terminating: AtomicBool,
+}
+
+pub(crate) type TmuxInvocationSlot = Arc<TmuxInvocationOwner>;
+
+impl TmuxInvocationOwner {
+    fn is_terminating(&self) -> bool {
+        self.terminating.load(Ordering::Acquire)
+    }
+}
 
 thread_local! {
     /// The slot this thread publishes its tmux invocations into.
@@ -51,11 +75,13 @@ pub(crate) fn publish_tmux_invocations(slot: TmuxInvocationSlot) {
 /// and terminating it to fence one delivery would destroy the work the fence
 /// exists to protect.
 ///
-/// `try_lock` keeps the call non-blocking, as step 3 is contracted to be. The
-/// lock is held only across the reap, so failing to take it means the invocation
-/// is already exiting and there is nothing left to signal.
+/// Latches the request first, then makes one non-blocking attempt to serve it,
+/// as step 3 is contracted to be. Neither a failed `try_lock` nor an empty slot
+/// loses the request: whoever holds the lock serves the latch as it reaps, and
+/// whoever publishes next serves it on publication.
 pub(crate) fn terminate_published_invocation(slot: &TmuxInvocationSlot) {
-    if let Ok(mut held) = slot.try_lock()
+    slot.terminating.store(true, Ordering::Release);
+    if let Ok(mut held) = slot.child.try_lock()
         && let Some(child) = held.as_mut()
     {
         let _ = child.kill();
@@ -73,13 +99,17 @@ struct PublishedInvocation {
 
 impl PublishedInvocation {
     /// Takes ownership of `child`, publishing it if this thread has a slot.
+    ///
+    /// An invocation started behind an already-terminating generation is ended at
+    /// once rather than refused: refusing would leave a spawned child owned by
+    /// nobody, and the caller still needs something to reap.
     fn record(mut child: Child) -> (Self, Option<ChildStdout>, Option<ChildStderr>) {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let slot = PUBLISHED_INVOCATIONS.with(|published| published.borrow().clone());
         let owned = match slot {
             Some(slot) => {
-                let published = match slot.lock() {
+                let published = match slot.child.lock() {
                     Ok(mut held) => {
                         *held = Some(child);
                         None
@@ -90,10 +120,22 @@ impl PublishedInvocation {
                     Err(_) => Some(child),
                 };
                 match published {
-                    None => Self {
-                        slot: Some(slot),
-                        unpublished: None,
-                    },
+                    None => {
+                        // Read after the lock is released, not under it. A check
+                        // taken while holding the slot leaves the window where
+                        // the forced step latches, fails its non-blocking attempt
+                        // against this very publisher, and this publisher then
+                        // releases without looking again — leaving the executor
+                        // to block on a child nothing will signal. Reading here
+                        // makes the two sides cover each other.
+                        if slot.is_terminating() {
+                            terminate_published_invocation(&slot);
+                        }
+                        Self {
+                            slot: Some(slot),
+                            unpublished: None,
+                        }
+                    }
                     Some(child) => Self {
                         slot: None,
                         unpublished: Some(child),
@@ -108,8 +150,20 @@ impl PublishedInvocation {
         (owned, stdout, stderr)
     }
 
-    /// Reaps the invocation, clearing the slot in the same critical section so
-    /// no signaller can observe a pid this process no longer owns.
+    /// Reaps the invocation, keeping it reachable until its exit has actually
+    /// been observed and clearing the slot in the same critical section as the
+    /// reap.
+    ///
+    /// Polled through `try_wait` rather than parked in `wait`, because the wait
+    /// is the interval that most needs the child to stay reachable. A tmux client
+    /// can close its pipes and remain alive; draining then returns, and a
+    /// blocking `wait` taken *after* removing the child from the slot left the
+    /// executor stuck on a process the fence could no longer name. Holding the
+    /// lock across a blocking `wait` would be no better — step 3 only ever tries
+    /// for that lock, so it would fail and find nothing.
+    ///
+    /// The latch is re-served on every tick: a request that arrived while this
+    /// loop held the lock is honoured here rather than lost.
     fn reap(mut self) -> io::Result<ExitStatus> {
         if let Some(mut child) = self.unpublished.take() {
             return child.wait();
@@ -117,15 +171,28 @@ impl PublishedInvocation {
         let Some(slot) = self.slot.take() else {
             return Err(io::Error::other("tmux invocation slot poisoned"));
         };
-        let mut child = slot
-            .lock()
-            .map_err(|_| io::Error::other("tmux invocation slot poisoned"))?
-            .take()
-            .ok_or_else(|| io::Error::other("tmux invocation was already reaped"))?;
-        let status = child.wait();
-        // `child` drops here, still inside no lock but already reaped and no
-        // longer reachable from the slot.
-        status
+        let poll = Duration::from_millis(INVOCATION_REAP_POLL_MS);
+        loop {
+            {
+                let mut held = slot
+                    .child
+                    .lock()
+                    .map_err(|_| io::Error::other("tmux invocation slot poisoned"))?;
+                let child = held
+                    .as_mut()
+                    .ok_or_else(|| io::Error::other("tmux invocation was already reaped"))?;
+                if slot.is_terminating() {
+                    let _ = child.kill();
+                }
+                if let Some(status) = child.try_wait()? {
+                    // Cleared only now that the process is reaped, so the slot
+                    // never names a pid this process no longer owns.
+                    *held = None;
+                    return Ok(status);
+                }
+            }
+            thread::sleep(poll);
+        }
     }
 }
 

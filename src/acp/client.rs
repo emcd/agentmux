@@ -118,7 +118,61 @@ pub struct AcpStdioClient {
     last_prompt_signal: Mutex<Option<mpsc::Receiver<()>>>,
 }
 
-type SharedChild = Arc<Mutex<Child>>;
+/// The agent child, and the latch saying it has been told to end.
+///
+/// The two live together because the latch's whole purpose is to be honoured by
+/// whoever holds the child: a termination request that arrives while the lock is
+/// taken must not be dropped just because it could not be served at that instant.
+#[derive(Debug)]
+struct SupervisedChild {
+    child: Mutex<Child>,
+    /// Set once and never cleared. Read *after* every release of the child lock,
+    /// so a request that lost a `try_lock` is served by whoever was holding it
+    /// rather than lost.
+    terminating: AtomicBool,
+}
+
+type SharedChild = Arc<SupervisedChild>;
+
+impl SupervisedChild {
+    /// Runs `action` against the child, then serves any termination request that
+    /// arrived while the lock was held.
+    ///
+    /// Every lock of the child goes through here. Step 3 is contracted
+    /// non-blocking, so it can only ever *try* for the lock, and something has to
+    /// answer for the attempts that fail.
+    ///
+    /// The latch is read after the guard is dropped, and that ordering is the
+    /// whole mechanism. Reading it while still holding the lock leaves a window
+    /// nothing covers: the holder sees `false`, the request is latched, its
+    /// `try_lock` fails against the holder that has already looked, and the
+    /// holder then releases without looking again. Both sides have to be able to
+    /// serve the request for either to be allowed to give up on it — hence: if
+    /// the store lands before the release, this read sees it; if it lands after,
+    /// the requester's own attempt finds the lock free.
+    fn with_child<R>(&self, action: impl FnOnce(&mut Child) -> R) -> Option<R> {
+        let outcome = {
+            let mut child = self.child.lock().ok()?;
+            action(&mut child)
+        };
+        if self.terminating.load(Ordering::Acquire) {
+            self.initiate_termination();
+        }
+        Some(outcome)
+    }
+
+    /// Latches the termination request, then makes one non-blocking attempt to
+    /// serve it. A failed attempt is not a failure: whoever holds the lock reads
+    /// the latch as it releases and serves it there.
+    ///
+    /// Idempotent, so the release-point handoff can simply call it again.
+    fn initiate_termination(&self) {
+        self.terminating.store(true, Ordering::Release);
+        if let Ok(mut child) = self.child.try_lock() {
+            let _ = child.kill();
+        }
+    }
+}
 
 /// The fencing surface of one ACP generation, detached from the client that
 /// owns it.
@@ -138,10 +192,13 @@ impl AcpGenerationHandle {
     /// The fence's forced step: signals the child and returns. Killing it closes
     /// its stdio, which unblocks a reader parked in `read_line` and a writer
     /// parked on its stdin — the executors a cooperative flag cannot reach.
+    ///
+    /// Latches the request before attempting it, and never blocks. Taking the
+    /// lock outright would have parked step 3 behind a teardown holding it
+    /// across `wait`, which is exactly the blocking the step is contracted not
+    /// to do.
     pub fn initiate_termination(&self) {
-        if let Ok(mut child) = self.child.lock() {
-            let _ = child.kill();
-        }
+        self.child.initiate_termination();
     }
 
     /// Whether the reader thread of this generation has left its loop.
@@ -276,7 +333,10 @@ impl AcpStdioClient {
         );
 
         Ok(Self {
-            child: Arc::new(Mutex::new(child)),
+            child: Arc::new(SupervisedChild {
+                child: Mutex::new(child),
+                terminating: AtomicBool::new(false),
+            }),
             stdin,
             replay_buffer,
             pending_tool_calls,
@@ -523,7 +583,7 @@ impl AcpStdioClient {
     }
 
     pub fn child_stderr(&mut self) -> Option<std::process::ChildStderr> {
-        self.child.lock().ok()?.stderr.take()
+        self.child.with_child(|child| child.stderr.take())?
     }
 
     /// Hands out this generation's fencing surface, so a supervisor can keep
@@ -543,10 +603,10 @@ impl AcpStdioClient {
         // reader then drops its clones of the shared stdin, replay buffer,
         // and pending-response registry; pending senders dropped in the
         // registry signal `Disconnected` to any waiters in `prompt`/`request`.
-        if let Ok(mut child) = self.child.lock() {
+        self.child.with_child(|child| {
             let _ = child.kill();
             let _ = child.wait();
-        }
+        });
         if let Some(handle) = self.reader_handle.take() {
             let _ = handle.join();
         }

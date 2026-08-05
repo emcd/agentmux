@@ -682,9 +682,7 @@ fn a_tmux_paste_write_is_reachable_before_its_first_byte() {
     use std::os::unix::fs::PermissionsExt;
     use std::sync::Arc;
 
-    // Comfortably past a 64 KiB pipe buffer, so `write_all` cannot finish into
-    // it and return before the client is ever scheduled.
-    const PAYLOAD_BYTES: usize = 1 << 20;
+    let payload_bytes = blocking_payload_bytes();
 
     let temporary = tempfile::TempDir::new().expect("temporary");
     let fifo = temporary.path().join("block.fifo");
@@ -744,7 +742,7 @@ fn a_tmux_paste_write_is_reachable_before_its_first_byte() {
         })
         .expect("tmux startup");
 
-    let _outcome = transport.raww("x".repeat(PAYLOAD_BYTES), false);
+    let _outcome = transport.raww("x".repeat(payload_bytes), false);
     await_path(
         &loading,
         "the delivery thread should have reached the paste's load-buffer",
@@ -769,6 +767,121 @@ fn a_tmux_paste_write_is_reachable_before_its_first_byte() {
         );
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// An invocation must stay reachable until its exit is actually observed.
+///
+/// Draining an invocation's pipes and waiting for it to exit are different
+/// events, and a tmux client can close its stdio while still running. The reap
+/// used to take the child out of the shared slot and only then block in `wait`,
+/// so for the whole of that wait the fence's forced step looked into an empty
+/// slot and found nothing to signal — while the executor sat on a live process.
+///
+/// The fake client closes stdout and stderr, then blocks. Draining returns at
+/// once on both pipes, which puts the executor into exactly that wait with a
+/// live child; the forced step then has to reach it.
+#[test]
+fn a_tmux_invocation_stays_reachable_until_its_exit_is_observed() {
+    use agentmux::configuration::{BundleMember, TargetConfiguration, TmuxTargetConfiguration};
+    use agentmux::transports::{GenerationFence, StartupContext};
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+
+    let temporary = tempfile::TempDir::new().expect("temporary");
+    let fifo = temporary.path().join("block.fifo");
+    let entered = temporary.path().join("entered");
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    std::fs::write(
+        &fake_tmux,
+        format!(
+            "#!/bin/sh\n\
+             : > '{entered}'\n\
+             [ -p '{fifo}' ] || mkfifo '{fifo}'\n\
+             exec 1>&- 2>&-\n\
+             read line < '{fifo}'\n",
+            entered = entered.display(),
+            fifo = fifo.display(),
+        ),
+    )
+    .expect("write fake tmux");
+    std::fs::set_permissions(&fake_tmux, std::fs::Permissions::from_mode(0o755))
+        .expect("make fake tmux executable");
+    // SAFETY: nextest runs each test in its own process, so no other thread here
+    // races this read of the environment.
+    unsafe { std::env::set_var("AGENTMUX_TMUX_COMMAND", &fake_tmux) };
+
+    let member = BundleMember {
+        id: TEST_TARGET_SESSION.to_string(),
+        name: None,
+        working_directory: None,
+        target: TargetConfiguration::Tmux(TmuxTargetConfiguration {
+            start_command: "/bin/sh".to_string(),
+            prompt_readiness: None,
+            prime_timeout_ms: None,
+            readiness_timeout_ms: 1_000,
+        }),
+        coder_session_id: None,
+        policy_id: None,
+        environment: Vec::new(),
+    };
+    let mut transport = agentmux::tmux::TmuxTransport::new(PromptBatchSettings::default());
+    transport
+        .startup(StartupContext {
+            namespace: "party".to_string(),
+            runtime_directory: temporary.path().to_path_buf(),
+            target_member: member,
+            choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+                decided_by: "test".to_string(),
+                reason_code: "test_cancel".to_string(),
+                reason: None,
+            }),
+        })
+        .expect("tmux startup");
+
+    let _outcome = transport.raww("hello".to_string(), true);
+    await_path(
+        &entered,
+        "the delivery thread should have entered a tmux invocation",
+    );
+    // Past the point where both pipes have hit EOF and the executor is waiting
+    // on a client that has not exited.
+    std::thread::sleep(Duration::from_millis(150));
+
+    transport.fence_generation();
+    std::thread::sleep(Duration::from_millis(150));
+    assert!(
+        !transport.generation_ceased(),
+        "a thread waiting on a live client cannot observe the cooperative flag"
+    );
+
+    transport.terminate_generation();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !transport.generation_ceased() {
+        assert!(
+            Instant::now() < deadline,
+            "the generation did not cease within 5s of forced termination"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// A payload that cannot fit in a pipe, so a write into one with no reader
+/// blocks rather than completing into the buffer.
+///
+/// Derived from the platform's ceiling rather than assumed: a pipe holds 64 KiB
+/// by default on Linux, but a process may enlarge it up to
+/// `/proc/sys/fs/pipe-max-size`, and a constant chosen against the default is a
+/// constant that stops discriminating the moment that changes. Where the ceiling
+/// cannot be read, fall back to a value comfortably past every capacity this
+/// project has encountered.
+fn blocking_payload_bytes() -> usize {
+    const FALLBACK_BYTES: usize = 8 << 20;
+    const PAGE_HEADROOM: usize = 4096;
+
+    std::fs::read_to_string("/proc/sys/fs/pipe-max-size")
+        .ok()
+        .and_then(|value| value.trim().parse::<usize>().ok())
+        .map_or(FALLBACK_BYTES, |ceiling| ceiling + PAGE_HEADROOM)
 }
 
 /// Polls for `path` to appear, panicking with `message` if it does not.

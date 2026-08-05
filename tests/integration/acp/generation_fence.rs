@@ -26,11 +26,22 @@ use super::helpers::*;
 /// `read_line`.
 ///
 /// **What this does not prove.** It does not discriminate ACP's forced
-/// termination primitive. On the shutdown path the cooperative step reaches the
-/// agent by other means, so the fence still reaches a positive verdict with that
-/// primitive reverted. Termination's teeth were only demonstrable under the
-/// execution watchdog, which is no longer armed; if it is re-armed, restore the
-/// watchdog-driven variant of this test with it.
+/// termination primitive, and it deliberately asserts nothing about which
+/// resolution the fence reaches. This stub keeps reading its stdin while
+/// ignoring the prompt, so the cooperative step — which drops the write channel
+/// and closes that stdin — can end the agent on its own. Whether it does so
+/// inside the first observation window is a race with the process exiting, so
+/// the resolution is legitimately either `cooperative` or `forced`. An earlier
+/// version asserted `forced` and was flaky for exactly that reason, while its
+/// comment claimed the reader always parks somewhere no cooperative request can
+/// reach — which is true of the *bootstrap* tests below, where the agent never
+/// answers, and false here.
+///
+/// Termination's teeth against a steady-state generation were only demonstrable
+/// under the execution watchdog, which is no longer armed; if it is re-armed,
+/// restore the watchdog-driven variant of this test with it. What this test
+/// still holds down is the fate of the process, which is the part the relay's
+/// own account of a generation cannot fake.
 ///
 /// The second half asserts the invariant that lets the guard key drop its
 /// generation component: a fenced generation admits no replacement. The dying
@@ -69,7 +80,7 @@ fn a_fenced_acp_generation_leaves_no_surviving_child() {
     assert_eq!(result.outcome, SendOutcome::Queued);
 
     let pid_path = acp_child_pid_path(temporary.path());
-    let child_pids = await_recorded_child_pids(&pid_path);
+    let child_pids = await_recorded_child_pids(&pid_path, "bravo");
 
     // The real signal, not a test-only flag: this is the production trigger.
     // The guard restores the previous handlers and clears the flag on drop, so
@@ -95,11 +106,6 @@ fn a_fenced_acp_generation_leaves_no_surviving_child() {
         verdict.contains("\"verdict\":\"positive\""),
         "the fence must establish cessation rather than fail stop: {verdict}"
     );
-    assert!(
-        verdict.contains("\"resolution\":\"forced\""),
-        "the ACP reader parks in a blocking read, so no cooperative request can \
-         reach it and the destructive step is always required: {verdict}"
-    );
 
     for pid in child_pids.iter().copied() {
         await_process_gone(pid);
@@ -108,32 +114,50 @@ fn a_fenced_acp_generation_leaves_no_surviving_child() {
     // Settle past the monitor's poll interval and a respawn's backoff, so a
     // replacement that was going to be installed would have appeared by now.
     std::thread::sleep(Duration::from_secs(2));
-    let after = std::fs::read_to_string(&pid_path).unwrap_or_default();
-    let started_total = after
-        .lines()
-        .filter(|line| line.trim().parse::<i32>().is_ok())
-        .count();
+    let after = recorded_child_pids(&pid_path, "bravo");
     assert_eq!(
-        started_total,
+        after.len(),
         child_pids.len(),
-        "a fenced generation must admit no replacement agent; pid log: {after:?}"
+        "a fenced generation must admit no replacement agent; recorded: {after:?}"
     );
 }
 
-/// Every child pid the stub has recorded so far, in the order it started them.
-fn recorded_child_pids(path: &Path) -> Vec<i32> {
+/// Polls until an agent has reached the `initialize` hang, which it signals by
+/// creating the fifo it is about to block on.
+fn await_hang_fifo(root: &Path) {
+    let fifo = root.join("acp_hang_initialize.fifo");
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !fifo.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "no agent reached the initialize hang within 20s"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+/// Every child pid the stub has recorded for `target_session`, in the order it
+/// started them.
+///
+/// Scoped by session because every member of the bundle appends to one file.
+/// Taking a pid off the end of the whole file attributed whichever member
+/// happened to start last to the target an assertion names — the same unscoped
+/// reading that once let a fence assertion pass on an idle sibling's verdict.
+fn recorded_child_pids(path: &Path, target_session: &str) -> Vec<i32> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
-        .filter_map(|line| line.trim().parse::<i32>().ok())
+        .filter_map(|line| line.split_once(' '))
+        .filter(|(session, _)| *session == target_session)
+        .filter_map(|(_, pid)| pid.trim().parse::<i32>().ok())
         .collect()
 }
 
-/// Polls until the stub has recorded at least one child pid.
-fn await_recorded_child_pids(path: &Path) -> Vec<i32> {
+/// Polls until the stub has recorded at least one child pid for `target_session`.
+fn await_recorded_child_pids(path: &Path, target_session: &str) -> Vec<i32> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let pids = recorded_child_pids(path);
+        let pids = recorded_child_pids(path, target_session);
         if !pids.is_empty() {
             return pids;
         }
@@ -202,12 +226,7 @@ fn await_inscription(path: &Path, event: &str, scope: &str) -> String {
 /// the monitor starts a respawn — and a second that blocks inside `initialize`,
 /// holding that respawn's bootstrap open across the signal.
 ///
-/// Ignored by default because the respawn backoffs that get a bootstrap open at
-/// the right moment cost about thirty seconds, which is too much to pay on every
-/// commit. The pre-push hook runs it; see
-/// `.auxiliary/configuration/pre-commit.yaml`.
 #[test]
-#[ignore = "~30s: holds a bootstrap open across a signal; run at pre-push"]
 fn a_fence_ends_a_respawn_bootstrap() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
@@ -228,17 +247,30 @@ fn a_fence_ends_a_respawn_bootstrap() {
 
     let _ = send_result(dispatch_send(&config_root, &tmux_socket));
 
-    // Both bundle members respawn, so a replacement agent for every one of them
-    // has to be up before the signal; otherwise the fence could land before the
-    // bootstrap this test is about has started.
+    // The target's *second* agent is the respawn this test is about: the first
+    // disconnected on its prompt, and the replacement is the one that hangs in
+    // `initialize`. Waiting on the target's own count rather than a bundle-wide
+    // one is what makes this the respawn of `bravo` and not of whichever member
+    // happened to reach two first.
     let pid_path = acp_child_pid_path(temporary.path());
-    await_recorded_agents(&pid_path, 4);
-    // The most recent agent is the one parked in `initialize`, holding this
-    // respawn's bootstrap open. Earlier ones have already been killed and reaped
-    // by the respawns that replaced them, so they say nothing about the fence.
-    let hung_agent = *recorded_child_pids(&pid_path)
+    await_recorded_agents(&pid_path, "bravo", 2);
+    // `bravo`'s most recent agent is the one parked in `initialize`, holding this
+    // respawn's bootstrap open. Read from `bravo`'s own records: both members
+    // respawn into the same file, so the last line overall belongs to whichever
+    // of them happened to start last, which is not the target this asserts on.
+    // Earlier agents were killed and reaped by the respawns that replaced them,
+    // so they say nothing about the fence.
+    let hung_agent = *recorded_child_pids(&pid_path, "bravo")
         .last()
-        .expect("at least one agent recorded");
+        .expect("at least one agent recorded for the target");
+    // A recorded pid only means the stub started; it is written before the
+    // agent has read anything. The fifo is created immediately before the read
+    // that blocks on it, so its existence is the first moment an agent is
+    // actually parked in `initialize` with a bootstrap held open behind it.
+    // Signalling on the pid alone left a window — wide enough to matter under
+    // load — in which the fence could land before there was a hung bootstrap to
+    // find, and then resolve cooperatively.
+    await_hang_fifo(temporary.path());
 
     let _signal_guard = agentmux::runtime::signals::install_shutdown_signal_handlers()
         .expect("install shutdown signal handlers");
@@ -260,6 +292,12 @@ fn a_fence_ends_a_respawn_bootstrap() {
         verdict.contains("\"verdict\":\"positive\""),
         "the fence must end the respawn's bootstrap rather than wait out an \
          operation timeout it does not control: {verdict}"
+    );
+    assert!(
+        verdict.contains("\"resolution\":\"forced\""),
+        "a bootstrap parked on an agent that will not answer is not reachable by \
+         any cooperative request, so reaching this positive without escalating \
+         would mean the bootstrap was not in flight at all: {verdict}"
     );
 
     // The verdict claims cessation; this is the process it claimed it about.
@@ -326,7 +364,7 @@ fn a_fence_ends_a_hung_initial_bootstrap() {
     // the bundle starts, so this pid is its initial bootstrap's child, and
     // nothing but the fence will end it.
     let pid_path = acp_child_pid_path(temporary.path());
-    let child_pids = await_recorded_child_pids(&pid_path);
+    await_recorded_child_pids(&pid_path, "alpha");
 
     let _signal_guard = agentmux::runtime::signals::install_shutdown_signal_handlers()
         .expect("install shutdown signal handlers");
@@ -353,8 +391,20 @@ fn a_fence_ends_a_hung_initial_bootstrap() {
          any cooperative request: {verdict}"
     );
 
-    // The verdict claims cessation; this is the process it claimed it about.
-    for pid in child_pids.iter().copied() {
+    // Read *after* the verdict, not snapshotted before the signal. A child
+    // spawned between the signal and the verdict is precisely the one a
+    // one-shot traversal of the bootstrap registry would have missed: it
+    // publishes into a record the forced step has already walked past, so a
+    // before-snapshot cannot name it and the assertion would pass over the leak.
+    // Settle past a respawn's poll interval first, so a replacement that was
+    // going to appear has.
+    std::thread::sleep(Duration::from_millis(500));
+    let recorded = recorded_child_pids(&pid_path, "alpha");
+    assert!(
+        !recorded.is_empty(),
+        "the target must have started at least one agent"
+    );
+    for pid in recorded {
         await_process_gone(pid);
     }
 
@@ -383,21 +433,17 @@ fn await_dispatch_thread(finished: &std::sync::mpsc::Receiver<()>, root: &Path) 
     }
 }
 
-/// Polls until the stub has recorded at least `count` agents.
-fn await_recorded_agents(path: &Path, count: usize) {
+/// Polls until the stub has recorded at least `count` agents for `target_session`.
+fn await_recorded_agents(path: &Path, target_session: &str, count: usize) {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
-        let recorded = std::fs::read_to_string(path)
-            .unwrap_or_default()
-            .lines()
-            .filter(|line| line.trim().parse::<i32>().is_ok())
-            .count();
+        let recorded = recorded_child_pids(path, target_session).len();
         if recorded >= count {
             return;
         }
         assert!(
             Instant::now() < deadline,
-            "only {recorded} of {count} agents started within 20s"
+            "only {recorded} of {count} {target_session} agents started within 20s"
         );
         std::thread::sleep(Duration::from_millis(100));
     }

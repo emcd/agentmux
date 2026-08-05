@@ -109,25 +109,3 @@ repos:
       stages: [ 'pre-push' ]
       always_run: true
       fail_fast: true
-
-    # Generation-fence tests that are ignored by default because they cost tens
-    # of seconds each -- holding a bootstrap open across a signal is inherently
-    # slow, and paying for it on every commit is the wrong trade. Selected by
-    # module rather than by test name, so a slow fence test added alongside them
-    # is picked up without editing this entry. Deliberately NOT `--run-ignored
-    # ignored-only` across the whole suite: most ignored tests are ignored
-    # because they are blocked on unimplemented work, not because they are slow,
-    # and running those here would fail every push.
-    - id: cargo-nextest-generation-fence
-      name: 'Test (Rust: Generation Fence, slow)'
-      language: system
-      entry: >-
-        cargo nextest run --locked
-        --config-file .auxiliary/configuration/nextest.toml
-        --run-ignored ignored-only
-        -E 'test(/^acp::generation_fence::/)'
-      pass_filenames: false
-      require_serial: true
-      stages: [ 'pre-push' ]
-      always_run: true
-      fail_fast: true

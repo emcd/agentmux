@@ -107,10 +107,17 @@ set -eu
 
 log_file="${ACP_LOG_FILE:?}"
 pid_file="${ACP_PID_FILE:-}"
+session="${AGENTMUX_SESSION:-unknown}"
+# How many agents THIS target has already started. Counted per session, not
+# across the file: every member of the bundle appends here, so a global count
+# makes "the second agent" mean whichever member happened to start second, and
+# a member's *initial* bootstrap can be mistaken for a respawn.
 prior_agents=0
 if [ -n "$pid_file" ]; then
-  [ -f "$pid_file" ] && prior_agents=$(wc -l < "$pid_file")
-  printf '%s\n' "$$" >> "$pid_file"
+  if [ -f "$pid_file" ]; then
+    prior_agents=$(grep -c "^${session} " "$pid_file" || true)
+  fi
+  printf '%s %s\n' "$session" "$$" >> "$pid_file"
 fi
 fail_initialize="${FAIL_INITIALIZE:-0}"
 fail_load="${FAIL_LOAD:-0}"
