@@ -52,8 +52,8 @@ use crate::configuration::BundleMember;
 use crate::configuration::TermProtocol;
 use crate::transports::{
     DeliveryDiagnosticContext, DeliveryEnvelope, GenerationFence, OutcomeFuture, OutputView,
-    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportReadiness,
-    TransportStatus, WedgeProbe, WorkerReadinessState,
+    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportHealth,
+    TransportReadiness, TransportStatus, UnreachableSince, WedgeProbe, WorkerReadinessState,
 };
 
 /// Mirrors the worker readiness state into the relay's global registry.
@@ -179,6 +179,8 @@ pub struct PtyTransport {
     worker_handle: Option<thread::JoinHandle<()>>,
     /// Handle to the reader thread. Joined by `shutdown`.
     reader_handle: Option<thread::JoinHandle<()>>,
+    /// Latch for the health axis; see [`Transport::health`].
+    unreachable_since: UnreachableSince,
     /// Live handle to the spawned child. `shutdown` kills and reaps.
     child: Option<Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>,
     /// Per-transport readiness state. The relay thread reads it via
@@ -266,6 +268,7 @@ impl PtyTransport {
             write_tx: None,
             bytes_tx: None,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
+            unreachable_since: UnreachableSince::default(),
             worker_handle: None,
             reader_handle: None,
             child: None,
@@ -872,6 +875,16 @@ impl Transport for PtyTransport {
             // Channel closed; the consumer is gone.
         }
         outcome_rx
+    }
+
+    fn health(&self) -> TransportHealth {
+        // The child exiting is the unreachable case: a pty whose process is gone
+        // has no target left, and unlike ACP there is no respawn monitor that
+        // might bring one back. A live child that is merely `Busy` or
+        // `Initializing` is healthy — those belong to the readiness axis.
+        let reachable =
+            self.write_tx.is_some() && !self.shared.child_exited.load(Ordering::Acquire);
+        self.unreachable_since.fold(reachable)
     }
 
     fn is_ready_for_handover(&self) -> bool {

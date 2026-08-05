@@ -40,7 +40,7 @@ use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::transports::{
     DeliveryEnvelope, DeliveryWaitError, GenerationFence, LookMode, LookSnapshotPayload,
     OutcomeFuture, OutputView, SendOutcome, SingleDeliveryOutcome, StartupContext, Transport,
-    TransportError, TransportReadiness, TransportStatus,
+    TransportError, TransportHealth, TransportReadiness, TransportStatus, UnreachableSince,
 };
 
 /// Default tmux look window applied when the caller omits a window size.
@@ -127,6 +127,8 @@ pub struct TmuxTransport {
     /// channel reaches a thread between items, and nothing else reaches one
     /// parked in a tmux client call.
     invocation: TmuxInvocationSlot,
+    /// Latch for the health axis: when the pane first stopped being observable.
+    unreachable_since: UnreachableSince,
 }
 
 impl std::fmt::Debug for TmuxTransport {
@@ -155,7 +157,41 @@ impl TmuxTransport {
             task_context: None,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             invocation: TmuxInvocationSlot::default(),
+            unreachable_since: UnreachableSince::default(),
         }
+    }
+
+    /// One pane observation, separating "could not observe" from "observed".
+    ///
+    /// `None` means the pane could not be inspected at all — the delivery task
+    /// is gone, the target is not a tmux target, or the tmux client call failed,
+    /// which is what happens when the session or its server has departed.
+    /// `Some(ready)` means the pane was inspected and this is what it said.
+    ///
+    /// The two readings feed different axes and must not be collapsed: an
+    /// unobservable pane is not a busy one, and only the busy one is worth
+    /// waiting on.
+    fn observe_pane(&self) -> Option<bool> {
+        let sender = self.sender.as_ref()?;
+        let handle = self.task_handle.as_ref()?;
+        if handle.is_finished() || sender.is_closed() {
+            return None;
+        }
+        let context = self.task_context.as_ref()?;
+        let TargetConfiguration::Tmux(target) = &context.target_member.target else {
+            return None;
+        };
+        let socket = tmux_socket_path_for_runtime_directory(context.runtime_directory.as_path());
+        let mut probe = RealPaneQuiescenceProbe::new(
+            socket.as_path(),
+            context.target_session.as_str(),
+            target.prompt_readiness.as_ref(),
+        )
+        .ok()?;
+        probe
+            .next_evaluation()
+            .ok()
+            .map(|evaluation| evaluation.ready)
     }
 
     /// Starts the internal delivery task if not already running and `startup()`
@@ -323,32 +359,15 @@ impl Transport for TmuxTransport {
     }
 
     fn is_ready_for_handover(&self) -> bool {
-        let Some(sender) = self.sender.as_ref() else {
-            return false;
-        };
-        let Some(handle) = self.task_handle.as_ref() else {
-            return false;
-        };
-        if handle.is_finished() || sender.is_closed() {
-            return false;
-        }
-        let Some(context) = self.task_context.as_ref() else {
-            return false;
-        };
-        let TargetConfiguration::Tmux(target) = &context.target_member.target else {
-            return false;
-        };
-        let socket = tmux_socket_path_for_runtime_directory(context.runtime_directory.as_path());
-        let Ok(mut probe) = RealPaneQuiescenceProbe::new(
-            socket.as_path(),
-            context.target_session.as_str(),
-            target.prompt_readiness.as_ref(),
-        ) else {
-            return false;
-        };
-        probe
-            .next_evaluation()
-            .is_ok_and(|evaluation| evaluation.ready)
+        self.observe_pane() == Some(true)
+    }
+
+    fn health(&self) -> TransportHealth {
+        // An unobservable pane is the unreachable case: a departed session, a
+        // dead tmux server, or a delivery task that has stopped. An observed
+        // pane is healthy whatever it says, because a non-prompt frame is a busy
+        // target and belongs to the readiness axis, not this one.
+        self.unreachable_since.fold(self.observe_pane().is_some())
     }
 
     fn shutdown(&mut self) {

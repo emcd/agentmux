@@ -34,7 +34,8 @@ use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
     Chooser, DeliveryEnvelope, GenerationFence, OutputView, StartupContext, Transport,
-    TransportError, TransportStatus, WorkerFailureReason, WorkerReadinessState,
+    TransportError, TransportHealth, TransportStatus, UnreachableSince, WorkerFailureReason,
+    WorkerReadinessState,
 };
 
 use super::{AcpBootstrapError, AcpTransport, bootstrap_acp_worker_runtime};
@@ -148,6 +149,20 @@ pub struct AcpWorkerDriver {
     /// generation-owned executor, and one whose handle is discarded can be
     /// neither terminated nor observed.
     bootstrap_task: Option<tokio::task::JoinHandle<()>>,
+    /// Set once respawn has given up on this target, either because the failure
+    /// was permanent or because the retry budget ran out.
+    ///
+    /// This, and not `WorkerReadinessState::Unavailable`, is what the health
+    /// axis reads. `Unavailable` is published for a respawn gap as readily as
+    /// for a give-up, so reading it would report a worker whose replacement is
+    /// seconds away as unreachable and bounce the members that replacement was
+    /// about to serve.
+    ///
+    /// Shared with the respawn monitor, which is the task that discovers the
+    /// give-up and outlives no driver.
+    respawn_abandoned: Arc<AtomicBool>,
+    /// Latch for the health axis; see [`Transport::health`].
+    unreachable_since: UnreachableSince,
 }
 
 impl AcpWorkerDriver {
@@ -171,6 +186,8 @@ impl AcpWorkerDriver {
             services,
             respawn_monitor: None,
             bootstrap_task: None,
+            respawn_abandoned: Arc::new(AtomicBool::new(false)),
+            unreachable_since: UnreachableSince::default(),
         }
     }
 
@@ -242,9 +259,12 @@ impl AcpWorkerDriver {
             respawn_needed,
             services,
             AcpRespawnState::new(),
-            namespace,
-            runtime_directory,
-            target_member,
+            AcpRespawnTarget {
+                namespace,
+                runtime_directory,
+                member: target_member,
+            },
+            Arc::clone(&self.respawn_abandoned),
         )));
     }
 }
@@ -300,6 +320,16 @@ impl Transport for AcpWorkerDriver {
 
     fn is_ready_for_handover(&self) -> bool {
         self.lock_transport().is_ready_for_handover()
+    }
+
+    fn health(&self) -> TransportHealth {
+        // Reachability for an ACP target means a replacement is still possible,
+        // not that one exists right now. A respawn gap reports `Unavailable` and
+        // is healthy: the monitor is mid-flight and the member it would bounce is
+        // the member the replacement is about to serve. Only an abandoned respawn
+        // — permanent failure or an exhausted retry budget — is unreachable.
+        self.unreachable_since
+            .fold(!self.respawn_abandoned.load(Ordering::Acquire))
     }
 
     fn shutdown(&mut self) {
@@ -465,14 +495,24 @@ async fn initial_acp_bootstrap(
 /// the fast release/install steps — never across `.await` or the blocking child
 /// spawn — so a concurrent worker `mailw` is never stalled. Exits on relay
 /// shutdown.
+/// The target one respawn monitor supervises.
+///
+/// Grouped rather than passed as three parallel parameters: they are one
+/// cohesive identity — which target, where its runtime lives, and how it is
+/// configured — and every re-establish attempt needs all three together.
+struct AcpRespawnTarget {
+    namespace: String,
+    runtime_directory: PathBuf,
+    member: BundleMember,
+}
+
 async fn acp_respawn_monitor(
     transport: Arc<Mutex<AcpTransport>>,
     mut respawn_needed: tokio::sync::watch::Receiver<bool>,
     services: AcpDriverServices,
     mut respawn_state: AcpRespawnState,
-    namespace: String,
-    runtime_directory: PathBuf,
-    target_member: BundleMember,
+    target: AcpRespawnTarget,
+    respawn_abandoned: Arc<AtomicBool>,
 ) {
     let poll = Duration::from_millis(RESPAWN_MONITOR_POLL_MS);
     loop {
@@ -506,9 +546,10 @@ async fn acp_respawn_monitor(
             &transport,
             &services,
             &mut respawn_state,
-            namespace.as_str(),
-            runtime_directory.as_path(),
-            &target_member,
+            target.namespace.as_str(),
+            target.runtime_directory.as_path(),
+            &target.member,
+            respawn_abandoned.as_ref(),
         )
         .await;
         // Reset the signal so a later Unavailable turn re-triggers the monitor.
@@ -532,6 +573,7 @@ async fn run_acp_respawn(
     namespace: &str,
     runtime_directory: &Path,
     target_member: &BundleMember,
+    respawn_abandoned: &AtomicBool,
 ) {
     let target_session = target_member.id.as_str();
     // Release the dead runtime (joining its child + reader thread) but keep the
@@ -640,6 +682,12 @@ async fn run_acp_respawn(
                     }),
                 );
                 if error.is_permanent() || respawn_state.should_give_up() {
+                    // Latch the health axis here, at the one place that knows no
+                    // further attempt is coming. Every other route to
+                    // `Unavailable` is survivable, so this is the only signal
+                    // that separates a target worth waiting for from one that
+                    // will never come back.
+                    respawn_abandoned.store(true, Ordering::Release);
                     transport
                         .lock()
                         .expect("acp transport mutex poisoned")

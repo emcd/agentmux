@@ -52,7 +52,7 @@ use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
     ChoiceMade, DeliveryDiagnosticContext, DeliveryEnvelope, GenerationFence, LookMode,
     LookSnapshotPayload, OutputView, SingleDeliveryOutcome, StartupContext, Transport,
-    TransportError, TransportStatus, emit_delivery_progress,
+    TransportError, TransportHealth, TransportStatus, emit_delivery_progress,
 };
 use crate::transports::{SendOutcome, WorkerReadinessState};
 
@@ -748,6 +748,16 @@ impl Transport for AcpTransport {
 
     fn is_ready_for_handover(&self) -> bool {
         matches!(self.readiness(), WorkerReadinessState::Available)
+    }
+
+    fn health(&self) -> TransportHealth {
+        // The inner transport cannot answer this one. `Unavailable` is published
+        // for a respawn gap and for a permanent give-up alike, so reading it here
+        // would report a recoverable worker as unreachable and bounce messages a
+        // respawn was about to make deliverable. Permanence is the driver's
+        // knowledge, and `AcpWorkerDriver::health` is what the relay actually
+        // calls — `TransportImpl::Acp` holds the driver, never this type.
+        TransportHealth::Healthy
     }
 
     fn shutdown(&mut self) {

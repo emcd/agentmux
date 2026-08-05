@@ -52,8 +52,8 @@
 //! agent delivery through it.
 
 use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use tokio::sync::oneshot;
@@ -147,6 +147,61 @@ pub trait GenerationFence {
     fn generation_ceased(&self) -> bool;
 }
 
+/// Whether a transport can reach its target at all — the health axis, distinct
+/// from handover readiness.
+///
+/// Two findings were previously collapsed into a single `false` from the
+/// readiness predicate. "Observed, and not ready" means the target is busy,
+/// composing, or mid-turn, and waiting is correct. "Could not observe" means the
+/// transport cannot reach its target, and waiting learns nothing — a member
+/// queued for a departed tmux session or a permanently failed ACP worker would
+/// wait forever under an unbounded `Pending`.
+///
+/// The `since` instant is what makes the relay's dwell threshold meaningful: the
+/// bound is on *continuous* unreachability, so the transport reports when it
+/// began and the relay owns how long is too long. That split keeps determination
+/// in the transport and policy in the relay, with no back-edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TransportHealth {
+    /// The transport can reach its target. Says nothing about readiness.
+    Healthy,
+    /// The transport cannot observe or reach its target, first seen at `since`.
+    Unreachable {
+        /// When unreachability was *first* observed, not when it was last
+        /// checked. Restarting this on every observation would make a
+        /// continuous-unreachability bound unelapsable.
+        since: Instant,
+    },
+}
+
+/// Latches the instant a transport first observed itself unreachable.
+///
+/// Exists so each transport turns a momentary observation into the contract's
+/// level without repeating the latch, and so the property the dwell threshold
+/// depends on — first-observed, cleared on any recovery — is defined in exactly
+/// one place rather than five.
+#[derive(Debug, Default)]
+pub struct UnreachableSince(Mutex<Option<Instant>>);
+
+impl UnreachableSince {
+    /// Folds one observation into the reported level.
+    ///
+    /// A `true` (reachable) clears the latch, so an unreachability that ends
+    /// before the relay's threshold elapses leaves nothing behind and resolves
+    /// no members. A `false` latches the first instant and keeps returning it.
+    #[must_use]
+    pub fn fold(&self, reachable: bool) -> TransportHealth {
+        let mut since = self.0.lock().expect("unreachable-since mutex poisoned");
+        if reachable {
+            *since = None;
+            return TransportHealth::Healthy;
+        }
+        TransportHealth::Unreachable {
+            since: *since.get_or_insert_with(Instant::now),
+        }
+    }
+}
+
 pub trait Transport: GenerationFence {
     /// Establishes (or re-establishes, on respawn) the transport runtime for a
     /// target. On respawn the transport may publish a fresh [`OutputView`]; the
@@ -206,6 +261,24 @@ pub trait Transport: GenerationFence {
     /// default of `false` strands it permanently, since `Pending` is unbounded. A
     /// transport answers for itself or does not participate in delivery.
     fn is_ready_for_handover(&self) -> bool;
+
+    /// Reports whether this transport can reach its target at all.
+    ///
+    /// The second axis beside [`is_ready_for_handover`](Self::is_ready_for_handover),
+    /// and a different question: readiness says *when* a handover is useful,
+    /// health says *whether* one is possible. A busy target and a departed one
+    /// both fail a readiness check, and only the first is a reason to wait.
+    ///
+    /// Also no default body, for the same shape of reason. Defaulting to
+    /// [`TransportHealth::Healthy`] lets a transport that cannot observe its
+    /// target claim it is fine, which is the exact failure this axis exists to
+    /// close; defaulting to `Unreachable` bounces everything.
+    ///
+    /// Implementations SHOULD fold their momentary observation through an
+    /// [`UnreachableSince`] latch rather than reporting `Instant::now()` each
+    /// call, since the relay's dwell threshold measures *continuous*
+    /// unreachability and a restarting clock never elapses.
+    fn health(&self) -> TransportHealth;
 
     /// Tears down the transport runtime, releasing its resources.
     fn shutdown(&mut self);
@@ -590,6 +663,26 @@ impl TransportImpl {
             Self::Pty => {
                 unimplemented!("PTY transport is feature-gated; rebuild with --features pty")
             }
+        }
+    }
+
+    /// Reports whether the selected transport can reach its target; see
+    /// [`Transport::health`].
+    #[must_use]
+    pub fn health(&self) -> TransportHealth {
+        match self {
+            Self::Acp(transport) => transport.health(),
+            Self::Tmux(transport) => transport.health(),
+            Self::Ui(transport) => transport.health(),
+            // A `Pubsub` target is rejected synchronously at admission and never
+            // reaches a worker, so it has no target to be unreachable from.
+            // Reporting `Unreachable` would start a dwell for a member that was
+            // already answered.
+            Self::Pubsub => TransportHealth::Healthy,
+            #[cfg(feature = "pty")]
+            Self::Pty(transport) => transport.health(),
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => TransportHealth::Healthy,
         }
     }
 

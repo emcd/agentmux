@@ -20,7 +20,8 @@ pub use contract::{
     ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryMessage, DeliveryWaitError,
     GenerationFence, HandoverDimensions, LookMode, OutcomeFuture, OutputView,
     PromptReadinessTemplate, ReadinessTimeoutReason, SingleDeliveryOutcome, StartupContext,
-    ThingToChoose, Transport, TransportError, TransportImpl, TransportReadiness, TransportStatus,
+    ThingToChoose, Transport, TransportError, TransportHealth, TransportImpl, TransportReadiness,
+    TransportStatus, UnreachableSince,
 };
 pub use quiescence::{
     DIAGNOSTIC_MESSAGE_IDS_MAXIMUM, DeliveryDiagnosticContext, EMPTY_PANE_MISMATCH_PREFIX,
