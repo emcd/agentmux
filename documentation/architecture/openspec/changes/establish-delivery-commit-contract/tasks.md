@@ -56,6 +56,13 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Remove the weaker `is_ready` predicate from the transport contract so one readiness question remains, and drop the default body that could answer it wrongly
 - [ ] Gate authorization on `is_ready_for_handover` during the `Pending` phase, so no batch is authorized for a target that cannot take a handover
 - [ ] Keep prompt-readiness evaluation inside each owning transport, feeding `is_ready_for_handover`; the relay compiles no `prompt_regex`, inspects no pane output, and compares no cursor column
+- [ ] Add `TransportHealth` to the transport contract as a level distinct from readiness, carrying the instant unreachability was first observed
+- [ ] Require both axes for a delivery attempt: `Healthy` and `is_ready_for_handover`, with healthy-but-unready leaving the member `Pending`
+- [ ] Add the `[delivery]` dwell threshold and resolve still-`Pending` members through the guard once their target has been continuously unreachable past it, releasing quota on that terminal transition
+- [ ] Reset the dwell on any return to `Healthy`, so a transient unreachability resolves nothing
+- [ ] Report health from each transport without a relay dependency: Tmux distinguishes a failed pane observation from an observed non-prompt frame; ACP reads its permanence signal (`is_permanent` / respawn give-up) rather than treating every `Unavailable` as unreachable, so a recoverable respawn gap does not bounce
+- [ ] Carry the health level in `look` responses and keep `look` served on an unreachable target; `raww` inherits the write gate through the shared ordered channel
+- [ ] Construct the worker's transport at worker spawn rather than on first write, passing the target member the spawn site already holds, and resolve the triggering task if construction fails
 - [ ] Wire the readiness notification as a relay-provided closure the transport invokes, with subscribe-before-check and a bounded poll backstop
 - [ ] Delete the shared wedge/prime classifier once every transport determines its own readiness, and with it the relay's dependence on a cross-transport quiescence state machine
 
@@ -110,6 +117,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Delete the five per-coder keys and their loader, validation, and default machinery
 - [x] Add the `relay.toml` `[delivery]` table with submission timeout, quantum, fence-observation bound, the four admission-quota keys, and the two undelivered-reporting keys
 - [x] Validate `scheduling-quantum-bytes` at load against every registered transport's maximum handover dimension
+- [ ] Add the `[delivery]` unreachable-dwell key that bounds how long a target may be continuously unreachable before its `Pending` members resolve
 - [ ] Delete `prime_timeout_ms` and `readiness_timeout_ms` from `DeliveryEnvelope`
 
 ### Documentation
@@ -135,6 +143,9 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Cover that an unbound member resolves `not_submitted` under every trigger, and that a recorded `Submitted` is not downgraded by a generation replacement
 - [ ] Cover that siblings of one packing unit never receive different outcomes from one evidence record
 - [ ] Cover that a `Pending` entry survives an arbitrarily long wait and is still authorized and delivered when its target finally becomes ready
+- [ ] Cover the two axes independently: a healthy-but-unready target holds its member indefinitely, and an unreachable one resolves its member only after the dwell threshold
+- [ ] Cover that unreachability shorter than the threshold resolves nothing and the member still delivers afterward, and that a target flapping across the threshold boundary resolves each member exactly once
+- [ ] Cover that `look` is served on an unreachable target and reports the health level, while `raww` to the same target is gated
 - [ ] Cover that no elapsed duration resolves a `Pending` entry, releases its quota, or produces a receipt for it
 - [x] Cover the warning dedup: many entries crossing together emit one inscription for their target, and the target re-arms after its queue empties
 - [x] Cover that the aggregate is suppressed when nothing is `Pending`, and that neither emission changes any outcome, quota, or scheduling position

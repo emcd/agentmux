@@ -839,6 +839,80 @@ delivery until the next poll; it cannot lose one or resolve it without evidence.
 - **THEN** they are expressed in envelope count and canonical payload bytes
 - **AND** not in rendered tokens
 
+### Requirement: Transport Health as a Separate Axis
+
+A transport SHALL report **health** as a level distinct from handover readiness,
+carrying the instant it was first observed unreachable:
+
+| State | Meaning |
+|---|---|
+| `Healthy` | the transport can reach its target |
+| `Unreachable { since }` | the transport cannot observe or reach its target at all, first seen at `since` |
+
+Readiness and health answer different questions. Readiness says *when* a handover
+is useful; health says *whether* one is possible. A target that is busy and a
+target whose transport cannot reach it both fail a readiness check, and only the
+first is a reason to wait.
+
+A delivery attempt SHALL require both: the transport reports `Healthy` **and**
+reports `is_ready_for_handover`. Healthy-but-unready leaves the member `Pending`.
+
+The transport SHALL determine health and report when it began; the relay SHALL
+own the dwell threshold as `[delivery]` policy. A transport SHALL NOT reference a
+relay interface to report it, per `Transport Module Boundaries`.
+
+A member SHALL be resolved only after its target has been **continuously
+unreachable past the configured threshold**, never on a single failed
+observation. One observation that does not come back cannot distinguish a
+transient failure from a departed target, and a bounce asserts something to the
+sender that a wait does not.
+
+This threshold SHALL NOT be read as a delivery timeout. No bound converts a
+readiness wait into an outcome, because duration cannot substitute for an
+observation that was never made. Here duration qualifies observations that were
+made repeatedly, and sustained unreachability is itself evidence in a way that
+sustained busyness is not.
+
+Health SHALL gate write paths and SHALL NOT gate `look`. `raww` shares the
+ordered delivery channel and inherits the gate. `look` SHALL remain available on
+an unreachable target and SHALL carry the health level in its response metadata:
+a target is inspected precisely when something is wrong with it, so withholding
+the snapshot removes the diagnostic exactly when it is needed.
+
+#### Scenario: A busy target keeps waiting
+
+- **WHEN** a transport reports `Healthy` and does not report
+  `is_ready_for_handover`
+- **THEN** its member stays `Pending`
+- **AND** no elapsed duration resolves it
+
+#### Scenario: A sustained-unreachable target resolves its members
+
+- **WHEN** a transport reports `Unreachable` continuously past the configured
+  threshold
+- **THEN** its still-`Pending` members resolve through the guard's evidence order
+- **AND** their admission quota is released on that terminal transition
+
+#### Scenario: A transient unreachability does not resolve anything
+
+- **WHEN** a transport reports `Unreachable` and reports `Healthy` again before
+  the threshold elapses
+- **THEN** no member was resolved
+- **AND** the members that were waiting are authorized normally once readiness
+  allows
+
+#### Scenario: Look survives an unreachable target
+
+- **WHEN** an operator looks at a target whose transport reports `Unreachable`
+- **THEN** the snapshot request is served rather than refused
+- **AND** the response carries the health level and how long it has held
+
+#### Scenario: Health determination carries no relay dependency
+
+- **WHEN** a transport determines its own health
+- **THEN** it references no `crate::relay` type
+- **AND** the relay supplies the dwell threshold rather than the transport
+
 ## REMOVED Requirements
 
 ### Requirement: Three-State Delivery Classifier

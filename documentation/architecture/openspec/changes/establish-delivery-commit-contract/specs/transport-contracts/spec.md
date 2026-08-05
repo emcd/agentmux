@@ -61,10 +61,17 @@ mismatch is removed. No transport infers a terminal outcome from the template,
 and the distinction between the two causes survives only as diagnostic
 observability.
 
-A target that never becomes prompt-ready SHALL leave its entry `Pending`
-indefinitely. No bound converts that wait into an outcome, because how long a
-target stays busy is not evidence about the target. The wait is reported through
-the `delivery-quiescence` capability's undelivered-queue inscriptions.
+A target that never becomes prompt-ready **while its transport remains healthy**
+SHALL leave its entry `Pending` indefinitely. No bound converts that wait into an
+outcome, because how long a target stays busy is not evidence about the target.
+The wait is reported through the `delivery-quiescence` capability's
+undelivered-queue inscriptions.
+
+This is bounded by health, not by time. A transport that reports itself
+unreachable past the dwell threshold resolves its members per the
+`transport-abstraction` capability's `Transport Health as a Separate Axis`
+requirement — not because the wait grew long, but because sustained
+unreachability is evidence that no wait will end it.
 
 #### Scenario: Authorize when prompt-readiness template matches
 
