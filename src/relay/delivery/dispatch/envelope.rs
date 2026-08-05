@@ -43,8 +43,8 @@ use crate::envelope::PromptBatchSettings;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::transports::{
     AcpDriverServices, ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryMessage,
-    StartupContext, TransportImpl, UiBroadcastStatus, UiIncomingMessage, UiOutcomePhase,
-    UiTransportServices,
+    StartupContext, TransportError, TransportImpl, UiBroadcastStatus, UiIncomingMessage,
+    UiOutcomePhase, UiTransportServices,
 };
 
 /// Builds the [`TransportImpl`] for a non-bootstrap worker delivery, dispatching
@@ -53,6 +53,25 @@ use crate::transports::{
 /// receive a `UiTransport` built via `build_ui_transport_services`; Pubsub and
 /// Acp variants carry their own forwarding/bootstrap path (the enqueue layer
 /// rejects ACP unless a bootstrap driver already exists).
+/// Maps a transport's startup failure onto the relay error the triggering task
+/// resolves with.
+///
+/// Carries the transport's own code and details through: the reason a pty child
+/// failed to spawn is the useful part, and flattening it to a generic failure at
+/// the relay boundary is what left a construction error indistinguishable from a
+/// target that merely went quiet.
+fn startup_failure(target_session: &str, error: TransportError) -> RelayError {
+    relay_error(
+        "runtime_transport_startup_failed",
+        error.reason.as_str(),
+        Some(json!({
+            "target_session": target_session,
+            "code": error.code,
+            "details": error.details,
+        })),
+    )
+}
+
 pub(super) fn build_worker_transport(
     task: &AsyncDeliveryTask,
     key: &AsyncWorkerKey,
@@ -74,7 +93,9 @@ pub(super) fn build_worker_transport(
                 target_member: target_member.clone(),
                 choose: noop_tmux_chooser(),
             };
-            let _ = transport.startup(context);
+            transport
+                .startup(context)
+                .map_err(|error| startup_failure(task.target_session.as_str(), error))?;
             Ok(transport)
         }
         SessionType::Ui => Ok(TransportImpl::ui(build_ui_transport_services(key))),
@@ -144,7 +165,14 @@ pub(super) fn build_worker_transport(
                 target_member: target_member.clone(),
                 choose: noop_tmux_chooser(),
             };
-            let _ = transport.startup(context);
+            // Propagated rather than discarded. A dropped startup error installed
+            // an already-dead transport, and the health gate then held the
+            // triggering member through the whole dwell before reporting a generic
+            // unreachable -- turning a spawn failure the relay already knew about
+            // into a delayed guess.
+            transport
+                .startup(context)
+                .map_err(|error| startup_failure(task.target_session.as_str(), error))?;
             Ok(transport)
         }
         #[cfg(not(feature = "pty"))]
