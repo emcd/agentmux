@@ -102,3 +102,67 @@ fn acp_output_view_zero_prime_timeout_returns_immediately() {
         Some("acp_snapshot_prime_timeout"),
     );
 }
+
+/// The respawn signal must survive a retirement decision that was made about an
+/// earlier cause.
+///
+/// The monitor classifies an outstanding cause as answered, releases the
+/// transport lock, and only then writes that decision down. A live delivery can
+/// publish a genuine new cause inside that window. A signal that is a flag
+/// cannot tell the two apart, so writing the decision erases the new cause — and
+/// because the readiness gate withholds exactly the writes that would raise it
+/// again, that is not a delayed recovery but a permanent one.
+///
+/// Retirement bounds the epoch it classified rather than clearing what is
+/// current, so the newer cause outlives the older cause's answer by arithmetic.
+#[test]
+fn retiring_a_classified_cause_leaves_a_cause_published_since_it_outstanding() {
+    let transport = AcpTransport::new(test_batch_settings(), None);
+    assert_eq!(
+        transport.respawn_signal_outstanding(),
+        None,
+        "a fresh transport owes no respawn"
+    );
+
+    transport.signal_respawn();
+    let classified = transport
+        .respawn_signal_outstanding()
+        .expect("the first cause is outstanding once raised");
+
+    // The window: the monitor has decided `classified` is answered and has not
+    // yet said so when a second failure publishes its own cause.
+    transport.signal_respawn();
+
+    let remaining = transport.retire_respawn_signal(classified);
+    let remaining = remaining.expect("the cause published since must still be outstanding");
+    assert!(
+        remaining > classified,
+        "retirement must bound only the classified cause, leaving the newer one to be answered"
+    );
+}
+
+/// Retirement is a high-water mark, so a decision that lands out of order cannot
+/// resurrect a cause that a later retirement already answered.
+#[test]
+fn retirement_never_moves_backwards() {
+    let transport = AcpTransport::new(test_batch_settings(), None);
+    transport.signal_respawn();
+    let first = transport
+        .respawn_signal_outstanding()
+        .expect("first cause outstanding");
+    transport.signal_respawn();
+    let second = transport
+        .respawn_signal_outstanding()
+        .expect("second cause outstanding");
+
+    assert_eq!(
+        transport.retire_respawn_signal(second),
+        None,
+        "retiring the current cause answers everything raised so far"
+    );
+    assert_eq!(
+        transport.retire_respawn_signal(first),
+        None,
+        "a late retirement of an older cause must not resurrect an answered one"
+    );
+}

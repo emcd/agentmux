@@ -539,7 +539,7 @@ struct AcpRespawnTarget {
 
 async fn acp_respawn_monitor(
     transport: Arc<Mutex<AcpTransport>>,
-    mut respawn_needed: tokio::sync::watch::Receiver<bool>,
+    mut respawn_needed: tokio::sync::watch::Receiver<u64>,
     services: AcpDriverServices,
     mut respawn_state: AcpRespawnState,
     target: AcpRespawnTarget,
@@ -593,15 +593,44 @@ async fn acp_respawn_monitor(
         // standing and the monitor retries on its own clock. Re-priming from
         // `mailw` — recovery only because something tried to write — is what
         // that replaces.
-        let respawn_owed = respawn_is_owed(
-            *respawn_needed.borrow_and_update(),
-            respawn_abandoned.load(Ordering::Acquire),
-            transport
-                .lock()
-                .expect("acp transport mutex poisoned")
-                .readiness(),
-        );
-        if !respawn_owed {
+        respawn_needed.borrow_and_update();
+        let abandoned = respawn_abandoned.load(Ordering::Acquire);
+        let (outstanding, readiness) = {
+            let transport = transport.lock().expect("acp transport mutex poisoned");
+            (
+                transport.respawn_signal_outstanding(),
+                transport.readiness(),
+            )
+        };
+        if !respawn_is_owed(outstanding.is_some(), abandoned, readiness) {
+            // Once raised, "owed" and "answered" are exact complements: owed is
+            // `!abandoned && Unavailable`, so an outstanding cause that is not
+            // owed has necessarily been answered -- the runtime left
+            // `Unavailable` under its own power, or abandonment closed the
+            // account.
+            //
+            // Retiring it here and not only after this monitor's own attempt is
+            // what keeps a cause from outliving the failure it described. One
+            // left standing across a recovery stays outstanding, and the next
+            // `Unavailable` -- including a serialization failure, which
+            // `outcome_requires_respawn` deliberately refuses to signal --
+            // would find all three conditions met and respawn on a
+            // classification that was never made for it. The level check cannot
+            // catch that on its own: it distinguishes states, not which failure
+            // put the runtime in one.
+            //
+            // Retiring *this* epoch rather than clearing the signal is what
+            // makes the decision safe to act on late. Everything above is a
+            // sample: the lock is released before the retirement lands, so a
+            // live failure can publish a new cause in between. That cause
+            // carries a higher epoch, so the retirement bounds only what was
+            // classified and leaves the new one outstanding for the next tick.
+            if let Some(epoch) = outstanding {
+                transport
+                    .lock()
+                    .expect("acp transport mutex poisoned")
+                    .retire_respawn_signal(epoch);
+            }
             continue;
         }
         run_acp_respawn(
@@ -617,26 +646,32 @@ async fn acp_respawn_monitor(
             },
         )
         .await;
-        // Clear the signal only once it has been answered — the runtime is no
+        // Retire the cause only once it has been answered — the runtime is no
         // longer `Unavailable`, or respawn has been abandoned and no further
-        // attempt is coming. Clearing unconditionally is what made an external
+        // attempt is coming. Retiring unconditionally is what made an external
         // re-prime necessary: an attempt that failed without exhausting the
         // budget left the worker dead with nothing left to say so, and recovery
         // then waited for a write that the readiness gate would never allow.
         //
-        // Holding the signal while `Unavailable` persists also keeps the
+        // Holding the cause while `Unavailable` persists also keeps the
         // classification intact across retries. It was raised because *this*
         // failure warranted a respawn; that judgement does not expire because an
         // attempt did not take.
+        //
+        // The epoch retired is the one this attempt answered, never whatever is
+        // current. A respawn runs for a while, and a failure on the way back up
+        // can publish a cause of its own; bounding by the classified epoch
+        // leaves that one for the next tick instead of consuming it here.
         let answered = {
             let transport = transport.lock().expect("acp transport mutex poisoned");
             !matches!(transport.readiness(), WorkerReadinessState::Unavailable)
         } || respawn_abandoned.load(Ordering::Acquire);
         if answered {
+            let epoch = outstanding.expect("an owed respawn has an outstanding cause");
             transport
                 .lock()
                 .expect("acp transport mutex poisoned")
-                .clear_respawn_signal();
+                .retire_respawn_signal(epoch);
         }
     }
 }
