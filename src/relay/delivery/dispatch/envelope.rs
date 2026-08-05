@@ -76,6 +76,7 @@ pub(super) fn build_worker_transport(
     task: &AsyncDeliveryTask,
     key: &AsyncWorkerKey,
     batch_settings: PromptBatchSettings,
+    readiness_notifier: crate::tmux::ReadinessNotifier,
 ) -> Result<TransportImpl, RelayError> {
     if target_is_relay_wide(task) {
         return Ok(TransportImpl::ui(build_ui_transport_services(key)));
@@ -84,7 +85,7 @@ pub(super) fn build_worker_transport(
         resolve_target_member(task)?.expect("configured non-relay-wide target must have a member");
     match target_member.target.session_type() {
         SessionType::Tmux => {
-            let mut transport = TransportImpl::tmux(batch_settings);
+            let mut transport = TransportImpl::tmux(batch_settings, Some(readiness_notifier));
             // tmux ignores the `choose` resolver (it raises no operator choices),
             // so a cancelling no-op chooser satisfies the `StartupContext` contract.
             let context = StartupContext {

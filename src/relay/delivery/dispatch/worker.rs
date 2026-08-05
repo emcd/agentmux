@@ -366,10 +366,16 @@ fn submit_task(
     pending: &std::sync::atomic::AtomicUsize,
 ) -> Option<AsyncDeliveryTask> {
     if transport.is_none() {
-        match build_worker_transport(&task, context.key, context.batch_settings) {
-            Ok(mut built) => {
-                let notify = std::sync::Arc::clone(context.readiness_changed);
-                built.set_readiness_notifier(std::sync::Arc::new(move || notify.notify_waiters()));
+        let notify = std::sync::Arc::clone(context.readiness_changed);
+        let readiness_notifier: crate::tmux::ReadinessNotifier =
+            std::sync::Arc::new(move || notify.notify_waiters());
+        match build_worker_transport(
+            &task,
+            context.key,
+            context.batch_settings,
+            readiness_notifier,
+        ) {
+            Ok(built) => {
                 *transport = Some(built);
             }
             Err(error) => {

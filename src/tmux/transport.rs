@@ -216,10 +216,20 @@ impl std::fmt::Debug for TmuxTransport {
 }
 
 impl TmuxTransport {
+    /// Takes the readiness notifier at construction rather than through a
+    /// setter. `startup` spawns the observer, and the observer captures the
+    /// notifier as it starts; anything that installs the closure afterwards
+    /// hands it to a thread that has already taken its copy, leaving a wakeup
+    /// path that is wired at every point except the one that fires it. Passing
+    /// it in makes that ordering unrepresentable instead of merely documented.
     #[must_use]
-    pub fn new(batch_settings: PromptBatchSettings) -> Self {
+    pub fn new(
+        batch_settings: PromptBatchSettings,
+        readiness_notifier: Option<ReadinessNotifier>,
+    ) -> Self {
         Self {
             batch_settings,
+            readiness_notifier,
             sender: None,
             task_handle: None,
             task_context: None,
@@ -229,16 +239,7 @@ impl TmuxTransport {
             observation: Arc::new(Mutex::new(PaneObservation::Pending)),
             observer_invocation: TmuxInvocationSlot::default(),
             observer_handle: None,
-            readiness_notifier: None,
         }
-    }
-
-    /// Installs the relay's wakeup closure.
-    ///
-    /// A setter rather than a constructor parameter so `new` keeps its shape for
-    /// the callers that build a transport without a relay behind it.
-    pub fn set_readiness_notifier(&mut self, notifier: ReadinessNotifier) {
-        self.readiness_notifier = Some(notifier);
     }
 
     /// Starts the observer thread if it is not already running.
@@ -1098,7 +1099,7 @@ mod tests {
             thread::yield_now();
         }
 
-        let mut transport = TmuxTransport::new(PromptBatchSettings::default());
+        let mut transport = TmuxTransport::new(PromptBatchSettings::default(), None);
         transport.sender = Some(sender);
         transport.task_handle = Some(task_handle);
 

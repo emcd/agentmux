@@ -498,9 +498,19 @@ impl TransportImpl {
     /// Builds a tmux delivery transport carrying the prompt-batch settings (token
     /// budget and tokenizer profile) the internal delivery task consumes when
     /// combining a coalesced envelope group.
+    ///
+    /// `readiness_notifier` is the relay's wakeup closure, taken here because the
+    /// observer captures it during `startup`. It is optional rather than required:
+    /// the delivery contract does not oblige a transport to have a notification
+    /// path, and correctness never depends on one — the level the relay reads is
+    /// authoritative, and a missing wakeup only defers a delivery to the next
+    /// poll.
     #[must_use]
-    pub fn tmux(batch_settings: PromptBatchSettings) -> Self {
-        Self::Tmux(TmuxTransport::new(batch_settings))
+    pub fn tmux(
+        batch_settings: PromptBatchSettings,
+        readiness_notifier: Option<crate::tmux::ReadinessNotifier>,
+    ) -> Self {
+        Self::Tmux(TmuxTransport::new(batch_settings, readiness_notifier))
     }
 
     /// Builds a UI stream-broadcast transport for one target. The relay
@@ -663,21 +673,6 @@ impl TransportImpl {
             Self::Pty => {
                 unimplemented!("PTY transport is feature-gated; rebuild with --features pty")
             }
-        }
-    }
-
-    /// Installs the relay's readiness wakeup on transports that publish one.
-    ///
-    /// Not on the [`Transport`] trait: it is relay-to-transport plumbing rather
-    /// than part of the delivery contract, and the contract deliberately does not
-    /// require a transport to have a notification path at all. Correctness never
-    /// depends on one — the level the relay reads is authoritative, and a lost
-    /// wakeup only delays a delivery to the next poll.
-    pub fn set_readiness_notifier(&mut self, notifier: crate::tmux::ReadinessNotifier) {
-        // ACP and Pty already mirror their readiness transitions into the relay
-        // registry; wiring them onto this seam as well is follow-on.
-        if let Self::Tmux(transport) = self {
-            transport.set_readiness_notifier(notifier);
         }
     }
 
