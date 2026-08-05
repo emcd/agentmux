@@ -24,7 +24,7 @@
 //!
 //! [`is_ready`]: Transport::is_ready
 
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -213,28 +213,58 @@ pub struct AcpTransport {
     /// decision to install has to be taken against this flag under the same lock
     /// as the install itself.
     fenced: Arc<AtomicBool>,
-    /// How many bootstraps this generation currently has running.
+    /// The bootstraps this generation currently has running, and the agent child
+    /// each one owns.
     ///
     /// A bootstrap spawns and owns an agent child, so it is a generation-owned
     /// executor — but it runs on a blocking pool, and aborting the async task
     /// awaiting it does not cancel the closure. Observing the wrapper therefore
-    /// says nothing about whether the executor stopped. Counted rather than
-    /// flagged so an initial bootstrap and a respawn cannot clear each other's
-    /// state.
-    bootstrap_in_flight: Arc<AtomicUsize>,
+    /// says nothing about whether the executor stopped, and it offers the fence
+    /// nothing to signal either; the child is what both steps have to reach.
+    ///
+    /// A list rather than a single slot, for the same reason this was a count
+    /// before it carried handles: an initial bootstrap and a respawn can overlap,
+    /// and neither may clear or terminate the other's state.
+    bootstraps: Arc<Mutex<Vec<BootstrapRecord>>>,
 }
 
-/// Marks a bootstrap as running for as long as it is held.
+/// One in-flight bootstrap: its guard's identity, and the agent child it owns
+/// once the spawn has happened.
+#[derive(Debug)]
+struct BootstrapRecord {
+    id: u64,
+    generation: Option<AcpGenerationHandle>,
+}
+
+static NEXT_BOOTSTRAP_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Marks a bootstrap as running for as long as it is held, and is how that
+/// bootstrap hands its agent child to the fence.
 ///
 /// Moved into the blocking closure itself, not held beside it: the closure
 /// outlives any abort of the task awaiting it, so only something dropped by the
 /// closure can say when that executor actually stopped.
 #[derive(Debug)]
-pub(crate) struct BootstrapInFlight(Arc<AtomicUsize>);
+pub(crate) struct BootstrapInFlight {
+    id: u64,
+    bootstraps: Arc<Mutex<Vec<BootstrapRecord>>>,
+}
+
+impl BootstrapInFlight {
+    /// Publishes the agent child this bootstrap owns, making it reachable by the
+    /// fence's forced step for as long as this guard lives.
+    pub(crate) fn publish_generation(&self, generation: AcpGenerationHandle) {
+        let mut bootstraps = self.bootstraps.lock().expect("bootstrap registry mutex");
+        if let Some(record) = bootstraps.iter_mut().find(|record| record.id == self.id) {
+            record.generation = Some(generation);
+        }
+    }
+}
 
 impl Drop for BootstrapInFlight {
     fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::Release);
+        let mut bootstraps = self.bootstraps.lock().expect("bootstrap registry mutex");
+        bootstraps.retain(|record| record.id != self.id);
     }
 }
 
@@ -270,7 +300,7 @@ impl AcpTransport {
             delivery_task_handle: None,
             generation: None,
             fenced: Arc::new(AtomicBool::new(false)),
-            bootstrap_in_flight: Arc::new(AtomicUsize::new(0)),
+            bootstraps: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -421,8 +451,18 @@ impl AcpTransport {
     /// Registers a bootstrap as running until the returned guard drops.
     #[must_use]
     pub(crate) fn begin_bootstrap(&self) -> BootstrapInFlight {
-        self.bootstrap_in_flight.fetch_add(1, Ordering::AcqRel);
-        BootstrapInFlight(Arc::clone(&self.bootstrap_in_flight))
+        let id = NEXT_BOOTSTRAP_ID.fetch_add(1, Ordering::Relaxed);
+        self.bootstraps
+            .lock()
+            .expect("bootstrap registry mutex")
+            .push(BootstrapRecord {
+                id,
+                generation: None,
+            });
+        BootstrapInFlight {
+            id,
+            bootstraps: Arc::clone(&self.bootstraps),
+        }
     }
 
     /// Whether this generation has been fenced.
@@ -510,6 +550,22 @@ impl GenerationFence for AcpTransport {
         if let Some(generation) = self.generation.as_ref() {
             generation.initiate_termination();
         }
+        // Every bootstrap still running owns an agent child of its own, and a
+        // bootstrap is held where it is by that child failing to answer. Killing
+        // it closes the stdio the handshake is waiting on, so the request fails,
+        // the client drops, and the executor returns — where before, step 3 had
+        // nothing to say to it and the fence could only wait out an operation
+        // timeout it does not control.
+        for record in self
+            .bootstraps
+            .lock()
+            .expect("bootstrap registry mutex")
+            .iter()
+        {
+            if let Some(generation) = record.generation.as_ref() {
+                generation.initiate_termination();
+            }
+        }
         self.write_tx = None;
     }
 
@@ -522,7 +578,18 @@ impl GenerationFence for AcpTransport {
             .generation
             .as_ref()
             .is_none_or(AcpGenerationHandle::reader_ceased);
-        let no_bootstrap_running = self.bootstrap_in_flight.load(Ordering::Acquire) == 0;
+        // A record outlives its bootstrap's disposal of the child it owns. On
+        // every path that produced no live runtime the client has been dropped
+        // by the time the guard goes, and dropping it kills *and waits* the
+        // child; on the path that succeeded, that child has become this
+        // generation's steady-state one, which the conjunct above observes.
+        // Either way an empty registry means reaped or accounted for, never
+        // merely signalled.
+        let no_bootstrap_running = self
+            .bootstraps
+            .lock()
+            .expect("bootstrap registry mutex")
+            .is_empty();
         delivery_task_ceased
             && client_ceased
             && no_bootstrap_running

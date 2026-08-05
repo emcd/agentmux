@@ -120,15 +120,20 @@ fn a_fenced_acp_generation_leaves_no_surviving_child() {
     );
 }
 
+/// Every child pid the stub has recorded so far, in the order it started them.
+fn recorded_child_pids(path: &Path) -> Vec<i32> {
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter_map(|line| line.trim().parse::<i32>().ok())
+        .collect()
+}
+
 /// Polls until the stub has recorded at least one child pid.
 fn await_recorded_child_pids(path: &Path) -> Vec<i32> {
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
-        let pids: Vec<i32> = std::fs::read_to_string(path)
-            .unwrap_or_default()
-            .lines()
-            .filter_map(|line| line.trim().parse::<i32>().ok())
-            .collect();
+        let pids = recorded_child_pids(path);
         if !pids.is_empty() {
             return pids;
         }
@@ -177,30 +182,33 @@ fn await_inscription(path: &Path, event: &str, scope: &str) -> String {
     }
 }
 
-/// A fence must not report cessation while a bootstrap is still running.
+/// A fence must reach a *respawn's* bootstrap too, not only the initial one.
 ///
-/// The ACP respawn monitor drives its bootstrap on a blocking pool, and
-/// `tokio`'s abort cancels only the task awaiting that closure — never the
-/// closure itself. Observing the async wrapper therefore says nothing about
-/// whether the executor stopped, and that executor is the one that spawns and
-/// owns an agent child. Before this was counted, a fence landing mid-respawn
-/// reported *positive* within a second while a live agent was being brought up
-/// behind it.
+/// The two arrive by different routes. The initial bootstrap is started by the
+/// worker; a respawn's is started by the driver-owned monitor, off the worker
+/// loop, at a moment nothing coordinates with the fence. The monitor drives it on
+/// a blocking pool, and `tokio`'s abort cancels only the task awaiting that
+/// closure — never the closure itself — so the async wrapper says nothing about
+/// whether the executor stopped, and that executor is the one holding an agent
+/// child. A fence landing mid-respawn once reported *positive* within a second
+/// while a live agent was being brought up behind it.
 ///
-/// The negative verdict is the whole assertion. It is the honest answer, and it
-/// is fail-stop: the relay declines to claim a generation stopped when it cannot
-/// see one of its executors. Reverting the in-flight count turns this positive.
+/// Counting the bootstrap fixed the false positive but only bought an honest
+/// negative; ending it is what makes the verdict positive on its merits. Both
+/// halves are asserted: revert the registry and this reports positive too early,
+/// revert the bootstrap arm of step 3 and it reports negative forever.
 ///
 /// The scenario is built from a first agent that disconnects on its prompt — so
 /// the monitor starts a respawn — and a second that blocks inside `initialize`,
 /// holding that respawn's bootstrap open across the signal.
 ///
-/// Ignored by default because holding a bootstrap open across a signal costs
-/// about thirty seconds, which is too much to pay on every commit. The pre-push
-/// hook runs it; see `.auxiliary/configuration/pre-commit.yaml`.
+/// Ignored by default because the respawn backoffs that get a bootstrap open at
+/// the right moment cost about thirty seconds, which is too much to pay on every
+/// commit. The pre-push hook runs it; see
+/// `.auxiliary/configuration/pre-commit.yaml`.
 #[test]
 #[ignore = "~30s: holds a bootstrap open across a signal; run at pre-push"]
-fn a_fence_does_not_report_cessation_while_a_bootstrap_runs() {
+fn a_fence_ends_a_respawn_bootstrap() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
@@ -225,6 +233,12 @@ fn a_fence_does_not_report_cessation_while_a_bootstrap_runs() {
     // bootstrap this test is about has started.
     let pid_path = acp_child_pid_path(temporary.path());
     await_recorded_agents(&pid_path, 4);
+    // The most recent agent is the one parked in `initialize`, holding this
+    // respawn's bootstrap open. Earlier ones have already been killed and reaped
+    // by the respawns that replaced them, so they say nothing about the fence.
+    let hung_agent = *recorded_child_pids(&pid_path)
+        .last()
+        .expect("at least one agent recorded");
 
     let _signal_guard = agentmux::runtime::signals::install_shutdown_signal_handlers()
         .expect("install shutdown signal handlers");
@@ -243,33 +257,42 @@ fn a_fence_does_not_report_cessation_while_a_bootstrap_runs() {
         "\"target_session\":\"bravo\"",
     );
     assert!(
-        verdict.contains("\"verdict\":\"negative\""),
-        "a generation with a bootstrap still running has not been observed to \
-         cease: {verdict}"
+        verdict.contains("\"verdict\":\"positive\""),
+        "the fence must end the respawn's bootstrap rather than wait out an \
+         operation timeout it does not control: {verdict}"
     );
 
-    // Release the hung agent so the blocking bootstrap returns rather than
-    // sitting out its full operation timeout while the process tears down.
+    // The verdict claims cessation; this is the process it claimed it about.
+    await_process_gone(hung_agent);
+
+    // A safety net, not a step: nothing should still be parked on the fifo once
+    // the fence has ended these children, but a writer costs nothing and an
+    // agent left blocked there would outlive the test.
     release_hung_initialize(temporary.path());
 }
 
-/// A hung *initial* bootstrap must still reach the fence.
+/// A fence must reach, and end, a hung *initial* bootstrap.
 ///
-/// The respawn case above is the easy half: by then a worker is running its
-/// loop, so a fence begins and reports what it can see. The initial bootstrap
-/// used to run before that loop was ever entered — the worker awaited it — so an
-/// agent parked in its `initialize` handshake left the worker with no shutdown
-/// gate at all. No fence began, no verdict was emitted, and the relay's account
-/// of that target on the way out was silence rather than a finding. The host
-/// process gives up after its own timeout and exits, which is not fencing, and
-/// is no help at all to an embedded runtime that keeps running.
+/// Two things are load-bearing here, and each fails differently.
 ///
-/// The verdict being *negative* is not what this test is about — that is the
-/// established honest answer for a bootstrap still in flight. What it asserts is
-/// that a verdict exists. Reverting the concurrent start makes this time out
-/// waiting for an inscription that is never written.
+/// The fence has to begin at all. The initial bootstrap used to run before the
+/// delivery loop was ever entered — the worker awaited it — so an agent parked
+/// in its `initialize` handshake left the worker with no shutdown gate. No fence
+/// began, no verdict was emitted, and the relay's account of that target on the
+/// way out was silence rather than a finding. Reverting that makes this test time
+/// out waiting for an inscription nothing writes.
+///
+/// Then the forced step has to reach the child. A bootstrap is held where it is
+/// by its agent failing to answer, so signalling that child is the only thing
+/// that ends it; the relay does not control the operation timeout that would
+/// otherwise expire. Reverting the bootstrap arm of step 3 turns this negative —
+/// still honest, but honest about a generation the relay could not stop.
+///
+/// So the assertion is a *forced positive* against a live process: the verdict
+/// says cessation was established, and the pid says the agent it was established
+/// about is gone.
 #[test]
-fn a_hung_initial_bootstrap_still_reaches_the_fence() {
+fn a_fence_ends_a_hung_initial_bootstrap() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
@@ -288,9 +311,9 @@ fn a_hung_initial_bootstrap_still_reaches_the_fence() {
         ..DeliveryConfiguration::default()
     });
 
-    // Startup polls readiness for a target that will never report any, so it
-    // runs on its own thread; this test is about what the worker does while that
-    // wait is happening.
+    // Startup waits on a target whose agent never answers, so it runs on its own
+    // thread; this test is about what the worker does while that wait is
+    // happening.
     let (dispatch_done, dispatch_finished) = std::sync::mpsc::channel();
     let dispatch_roots = config_root.clone();
     let dispatch_socket = tmux_socket.clone();
@@ -300,10 +323,10 @@ fn a_hung_initial_bootstrap_still_reaches_the_fence() {
     });
 
     // The agent is up and parked in `initialize`: `alpha` is the first member
-    // the bundle starts, so this pid is its initial bootstrap's child, and that
-    // bootstrap will not return until this test releases it.
+    // the bundle starts, so this pid is its initial bootstrap's child, and
+    // nothing but the fence will end it.
     let pid_path = acp_child_pid_path(temporary.path());
-    let _child_pids = await_recorded_child_pids(&pid_path);
+    let child_pids = await_recorded_child_pids(&pid_path);
 
     let _signal_guard = agentmux::runtime::signals::install_shutdown_signal_handlers()
         .expect("install shutdown signal handlers");
@@ -320,13 +343,23 @@ fn a_hung_initial_bootstrap_still_reaches_the_fence() {
         "\"target_session\":\"alpha\"",
     );
     assert!(
-        verdict.contains("\"verdict\":\"negative\""),
-        "a generation whose initial bootstrap is still running has not been \
-         observed to cease: {verdict}"
+        verdict.contains("\"verdict\":\"positive\""),
+        "the fence must end the bootstrap rather than wait out an operation \
+         timeout it does not control: {verdict}"
+    );
+    assert!(
+        verdict.contains("\"resolution\":\"forced\""),
+        "a bootstrap parked on an agent that will not answer is not reachable by \
+         any cooperative request: {verdict}"
     );
 
-    // Release every agent parked in `initialize` so the startup thread returns
-    // and its children exit with it, rather than being orphaned on the fifo.
+    // The verdict claims cessation; this is the process it claimed it about.
+    for pid in child_pids.iter().copied() {
+        await_process_gone(pid);
+    }
+
+    // Release anything still parked in `initialize` so the startup thread
+    // returns rather than leaving children orphaned on the fifo.
     await_dispatch_thread(&dispatch_finished, temporary.path());
     dispatcher.join().expect("startup thread");
 }

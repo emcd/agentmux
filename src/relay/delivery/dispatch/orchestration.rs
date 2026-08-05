@@ -30,6 +30,14 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
     if !matches!(target_member.target, TargetConfiguration::Acp(_)) {
         return Ok(());
     }
+    // Checked before the worker is created, not only while waiting on it:
+    // starting a target means spawning an agent process, and a relay on its way
+    // out has no use for one. Signalled part-way through a bundle, this is the
+    // difference between the remaining members never starting and each of them
+    // starting an agent for a fence to have to end.
+    if shutdown_requested() {
+        return Err(startup_interrupted_error(target_member.id.as_str()));
+    }
     if target_member.working_directory.is_none() {
         return Err((
             "runtime_acp_initialize_failed".to_string(),
@@ -88,13 +96,7 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
         // change. Signalled during a multi-member startup, that cost the relay
         // its whole timeout for every member still to come.
         if shutdown_requested() {
-            return Err((
-                "runtime_startup_interrupted".to_string(),
-                "relay shutdown requested during ACP worker startup".to_string(),
-                Some(json!({
-                    "target_session": target_member.id,
-                })),
-            ));
+            return Err(startup_interrupted_error(target_member.id.as_str()));
         }
         let readiness =
             get_worker_readiness(namespace, runtime_directory, target_member.id.as_str());
@@ -132,6 +134,17 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
             }
         }
     }
+}
+
+/// Reports a startup abandoned because the relay is shutting down.
+fn startup_interrupted_error(target_session: &str) -> (String, String, Option<serde_json::Value>) {
+    (
+        "runtime_startup_interrupted".to_string(),
+        "relay shutdown requested during ACP worker startup".to_string(),
+        Some(json!({
+            "target_session": target_session,
+        })),
+    )
 }
 
 /// Builds the startup failure tuple, preferring the worker's recorded structured

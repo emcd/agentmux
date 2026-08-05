@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use crate::configuration::{AcpChannel, AcpTargetConfiguration, BundleMember, TargetConfiguration};
 
-use super::client::AcpStdioClient;
+use super::client::{AcpGenerationHandle, AcpStdioClient};
 
 /// Bootstrap initialize failure; surfaced to the worker's respawn classifier.
 pub const ACP_ERROR_CODE_INITIALIZE_FAILED: &str = "runtime_acp_initialize_failed";
@@ -65,9 +65,18 @@ struct AcpCapabilities {
 /// Builds the per-target ACP runtime. Used by the relay worker for initial
 /// bootstrap and respawn (the worker re-publishes the [`OutputView`] handle
 /// afterward via [`crate::transports::Transport::give_output`]).
+///
+/// `publish_generation` is called with the agent's fencing surface the moment
+/// the child exists, before any protocol work is attempted. A bootstrap owns a
+/// live child for its whole duration, and everything that can hold it there —
+/// the `initialize` handshake, `session/load`, `session/new` — waits on that
+/// child answering. Handing the surface out only on success would leave exactly
+/// the executor a fence most needs to reach unreachable for exactly as long as
+/// it is stuck.
 pub fn bootstrap_acp_worker_runtime(
     runtime_directory: &Path,
     target_member: &BundleMember,
+    publish_generation: &dyn Fn(AcpGenerationHandle),
 ) -> Result<PersistentAcpWorkerRuntime, AcpBootstrapError> {
     let TargetConfiguration::Acp(acp_target) = &target_member.target else {
         return Err(AcpBootstrapError {
@@ -86,6 +95,7 @@ pub fn bootstrap_acp_worker_runtime(
         acp_target,
         working_directory.as_path(),
         runtime_directory,
+        publish_generation,
     )
 }
 
@@ -94,6 +104,7 @@ fn initialize_persistent_acp_worker_runtime(
     acp: &AcpTargetConfiguration,
     working_directory: &Path,
     runtime_directory: &Path,
+    publish_generation: &dyn Fn(AcpGenerationHandle),
 ) -> Result<PersistentAcpWorkerRuntime, AcpBootstrapError> {
     let mut client = match acp.channel {
         AcpChannel::Stdio => {
@@ -125,6 +136,11 @@ fn initialize_persistent_acp_worker_runtime(
             });
         }
     };
+
+    // Published before the first request, not after the handshake: `initialize`
+    // is the step most likely to never come back, and a child nobody can name is
+    // one no fence can end.
+    publish_generation(client.generation_handle());
 
     let initialize_result = client.initialize().map_err(|reason| AcpBootstrapError {
         code: ACP_ERROR_CODE_INITIALIZE_FAILED.to_string(),

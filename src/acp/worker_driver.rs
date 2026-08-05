@@ -361,8 +361,8 @@ async fn run_one_bootstrap(
     let transport = Arc::clone(transport);
     let mirror_state = Arc::clone(mirror_state);
     tokio::task::spawn_blocking(move || {
-        let _in_flight = in_flight;
-        match bootstrap_acp_worker_runtime(&runtime_directory, &target_member) {
+        let publish = |generation| in_flight.publish_generation(generation);
+        match bootstrap_acp_worker_runtime(&runtime_directory, &target_member, &publish) {
             Ok(runtime) => {
                 // The check and the install happen under one lock: a fence that
                 // began while this bootstrap ran must not find a fresh agent
