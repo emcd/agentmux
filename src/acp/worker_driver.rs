@@ -56,8 +56,9 @@ const RESPAWN_BACKOFF_CAP_DEFAULT_MS: u64 = 30_000;
 ///
 /// This bound matters more than it used to. Recovery used to be driven by
 /// delivery attempts, so a hopeless target stopped being retried once senders
-/// gave up on it — traffic was an accidental circuit breaker. The monitor now
-/// re-signals itself, so nothing else bounds the loop.
+/// gave up on it — traffic was an accidental circuit breaker. The respawn signal
+/// now persists while the runtime stays `Unavailable`, so the monitor retries on
+/// its own clock and nothing else bounds the loop.
 const RESPAWN_ATTEMPT_LIMIT: u32 = 6;
 /// Idle poll interval for the respawn monitor's shutdown gate.
 const RESPAWN_MONITOR_POLL_MS: u64 = 100;
@@ -560,28 +561,37 @@ async fn acp_respawn_monitor(
         {
             return;
         }
-        // The monitor decides for itself whether a respawn is owed, rather than
-        // waiting to be told. The signal is still honoured — it is the prompt
-        // edge — but an `Unavailable` runtime is sufficient on its own.
+        // Three conditions, each excluding something the others cannot.
         //
-        // It has to be. Re-signalling used to happen inside `mailw`/`raww`, so a
-        // dead worker was revived only because something tried to write to it.
-        // With authorization gated on readiness, nothing writes to an unready
-        // target, and a worker that died would have stayed dead with its members
-        // waiting on a recovery that recovery-by-traffic could no longer start.
+        // The **signal** carries the classification. Not every `Unavailable` is
+        // a respawn: `outcome_requires_respawn` deliberately excludes
+        // serialization failure, which sets `Unavailable` and is not
+        // recoverable by restarting the agent. A level-only trigger would
+        // respawn on it and override that judgement.
         //
-        // A target whose respawn has been abandoned is excluded: it is past
-        // recovery, and retrying it is the crash loop `RESPAWN_ATTEMPT_LIMIT`
+        // The **level** guards against staleness. A producer's edge can arrive
+        // after the runtime it described has already been replaced, and acting
+        // on it would tear down a healthy generation to recover from a failure
+        // that is already over.
+        //
+        // **Abandonment** guards the crash loop that `RESPAWN_ATTEMPT_LIMIT`
         // exists to stop.
+        //
+        // What makes this independent of delivery traffic is not a level-only
+        // trigger but the signal's *persistence*: it is cleared below only once
+        // the runtime is no longer `Unavailable`, so a failed attempt leaves it
+        // standing and the monitor retries on its own clock. Re-priming from
+        // `mailw` — recovery only because something tried to write — is what
+        // that replaces.
         let respawn_owed = *respawn_needed.borrow_and_update()
-            || (!respawn_abandoned.load(Ordering::Acquire)
-                && matches!(
-                    transport
-                        .lock()
-                        .expect("acp transport mutex poisoned")
-                        .readiness(),
-                    WorkerReadinessState::Unavailable
-                ));
+            && !respawn_abandoned.load(Ordering::Acquire)
+            && matches!(
+                transport
+                    .lock()
+                    .expect("acp transport mutex poisoned")
+                    .readiness(),
+                WorkerReadinessState::Unavailable
+            );
         if !respawn_owed {
             continue;
         }
@@ -598,11 +608,27 @@ async fn acp_respawn_monitor(
             },
         )
         .await;
-        // Reset the signal so a later Unavailable turn re-triggers the monitor.
-        transport
-            .lock()
-            .expect("acp transport mutex poisoned")
-            .clear_respawn_signal();
+        // Clear the signal only once it has been answered — the runtime is no
+        // longer `Unavailable`, or respawn has been abandoned and no further
+        // attempt is coming. Clearing unconditionally is what made an external
+        // re-prime necessary: an attempt that failed without exhausting the
+        // budget left the worker dead with nothing left to say so, and recovery
+        // then waited for a write that the readiness gate would never allow.
+        //
+        // Holding the signal while `Unavailable` persists also keeps the
+        // classification intact across retries. It was raised because *this*
+        // failure warranted a respawn; that judgement does not expire because an
+        // attempt did not take.
+        let answered = {
+            let transport = transport.lock().expect("acp transport mutex poisoned");
+            !matches!(transport.readiness(), WorkerReadinessState::Unavailable)
+        } || respawn_abandoned.load(Ordering::Acquire);
+        if answered {
+            transport
+                .lock()
+                .expect("acp transport mutex poisoned")
+                .clear_respawn_signal();
+        }
     }
 }
 
