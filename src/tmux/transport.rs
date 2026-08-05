@@ -25,10 +25,11 @@
 use std::{
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread,
+    time::Duration,
 };
 
 use serde_json::json;
@@ -58,6 +59,13 @@ const TMUX_DELIVERY_THREAD_STOPPED_CODE: &str = "tmux_delivery_thread_stopped";
 /// Capacity of the internal write channel. Sized to absorb bursts from the
 /// relay worker without unbounded growth; the delivery task drains continuously.
 const WRITE_CHANNEL_CAPACITY: usize = 256;
+
+/// How often the observer thread re-reads its pane.
+///
+/// Matches the relay worker's poll cadence: a level staler than the interval at
+/// which it is read would make the reader wait for news that had already
+/// arrived.
+const OBSERVER_INTERVAL_MS: u64 = 100;
 
 /// Marker line written immediately before a terminal-outcome receipt's
 /// pane text so the receiving agent can distinguish a relay/system
@@ -129,6 +137,37 @@ pub struct TmuxTransport {
     invocation: TmuxInvocationSlot,
     /// Latch for the health axis: when the pane first stopped being observable.
     unreachable_since: UnreachableSince,
+    /// The most recent pane observation, published by the observer thread and
+    /// read by the two contract predicates.
+    ///
+    /// The relay reads levels from its async worker, so the read must not block
+    /// and must not spawn a tmux client. It also must not spawn one *there*
+    /// specifically: `publish_tmux_invocations` is thread-local, so an
+    /// invocation made from a runtime worker thread lands in no slot and
+    /// `terminate_generation` cannot reach it. Observing on an owned thread that
+    /// publishes into a slot fixes both at once.
+    observation: Arc<Mutex<PaneObservation>>,
+    /// The observer thread's own invocation slot.
+    ///
+    /// Separate from the delivery thread's: a slot holds one child, so two
+    /// publishers would clobber each other. The fence signals both.
+    observer_invocation: TmuxInvocationSlot,
+    /// Handle to the observer thread, for cessation observation and shutdown.
+    observer_handle: Option<thread::JoinHandle<()>>,
+}
+
+/// The most recent thing the observer thread learned about the pane.
+#[derive(Clone, Copy, Debug)]
+enum PaneObservation {
+    /// Nothing observed yet. Deliberately distinct from `Unreachable`: not having
+    /// looked is ignorance, not evidence, and reporting it as unreachable would
+    /// start a dwell against a target nobody has examined.
+    Pending,
+    /// The pane could not be inspected at all — a departed session, a dead
+    /// server, or a delivery task that has stopped.
+    Unreachable,
+    /// The pane was inspected, and this is what it said.
+    Observed { ready: bool },
 }
 
 impl std::fmt::Debug for TmuxTransport {
@@ -158,7 +197,54 @@ impl TmuxTransport {
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             invocation: TmuxInvocationSlot::default(),
             unreachable_since: UnreachableSince::default(),
+            observation: Arc::new(Mutex::new(PaneObservation::Pending)),
+            observer_invocation: TmuxInvocationSlot::default(),
+            observer_handle: None,
         }
+    }
+
+    /// Starts the observer thread if it is not already running.
+    ///
+    /// Owned rather than folded into the delivery thread because that thread
+    /// blocks on its channel: it observes nothing while idle, which is exactly
+    /// when the relay is holding a member and needs a current level.
+    fn ensure_observer_running(&mut self) {
+        if self
+            .observer_handle
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished())
+        {
+            return;
+        }
+        let Some(context) = self.task_context.clone() else {
+            return;
+        };
+        let TargetConfiguration::Tmux(target) = context.target_member.target.clone() else {
+            return;
+        };
+        let socket = tmux_socket_path_for_runtime_directory(context.runtime_directory.as_path());
+        let observation = Arc::clone(&self.observation);
+        let slot = Arc::clone(&self.observer_invocation);
+        let shutdown_flag = Arc::clone(&self.shutdown_flag);
+        let target_session = context.target_session.clone();
+        self.observer_handle = Some(thread::spawn(move || {
+            // Publish before the first invocation, so every tmux client this
+            // thread spawns is reachable by the fence.
+            publish_tmux_invocations(slot);
+            while !shutdown_flag.load(Ordering::Acquire) {
+                let observed = observe_pane_once(
+                    socket.as_path(),
+                    target_session.as_str(),
+                    target.prompt_readiness.as_ref(),
+                );
+                let next = match observed {
+                    Some(ready) => PaneObservation::Observed { ready },
+                    None => PaneObservation::Unreachable,
+                };
+                *observation.lock().expect("tmux observation mutex") = next;
+                thread::sleep(Duration::from_millis(OBSERVER_INTERVAL_MS));
+            }
+        }));
     }
 
     /// One pane observation, separating "could not observe" from "observed".
@@ -171,27 +257,23 @@ impl TmuxTransport {
     /// The two readings feed different axes and must not be collapsed: an
     /// unobservable pane is not a busy one, and only the busy one is worth
     /// waiting on.
-    fn observe_pane(&self) -> Option<bool> {
-        let sender = self.sender.as_ref()?;
-        let handle = self.task_handle.as_ref()?;
-        if handle.is_finished() || sender.is_closed() {
-            return None;
+    /// The cached observation, plus the liveness facts only the transport holds.
+    ///
+    /// A stopped delivery task is unreachable however healthy the pane looks:
+    /// there is nothing left to carry a write to it.
+    fn observed(&self) -> PaneObservation {
+        let live = self
+            .sender
+            .as_ref()
+            .is_some_and(|sender| !sender.is_closed())
+            && self
+                .task_handle
+                .as_ref()
+                .is_some_and(|handle| !handle.is_finished());
+        if !live {
+            return PaneObservation::Unreachable;
         }
-        let context = self.task_context.as_ref()?;
-        let TargetConfiguration::Tmux(target) = &context.target_member.target else {
-            return None;
-        };
-        let socket = tmux_socket_path_for_runtime_directory(context.runtime_directory.as_path());
-        let mut probe = RealPaneQuiescenceProbe::new(
-            socket.as_path(),
-            context.target_session.as_str(),
-            target.prompt_readiness.as_ref(),
-        )
-        .ok()?;
-        probe
-            .next_evaluation()
-            .ok()
-            .map(|evaluation| evaluation.ready)
+        *self.observation.lock().expect("tmux observation mutex")
     }
 
     /// Starts the internal delivery task if not already running and `startup()`
@@ -280,6 +362,9 @@ impl GenerationFence for TmuxTransport {
         // generation — it holds the operator's sessions, and terminating it to
         // fence one delivery would destroy work the fence exists to protect.
         terminate_published_invocation(&self.invocation);
+        // The observer holds a second slot, and a fence that reached only the
+        // delivery thread would leave a tmux client of this generation running.
+        terminate_published_invocation(&self.observer_invocation);
         self.sender = None;
     }
 
@@ -289,6 +374,10 @@ impl GenerationFence for TmuxTransport {
         self.task_handle
             .as_ref()
             .is_none_or(thread::JoinHandle::is_finished)
+            && self
+                .observer_handle
+                .as_ref()
+                .is_none_or(thread::JoinHandle::is_finished)
     }
 }
 
@@ -309,6 +398,7 @@ impl Transport for TmuxTransport {
             reason: "tmux delivery task could not be established at startup".to_string(),
             details: None,
         })?;
+        self.ensure_observer_running();
         Ok(TransportStatus {
             readiness: TransportReadiness::Ready,
         })
@@ -359,24 +449,20 @@ impl Transport for TmuxTransport {
     }
 
     fn is_ready_for_handover(&self) -> bool {
-        // Folds into the health latch as well as answering readiness. Every
-        // observation of this pane is evidence about reachability, and letting
-        // only `health()` fold left the latch able to survive an intervening
-        // successful observation — a later failure could then satisfy the dwell
-        // using time during which the pane was demonstrably reachable.
-        let observation = self.observe_pane();
-        // The latch update is the point here; the level it returns is `health`'s
-        // to report.
-        let _ = self.unreachable_since.fold(observation.is_some());
-        observation == Some(true)
+        matches!(self.observed(), PaneObservation::Observed { ready: true })
     }
 
     fn health(&self) -> TransportHealth {
-        // An unobservable pane is the unreachable case: a departed session, a
-        // dead tmux server, or a delivery task that has stopped. An observed
-        // pane is healthy whatever it says, because a non-prompt frame is a busy
-        // target and belongs to the readiness axis, not this one.
-        self.unreachable_since.fold(self.observe_pane().is_some())
+        // Both predicates now read one cached observation, so they cannot
+        // disagree about reachability and the latch cannot survive a successful
+        // look — the interleaving that needed a defensive fold in each of them.
+        //
+        // `Pending` reports healthy. Not having observed yet is ignorance, not
+        // evidence, and starting a dwell against a target nobody has examined
+        // would resolve members on the strength of not knowing. It reports
+        // unready through the other axis, so such a member is held.
+        let reachable = !matches!(self.observed(), PaneObservation::Unreachable);
+        self.unreachable_since.fold(reachable)
     }
 
     fn shutdown(&mut self) {
@@ -868,6 +954,27 @@ impl OutputView for TmuxOutputView {
         })?;
         Ok(LookSnapshotPayload::Lines { snapshot_lines })
     }
+}
+
+/// One pane observation, separating "could not observe" from "observed".
+///
+/// `None` means the pane could not be inspected at all, which is what a departed
+/// session or a dead tmux server looks like. `Some(ready)` means it was
+/// inspected and this is what it said — a settled non-prompt frame is a *busy*
+/// target and belongs to the readiness axis, not the health one.
+///
+/// A free function because the observer thread owns no transport: it holds only
+/// what it needs to look, which is also what keeps it off the transport lock.
+fn observe_pane_once(
+    socket: &Path,
+    target_session: &str,
+    prompt_readiness: Option<&crate::configuration::PromptReadinessTemplate>,
+) -> Option<bool> {
+    let mut probe = RealPaneQuiescenceProbe::new(socket, target_session, prompt_readiness).ok()?;
+    probe
+        .next_evaluation()
+        .ok()
+        .map(|evaluation| evaluation.ready)
 }
 
 #[cfg(test)]
