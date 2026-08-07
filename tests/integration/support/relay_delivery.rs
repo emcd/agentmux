@@ -663,7 +663,13 @@ pub(crate) fn spawn_relay_with_fake_tmux_and_env(
         .env("AGENTMUX_TMUX_COMMAND", fake_tmux_script)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
+        .stderr(std::process::Stdio::piped())
+        // A tokio `Child` does not kill on drop by default, so a test that
+        // panicked before reaching its explicit shutdown left its relay running
+        // against a temp directory nothing would ever clean up. The panic path is
+        // exactly when cleanup matters most, and it is the one path that cannot
+        // be written out longhand at each call site.
+        .kill_on_drop(true);
     for (name, value) in environment {
         command.env(name, value);
     }

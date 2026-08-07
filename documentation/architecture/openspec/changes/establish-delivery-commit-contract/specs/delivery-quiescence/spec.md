@@ -17,7 +17,7 @@ exactly the ones for which nothing has been submitted, so no target-side effect 
 outstanding for the duration of the wait, however long it runs.
 
 The relay SHALL determine readiness from a **level-triggered**
-`can_accept_handover` state read from the transport. Because a notification is
+`is_ready_for_handover` state read from the transport. Because a notification is
 only an edge, the relay SHALL subscribe before checking or re-check after
 subscribing, SHALL poll at a bounded cadence as a backstop, and SHALL re-read
 the level on every notification, admission, and completion. Readiness is
@@ -61,7 +61,7 @@ would be anything but a guess about work it does not control.
 
 - **WHEN** a target's observable output remains unchanged for the configured
   quiet window
-- **AND** the transport reports `can_accept_handover`
+- **AND** the transport reports `is_ready_for_handover`
 - **THEN** the relay authorizes the batch and the transport submits it
 
 #### Scenario: Keep waiting while the target is active
@@ -218,7 +218,7 @@ which:
   be authorized; debiting at resolution would let a target be visited repeatedly
   while its earlier batches are still in flight;
 - **eligible rotation** — only targets with pending work whose transport reports
-  `can_accept_handover` are visited; ineligible targets are skipped;
+  `is_ready_for_handover` are visited; ineligible targets are skipped;
 - **revalidation** — when the set of registered transports changes, or a
   registered transport's declared maximum handover dimensions change, the relay
   SHALL revalidate the configured quantum against the new largest byte component.
@@ -295,7 +295,7 @@ any coder.
 #### Scenario: Skip an unready target
 
 - **WHEN** a target has pending work but its transport does not report
-  `can_accept_handover`
+  `is_ready_for_handover`
 - **THEN** the rotation skips it
 - **AND** it accrues no credit toward a later visit
 

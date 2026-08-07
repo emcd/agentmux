@@ -27,7 +27,7 @@ written the bytes.
 
 **The template SHALL be evaluated by the transport that owns the target, never by
 the relay.** The relay learns the result only as the level it reads through
-`can_accept_handover`, and MUST NOT interpret `prompt_regex`, inspect pane
+`is_ready_for_handover`, and MUST NOT interpret `prompt_regex`, inspect pane
 output, or compare a cursor column itself.
 
 This is a decoupling boundary, not an implementation preference. Readiness
@@ -61,10 +61,17 @@ mismatch is removed. No transport infers a terminal outcome from the template,
 and the distinction between the two causes survives only as diagnostic
 observability.
 
-A target that never becomes prompt-ready SHALL leave its entry `Pending`
-indefinitely. No bound converts that wait into an outcome, because how long a
-target stays busy is not evidence about the target. The wait is reported through
-the `delivery-quiescence` capability's undelivered-queue inscriptions.
+A target that never becomes prompt-ready **while its transport remains healthy**
+SHALL leave its entry `Pending` indefinitely. No bound converts that wait into an
+outcome, because how long a target stays busy is not evidence about the target.
+The wait is reported through the `delivery-quiescence` capability's
+undelivered-queue inscriptions.
+
+This is bounded by health, not by time. A transport that reports itself
+unreachable past the dwell threshold resolves its members per the
+`transport-abstraction` capability's `Transport Health as a Separate Axis`
+requirement — not because the wait grew long, but because sustained
+unreachability is evidence that no wait will end it.
 
 #### Scenario: Authorize when prompt-readiness template matches
 
@@ -79,13 +86,13 @@ the `delivery-quiescence` capability's undelivered-queue inscriptions.
 - **THEN** the relay delivery subsystem does not compile `prompt_regex`, read
   pane output, or compare a cursor column
 - **AND** it authorizes solely on the level the transport reports through
-  `can_accept_handover`
+  `is_ready_for_handover`
 
 #### Scenario: A transport with no pane has no template to evaluate
 
 - **WHEN** the target's transport observes readiness from a wire protocol or
   subscriber connectivity rather than pane output
-- **THEN** it reports `can_accept_handover` from that observation
+- **THEN** it reports `is_ready_for_handover` from that observation
 - **AND** the relay authorizes on the same level it reads for every other
   transport, with no transport-specific branch
 

@@ -678,12 +678,20 @@ fn a_configured_quota_binds_at_admission() {
 /// Without those identities on the wire the state model would be internal
 /// bookkeeping no operator could correlate — a stuck target's outcome could not
 /// be traced back to the authorization that produced it.
+///
+/// The target is the UI session rather than a tmux one, and that is load-bearing
+/// now that authorization is gated. A tmux target with no server behind it is
+/// unreachable, so its member resolves during `Pending` and never mints a batch
+/// at all — a correct outcome that simply is not the one under test. UI reports
+/// healthy and ready unconditionally, so it reaches the authorized state this
+/// test is about.
 #[test]
 fn a_terminal_outcome_names_the_authorization_it_resolved_under() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
     let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
 
     dispatch_request(
@@ -691,7 +699,7 @@ fn a_terminal_outcome_names_the_authorization_it_resolved_under() {
             request_id: None,
             requester_session: "alpha".to_string(),
             message: "hello".to_string(),
-            targets: vec!["bravo@party".to_string()],
+            targets: vec!["user@GLOBAL".to_string()],
             broadcast: false,
             quiet_window_ms: Some(1),
             on_behalf_of: None,
@@ -702,7 +710,13 @@ fn a_terminal_outcome_names_the_authorization_it_resolved_under() {
     )
     .expect("send response");
 
-    let completed = await_inscription(&inscriptions, "relay.send.async.completed");
+    // The UI transport resolves only after its own reconnect wait, and no UI is
+    // connected here, so the bound is that wait rather than anything relay-side.
+    let completed = await_inscription_within(
+        &inscriptions,
+        "relay.send.async.completed",
+        std::time::Duration::from_secs(45),
+    );
     let record: serde_json::Value =
         serde_json::from_str(completed.as_str()).expect("completed inscription is json");
     let payload = record
@@ -731,6 +745,9 @@ fn a_member_produces_exactly_one_terminal_record() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    // No tmux server backs this socket, so the target is unreachable and the
+    // member resolves on the dwell rather than on a write that never happens.
+    super::configure_short_unreachable_dwell();
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
@@ -765,14 +782,24 @@ fn a_member_produces_exactly_one_terminal_record() {
 /// written by the delivery worker task rather than on the request path, so it is
 /// not present when the send response returns.
 fn await_inscription(path: &std::path::Path, event: &str) -> String {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    await_inscription_within(path, event, std::time::Duration::from_secs(5))
+}
+
+/// `await_inscription` with an explicit bound, for the one scenario whose
+/// completion is gated on a transport's own wait rather than on the relay.
+fn await_inscription_within(
+    path: &std::path::Path,
+    event: &str,
+    bound: std::time::Duration,
+) -> String {
+    let deadline = std::time::Instant::now() + bound;
     loop {
         if let Some(line) = read_inscriptions(path, event).into_iter().next() {
             return line;
         }
         assert!(
             std::time::Instant::now() < deadline,
-            "no {event} inscription within 5s"
+            "no {event} inscription within {bound:?}"
         );
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
@@ -793,4 +820,106 @@ fn read_inscriptions(path: &std::path::Path, event: &str) -> Vec<String> {
         .filter(|line| line.contains(needle.as_str()))
         .map(str::to_string)
         .collect()
+}
+
+/// A target unreachable past the dwell resolves `not_submitted`, not `failed`.
+///
+/// The member was never authorized and never handed to a transport, so nothing
+/// could have reached the target. That is positive evidence of non-delivery,
+/// which is what `not_submitted` asserts; `failed` would report a delivery
+/// attempt that never happened. The distinction is the whole point of the guard's
+/// evidence order, and reporting the weaker spelling would make an honest
+/// non-delivery indistinguishable from a write that went wrong.
+#[test]
+fn a_sustained_unreachable_target_resolves_not_submitted() {
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    // No tmux server backs this socket, so the target is unreachable from the
+    // first observation and stays that way.
+    super::configure_short_unreachable_dwell();
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    dispatch_request(
+        RelayRequest::Send {
+            request_id: None,
+            requester_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["bravo@party".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(1),
+            on_behalf_of: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect("send response");
+
+    let completed = await_inscription(&inscriptions, "relay.send.async.completed");
+    let record: serde_json::Value =
+        serde_json::from_str(completed.as_str()).expect("completed inscription is json");
+    let payload = record
+        .get("details")
+        .expect("completed inscription carries a details object");
+    assert_eq!(
+        payload.get("outcome").and_then(serde_json::Value::as_str),
+        Some("not_submitted"),
+        "an unreachable target's member resolves not_submitted: {completed}"
+    );
+    assert_eq!(
+        payload
+            .get("reason_code")
+            .and_then(serde_json::Value::as_str),
+        Some("delivery_target_unreachable"),
+        "the unreachable reason code survives the terminal transition: {completed}"
+    );
+}
+
+/// An unreachable target under the dwell is held, never authorized.
+///
+/// Both axes gate a delivery attempt, and readiness cannot stand in for health:
+/// a transport that cannot reach its target has nothing useful to say about
+/// whether that target is at a prompt. An earlier version read health, declined
+/// to resolve under the dwell, and then let a successful readiness probe
+/// authorize anyway — which is the two-axis rule holding in the spec and not in
+/// the code.
+///
+/// Absence is the assertion here, so the teeth are in the dwell: it is long
+/// enough that resolution cannot be what suppressed the record.
+#[test]
+fn an_unreachable_target_under_the_dwell_is_never_authorized() {
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    super::configure_long_unreachable_dwell();
+    let config_root = write_bundle(&temporary, "party");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    dispatch_request(
+        RelayRequest::Send {
+            request_id: None,
+            requester_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["bravo@party".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(1),
+            on_behalf_of: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect("send response");
+
+    // Several worker poll ticks: long enough that an authorization would have
+    // produced its terminal record by now, far short of the dwell.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+
+    assert_eq!(
+        count_inscriptions(&inscriptions, "relay.send.async.completed"),
+        0,
+        "a member held under the dwell produces no terminal record"
+    );
 }

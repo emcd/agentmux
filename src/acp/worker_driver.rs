@@ -34,7 +34,8 @@ use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
     Chooser, DeliveryEnvelope, GenerationFence, OutputView, StartupContext, Transport,
-    TransportError, TransportStatus, WorkerFailureReason, WorkerReadinessState,
+    TransportError, TransportHealth, TransportStatus, UnreachableSince, WorkerFailureReason,
+    WorkerReadinessState,
 };
 
 use super::{AcpBootstrapError, AcpTransport, bootstrap_acp_worker_runtime};
@@ -43,20 +44,22 @@ const RESPAWN_BACKOFF_MAX_MS_ENVVAR: &str = "AGENTMUX_RELAY_ACP_RESPAWN_BACKOFF_
 const RESPAWN_SLEEP_POLL_MS: u64 = 50;
 const RESPAWN_BACKOFF_INITIAL_MS: u64 = 1_000;
 const RESPAWN_BACKOFF_CAP_DEFAULT_MS: u64 = 30_000;
-// How many times the same bootstrap failure may repeat before the respawn
-// monitor gives up and settles the worker Unavailable. This is stage-agnostic:
-// any non-permanent bootstrap failure (spawn, initialize, session/load,
-// session/new, persist) counts, keyed on its (code, reason) signature. A
-// deterministic failure that reproduces identically across this many
-// backoff-spaced attempts is not going to self-resolve, so we surface it to
-// operators rather than loop forever -- a genuinely transient failure that
-// changes signature or succeeds within the window resets the counter and keeps
-// recovering. Permanent failures (missing capability) short-circuit this via
-// AcpBootstrapError::is_permanent before the count is even consulted. Before
-// this was stage-agnostic, only repeated `initialize` failures could give up,
-// so a coder whose session/load or session/new deterministically failed
-// respawned forever and never published a terminal Unavailable.
-const RESPAWN_REPEATED_FAILURE_THRESHOLD: u32 = 3;
+/// Attempts one worker may consume before respawn gives up, counted across every
+/// trigger rather than per burst and cleared only by a successful re-establish.
+///
+/// Deliberately blind to *which* failure occurred. The predecessor counted
+/// consecutive **identical** failure signatures, which stopped fast on a
+/// deterministic fault and never stopped at all on an alternating one — a worker
+/// failing A, B, A, B reset the counter every time and retried forever. Stopping
+/// sooner on the deterministic case was a latency optimisation; failing to stop
+/// on the alternating case was the bug.
+///
+/// This bound matters more than it used to. Recovery used to be driven by
+/// delivery attempts, so a hopeless target stopped being retried once senders
+/// gave up on it — traffic was an accidental circuit breaker. The respawn signal
+/// now persists while the runtime stays `Unavailable`, so the monitor retries on
+/// its own clock and nothing else bounds the loop.
+const RESPAWN_ATTEMPT_LIMIT: u32 = 6;
 /// Idle poll interval for the respawn monitor's shutdown gate.
 const RESPAWN_MONITOR_POLL_MS: u64 = 100;
 /// Generic respawn trigger label. The internal delivery task signals a boolean
@@ -148,6 +151,27 @@ pub struct AcpWorkerDriver {
     /// generation-owned executor, and one whose handle is discarded can be
     /// neither terminated nor observed.
     bootstrap_task: Option<tokio::task::JoinHandle<()>>,
+    /// Set once respawn has given up on this target, either because the failure
+    /// was permanent or because the retry budget ran out.
+    ///
+    /// This, and not `WorkerReadinessState::Unavailable`, is what the health
+    /// axis reads. `Unavailable` is published for a respawn gap as readily as
+    /// for a give-up, so reading it would report a worker whose replacement is
+    /// seconds away as unreachable and bounce the members that replacement was
+    /// about to serve.
+    ///
+    /// Shared with the respawn monitor, which is the task that discovers the
+    /// give-up and outlives no driver.
+    respawn_abandoned: Arc<AtomicBool>,
+    /// Latch for the health axis; see [`Transport::health`].
+    ///
+    /// Shared with the respawn monitor so the instant is recorded at the
+    /// give-up transition rather than at the first later `health()` call. The
+    /// dwell measures how long the target has been unreachable, not how long
+    /// since someone happened to ask: a member arriving well after a permanent
+    /// failure would otherwise wait a fresh full dwell for a target that was
+    /// already known to be gone.
+    unreachable_since: Arc<UnreachableSince>,
 }
 
 impl AcpWorkerDriver {
@@ -171,6 +195,8 @@ impl AcpWorkerDriver {
             services,
             respawn_monitor: None,
             bootstrap_task: None,
+            respawn_abandoned: Arc::new(AtomicBool::new(false)),
+            unreachable_since: Arc::new(UnreachableSince::default()),
         }
     }
 
@@ -242,9 +268,13 @@ impl AcpWorkerDriver {
             respawn_needed,
             services,
             AcpRespawnState::new(),
-            namespace,
-            runtime_directory,
-            target_member,
+            AcpRespawnTarget {
+                namespace,
+                runtime_directory,
+                member: target_member,
+            },
+            Arc::clone(&self.respawn_abandoned),
+            Arc::clone(&self.unreachable_since),
         )));
     }
 }
@@ -298,12 +328,18 @@ impl Transport for AcpWorkerDriver {
         self.lock_transport().raww(content, append_enter)
     }
 
-    fn is_ready(&self) -> bool {
-        self.lock_transport().is_ready()
+    fn is_ready_for_handover(&self) -> bool {
+        self.lock_transport().is_ready_for_handover()
     }
 
-    fn can_accept_handover(&self) -> bool {
-        self.lock_transport().can_accept_handover()
+    fn health(&self) -> TransportHealth {
+        // Reachability for an ACP target means a replacement is still possible,
+        // not that one exists right now. A respawn gap reports `Unavailable` and
+        // is healthy: the monitor is mid-flight and the member it would bounce is
+        // the member the replacement is about to serve. Only an abandoned respawn
+        // — permanent failure or an exhausted retry budget — is unreachable.
+        self.unreachable_since
+            .fold(!self.respawn_abandoned.load(Ordering::Acquire))
     }
 
     fn shutdown(&mut self) {
@@ -469,14 +505,46 @@ async fn initial_acp_bootstrap(
 /// the fast release/install steps — never across `.await` or the blocking child
 /// spawn — so a concurrent worker `mailw` is never stalled. Exits on relay
 /// shutdown.
-async fn acp_respawn_monitor(
-    transport: Arc<Mutex<AcpTransport>>,
-    mut respawn_needed: tokio::sync::watch::Receiver<bool>,
-    services: AcpDriverServices,
-    mut respawn_state: AcpRespawnState,
+/// The target one respawn monitor supervises.
+///
+/// Grouped rather than passed as three parallel parameters: they are one
+/// cohesive identity — which target, where its runtime lives, and how it is
+/// configured — and every re-establish attempt needs all three together.
+/// Whether the monitor owes this target a respawn attempt.
+///
+/// Extracted from the monitor loop because the interesting cases are
+/// *combinations* — a signal without an `Unavailable` runtime, an `Unavailable`
+/// runtime without a signal — and staging those against a live monitor means
+/// racing a respawn to observe a state it is about to leave.
+fn respawn_is_owed(signalled: bool, abandoned: bool, readiness: WorkerReadinessState) -> bool {
+    signalled && !abandoned && matches!(readiness, WorkerReadinessState::Unavailable)
+}
+
+/// The health signals a respawn writes when it gives up on a target.
+///
+/// Paired rather than passed separately because they are one fact recorded in
+/// two places — that the target is past recovery, and when that became true —
+/// and separating them is exactly how the instant came to be stamped at first
+/// enquiry instead of at the transition.
+struct AbandonmentSignal<'a> {
+    abandoned: &'a AtomicBool,
+    unreachable_since: &'a UnreachableSince,
+}
+
+struct AcpRespawnTarget {
     namespace: String,
     runtime_directory: PathBuf,
-    target_member: BundleMember,
+    member: BundleMember,
+}
+
+async fn acp_respawn_monitor(
+    transport: Arc<Mutex<AcpTransport>>,
+    mut respawn_needed: tokio::sync::watch::Receiver<u64>,
+    services: AcpDriverServices,
+    mut respawn_state: AcpRespawnState,
+    target: AcpRespawnTarget,
+    respawn_abandoned: Arc<AtomicBool>,
+    unreachable_since: Arc<UnreachableSince>,
 ) {
     let poll = Duration::from_millis(RESPAWN_MONITOR_POLL_MS);
     loop {
@@ -503,23 +571,108 @@ async fn acp_respawn_monitor(
         {
             return;
         }
-        if !*respawn_needed.borrow_and_update() {
+        // Three conditions, each excluding something the others cannot.
+        //
+        // The **signal** carries the classification. Not every `Unavailable` is
+        // a respawn: `outcome_requires_respawn` deliberately excludes
+        // serialization failure, which sets `Unavailable` and is not
+        // recoverable by restarting the agent. A level-only trigger would
+        // respawn on it and override that judgement.
+        //
+        // The **level** guards against staleness. A producer's edge can arrive
+        // after the runtime it described has already been replaced, and acting
+        // on it would tear down a healthy generation to recover from a failure
+        // that is already over.
+        //
+        // **Abandonment** guards the crash loop that `RESPAWN_ATTEMPT_LIMIT`
+        // exists to stop.
+        //
+        // What makes this independent of delivery traffic is not a level-only
+        // trigger but the signal's *persistence*: it is cleared below only once
+        // the runtime is no longer `Unavailable`, so a failed attempt leaves it
+        // standing and the monitor retries on its own clock. Re-priming from
+        // `mailw` — recovery only because something tried to write — is what
+        // that replaces.
+        respawn_needed.borrow_and_update();
+        let abandoned = respawn_abandoned.load(Ordering::Acquire);
+        let (outstanding, readiness) = {
+            let transport = transport.lock().expect("acp transport mutex poisoned");
+            (
+                transport.respawn_signal_outstanding(),
+                transport.readiness(),
+            )
+        };
+        if !respawn_is_owed(outstanding.is_some(), abandoned, readiness) {
+            // Once raised, "owed" and "answered" are exact complements: owed is
+            // `!abandoned && Unavailable`, so an outstanding cause that is not
+            // owed has necessarily been answered -- the runtime left
+            // `Unavailable` under its own power, or abandonment closed the
+            // account.
+            //
+            // Retiring it here and not only after this monitor's own attempt is
+            // what keeps a cause from outliving the failure it described. One
+            // left standing across a recovery stays outstanding, and the next
+            // `Unavailable` -- including a serialization failure, which
+            // `outcome_requires_respawn` deliberately refuses to signal --
+            // would find all three conditions met and respawn on a
+            // classification that was never made for it. The level check cannot
+            // catch that on its own: it distinguishes states, not which failure
+            // put the runtime in one.
+            //
+            // Retiring *this* epoch rather than clearing the signal is what
+            // makes the decision safe to act on late. Everything above is a
+            // sample: the lock is released before the retirement lands, so a
+            // live failure can publish a new cause in between. That cause
+            // carries a higher epoch, so the retirement bounds only what was
+            // classified and leaves the new one outstanding for the next tick.
+            if let Some(epoch) = outstanding {
+                transport
+                    .lock()
+                    .expect("acp transport mutex poisoned")
+                    .retire_respawn_signal(epoch);
+            }
             continue;
         }
         run_acp_respawn(
             &transport,
             &services,
             &mut respawn_state,
-            namespace.as_str(),
-            runtime_directory.as_path(),
-            &target_member,
+            target.namespace.as_str(),
+            target.runtime_directory.as_path(),
+            &target.member,
+            AbandonmentSignal {
+                abandoned: respawn_abandoned.as_ref(),
+                unreachable_since: unreachable_since.as_ref(),
+            },
         )
         .await;
-        // Reset the signal so a later Unavailable turn re-triggers the monitor.
-        transport
-            .lock()
-            .expect("acp transport mutex poisoned")
-            .clear_respawn_signal();
+        // Retire the cause only once it has been answered — the runtime is no
+        // longer `Unavailable`, or respawn has been abandoned and no further
+        // attempt is coming. Retiring unconditionally is what made an external
+        // re-prime necessary: an attempt that failed without exhausting the
+        // budget left the worker dead with nothing left to say so, and recovery
+        // then waited for a write that the readiness gate would never allow.
+        //
+        // Holding the cause while `Unavailable` persists also keeps the
+        // classification intact across retries. It was raised because *this*
+        // failure warranted a respawn; that judgement does not expire because an
+        // attempt did not take.
+        //
+        // The epoch retired is the one this attempt answered, never whatever is
+        // current. A respawn runs for a while, and a failure on the way back up
+        // can publish a cause of its own; bounding by the classified epoch
+        // leaves that one for the next tick instead of consuming it here.
+        let answered = {
+            let transport = transport.lock().expect("acp transport mutex poisoned");
+            !matches!(transport.readiness(), WorkerReadinessState::Unavailable)
+        } || respawn_abandoned.load(Ordering::Acquire);
+        if answered {
+            let epoch = outstanding.expect("an owed respawn has an outstanding cause");
+            transport
+                .lock()
+                .expect("acp transport mutex poisoned")
+                .retire_respawn_signal(epoch);
+        }
     }
 }
 
@@ -536,6 +689,7 @@ async fn run_acp_respawn(
     namespace: &str,
     runtime_directory: &Path,
     target_member: &BundleMember,
+    abandonment: AbandonmentSignal<'_>,
 ) {
     let target_session = target_member.id.as_str();
     // Release the dead runtime (joining its child + reader thread) but keep the
@@ -632,7 +786,6 @@ async fn run_acp_respawn(
                 return;
             }
             BootstrapDisposition::Failed(error) => {
-                respawn_state.record_failure(&error);
                 emit_inscription(
                     "relay.acp.respawn.attempt_failed",
                     &json!({
@@ -644,6 +797,20 @@ async fn run_acp_respawn(
                     }),
                 );
                 if error.is_permanent() || respawn_state.should_give_up() {
+                    // Latch the health axis here, at the one place that knows no
+                    // further attempt is coming. Every other route to
+                    // `Unavailable` is survivable, so this is the only signal
+                    // that separates a target worth waiting for from one that
+                    // will never come back.
+                    // Both halves of the same fact, recorded together: that this
+                    // target is past recovery, and when that became true. Stamping
+                    // the instant here rather than leaving it to whenever a member
+                    // next asks is what keeps the dwell measuring how long the
+                    // target has been unreachable — starting the clock on first
+                    // enquiry would charge a late arrival a full fresh dwell for a
+                    // target already known to be gone.
+                    abandonment.abandoned.store(true, Ordering::Release);
+                    let _ = abandonment.unreachable_since.fold(false);
                     transport
                         .lock()
                         .expect("acp transport mutex poisoned")
@@ -706,8 +873,6 @@ fn respawn_backoff_cap_ms() -> u64 {
 struct AcpRespawnState {
     attempt: u32,
     next_backoff_ms: u64,
-    last_failure_signature: Option<(String, String)>,
-    consecutive_identical_failures: u32,
 }
 
 impl AcpRespawnState {
@@ -715,8 +880,6 @@ impl AcpRespawnState {
         Self {
             attempt: 0,
             next_backoff_ms: 0,
-            last_failure_signature: None,
-            consecutive_identical_failures: 0,
         }
     }
 
@@ -732,25 +895,68 @@ impl AcpRespawnState {
         Duration::from_millis(backoff)
     }
 
-    fn record_failure(&mut self, error: &AcpBootstrapError) {
-        let signature = (error.code.clone(), error.reason.clone());
-        if self.last_failure_signature.as_ref() == Some(&signature) {
-            self.consecutive_identical_failures =
-                self.consecutive_identical_failures.saturating_add(1);
-        } else {
-            self.last_failure_signature = Some(signature);
-            self.consecutive_identical_failures = 1;
-        }
-    }
-
     fn should_give_up(&self) -> bool {
-        self.consecutive_identical_failures >= RESPAWN_REPEATED_FAILURE_THRESHOLD
+        self.attempt >= RESPAWN_ATTEMPT_LIMIT
     }
 
     fn reset_on_success(&mut self) {
         self.attempt = 0;
         self.next_backoff_ms = 0;
-        self.last_failure_signature = None;
-        self.consecutive_identical_failures = 0;
+    }
+}
+
+#[cfg(test)]
+mod respawn_owed_tests {
+    use super::{WorkerReadinessState, respawn_is_owed};
+
+    /// The three conditions each exclude something the others cannot, so the
+    /// matrix is the assertion.
+    ///
+    /// Crate-private by design: the owed condition is monitor internals with no
+    /// public consumer, and widening it to reach from `tests/unit` would add API
+    /// surface that exists only for this check.
+    #[test]
+    fn a_respawn_is_owed_only_when_signal_level_and_budget_agree() {
+        // The positive case: a failure that warranted a respawn, a runtime still
+        // dead, and a budget that has not run out.
+        assert!(respawn_is_owed(
+            true,
+            false,
+            WorkerReadinessState::Unavailable
+        ));
+
+        // A stale edge. A producer's signal can arrive after the runtime it
+        // described has already been replaced; acting on it would tear down a
+        // healthy generation to recover from a failure that is already over. The
+        // level is what makes the edge safe to receive late.
+        for recovered in [
+            WorkerReadinessState::Available,
+            WorkerReadinessState::Busy,
+            WorkerReadinessState::Recovering,
+            WorkerReadinessState::Initializing,
+        ] {
+            assert!(
+                !respawn_is_owed(true, false, recovered),
+                "a signal must not respawn a runtime that is no longer Unavailable: {recovered:?}"
+            );
+        }
+
+        // An Unavailable runtime with no signal. Not every Unavailable warrants a
+        // respawn -- `outcome_requires_respawn` deliberately excludes
+        // serialization failure, which sets Unavailable and is not fixed by
+        // restarting the agent. The signal is where that judgement lives, so a
+        // level-only trigger would override it.
+        assert!(
+            !respawn_is_owed(false, false, WorkerReadinessState::Unavailable),
+            "an Unavailable the transport did not signal for is not a respawn"
+        );
+
+        // Abandoned: past recovery whatever else is true. This is the crash loop
+        // `RESPAWN_ATTEMPT_LIMIT` exists to stop.
+        assert!(!respawn_is_owed(
+            true,
+            true,
+            WorkerReadinessState::Unavailable
+        ));
     }
 }

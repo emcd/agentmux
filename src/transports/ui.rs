@@ -37,7 +37,8 @@ use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
     DeliveryEnvelope, GenerationFence, OutputView, SendOutcome, SingleDeliveryOutcome,
-    StartupContext, Transport, TransportError, TransportReadiness, TransportStatus,
+    StartupContext, Transport, TransportError, TransportHealth, TransportReadiness,
+    TransportStatus,
 };
 
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
@@ -274,12 +275,16 @@ impl Transport for UiTransport {
         receiver
     }
 
-    fn is_ready(&self) -> bool {
+    fn is_ready_for_handover(&self) -> bool {
         true
     }
 
-    fn can_accept_handover(&self) -> bool {
-        true
+    fn health(&self) -> TransportHealth {
+        // A UI target is a broadcast surface, not a process the transport can
+        // lose track of: with no subscribers the broadcast is delivered to
+        // nobody, which is an empty audience rather than an unreachable target.
+        // Nothing here can fail to be observed, so nothing can start a dwell.
+        TransportHealth::Healthy
     }
 
     fn shutdown(&mut self) {}

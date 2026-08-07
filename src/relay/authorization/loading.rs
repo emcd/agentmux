@@ -43,6 +43,17 @@ const DELIVERY_SUBMISSION_TIMEOUT_MS: DeliveryRange =
     DeliveryRange::new("delivery.submission-timeout-ms", 5_000, 500, 60_000);
 const DELIVERY_FENCE_OBSERVATION_TIMEOUT_MS: DeliveryRange =
     DeliveryRange::new("delivery.fence-observation-timeout-ms", 5_000, 100, 60_000);
+/// How long a target may be *continuously* unreachable before its still-waiting
+/// members resolve.
+///
+/// Not a readiness bound. A busy target waits forever, because how long a target
+/// stays busy is not evidence about it. This measures repeated observations that
+/// the target could not be reached at all, which is evidence, and the default is
+/// deliberately generous: a bounce asserts something to the sender that a wait
+/// does not, so the cost of waiting slightly too long is lower than the cost of
+/// claiming a target is gone while it is restarting.
+const DELIVERY_UNREACHABLE_DWELL_MS: DeliveryRange =
+    DeliveryRange::new("delivery.unreachable-dwell-ms", 30_000, 1_000, 600_000);
 const DELIVERY_QUEUED_ENVELOPES_MAX: DeliveryRange =
     DeliveryRange::new("delivery.queued-envelopes-max", 10_000, 1, 1_000_000);
 const DELIVERY_QUEUED_BYTES_MAX: DeliveryRange = DeliveryRange::new(
@@ -186,6 +197,8 @@ struct RawRelayDeliverySection {
     submission_timeout_ms: Option<u64>,
     #[serde(default)]
     fence_observation_timeout_ms: Option<u64>,
+    #[serde(default)]
+    unreachable_dwell_ms: Option<u64>,
     #[serde(default)]
     queued_envelopes_max: Option<u64>,
     #[serde(default)]
@@ -458,6 +471,7 @@ pub struct DeliveryConfiguration {
     pub scheduling_quantum_bytes: u64,
     pub submission_timeout_ms: u64,
     pub fence_observation_timeout_ms: u64,
+    pub unreachable_dwell_ms: u64,
     pub queued_envelopes_max: usize,
     pub queued_bytes_max: u64,
     pub queued_envelopes_per_target_max: usize,
@@ -472,6 +486,7 @@ impl Default for DeliveryConfiguration {
             scheduling_quantum_bytes: DELIVERY_SCHEDULING_QUANTUM_BYTES.default,
             submission_timeout_ms: DELIVERY_SUBMISSION_TIMEOUT_MS.default,
             fence_observation_timeout_ms: DELIVERY_FENCE_OBSERVATION_TIMEOUT_MS.default,
+            unreachable_dwell_ms: DELIVERY_UNREACHABLE_DWELL_MS.default,
             queued_envelopes_max: DELIVERY_QUEUED_ENVELOPES_MAX.default as usize,
             queued_bytes_max: DELIVERY_QUEUED_BYTES_MAX.default,
             queued_envelopes_per_target_max: DELIVERY_QUEUED_ENVELOPES_PER_TARGET_MAX.default
@@ -552,6 +567,8 @@ fn resolve_delivery_configuration(
             .resolve(section.submission_timeout_ms, path)?,
         fence_observation_timeout_ms: DELIVERY_FENCE_OBSERVATION_TIMEOUT_MS
             .resolve(section.fence_observation_timeout_ms, path)?,
+        unreachable_dwell_ms: DELIVERY_UNREACHABLE_DWELL_MS
+            .resolve(section.unreachable_dwell_ms, path)?,
         queued_envelopes_max: queued_envelopes_max as usize,
         queued_bytes_max,
         queued_envelopes_per_target_max: queued_envelopes_per_target_max as usize,

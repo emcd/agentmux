@@ -45,6 +45,36 @@ fn dispatch_request(
     handle_request(request, configuration_roots, bundle_name, runtime_directory)
 }
 
+/// Shortens the unreachable dwell for a test that drives delivery at a target
+/// nothing is listening for.
+///
+/// The compiled-in default is thirty seconds, deliberately: a bounce asserts to
+/// the sender that a target is gone, so a target that is merely restarting must
+/// not trip it. A test cannot also wait that long. What is shortened is the
+/// policy, not the behaviour — the member still resolves only on a *sustained*
+/// observation, just one measured in a window a test can outlast.
+///
+/// This must be a call and not a `relay.toml`: `DELIVERY_CONFIGURATION` is a
+/// process-global the real host installs at startup, and a test driving
+/// `handle_request` in-process never runs that path, so a `[delivery]` table
+/// beside the bundle is read by nobody. Safe as a `OnceLock` write because
+/// nextest gives each test its own process.
+fn configure_short_unreachable_dwell() {
+    agentmux::relay::configure_delivery(agentmux::relay::DeliveryConfiguration {
+        unreachable_dwell_ms: 500,
+        ..Default::default()
+    });
+}
+
+/// A dwell long enough that no test window reaches it, for asserting that an
+/// unreachable target is *held* rather than resolved.
+fn configure_long_unreachable_dwell() {
+    agentmux::relay::configure_delivery(agentmux::relay::DeliveryConfiguration {
+        unreachable_dwell_ms: 600_000,
+        ..Default::default()
+    });
+}
+
 fn write_tui_configuration(roots: &ConfigurationRoots, policy: &str) {
     std::fs::write(
         roots.base_layer().join("users.toml"),

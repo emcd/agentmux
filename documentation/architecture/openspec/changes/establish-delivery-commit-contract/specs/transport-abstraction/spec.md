@@ -94,6 +94,19 @@ members resolve from evidence.
 - **THEN** still-`Pending` relay-owned members resolve `dropped_on_shutdown`
 - **AND** `Authorized` members resolve from evidence
 
+#### Scenario: Startup never runs on an async runtime thread
+
+- **WHEN** the relay invokes `Transport::startup` for any session type
+- **THEN** it runs the call on a blocking thread rather than on a runtime worker
+  thread, because `startup` is synchronous on the trait and every implementation
+  of it is therefore permitted to block
+- **AND** the relay SHALL NOT make that choice per session type, so that a
+  transport acquiring a blocking startup step later inherits the guarantee
+  rather than an assumption about what it used to do
+- **AND** because such a call cannot be aborted, each transport's `startup`
+  SHALL own the cleanup of anything it created, reaching its own conclusion even
+  when the caller awaiting it has gone away
+
 ### Requirement: Transport Module Boundaries
 
 ACP-specific delivery code SHALL reside in `src/acp/`. Tmux-specific delivery
@@ -122,7 +135,7 @@ inspect, and meaningless again for UI, whose readiness is subscriber
 connectivity. Conflating them is what would put pane semantics inside the relay.
 
 The relay SHALL learn readiness only as the level it reads through
-`can_accept_handover`, refreshed by the transport-invoked notification closure
+`is_ready_for_handover`, refreshed by the transport-invoked notification closure
 described in the `Transport Handover Capacity and Readiness` requirement. Only
 the transport can render target text and count its tokens, so `prompt_tokens_max`
 likewise remains an internal packing-unit limit invisible to the relay.
@@ -186,7 +199,7 @@ transport construction.
 - **THEN** they find it in the owning transport module
 - **AND** `src/relay/delivery/` contains no prompt-regex matching, pane
   inspection, or cursor-column comparison
-- **AND** the relay reads only the `can_accept_handover` level
+- **AND** the relay reads only the `is_ready_for_handover` level
 
 ### Requirement: Synchronous Delivery Completion
 
@@ -416,6 +429,45 @@ No envelope SHALL be absorbed into a batch after that batch is authorized.
 - **AND** spawns the reader thread and the delivery task
 - **AND** the worker thread publishes `WorkerReadinessState::Available` AFTER
   successful `Terminal::new` + handler installation
+
+#### Scenario: Pty startup does not wait for the worker to initialize
+
+- **WHEN** `startup` has spawned the child, the worker thread, and the reader
+  thread
+- **THEN** it returns `TransportReadiness::Pending` immediately rather than
+  waiting for the worker to report that it initialized
+- **AND** the worker publishes `WorkerReadinessState::Available` when it has
+  genuinely initialized, so `is_ready_for_handover` is what gates the handover
+  and the return value carries no readiness answer
+- **AND** a worker that never arrives is treated as a target that is never
+  ready — the entry stays `Pending`, bounded in consequence by per-target
+  admission quota rather than by a clock, exactly as for every other transport
+
+**Reason:** the wait could not be made safe in either direction. Unbounded it
+never reached a verdict. Bounded, its cleanup joined the worker thread, so a
+startup that timed out *because that thread had stalled* then blocked on the
+same stall — the bound relocated the hang rather than ending it. An in-process
+`Terminal::new` cannot be interrupted, so no cleanup can promise a cessation it
+has not observed, and a bound that cannot be made true is worse than none.
+
+#### Scenario: Pty initialization failure becomes a reachability signal
+
+- **WHEN** the Pty worker thread fails to construct its terminal, after
+  `startup` has already returned
+- **THEN** it publishes `WorkerReadinessState::Unavailable` and terminates its
+  child, so the reader observes EOF and the transport reports `Unreachable`
+- **AND** the member resolves through the unreachable dwell rather than waiting
+  on a runtime that is never coming, which is the treatment reserved for a
+  target that might still arrive
+
+#### Scenario: A teardown during initialization is not overwritten
+
+- **WHEN** shutdown is requested while the Pty worker is still initializing
+- **THEN** the worker SHALL NOT publish `Available` for a runtime already being
+  torn down
+- **AND** the worker SHALL check the shutdown flag at every point it controls,
+  leaving as the unobserved window only what precedes its first check: the
+  uninterruptible terminal construction and the handler installation beside it
 
 #### Scenario: Pty submits an authorized batch immediately
 
@@ -781,7 +833,7 @@ separate:
 |---|---|---|
 | **Admission quota** | relay | how much may be queued per target and relay-global; enforced at admission |
 | **Maximum handover dimensions** | transport, static | the largest batch a transport will accept |
-| **Acceptance capacity** | transport, dynamic | whether it can accept right now; surfaced as `can_accept_handover` |
+| **Acceptance capacity** | transport, dynamic | whether it can accept right now; surfaced as `is_ready_for_handover` |
 
 All relay-facing quantities SHALL be expressed in units the relay can evaluate
 without packing: **envelope count and canonical payload bytes**, where canonical
@@ -789,9 +841,22 @@ bytes means the serialized envelope payload the relay already holds, not rendere
 target text. Declaring them in tokens would be circular, since only the transport
 can render and count those.
 
-`can_accept_handover` SHALL be **level-triggered** and readable on demand.
-Existing surfaces cannot serve it: Tmux `is_ready` is always true, and ACP and
-Pty count `Busy` as ready. It is **advisory** — a stale reading yields a fallible
+`is_ready_for_handover` SHALL be **level-triggered**, readable on demand, and the
+transport contract's **only** readiness predicate. It SHALL have no default
+implementation: a default of `true` would authorize a busy target, and a default
+of `false` would strand it permanently, so a transport answers for itself or does
+not participate in delivery.
+
+An earlier `is_ready` answered the weaker question of whether a transport's
+machinery existed — Tmux answered it unconditionally true, and ACP and Pty
+counted `Busy` as ready — which is why it could not serve handover readiness. It
+has been **removed from the contract rather than redefined**, because two
+readiness predicates were confusable precisely under a name that does not say
+what it is ready *for*. A transport MAY keep an equivalent lifecycle predicate
+privately, and Pty does, gating its `OutputView` on the runtime existing so that
+`look` still reaches a target that is mid-turn.
+
+`is_ready_for_handover` is **advisory** — a stale reading yields a fallible
 invocation, not a guarantee.
 
 **No transport → relay back-edge.** The relay calls transports; transports SHALL
@@ -805,7 +870,7 @@ delivery until the next poll; it cannot lose one or resolve it without evidence.
 #### Scenario: Readiness is readable as a level
 
 - **WHEN** the relay needs to decide whether handover is useful
-- **THEN** it reads `can_accept_handover` directly
+- **THEN** it reads `is_ready_for_handover` directly
 - **AND** does not rely on having observed a transition
 
 #### Scenario: A lost notification only delays
@@ -825,6 +890,80 @@ delivery until the next poll; it cannot lose one or resolve it without evidence.
 - **WHEN** a transport declares its maximum handover dimensions
 - **THEN** they are expressed in envelope count and canonical payload bytes
 - **AND** not in rendered tokens
+
+### Requirement: Transport Health as a Separate Axis
+
+A transport SHALL report **health** as a level distinct from handover readiness,
+carrying the instant it was first observed unreachable:
+
+| State | Meaning |
+|---|---|
+| `Healthy` | the transport can reach its target |
+| `Unreachable { since }` | the transport cannot observe or reach its target at all, first seen at `since` |
+
+Readiness and health answer different questions. Readiness says *when* a handover
+is useful; health says *whether* one is possible. A target that is busy and a
+target whose transport cannot reach it both fail a readiness check, and only the
+first is a reason to wait.
+
+A delivery attempt SHALL require both: the transport reports `Healthy` **and**
+reports `is_ready_for_handover`. Healthy-but-unready leaves the member `Pending`.
+
+The transport SHALL determine health and report when it began; the relay SHALL
+own the dwell threshold as `[delivery]` policy. A transport SHALL NOT reference a
+relay interface to report it, per `Transport Module Boundaries`.
+
+A member SHALL be resolved only after its target has been **continuously
+unreachable past the configured threshold**, never on a single failed
+observation. One observation that does not come back cannot distinguish a
+transient failure from a departed target, and a bounce asserts something to the
+sender that a wait does not.
+
+This threshold SHALL NOT be read as a delivery timeout. No bound converts a
+readiness wait into an outcome, because duration cannot substitute for an
+observation that was never made. Here duration qualifies observations that were
+made repeatedly, and sustained unreachability is itself evidence in a way that
+sustained busyness is not.
+
+Health SHALL gate write paths and SHALL NOT gate `look`. `raww` shares the
+ordered delivery channel and inherits the gate. `look` SHALL remain available on
+an unreachable target and SHALL carry the health level in its response metadata:
+a target is inspected precisely when something is wrong with it, so withholding
+the snapshot removes the diagnostic exactly when it is needed.
+
+#### Scenario: A busy target keeps waiting
+
+- **WHEN** a transport reports `Healthy` and does not report
+  `is_ready_for_handover`
+- **THEN** its member stays `Pending`
+- **AND** no elapsed duration resolves it
+
+#### Scenario: A sustained-unreachable target resolves its members
+
+- **WHEN** a transport reports `Unreachable` continuously past the configured
+  threshold
+- **THEN** its still-`Pending` members resolve through the guard's evidence order
+- **AND** their admission quota is released on that terminal transition
+
+#### Scenario: A transient unreachability does not resolve anything
+
+- **WHEN** a transport reports `Unreachable` and reports `Healthy` again before
+  the threshold elapses
+- **THEN** no member was resolved
+- **AND** the members that were waiting are authorized normally once readiness
+  allows
+
+#### Scenario: Look survives an unreachable target
+
+- **WHEN** an operator looks at a target whose transport reports `Unreachable`
+- **THEN** the snapshot request is served rather than refused
+- **AND** the response carries the health level and how long it has held
+
+#### Scenario: Health determination carries no relay dependency
+
+- **WHEN** a transport determines its own health
+- **THEN** it references no `crate::relay` type
+- **AND** the relay supplies the dwell threshold rather than the transport
 
 ## REMOVED Requirements
 

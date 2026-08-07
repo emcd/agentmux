@@ -14,7 +14,9 @@ use crate::{
     runtime::signals::shutdown_requested,
 };
 
-use super::super::super::{AsyncDeliveryTask, DeliveryPayloadMode, RelayError};
+use super::super::super::{
+    AsyncDeliveryTask, DeliveryPayloadMode, RelayError, SendOutcome, SendResult,
+};
 use super::envelope::{
     build_acp_driver_services, build_coder_envelope, build_ui_envelope, build_worker_transport,
 };
@@ -23,7 +25,7 @@ use super::payload::{
     build_delivery_message, emit_envelope_metadata_inscription, resolve_target_member,
 };
 
-use crate::transports::{OutcomeFuture, SingleDeliveryOutcome, TransportImpl};
+use crate::transports::{OutcomeFuture, SingleDeliveryOutcome, TransportHealth, TransportImpl};
 
 use super::super::async_worker::{AsyncWorkerKey, WorkerOwner};
 use super::super::fence::{FenceInProgress, FenceResolution, FenceVerdict};
@@ -174,10 +176,32 @@ async fn run_async_delivery_worker(
     // still leaves the relay able to name — and therefore resolve — its member.
     let mut inflight_members: HashMap<tokio::task::Id, InflightMember> = HashMap::new();
     let mut senders_dropped = false;
+    // One member received but not yet authorized, because its target reported it
+    // could not take a handover. It stays `Pending` — quota reserved, nothing
+    // submitted, no batch minted — and is retried ahead of anything newer so the
+    // target's FIFO order survives the wait. At most one: taking a second member
+    // off the channel while this one waits would reorder the target's queue.
+    let mut held: Option<AsyncDeliveryTask> = None;
+    // Subscribed before any level is read, and before the transport that will
+    // poke it exists. The contract requires subscribe-before-check precisely so
+    // a change occurring between the check and the subscription cannot be missed;
+    // creating this first makes that ordering unrepresentable rather than
+    // merely observed.
+    //
+    // Correctness never depends on it. The authoritative state is the level the
+    // worker reads, and a lost wakeup only delays a delivery to the next poll
+    // below.
+    let readiness_changed = std::sync::Arc::new(tokio::sync::Notify::new());
     // Graceful shutdown is the only thing that fences a generation today. The
     // bound is the relay's own `[delivery]` setting, read once per worker.
     let delivery = super::super::admission::delivery_configuration();
     let fence_observation = Duration::from_millis(delivery.fence_observation_timeout_ms);
+    let submit_context = SubmitContext {
+        key: &key,
+        batch_settings,
+        readiness_changed: &readiness_changed,
+        unreachable_dwell: Duration::from_millis(delivery.unreachable_dwell_ms),
+    };
 
     loop {
         if shutdown_requested() {
@@ -192,6 +216,12 @@ async fn run_async_delivery_worker(
             // worker; the final unregister below drops it. Anything already queued
             // before this point is still drained.
             super::super::async_worker::close_worker(&key, owner);
+            // A held member was never authorized, so shutdown can say so
+            // positively rather than leaving it to the guard's weaker inference.
+            if let Some(task) = held.take() {
+                super::super::async_worker::complete_task_on_shutdown(&task);
+                super::super::async_worker::release_pending_slot(pending.as_ref());
+            }
             shutdown_drain(
                 &key,
                 transport.as_mut(),
@@ -204,8 +234,11 @@ async fn run_async_delivery_worker(
             .await;
             break;
         }
-        if senders_dropped && inflight.is_empty() {
-            // No more producers and nothing in flight: the worker is unreachable.
+        if senders_dropped && inflight.is_empty() && held.is_none() {
+            // No more producers, nothing in flight, and nothing waiting on
+            // readiness: the worker is unreachable. A held member keeps the loop
+            // alive even with its producers gone — it is still owed a delivery
+            // once its target can take one, and only shutdown resolves it early.
             break;
         }
         // A target whose bootstrap has not settled has no runtime to submit
@@ -214,8 +247,24 @@ async fn run_async_delivery_worker(
         let bootstrap_settled_now = bootstrap_settled
             .as_ref()
             .is_none_or(|settled| settled.load(std::sync::atomic::Ordering::Acquire));
+        // Retry the held member before accepting anything newer. Its target may
+        // have become ready since the last attempt; the poll arm below is what
+        // paces the retries, and is the bounded backstop the readiness contract
+        // requires so a missed notification only delays a delivery.
+        if held.is_some() && bootstrap_settled_now {
+            let task = held.take().expect("held member present in this branch");
+            held = submit_task(
+                task,
+                &submit_context,
+                &mut transport,
+                &mut inflight,
+                &mut inflight_members,
+                pending.as_ref(),
+            )
+            .await;
+        }
         tokio::select! {
-            maybe_task = receiver.recv(), if !senders_dropped && bootstrap_settled_now => {
+            maybe_task = receiver.recv(), if !senders_dropped && bootstrap_settled_now && held.is_none() => {
                 match maybe_task {
                     Some(task) => {
                         if shutdown_requested() {
@@ -223,15 +272,15 @@ async fn run_async_delivery_worker(
                             super::super::async_worker::release_pending_slot(pending.as_ref());
                             continue;
                         }
-                        submit_task(
+                        held = submit_task(
                             task,
-                            &key,
+                            &submit_context,
                             &mut transport,
-                            batch_settings,
                             &mut inflight,
                             &mut inflight_members,
                             pending.as_ref(),
-                        );
+                        )
+                        .await;
                     }
                     None => senders_dropped = true,
                 }
@@ -241,12 +290,61 @@ async fn run_async_delivery_worker(
                     collect_outcome(joined, &mut inflight_members, pending.as_ref());
                 }
             }
+            _ = readiness_changed.notified(), if held.is_some() => {
+                // A transport reported that its observed level moved. Only
+                // interesting while a member is waiting on one; otherwise the
+                // loop has nothing to re-evaluate.
+            }
             _ = tokio::time::sleep(poll_interval) => {
-                // Poll tick: re-evaluate the shutdown gate even while idle.
+                // Poll tick: re-evaluate the shutdown gate even while idle, and
+                // the lost-wakeup backstop for the notification above.
             }
         }
     }
     super::super::async_worker::unregister_worker(&key, owner);
+}
+
+/// The fixed context one worker submits under.
+///
+/// Grouped rather than passed as parallel parameters: these are the settings the
+/// worker resolves once at spawn and applies to every task, as distinct from the
+/// per-task state that changes underneath them.
+struct SubmitContext<'a> {
+    key: &'a AsyncWorkerKey,
+    batch_settings: PromptBatchSettings,
+    /// Handed to each transport as it is constructed, so a level change wakes the
+    /// worker instead of waiting out a poll interval.
+    readiness_changed: &'a std::sync::Arc<tokio::sync::Notify>,
+    /// How long a target may be *continuously* unreachable before a held member
+    /// resolves rather than keeping its place in the queue.
+    unreachable_dwell: Duration,
+}
+
+/// The outcome for a member whose target was unreachable for longer than the
+/// dwell allows.
+///
+/// `not_submitted`, not `failed`. The member was never authorized and never
+/// handed to a transport, so nothing could have reached the target — that is
+/// positive evidence of non-delivery, which is exactly what `NotSubmitted`
+/// asserts and what `Failed` does not.
+///
+/// Returned as `Ok` rather than `Err` deliberately: the error branch of the
+/// terminal transition spells everything `Failed`, and only the `Ok` branch is
+/// reconciled against recorded evidence. A never-authorized member has no
+/// recorded evidence, so this spelling passes through as given.
+fn target_unreachable_result(task: &AsyncDeliveryTask, dwell: Duration) -> SendResult {
+    SendResult {
+        target_session: task.target_session.clone(),
+        message_id: task.message_id.clone(),
+        outcome: SendOutcome::NotSubmitted,
+        reason_code: Some("delivery_target_unreachable".to_string()),
+        reason: Some(
+            "target could not be reached for longer than the configured dwell".to_string(),
+        ),
+        details: Some(json!({
+            "unreachable_dwell_ms": dwell.as_millis() as u64,
+        })),
+    }
 }
 
 /// Submits one task to its transport via the non-blocking write seam and spawns
@@ -257,28 +355,90 @@ async fn run_async_delivery_worker(
 /// submit raw input, and the forward-declared `Pubsub` stub yields an explicit
 /// not-implemented outcome (it is not deliverable). A construction or render
 /// failure completes the task immediately and releases its slot.
-fn submit_task(
+///
+/// Returns the task unconsumed when its target reported that it cannot take a
+/// handover. Nothing has happened to it in that case — no authorization, no
+/// batch, no quota movement — and the caller holds it for a later attempt.
+async fn submit_task(
     task: AsyncDeliveryTask,
-    key: &AsyncWorkerKey,
+    context: &SubmitContext<'_>,
     transport: &mut Option<TransportImpl>,
-    batch_settings: PromptBatchSettings,
     inflight: &mut JoinSet<InflightOutcome>,
     inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
     pending: &std::sync::atomic::AtomicUsize,
-) {
+) -> Option<AsyncDeliveryTask> {
     if transport.is_none() {
-        match build_worker_transport(&task, key, batch_settings) {
-            Ok(built) => *transport = Some(built),
+        let notify = std::sync::Arc::clone(context.readiness_changed);
+        let readiness_notifier: crate::tmux::ReadinessNotifier =
+            std::sync::Arc::new(move || notify.notify_waiters());
+        match build_worker_transport(
+            &task,
+            context.key,
+            context.batch_settings,
+            readiness_notifier,
+        )
+        .await
+        {
+            Ok(built) => {
+                *transport = Some(built);
+            }
             Err(error) => {
                 super::super::async_worker::complete_task_outcome(&task, Err(error));
                 super::super::async_worker::release_pending_slot(pending);
-                return;
+                return None;
             }
         }
     }
     let transport = transport
         .as_mut()
         .expect("worker transport constructed above");
+
+    // Readiness gates authorization, not submission. A target that cannot take a
+    // handover now must not have a batch authorized against it: authorization is
+    // the linearization point, and quota releases only at the terminal
+    // transition, so authorizing early would commit a member to a generation that
+    // cannot act on it. The member stays `Pending` instead, which is a state it
+    // may occupy indefinitely — how long a target stays busy is not evidence
+    // about the target, and no elapsed duration converts this wait into an
+    // outcome.
+    //
+    // Reading the level here is deliberately advisory. It can go stale between
+    // this check and the write below, and when it does the invocation fails and
+    // resolves through the guard's evidence order rather than being retried
+    // behind the sender's back.
+    //
+    // Pubsub is excluded rather than gated. It reports unready like any transport
+    // with no delivery path, so gating it would hold a member no transport can
+    // ever accept; it is rejected synchronously below instead.
+    if !matches!(transport, TransportImpl::Pubsub) {
+        // Both axes are required, and neither substitutes for the other. Health
+        // is read first because it is what bounds the wait, and an unreachable
+        // target is never authorized whatever readiness says — a transport that
+        // cannot reach its target has nothing useful to report about whether that
+        // target is at a prompt.
+        match transport.health() {
+            // Continuously unreachable past the dwell. Waiting will not make this
+            // target ready, so the member resolves rather than keeping a place in
+            // a queue nothing will drain.
+            TransportHealth::Unreachable { since }
+                if since.elapsed() >= context.unreachable_dwell =>
+            {
+                super::super::async_worker::complete_task_outcome(
+                    &task,
+                    Ok(target_unreachable_result(&task, context.unreachable_dwell)),
+                );
+                super::super::async_worker::release_pending_slot(pending);
+                return None;
+            }
+            // Unreachable but not yet past the dwell: hold, exactly as an unready
+            // target is held. An unreachability that ends in time costs nothing.
+            TransportHealth::Unreachable { .. } => return Some(task),
+            TransportHealth::Healthy => {}
+        }
+        if !transport.is_ready_for_handover() {
+            return Some(task);
+        }
+    }
 
     // Authorization is the linearization point and the watchdog's anchor, so it
     // happens once, before any transport-specific branch, and the clock starts
@@ -300,7 +460,7 @@ fn submit_task(
             )),
         );
         super::super::async_worker::release_pending_slot(pending);
-        return;
+        return None;
     } else if matches!(transport, TransportImpl::Ui(_)) {
         let envelope = build_ui_envelope(&task);
         // Recorded immediately before the call that can produce an effect, and
@@ -322,7 +482,7 @@ fn submit_task(
                 // `not_submitted` rather than inferring the weaker unknown.
                 super::super::async_worker::complete_task_outcome(&task, Err(error));
                 super::super::async_worker::release_pending_slot(pending);
-                return;
+                return None;
             }
         }
     };
@@ -335,6 +495,7 @@ fn submit_task(
             record_served,
         },
     );
+    None
 }
 
 /// Performs the `Pending` to `Authorized` transition for one member, minting its

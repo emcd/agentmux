@@ -209,6 +209,15 @@ fn relay_send_waits_for_ui_reconnect_before_delivery() {
 
 #[test]
 fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
+    // The tmux target has no server behind it, so it is unreachable and its
+    // member resolves on the dwell. The compiled-in default is thirty seconds,
+    // which no test window outlasts; the relay runs in-process here, so the
+    // process-global the real host would install at startup has to be set
+    // directly. Shortens the policy, not the sustained-observation behaviour.
+    agentmux::relay::configure_delivery(agentmux::relay::DeliveryConfiguration {
+        unreachable_dwell_ms: 500,
+        ..Default::default()
+    });
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);

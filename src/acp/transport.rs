@@ -16,13 +16,18 @@
 //!
 //! ## Readiness
 //!
-//! The transport owns an [`WorkerReadinessState`] signal for [`is_ready`] and
-//! the [`OutputView`] prime-wait, because it cannot call relay's
-//! `set_worker_readiness`. The `AcpWorkerDriver` mirrors transitions into the
-//! global worker-state registry (which external observers and respawn/startup
-//! gating still read).
+//! The transport owns an [`WorkerReadinessState`] signal for
+//! [`is_ready_for_handover`] and the [`OutputView`] prime-wait, because it
+//! cannot call relay's `set_worker_readiness`. The `AcpWorkerDriver` mirrors
+//! transitions into the global worker-state registry (which external observers
+//! and respawn/startup gating still read).
 //!
-//! [`is_ready`]: Transport::is_ready
+//! Handover readiness is the narrow question: only `Available` qualifies, since
+//! a `Busy` worker is mid-turn and cannot take another. The wider
+//! "runtime exists" reading that `Busy` also satisfies is what the mirrored
+//! registry state carries for those other observers.
+//!
+//! [`is_ready_for_handover`]: Transport::is_ready_for_handover
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -47,7 +52,7 @@ use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
     ChoiceMade, DeliveryDiagnosticContext, DeliveryEnvelope, GenerationFence, LookMode,
     LookSnapshotPayload, OutputView, SingleDeliveryOutcome, StartupContext, Transport,
-    TransportError, TransportStatus, emit_delivery_progress,
+    TransportError, TransportHealth, TransportStatus, emit_delivery_progress,
 };
 use crate::transports::{SendOutcome, WorkerReadinessState};
 
@@ -184,13 +189,33 @@ pub struct AcpTransport {
     namespace: String,
     /// Target session id, captured at startup for permission correlation.
     target_session: String,
-    /// Stable respawn-needed signal. Created once at construction (not per
-    /// delivery task) so the driver-owned async respawn monitor can hold a single
-    /// long-lived subscription across respawns. Driven exclusively from the
-    /// transport (bootstrap failure, write-without-runtime paths); readiness
-    /// latches no longer promote themselves into respawn signals. The monitor
-    /// awaits the change, drives the respawn, then resets it to `false`.
-    respawn_needed_tx: tokio::sync::watch::Sender<bool>,
+    /// Stable respawn-needed signal, as a monotonically increasing epoch.
+    ///
+    /// Created once at construction (not per delivery task) so the driver-owned
+    /// async respawn monitor can hold a single long-lived subscription across
+    /// respawns. Driven exclusively from the transport (bootstrap failure,
+    /// write-without-runtime paths); readiness latches no longer promote
+    /// themselves into respawn signals.
+    ///
+    /// An epoch rather than a flag because a flag cannot name *which* failure
+    /// asked for the respawn, and every consumer of this signal needs that. A
+    /// bare `bool` makes classification and retirement two operations on the
+    /// same indistinguishable value: the monitor decides an outstanding signal
+    /// has been answered, and by the time it writes that decision down, the
+    /// value may describe a different, live failure that the write would erase.
+    /// The counter never resets, so an epoch identifies its cause for the life
+    /// of the transport and a decision made about one can never land on
+    /// another. Retirement is a high-water mark
+    /// ([`respawn_retired`](Self::respawn_retired)), not a reset.
+    respawn_needed_tx: tokio::sync::watch::Sender<u64>,
+    /// Highest respawn epoch the monitor has finished with.
+    ///
+    /// The signal is outstanding while the raised epoch exceeds this. Retiring
+    /// records a bound rather than clearing a flag, which is what makes
+    /// retirement safe against a concurrent raise: a cause published after the
+    /// monitor sampled its epoch carries a strictly greater one, so it stays
+    /// outstanding no matter when the retirement lands.
+    respawn_retired: AtomicU64,
     /// `JoinHandle` for the most recent delivery task thread. Retained so a
     /// generation supervisor can observe the task's cessation (the binding the
     /// fence requires) and detach it cleanly on `take`. The handle is replaced
@@ -301,6 +326,17 @@ struct BootstrapRecord {
 
 static NEXT_BOOTSTRAP_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Publishes a fresh respawn cause on the shared signal.
+///
+/// The delivery paths hold a cloned sender rather than the transport, so raising
+/// cannot go through `&self`. Incrementing under `send_modify` keeps epochs
+/// unique per cause even when two delivery threads conclude at once: the watch's
+/// own lock serializes the read-modify-write, so neither can observe the other's
+/// value and reuse it.
+pub(crate) fn raise_respawn_signal(sender: &tokio::sync::watch::Sender<u64>) {
+    sender.send_modify(|epoch| *epoch += 1);
+}
+
 /// Marks a bootstrap as running for as long as it is held, and is how that
 /// bootstrap hands its agent child to the fence.
 ///
@@ -372,7 +408,8 @@ impl AcpTransport {
             batch_settings,
             namespace: String::new(),
             target_session: String::new(),
-            respawn_needed_tx: tokio::sync::watch::channel(false).0,
+            respawn_needed_tx: tokio::sync::watch::channel(0).0,
+            respawn_retired: AtomicU64::new(0),
             delivery_task_handle: None,
             generation: None,
             fenced: Arc::new(AtomicBool::new(false)),
@@ -382,33 +419,41 @@ impl AcpTransport {
 
     /// Subscribes to the stable respawn-needed signal. The driver-owned respawn
     /// monitor holds one subscription for the transport's whole life.
-    pub fn respawn_needed_subscribe(&self) -> tokio::sync::watch::Receiver<bool> {
+    pub fn respawn_needed_subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
         self.respawn_needed_tx.subscribe()
     }
 
-    /// Resets the respawn-needed signal to `false` after the monitor has handled
-    /// a respawn, so a subsequent Unavailable turn re-triggers it.
-    pub fn clear_respawn_signal(&self) {
-        let _ = self.respawn_needed_tx.send(false);
+    /// The outstanding respawn cause's epoch, if any is still owed an answer.
+    #[must_use]
+    pub fn respawn_signal_outstanding(&self) -> Option<u64> {
+        let raised = *self.respawn_needed_tx.borrow();
+        (raised > self.respawn_retired.load(Ordering::Acquire)).then_some(raised)
     }
 
-    /// Primes the respawn-needed signal directly (no delivery task running yet).
-    /// Used after an initial-bootstrap failure so the driver's respawn monitor
-    /// retries with backoff.
+    /// Marks every respawn cause up to and including `epoch` as answered, and
+    /// reports whether any signal remains outstanding afterwards.
+    ///
+    /// Retirement is a high-water mark rather than a reset, which is the whole
+    /// point: a caller retires the epoch it *classified*, and a cause published
+    /// between that classification and this call carries a strictly greater
+    /// epoch. `fetch_max` therefore cannot erase it — the newer cause is still
+    /// outstanding when this returns, and the caller learns so from the return
+    /// value. Resetting a flag instead loses that cause silently, and because
+    /// the readiness gate withholds the very writes that would raise it again,
+    /// losing one is not a delayed recovery but a permanent one.
+    ///
+    /// `fetch_max` also makes the operation idempotent and order-independent,
+    /// so a retirement that arrives late can never move the mark backwards.
+    pub fn retire_respawn_signal(&self, epoch: u64) -> Option<u64> {
+        self.respawn_retired.fetch_max(epoch, Ordering::AcqRel);
+        self.respawn_signal_outstanding()
+    }
+
+    /// Publishes a fresh respawn cause. Used after an initial-bootstrap failure
+    /// so the driver's respawn monitor retries with backoff, and by the delivery
+    /// paths whose outcome warrants replacing the runtime.
     pub fn signal_respawn(&self) {
-        let _ = self.respawn_needed_tx.send(true);
-    }
-
-    /// Re-primes the respawn signal when a write arrives but no runtime is live
-    /// and the worker has settled Unavailable. This preserves the prior
-    /// "every delivery to a dead worker re-attempts recovery" behavior: a
-    /// recoverable worker recovers, and a permanently-dead one re-publishes its
-    /// Unavailable transition for observers. A transient respawn window
-    /// (Recovering) is skipped so an in-flight respawn is not disturbed.
-    fn resignal_respawn_if_dead(&self) {
-        if matches!(self.readiness(), WorkerReadinessState::Unavailable) {
-            self.signal_respawn();
-        }
+        raise_respawn_signal(&self.respawn_needed_tx);
     }
 
     /// Takes and clears the most recent delivery task's [`JoinHandle`].
@@ -713,7 +758,6 @@ impl Transport for AcpTransport {
                 let _ = outcome_tx.send(self.unavailable_outcome_with_id(&envelope.message_id));
             }
         } else {
-            self.resignal_respawn_if_dead();
             let _ = outcome_tx.send(self.unavailable_outcome_with_id(&envelope.message_id));
         }
         outcome_rx
@@ -735,21 +779,23 @@ impl Transport for AcpTransport {
                 let _ = outcome_tx.send(self.unavailable_outcome_with_id(""));
             }
         } else {
-            self.resignal_respawn_if_dead();
             let _ = outcome_tx.send(self.unavailable_outcome_with_id(""));
         }
         outcome_rx
     }
 
-    fn is_ready(&self) -> bool {
-        matches!(
-            self.readiness(),
-            WorkerReadinessState::Available | WorkerReadinessState::Busy
-        )
+    fn is_ready_for_handover(&self) -> bool {
+        matches!(self.readiness(), WorkerReadinessState::Available)
     }
 
-    fn can_accept_handover(&self) -> bool {
-        matches!(self.readiness(), WorkerReadinessState::Available)
+    fn health(&self) -> TransportHealth {
+        // The inner transport cannot answer this one. `Unavailable` is published
+        // for a respawn gap and for a permanent give-up alike, so reading it here
+        // would report a recoverable worker as unreachable and bounce messages a
+        // respawn was about to make deliverable. Permanence is the driver's
+        // knowledge, and `AcpWorkerDriver::health` is what the relay actually
+        // calls — `TransportImpl::Acp` holds the driver, never this type.
+        TransportHealth::Healthy
     }
 
     fn shutdown(&mut self) {
@@ -919,7 +965,7 @@ impl EnvelopeBatch {
 struct DeliveryChannels {
     rx: mpsc::Receiver<WriteItem>,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
-    respawn_needed_tx: tokio::sync::watch::Sender<bool>,
+    respawn_needed_tx: tokio::sync::watch::Sender<u64>,
 }
 
 struct DeliveryTaskIdentity {
@@ -1053,7 +1099,7 @@ fn submit_singleton_envelope(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
     batch_settings: &PromptBatchSettings,
-    respawn_needed_tx: &tokio::sync::watch::Sender<bool>,
+    respawn_needed_tx: &tokio::sync::watch::Sender<u64>,
     envelope: Box<DeliveryEnvelope>,
     outcome_tx: tokio::sync::oneshot::Sender<SingleDeliveryOutcome>,
 ) {
@@ -1319,7 +1365,7 @@ fn execute_delivery_plan(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
     batch_settings: &PromptBatchSettings,
-    respawn_needed_tx: &tokio::sync::watch::Sender<bool>,
+    respawn_needed_tx: &tokio::sync::watch::Sender<u64>,
     rx: &mut mpsc::Receiver<WriteItem>,
     shutdown_rx: &mut tokio::sync::oneshot::Receiver<()>,
     plan: DeliveryPlan,
@@ -1384,7 +1430,7 @@ fn execute_delivery_plan(
             // outcome is a settled `SingleDeliveryOutcome` and the same
             // observable-event rule applies.
             if outcome_requires_respawn(&result) {
-                let _ = respawn_needed_tx.send(true);
+                raise_respawn_signal(respawn_needed_tx);
             }
         }
     }
@@ -1404,7 +1450,7 @@ fn flush_envelope_group(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
     batch_settings: &PromptBatchSettings,
-    respawn_needed_tx: &tokio::sync::watch::Sender<bool>,
+    respawn_needed_tx: &tokio::sync::watch::Sender<u64>,
     batch: &mut EnvelopeBatch,
 ) {
     let groups = crate::envelope::batch_envelope_groups(&batch.rendered, *batch_settings);
@@ -1446,7 +1492,7 @@ fn flush_envelope_group(
     if let Some(outcome) = last_outcome
         && outcome_requires_respawn(&outcome)
     {
-        let _ = respawn_needed_tx.send(true);
+        raise_respawn_signal(respawn_needed_tx);
     }
 }
 
@@ -2164,7 +2210,7 @@ mod handover_readiness_tests {
     use super::*;
 
     #[test]
-    fn can_accept_handover_readiness_matrix_and_delivery_task_handle_retention() {
+    fn handover_readiness_matrix_and_delivery_task_handle_retention() {
         let mut transport = AcpTransport::new(PromptBatchSettings::default(), None);
 
         // Initial state is `Initializing` — not ready for handover.
@@ -2172,28 +2218,26 @@ mod handover_readiness_tests {
             transport.readiness(),
             crate::transports::WorkerReadinessState::Initializing
         );
-        assert!(!transport.can_accept_handover());
+        assert!(!transport.is_ready_for_handover());
 
         // The single state that returns true: only when the transport is
         // actually idle and able to take a batch right now.
         transport.set_readiness(crate::transports::WorkerReadinessState::Available);
-        assert!(transport.can_accept_handover());
+        assert!(transport.is_ready_for_handover());
 
         // `Busy` is intentionally NOT a handover-ready state — accepting
         // another batch while a turn is in flight would dispatch the wrong
         // message to the same turn. The readiness signal still exists
-        // through the injected mirror closure.
+        // through the injected mirror closure, which is where observers
+        // wanting the wider "runtime exists" reading read it.
         transport.set_readiness(crate::transports::WorkerReadinessState::Busy);
-        assert!(!transport.can_accept_handover());
-        // `is_ready` keeps its pre-existing semantic and continues to
-        // include `Busy`; the two surfaces now differ by design.
-        assert!(transport.is_ready());
+        assert!(!transport.is_ready_for_handover());
 
         // `Recovering` and `Unavailable` are also not ready.
         transport.set_readiness(crate::transports::WorkerReadinessState::Recovering);
-        assert!(!transport.can_accept_handover());
+        assert!(!transport.is_ready_for_handover());
         transport.set_readiness(crate::transports::WorkerReadinessState::Unavailable);
-        assert!(!transport.can_accept_handover());
+        assert!(!transport.is_ready_for_handover());
 
         // No delivery task has been spawned yet, so there is no handle
         // for a generation supervisor to take — the field starts empty

@@ -129,7 +129,7 @@ So the rule is structural, not incidental:
   — completion and operator-choice resolution of an **older** turn. This says
   *when* the waiting happens, not who evaluates it. The relay owns the wait
   because it owns the queue; each transport owns the *determination* and reports
-  it through `can_accept_handover`, since readiness is transport-specific by
+  it through `is_ready_for_handover`, since readiness is transport-specific by
   nature and does not generalise across a pane, a wire protocol, and a subscriber
   list (*Decision 3*).
 - **Authorization starts exactly one immediate submission attempt.**
@@ -259,9 +259,12 @@ rename; operator has agreed.
 
 The relay needs to know when handing over is *useful*, not when it is *permitted*.
 
-- Add a **level-triggered** `can_accept_handover` capacity/readiness state.
-  Existing surfaces cannot serve: Tmux `is_ready` is always true, and ACP and Pty
-  count `Busy` as ready.
+- Add a **level-triggered** `is_ready_for_handover` capacity/readiness state, and
+  make it the transport contract's only readiness predicate. The earlier
+  `is_ready` could not serve — Tmux answered it unconditionally true, and ACP and
+  Pty counted `Busy` as ready — so it is **removed rather than redefined**. Two
+  predicates were confusable exactly because "ready" does not say what for; each
+  transport keeps whatever lifecycle predicate it needs privately instead.
 - The injected closure (*Decision 4*) delivers only an **edge**. The relay
   therefore MUST subscribe-before-check or re-check after subscribing, MUST poll
   at a bounded cadence as a backstop, and MUST re-read the level on every
@@ -303,7 +306,7 @@ now separate:**
 |---|---|---|
 | **Admission quota** | relay | how much may be queued per target and relay-global; enforced at admission |
 | **Maximum handover dimensions** | transport, static | the largest batch a transport will accept, in relay-evaluable units |
-| **Acceptance capacity** | transport, dynamic | whether it can accept *right now*; surfaced as `can_accept_handover`, and **advisory** — a stale reading yields a fallible invocation per *Decision 1*, not a guarantee |
+| **Acceptance capacity** | transport, dynamic | whether it can accept *right now*; surfaced as `is_ready_for_handover`, and **advisory** — a stale reading yields a fallible invocation per *Decision 1*, not a guarantee |
 
 All relay-facing quantities are expressed in units the relay can evaluate without
 packing: **envelope count and canonical payload bytes**, where canonical bytes
@@ -335,7 +338,7 @@ on its own is rejected at admission rather than queued unsendable.
     exceeding the transport's maximum handover dimensions, every admissible item
     fits within one quantum;
   - **eligible rotation** — only targets with pending work and a transport
-    reporting `can_accept_handover` are visited; ineligible targets are skipped.
+    reporting `is_ready_for_handover` are visited; ineligible targets are skipped.
 
   **A deficit counter was specified here and has been removed.** Classical DRR
   accumulates unspent quantum so an item larger than one quantum can eventually
@@ -802,6 +805,91 @@ it needs no new outcome spelling. **Work SHALL NOT be authorized merely to
 discover the stub.** It is inside the uniform contract with a defined answer,
 rather than silently outside it.
 
+### Decision 11 — Health is a second axis, and unreachability is not unreadiness
+
+*Decision 3* made readiness a single level: can this target take a handover right
+now. Gating authorization on it exposed a case that level cannot express. A
+target whose transport **cannot be observed at all** — a tmux session whose
+server is gone, an ACP worker that has permanently failed — reports the same
+`false` as a target that is merely busy. Under *Decision 5*'s unbounded `Pending`,
+that means a member queued for a target that will never come back waits forever,
+where it previously resolved from the failed write.
+
+The defect is a collapse of two different findings into one bit:
+
+| Finding | Meaning | Correct response |
+|---|---|---|
+| Observed, not ready | the target is busy, composing, or mid-turn | keep waiting; this is *Decision 5* working |
+| Could not observe | the transport cannot reach its target at all | resolve the member; waiting learns nothing |
+
+Only the first is evidence about *when* to hand over. The second is evidence
+about *whether* handover is possible at all, and it is not a readiness question.
+
+**Health is therefore a separate level, reported as a state rather than a bool:**
+
+```rust
+enum TransportHealth {
+    Healthy,
+    Unreachable { since: Instant },
+}
+```
+
+A delivery attempt requires **both** axes: the transport SHALL be `Healthy` and
+SHALL report `is_ready_for_handover`. Healthy-but-unready keeps the member
+`Pending`, exactly as today. Unreachable resolves it.
+
+**The `since` instant is the transport's; the threshold is the relay's.** The
+transport reports what it observed and when it first observed it; the relay owns
+the dwell policy as a `[delivery]` setting and decides what to do about it. Same
+split as readiness — determination in the transport, scheduling in the relay —
+and no back-edge.
+
+**Sustained unreachability, not the first failed observation, is what bounces.**
+A single probe that does not come back is not proof a target is gone: a fork
+failure under load, a momentary hiccup, and a dead tmux server all present
+identically at one observation. Bouncing on the first is trading a hang for a
+false claim, which is worse, because a bounce asserts something to the sender
+while a wait asserts nothing. A member is resolved only once its target has been
+**continuously unreachable past the configured threshold**.
+
+**This is not one of the timeouts being removed, and the distinction is exact.**
+What the contract forbids is duration *substituting* for an observation — nothing
+was seen, so after N seconds a verdict is guessed. That is why no bound converts
+a readiness wait into an outcome: how long a target stays busy is not evidence
+about the target. Here duration *qualifies* an observation that was actually
+made, repeatedly. Sustained unreachability is itself evidence, in a way that
+sustained busyness is not. Same clock, opposite epistemics.
+
+The threshold's cost is stated rather than hidden: a target that recovers just
+after it elapses will have had members bounced that could have been delivered.
+That is inherent to any health check, and the threshold is the tuning point.
+
+**Health gates writes and informs reads.** `raww` rides the same ordered channel
+as delivery and inherits the gate. `look` SHALL NOT be blocked by it: an operator
+looks at a target precisely when something is wrong with it, so refusing the
+snapshot removes the diagnostic exactly when it is needed. `look` instead carries
+the health level in its response metadata, which is strictly more informative
+than an error — the last output that was captured, plus how long the target has
+been unreachable.
+
+**Transports are constructed when their worker starts, not on first write.**
+Readiness and health are unanswerable for a transport that does not exist yet,
+and the lazy construction they had to work around bought nothing: the worker is
+spawned from a branch that already holds the task carrying the target member, so
+nothing was deferred that could otherwise have been avoided. Every worker exists
+because a task arrived for it. Construction moves to worker spawn, and a
+construction failure resolves the task that triggered it.
+
+**Where the bounce happens follows from that.** Admission runs on the request
+path, before any worker exists, so admission cannot consult a transport that is
+constructed at worker spawn. The bounce is therefore a **worker-side** resolution
+one hop after admission, not an admission-time rejection. The sender observes the
+same thing — a prompt terminal outcome rather than an indefinite wait — and the
+only difference is that the queue briefly holds a member that is about to
+resolve. Bouncing at admission would require a transport per configured target,
+alive from relay startup; that is a coherent design and a larger one, and it is
+not decided here.
+
 ## Rollout Ordering
 
 The decisions above describe an end state. Reaching it across five transports
@@ -836,15 +924,20 @@ the other side — it writes before its prime wait, so it trips on evidence timi
 rather than on readiness gating — and needs the same relocation.
 
 No per-transport stub can defer this the way `mailw`'s additions-only default
-deferred the write seam. `can_accept_handover` has no safe default, because the
-surfaces that could supply one are exactly the surfaces *Decision 3* rejected:
-Tmux's `is_ready` is always true, and ACP and Pty count `Busy` as ready. A default
-of `true` authorizes a busy target straight into the watchdog; a default of `false`
-strands it permanently, since *Decision 5* leaves `Pending` unbounded. The
+deferred the write seam. `is_ready_for_handover` has no safe default: a default of
+`true` authorizes a busy target straight into the watchdog, and a default of
+`false` strands it permanently, since *Decision 5* leaves `Pending` unbounded. The
 transport must answer for itself or not participate.
 
-What must land simultaneously is only that: `can_accept_handover` plus deletion of
-the internal readiness wait, on every transport, together with the watchdog. The
+The lifecycle predicates that could have supplied a default are exactly the ones
+*Decision 3* rejected, which is why the contract no longer carries one. Each
+transport keeps its own privately where it still needs one — Pty gates its
+`OutputView` on the runtime existing, a question `Busy` answers affirmatively and
+handover readiness does not — so the wrong answer is no longer reachable through
+the contract at all.
+
+What must land simultaneously is only that: `is_ready_for_handover` plus deletion
+of the internal readiness wait, on every transport, together with the watchdog. The
 rest of each transport's work — evidence recording, partition placement, prime and
 turn-timer deletion, ACP's staging queue — sequences independently.
 

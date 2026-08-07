@@ -2,7 +2,7 @@
 //!
 //! The Pty worker thread is the only thread that can apply bytes to
 //! the libghostty-vt terminal (the terminal is `!Send + !Sync`).
-//! Handover readiness is observed by `PtyTransport::can_accept_handover`;
+//! Handover readiness is observed by `PtyTransport::is_ready_for_handover`;
 //! once a command reaches this worker, its master write is the submission
 //! evidence and no prompt or quiescence wait is performed.
 

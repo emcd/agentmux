@@ -37,9 +37,9 @@ const TEST_PANE_TARGET: &str = "%0";
 
 #[test]
 fn tmux_handover_is_not_accepted_before_startup() {
-    let transport = agentmux::tmux::TmuxTransport::new(PromptBatchSettings::default());
+    let transport = agentmux::tmux::TmuxTransport::new(PromptBatchSettings::default(), None);
 
-    assert!(!transport.can_accept_handover());
+    assert!(!transport.is_ready_for_handover());
 }
 
 fn diagnostic_context() -> DeliveryDiagnosticContext<'static> {
@@ -619,7 +619,7 @@ fn a_parked_tmux_invocation_ceases_only_under_forced_termination() {
         policy_id: None,
         environment: Vec::new(),
     };
-    let mut transport = agentmux::tmux::TmuxTransport::new(PromptBatchSettings::default());
+    let mut transport = agentmux::tmux::TmuxTransport::new(PromptBatchSettings::default(), None);
     transport
         .startup(StartupContext {
             namespace: "party".to_string(),
@@ -728,7 +728,7 @@ fn a_tmux_paste_write_is_reachable_before_its_first_byte() {
         policy_id: None,
         environment: Vec::new(),
     };
-    let mut transport = agentmux::tmux::TmuxTransport::new(PromptBatchSettings::default());
+    let mut transport = agentmux::tmux::TmuxTransport::new(PromptBatchSettings::default(), None);
     transport
         .startup(StartupContext {
             namespace: "party".to_string(),
@@ -824,7 +824,7 @@ fn a_tmux_invocation_stays_reachable_until_its_exit_is_observed() {
         policy_id: None,
         environment: Vec::new(),
     };
-    let mut transport = agentmux::tmux::TmuxTransport::new(PromptBatchSettings::default());
+    let mut transport = agentmux::tmux::TmuxTransport::new(PromptBatchSettings::default(), None);
     transport
         .startup(StartupContext {
             namespace: "party".to_string(),
@@ -891,4 +891,122 @@ fn await_path(path: &std::path::Path, message: &str) {
         assert!(Instant::now() < deadline, "{message}");
         std::thread::sleep(Duration::from_millis(20));
     }
+}
+
+/// A recovery clears the latch, so a later failure cannot claim the dwell using
+/// time during which the target was demonstrably reachable.
+///
+/// The dwell bounds *continuous* unreachability. If the latch survived an
+/// intervening successful observation, two brief unrelated outages separated by
+/// a healthy period would sum toward one threshold and bounce a target that was
+/// never unreachable for anything like that long — which is the failure mode the
+/// "sustained, never first-observation" rule exists to prevent, arriving by a
+/// different route.
+#[test]
+fn a_reachable_observation_clears_the_unreachable_latch() {
+    use agentmux::transports::{TransportHealth, UnreachableSince};
+
+    let latch = UnreachableSince::default();
+
+    let TransportHealth::Unreachable { since: first } = latch.fold(false) else {
+        panic!("an unreachable observation reports unreachable");
+    };
+    // Latched, not restarted: a clock that resets on every observation never
+    // elapses, so a continuous-unreachability bound would be unreachable.
+    let TransportHealth::Unreachable { since: still_first } = latch.fold(false) else {
+        panic!("a repeated unreachable observation stays unreachable");
+    };
+    assert_eq!(
+        first, still_first,
+        "the latch reports when unreachability began, not when it was last observed"
+    );
+
+    assert_eq!(latch.fold(true), TransportHealth::Healthy);
+
+    let TransportHealth::Unreachable { since: after } = latch.fold(false) else {
+        panic!("a later failure reports unreachable again");
+    };
+    assert!(
+        after > first,
+        "a failure after a recovery starts a fresh clock rather than resuming the old one"
+    );
+}
+
+/// The observer captures its notifier as it starts, so anything that installs
+/// one after `startup` hands it to a thread that has already taken its copy.
+///
+/// Driving a real observed transition is what separates a wired notification
+/// path from one that merely looks wired. The predicate this exercises passed
+/// every structural check while the closure was never invoked once: the field
+/// existed, the edge test was correct, the relay awaited the notification, and
+/// the observer still held the `None` it had captured before the relay got to
+/// install anything. Only calling the closure proves the seam.
+#[test]
+fn the_observer_invokes_its_readiness_notifier_on_an_observed_transition() {
+    use agentmux::configuration::{BundleMember, TargetConfiguration, TmuxTargetConfiguration};
+    use agentmux::tmux::ReadinessNotifier;
+    use agentmux::transports::StartupContext;
+    use std::os::unix::fs::PermissionsExt;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let temporary = tempfile::TempDir::new().expect("temporary");
+    // A tmux that always fails makes the pane unobservable regardless of what
+    // the host has installed, so the transition under test is the one this
+    // asserts and not an artifact of the machine.
+    let fake_tmux = temporary.path().join("failing-tmux.sh");
+    std::fs::write(&fake_tmux, "#!/bin/sh\nexit 1\n").expect("write fake tmux");
+    std::fs::set_permissions(&fake_tmux, std::fs::Permissions::from_mode(0o755))
+        .expect("make fake tmux executable");
+    // SAFETY: nextest runs each test in its own process, so no other thread here
+    // races this read of the environment.
+    unsafe { std::env::set_var("AGENTMUX_TMUX_COMMAND", &fake_tmux) };
+
+    let fired = Arc::new(AtomicUsize::new(0));
+    let notifier: ReadinessNotifier = {
+        let fired = Arc::clone(&fired);
+        Arc::new(move || {
+            fired.fetch_add(1, Ordering::SeqCst);
+        })
+    };
+
+    let member = BundleMember {
+        id: TEST_TARGET_SESSION.to_string(),
+        name: None,
+        working_directory: None,
+        target: TargetConfiguration::Tmux(TmuxTargetConfiguration {
+            start_command: "/bin/sh".to_string(),
+            prompt_readiness: None,
+            prime_timeout_ms: None,
+            readiness_timeout_ms: 1_000,
+        }),
+        coder_session_id: None,
+        policy_id: None,
+        environment: Vec::new(),
+    };
+    let mut transport =
+        agentmux::tmux::TmuxTransport::new(PromptBatchSettings::default(), Some(notifier));
+    transport
+        .startup(StartupContext {
+            namespace: "party".to_string(),
+            runtime_directory: temporary.path().to_path_buf(),
+            target_member: member,
+            choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+                decided_by: "test".to_string(),
+                reason_code: "test_cancel".to_string(),
+                reason: None,
+            }),
+        })
+        .expect("tmux startup");
+
+    // Pending -> Unreachable is a genuine edge: the pane cannot be inspected, and
+    // the observer publishes that as a change like any other.
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while fired.load(Ordering::SeqCst) == 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        fired.load(Ordering::SeqCst) > 0,
+        "the observer must invoke the notifier it was constructed with when its observation changes"
+    );
 }

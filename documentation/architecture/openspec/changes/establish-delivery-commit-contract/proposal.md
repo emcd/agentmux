@@ -272,7 +272,7 @@ omissions:
 
 - `transport-contracts` / `Transport Capability Contract` — it derives static
   look/write capability from `SessionType`. Maximum handover dimensions and
-  `can_accept_handover` are a different axis (dynamic delivery capacity), and
+  `is_ready_for_handover` are a different axis (dynamic delivery capacity), and
   adding a fifth capability there would conflate them. They live in
   `transport-abstraction` / `Transport Handover Capacity and Readiness`.
 - `transport-contracts` / `ACP Persistent Worker Lifecycle` — ACP's discarded

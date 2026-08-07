@@ -647,11 +647,28 @@ pub(super) fn assert_acp_delivery_unavailable(
         Ok(response) => {
             let _result = send_result(response);
             let started = Instant::now();
-            let settled = await_acp_worker_state(
-                &mut receiver,
-                WorkerReadinessState::Unavailable,
-                ACP_FAIL_LOAD_SETTLE_BUDGET,
-            );
+            // The level first, the transition second, and the order matters.
+            //
+            // A watch fires only on transitions, and this receiver is subscribed
+            // after the worker may already have reached its terminal state — in
+            // which case there is nothing further to observe and waiting on the
+            // watch burns the whole budget before failing. Reading the registry
+            // is not the weaker check: it reads the same published state, just
+            // without requiring that we were listening when it changed.
+            //
+            // Waiting on the transition alone made this assertion depend on the
+            // send being refused synchronously, which depended in turn on the
+            // worker being Unavailable at that exact instant rather than
+            // mid-respawn — a coincidence of timing, not a property.
+            //
+            // The watch is still needed for the other ordering, where the worker
+            // is mid-respawn at this point and settles shortly after.
+            let settled = read_worker_state(root, "bravo").as_deref() == Some("unavailable")
+                || await_acp_worker_state(
+                    &mut receiver,
+                    WorkerReadinessState::Unavailable,
+                    ACP_FAIL_LOAD_SETTLE_BUDGET,
+                );
             if !settled {
                 let elapsed = started.elapsed();
                 let last_state_label = (*receiver.borrow())
