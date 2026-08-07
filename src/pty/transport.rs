@@ -492,8 +492,6 @@ impl PtyTransport {
         let reader_shutdown_flag = self.shutdown_flag.clone();
         let child_exited_for_reader = self.shared.child_exited.clone();
 
-        let (init_tx, init_rx) = oneshot::channel::<Result<(), String>>();
-
         let worker_handle = thread::Builder::new()
             .name(format!("pty-worker-{target_session_for_worker}"))
             .spawn(move || {
@@ -509,7 +507,6 @@ impl PtyTransport {
                     namespace_for_worker,
                     target_session_for_worker,
                     shutdown_flag_for_worker,
-                    Some(init_tx),
                     mirror_state_for_worker,
                     readiness_for_worker,
                 );
@@ -539,48 +536,38 @@ impl PtyTransport {
             })?;
         guard.note_reader(reader_handle);
 
-        // Block on the worker's init-result handshake: the worker
-        // publishes `WorkerReadinessState::Available` on success
-        // BEFORE sending the init result, so when this recv returns
-        // Ok(Ok(())) the local + relay-global readiness state is
-        // already `Available`. On failure (Terminal::new error or
-        // channel drop before init report) we surface the error and
-        // the guard's Drop cleans up the partial runtime state.
-        let result = match init_rx.blocking_recv() {
-            Ok(Ok(())) => Ok(TransportStatus {
-                readiness: TransportReadiness::Ready,
-            }),
-            Ok(Err(reason)) => Err(TransportError {
-                code: "pty_init_failed".to_string(),
-                reason,
-                details: None,
-            }),
-            Err(_) => Err(TransportError {
-                code: "pty_init_dropped".to_string(),
-                reason: "pty worker thread exited before reporting initialization result"
-                    .to_string(),
-                details: None,
-            }),
-        };
+        // Startup does not wait for the worker to finish initializing, and there
+        // is no handshake left to bound.
+        //
+        // Waiting here was a delivery wait wearing a different hat, and every
+        // way of holding onto it was worse than letting it go. Unbounded, it
+        // never reached a verdict. Bounded, the timeout could not be made true:
+        // the cleanup it triggered joined the worker thread, so a startup that
+        // timed out because that thread was stalled then blocked on the same
+        // stall — the bound only moved where the hang lived. Nothing can
+        // interrupt an in-process `Terminal::new`, so no cleanup can promise
+        // cessation it has not observed.
+        //
+        // The readiness axis already answers this question and answers it the
+        // same way for every transport. The worker publishes `Available` when it
+        // is genuinely ready, `is_ready_for_handover` stays false until then, and
+        // the relay holds the member without committing it. A worker that never
+        // arrives is a target that is never ready, which this contract treats
+        // uniformly: the entry stays `Pending`, bounded in consequence by
+        // per-target admission quota rather than by a clock. An initialization
+        // that *fails* is different from one that is slow, and the worker says so
+        // by tearing its child down, which is the reachability signal the health
+        // axis is watching for.
+        let (child, worker, reader) = guard.finish();
+        self.write_tx = Some(write_tx);
+        self.bytes_tx = Some(bytes_tx);
+        self.child = Some(child);
+        self.worker_handle = Some(worker);
+        self.reader_handle = Some(reader);
 
-        if result.is_ok() {
-            // Success: disarm the guard and move the resources into
-            // self. The guard's Drop is a no-op from here on; the
-            // resources are owned by self.
-            let (child, worker, reader) = guard.finish();
-            self.write_tx = Some(write_tx);
-            self.bytes_tx = Some(bytes_tx);
-            self.child = Some(child);
-            self.worker_handle = Some(worker);
-            self.reader_handle = Some(reader);
-        }
-        // On Err, guard drops and tears down the partial state. The
-        // `bytes_tx` / `write_tx` Senders fall out of scope here and
-        // close their channels; the worker / reader threads see
-        // their receivers return Err on the next poll and exit; the
-        // child is killed + reaped by the guard.
-
-        result
+        Ok(TransportStatus {
+            readiness: TransportReadiness::Pending,
+        })
     }
 }
 
@@ -957,20 +944,10 @@ fn run_worker(
     mut snapshot_rx: mpsc::Receiver<SnapshotRequest>,
     shared: PtyShared,
     writer: Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
-    _child: Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+    child: Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
     namespace: String,
     target_session: String,
     shutdown_flag: Arc<AtomicBool>,
-    // Init-result handshake: send `Ok(())` after a successful
-    // Terminal::new + handler installation + initial `Available`
-    // publish, or `Err(reason)` if Terminal::new failed. The relay's
-    // `startup_inner` blocks on the receiving end and only returns
-    // `TransportStatus::Ready` once `Ok(())` arrives, so a
-    // `startup()`-reported `Ready` is guaranteed to post-date
-    // the worker publishing `Available` (and `Ready` is reported
-    // as a transport-level failure when the init result is
-    // `Err`).
-    init_tx: Option<oneshot::Sender<Result<(), String>>>,
     // Optional mirror closure for per-turn readiness transitions.
     // `None` in tests constructed without a relay registry; the
     // worker skips the publish in that case.
@@ -992,27 +969,51 @@ fn run_worker(
         Ok(t) => t,
         Err(e) => {
             eprintln!("[pty-worker-{target_session}] Terminal::new failed: {e}");
-            let _ = init_tx.map(|tx| tx.send(Err(format!("Terminal::new failed: {e}"))));
+            // Startup has already returned by now, so this failure cannot be
+            // reported through its result. Say it on the two axes the relay
+            // actually reads instead: publish `Unavailable`, then tear the child
+            // down so the reader observes EOF and flips `child_exited`, which is
+            // what turns this into an unreachable target rather than a merely
+            // slow one. Without that the member would wait on a runtime that is
+            // never coming, which is the treatment reserved for a target that
+            // might still arrive.
+            publish(
+                &readiness,
+                mirror_state.as_ref(),
+                WorkerReadinessState::Unavailable,
+            );
+            if let Ok(mut child) = child.lock() {
+                let _ = child.kill();
+            }
             return;
         }
     };
 
     install_handlers(&mut terminal, writer.clone(), cols, rows);
 
-    // Publish `Available` BEFORE signalling the init handshake so
-    // that by the time `startup_inner` returns `TransportStatus::Ready`
-    // the transport-local + relay-global readiness state is already
-    // `Available`. The `startup` guard (which checks for `Available` /
-    // `Busy`) sees a consistent post-init snapshot, and a caller
-    // racing a readiness read after `startup` returns sees `true`
-    // rather than the brief `Initializing` window before the worker
-    // publishes.
+    // The shutdown flag is read on the far side of construction. Startup no
+    // longer waits for this thread, which means a teardown can be requested and
+    // completed while initialization is still running; publishing `Available`
+    // afterwards would announce a runtime that is already gone, and the retry
+    // guard reads exactly that state to decide whether a restart is permitted.
+    //
+    // This is the general rule for the rest of the worker: the flag is checked
+    // at every point the thread controls. The unobserved window is therefore
+    // everything before this check -- `Terminal::new`, which nothing can
+    // interrupt, and `install_handlers` alongside it.
+    if shutdown_flag.load(Ordering::Acquire) {
+        return;
+    }
+
+    // Publish `Available` once initialization has genuinely completed. Startup
+    // has already returned `Pending` by now: the relay's readiness gate holds
+    // the member until this publication lands, so the transition is the signal
+    // rather than the return value.
     publish(
         &readiness,
         mirror_state.as_ref(),
         WorkerReadinessState::Available,
     );
-    let _ = init_tx.map(|tx| tx.send(Ok(())));
 
     // Event loop. Each iteration services snapshot_rx (user-facing
     // look requests) and the active delivery. When idle, it drains

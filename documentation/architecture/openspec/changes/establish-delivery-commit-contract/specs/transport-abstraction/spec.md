@@ -94,6 +94,19 @@ members resolve from evidence.
 - **THEN** still-`Pending` relay-owned members resolve `dropped_on_shutdown`
 - **AND** `Authorized` members resolve from evidence
 
+#### Scenario: Startup never runs on an async runtime thread
+
+- **WHEN** the relay invokes `Transport::startup` for any session type
+- **THEN** it runs the call on a blocking thread rather than on a runtime worker
+  thread, because `startup` is synchronous on the trait and every implementation
+  of it is therefore permitted to block
+- **AND** the relay SHALL NOT make that choice per session type, so that a
+  transport acquiring a blocking startup step later inherits the guarantee
+  rather than an assumption about what it used to do
+- **AND** because such a call cannot be aborted, each transport's `startup`
+  SHALL own the cleanup of anything it created, reaching its own conclusion even
+  when the caller awaiting it has gone away
+
 ### Requirement: Transport Module Boundaries
 
 ACP-specific delivery code SHALL reside in `src/acp/`. Tmux-specific delivery
@@ -416,6 +429,45 @@ No envelope SHALL be absorbed into a batch after that batch is authorized.
 - **AND** spawns the reader thread and the delivery task
 - **AND** the worker thread publishes `WorkerReadinessState::Available` AFTER
   successful `Terminal::new` + handler installation
+
+#### Scenario: Pty startup does not wait for the worker to initialize
+
+- **WHEN** `startup` has spawned the child, the worker thread, and the reader
+  thread
+- **THEN** it returns `TransportReadiness::Pending` immediately rather than
+  waiting for the worker to report that it initialized
+- **AND** the worker publishes `WorkerReadinessState::Available` when it has
+  genuinely initialized, so `is_ready_for_handover` is what gates the handover
+  and the return value carries no readiness answer
+- **AND** a worker that never arrives is treated as a target that is never
+  ready — the entry stays `Pending`, bounded in consequence by per-target
+  admission quota rather than by a clock, exactly as for every other transport
+
+**Reason:** the wait could not be made safe in either direction. Unbounded it
+never reached a verdict. Bounded, its cleanup joined the worker thread, so a
+startup that timed out *because that thread had stalled* then blocked on the
+same stall — the bound relocated the hang rather than ending it. An in-process
+`Terminal::new` cannot be interrupted, so no cleanup can promise a cessation it
+has not observed, and a bound that cannot be made true is worse than none.
+
+#### Scenario: Pty initialization failure becomes a reachability signal
+
+- **WHEN** the Pty worker thread fails to construct its terminal, after
+  `startup` has already returned
+- **THEN** it publishes `WorkerReadinessState::Unavailable` and terminates its
+  child, so the reader observes EOF and the transport reports `Unreachable`
+- **AND** the member resolves through the unreachable dwell rather than waiting
+  on a runtime that is never coming, which is the treatment reserved for a
+  target that might still arrive
+
+#### Scenario: A teardown during initialization is not overwritten
+
+- **WHEN** shutdown is requested while the Pty worker is still initializing
+- **THEN** the worker SHALL NOT publish `Available` for a runtime already being
+  torn down
+- **AND** the worker SHALL check the shutdown flag at every point it controls,
+  leaving as the unobserved window only what precedes its first check: the
+  uninterruptible terminal construction and the handler installation beside it
 
 #### Scenario: Pty submits an authorized batch immediately
 

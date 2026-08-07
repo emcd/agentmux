@@ -1,8 +1,9 @@
 //! Envelope and service builders used by the async-delivery worker.
 //!
 //! Five free fns extracted from `worker.rs`:
-//! - `build_worker_transport` constructs the per-task `TransportImpl` and
-//!   runs the (mostly no-op) `startup` context for tmux/Pty surfaces.
+//! - `build_worker_transport` constructs the per-task `TransportImpl` and runs
+//!   its `startup` for tmux/Pty surfaces, off the async runtime via
+//!   `start_transport_off_runtime`.
 //! - `build_coder_envelope`/`build_ui_envelope` build the coder vs. UI
 //!   `DeliveryEnvelope`s from an `AsyncDeliveryTask`, including the per-coder
 //!   prime-timeout carry-over.
@@ -72,7 +73,44 @@ fn startup_failure(target_session: &str, error: TransportError) -> RelayError {
     )
 }
 
-pub(super) fn build_worker_transport(
+/// Runs a transport's `startup` off the async runtime and returns the started
+/// transport.
+///
+/// The single place the relay invokes [`Transport::startup`], so the rule it
+/// enforces needs no per-transport judgement: `startup` is a *synchronous*
+/// method on the delivery contract, which makes every implementation of it a
+/// blocking call, and a blocking call on a runtime worker thread starves
+/// everything else that thread owes progress to. Deciding that per session type
+/// -- pty spawns a process so it goes off-runtime, tmux only spawns threads so
+/// it stays -- would be reasoning from what the implementations happen to do
+/// today rather than from what the contract permits them to do, and the next
+/// implementation to acquire a blocking step would inherit a decision nobody
+/// revisits.
+///
+/// `spawn_blocking` tasks cannot be aborted, so the closure owns everything it
+/// creates: a startup that is still running when its awaiting task goes away
+/// must reach its own conclusion and clean up after itself. Both transports do,
+/// each through a guard whose `Drop` reclaims the partial runtime.
+async fn start_transport_off_runtime(
+    mut transport: TransportImpl,
+    context: StartupContext,
+    target_session: String,
+) -> Result<TransportImpl, RelayError> {
+    tokio::task::spawn_blocking(move || match transport.startup(context) {
+        Ok(_) => Ok(transport),
+        Err(error) => Err(startup_failure(target_session.as_str(), error)),
+    })
+    .await
+    .map_err(|join_error| {
+        relay_error(
+            "runtime_transport_startup_failed",
+            "transport startup panicked",
+            Some(json!({ "details": join_error.to_string() })),
+        )
+    })?
+}
+
+pub(super) async fn build_worker_transport(
     task: &AsyncDeliveryTask,
     key: &AsyncWorkerKey,
     batch_settings: PromptBatchSettings,
@@ -85,7 +123,7 @@ pub(super) fn build_worker_transport(
         resolve_target_member(task)?.expect("configured non-relay-wide target must have a member");
     match target_member.target.session_type() {
         SessionType::Tmux => {
-            let mut transport = TransportImpl::tmux(batch_settings, Some(readiness_notifier));
+            let transport = TransportImpl::tmux(batch_settings, Some(readiness_notifier));
             // tmux ignores the `choose` resolver (it raises no operator choices),
             // so a cancelling no-op chooser satisfies the `StartupContext` contract.
             let context = StartupContext {
@@ -94,21 +132,17 @@ pub(super) fn build_worker_transport(
                 target_member: target_member.clone(),
                 choose: noop_tmux_chooser(),
             };
-            transport
-                .startup(context)
-                .map_err(|error| startup_failure(task.target_session.as_str(), error))?;
-            Ok(transport)
+            start_transport_off_runtime(transport, context, task.target_session.clone()).await
         }
         SessionType::Ui => Ok(TransportImpl::ui(build_ui_transport_services(key))),
         SessionType::Pubsub => Ok(TransportImpl::Pubsub),
         #[cfg(feature = "pty")]
         SessionType::Pty => {
-            // Pty target reached the non-bootstrap worker construction
-            // path. The bootstrap path (`acp_target_ready_for_startup`)
-            // handles startup() under the per-coder config snapshot; this
-            // branch constructs the transport with placeholder defaults
-            // so dispatch does not panic when the feature is enabled.
-            // The full startup wiring lands alongside §6 config parsing.
+            // Pty target reached the non-bootstrap worker construction path.
+            // The per-coder configuration is read from the resolved target; the
+            // fallback arm below covers a member whose target is not a Pty
+            // configuration, which the session-type dispatch above should already
+            // have excluded.
             let pty_config = match &target_member.target {
                 crate::configuration::TargetConfiguration::Pty(pty_cfg) => {
                     crate::pty::PtyTargetConfiguration {
@@ -158,7 +192,7 @@ pub(super) fn build_worker_transport(
                     );
                 })
             };
-            let mut transport =
+            let transport =
                 TransportImpl::pty(target_member.clone(), pty_config, Some(pty_mirror_state));
             let context = StartupContext {
                 namespace: task.bundle.bundle_name.clone(),
@@ -171,10 +205,7 @@ pub(super) fn build_worker_transport(
             // triggering member through the whole dwell before reporting a generic
             // unreachable -- turning a spawn failure the relay already knew about
             // into a delayed guess.
-            transport
-                .startup(context)
-                .map_err(|error| startup_failure(task.target_session.as_str(), error))?;
-            Ok(transport)
+            start_transport_off_runtime(transport, context, task.target_session.clone()).await
         }
         #[cfg(not(feature = "pty"))]
         SessionType::Pty => Err(relay_error(

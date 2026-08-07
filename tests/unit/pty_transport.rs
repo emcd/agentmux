@@ -2025,15 +2025,19 @@ fn make_pty_transport_for_lifecycle_test_with_prompt_and_mirror(
     (transport, context)
 }
 
-/// Verifies the startup handshake: the worker publishes
-/// `Available` only after `Terminal::new` + handler install
-/// succeed, and the relay's `startup_inner` returns `Ok(Ready)`
-/// only once the worker has signaled via the init handshake. A
-/// failure here indicates the startup race (publish-before-
-/// construct) regressed.
+/// Startup reports `Pending` without waiting for the worker, and readiness
+/// converges to `Available` on the worker's own schedule.
+///
+/// The old contract had startup block until the worker reported in, so its
+/// return value doubled as the readiness answer. That wait could not be made
+/// safe: unbounded it never reached a verdict, and bounded its cleanup joined
+/// the very thread whose stall triggered the bound. The readiness axis answers
+/// the question instead, and it answers it the same way for every transport, so
+/// what this asserts is that the return value stops carrying readiness and the
+/// transition starts.
 #[cfg(feature = "pty")]
 #[test]
-fn pty_transport_startup_handshake_publishes_available_before_returning_ready() {
+fn pty_startup_returns_pending_and_readiness_converges_on_the_worker_schedule() {
     let (mut transport, context) = make_pty_transport_for_lifecycle_test(
         "handshake-success",
         "/bin/bash",
@@ -2045,15 +2049,22 @@ fn pty_transport_startup_handshake_publishes_available_before_returning_ready() 
     assert!(
         matches!(
             status.readiness,
-            agentmux::transports::TransportReadiness::Ready
+            agentmux::transports::TransportReadiness::Pending
         ),
-        "startup should report Ready, got {:?}",
+        "startup should report Pending rather than answering for the worker, got {:?}",
         status.readiness,
     );
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while transport.readiness() != agentmux::transports::WorkerReadinessState::Available
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(
         transport.readiness(),
         agentmux::transports::WorkerReadinessState::Available,
-        "transport-local readiness should be Available after successful startup",
+        "the worker must publish Available once it has genuinely initialized",
     );
     transport.shutdown();
 }

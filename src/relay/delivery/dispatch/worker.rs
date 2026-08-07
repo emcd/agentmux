@@ -260,7 +260,8 @@ async fn run_async_delivery_worker(
                 &mut inflight,
                 &mut inflight_members,
                 pending.as_ref(),
-            );
+            )
+            .await;
         }
         tokio::select! {
             maybe_task = receiver.recv(), if !senders_dropped && bootstrap_settled_now && held.is_none() => {
@@ -278,7 +279,8 @@ async fn run_async_delivery_worker(
                             &mut inflight,
                             &mut inflight_members,
                             pending.as_ref(),
-                        );
+                        )
+                        .await;
                     }
                     None => senders_dropped = true,
                 }
@@ -357,7 +359,7 @@ fn target_unreachable_result(task: &AsyncDeliveryTask, dwell: Duration) -> SendR
 /// Returns the task unconsumed when its target reported that it cannot take a
 /// handover. Nothing has happened to it in that case — no authorization, no
 /// batch, no quota movement — and the caller holds it for a later attempt.
-fn submit_task(
+async fn submit_task(
     task: AsyncDeliveryTask,
     context: &SubmitContext<'_>,
     transport: &mut Option<TransportImpl>,
@@ -374,7 +376,9 @@ fn submit_task(
             context.key,
             context.batch_settings,
             readiness_notifier,
-        ) {
+        )
+        .await
+        {
             Ok(built) => {
                 *transport = Some(built);
             }
