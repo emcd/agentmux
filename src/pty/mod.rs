@@ -12,8 +12,8 @@
 //! Module layout:
 //! - [`state`] holds the cross-thread shared state ([`PtyShared`],
 //!   [`PtyConfigSnapshot`], [`SnapshotRequest`] / [`SnapshotResponse`])
-//!   plus the per-thread look / probe consumers ([`PtyOutputView`],
-//!   [`PtyQuiescenceProbe`]).
+//!   plus the per-thread look / prompt consumer ([`PtyOutputView`],
+//!   [`PtyPromptProbe`]).
 //! - [`transport`] holds [`PtyTransport`] (the per-target
 //!   [`Transport`](crate::transports::Transport) implementation with its
 //!   worker thread, delivery task, and reader thread) plus
@@ -26,7 +26,7 @@ pub mod transport;
 
 pub use command::{CommandParseError, program_and_args, tokenize_command};
 pub use state::{
-    LOOK_LINES_DEFAULT, PtyConfigSnapshot, PtyOutputView, PtyQuiescenceProbe, PtyShared, PtyState,
+    LOOK_LINES_DEFAULT, PtyConfigSnapshot, PtyOutputView, PtyPromptProbe, PtyShared, PtyState,
     SnapshotRequest, SnapshotResponse,
 };
 pub use transport::{PtyMirrorStateFn, PtyTargetConfiguration, PtyTransport};

@@ -17,10 +17,11 @@ are documented in `documentation/development/README.md` Zig-free Pty Builds.
   worker is the only thread that can apply bytes to the libghostty-vt
   terminal (the terminal is `!Send + !Sync`); handover readiness is observed
   on demand through `PtyTransport::is_ready_for_handover` before authorization,
-  and an authorized write resolves from its master-write result.
+  and an authorized write resolves from its master-write result without a
+  prompt, prime, or quiescence wait.
 - `state` — cross-thread shared state (`PtyShared`, `PtyConfigSnapshot`,
-  `SnapshotRequest`/`SnapshotResponse`) plus the per-thread look / probe
-  consumers (`PtyOutputView`, `PtyQuiescenceProbe`).
+  `SnapshotRequest`/`SnapshotResponse`) plus the look and prompt observer
+  consumers (`PtyOutputView`, `PtyPromptProbe`).
 - `transport` — `PtyTransport` (the per-target `Transport` implementation
   with its worker thread, delivery task, and reader thread) plus
   `PtyTargetConfiguration` (the per-coder config bundle).
@@ -65,9 +66,8 @@ without editing the bundle config.
 - `src/transports/contract.rs` — the transport contract and the
   `DeliveryEnvelope` / `DeliveryMessage` types the relay populates and
   the Pty transport renders.
-- `src/transports/quiescence.rs` — the cross-transport wedge/prime
-  quiescence state machine consumed by `delivery.rs` and the other
-  coder transports.
+- `src/transports/diagnostics.rs` — the transport-neutral delivery-progress
+  inscription context.
 - `src/configuration/types.rs` — `TermProtocol` enum and
   `PtyTargetConfiguration` definitions.
 - `src/envelope.rs` — the canonical pane-envelope renderer

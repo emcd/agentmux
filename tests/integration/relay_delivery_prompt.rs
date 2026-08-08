@@ -50,7 +50,6 @@ fn relay_send_delivers_when_prompt_readiness_template_matches() {
                 prompt_regex: None,
                 prompt_inspect_lines: None,
                 prompt_idle_column: None,
-                prime_timeout_ms: None,
             },
             CoderSpec {
                 id: "prompt".to_string(),
@@ -59,7 +58,6 @@ fn relay_send_delivers_when_prompt_readiness_template_matches() {
                 prompt_regex: Some("READY>".to_string()),
                 prompt_inspect_lines: Some(8),
                 prompt_idle_column: None,
-                prime_timeout_ms: None,
             },
         ],
         &[
@@ -149,7 +147,6 @@ fn relay_send_times_out_when_prompt_readiness_never_matches() {
                 prompt_regex: None,
                 prompt_inspect_lines: None,
                 prompt_idle_column: None,
-                prime_timeout_ms: None,
             },
             CoderSpec {
                 id: "prompt".to_string(),
@@ -158,7 +155,6 @@ fn relay_send_times_out_when_prompt_readiness_never_matches() {
                 prompt_regex: Some("^›".to_string()),
                 prompt_inspect_lines: None,
                 prompt_idle_column: None,
-                prime_timeout_ms: None,
             },
         ],
         &[
@@ -243,7 +239,6 @@ fn relay_send_delivers_when_prompt_idle_column_matches() {
                 prompt_regex: None,
                 prompt_inspect_lines: None,
                 prompt_idle_column: None,
-                prime_timeout_ms: None,
             },
             CoderSpec {
                 id: "prompt".to_string(),
@@ -252,7 +247,6 @@ fn relay_send_delivers_when_prompt_idle_column_matches() {
                 prompt_regex: Some("(?m)^READY>".to_string()),
                 prompt_inspect_lines: Some(3),
                 prompt_idle_column: Some(6),
-                prime_timeout_ms: None,
             },
         ],
         &[
@@ -342,7 +336,6 @@ fn relay_send_delivers_when_prompt_regex_requires_blank_separator_line() {
                 prompt_regex: None,
                 prompt_inspect_lines: None,
                 prompt_idle_column: None,
-                prime_timeout_ms: None,
             },
             CoderSpec {
                 id: "prompt".to_string(),
@@ -351,7 +344,6 @@ fn relay_send_delivers_when_prompt_regex_requires_blank_separator_line() {
                 prompt_regex: Some("(?ms)^READY>.*\\n\\nstatus.*$".to_string()),
                 prompt_inspect_lines: Some(3),
                 prompt_idle_column: None,
-                prime_timeout_ms: None,
             },
         ],
         &[
@@ -446,7 +438,6 @@ fn relay_send_times_out_when_prompt_idle_column_does_not_match() {
                 prompt_regex: None,
                 prompt_inspect_lines: None,
                 prompt_idle_column: None,
-                prime_timeout_ms: None,
             },
             CoderSpec {
                 id: "prompt".to_string(),
@@ -455,7 +446,6 @@ fn relay_send_times_out_when_prompt_idle_column_does_not_match() {
                 prompt_regex: Some("(?m)^READY>".to_string()),
                 prompt_inspect_lines: Some(3),
                 prompt_idle_column: Some(6),
-                prime_timeout_ms: None,
             },
         ],
         &[

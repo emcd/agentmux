@@ -66,7 +66,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Move every transport's `startup` off the async worker through one relay-side chokepoint, rather than deciding per session type from what each implementation happens to do today. Delete Pty's initialization handshake rather than bounding it: the readiness axis already answers when a worker is usable, and a bound whose cleanup joins the stalled thread relocates the hang instead of ending it
 - [ ] Construct the worker's transport at worker spawn rather than on first write, passing the target member the spawn site already holds, and resolve the triggering task if construction fails
 - [x] Wire the readiness notification as a relay-provided closure the transport invokes, with subscribe-before-check and a bounded poll backstop
-- [ ] Delete the shared wedge/prime classifier once every transport determines its own readiness, and with it the relay's dependence on a cross-transport quiescence state machine
+- [x] Delete the shared wedge/prime classifier once every transport determines its own readiness, and with it the relay's dependence on a cross-transport quiescence state machine
 
 ### Submission evidence
 
@@ -105,14 +105,14 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 ### Per-transport
 
 - [ ] Pty: move the write after the partition; buffer then write; one unit per member; resolve each member from its own evidence
-- [ ] Pty: delete the wedge classifier and the prime wait
-- [ ] Tmux: delete the readiness bound, the prime wait, and the quiescence wait; keep per-unit partition and outcomes, which are already correct
+- [x] Pty: delete the wedge classifier and the prime wait
+- [x] Tmux: delete the readiness bound, the prime wait, and the quiescence wait; keep per-unit partition and outcomes, which are already correct
 - [ ] ACP: remove the staging queue so an authorized batch starts a supervised executor synchronously
 - [ ] ACP: record `Submitted` immediately after the framed `session/prompt` write succeeds, before replay-buffer locks or `on_dispatched`
 - [ ] ACP: map active-prompt refusal and serialization failure to `not_submitted`, and a stdin write or flush error without proof of zero bytes to `submission_unknown`
 - [x] ACP: retain the client/child thread handle so the generation can be fenced (see `agentmux:todos/relay/128`)
 - [ ] ACP: delete the prime timer, `acp_turn_timeout`, and the readiness latch and respawn signal it drove
-- [ ] Delete `src/transports/quiescence.rs` and the `WedgeProbe` trait
+- [x] Delete `src/transports/quiescence.rs` and the `WedgeProbe` trait
 
 ### Configuration
 

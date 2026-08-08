@@ -31,7 +31,7 @@ None.
 ## Impact
 
 - Updates the transport-contracts OpenSpec delta and its implementation in
-  `src/tmux/quiescence_probe.rs`; Tmux matching gates injection while Pty
+  `src/tmux/prompt_probe.rs`; Tmux matching gates injection while Pty
   matching resolves readiness outcomes after its pre-wait write.
 - Extends the private production-path test with a malformed frame case and
   non-OpenCode preservation coverage.

@@ -7,12 +7,9 @@ use agentmux::{
 };
 use tempfile::TempDir;
 
-use std::path::PathBuf;
-
 use crate::support::relay_delivery::{
-    CoderSpec, SessionSpec, TmuxServerGuard, capture_pane, spawn_session, tmux_available,
-    tmux_command, wait_for_pane_contains, write_bundle_configuration,
-    write_bundle_configuration_members,
+    TmuxServerGuard, capture_pane, spawn_session, tmux_available, tmux_command,
+    wait_for_pane_contains, write_bundle_configuration,
 };
 
 fn dispatch_request(
@@ -22,273 +19,6 @@ fn dispatch_request(
     runtime_directory: &std::path::Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     handle_request(request, configuration_roots, bundle_name, runtime_directory)
-}
-
-/// A non-delivered terminal outcome for a queued message must reach the original
-/// coder-session sender through a receipt
-/// delivered to its own transport — its tmux pane — WITHOUT the sender having to
-/// read `relay.log`.
-///
-/// `alpha` is a responsive (unbounded-wait) sleep pane; `bravo`'s coder sets a
-/// small `prime-timeout-ms` and its quiet pane produces no output, so a send to
-/// `bravo` resolves as `Timeout`, a non-delivered outcome. The relay routes a
-/// terminal-outcome receipt back to `alpha`'s live delivery worker, which renders
-/// it into `alpha`'s pane. `alpha`'s worker is primed first by delivering one
-/// message TO it (`bravo -> alpha`), since a receipt routes only to an
-/// already-live sender worker and is otherwise dropped.
-// This assertion depends on the pre-relocation prompt-wait timeout producing
-// a non-delivered receipt. Handover readiness is now an advisory level
-// consumed by relay admission, so the old receipt timing is not meaningful
-// until that relay-side gate is active.
-#[ignore = "requires relay-side handover admission gating"]
-#[test]
-fn relay_send_async_delivers_terminal_outcome_receipt_to_coder_sender() {
-    if !tmux_available() {
-        eprintln!("skipping terminal-outcome-receipt test because tmux is unavailable");
-        return;
-    }
-
-    let temporary = TempDir::new().expect("temporary");
-    let bundle_name = "party";
-    // Two coders: `responsive` has no prompt gate, so it delivers to a quiet pane
-    // (used to prime alpha's worker). `unresponsive` gates delivery on a prompt
-    // regex that never appears in its quiet pane and bounds the wait with a prime
-    // timeout, so a send to it resolves as `Timeout` rather than waiting unbounded.
-    let coders = vec![
-        CoderSpec::sleeping("responsive"),
-        CoderSpec {
-            prompt_regex: Some("READY_PROMPT_THAT_NEVER_APPEARS>".to_string()),
-            prompt_inspect_lines: Some(3),
-            prime_timeout_ms: Some(300),
-            ..CoderSpec::sleeping("unresponsive")
-        },
-    ];
-    let sessions = vec![
-        SessionSpec {
-            id: "alpha".to_string(),
-            name: Some("alpha".to_string()),
-            directory: PathBuf::from("/tmp"),
-            coder: "responsive".to_string(),
-            coder_session_id: None,
-        },
-        SessionSpec {
-            id: "bravo".to_string(),
-            name: Some("bravo".to_string()),
-            directory: PathBuf::from("/tmp"),
-            coder: "unresponsive".to_string(),
-            coder_session_id: None,
-        },
-    ];
-    let config_root =
-        write_bundle_configuration_members(temporary.path(), bundle_name, &coders, &sessions);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
-    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
-    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
-
-    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
-    spawn_session(&paths.tmux_socket, "bravo", "exec sleep 45");
-
-    // Prime alpha's delivery worker by delivering one message TO alpha, so a
-    // receipt has a live worker to route to.
-    let prime_marker = "PRIME-ALPHA-WORKER-MARKER";
-    dispatch_request(
-        RelayRequest::Send {
-            request_id: Some("req-prime".to_string()),
-            requester_session: "bravo".to_string(),
-            message: prime_marker.to_string(),
-            targets: vec!["alpha@party".to_string()],
-            broadcast: false,
-            quiet_window_ms: Some(70),
-            on_behalf_of: None,
-        },
-        &config_root,
-        bundle_name,
-        &paths.runtime_directory,
-    )
-    .expect("priming send should be accepted");
-    wait_for_pane_contains(
-        &paths.tmux_socket,
-        "alpha",
-        prime_marker,
-        Duration::from_millis(3_000),
-    );
-
-    // alpha sends to bravo; bravo's quiet pane + prime-timeout resolves the
-    // delivery as Timeout, a non-delivered terminal outcome.
-    let response = dispatch_request(
-        RelayRequest::Send {
-            request_id: Some("req-to-slow".to_string()),
-            requester_session: "alpha".to_string(),
-            message: "PAYLOAD-FOR-UNRESPONSIVE-TARGET".to_string(),
-            targets: vec!["bravo@party".to_string()],
-            broadcast: false,
-            quiet_window_ms: Some(70),
-            on_behalf_of: None,
-        },
-        &config_root,
-        bundle_name,
-        &paths.runtime_directory,
-    )
-    .expect("send to the slow target should be accepted");
-    let RelayResponse::Send { results, .. } = response else {
-        panic!("expected send response");
-    };
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].outcome, SendOutcome::Queued);
-    let queued_message_id = results[0].message_id.clone();
-
-    // The terminal-outcome receipt must land in ALPHA's pane — proving the sender
-    // learns the outcome through its own transport, not by reading relay.log. Wait
-    // on the relay/system `From` identity, a short needle that does not wrap.
-    wait_for_pane_contains(
-        &paths.tmux_socket,
-        "alpha",
-        "relay@RELAY",
-        Duration::from_secs(8),
-    );
-    // tmux hard-wraps the pane at its column width, so flatten newlines before
-    // matching the receipt's longer fields.
-    let snapshot = capture_pane(&paths.tmux_socket, "alpha", "-200");
-    let flattened = snapshot.replace('\n', "");
-    assert!(
-        flattened.contains("was not delivered"),
-        "expected a non-delivered receipt in alpha's pane, snapshot={snapshot:?}"
-    );
-    assert!(
-        flattened.contains("bravo@party"),
-        "receipt should name the delivery target, snapshot={snapshot:?}"
-    );
-    assert!(
-        flattened.contains(&queued_message_id),
-        "receipt should name the queued message id, snapshot={snapshot:?}"
-    );
-    // The receipt carries the terminal outcome's machine-readable reason code, not
-    // just prose. Every bounded Tmux non-delivery — this prime timeout and the
-    // readiness bound alike — resolves as `Timeout` with a reason code and reaches
-    // the sender through this one render path, so asserting the code here covers
-    // the readiness expiry's route to the sender as well.
-    assert!(
-        flattened.contains("reason_code=delivery_prime_timeout"),
-        "receipt should carry the terminal outcome's reason code, snapshot={snapshot:?}"
-    );
-
-    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
-}
-
-/// Best-effort boundary: when the sender is not routable — it has no live
-/// delivery worker — its receipt is dropped, not persisted or retried, and never
-/// resurfaces once the sender does become routable.
-///
-/// `alpha` sends to the wedging target WITHOUT being primed, so it has no worker
-/// when the non-delivered outcome resolves and the receipt is dropped. A fixed
-/// wait past the target's prime timeout guarantees the drop happened while
-/// `alpha` was unroutable. `alpha` is then primed and a sentinel delivered; the
-/// dropped receipt must not reappear ahead of the sentinel.
-#[test]
-fn relay_send_async_drops_terminal_receipt_when_sender_not_routable() {
-    if !tmux_available() {
-        eprintln!("skipping receipt-drop test because tmux is unavailable");
-        return;
-    }
-
-    let temporary = TempDir::new().expect("temporary");
-    let bundle_name = "party";
-    let coders = vec![
-        CoderSpec::sleeping("responsive"),
-        CoderSpec {
-            prompt_regex: Some("READY_PROMPT_THAT_NEVER_APPEARS>".to_string()),
-            prompt_inspect_lines: Some(3),
-            prime_timeout_ms: Some(300),
-            ..CoderSpec::sleeping("wedging")
-        },
-    ];
-    let sessions = vec![
-        SessionSpec {
-            id: "alpha".to_string(),
-            name: Some("alpha".to_string()),
-            directory: PathBuf::from("/tmp"),
-            coder: "responsive".to_string(),
-            coder_session_id: None,
-        },
-        SessionSpec {
-            id: "bravo".to_string(),
-            name: Some("bravo".to_string()),
-            directory: PathBuf::from("/tmp"),
-            coder: "wedging".to_string(),
-            coder_session_id: None,
-        },
-    ];
-    let config_root =
-        write_bundle_configuration_members(temporary.path(), bundle_name, &coders, &sessions);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
-    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
-    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
-
-    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
-    spawn_session(&paths.tmux_socket, "bravo", "exec sleep 45");
-
-    // alpha sends to bravo while alpha has NO live worker: the non-delivered
-    // outcome's receipt is dropped rather than spawning a worker for alpha.
-    let response = dispatch_request(
-        RelayRequest::Send {
-            request_id: Some("req-unroutable".to_string()),
-            requester_session: "alpha".to_string(),
-            message: "PAYLOAD-WHILE-SENDER-UNROUTABLE".to_string(),
-            targets: vec!["bravo@party".to_string()],
-            broadcast: false,
-            quiet_window_ms: Some(70),
-            on_behalf_of: None,
-        },
-        &config_root,
-        bundle_name,
-        &paths.runtime_directory,
-    )
-    .expect("send to the wedging target should be accepted");
-    let RelayResponse::Send { results, .. } = response else {
-        panic!("expected send response");
-    };
-    let dropped_message_id = results[0].message_id.clone();
-
-    // Wait past the 300ms prime timeout so the outcome resolves and the receipt
-    // drops while alpha still has no worker.
-    std::thread::sleep(Duration::from_millis(900));
-
-    // Now prime alpha and deliver a sentinel; the dropped receipt must not appear.
-    let sentinel = "SENTINEL-AFTER-DROP";
-    dispatch_request(
-        RelayRequest::Send {
-            request_id: Some("req-sentinel".to_string()),
-            requester_session: "bravo".to_string(),
-            message: sentinel.to_string(),
-            targets: vec!["alpha@party".to_string()],
-            broadcast: false,
-            quiet_window_ms: Some(70),
-            on_behalf_of: None,
-        },
-        &config_root,
-        bundle_name,
-        &paths.runtime_directory,
-    )
-    .expect("sentinel send should be accepted");
-    wait_for_pane_contains(
-        &paths.tmux_socket,
-        "alpha",
-        sentinel,
-        Duration::from_secs(5),
-    );
-
-    let snapshot = capture_pane(&paths.tmux_socket, "alpha", "-200");
-    let flattened = snapshot.replace('\n', "");
-    assert!(
-        !flattened.contains("was not delivered"),
-        "a dropped receipt must not resurface, snapshot={snapshot:?}"
-    );
-    assert!(
-        !flattened.contains(&dropped_message_id),
-        "the dropped receipt's message id must not appear, snapshot={snapshot:?}"
-    );
-
-    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
 }
 
 /// A *delivered* terminal outcome produces NO receipt. Only non-delivered
@@ -507,8 +237,10 @@ fn relay_send_async_processes_repeated_target_messages_in_fifo_order() {
     let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
 }
 
+/// A Tmux delivery is written while the target is still producing output;
+/// delivery does not wait for a quiet pane or a prompt-readiness timeout.
 #[test]
-fn relay_send_async_without_timeout_waits_for_late_quiescence() {
+fn relay_send_async_writes_while_target_is_active() {
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -526,7 +258,7 @@ fn relay_send_async_without_timeout_waits_for_late_quiescence() {
     spawn_session(
         &paths.tmux_socket,
         "bravo",
-        "i=0; while [ \"$i\" -lt 30 ]; do printf '\\rWORK-%02d' \"$i\"; i=$((i+1)); sleep 0.02; done; printf '\\nIDLE\\n'; exec sleep 45",
+        "i=0; while [ \"$i\" -lt 300 ]; do printf '\\rWORK-%03d' \"$i\"; i=$((i+1)); sleep 0.02; done; printf '\\nIDLE\\n'; exec sleep 45",
     );
     wait_for_pane_contains(
         &paths.tmux_socket,
@@ -535,7 +267,7 @@ fn relay_send_async_without_timeout_waits_for_late_quiescence() {
         Duration::from_millis(1_200),
     );
 
-    let marker = "ASYNC-LATE-QUIESCENCE-MARKER";
+    let marker = "ASYNC-DIRECT-WRITE-MARKER";
     let response = dispatch_request(
         RelayRequest::Send {
             request_id: Some("req-async-default".to_string()),
@@ -562,7 +294,7 @@ fn relay_send_async_without_timeout_waits_for_late_quiescence() {
         &paths.tmux_socket,
         "bravo",
         marker,
-        Duration::from_millis(3_000),
+        Duration::from_millis(2_000),
     );
 
     let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);

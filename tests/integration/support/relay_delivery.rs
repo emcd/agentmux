@@ -93,7 +93,6 @@ pub(crate) fn write_bundle_configuration(
         prompt_regex: None,
         prompt_inspect_lines: None,
         prompt_idle_column: None,
-        prime_timeout_ms: None,
     }];
     let session_specs = sessions
         .iter()
@@ -116,26 +115,6 @@ pub(crate) struct CoderSpec {
     pub(crate) prompt_regex: Option<String>,
     pub(crate) prompt_inspect_lines: Option<usize>,
     pub(crate) prompt_idle_column: Option<usize>,
-    /// Per-coder `[coders.<id>.tmux].prime-timeout-ms`. `Some(ms)` bounds the
-    /// tmux quiescence wait so a quiet, output-free target pane resolves as
-    /// `SendOutcome::Timeout`; `None` preserves the unbounded wait.
-    pub(crate) prime_timeout_ms: Option<u64>,
-}
-
-impl CoderSpec {
-    /// A default `sleep`-backed tmux coder with the given id. The pane produces no
-    /// output, so with `prime_timeout_ms` set it resolves a send as `Timeout`.
-    pub(crate) fn sleeping(id: &str) -> Self {
-        Self {
-            id: id.to_string(),
-            initial_command: "sh -lc 'exec sleep 45'".to_string(),
-            resume_command: "sh -lc 'exec sleep 45'".to_string(),
-            prompt_regex: None,
-            prompt_inspect_lines: None,
-            prompt_idle_column: None,
-            prime_timeout_ms: None,
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -173,9 +152,6 @@ pub(crate) fn write_bundle_configuration_members(
         }
         if let Some(column) = coder.prompt_idle_column {
             coders_toml.push_str(format!("prompt-idle-column = {column}\n").as_str());
-        }
-        if let Some(prime_timeout_ms) = coder.prime_timeout_ms {
-            coders_toml.push_str(format!("prime-timeout-ms = {prime_timeout_ms}\n").as_str());
         }
     }
     fs::write(config_root.join("coders.toml"), coders_toml).expect("write coders config");
@@ -239,7 +215,6 @@ pub(crate) fn write_bundle_with_pubsub_member(
         prompt_regex: None,
         prompt_inspect_lines: None,
         prompt_idle_column: None,
-        prime_timeout_ms: None,
     }];
     let sessions = vec![SessionSpec {
         id: tmux_session.to_string(),
@@ -292,7 +267,6 @@ pub(crate) fn write_bundle_configuration_with_environment(
         prompt_regex: None,
         prompt_inspect_lines: None,
         prompt_idle_column: None,
-        prime_timeout_ms: None,
     }];
     let sessions = vec![SessionSpec {
         id: session.to_string(),

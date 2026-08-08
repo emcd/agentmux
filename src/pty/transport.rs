@@ -28,9 +28,8 @@
 //! thread and the worker goes through the bytes channel.
 //!
 //! Status: the Transport trait surface compiles against the
-//! libghostty-vt binding. The full delivery-task semantics (envelope
-//! rendering, group coalesce, wedge/prime quiescence wait) lands in
-//! §4.4 as a follow-up. Per-coder config parsing
+//! libghostty-vt binding. Delivery writes are resolved from the PTY master
+//! result after handover admission. Per-coder config parsing
 //! (`[coders.<id>.pty]` → [`PtyTargetConfiguration`]) lands in §6.
 //! The `TransportImpl::pty` cfg-gated wiring lands in §5.
 
@@ -38,7 +37,7 @@ use std::{
     io::Write,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::Duration,
@@ -51,9 +50,9 @@ use tokio::sync::{mpsc, oneshot};
 use crate::configuration::BundleMember;
 use crate::configuration::TermProtocol;
 use crate::transports::{
-    DeliveryDiagnosticContext, DeliveryEnvelope, GenerationFence, OutcomeFuture, OutputView,
-    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportHealth,
-    TransportReadiness, TransportStatus, UnreachableSince, WedgeProbe, WorkerReadinessState,
+    DeliveryEnvelope, GenerationFence, OutcomeFuture, OutputView, SingleDeliveryOutcome,
+    StartupContext, Transport, TransportError, TransportHealth, TransportReadiness,
+    TransportStatus, UnreachableSince, WorkerReadinessState,
 };
 
 /// Mirrors the worker readiness state into the relay's global registry.
@@ -69,8 +68,7 @@ pub type PtyMirrorStateFn = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
 
 use super::command::program_and_args;
 use super::state::{
-    PtyConfigSnapshot, PtyOutputView, PtyQuiescenceProbe, PtyShared, SnapshotRequest,
-    SnapshotResponse,
+    PtyConfigSnapshot, PtyOutputView, PtyPromptProbe, PtyShared, SnapshotRequest, SnapshotResponse,
 };
 
 /// Default pty cols when the per-coder config does not set them.
@@ -254,7 +252,6 @@ impl PtyTransport {
                 prime_timeout_ms: config.prime_timeout_ms,
                 wedge_detection: config.wedge_detection,
             },
-            last_change_atomic: Arc::new(AtomicU64::new(0)),
             snapshot_tx: mpsc::channel(64).0,
             child_exited: Arc::new(AtomicBool::new(false)),
         };
@@ -473,14 +470,12 @@ impl PtyTransport {
         self.shared.snapshot_tx = snapshot_tx.clone();
         let shared_for_worker = PtyShared {
             config: self.shared.config.clone(),
-            last_change_atomic: self.shared.last_change_atomic.clone(),
             snapshot_tx,
             child_exited: self.shared.child_exited.clone(),
         };
 
         let target_session = self.target_member.id.clone();
         let target_session_for_worker = target_session.clone();
-        let namespace_for_worker = context.namespace.clone();
         let writer_for_worker = writer_arc.clone();
         let child_for_worker = child_arc.clone();
         let shutdown_flag_for_worker = self.shutdown_flag.clone();
@@ -488,7 +483,6 @@ impl PtyTransport {
         let readiness_for_worker = self.readiness.clone();
 
         let bytes_tx_for_reader = bytes_tx.clone();
-        let last_byte_atomic_for_reader = self.shared.last_change_atomic.clone();
         let reader_shutdown_flag = self.shutdown_flag.clone();
         let child_exited_for_reader = self.shared.child_exited.clone();
 
@@ -504,7 +498,6 @@ impl PtyTransport {
                     shared_for_worker,
                     writer_for_worker,
                     child_for_worker,
-                    namespace_for_worker,
                     target_session_for_worker,
                     shutdown_flag_for_worker,
                     mirror_state_for_worker,
@@ -524,7 +517,6 @@ impl PtyTransport {
                 run_reader(
                     reader,
                     bytes_tx_for_reader,
-                    last_byte_atomic_for_reader,
                     reader_shutdown_flag,
                     child_exited_for_reader,
                 );
@@ -869,8 +861,18 @@ impl Transport for PtyTransport {
         // has no target left, and unlike ACP there is no respawn monitor that
         // might bring one back. A live child that is merely `Busy` or
         // `Initializing` is healthy — those belong to the readiness axis.
-        let reachable =
-            self.write_tx.is_some() && !self.shared.child_exited.load(Ordering::Acquire);
+        let worker_live = self
+            .worker_handle
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished());
+        let reader_live = self
+            .reader_handle
+            .as_ref()
+            .is_some_and(|handle| !handle.is_finished());
+        let reachable = self.write_tx.is_some()
+            && worker_live
+            && reader_live
+            && !self.shared.child_exited.load(Ordering::Acquire);
         self.unreachable_since.fold(reachable)
     }
 
@@ -881,10 +883,8 @@ impl Transport for PtyTransport {
         {
             return false;
         }
-        let mut probe = PtyQuiescenceProbe::new(self.shared.clone());
-        probe
-            .observe()
-            .is_ok_and(|observation| observation.is_prompt_ready)
+        let mut probe = PtyPromptProbe::new(self.shared.clone());
+        probe.observe().is_ok_and(|ready| ready)
     }
 
     fn shutdown(&mut self) {
@@ -945,7 +945,6 @@ fn run_worker(
     shared: PtyShared,
     writer: Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
     child: Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
-    namespace: String,
     target_session: String,
     shutdown_flag: Arc<AtomicBool>,
     // Optional mirror closure for per-turn readiness transitions.
@@ -1020,16 +1019,6 @@ fn run_worker(
     // bytes_rx (PTY output → terminal) and starts a new delivery
     // from write_rx.
     //
-    // Critically, the worker does NOT block inside a delivery wait
-    // — `Delivery::step` advances the state machine by ONE
-    // classify-or-wait-poll per call. Between steps the worker
-    // services other channels. The wait's `one_poll` drains
-    // bytes_rx (so the terminal reflects the latest child output
-    // before the next observation) and, for envelope-group waits,
-    // absorbs write_rx envelopes. Raw-only waits do NOT drain
-    // write_rx (avoids the v1 bug where raw waits absorbed
-    // envelopes into a throwaway group and dropped them).
-    //
     // Once the reader thread observes EOF on the PTY master
     // (`Ok(0`) or a fatal `Err(_)` (typical cause: the underlying
     // handle went bad on the OS side), it sets `child_exited=true`
@@ -1074,26 +1063,20 @@ fn run_worker(
             break;
         }
 
-        // 1. Always drain snapshot_rx. User-facing look requests
-        // take priority over deliveries so the operator gets a
-        // responsive view (the wait is decomposed into per-tick
-        // polls so the worker loop services snapshot_rx between
-        // wait ticks).
+        // 1. Always drain snapshot_rx. User-facing look requests take
+        // priority over deliveries so the operator gets a responsive view.
         while let Ok(request) = snapshot_rx.try_recv() {
             handle_snapshot(&mut terminal, request);
         }
 
-        // 2. If a `Raw` is pending (from a prior delivery's batch
-        // barrier, or a fresh raw from write_rx), start a new
-        // raw-only delivery. The raw delivery's wait is
-        // `WaitKind::RawOnly` — does not drain write_rx.
+        // 2. If a `Raw` is pending from a prior delivery's batch barrier,
+        // start a new raw-only delivery.
         if let Some(raw) = pending_raw.take() {
             match super::delivery::Delivery::start_raw(
                 raw.content,
                 raw.append_enter,
                 raw.outcome_tx,
                 &writer,
-                &shared,
                 &target_session,
             ) {
                 Ok(d) => {
@@ -1115,38 +1098,13 @@ fn run_worker(
 
         // 3. If a delivery is in progress, resolve its write result.
         if let Some(d) = delivery.as_mut() {
-            let diagnostics = DeliveryDiagnosticContext::without_messages(
-                namespace.as_str(),
-                target_session.as_str(),
-            );
-            match d.step(
-                &mut terminal,
-                &mut bytes_rx,
-                &mut write_rx,
-                &shared,
-                &diagnostics,
-                &mut pending_raw,
-            ) {
-                super::delivery::DeliveryStep::Continue => {
-                    continue;
-                }
-                super::delivery::DeliveryStep::Done { wedged } => {
-                    // Delivery resolved. Publish the readiness
-                    // transition implied by the outcome kind:
-                    // `Wedged` → `Unavailable` (per-turn failure
-                    // observable to the relay); everything else
-                    // (`Delivered` / `Timeout`) → `Available` (idle
-                    // worker, awaiting the next write). The
-                    // `child_exited` check on step 0 above means we
-                    // can never reach this branch with the latch
-                    // armed — the step-0 branch would have broken
-                    // first.
-                    let next = if wedged {
-                        WorkerReadinessState::Unavailable
-                    } else {
-                        WorkerReadinessState::Available
-                    };
-                    publish(&readiness, mirror_state.as_ref(), next);
+            match d.step(&target_session) {
+                super::delivery::DeliveryStep::Done => {
+                    publish(
+                        &readiness,
+                        mirror_state.as_ref(),
+                        WorkerReadinessState::Available,
+                    );
                     delivery = None;
                     continue;
                 }
@@ -1158,7 +1116,6 @@ fn run_worker(
         // data even when no delivery is in progress.
         while let Ok(bytes) = bytes_rx.try_recv() {
             terminal.vt_write(&bytes);
-            shared.last_change_atomic.fetch_add(1, Ordering::AcqRel);
         }
 
         // 5. Try to start a new delivery from write_rx. An
@@ -1174,7 +1131,6 @@ fn run_worker(
                 outcome_tx,
                 &mut write_rx,
                 &writer,
-                &shared,
                 &target_session,
             ) {
                 Ok(d) => {
@@ -1430,18 +1386,9 @@ fn drain_remaining(write_rx: &mut mpsc::Receiver<DeliveryCommand>, _target_sessi
 fn run_reader(
     mut reader: Box<dyn std::io::Read + Send>,
     bytes_tx: mpsc::Sender<Vec<u8>>,
-    _last_change_atomic: Arc<AtomicU64>,
     shutdown_flag: Arc<AtomicBool>,
     child_exited: Arc<AtomicBool>,
 ) {
-    // The reader forwards raw bytes to the worker. The change atomic
-    // is updated by the worker AFTER `terminal.vt_write(&bytes)` so
-    // the quiescence probe sees a generation advance only when the
-    // terminal has actually consumed the bytes. Updating the atomic
-    // here (before vt_write) would let `wait_for_change` return while
-    // the terminal still shows the old screen, producing stale
-    // readiness decisions.
-    //
     // On EOF (`Ok(0)` — the master has closed, typically because
     // the spawned child exited or the relay called `shutdown()`'s
     // `child.kill`/`wait`), set `child_exited` so the worker thread
@@ -1490,14 +1437,6 @@ fn run_reader(
     }
 }
 
-impl PtyConfigSnapshot {
-    /// Re-export of `target_member_id` for callers that need a stable
-    /// identifier in the worker thread's logs and diagnostic payloads.
-    pub fn target_id(&self) -> &str {
-        &self.target_member_id
-    }
-}
-
 /// Inline private test block. Covers the two private-only
 /// branches that have no public exerciser path: the fatal
 /// non-`WouldBlock` `Err` arm of `run_reader`'s `read()` loop
@@ -1536,7 +1475,6 @@ mod tests {
         run_reader(
             Box::new(FatalErrReader),
             bytes_tx,
-            Arc::new(AtomicU64::new(0)),
             shutdown_flag,
             child_exited.clone(),
         );

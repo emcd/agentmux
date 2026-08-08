@@ -22,9 +22,9 @@ introduced.
   driven by relay bundle reconcile/startup.
 - `pane` — pane operations: resolve active pane target, inject literal
   text into the pane, capture pane tail lines.
-- `quiescence_probe` — the pane-readiness probe used by
-  [`TmuxTransport::is_ready_for_handover`] and the transport-level classifier
-  tests. Implements [`PaneQuiescenceProbe`].
+- `prompt_probe` — the pane-readiness probe used by
+  [`TmuxTransport::is_ready_for_handover`] and its focused tests. Implements
+  [`PanePromptProbe`].
 
   OpenCode readiness has a second, private compose-region gate. It recognizes
   the measured 1.18.9 frame suffix (info row, 20-or-more `▀` characters, and
@@ -39,19 +39,12 @@ introduced.
    holding typed input, or a coder working without terminal output. The
    delivery task therefore pastes immediately after handover; the relay
    reads `is_ready_for_handover` as an advisory pane-readiness level before
-   authorization, while the classifier remains available to its focused
-   probe tests.
-
-  Pty still classifies `wedged` through the same shared machinery, and
-  keeps it until `agentmux:issues/relay/61` supplies a Pty readiness
-  bound. That the classifier survives there is a known-unsound exception,
-  not a property of Pty.
+    authorization. The delivery task performs no readiness wait after
+    authorization.
 - `transport` — [`TmuxTransport`] (the per-target `Transport`
   implementation with its internal delivery task + write channel +
   ordering) plus [`render_paste_text`] (the per-envelope pane-text
-  rendering used by `paste_group`). The delivery task retains the target
-  namespace from `StartupContext` and supplies the current coalesced group's
-  message ids to shared quiescence diagnostics.
+  rendering used by `paste_group`).
 
 ## Terminal-outcome receipt rendering
 
@@ -86,10 +79,10 @@ in the prompt before token budgeting and paste injection.
 - `src/transports/contract.rs` — the transport contract and the
   `DeliveryEnvelope` / `DeliveryMessage` types the relay populates
   and the Tmux transport renders.
-- `src/transports/quiescence.rs` — the cross-transport quiescence state
-  machine the Tmux transport's quiescence probe drives, including
-  `QuiescenceBounds` (the per-flush-group bounds, both deadlines anchored
-  at group formation) and the readiness-expiry reason classifier.
+- `src/transports/diagnostics.rs` — the transport-neutral delivery-progress
+  inscription context used by transports to bound diagnostic message IDs and
+  emit progress inscriptions. It does not classify readiness or delivery
+  outcomes.
 - `src/envelope.rs` — the canonical pane-envelope renderer
   (`render_envelope`) and `AddressIdentity` helpers. The Tmux
   transport renders one pane envelope per `DeliveryEnvelope.message`

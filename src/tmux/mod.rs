@@ -2,8 +2,7 @@
 //! [`Transport`](crate::transports::Transport) implementation.
 //!
 //! This module owns all tmux-process knowledge that previously lived scattered
-//! across `relay/tmux.rs`, `relay/lifecycle.rs`, and
-//! `relay/delivery/quiescence.rs`. The relay delivery worker dispatches tmux
+//! across `relay/tmux.rs`, `relay/lifecycle.rs`, and relay delivery code. The relay delivery worker dispatches tmux
 //! delivery generically through [`TmuxTransport`](transport::TmuxTransport); the
 //! relay orchestration layer (bundle reconcile/startup/shutdown) calls the
 //! lifecycle primitives in [`lifecycle`] directly.
@@ -17,13 +16,8 @@
 
 pub mod lifecycle;
 pub mod pane;
-mod quiescence_probe;
+mod prompt_probe;
 pub mod transport;
 
-pub use quiescence_probe::{
-    PaneQuiescenceProbe, PromptReadinessEvaluation, wait_for_quiescent_pane_three_state,
-};
-pub use transport::{
-    ReadinessNotifier, TmuxOutputView, TmuxTransport, render_paste_text,
-    wait_error_to_outcome_for_test,
-};
+pub use prompt_probe::{PanePromptProbe, PromptReadinessEvaluation};
+pub use transport::{ReadinessNotifier, TmuxOutputView, TmuxTransport, render_paste_text};
