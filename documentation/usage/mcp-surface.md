@@ -30,9 +30,12 @@ layout.
 
 ## Delivery behavior
 
-- ACP delivery bounds are configured per-coder under
-  `[coders.<id>.acp]` (`prime-timeout-ms`); v1 has no per-call
-  operator override.
+- ACP delivery has no elapsed-time bound of its own; ACP accepts the
+  `prime-timeout-ms` key under `[coders.<id>.acp]` for cross-transport
+  symmetry and forwards it onto the shared `DeliveryEnvelope.prime_timeout_ms`
+  field, but the ACP transport does not consume or bound on it today. The
+  field is retained pending a coordinated cross-transport removal. v1
+  has no per-call operator override.
 - Tmux delivery bounds are configured per-coder under
   `[coders.<id>.tmux]` (`prime-timeout-ms`, `readiness-timeout-ms`);
   v1 has no per-call operator override. `readiness-timeout-ms` bounds

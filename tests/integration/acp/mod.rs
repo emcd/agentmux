@@ -3,7 +3,6 @@ mod generation_fence;
 pub(crate) mod helpers;
 mod lifecycle;
 mod look;
-mod prime_timeout;
 mod prompt_wait;
 mod raww;
 mod recovery;

@@ -63,35 +63,16 @@ pub(super) struct RawAcpTarget {
     pub(super) command: Option<String>,
     #[serde(default)]
     pub(super) url: Option<String>,
-    /// Per-coder bounded prime window for the ACP per-turn prompt
-    /// completion wait. When `Some`, the ACP delivery task resolves
-    /// the wait as `SendOutcome::Timeout` with
-    /// `reason_code = "acp_turn_timeout"` if no terminal
-    /// `PromptCompletion` AND no `pending_choice_outcome` is observed
-    /// within the configured milliseconds. The per-target readiness
-    /// is then latched to `Unavailable` (matching the
-    /// `PromptCompletion::ConnectionClosed` path) and a
-    /// `delivery_prime_timeout` inscription is emitted carrying
-    /// `target_session`, `timeout_ms`, and `prime_wait_elapsed_ms`.
-    /// The transport signals respawn-needed so the worker can
-    /// re-bootstrap the runtime on the same path used for connection
-    /// closure.
+    /// Per-coder `prime_timeout_ms` for cross-transport symmetry. ACP has
+    /// no elapsed-time bound of its own today; the field is still
+    /// accepted at the typed-config layer and forwarded onto the
+    /// shared `DeliveryEnvelope.prime_timeout_ms` so the loader does
+    /// not reject legacy bundle configs, but the ACP transport does
+    /// not consume or bound on it. The field is retained pending a
+    /// coordinated cross-transport removal.
     ///
-    /// The prime timer does NOT fire while a `pending_choice_outcome`
-    /// is in flight; the timer continues to count down without firing
-    /// until the choice resolves or the turn completes. Pending choice
-    /// requests remain non-expiring as long as relay and worker state
-    /// remain healthy.
-    ///
-    /// Absent (default) preserves the unbounded wait. TOML key under
-    /// `[coders.<id>.acp]` is `prime-timeout-ms` — symmetric with the
-    /// Tmux-side `[coders.<id>.tmux].prime-timeout-ms` key; the table
-    /// itself namespaces the transport.
-    ///
-    /// Renamed from the legacy `turn-timeout-ms` (pre-existing field
-    /// that was declared but never consumed by the runtime; the new
-    /// name makes the field load-bearing on the ACP delivery task).
-    /// Legacy configs using `turn-timeout-ms` fail the
+    /// TOML key under `[coders.<id>.acp]` is `prime-timeout-ms`. Legacy
+    /// `turn-timeout-ms` configs fail the raw loader's
     /// `deny_unknown_fields` check at bundle load.
     #[serde(default)]
     pub(super) prime_timeout_ms: Option<u64>,

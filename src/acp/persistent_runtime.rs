@@ -3,11 +3,16 @@
 //! handle it returns.
 //!
 //! Extracted from `crate::acp::transport` so the transport module can focus on
-//! per-call delivery mechanics (write channel, prime timer, outcome mapping) and
-//! so the bootstrap path sits next to its companions
+//! per-call delivery mechanics (write channel, outcome mapping, readiness
+//! transitions) and so the bootstrap path sits next to its companions
 //! ([`crate::acp::state::load_persisted_acp_session_id`] and
 //! [`crate::acp::state::persist_acp_session_id`]) without crossing the
-//! transport-module boundary.
+//! transport-module boundary. ACP delivery has no per-turn elapsed-time
+//! bound of its own — the wait resolves on completion, agent close,
+//! dispatcher refusal, serialization failure, or shutdown. The relay's
+//! submission-timeout watchdog bounds the supervised code's runtime
+//! only after it is armed, which it becomes when the relay records
+//! submission evidence at write time.
 
 use std::path::Path;
 
