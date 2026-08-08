@@ -499,11 +499,14 @@ fn count_bravo_queued_inscriptions(path: &std::path::Path) -> usize {
 /// backlog, and would age it toward a warning that says a target is not draining
 /// while it is in fact being written to.
 ///
-/// This asserts the scoping rule rather than concrete queue depths, because the
-/// relay currently authorizes a member the instant its worker receives it — so
-/// almost nothing stays `Pending` long enough to count. The count and dedup
-/// assertions return once authorization is gated on readiness; see
-/// `agentmux:todos/relay/130`.
+/// Both halves are asserted against one report, so the counts and the exclusion
+/// cannot be satisfied by different states of the queue. `bravo@party` is a tmux
+/// target with no server behind its socket: it is unreachable from the first
+/// observation, and under a long dwell its members are held rather than
+/// resolved, which is a `Pending` that lasts as long as the test needs.
+/// `user@GLOBAL` is the UI target, which is always ready and always healthy, so
+/// its member authorizes immediately and stays in flight for the reconnect
+/// timeout.
 #[test]
 fn undelivered_reporting_counts_pending_entries_and_not_authorized_ones() {
     use agentmux::relay::{UndeliveredReporting, report_undelivered_queue};
@@ -511,6 +514,7 @@ fn undelivered_reporting_counts_pending_entries_and_not_authorized_ones() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    super::configure_long_unreachable_dwell();
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -524,65 +528,13 @@ fn undelivered_reporting_counts_pending_entries_and_not_authorized_ones() {
         "an idle relay emits no aggregate"
     );
 
-    dispatch_request(
-        RelayRequest::Send {
-            request_id: None,
-            requester_session: "alpha".to_string(),
-            message: "hello".to_string(),
-            targets: vec!["user@GLOBAL".to_string()],
-            broadcast: false,
-            quiet_window_ms: Some(1),
-            on_behalf_of: None,
-        },
-        &config_root,
-        "party",
-        &tmux_socket,
-    )
-    .expect("send response");
-
-    // The member is admitted and holds quota, but its worker authorizes it
-    // immediately, so it is executing rather than waiting. A report that counted
-    // reservations would name it here; one scoped to `Pending` does not.
-    std::thread::sleep(std::time::Duration::from_millis(300));
-    report_undelivered_queue(reporting);
-    let aggregates = read_inscriptions(&inscriptions, "relay.delivery.undelivered");
-    assert!(
-        aggregates
-            .iter()
-            .all(|line| !line.contains("\"target_session\":\"user@GLOBAL\"")),
-        "an authorized member is executing, not backlogged, so it is not reported \
-         as undelivered: {aggregates:?}"
-    );
-}
-
-/// A target with nothing `Pending` produces no warning, however much quota its
-/// executing members still hold.
-///
-/// The per-target dedup this once asserted — three entries crossing a threshold
-/// together warning once rather than once each — needs entries that stay
-/// `Pending`, which the relay cannot currently produce because it authorizes on
-/// receipt. What survives is the half that is still reachable: a warning is a
-/// statement about a target that is *not draining*, so members that have been
-/// handed over must not produce one. See `agentmux:todos/relay/130` for
-/// restoring the dedup and count assertions.
-#[test]
-fn an_authorized_member_produces_no_undelivered_warning() {
-    use agentmux::relay::{UndeliveredReporting, report_undelivered_queue};
-
-    let temporary = TempDir::new().expect("temporary");
-    let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
-    let config_root = write_bundle(&temporary, "party");
-    write_tui_configuration(&config_root, "default");
-    let tmux_socket = temporary.path().join("tmux.sock");
-
-    for _ in 0..3 {
+    let send = |target: &str| {
         dispatch_request(
             RelayRequest::Send {
                 request_id: None,
                 requester_session: "alpha".to_string(),
                 message: "hello".to_string(),
-                targets: vec!["user@GLOBAL".to_string()],
+                targets: vec![target.to_string()],
                 broadcast: false,
                 quiet_window_ms: Some(1),
                 on_behalf_of: None,
@@ -592,24 +544,168 @@ fn an_authorized_member_produces_no_undelivered_warning() {
             &tmux_socket,
         )
         .expect("send response");
+    };
+    for _ in 0..3 {
+        send("bravo@party");
     }
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    send("user@GLOBAL");
 
-    // A zero threshold makes any `Pending` entry already past it, so this is the
-    // most permissive possible condition for emitting a warning. Nothing is
-    // emitted anyway, because none of these members is waiting.
+    // Several worker poll ticks: long enough for every member to have reached
+    // the state it will hold, far short of the dwell.
+    std::thread::sleep(std::time::Duration::from_millis(600));
+    report_undelivered_queue(reporting);
+
+    // Teeth for the count: nothing resolved during the window, so three is the
+    // depth of a queue that is still waiting rather than what a partial drain
+    // happened to leave behind.
+    assert_eq!(
+        count_inscriptions(&inscriptions, "relay.send.async.completed"),
+        0,
+        "no member resolves inside the dwell, so the queue depth is not a residue"
+    );
+
+    let aggregates = read_inscriptions(&inscriptions, "relay.delivery.undelivered");
+    assert_eq!(aggregates.len(), 1, "one pass emits one aggregate");
+    let record: serde_json::Value =
+        serde_json::from_str(aggregates[0].as_str()).expect("aggregate is json");
+    let details = record.get("details").expect("aggregate carries details");
+    assert_eq!(
+        details
+            .get("undelivered_envelopes_total")
+            .and_then(serde_json::Value::as_u64),
+        Some(3),
+        "the three held members are the whole backlog: {}",
+        aggregates[0]
+    );
+    assert_eq!(
+        details
+            .get("target_total")
+            .and_then(serde_json::Value::as_u64),
+        Some(1),
+        "the authorized member's target is not a backlogged target: {}",
+        aggregates[0]
+    );
+    let targets = details
+        .get("targets")
+        .and_then(serde_json::Value::as_array)
+        .expect("aggregate carries a targets array");
+    assert_eq!(
+        targets[0]
+            .get("target_session")
+            .and_then(serde_json::Value::as_str),
+        Some("bravo"),
+        "the reported target is the one whose members are waiting: {}",
+        aggregates[0]
+    );
+    assert_eq!(
+        targets[0]
+            .get("undelivered_envelopes")
+            .and_then(serde_json::Value::as_u64),
+        Some(3),
+        "all three held members are counted against their target: {}",
+        aggregates[0]
+    );
+    // An `Authorized` member is executing, not backlogged. A report that counted
+    // reservations rather than waiting would name it here.
+    assert!(
+        !aggregates[0].contains("\"target_session\":\"user@GLOBAL\""),
+        "an authorized member is not reported as undelivered: {}",
+        aggregates[0]
+    );
+}
+
+/// A warning is a condition an operator acts on, not a per-message notification.
+///
+/// Three entries crossing the threshold together warn once rather than once
+/// each, and that suppression persists across passes — the warned flag exists
+/// precisely to stop a recurring report from re-announcing a condition already
+/// announced. The aggregate carries no such flag and repeats every pass, which
+/// is what makes it usable for watching a queue move. Asserting both against the
+/// same two passes is what separates "deduplicated" from "emitted once because
+/// nothing was reported at all".
+#[test]
+fn a_backlogged_target_warns_once_while_the_aggregate_repeats() {
+    use agentmux::relay::{UndeliveredReporting, report_undelivered_queue};
+
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    super::configure_long_unreachable_dwell();
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let send = |target: &str| {
+        dispatch_request(
+            RelayRequest::Send {
+                request_id: None,
+                requester_session: "alpha".to_string(),
+                message: "hello".to_string(),
+                targets: vec![target.to_string()],
+                broadcast: false,
+                quiet_window_ms: Some(1),
+                on_behalf_of: None,
+            },
+            &config_root,
+            "party",
+            &tmux_socket,
+        )
+        .expect("send response");
+    };
+    for _ in 0..3 {
+        send("bravo@party");
+    }
+    send("user@GLOBAL");
+    std::thread::sleep(std::time::Duration::from_millis(600));
+
+    // A zero threshold makes any `Pending` entry already past it, so every
+    // warning this run withholds is withheld by the dedup rather than by the
+    // clock.
     let reporting = UndeliveredReporting {
         warning: std::time::Duration::ZERO,
         ..UndeliveredReporting::default()
     };
     report_undelivered_queue(reporting);
+    report_undelivered_queue(reporting);
+
     let warnings = read_inscriptions(&inscriptions, "relay.delivery.undelivered.warning");
+    assert_eq!(
+        warnings.len(),
+        1,
+        "one warning covers a target's whole backlog and does not repeat: {warnings:?}"
+    );
+    let record: serde_json::Value =
+        serde_json::from_str(warnings[0].as_str()).expect("warning is json");
+    let details = record.get("details").expect("warning carries details");
+    assert_eq!(
+        details
+            .get("target_session")
+            .and_then(serde_json::Value::as_str),
+        Some("bravo"),
+        "the warning names the target that is not draining: {}",
+        warnings[0]
+    );
+    assert_eq!(
+        details
+            .get("undelivered_envelopes")
+            .and_then(serde_json::Value::as_u64),
+        Some(3),
+        "the warning carries the full waiting count, not one entry's worth: {}",
+        warnings[0]
+    );
+    // A warning names a target that is not draining. The UI member was handed
+    // over and is executing, so its target has nothing waiting to warn about —
+    // and with the threshold at zero, nothing but the scoping rule suppresses it.
     assert!(
-        warnings
-            .iter()
-            .all(|line| !line.contains("\"target_session\":\"user@GLOBAL\"")),
-        "a warning names a target that is not draining; these members were handed \
-         over and are executing: {warnings:?}"
+        !warnings[0].contains("\"target_session\":\"user@GLOBAL\""),
+        "an authorized member produces no warning: {}",
+        warnings[0]
+    );
+
+    assert_eq!(
+        count_inscriptions(&inscriptions, "relay.delivery.undelivered"),
+        2,
+        "the aggregate repeats every pass while the backlog stands"
     );
 }
 
