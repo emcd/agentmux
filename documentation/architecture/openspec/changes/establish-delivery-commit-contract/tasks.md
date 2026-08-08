@@ -32,7 +32,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Scheduling
 
-- [ ] Ensure no elapsed-time path can resolve a `Pending` entry: it leaves that state only by authorization, positively observed transport teardown, or graceful shutdown
+- [ ] Ensure no elapsed-time path can resolve a `Pending` entry whose target is reachable: it leaves that state only by authorization, positively observed transport teardown, sustained unreachability past `[delivery].unreachable-dwell-ms`, or graceful shutdown
 - [ ] Implement per-target FIFO covering mail and raw as one order
 - [ ] Implement byte-budgeted round-robin across targets: canonical payload bytes as the cost unit, exactly one quantum of credit per visit with no carry-over, ineligible targets skipped
 - [ ] Form batches against both handover components, stopping at whichever of envelope count or canonical payload bytes binds first

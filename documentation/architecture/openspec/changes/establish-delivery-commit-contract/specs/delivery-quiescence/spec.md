@@ -241,14 +241,28 @@ Fairness is unaffected and slightly stronger: every eligible target is visited
 each rotation and receives a full quantum, so no target can be starved and none
 can bank credit to monopolise a later rotation.
 
-**No elapsed duration SHALL resolve a `Pending` entry.** A `Pending` entry leaves
-that state only by being authorized, by its target's transport being positively
-observed torn down without replacement, or by graceful relay shutdown. **No
-configuration key SHALL bound this wait, and none may be introduced.** The length
-of a target's turn is not evidence about the target, and such a bound would
-terminalize the entry and release its quota — discarding a message that would have
-been delivered once the target came back. The relay reports a long wait through
-undelivered-queue inscriptions and never resolves one.
+**No elapsed duration SHALL resolve a `Pending` entry whose target is
+reachable.** A `Pending` entry leaves that state only by being authorized, by its
+target's transport being positively observed torn down without replacement, by
+that transport being continuously observed `Unreachable` for longer than
+`[delivery].unreachable-dwell-ms`, or by graceful relay shutdown. The
+unreachability case is specified in full by the `transport-abstraction`
+capability, which owns the health axis; it is named here so this enumeration is
+exhaustive.
+
+That case is a concession to observation, **not an admission of delivery
+timeouts.** The distinction is exact: a forbidden bound lets duration
+*substitute* for an observation — nothing was seen, so after N seconds a verdict
+is guessed. The dwell lets duration *qualify* an observation that was actually
+made, repeatedly. Sustained unreachability is itself evidence; sustained busyness
+is not.
+
+**No configuration key SHALL bound how long a reachable target may leave an entry
+`Pending`, and none may be introduced.** The length of a target's turn is not
+evidence about the target, and such a bound would terminalize the entry and
+release its quota — discarding a message that would have been delivered once the
+target came back. The relay reports a long wait through undelivered-queue
+inscriptions and never resolves one.
 
 Consequently the relay guarantees that every accepted message resolves **at most
 once**, not that every accepted message eventually resolves. Uniqueness is held by
@@ -280,7 +294,9 @@ any coder.
 
 - **WHEN** an entry has been `Pending` for an arbitrarily long duration
 - **AND** it has not been authorized, its target's transport has not been
-  positively observed torn down, and the relay has not shut down
+  positively observed torn down, its target's transport has not been
+  continuously `Unreachable` past `[delivery].unreachable-dwell-ms`, and the
+  relay has not shut down
 - **THEN** it remains `Pending`
 - **AND** no terminal outcome is issued and no admission quota is released for it
 
