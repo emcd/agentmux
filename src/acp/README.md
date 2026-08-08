@@ -131,11 +131,12 @@ declaring a slow turn a non-delivery.
 
 Wedge detection is intentionally not applied to the ACP path. ACP
 does no snapshot polling, so there is no settled non-prompt frame to
-classify and no empty-pane mismatch to compare against. Pty is now
-the only transport that classifies `wedged` at all — Tmux stopped
-doing so in `bound-tmux-readiness-wait`, because a settled non-prompt
-frame cannot be told apart from a permission dialog or a coder
-working silently. ACP has no elapsed-time bound today; the relay's
+classify and no empty-pane mismatch to compare against. No transport
+classifies `wedged` any more — Tmux stopped in
+`bound-tmux-readiness-wait` and Pty's classifier was deleted with the
+rest of the wedge machinery, because a settled non-prompt frame cannot
+be told apart from a permission dialog or a coder working silently.
+ACP has no elapsed-time bound today; the relay's
 submission-timeout watchdog (when armed) bounds the supervised code's
 runtime instead, but arming depends on relay-side submission-evidence
 work that is not yet in this slice.
