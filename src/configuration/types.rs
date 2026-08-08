@@ -1,4 +1,3 @@
-use std::ops::RangeInclusive;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -233,26 +232,6 @@ impl TargetConfiguration {
             Self::Ui | Self::Pubsub => false,
         }
     }
-
-    /// The bound on this target's entire readiness wait, mirrored onto
-    /// [`crate::transports::DeliveryEnvelope::readiness_timeout_ms`] by the
-    /// relay dispatch worker.
-    ///
-    /// Only Tmux carries one. The rule is not "which transports wait" — every
-    /// coder transport does — but which can soundly report an expired bound as
-    /// *non-delivery*: Tmux injects after its readiness wait, so expiry
-    /// provably precedes delivery, while Pty writes to the master and ACP
-    /// submits the turn before theirs. Reporting a bound expiry as
-    /// non-delivery on those would report a message the target may already
-    /// have. Extending the bound to them needs a delivery contract that says
-    /// what an expiry means there — tracked as `agentmux:issues/relay/61`.
-    #[must_use]
-    pub fn readiness_timeout_ms(&self) -> Option<u64> {
-        match self {
-            Self::Tmux(tmux) => Some(tmux.readiness_timeout_ms),
-            Self::Acp(_) | Self::Pty(_) | Self::Ui | Self::Pubsub => None,
-        }
-    }
 }
 
 /// Tmux transport configuration for one bundle member.
@@ -261,63 +240,6 @@ pub struct TmuxTargetConfiguration {
     pub start_command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_readiness: Option<PromptReadinessTemplate>,
-    /// Per-coder bounded prime window for the quiescence wait. When `Some`,
-    /// the tmux transport's internal delivery task resolves the wait as
-    /// `SendOutcome::Timeout` if the target produces no observable output for
-    /// the configured milliseconds. `None` (or absent) leaves the prime window
-    /// unbounded; the wait as a whole is still bounded by
-    /// [`Self::readiness_timeout_ms`]. The key lives under
-    /// `[coders.<id>.tmux]` and is called `prime-timeout-ms` in TOML; this
-    /// field carries the integer-millisecond form.
-    ///
-    /// Mirrored onto [`crate::transports::DeliveryEnvelope::prime_timeout_ms`]
-    /// by the relay dispatch worker for tmux targets; the ACP follow-up
-    /// consumes the same envelope field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prime_timeout_ms: Option<u64>,
-    /// Per-coder bound on the entire readiness wait for a flush group. The
-    /// key lives under `[coders.<id>.tmux]` and is called
-    /// `readiness-timeout-ms` in TOML; this field carries the
-    /// integer-millisecond form with the default already resolved.
-    ///
-    /// Unlike `prime_timeout_ms` this is not opt-in. It covers the whole wait
-    /// — the prime window and any period of continuous target activity, not
-    /// merely the post-quiescence stretch — and no signal defers, extends, or
-    /// suspends it. It is the unconditional termination guarantee for a Tmux
-    /// delivery: other terminal paths remain (an opted-in prime timeout,
-    /// shutdown, a positively observed probe failure), but this is the only
-    /// one guaranteed to arrive.
-    ///
-    /// Mirrored onto
-    /// [`crate::transports::DeliveryEnvelope::readiness_timeout_ms`] by the
-    /// relay dispatch worker for tmux targets only. Transports that commit the
-    /// message before their readiness wait cannot report an expired bound as
-    /// non-delivery, so they receive `None`.
-    #[serde(default = "tmux_readiness_timeout_ms_default")]
-    pub readiness_timeout_ms: u64,
-}
-
-/// Default bound on the entire Tmux readiness wait, in milliseconds.
-///
-/// Chosen to exceed the longest plausible agent turn: a target mid-turn is
-/// legitimately not ready and its message should wait rather than fail.
-pub const TMUX_READINESS_TIMEOUT_MS_DEFAULT: u64 = 900_000;
-
-/// Inclusive range a configured Tmux readiness bound must fall within.
-///
-/// The lower bound keeps an operator from configuring a value beneath a single
-/// agent turn; the upper bound keeps the setting from re-creating the
-/// effectively unbounded wait it exists to eliminate.
-pub const TMUX_READINESS_TIMEOUT_MS_RANGE: RangeInclusive<u64> = 30_000..=3_600_000;
-
-/// Returns the default for [`TmuxTargetConfiguration::readiness_timeout_ms`].
-fn tmux_readiness_timeout_ms_default() -> u64 {
-    TMUX_READINESS_TIMEOUT_MS_DEFAULT
-}
-
-/// Returns the default value for [`PtyTargetConfiguration::wedge_detection`].
-fn wedge_detection_default_true() -> bool {
-    true
 }
 
 /// Pty transport configuration for one bundle member.
@@ -325,7 +247,7 @@ fn wedge_detection_default_true() -> bool {
 /// Pty spawns the child process under a portable-pty PTY and feeds
 /// terminal output through libghostty-vt. Per-coder config keys live
 /// under `[coders.<id>.pty]`. The validator rejects `cols = 0`,
-/// `rows = 0`, `prime-timeout-ms = 0`, and the mutual-exclusion rule
+/// `rows = 0`, and the mutual-exclusion rule
 /// between `[coders.<id>.pty]` and `[coders.<id>.tmux]` /
 /// `[coders.<id>.acp]` (exactly one must be set, never both, never
 /// neither).
@@ -340,23 +262,6 @@ pub struct PtyTargetConfiguration {
     pub resume_command: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_readiness: Option<PromptReadinessTemplate>,
-    /// Per-coder bounded prime window for the Pty quiescence wait.
-    /// Same semantics as the Tmux / ACP `prime_timeout_ms` field.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prime_timeout_ms: Option<u64>,
-    /// Per-coder wedge detection switch (default true). Gates only the
-    /// wedge classifier, not the prime timeout, which fires on an
-    /// empty-pane mismatch independently.
-    ///
-    /// Pty is the last transport carrying this classifier. It infers a
-    /// terminal failure from the absence of change in rendered content,
-    /// which cannot distinguish a hung target from a permission dialog, a
-    /// compose box, or a target working without output. Tmux dropped it for
-    /// that reason; Pty keeps it only because it is Pty's sole terminal path
-    /// until `agentmux:issues/relay/61` supplies a Pty readiness bound, at
-    /// which point the bound and this key go together.
-    #[serde(default = "wedge_detection_default_true")]
-    pub wedge_detection: bool,
     /// Per-coder grid columns. Default 120.
     #[serde(default = "pty_cols_default")]
     pub cols: u16,
@@ -389,25 +294,6 @@ pub struct AcpTargetConfiguration {
     pub command: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
-    /// Per-coder `prime_timeout_ms` for cross-transport symmetry. ACP has
-    /// no elapsed-time bound of its own today; the field is still
-    /// accepted at the typed-config layer and forwarded onto the
-    /// shared `DeliveryEnvelope.prime_timeout_ms`, but the ACP
-    /// transport does not consume or bound on it. The field is
-    /// retained pending a coordinated cross-transport removal.
-    ///
-    /// The key lives under `[coders.<id>.acp]` and is called
-    /// `prime-timeout-ms` in TOML — symmetric with the Tmux-side
-    /// `[coders.<id>.tmux].prime-timeout-ms` key; the table itself
-    /// namespaces the transport.
-    ///
-    /// Renamed from the pre-existing `turn_timeout_ms` field (which was
-    /// never consumed by the runtime; the pre-existing field was dead
-    /// baggage). The TOML key is therefore `prime-timeout-ms`, not
-    /// `turn-timeout-ms`; legacy configs using `turn-timeout-ms` fail
-    /// the raw loader's `deny_unknown_fields` check at bundle load.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prime_timeout_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub headers: Vec<NameValueEntry>,
 }

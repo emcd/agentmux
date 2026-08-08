@@ -41,8 +41,6 @@ fn shared_with(script: Vec<SnapshotResponse>) -> (PtyShared, thread::JoinHandle<
             prompt_regex: Some(Regex::new(r"READY").expect("regex")),
             prompt_inspect_lines: 3,
             prompt_idle_column: Some(2),
-            prime_timeout_ms: None,
-            wedge_detection: true,
         },
         snapshot_tx: tx,
         child_exited: Arc::new(std::sync::atomic::AtomicBool::new(false)),

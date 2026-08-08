@@ -35,9 +35,6 @@ fn bundle_with_sessions(sessions: &[&str]) -> BundleConfiguration {
                     agentmux::configuration::TmuxTargetConfiguration {
                         start_command: "sh -lc 'true'".to_string(),
                         prompt_readiness: None,
-                        prime_timeout_ms: None,
-                        readiness_timeout_ms:
-                            agentmux::configuration::TMUX_READINESS_TIMEOUT_MS_DEFAULT,
                     },
                 ),
                 coder_session_id: None,
@@ -67,9 +64,6 @@ fn bundle_with_directories(
                         agentmux::configuration::TmuxTargetConfiguration {
                             start_command: "sh -lc 'true'".to_string(),
                             prompt_readiness: None,
-                            prime_timeout_ms: None,
-                            readiness_timeout_ms:
-                                agentmux::configuration::TMUX_READINESS_TIMEOUT_MS_DEFAULT,
                         },
                     ),
                     coder_session_id: None,

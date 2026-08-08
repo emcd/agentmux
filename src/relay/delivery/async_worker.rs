@@ -950,8 +950,6 @@ mod tests {
             target: TargetConfiguration::Tmux(crate::configuration::TmuxTargetConfiguration {
                 start_command: format!("run-{id}"),
                 prompt_readiness: None,
-                prime_timeout_ms: None,
-                readiness_timeout_ms: crate::configuration::TMUX_READINESS_TIMEOUT_MS_DEFAULT,
             }),
             coder_session_id: None,
             policy_id: None,

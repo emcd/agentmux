@@ -40,19 +40,6 @@ pub(super) struct RawTmuxTarget {
     pub(super) prompt_inspect_lines: Option<usize>,
     #[serde(default)]
     pub(super) prompt_idle_column: Option<usize>,
-    /// Per-coder bounded prime window for the tmux quiescence wait. When
-    /// `Some`, the tmux transport's internal delivery task resolves the
-    /// wait as `SendOutcome::Timeout` if no observable output is produced
-    /// within the configured milliseconds. `None` (absent) issues no
-    /// prime-window verdict; it does not make the wait unbounded, because
-    /// `readiness_timeout_ms` applies regardless.
-    #[serde(default)]
-    pub(super) prime_timeout_ms: Option<u64>,
-    /// Per-coder bound on the entire readiness wait for a flush group.
-    /// Absent takes [`TMUX_READINESS_TIMEOUT_MS_DEFAULT`]; a present value
-    /// is validated against [`TMUX_READINESS_TIMEOUT_MS_RANGE`].
-    #[serde(default)]
-    pub(super) readiness_timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -63,19 +50,6 @@ pub(super) struct RawAcpTarget {
     pub(super) command: Option<String>,
     #[serde(default)]
     pub(super) url: Option<String>,
-    /// Per-coder `prime_timeout_ms` for cross-transport symmetry. ACP has
-    /// no elapsed-time bound of its own today; the field is still
-    /// accepted at the typed-config layer and forwarded onto the
-    /// shared `DeliveryEnvelope.prime_timeout_ms` so the loader does
-    /// not reject legacy bundle configs, but the ACP transport does
-    /// not consume or bound on it. The field is retained pending a
-    /// coordinated cross-transport removal.
-    ///
-    /// TOML key under `[coders.<id>.acp]` is `prime-timeout-ms`. Legacy
-    /// `turn-timeout-ms` configs fail the raw loader's
-    /// `deny_unknown_fields` check at bundle load.
-    #[serde(default)]
-    pub(super) prime_timeout_ms: Option<u64>,
     #[serde(default)]
     pub(super) headers: Vec<NameValueEntry>,
 }
@@ -94,15 +68,6 @@ pub(super) struct RawPtyTarget {
     pub(super) prompt_inspect_lines: Option<usize>,
     #[serde(default)]
     pub(super) prompt_idle_column: Option<usize>,
-    /// Per-coder bounded prime window for the Pty quiescence wait.
-    /// Same semantics as the Tmux / ACP `prime_timeout_ms` field.
-    #[serde(default)]
-    pub(super) prime_timeout_ms: Option<u64>,
-    /// Per-coder wedge detection switch. Defaults to `true` (enabled)
-    /// when absent; operators MAY set `false` to opt out and preserve
-    /// the prior unbounded-wait behavior for a wedged pane.
-    #[serde(default)]
-    pub(super) wedge_detection: Option<bool>,
     /// Per-coder grid columns (TOML key `cols`). Default 120.
     #[serde(default)]
     pub(super) cols: Option<u16>,
@@ -138,8 +103,6 @@ pub(super) struct TmuxTarget {
     pub(super) prompt_regex: Option<String>,
     pub(super) prompt_inspect_lines: Option<usize>,
     pub(super) prompt_idle_column: Option<usize>,
-    pub(super) prime_timeout_ms: Option<u64>,
-    pub(super) readiness_timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug)]
@@ -147,7 +110,6 @@ pub(super) struct AcpTarget {
     pub(super) channel: AcpChannel,
     pub(super) command: Option<String>,
     pub(super) url: Option<String>,
-    pub(super) prime_timeout_ms: Option<u64>,
     pub(super) headers: Vec<NameValueEntry>,
 }
 
@@ -159,8 +121,6 @@ pub(super) struct PtyTarget {
     pub(super) prompt_regex: Option<String>,
     pub(super) prompt_inspect_lines: Option<usize>,
     pub(super) prompt_idle_column: Option<usize>,
-    pub(super) prime_timeout_ms: Option<u64>,
-    pub(super) wedge_detection: Option<bool>,
     pub(super) cols: Option<u16>,
     pub(super) rows: Option<u16>,
     pub(super) term_protocol: Option<TermProtocol>,

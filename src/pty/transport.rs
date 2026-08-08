@@ -100,8 +100,6 @@ pub struct PtyTargetConfiguration {
     pub prompt_readiness: Option<crate::configuration::PromptReadinessTemplate>,
     pub cols: u16,
     pub rows: u16,
-    pub prime_timeout_ms: Option<u64>,
-    pub wedge_detection: bool,
     /// Optional working directory. When set, the worker `chdir`s
     /// into it before spawning the child. When `None`, the worker
     /// uses the bundle's runtime directory (the relay passes that
@@ -208,12 +206,15 @@ impl std::fmt::Debug for PtyTransport {
 
 impl PtyTransport {
     /// Constructs a new PtyTransport with the given target member and
-    /// per-coder configuration. Carries the configured
-    /// initial/resume command, prompt-readiness template, grid dims,
-    /// prime-timeout, wedge switch, and optional working directory
-    /// into the shared `PtyConfigSnapshot` so the runtime probe
-    /// (both cross-thread and worker-local) sees the same per-coder
-    /// values.
+    /// per-coder configuration.
+    ///
+    /// The per-coder values split by who needs them. The target id, grid
+    /// dimensions, and compiled prompt-readiness template go into the shared
+    /// `PtyConfigSnapshot`, because the runtime probe reads them from both the
+    /// worker thread and cross-thread callers and both must see the same
+    /// values. The start command, working directory, and TERM protocol stay on
+    /// the transport itself: they are consumed once, at child spawn, and the
+    /// probe has no use for them.
     ///
     /// `mirror_state` is the relay-constructed closure that mirrors
     /// per-turn readiness transitions into the relay's global
@@ -249,8 +250,6 @@ impl PtyTransport {
                 prompt_regex,
                 prompt_inspect_lines,
                 prompt_idle_column,
-                prime_timeout_ms: config.prime_timeout_ms,
-                wedge_detection: config.wedge_detection,
             },
             snapshot_tx: mpsc::channel(64).0,
             child_exited: Arc::new(AtomicBool::new(false)),

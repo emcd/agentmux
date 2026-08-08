@@ -11,8 +11,7 @@ use super::{
     },
     types::{
         AcpChannel, AcpTargetConfiguration, NameValueEntry, PromptReadinessTemplate,
-        PtyTargetConfiguration, SessionType, TMUX_READINESS_TIMEOUT_MS_DEFAULT,
-        TMUX_READINESS_TIMEOUT_MS_RANGE, TargetConfiguration, TmuxTargetConfiguration,
+        PtyTargetConfiguration, SessionType, TargetConfiguration, TmuxTargetConfiguration,
     },
 };
 
@@ -63,10 +62,6 @@ pub(super) fn build_session_target(
                         TargetConfiguration::Tmux(TmuxTargetConfiguration {
                             start_command,
                             prompt_readiness,
-                            prime_timeout_ms: tmux_target.prime_timeout_ms,
-                            readiness_timeout_ms: tmux_target
-                                .readiness_timeout_ms
-                                .unwrap_or(TMUX_READINESS_TIMEOUT_MS_DEFAULT),
                         }),
                         coder_session_id,
                     ))
@@ -76,7 +71,6 @@ pub(super) fn build_session_target(
                         channel: acp_target.channel,
                         command: acp_target.command.clone(),
                         url: acp_target.url.clone(),
-                        prime_timeout_ms: acp_target.prime_timeout_ms,
                         headers: acp_target.headers.clone(),
                     }),
                     coder_session_id,
@@ -100,8 +94,6 @@ pub(super) fn build_session_target(
                             initial_command: start_command.clone(),
                             resume_command: start_command,
                             prompt_readiness,
-                            prime_timeout_ms: pty_target.prime_timeout_ms,
-                            wedge_detection: pty_target.wedge_detection.unwrap_or(true),
                             cols: pty_target.cols.unwrap_or(120),
                             rows: pty_target.rows.unwrap_or(40),
                             term_protocol: pty_target.term_protocol.unwrap_or_default(),
@@ -266,35 +258,12 @@ pub(super) fn validate_tmux_target(
         ));
     }
 
-    if matches!(target.prime_timeout_ms, Some(0)) {
-        return Err(ConfigurationError::invalid(
-            coders_path,
-            format!("coder '{coder_id}' tmux prime-timeout-ms must be greater than zero"),
-        ));
-    }
-
-    if let Some(readiness_timeout_ms) = target.readiness_timeout_ms
-        && !TMUX_READINESS_TIMEOUT_MS_RANGE.contains(&readiness_timeout_ms)
-    {
-        let minimum = TMUX_READINESS_TIMEOUT_MS_RANGE.start();
-        let maximum = TMUX_READINESS_TIMEOUT_MS_RANGE.end();
-        return Err(ConfigurationError::invalid(
-            coders_path,
-            format!(
-                "coder '{coder_id}' tmux readiness-timeout-ms must be between \
-                 {minimum} and {maximum} inclusive (got {readiness_timeout_ms})"
-            ),
-        ));
-    }
-
     Ok(TmuxTarget {
         initial_command: target.initial_command,
         resume_command: target.resume_command,
         prompt_regex: target.prompt_regex,
         prompt_inspect_lines: target.prompt_inspect_lines,
         prompt_idle_column: target.prompt_idle_column,
-        prime_timeout_ms: target.prime_timeout_ms,
-        readiness_timeout_ms: target.readiness_timeout_ms,
     })
 }
 
@@ -303,13 +272,6 @@ pub(super) fn validate_acp_target(
     coders_path: &Path,
     coder_id: &str,
 ) -> Result<AcpTarget, ConfigurationError> {
-    if matches!(target.prime_timeout_ms, Some(0)) {
-        return Err(ConfigurationError::invalid(
-            coders_path,
-            format!("coder '{coder_id}' ACP prime-timeout-ms must be greater than zero"),
-        ));
-    }
-
     match target.channel {
         AcpChannel::Stdio => {
             let Some(command) = target.command.as_deref() else {
@@ -364,7 +326,6 @@ pub(super) fn validate_acp_target(
         channel: target.channel,
         command: target.command,
         url: target.url,
-        prime_timeout_ms: target.prime_timeout_ms,
         headers: target.headers,
     })
 }
@@ -547,12 +508,6 @@ pub(super) fn validate_pty_target(
             format!("coder '{coder_id}' pty prompt-inspect-lines must be greater than zero"),
         ));
     }
-    if matches!(target.prime_timeout_ms, Some(0)) {
-        return Err(ConfigurationError::invalid(
-            coders_path,
-            format!("coder '{coder_id}' pty prime-timeout-ms must be greater than zero"),
-        ));
-    }
     if matches!(target.cols, Some(0)) {
         return Err(ConfigurationError::invalid(
             coders_path,
@@ -571,8 +526,6 @@ pub(super) fn validate_pty_target(
         prompt_regex: target.prompt_regex,
         prompt_inspect_lines: target.prompt_inspect_lines,
         prompt_idle_column: target.prompt_idle_column,
-        prime_timeout_ms: target.prime_timeout_ms,
-        wedge_detection: target.wedge_detection,
         cols: target.cols,
         rows: target.rows,
         term_protocol: target.term_protocol,

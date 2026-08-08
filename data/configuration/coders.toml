@@ -78,6 +78,4 @@ command = 'opencode acp'
 # prompt-inspect-lines = 3
 # cols = 120
 # rows = 40
-# prime-timeout-ms = 30000
-# wedge-detection = true
 # term-protocol = 'xterm-kitty'

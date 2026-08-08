@@ -30,21 +30,15 @@ layout.
 
 ## Delivery behavior
 
-- ACP delivery has no elapsed-time bound of its own; ACP accepts the
-  `prime-timeout-ms` key under `[coders.<id>.acp]` for cross-transport
-  symmetry and forwards it onto the shared `DeliveryEnvelope.prime_timeout_ms`
-  field, but the ACP transport does not consume or bound on it today. The
-  field is retained pending a coordinated cross-transport removal. v1
-  has no per-call operator override.
-- Tmux delivery bounds are configured per-coder under
-  `[coders.<id>.tmux]` (`prime-timeout-ms`, `readiness-timeout-ms`);
-  v1 has no per-call operator override. `readiness-timeout-ms` bounds
-  the whole wait and always applies; `prime-timeout-ms` is opt-in.
-  Tmux has no `wedge-detection` key.
+- No elapsed-time bound applies to a delivery's wait on a target that is
+  reachable but not ready, on any transport, and there is no per-call
+  operator override. What is bounded there is the queue rather than the
+  wait: per-target admission quota in the `relay.toml` `[delivery]` table.
+  A continuously unreachable target is bounded separately — its messages
+  resolve `not_submitted` after `[delivery].unreachable-dwell-ms`.
 - Pty sessions use the same look bounds as Tmux (the relay truncates
-  to `mode.lines` rows). Pty delivery bounds are configured per-coder
-  under `[coders.<id>.pty]` (`prime-timeout-ms`, `wedge-detection`,
-  `cols`, `rows`); v1 has no per-call operator override.
+  to `mode.lines` rows). Pty grid dimensions are configured per-coder
+  under `[coders.<id>.pty]` (`cols`, `rows`).
 - Terminal completion is correlated out-of-band by `message_id`.
 
 ## Association resolution for `host mcp`
