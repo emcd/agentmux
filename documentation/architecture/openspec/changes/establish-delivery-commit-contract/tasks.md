@@ -104,7 +104,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Per-transport
 
-- [ ] Pty: move the write after the partition; buffer then write; one unit per member; resolve each member from its own evidence
+- [x] Pty: move the write after the partition; buffer then write; one unit per member; resolve each member from its own evidence
 - [x] Pty: delete the wedge classifier and the prime wait
 - [x] Tmux: delete the readiness bound, the prime wait, and the quiescence wait; keep per-unit partition and outcomes, which are already correct
 - [ ] ACP: remove the staging queue so an authorized batch starts a supervised executor synchronously
