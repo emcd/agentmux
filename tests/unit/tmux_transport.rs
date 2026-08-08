@@ -26,8 +26,6 @@ fn envelope(is_receipt: bool) -> DeliveryEnvelope {
         append_enter: true,
         choice_decider_sessions: Vec::new(),
         quiet_window: std::time::Duration::from_millis(50),
-        prime_timeout_ms: None,
-        readiness_timeout_ms: None,
         is_receipt,
     }
 }

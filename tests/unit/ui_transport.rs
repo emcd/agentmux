@@ -42,8 +42,6 @@ fn ui_envelope() -> DeliveryEnvelope {
         append_enter: true,
         choice_decider_sessions: Vec::new(),
         quiet_window: Duration::from_millis(1),
-        prime_timeout_ms: None,
-        readiness_timeout_ms: None,
         is_receipt: false,
     }
 }
@@ -214,8 +212,6 @@ fn ui_incoming_message_emits_bare_canonical_identity_never_decorated() {
         append_enter: true,
         choice_decider_sessions: Vec::new(),
         quiet_window: Duration::from_millis(1),
-        prime_timeout_ms: None,
-        readiness_timeout_ms: None,
         is_receipt: false,
     };
 

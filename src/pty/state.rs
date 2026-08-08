@@ -23,9 +23,6 @@ pub struct PtyConfigSnapshot {
     pub prompt_regex: Option<Regex>,
     pub prompt_inspect_lines: u16,
     pub prompt_idle_column: Option<u16>,
-    /// Retained until the shared configuration cleanup removes these inputs.
-    pub prime_timeout_ms: Option<u64>,
-    pub wedge_detection: bool,
 }
 
 /// Snapshot request routed from the look path or readiness observer through

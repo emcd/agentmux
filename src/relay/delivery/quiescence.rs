@@ -5,10 +5,7 @@
 //! before each flush group; this module keeps the relay-owned scheduling config
 //! the delivery handlers populate. [`QuiescenceOptions`] rides on the async
 //! delivery task (constructed by the `send`/`raww` handlers) and is unpacked
-//! into the `DeliveryEnvelope`'s `quiet_window` at the worker. The bounded
-//! prime window and wedge detection live on the per-coder tmux config and are
-//! threaded through by the dispatch worker via
-//! [`crate::transports::DeliveryEnvelope::prime_timeout_ms`].
+//! into the `DeliveryEnvelope`'s `quiet_window` at the worker.
 use std::time::Duration;
 
 const QUIET_WINDOW_MS_DEFAULT: u64 = 750;

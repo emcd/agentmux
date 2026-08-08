@@ -280,11 +280,11 @@ pub(super) fn print_send_help() {
     println!(
         "Usage: agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]\n\
          \n\
-         Send carries no per-call timeout override in v1. The timeout surfaces\n\
-         are all per-coder config keys: prime-timeout-ms under\n\
-         [coders.<id>.acp], [coders.<id>.tmux], and [coders.<id>.pty], plus\n\
-         [coders.<id>.tmux].readiness-timeout-ms, which bounds a tmux\n\
-         delivery's entire wait and applies whether or not a prime timeout\n\
-         is set."
+         Send carries no per-call timeout override, and no configuration key\n\
+         bounds how long a delivery waits on a target that is reachable but\n\
+         not ready; the relay.toml [delivery] per-target admission quota\n\
+         bounds how many such messages may accumulate. A target that is\n\
+         continuously unreachable is bounded separately: its messages resolve\n\
+         not_submitted after [delivery].unreachable-dwell-ms."
     );
 }

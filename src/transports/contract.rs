@@ -922,36 +922,6 @@ pub struct DeliveryEnvelope {
     /// ready to receive a flush group. Ignored by transports with no
     /// quiescence wait (ACP).
     pub quiet_window: Duration,
-    /// Generic bounded prime window for any prime-wait transport's internal
-    /// delivery task. The relay populates it from per-coder config
-    /// (`[coders.<id>.tmux].prime-timeout-ms` today; ACP follow-up will set
-    /// it for ACP targets) without knowing which transport will consume it,
-    /// so the envelope stays transport-neutral.
-    ///
-    /// `None` issues no prime-window verdict. It does NOT mean the wait is
-    /// unbounded: see `readiness_timeout_ms`, which applies regardless where
-    /// the transport defines one. When the prime window elapses during a
-    /// transport's prime wait with no observable output, the transport MUST
-    /// resolve its wait as `SendOutcome::Timeout` (existing outcome variant).
-    /// This field bounds only the prime window.
-    pub prime_timeout_ms: Option<u64>,
-    /// Bound on the ENTIRE wait for a flush group, for transports whose
-    /// readiness contract defines one. Covers the prime window and any period
-    /// of continuous target activity, not merely the post-quiescence stretch,
-    /// and no signal defers, extends, or suspends it.
-    ///
-    /// Populated only for transports that both define a readiness bound and
-    /// can soundly report its expiry as non-delivery. That is Tmux alone
-    /// today: Tmux injects into the pane only after its readiness wait, so an
-    /// expired bound provably precedes delivery. Pty writes every envelope to
-    /// the PTY master before its wait and ACP submits the prompt before its
-    /// wait, so on those an expired bound may follow actual delivery and
-    /// reporting non-delivery would assert what the transport cannot
-    /// establish. They receive `None`, as do UI and pubsub.
-    ///
-    /// A `None` value MUST NOT be read as that transport being bounded by
-    /// some other means. It is not. See `agentmux:issues/relay/61`.
-    pub readiness_timeout_ms: Option<u64>,
     /// True when this envelope carries a terminal-outcome receipt (a
     /// relay/system-originated notice back to the original sender for a
     /// non-delivered outcome). Carried on the envelope so per-transport

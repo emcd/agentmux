@@ -81,14 +81,10 @@ What lives in a coder entry:
 - `id` — the bundle's `coder = "<id>"` reference.
 - `[coders.tmux]` / `[coders.acp]` / `[coders.pty]` — the transport.
   The starter Tmux form carries `initial-command`, `resume-command`,
-  `prompt-regex`, `prompt-inspect-lines`, and `prompt-idle-column`;
-  `prime-timeout-ms` is an optional bounded-prime switch and
-  `readiness-timeout-ms` bounds the whole wait (see [How long a
-  delivery can wait](#how-long-a-delivery-can-wait))
-  ([`src/configuration/raw.rs`](../../src/configuration/raw.rs)).
-  `wedge-detection` is a `[coders.pty]` key only; the Tmux key of the
-  same name was removed, and a `coders.toml` that still sets it under
-  `[coders.tmux]` fails to load.
+  `prompt-regex`, `prompt-inspect-lines`, and `prompt-idle-column`
+  ([`src/configuration/raw.rs`](../../src/configuration/raw.rs)). No
+  per-coder key bounds how long a delivery waits (see [How long a
+  delivery can wait](#how-long-a-delivery-can-wait)).
 - `[[coders.environment]]` — the base merge layer for a member's spawn
   environment, applied before the bundle and session layers
   ([`src/configuration/loaders.rs:543-559`](../../src/configuration/loaders.rs)
@@ -97,38 +93,30 @@ What lives in a coder entry:
 ### How long a delivery can wait
 
 Chat delivery is async: `send` returns `queued`, and a per-target worker
-waits for the target to become ready before injecting. Two per-coder
-keys govern that wait, and they answer different questions.
+waits for the target to become ready before injecting.
 
-- `[coders.tmux].prime-timeout-ms` — optional, off by default. Bounds
-  only the *prime* window: how long a silent target may stay silent
-  before the delivery gives up. It is measured from the moment the
-  delivery starts waiting and is never reset — output from the target
-  defers the verdict for as long as the output keeps arriving, but the
-  clock does not restart.
-- `[coders.tmux].readiness-timeout-ms` — always in effect, default
-  `900000` (15 minutes), accepted range `30000`–`3600000`. Bounds the
-  wait *as a whole*, anchored when the delivery starts waiting. Nothing
-  defers, extends, or suspends it — not target activity, not a pending
-  permission dialog. When it elapses the message is not injected and
-  the sender receives a `timeout` outcome carrying a reason code
-  (`target_never_settled`, `target_unresponsive`,
-  `pending_operator_input`, or `target_not_ready`). The reason is
-  diagnostic; every one of them is the same outcome.
+**No setting bounds that wait for a target that is reachable but simply
+not ready.** Such a message waits indefinitely. The per-coder prime and
+readiness timeout keys that used to appear here have been removed: they
+bounded the wait by declaring a non-delivery, which only Tmux could do
+soundly, and which reported a busy target as a failed message rather
+than as a busy target.
 
-The default is deliberately long. A target mid-turn is legitimately not
-ready, and its message should wait rather than fail. Lower it only if
-you would rather learn about a stuck target sooner than have a slow
-turn's message eventually land.
+Reachability is a separate question from readiness, and it *is* bounded.
+A target the relay cannot reach at all — no tmux server, a dead ACP
+child — is not merely slow, and waiting will not fix it. Once a target
+has been continuously unreachable for `[delivery].unreachable-dwell-ms`
+(default `30000`), its waiting messages resolve as `not_submitted` with
+reason code `delivery_target_unreachable`, and the sender receives a
+terminal-outcome receipt. An unreachability that ends inside the dwell
+costs nothing.
 
-**This bound applies to Tmux targets only.** ACP and Pty deliveries have
-no equivalent: those transports commit the message — submitting the turn,
-or writing to the pty master — *before* their readiness wait, so an
-expired bound there could not be reported as a non-delivery without
-claiming a message was not delivered when it may have been. A Pty or ACP
-target that never becomes ready can still accumulate a pending queue
-without limit, so the unbounded-queue caution applies to those two
-transports, not to Tmux, whose entries always leave the queue.
+So: unreachable is bounded by the dwell; reachable-but-unready is not
+bounded at all. For the latter, what is bounded is the queue rather than
+the wait — per-target admission quota caps how many envelopes one unready
+target can hold, and the undelivered-queue inscriptions report the depth
+and age of what is waiting. Both live in the `relay.toml` `[delivery]`
+table.
 
 ### `policies.toml` — authorization policy presets
 

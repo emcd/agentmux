@@ -120,32 +120,23 @@ through the same reader-thread path, so coalescence also covers the
 reconnect-coalescence invariant. Look snapshots after a reconnect
 hold coherent turns rather than fragments of the same turn.
 
-## Prime timeout
+## No elapsed-time bound
 
-ACP delivery exposes a per-coder `prime_timeout_ms` configuration
-key under `[coders.<id>.acp].prime-timeout-ms`, mirroring the
-Tmux-side key for symmetry. **Today, the ACP transport has no
-turn timer that consumes this field.** The configured value is
-populated onto `DeliveryEnvelope.prime_timeout_ms` at envelope
-construction time (the shared envelope field is still present for
-cross-transport consumers) but the ACP delivery task no longer reads
-or bounds on it; the wait resolves on `PromptCompletion`, agent
-process close, dispatcher refusal, serialization failure, or
-shutdown only. The pre-existing `turn-timeout-ms` key was never
-consumed by the runtime either; legacy configs that still carry it
-fail the raw loader's `deny_unknown_fields` check at bundle load.
-
-The shared `DeliveryEnvelope.prime_timeout_ms` field is retained on
-the envelope struct until the cross-transport removal is sequenced as a
-follow-up; ACP consumers should not depend on it.
+ACP delivery has no turn timer. The wait resolves on
+`PromptCompletion`, agent process close, dispatcher refusal,
+serialization failure, or shutdown only — never on a clock. No
+per-coder key and no envelope field can bound it; the delivery
+contract bounds the queue behind an unready target instead of
+declaring a slow turn a non-delivery.
 
 Wedge detection is intentionally not applied to the ACP path. ACP
 does no snapshot polling, so there is no settled non-prompt frame to
-classify and no empty-pane mismatch to compare against. Pty is now
-the only transport that classifies `wedged` at all — Tmux stopped
-doing so in `bound-tmux-readiness-wait`, because a settled non-prompt
-frame cannot be told apart from a permission dialog or a coder
-working silently. ACP has no elapsed-time bound today; the relay's
+classify and no empty-pane mismatch to compare against. No transport
+classifies `wedged` any more — Tmux stopped in
+`bound-tmux-readiness-wait` and Pty's classifier was deleted with the
+rest of the wedge machinery, because a settled non-prompt frame cannot
+be told apart from a permission dialog or a coder working silently.
+ACP has no elapsed-time bound today; the relay's
 submission-timeout watchdog (when armed) bounds the supervised code's
 runtime instead, but arming depends on relay-side submission-evidence
 work that is not yet in this slice.
@@ -201,8 +192,8 @@ shape-specific behaviors:
 The receipt runs through `submit_envelope_turn` like any other turn
 and surfaces its terminal outcome through the same `SingleDeliveryOutcome`
 channel every other delivery uses. ACP's turn wait has no elapsed-time
-bound today; a receipt on a configured `prime_timeout_ms` resolves on
-completion, agent close, dispatcher refusal, or shutdown — not on a
+bound; a receipt resolves on completion, agent close, dispatcher
+refusal, or shutdown — not on a
 timer. Non-recursion is enforced at the relay's single terminal-
 resolution spawn site; the ACP transport never has to know about it.
 

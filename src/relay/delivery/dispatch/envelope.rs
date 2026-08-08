@@ -5,8 +5,7 @@
 //!   its `startup` for tmux/Pty surfaces, off the async runtime via
 //!   `start_transport_off_runtime`.
 //! - `build_coder_envelope`/`build_ui_envelope` build the coder vs. UI
-//!   `DeliveryEnvelope`s from an `AsyncDeliveryTask`, including the per-coder
-//!   prime-timeout carry-over.
+//!   `DeliveryEnvelope`s from an `AsyncDeliveryTask`.
 //! - `build_acp_driver_services`/`build_ui_transport_services` close over
 //!   the relay-internal lifecycle touchpoints the ACP and UI transport
 //!   drivers invoke (record-failure / mirror-state / publish-output / chooser
@@ -151,8 +150,6 @@ pub(super) async fn build_worker_transport(
                         prompt_readiness: pty_cfg.prompt_readiness.clone(),
                         cols: pty_cfg.cols,
                         rows: pty_cfg.rows,
-                        prime_timeout_ms: pty_cfg.prime_timeout_ms,
-                        wedge_detection: pty_cfg.wedge_detection,
                         working_directory: target_member.working_directory.clone(),
                         term_protocol: pty_cfg.term_protocol,
                     }
@@ -163,8 +160,6 @@ pub(super) async fn build_worker_transport(
                     prompt_readiness: None,
                     cols: 120,
                     rows: 40,
-                    prime_timeout_ms: None,
-                    wedge_detection: true,
                     working_directory: target_member.working_directory.clone(),
                     term_protocol: crate::configuration::TermProtocol::default(),
                 },
@@ -236,23 +231,6 @@ fn noop_tmux_chooser() -> Chooser {
 /// message. Envelope-mode writes always submit with Enter; the transport renders
 /// the pane envelope from `message` before paste/turn submission.
 ///
-/// The envelope's generic [`DeliveryEnvelope::prime_timeout_ms`] field is
-/// populated from the per-coder config: `TmuxTargetConfiguration.prime_timeout_ms`
-/// for tmux sessions (`[coders.<id>.tmux].prime-timeout-ms`),
-/// `AcpTargetConfiguration.prime_timeout_ms` for ACP sessions
-/// (`[coders.<id>.acp].prime-timeout-ms`), and the Pty equivalent. Each
-/// transport consumes the same generic envelope field; no transport-prefixed
-/// envelope field is introduced.
-///
-/// [`DeliveryEnvelope::readiness_timeout_ms`] comes from
-/// [`TargetConfiguration::readiness_timeout_ms`], which is the sole place the
-/// per-transport rule is decided: **Tmux targets only**, from
-/// `[coders.<id>.tmux].readiness-timeout-ms`. Every other target gets `None` —
-/// not because their waits are bounded elsewhere, but because only Tmux can
-/// soundly report an expired bound as non-delivery (it injects after its
-/// readiness wait; Pty and ACP commit before theirs). See
-/// `agentmux:issues/relay/61`.
-///
 /// For terminal-outcome receipts addressed to an ACP sender the envelope's
 /// `quiet_window` is forced to zero, satisfying the
 /// "receipt-bypasses-quiescence" invariant on ACP. ACP ignores `quiet_window`
@@ -265,27 +243,10 @@ pub(super) fn build_coder_envelope(
     task: &AsyncDeliveryTask,
     message: DeliveryMessage,
 ) -> DeliveryEnvelope {
-    let (prime_timeout_ms, readiness_timeout_ms, target_is_acp) = match resolve_target_member(task)
-    {
-        Ok(Some(member)) => {
-            let readiness_timeout_ms = member.target.readiness_timeout_ms();
-            match &member.target {
-                TargetConfiguration::Tmux(tmux_target) => {
-                    (tmux_target.prime_timeout_ms, readiness_timeout_ms, false)
-                }
-                TargetConfiguration::Acp(acp_target) => {
-                    (acp_target.prime_timeout_ms, readiness_timeout_ms, true)
-                }
-                TargetConfiguration::Pty(pty_target) => {
-                    (pty_target.prime_timeout_ms, readiness_timeout_ms, false)
-                }
-                TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
-                    (None, readiness_timeout_ms, false)
-                }
-            }
-        }
-        _ => (None, None, false),
-    };
+    let target_is_acp = matches!(
+        resolve_target_member(task),
+        Ok(Some(member)) if matches!(member.target, TargetConfiguration::Acp(_))
+    );
     let quiet_window = if task.is_receipt && target_is_acp {
         Duration::ZERO
     } else {
@@ -297,8 +258,6 @@ pub(super) fn build_coder_envelope(
         append_enter: true,
         choice_decider_sessions: task.choice_decider_sessions.clone(),
         quiet_window,
-        prime_timeout_ms,
-        readiness_timeout_ms,
         is_receipt: task.is_receipt,
     }
 }
@@ -505,8 +464,6 @@ pub(super) fn build_ui_envelope(task: &AsyncDeliveryTask) -> DeliveryEnvelope {
         append_enter: task.append_enter,
         choice_decider_sessions: task.choice_decider_sessions.clone(),
         quiet_window: task.quiescence.quiet_window,
-        prime_timeout_ms: None,
-        readiness_timeout_ms: None,
         is_receipt: task.is_receipt,
     }
 }
@@ -523,145 +480,6 @@ fn stream_send_to_broadcast_status(
         }
         Err(source) => {
             UiBroadcastStatus::Failed(format!("failed to emit relay stream event: {source}"))
-        }
-    }
-}
-
-/// Inline because [`build_coder_envelope`] is `pub(super)` and takes
-/// [`AsyncDeliveryTask`], a relay-internal type. Reaching it from
-/// `tests/unit` would mean widening both to `pub` — publishing the relay's
-/// dispatch internals as API to observe one field assignment. The
-/// per-transport *rule* is covered publicly through
-/// `TargetConfiguration::readiness_timeout_ms`; what only this seam can show is
-/// that the builder puts the resolved value on the envelope it emits.
-#[cfg(test)]
-mod tests {
-    use std::path::PathBuf;
-
-    use super::*;
-    use crate::configuration::{
-        AcpChannel, AcpTargetConfiguration, BundleConfiguration, BundleMember,
-        PtyTargetConfiguration, TermProtocol, TmuxTargetConfiguration,
-    };
-    use crate::envelope::AddressIdentity;
-    use crate::transports::DeliveryPayloadMode;
-
-    const SCHEMA_VERSION: &str = "1";
-    const TEST_BOUND_MS: u64 = 45_000;
-
-    fn member(target: TargetConfiguration) -> BundleMember {
-        BundleMember {
-            id: "target".to_string(),
-            name: None,
-            working_directory: None,
-            target,
-            coder_session_id: None,
-            policy_id: None,
-            environment: Vec::new(),
-        }
-    }
-
-    fn task_for(target: TargetConfiguration) -> AsyncDeliveryTask {
-        let target_member = member(target);
-        AsyncDeliveryTask {
-            // Test fixture: constructed directly, never admitted.
-            admitted: false,
-            bundle: BundleConfiguration {
-                schema_version: SCHEMA_VERSION.to_string(),
-                bundle_name: "party".to_string(),
-                autostart: false,
-                groups: Vec::new(),
-                members: vec![target_member.clone()],
-            },
-            sender_namespace: "party".to_string(),
-            sender: target_member,
-            authenticated_identity: None,
-            on_behalf_of: None,
-            all_target_sessions: Vec::new(),
-            target_session: "target".to_string(),
-            message: "body".to_string(),
-            message_id: "message-id".to_string(),
-            quiescence: crate::relay::delivery::QuiescenceOptions::for_async(None),
-            runtime_directory: PathBuf::from("/runtime"),
-            payload_mode: DeliveryPayloadMode::EnvelopeMessage,
-            append_enter: true,
-            choice_decider_sessions: Vec::new(),
-            is_receipt: false,
-            sender_return_route: None,
-        }
-    }
-
-    fn delivery_message() -> DeliveryMessage {
-        DeliveryMessage {
-            body: "body".to_string(),
-            created_at: "2026-08-01T00:00:00Z".to_string(),
-            namespace: "party".to_string(),
-            sender: AddressIdentity {
-                session_name: "sender".to_string(),
-                display_name: None,
-            },
-            target: AddressIdentity {
-                session_name: "target".to_string(),
-                display_name: None,
-            },
-            cc: Vec::new(),
-            authenticated_identity: None,
-            on_behalf_of: None,
-        }
-    }
-
-    /// Task 4.11 — the builder places the resolved readiness bound on the
-    /// envelope for Tmux and leaves every other transport's at `None`.
-    ///
-    /// Table-driven over all five target variants: a bound that leaked to Pty
-    /// or ACP would make those transports report an expired wait as
-    /// non-delivery, which they cannot do soundly — they commit the message
-    /// before their readiness wait, so the target may already hold it.
-    #[test]
-    fn build_coder_envelope_carries_the_readiness_bound_for_tmux_only() {
-        let cases = [
-            (
-                TargetConfiguration::Tmux(TmuxTargetConfiguration {
-                    start_command: "run".to_string(),
-                    prompt_readiness: None,
-                    prime_timeout_ms: None,
-                    readiness_timeout_ms: TEST_BOUND_MS,
-                }),
-                Some(TEST_BOUND_MS),
-            ),
-            (
-                TargetConfiguration::Pty(PtyTargetConfiguration {
-                    initial_command: "/bin/cat".to_string(),
-                    resume_command: "/bin/cat".to_string(),
-                    prompt_readiness: None,
-                    prime_timeout_ms: None,
-                    wedge_detection: true,
-                    cols: 120,
-                    rows: 40,
-                    term_protocol: TermProtocol::default(),
-                }),
-                None,
-            ),
-            (
-                TargetConfiguration::Acp(AcpTargetConfiguration {
-                    channel: AcpChannel::Stdio,
-                    command: Some("acp-shell".to_string()),
-                    url: None,
-                    prime_timeout_ms: None,
-                    headers: Vec::new(),
-                }),
-                None,
-            ),
-            (TargetConfiguration::Ui, None),
-            (TargetConfiguration::Pubsub, None),
-        ];
-        for (target, expected) in cases {
-            let label = target.session_type();
-            let envelope = build_coder_envelope(&task_for(target), delivery_message());
-            assert_eq!(
-                envelope.readiness_timeout_ms, expected,
-                "wrong readiness bound on the envelope for {label:?}",
-            );
         }
     }
 }

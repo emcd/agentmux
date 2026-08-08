@@ -27,8 +27,8 @@ pub use types::{
     BundleConfiguration, BundleGroupMembership, BundleMember, INHERITED_CONTEXT_VARIABLE_NAMES,
     NameValueEntry, PromptReadinessTemplate, PtyTargetConfiguration, RESERVED_GROUP_ALL,
     SESSION_ENVIRONMENT_VARIABLE, STATE_DIRECTORY_ENVIRONMENT_VARIABLE, SessionType,
-    TMUX_READINESS_TIMEOUT_MS_DEFAULT, TMUX_READINESS_TIMEOUT_MS_RANGE, TargetConfiguration,
-    TermProtocol, TmuxTargetConfiguration, TuiConfiguration, TuiSession, UiConfiguration,
+    TargetConfiguration, TermProtocol, TmuxTargetConfiguration, TuiConfiguration, TuiSession,
+    UiConfiguration,
 };
 
 pub(super) const BUNDLE_SCHEMA_VERSION: u32 = 1;

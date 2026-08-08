@@ -1061,10 +1061,8 @@ fn dropped_on_shutdown_outcome() -> SingleDeliveryOutcome {
 /// never absorbs peer envelopes and never lands inside a peer flush group:
 /// the receipt is its own turn and is observable on its own. The receipt
 /// resolves on completion, agent close, dispatcher refusal, serialization
-/// failure, or shutdown — no elapsed-time bound is applied here; the
-/// envelope's `prime_timeout_ms` field (carried from the sender's
-/// `[coders.<id>.acp].prime-timeout-ms` for cross-transport symmetry) is
-/// not consumed on the ACP path. `quiet_window` is unused on ACP and the
+/// failure, or shutdown — no elapsed-time bound is applied here.
+/// `quiet_window` is unused on ACP and the
 /// relay's `build_coder_envelope` zeros it for receipts addressed to an
 /// ACP sender so the receipt-bypasses-quiescence invariant holds at the
 /// envelope seam.
@@ -1821,8 +1819,6 @@ mod delivery_plan_tests {
             append_enter: true,
             choice_decider_sessions: vec![],
             quiet_window: Duration::ZERO,
-            prime_timeout_ms: None,
-            readiness_timeout_ms: None,
             is_receipt,
         }
     }
