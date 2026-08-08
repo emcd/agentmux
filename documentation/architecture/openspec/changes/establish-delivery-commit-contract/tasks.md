@@ -111,7 +111,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] ACP: record `Submitted` immediately after the framed `session/prompt` write succeeds, before replay-buffer locks or `on_dispatched`
 - [ ] ACP: map active-prompt refusal and serialization failure to `not_submitted`, and a stdin write or flush error without proof of zero bytes to `submission_unknown`
 - [x] ACP: retain the client/child thread handle so the generation can be fenced (see `agentmux:todos/relay/128`)
-- [ ] ACP: delete the prime timer, `acp_turn_timeout`, and the readiness latch and respawn signal it drove
+- [x] ACP: delete the prime timer, `acp_turn_timeout`, and the readiness latch and respawn signal it drove
 - [x] Delete `src/transports/quiescence.rs` and the `WedgeProbe` trait
 
 ### Configuration
