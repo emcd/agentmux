@@ -229,11 +229,8 @@ impl AcpWorkerDriver {
 
         // Set chooser/target identity ahead of the establish; the freshly-built
         // transport already reads Initializing from construction.
-        self.lock_transport().prepare_for_startup(
-            self.services.chooser.clone(),
-            self.namespace.clone(),
-            self.target_member.id.clone(),
-        );
+        self.lock_transport()
+            .prepare_for_startup(self.services.chooser.clone(), self.target_member.id.clone());
 
         // Spawned before the bootstrap it supervises, rather than after it
         // returns: the monitor is idle until the transport signals
@@ -736,11 +733,7 @@ async fn run_acp_respawn(
         transport
             .lock()
             .expect("acp transport mutex poisoned")
-            .prepare_for_startup(
-                services.chooser.clone(),
-                namespace.to_string(),
-                target_member.id.clone(),
-            );
+            .prepare_for_startup(services.chooser.clone(), target_member.id.clone());
 
         // Bootstrap the new runtime OFF the lock (blocking child spawn). The
         // install happens inside that same closure, so the published handle

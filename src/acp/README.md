@@ -122,40 +122,22 @@ hold coherent turns rather than fragments of the same turn.
 
 ## Prime timeout
 
-ACP delivery exposes a per-coder bounded prime window configured
-under `[coders.<id>.acp].prime-timeout-ms`. The knob replaces the
-pre-existing `turn-timeout-ms` key, which was declared on the typed
-config but never consumed by the runtime. Legacy bundle configs
-that still carry the old key fail the raw loader's
-`deny_unknown_fields` check at bundle load.
+ACP delivery exposes a per-coder `prime_timeout_ms` configuration
+key under `[coders.<id>.acp].prime-timeout-ms`, mirroring the
+Tmux-side key for symmetry. **Today, the ACP transport has no
+turn timer that consumes this field.** The configured value is
+populated onto `DeliveryEnvelope.prime_timeout_ms` at envelope
+construction time (the shared envelope field is still present for
+cross-transport consumers) but the ACP delivery task no longer reads
+or bounds on it; the wait resolves on `PromptCompletion`, agent
+process close, dispatcher refusal, serialization failure, or
+shutdown only. The pre-existing `turn-timeout-ms` key was never
+consumed by the runtime either; legacy configs that still carry it
+fail the raw loader's `deny_unknown_fields` check at bundle load.
 
-When the configured field is absent (the default), the ACP transport
-preserves today's unbounded wait. When set to a finite millisecond
-value, the ACP transport's internal delivery task bounds the per-turn
-prompt completion wait for a flush group to that window. On fire:
-
-- the flush group resolves with `SendOutcome::Timeout` and
-  `reason_code = "acp_turn_timeout"`;
-- the per-target readiness latches to `Unavailable`, matching the
-  path used for `PromptCompletion::ConnectionClosed`;
-- a `delivery_prime_timeout` inscription is emitted carrying
-  `namespace`, `target_session`, the bounded `message_ids` from the combined
-  turn, the uncapped `message_ids_total`, `timeout_ms`, and
-  `prime_wait_elapsed_ms`;
-- the transport signals respawn-needed so the worker can re-bootstrap
-  the runtime on the same path used for connection closure.
-
-The prime timer anchor is the moment the delivery task first enters
-the per-turn wait. New envelopes absorbed into the flush group via
-coalesce-during-wait inherit the head envelope's prime timer; the
-timer does not extend or restart on coalesce. Raw writes and
-unbounded envelopes preserve today's behavior.
-
-The relay populates `DeliveryEnvelope.prime_timeout_ms` from
-`[coders.<id>.acp].prime-timeout-ms` at envelope construction time;
-the ACP transport reads the field on the same generic envelope seam
-that the Tmux transport consumes (`prime_timeout_ms` is the only
-timeout field, with no transport-prefixed variant).
+The shared `DeliveryEnvelope.prime_timeout_ms` field is retained on
+the envelope struct until the cross-transport removal is sequenced as a
+follow-up; ACP consumers should not depend on it.
 
 Wedge detection is intentionally not applied to the ACP path. ACP
 does no snapshot polling, so there is no settled non-prompt frame to
@@ -163,25 +145,10 @@ classify and no empty-pane mismatch to compare against. Pty is now
 the only transport that classifies `wedged` at all — Tmux stopped
 doing so in `bound-tmux-readiness-wait`, because a settled non-prompt
 frame cannot be told apart from a permission dialog or a coder
-working silently. The prime timeout is ACP's only bound; a follow-up
-proposal may add further semantics if ACP runtime signals warrant them.
-
-## Prime timeout suppresses during pending choice
-
-The prime timer does NOT fire while a `pending_choice_outcome` is in
-flight. When the agent raises a `session/request_permission` mid-turn,
-the prime timer continues to count down without firing until the
-choice resolves or the turn completes. Firing `Timeout` against a
-mid-decision operator would be a false positive: the transport must
-not classify the flush group as `unresponsive` while an operator
-decision is pending.
-
-This matches the non-expiring choice pending lifecycle contract:
-choice requests remain pending until the operator makes an explicit
-authorized `selected` or `cancelled` decision, the session or worker
-terminates, or a hard terminal cancellation condition fires. The
-ACP prime timeout field is a turn-wait bound, not a choice-decision
-lifecycle bound; the two surfaces are independent.
+working silently. ACP has no elapsed-time bound today; the relay's
+submission-timeout watchdog (when armed) bounds the supervised code's
+runtime instead, but arming depends on relay-side submission-evidence
+work that is not yet in this slice.
 
 ## Terminal-outcome receipt rendering
 
@@ -231,14 +198,13 @@ shape-specific behaviors:
   write receipt bodies that prompt the agent for a textual
   acknowledgement, not a tool call.
 
-The receipt still rides through the bounded prime wait
-(`prime_timeout_ms` from the sender's
-`[coders.<id>.acp].prime-timeout-ms` if configured, else unbounded),
-runs through `submit_envelope_turn` like any other turn, and surfaces
-its terminal outcome through the same `SingleDeliveryOutcome` channel
-every other delivery uses. Non-recursion is enforced at the relay's
-single terminal-resolution spawn site; the ACP transport never has
-to know about it.
+The receipt runs through `submit_envelope_turn` like any other turn
+and surfaces its terminal outcome through the same `SingleDeliveryOutcome`
+channel every other delivery uses. ACP's turn wait has no elapsed-time
+bound today; a receipt on a configured `prime_timeout_ms` resolves on
+completion, agent close, dispatcher refusal, or shutdown — not on a
+timer. Non-recursion is enforced at the relay's single terminal-
+resolution spawn site; the ACP transport never has to know about it.
 
 `submit_singleton_envelope` is the helper that encapsulates the
 flush-barrier semantics for the receipt's own turn submission; it is
