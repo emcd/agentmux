@@ -619,26 +619,34 @@ pub fn report_undelivered_queue(reporting: UndeliveredReporting) {
     // First-crossing warnings, deduplicated per target rather than per entry: a
     // backlogged target whose entries all cross together is one condition an
     // operator acts on, not one condition per queued message.
-    let crossed: Vec<(AdmissionTargetKey, u64)> = oldest
+    //
+    // The count carried here is the waiting one, taken from the same `Pending`
+    // tally the aggregate reports. `per_target` is the quota counter: it is
+    // incremented at admission and decremented only at release, so it counts
+    // authorized members too, and reading it here would make the warning
+    // contradict the aggregate beside it — announcing a target as further behind
+    // than it is by counting exactly the members being written to. The warned
+    // flag still lives on `per_target`, because suppression has to survive the
+    // pass that set it.
+    let crossed: Vec<(AdmissionTargetKey, u64, usize)> = oldest
         .into_iter()
         .filter_map(|(target, admitted_at)| {
             let age = now.saturating_duration_since(admitted_at);
             if age < reporting.warning {
                 return None;
             }
-            let usage = state.per_target.get(&target)?;
-            if usage.warned {
+            if state.per_target.get(&target)?.warned {
                 return None;
             }
-            Some((target, duration_ms(now, admitted_at)))
+            let waiting = pending_per_target.get(&target)?.envelopes;
+            Some((target, duration_ms(now, admitted_at), waiting))
         })
         .collect();
-    for (target, oldest_age_ms) in crossed {
+    for (target, oldest_age_ms, undelivered_envelopes) in crossed {
         let Some(usage) = state.per_target.get_mut(&target) else {
             continue;
         };
         usage.warned = true;
-        let undelivered_envelopes = usage.envelopes;
         emit_inscription(
             INSCRIPTION_UNDELIVERED_WARNING,
             &json!({
