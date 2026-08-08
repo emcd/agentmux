@@ -234,41 +234,6 @@ pub(crate) fn resolve_active_pane_target(
     Ok(pane_target)
 }
 
-pub(crate) fn resolve_window_activity_marker(
-    tmux_socket: &Path,
-    pane_target: &str,
-) -> Result<Option<String>, String> {
-    let output = run_tmux_command_capture(
-        tmux_socket,
-        &[
-            "display-message",
-            "-p",
-            "-t",
-            pane_target,
-            "#{window_activity}",
-        ],
-    )?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let lower = stderr.to_ascii_lowercase();
-        if lower.contains("unknown format")
-            || lower.contains("invalid format")
-            || lower.contains("bad format")
-        {
-            return Ok(None);
-        }
-        if stderr.is_empty() {
-            return Err("tmux display-message for window_activity failed".to_string());
-        }
-        return Err(stderr);
-    }
-    let marker = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if marker.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(marker))
-}
-
 pub(crate) fn capture_pane_snapshot(
     tmux_socket: &Path,
     pane_target: &str,

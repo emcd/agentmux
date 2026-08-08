@@ -14,7 +14,7 @@
 //! the transport's own internal ordered channel and returns an [`OutcomeFuture`]
 //! that resolves when the transport's internal delivery task drives that write
 //! to a terminal [`SingleDeliveryOutcome`]. The transport owns that task, its
-//! `spawn_blocking`, and the quiescence/coalesce waits; the relay worker
+//! `spawn_blocking`, and any transport-local batching; the relay worker
 //! concurrently submits new writes and collects resolved futures without
 //! blocking on any single one.
 //!
@@ -63,7 +63,7 @@ use crate::configuration::{BundleMember, SessionType};
 use crate::tmux::TmuxTransport;
 use crate::transports::ui::{UiTransport, UiTransportServices};
 // Re-export the configuration prompt-readiness template into the transport
-// contract namespace; tmux quiescence consumes it and Slice 3 wires it through
+// contract namespace; the Tmux prompt probe consumes it and the transport wires it through
 // the delivery context. It is defined once in `configuration`; re-exporting
 // (rather than redefining) keeps the two in lockstep.
 pub use crate::configuration::PromptReadinessTemplate;
@@ -219,9 +219,9 @@ pub trait Transport: GenerationFence {
     /// Submits one relay-framed envelope for delivery WITHOUT blocking, returning
     /// an [`OutcomeFuture`] that resolves when the transport's internal delivery
     /// task drives this envelope to a terminal [`SingleDeliveryOutcome`]. The
-    /// transport buffers the envelope on its own ordered channel, coalesces it
-    /// with contiguous envelopes during its quiescence wait, and resolves the
-    /// future once the combined turn settles.
+    /// transport buffers the envelope on its own ordered channel, may coalesce
+    /// contiguous envelopes into one target-side write, and resolves the future
+    /// once that write settles.
     ///
     /// The relay's sole envelope-delivery seam; see the module-level "Write
     /// boundary" note. Default body is an additions-only stub; each transport
@@ -1012,87 +1012,6 @@ impl DeliveryMessage {
             subject: None,
             body: self.body.clone(),
         })
-    }
-}
-
-/// A quiescence-barrier failure surfaced by the tmux transport's internal
-/// delivery task when it waits for its target pane to fall quiet before a flush
-/// group. The task maps it to a [`SingleDeliveryOutcome`] for the buffered
-/// group. Its canonical home is the transport contract, so the tmux loop that
-/// raises it forms no transport<->relay back-edge.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum DeliveryWaitError {
-    /// The prime window elapsed during the wait with no observable output.
-    /// Maps to `SendOutcome::Timeout` (existing variant); the
-    /// `readiness_mismatch`/`mismatch_reason` fields capture whether the
-    /// pane was already in a not-prompt-ready state at fire time.
-    Timeout {
-        timeout: Duration,
-        readiness_mismatch: bool,
-        mismatch_reason: Option<String>,
-    },
-    /// The target became quiescent + not-prompt-ready, and wedge detection is
-    /// enabled. Only Pty enables it: Tmux passes `wedge_detection: false`
-    /// because a settled non-prompt frame is produced by a hung coder, a
-    /// permission dialog, a compose box, and a coder working silently alike,
-    /// and `capture-pane` cannot tell them apart. Maps to
-    /// `SendOutcome::Failed` with `reason_code = "pane_wedged"`. The
-    /// `reason` carries the last-observed prompt-readiness mismatch reason
-    /// (or a default placeholder when the probe did not record one) so
-    /// operators can diagnose the wedge from the inscribed diagnostic.
-    Wedged {
-        reason: String,
-    },
-    /// The flush group's readiness bound elapsed without the target becoming
-    /// ready. Maps to `SendOutcome::Timeout` carrying `reason_code`'s string
-    /// form. Distinct from [`DeliveryWaitError::Timeout`] because the two
-    /// bounds diagnose different things and the prime timeout outranks this
-    /// one when both elapse in the same iteration.
-    ReadinessTimeout {
-        reason_code: ReadinessTimeoutReason,
-        elapsed: Duration,
-        mismatch_reason: Option<String>,
-    },
-    Failed {
-        reason: String,
-    },
-    Shutdown,
-}
-
-/// Why a readiness bound expired, derived from the most recent observation.
-///
-/// Diagnostic only: every variant resolves the same `SendOutcome::Timeout`.
-/// The distinction exists so an operator can tell a short bound from a stuck
-/// target, not so the transport can decide differently. In particular none of
-/// these is a claim that the target has failed — a settled non-prompt frame is
-/// produced by a hung coder, a permission dialog, a compose box, and a coder
-/// working without terminal output alike, and the inspected tail cannot
-/// separate them.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReadinessTimeoutReason {
-    /// Target activity advanced across the observation pair: the target was
-    /// producing output the whole time and never settled.
-    TargetNeverSettled,
-    /// The inspected tail carried no observable content.
-    TargetUnresponsive,
-    /// The prompt frame was present but the cursor sat away from its
-    /// configured idle column, so an operator has input pending.
-    PendingOperatorInput,
-    /// The prompt frame was absent. Covers the four indistinguishable cases
-    /// together, precisely because they are indistinguishable.
-    TargetNotReady,
-}
-
-impl ReadinessTimeoutReason {
-    /// Returns the stable `reason_code` string reported to the sender.
-    #[must_use]
-    pub fn code(self) -> &'static str {
-        match self {
-            Self::TargetNeverSettled => "target_never_settled",
-            Self::TargetUnresponsive => "target_unresponsive",
-            Self::PendingOperatorInput => "pending_operator_input",
-            Self::TargetNotReady => "target_not_ready",
-        }
     }
 }
 

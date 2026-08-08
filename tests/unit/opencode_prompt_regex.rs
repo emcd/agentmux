@@ -15,7 +15,7 @@
 //!    matches regardless of pane width; `ctrl+p commands` token in
 //!    the status row so the version is recognised as Opencode.
 //! 2. **Code-side compose-region check** (`compose_region_has_text`
-//!    in `src/tmux/quiescence_probe.rs`, called from
+//!    in `src/tmux/prompt_probe.rs`, called from
 //!    `prompt_readiness_matches`): walks the three rows
 //!    immediately preceding the info row and rejects compose text
 //!    (`┃` + 2-99 leading whitespace + non-whitespace) in any of
@@ -87,7 +87,7 @@ const AGENT_JUST_RESPONDED: &str = "\
 // Composing cases: text in input box. The regex matches the frame
 // structure; the production-path code-side compose-region check
 // rejects these. The compose check is tested through the inline
-// production-path test in `src/tmux/quiescence_probe.rs`.
+// production-path test in `src/tmux/prompt_probe.rs`.
 const COMPOSING: &str = "\
   ┃
   ┃

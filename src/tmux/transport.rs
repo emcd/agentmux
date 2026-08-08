@@ -4,15 +4,10 @@
 //! task. The relay worker submits writes via [`mailw`](Transport::mailw) and
 //! [`raww`](Transport::raww) without blocking; the internal task drains the
 //! channel in FIFO order, accumulates contiguous envelopes into flush groups,
-//! waits for pane quiescence (using per-envelope hints from the head envelope),
 //! renders each envelope's pane text and combines them into token-budget-bounded
 //! prompts (the same greedy split the ACP transport applies to its turns), and
 //! pastes each combined prompt. Raw writes act as batch barriers: the task
 //! flushes any buffered envelope group before delivering the raw write.
-//!
-//! During the quiescence wait the task continues to drain the channel, absorbing
-//! any envelopes that arrive into the current flush group (coalesce-during-wait).
-//! If the group grows, quiescence is re-checked before pasting.
 //!
 //! Tmux sessions are created and owned by the [`lifecycle`](super::lifecycle)
 //! primitives (driven by relay bundle reconcile/startup), so the transport owns
@@ -39,9 +34,9 @@ use crate::configuration::TargetConfiguration;
 use crate::envelope::{PromptBatchSettings, batch_envelope_groups};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::transports::{
-    DeliveryEnvelope, DeliveryWaitError, GenerationFence, LookMode, LookSnapshotPayload,
-    OutcomeFuture, OutputView, SendOutcome, SingleDeliveryOutcome, StartupContext, Transport,
-    TransportError, TransportHealth, TransportReadiness, TransportStatus, UnreachableSince,
+    DeliveryEnvelope, GenerationFence, LookMode, LookSnapshotPayload, OutcomeFuture, OutputView,
+    SendOutcome, SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportHealth,
+    TransportReadiness, TransportStatus, UnreachableSince,
 };
 
 /// Default tmux look window applied when the caller omits a window size.
@@ -51,7 +46,7 @@ use super::pane::{
     TmuxInvocationSlot, capture_pane_tail_lines, inject_literal_text, publish_tmux_invocations,
     resolve_active_pane_target, terminate_published_invocation,
 };
-use super::quiescence_probe::{PaneQuiescenceProbe, RealPaneQuiescenceProbe};
+use super::prompt_probe::{PanePromptProbe, RealPanePromptProbe};
 
 const TMUX_TARGET_UNAVAILABLE_CODE: &str = "tmux_target_unavailable";
 const TMUX_DELIVERY_THREAD_STOPPED_CODE: &str = "tmux_delivery_thread_stopped";
@@ -121,8 +116,7 @@ struct DeliveryTaskContext {
 ///
 /// The transport owns an ordered channel carrying [`WriteItem`]s. The relay
 /// worker submits writes via `mailw`/`raww` without blocking; a background
-/// delivery task drains the channel, groups contiguous envelopes, waits for
-/// pane quiescence, and pastes.
+/// delivery task drains the channel, groups contiguous envelopes, and pastes.
 pub struct TmuxTransport {
     batch_settings: PromptBatchSettings,
     sender: Option<mpsc::Sender<WriteItem>>,
@@ -319,6 +313,10 @@ impl TmuxTransport {
             .is_some_and(|sender| !sender.is_closed())
             && self
                 .task_handle
+                .as_ref()
+                .is_some_and(|handle| !handle.is_finished())
+            && self
+                .observer_handle
                 .as_ref()
                 .is_some_and(|handle| !handle.is_finished());
         if !live {
@@ -533,7 +531,7 @@ impl Transport for TmuxTransport {
 // ---------------------------------------------------------------------------
 
 /// Background delivery task: drains the write channel in FIFO order, groups
-/// contiguous envelopes into flush groups, waits for quiescence, and pastes.
+/// contiguous envelopes into flush groups, and pastes.
 ///
 /// Items are processed as a FIFO stream: accumulate envelopes until a raw item
 /// is encountered, flush the group, deliver the raw, then continue. This
@@ -704,13 +702,10 @@ fn drain_group_as_dropped(
     }
 }
 
-/// Flush an envelope group with coalesce-during-wait semantics:
-/// 1. Wait for quiescence using the head envelope's hints.
-/// 2. Drain the channel — absorb new envelopes into the group, defer raw items.
-/// 3. If the group grew, re-check quiescence (loop to step 1).
-/// 4. Paste all envelopes and resolve each sender with its own message_id.
+/// Paste an envelope group and resolve each sender with its own message id.
 ///
-/// On shutdown at any point, resolves the group as DroppedOnShutdown and returns.
+/// Handover readiness is observed before authorization; this function performs
+/// only the target-side write and its immediate outcome resolution.
 #[allow(clippy::too_many_arguments)]
 fn flush_and_resolve(
     group: &mut Vec<(DeliveryEnvelope, OutcomeSender)>,
@@ -851,102 +846,6 @@ fn deliver_raw(
     }
 }
 
-/// Convert a [`DeliveryWaitError`] into a [`SingleDeliveryOutcome`] with the
-/// caller's message_id. Exposed under a `_for_test` name and `#[doc(hidden)]`
-/// so the separate `tests/unit` crate can exercise the Wedged / Timeout
-/// outcome mapping without expanding the public runtime API. Not intended
-/// for use outside the crate's own test surface.
-#[doc(hidden)]
-pub fn wait_error_to_outcome_for_test(
-    target_session: &str,
-    error: &DeliveryWaitError,
-    message_id: &str,
-) -> SingleDeliveryOutcome {
-    wait_error_to_outcome(target_session, error, message_id)
-}
-
-fn wait_error_to_outcome(
-    target_session: &str,
-    error: &DeliveryWaitError,
-    message_id: &str,
-) -> SingleDeliveryOutcome {
-    match error {
-        DeliveryWaitError::Timeout {
-            timeout,
-            readiness_mismatch,
-            mismatch_reason,
-        } => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: message_id.to_string(),
-            outcome: SendOutcome::Timeout,
-            reason_code: Some("delivery_prime_timeout".to_string()),
-            reason: Some(format!(
-                "prime wait timed out after {}ms (readiness_mismatch={}, reason={:?})",
-                timeout.as_millis(),
-                readiness_mismatch,
-                mismatch_reason
-            )),
-            details: None,
-        },
-        DeliveryWaitError::ReadinessTimeout {
-            reason_code,
-            elapsed,
-            mismatch_reason,
-        } => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: message_id.to_string(),
-            outcome: SendOutcome::Timeout,
-            reason_code: Some(reason_code.code().to_string()),
-            reason: Some(format!(
-                "tmux target did not become ready within {}ms (reason={:?})",
-                elapsed.as_millis(),
-                mismatch_reason
-            )),
-            details: None,
-        },
-        // Tmux passes `wedge_detection: false`, so the shared classifier cannot
-        // return this. It is mapped rather than asserted because this runs inside
-        // a tokio delivery task: a panic here would be isolated to that task and
-        // swallowed, leaving the sender with no outcome at all and the process
-        // reporting success. A structured failure is strictly more observable
-        // than an invariant assertion that nothing can hear. The reason code is
-        // the generic unavailable one — `pane_wedged` is deliberately not
-        // resurrected for Tmux.
-        DeliveryWaitError::Wedged { reason } => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: message_id.to_string(),
-            outcome: SendOutcome::Failed,
-            reason_code: Some(TMUX_TARGET_UNAVAILABLE_CODE.to_string()),
-            reason: Some(format!(
-                "tmux classifier returned a wedge verdict it cannot produce \
-                 (wedge detection is off for tmux): {reason}"
-            )),
-            details: None,
-        },
-        DeliveryWaitError::Failed { reason } => SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: message_id.to_string(),
-            outcome: SendOutcome::Failed,
-            reason_code: Some(TMUX_TARGET_UNAVAILABLE_CODE.to_string()),
-            reason: Some(reason.clone()),
-            details: None,
-        },
-        DeliveryWaitError::Shutdown => make_dropped_on_shutdown(target_session, message_id),
-    }
-}
-
-/// Build a DroppedOnShutdown outcome for a target, preserving the message_id.
-fn make_dropped_on_shutdown(target_session: &str, message_id: &str) -> SingleDeliveryOutcome {
-    SingleDeliveryOutcome {
-        target_session: target_session.to_string(),
-        message_id: message_id.to_string(),
-        outcome: SendOutcome::DroppedOnShutdown,
-        reason_code: Some("dropped_on_shutdown".to_string()),
-        reason: Some("delivery dropped due to relay shutdown".to_string()),
-        details: None,
-    }
-}
-
 // ---------------------------------------------------------------------------
 // OutputView
 // ---------------------------------------------------------------------------
@@ -1021,7 +920,7 @@ fn observe_pane_once(
     target_session: &str,
     prompt_readiness: Option<&crate::configuration::PromptReadinessTemplate>,
 ) -> Option<bool> {
-    let mut probe = RealPaneQuiescenceProbe::new(socket, target_session, prompt_readiness).ok()?;
+    let mut probe = RealPanePromptProbe::new(socket, target_session, prompt_readiness).ok()?;
     probe
         .next_evaluation()
         .ok()
