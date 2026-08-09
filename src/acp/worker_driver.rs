@@ -571,10 +571,11 @@ async fn acp_respawn_monitor(
         // Three conditions, each excluding something the others cannot.
         //
         // The **signal** carries the classification. Not every `Unavailable` is
-        // a respawn: `outcome_requires_respawn` deliberately excludes
-        // serialization failure, which sets `Unavailable` and is not
-        // recoverable by restarting the agent. A level-only trigger would
-        // respawn on it and override that judgement.
+        // a respawn: the delivery task raises the signal only on a connection
+        // close or transport write failure, and deliberately not on a
+        // non-delivery like serialization failure, which is not recoverable by
+        // restarting the agent. A level-only trigger would respawn on it and
+        // override that judgement.
         //
         // The **level** guards against staleness. A producer's edge can arrive
         // after the runtime it described has already been replaced, and acting
@@ -609,12 +610,12 @@ async fn acp_respawn_monitor(
             // Retiring it here and not only after this monitor's own attempt is
             // what keeps a cause from outliving the failure it described. One
             // left standing across a recovery stays outstanding, and the next
-            // `Unavailable` -- including a serialization failure, which
-            // `outcome_requires_respawn` deliberately refuses to signal --
-            // would find all three conditions met and respawn on a
-            // classification that was never made for it. The level check cannot
-            // catch that on its own: it distinguishes states, not which failure
-            // put the runtime in one.
+            // `Unavailable` -- including a serialization failure, which the
+            // delivery task deliberately does not signal -- would find all
+            // three conditions met and respawn on a classification that was
+            // never made for it. The level check cannot catch that on its own:
+            // it distinguishes states, not which failure put the runtime in
+            // one.
             //
             // Retiring *this* epoch rather than clearing the signal is what
             // makes the decision safe to act on late. Everything above is a
@@ -935,10 +936,11 @@ mod respawn_owed_tests {
         }
 
         // An Unavailable runtime with no signal. Not every Unavailable warrants a
-        // respawn -- `outcome_requires_respawn` deliberately excludes
-        // serialization failure, which sets Unavailable and is not fixed by
-        // restarting the agent. The signal is where that judgement lives, so a
-        // level-only trigger would override it.
+        // respawn -- the delivery task raises the signal only on a connection
+        // close or transport write failure, and never for a non-delivery like
+        // serialization failure, which is not fixed by restarting the agent. The
+        // signal is where that judgement lives, so a level-only trigger would
+        // override it.
         assert!(
             !respawn_is_owed(false, false, WorkerReadinessState::Unavailable),
             "an Unavailable the transport did not signal for is not a respawn"

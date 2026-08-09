@@ -434,11 +434,18 @@ impl AcpStdioClient {
         Ok(buffer[entries_before_load..].to_vec())
     }
 
+    /// Dispatches a `session/prompt` request. The framed write is the delivery
+    /// boundary: `Submitted` is returned immediately after the write succeeds,
+    /// before the replay-buffer locks or the dispatch callback run. The caller
+    /// records the member's submission evidence on `Submitted`, then invokes
+    /// [`Self::note_prompt_dispatched`] to append the prompt-path replay entry
+    /// and fire the dispatch callback. Active-prompt refusal and serialization
+    /// failure return `SerializationFailed`; a stdin write or flush error
+    /// returns `TransportUnavailable`.
     pub fn prompt(
         &mut self,
         session_id: &str,
         prompt: &str,
-        on_dispatched: Option<DispatchHandler>,
         on_permission_request: Option<PermissionHandler>,
         on_completion: PromptCompletionHandler,
     ) -> PromptDispatchOutcome {
@@ -497,6 +504,21 @@ impl AcpStdioClient {
             };
         }
 
+        // The framed `session/prompt` write is the submission boundary: `Submitted`
+        // is recorded immediately after the write succeeds, before the
+        // replay-buffer locks or `on_dispatched` run. Either of those can block or
+        // panic and would otherwise strand evidence that had already been earned.
+        // The caller invokes [`Self::note_prompt_dispatched`] after recording the
+        // member's evidence.
+        PromptDispatchOutcome::Submitted
+    }
+
+    /// Records the prompt-path replay entries and fires the dispatch callback
+    /// after a `Submitted` outcome from [`Self::prompt`]. Kept separate so the
+    /// framed write's evidence is recorded before the replay-buffer locks or
+    /// `on_dispatched` — neither of which may interpose between the write and the
+    /// evidence that proves it happened.
+    pub fn note_prompt_dispatched(&self, prompt: &str, on_dispatched: Option<DispatchHandler>) {
         let mut user_lines: Vec<String> = Vec::new();
         super::text::append_text_lines(prompt, &mut user_lines);
         if !user_lines.is_empty() {
@@ -525,8 +547,6 @@ impl AcpStdioClient {
         if let Some(callback) = on_dispatched {
             callback();
         }
-
-        PromptDispatchOutcome::Submitted
     }
 
     pub fn read_replay_entries(&self) -> Vec<ReplayEntry> {

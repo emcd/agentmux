@@ -45,9 +45,10 @@ The buffer append step is split into two helpers:
   map with stale `buffer_position` values.
 
 The split is enforced at the call boundary (`dispatch_session_update`
-uses `coalesce_replay_entries_on_append`; `AcpStdioClient::prompt` uses
-`append_replay_entries`) so future paths that want to ingest cannot
-accidentally default to coalescing.
+uses `coalesce_replay_entries_on_append`; the prompt path calls
+`append_replay_entries` from `AcpStdioClient::note_prompt_dispatched`,
+after the framed write's evidence is recorded) so future paths that
+want to ingest cannot accidentally default to coalescing.
 
 ## Tool-call lifecycle coalescence
 
@@ -122,12 +123,17 @@ hold coherent turns rather than fragments of the same turn.
 
 ## No elapsed-time bound
 
-ACP delivery has no turn timer. The wait resolves on
-`PromptCompletion`, agent process close, dispatcher refusal,
-serialization failure, or shutdown only — never on a clock. No
-per-coder key and no envelope field can bound it; the delivery
-contract bounds the queue behind an unready target instead of
-declaring a slow turn a non-delivery.
+ACP delivery has no turn timer. The framed `session/prompt` write is the
+delivery boundary: the member resolves `Delivered` immediately when the
+write succeeds, and a write or flush error that cannot prove zero bytes
+left resolves `submission_unknown`. The turn's later completion,
+permission requests, or connection close are target-health observability —
+they drive readiness and the respawn signal, never a second delivery
+outcome for an already-resolved member. Active-prompt refusal and
+serialization failure resolve `not_submitted`, because nothing was
+written. No per-coder key and no envelope field can bound the delivery
+wait; the delivery contract bounds the queue behind an unready target
+instead of declaring a slow turn a non-delivery.
 
 Wedge detection is intentionally not applied to the ACP path. ACP
 does no snapshot polling, so there is no settled non-prompt frame to
@@ -191,16 +197,16 @@ shape-specific behaviors:
 
 The receipt runs through `submit_envelope_turn` like any other turn
 and surfaces its terminal outcome through the same `SingleDeliveryOutcome`
-channel every other delivery uses. ACP's turn wait has no elapsed-time
-bound; a receipt resolves on completion, agent close, dispatcher
-refusal, or shutdown — not on a
-timer. Non-recursion is enforced at the relay's single terminal-
-resolution spawn site; the ACP transport never has to know about it.
+channel every other delivery uses. The framed write is the delivery
+boundary, exactly as for peer traffic; the turn's later completion,
+agent close, or shutdown is observability only. Non-recursion is
+enforced at the relay's single terminal-resolution spawn site; the ACP
+transport never has to know about it.
 
 `submit_singleton_envelope` is the helper that encapsulates the
 flush-barrier semantics for the receipt's own turn submission; it is
-a thin wrapper around `flush_envelope_group` over a one-element batch
-plus the post-turn respawn signal. The barrier decision (when to
+a thin wrapper around `flush_envelope_group` over a one-element batch.
+The barrier decision (when to
 isolate a receipt from peer traffic) lives one level up, in
 `plan_inner_actions`, which `acp_delivery_task` calls once per head.
 The plan returns a `DeliveryPlan` (peers to absorb into the in-flight

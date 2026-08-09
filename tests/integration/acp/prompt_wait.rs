@@ -48,13 +48,7 @@ fn wait_times_out_while_pending_then_resolves_on_completion() {
         spawn_stub_client(&[("PROMPT_DELAY_SEC".to_string(), "1".to_string())]);
     client.initialize().expect("initialize stub ACP client");
 
-    let outcome = client.prompt(
-        "sess-wait",
-        "status?",
-        None,
-        None,
-        Box::new(|_completion| {}),
-    );
+    let outcome = client.prompt("sess-wait", "status?", None, Box::new(|_completion| {}));
     assert!(
         matches!(outcome, PromptDispatchOutcome::Submitted),
         "prompt dispatch should be accepted, got {outcome:?}"

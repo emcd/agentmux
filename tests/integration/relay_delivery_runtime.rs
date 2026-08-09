@@ -129,19 +129,21 @@ async fn relay_creates_tmux_session_with_environment_flags() {
 /// Regression for issues/relay/49: a relay hosting an ACP coder with an
 /// in-flight turn (the agent received `session/prompt` but has not yet returned
 /// a `stopReason`) must shut down cleanly and promptly on SIGTERM. The delivery
-/// thread's bounded, shutdown-gated prompt wait resolves the turn
-/// `dropped_on_shutdown`, no ACP child outlives the relay, and the process exits
-/// far inside systemd's 90s `TimeoutStopSec` rather than being SIGKILLed.
+/// thread's bounded, shutdown-gated prompt wait observes the turn; because the
+/// framed write already succeeded, the member resolves `delivered` at the write
+/// (not `dropped_on_shutdown`), no ACP child outlives the relay, and the process
+/// exits far inside systemd's 90s `TimeoutStopSec` rather than being SIGKILLed.
 ///
 /// Before the transport-abstraction + prime-timeout landings, the blocking ACP
 /// prompt wait sat on a tokio blocking-pool thread that `Runtime::drop` waited
 /// on, pinning the process until SIGKILL. The discriminators here are the
 /// graceful-shutdown contract assertions -- socket removed, the in-flight turn's
-/// `dropped_on_shutdown` inscription, and no surviving ACP child -- not the
-/// bounded `child.wait()` alone: the host's shutdown watchdog force-exits with
-/// `process::exit(0)` after a grace window, so a stuck delivery wait could still
-/// produce a clean exit inside the bound while skipping the graceful cleanup
-/// that removes the socket and resolves the in-flight send.
+/// `delivered` inscription (evidence earned at the framed write), and no
+/// surviving ACP child -- not the bounded `child.wait()` alone: the host's
+/// shutdown watchdog force-exits with `process::exit(0)` after a grace window,
+/// so a stuck delivery wait could still produce a clean exit inside the bound
+/// while skipping the graceful cleanup that removes the socket and resolves the
+/// in-flight send.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn relay_sigterm_reaps_in_flight_acp_turn_without_sigkill() {
     let temporary = TempDir::new().expect("temporary");
@@ -226,8 +228,8 @@ async fn relay_sigterm_reaps_in_flight_acp_turn_without_sigkill() {
     // liveness floor, not the precise regression detector -- the host's shutdown
     // watchdog would force process::exit(0) within its grace window even if a
     // delivery wait stalled graceful teardown. The graceful-shutdown contract
-    // asserted below (socket removed, dropped_on_shutdown, no surviving child) is
-    // what actually catches a reintroduced stuck ACP wait.
+    // asserted below (socket removed, delivered inscription, no surviving child)
+    // is what actually catches a reintroduced stuck ACP wait.
     let wait_result = timeout(Duration::from_secs(15), child.wait()).await;
     let status = match wait_result {
         Ok(result) => result.expect("wait relay"),
@@ -245,13 +247,15 @@ async fn relay_sigterm_reaps_in_flight_acp_turn_without_sigkill() {
         "relay socket should be removed during shutdown"
     );
 
-    // The in-flight ACP turn is resolved terminally by shutdown, not left hanging.
+    // The in-flight ACP turn resolved `delivered` at its framed write (the hang
+    // stub logged the `session/prompt` request before going silent), so shutdown
+    // does not downgrade it to `dropped_on_shutdown`.
     let inscriptions =
         fs::read_to_string(inscriptions_root.join("relay.log")).expect("read relay inscriptions");
     assert!(
         inscriptions.contains("\"event\":\"relay.send.async.completed\"")
-            && inscriptions.contains("\"outcome\":\"dropped_on_shutdown\""),
-        "expected the in-flight ACP turn to resolve dropped_on_shutdown, \
+            && inscriptions.contains("\"outcome\":\"delivered\""),
+        "expected the in-flight ACP turn to resolve delivered at the framed write, \
          inscriptions={inscriptions:?}"
     );
 
