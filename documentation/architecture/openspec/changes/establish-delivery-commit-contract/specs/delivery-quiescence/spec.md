@@ -332,7 +332,10 @@ Receipts SHALL be delivered for non-delivered terminal outcomes only:
 recorded per Async Delivery Observability only.
 
 Because no outcome is produced by elapsed waiting, a message queued for a target
-that never becomes ready produces **no receipt at all** while it waits. The sender
+that stays reachable but never becomes ready produces **no receipt at all** while
+it waits. A target that goes continuously unreachable is the exception to the
+elapsed-wait rule: its members resolve `not_submitted` past the dwell and receipt
+normally, as members resolved by teardown or shutdown also do. The sender
 is told at accept time that the message was `queued`, and learns nothing further
 until the message resolves. This is deliberate: a receipt issued while an entry is
 still waiting could only report that the relay had stopped waiting, which is a
@@ -451,8 +454,9 @@ A positively observed target exit or connection close SHALL be recorded as
 resolved member.
 
 **Relay SHALL report its undelivered queue.** Because no entry is resolved by
-elapsed waiting, a target that stops draining accumulates `Pending` entries
-silently, and reporting is the only thing that makes that condition visible. Two
+elapsed waiting while its target stays reachable, a target that stops draining
+without going unreachable accumulates `Pending` entries silently, and reporting is
+the only thing that makes that condition visible. Two
 emissions are required:
 
 - **A periodic aggregate**, at the cadence of
@@ -567,7 +571,8 @@ The system SHALL document the bounds that apply to async queueing, and SHALL NOT
 describe bounds that do not exist.
 
 Documentation SHALL state plainly that **no bound governs how long a delivery
-waits for its target to become ready**, on any transport. It SHALL NOT direct
+waits for a reachable target to become ready**, on any transport, and that
+`[delivery].unreachable-dwell-ms` is not that bound. It SHALL NOT direct
 operators to configuration keys that do not exist, and SHALL NOT describe
 per-coder timer keys that this change deletes.
 
@@ -580,12 +585,15 @@ have.
 Queue growth SHALL be described accurately, including what is **not** guaranteed.
 An `Authorized` entry always leaves the queue, because the authorization guard
 terminalizes it. A `Pending` entry leaves the queue only on authorization, on a
-positively observed transport teardown, or at graceful shutdown — so a message
-queued for a target that never becomes ready occupies its admission quota
-indefinitely. Documentation SHALL state this directly rather than implying that
-every queued message eventually resolves, SHALL point operators to the
-undelivered-queue inscriptions as the way to observe it, and SHALL explain that
-per-target admission quota is what bounds the consequence.
+positively observed transport teardown, on its transport being continuously
+observed `Unreachable` past `[delivery].unreachable-dwell-ms`, or at graceful
+shutdown — so a message queued for a target that stays **reachable but never
+ready** occupies its admission quota indefinitely. Documentation SHALL state this
+directly rather than implying that every queued message eventually resolves,
+SHALL distinguish the reachable-but-unready case from the unreachable one so an
+operator does not expect the dwell to rescue the former, SHALL point operators to
+the undelivered-queue inscriptions as the way to observe it, and SHALL explain
+that per-target admission quota is what bounds the consequence.
 
 Documentation SHALL state the two bounds that genuinely do not exist: durability
 across a relay crash, and completeness of resolution for `Pending` entries.
@@ -593,8 +601,10 @@ across a relay crash, and completeness of resolution for `Pending` entries.
 #### Scenario: Document the bounds that apply to async delivery
 
 - **WHEN** operator-facing documentation is updated for async delivery mode
-- **THEN** it states that no setting bounds how long a delivery waits for its
-  target, on any transport
+- **THEN** it states that no setting bounds how long a delivery waits for a
+  target that is reachable but not ready, on any transport
+- **AND** it states that `unreachable-dwell-ms` bounds only continuous
+  unreachability, and does not rescue a reachable target that never becomes ready
 - **AND** it describes `submission-timeout-ms` as bounding the relay's own
   post-authorization execution rather than the wait for a target
 - **AND** it does not reference a `quiescence_timeout_ms`, a per-coder
@@ -603,8 +613,10 @@ across a relay crash, and completeness of resolution for `Pending` entries.
 #### Scenario: Document that a pending entry may never resolve
 
 - **WHEN** operator-facing documentation describes queue growth
-- **THEN** it states that a message queued for a target that never becomes ready
-  remains queued and holds its admission quota indefinitely
+- **THEN** it states that a message queued for a target that stays reachable but
+  never becomes ready remains queued and holds its admission quota indefinitely
+- **AND** it distinguishes that case from a continuously unreachable target,
+  whose members resolve past `[delivery].unreachable-dwell-ms`
 - **AND** it names per-target admission quota as what bounds the consequence, and
   the undelivered-queue inscriptions as how to observe it
 - **AND** it does not claim that every queued message eventually reaches a

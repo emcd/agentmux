@@ -416,7 +416,8 @@ honestly make.
 
 The honest statement, which replaces it: **every accepted message resolves at most
 once, on delivery, on submission evidence, on a positively observed terminal
-target lifecycle, or at relay shutdown.** A message queued for a live target that
+target lifecycle, on sustained unreachability past the dwell, or at relay
+shutdown.** A message queued for a live target that
 never becomes ready remains `Pending` indefinitely, and that is correct — the
 target may still become ready, and the relay has observed nothing that says
 otherwise. Sends are asynchronous by contract, returning `queued` without blocking
@@ -581,8 +582,9 @@ gone" is not one condition. It fires only on a **positively observed terminal
 lifecycle state** — the transport was shut down, or its generation was torn down
 without replacement. A **transient absence** — a respawn in progress, a
 generation being replaced, a UI subscriber that has disconnected but whose
-session is still registered — leaves members `Pending` indefinitely, until the
-absence resolves into readiness or into a positively observed teardown. Nothing
+session is still registered — leaves members `Pending`, until the absence
+resolves into readiness, into a positively observed teardown, or into a sustained
+unreachability the transport reports as `Unreachable` past the dwell. Nothing
 converts the waiting itself into an outcome; otherwise `transport_unavailable`
 would become another inference from absence, retired at the transport and
 reintroduced at the relay.

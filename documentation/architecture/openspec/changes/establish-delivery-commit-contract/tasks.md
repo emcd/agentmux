@@ -121,8 +121,8 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Documentation
 
-- [ ] Update operator docs to state that no setting bounds how long a delivery waits for its target, on any transport, and to describe `submission-timeout-ms` as bounding relay-side execution rather than that wait
-- [ ] Document that a `Pending` entry for a never-ready target holds its admission quota indefinitely, naming per-target quota as the bound on the consequence and the undelivered-queue inscriptions as how to observe it
+- [ ] Update operator docs to state that no setting bounds how long a delivery waits for a reachable-but-unready target on any transport, that `unreachable-dwell-ms` bounds continuous unreachability only, and that `submission-timeout-ms` bounds relay-side execution rather than either wait
+- [ ] Document that a `Pending` entry for a reachable-but-never-ready target holds its admission quota indefinitely, distinguishing it from a continuously unreachable target whose members resolve past the dwell, and naming per-target quota as the bound on the consequence and the undelivered-queue inscriptions as how to observe it
 - [ ] State the crash-recovery limitation: guarantees hold for a surviving relay process and graceful shutdown only
 - [ ] Reconcile `session-relay/spec.md` hub prose (requirement total, the partition description advertising prime/wedge timeouts)
 - [ ] Refresh the MCP tool inventory after the `raww` schema change: restart the server, verify tool inventory client-side, and record the outcome in the lane handoff
@@ -145,7 +145,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Cover the two axes independently: a healthy-but-unready target holds its member indefinitely, and an unreachable one resolves its member only after the dwell threshold
 - [ ] Cover that unreachability shorter than the threshold resolves nothing and the member still delivers afterward, and that a target flapping across the threshold boundary resolves each member exactly once
 - [ ] Cover that `look` is served on an unreachable target and reports the health level, while `raww` to the same target is gated
-- [ ] Cover that no elapsed duration resolves a `Pending` entry, releases its quota, or produces a receipt for it
+- [ ] Cover that no elapsed duration resolves a `Pending` entry whose target is reachable, releases its quota, or produces a receipt for it
 - [x] Cover the warning dedup: many entries crossing together emit one inscription for their target, and the target re-arms after its queue empties
 - [x] Cover that the aggregate is suppressed when nothing is `Pending`, and that neither emission changes any outcome, quota, or scheduling position
 - [ ] Assert the teeth of the ordering and absence tests by reverting each mechanism and confirming the test fails

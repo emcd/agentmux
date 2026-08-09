@@ -32,10 +32,12 @@ The `[delivery]` keys live here rather than in `coders.toml` because they
 describe the relay's own queue, scheduling, and reporting rather than any coder's
 behavior.
 
-**No `[delivery]` key bounds how long the relay waits for a target to become
-ready, and no configuration SHALL introduce one.** A `Pending` entry waits
+**No `[delivery]` key bounds how long the relay waits for a *reachable* target to
+become ready, and no configuration SHALL introduce one.** Such an entry waits
 indefinitely; see the `delivery-quiescence` capability's `Async Queue Lifecycle
-and Ordering` requirement.
+and Ordering` requirement. `unreachable-dwell-ms` is not an exception to this: it
+bounds how long a target may be continuously *unreachable*, which qualifies a
+repeated observation rather than substituting for an absent one.
 
 `submission-timeout-ms` is the sole post-authorization bound, and it SHALL NOT be
 read as a readiness bound. **It bounds ingestion, not readiness.** A batch is

@@ -86,8 +86,10 @@ the retirement must land together.
   a relay-level residency bound resolving `expired`. That was the same inference
   relocated: elapsed waiting decided an outcome, and because expiry terminalizes
   and releases quota it dropped mail that would have landed once a long agent turn
-  finished. A `Pending` entry now waits indefinitely, and the `expired` outcome is
-  deleted along with the timers. What replaces them is a **relay-level admission
+  finished. A `Pending` entry whose target is reachable now waits indefinitely, and
+  the `expired` outcome is deleted along with the timers. Sustained
+  unreachability is bounded separately by `[delivery].unreachable-dwell-ms`,
+  which qualifies a repeated observation rather than inferring from absence. What replaces them is a **relay-level admission
   quota and scheduling policy** — enforced positively at send time, per target and
   relay-global — plus **undelivered-queue inscriptions** that report a long wait
   without adjudicating it.
@@ -308,8 +310,11 @@ text, so it takes no delta; reconciled as a sync/archive task.
   `fence-observation-timeout-ms`, `unreachable-dwell-ms`, the four
   admission-quota keys, and
   `undelivered-warning-ms` plus `undelivered-report-interval-ms`.
-  **No key bounds how long a delivery waits for its target**, and none may be
-  added. `submission-timeout-ms` is an **execution watchdog** over the relay's own
+  **No key bounds how long a delivery waits for a target that is reachable but
+  not ready**, and none may be added. `unreachable-dwell-ms` is not that bound:
+  it governs how long a target may be continuously *unreachable* before its
+  members resolve, qualifying an observation repeatedly made rather than
+  substituting for one never made. `submission-timeout-ms` is an **execution watchdog** over the relay's own
   supervised code, mandatory per the operator's 2026-08-04 call: it bounds how
   long an authorized submission may run, states nothing about target health, and
   exists because every other guard trigger is an event that a blocked-but-alive
