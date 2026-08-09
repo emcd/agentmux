@@ -365,7 +365,12 @@ advance, so such a target is never suppressed on this basis.
   observations
 - **THEN** no terminal outcome is produced on that basis
 - **AND** the entry remains `Pending`, resolving only if it is later authorized,
-  if its transport is positively observed torn down, or at relay shutdown
+  if its transport is positively observed torn down, if that transport is
+  continuously observed `Unreachable` past `[delivery].unreachable-dwell-ms`, or
+  at relay shutdown
+- **BECAUSE** the absence of an activity advance is not evidence; sustained
+  unreachability is, which is why the dwell resolves an entry and a quiet screen
+  never does
 
 ### Requirement: Transport-Internal Probe Seam for Testability
 

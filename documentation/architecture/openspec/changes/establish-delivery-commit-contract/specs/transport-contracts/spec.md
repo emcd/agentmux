@@ -165,7 +165,7 @@ unreachability is evidence that no wait will end it.
 #### Scenario: A never-ready target waits without resolving
 
 - **WHEN** a target's prompt-readiness template never matches, for arbitrarily
-  long
+  long, while its transport keeps reporting itself reachable
 - **THEN** the entry remains `Pending` and no terminal outcome is issued for it
 - **AND** the most recent observation is recorded as diagnostics only, and does
   not accumulate toward any verdict
@@ -362,9 +362,11 @@ policy boundary:
   transport was shut down, or its generation was torn down without replacement;
 - a **transient absence** — a respawn in progress, a generation being replaced, a
   UI subscriber that has disconnected but whose session is still registered —
-  SHALL leave members `Pending` indefinitely, until the absence resolves into
-  readiness or into a positively observed teardown. Nothing converts the waiting
-  itself into an outcome.
+  SHALL leave members `Pending`, until the absence resolves into readiness, into
+  a positively observed teardown, or into a sustained unreachability its
+  transport reports as `Unreachable` past `[delivery].unreachable-dwell-ms`.
+  Nothing converts the waiting itself into an outcome; what resolves the third
+  case is the repeated observation, not its duration alone.
 
 Otherwise `transport_unavailable` would become another inference from absence,
 retired at the transport and reintroduced at the relay.
@@ -419,7 +421,8 @@ so a `coders.toml` that still sets it fails load on existing unknown-field
 validation. An operator SHALL delete the line; no value preserves the prior
 behavior. Deliveries that previously resolved `Timeout` with
 `reason_code = "acp_turn_timeout"` now resolve `delivered` at the framed write, or
-remain `Pending` when the target never becomes ready to be authorized. No outcome
+remain `Pending` while the target is reachable but never becomes ready to be
+authorized — resolving only if it goes unreachable past the dwell. No outcome
 replaces the timeout on that path, because the timeout's outcome was the
 inference being retired.
 

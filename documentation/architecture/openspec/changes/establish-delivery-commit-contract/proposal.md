@@ -86,8 +86,10 @@ the retirement must land together.
   a relay-level residency bound resolving `expired`. That was the same inference
   relocated: elapsed waiting decided an outcome, and because expiry terminalizes
   and releases quota it dropped mail that would have landed once a long agent turn
-  finished. A `Pending` entry now waits indefinitely, and the `expired` outcome is
-  deleted along with the timers. What replaces them is a **relay-level admission
+  finished. A `Pending` entry whose target is reachable now waits indefinitely, and
+  the `expired` outcome is deleted along with the timers. Sustained
+  unreachability is bounded separately by `[delivery].unreachable-dwell-ms`,
+  which qualifies a repeated observation rather than inferring from absence. What replaces them is a **relay-level admission
   quota and scheduling policy** — enforced positively at send time, per target and
   relay-global — plus **undelivered-queue inscriptions** that report a long wait
   without adjudicating it.
@@ -253,8 +255,9 @@ inventory is reconciled against it.
 - `delivery-quiescence` (7 MODIFIED, 2 ADDED) — MODIFIED:
   `Quiescence-Gated Delivery` (relay-owned readiness), `Delivery Results Without
   ACK Protocol` (admission reservation, Pubsub rejection), `Async Queue Lifecycle
-  and Ordering` (entry states, no elapsed-time resolution, byte-budgeted
-  round-robin),
+  and Ordering` (entry states, elapsed-time resolution only for sustained
+  unreachability, per-target FIFO as worker-enqueue linearization, no
+  cross-target scheduling),
   `Asynchronous Terminal-Outcome
   Receipt` (new outcome vocabulary), `Async Delivery Observability`, `Async Queue
   Growth Risk Disclosure`, `Quiescence Documentation`. ADDED: `Delivery
@@ -303,22 +306,28 @@ text, so it takes no delta; reconciled as a sync/archive task.
   reconnect timeout is a constant plus builder (`src/transports/ui.rs:129-147`),
   not a TOML key, so retiring it is a code deletion rather than a config break.
 - **Configuration — additive, relay-level.** A `[delivery]` table in `relay.toml`
-  replaces them: `submission-timeout-ms`, `scheduling-quantum-bytes`,
-  `fence-observation-timeout-ms`, the four admission-quota keys, and
+  replaces them: `submission-timeout-ms`,
+  `fence-observation-timeout-ms`, `unreachable-dwell-ms`, the four
+  admission-quota keys, and
   `undelivered-warning-ms` plus `undelivered-report-interval-ms`.
-  **No key bounds how long a delivery waits for its target**, and none may be
-  added. `submission-timeout-ms` is an **execution watchdog** over the relay's own
+  **No key bounds how long a delivery waits for a target that is reachable but
+  not ready**, and none may be added. `unreachable-dwell-ms` is not that bound:
+  it governs how long a target may be continuously *unreachable* before its
+  members resolve, qualifying an observation repeatedly made rather than
+  substituting for one never made. `submission-timeout-ms` is an **execution watchdog** over the relay's own
   supervised code, mandatory per the operator's 2026-08-04 call: it bounds how
   long an authorized submission may run, states nothing about target health, and
   exists because every other guard trigger is an event that a blocked-but-alive
   executor never produces. The two undelivered keys govern **reporting only** and
   may not influence any outcome, quota, or scheduling decision. These are relay
-  configuration rather than per-coder because they describe the relay's own queue
-  and scheduling, not any coder's behavior. `scheduling-quantum-bytes` is
-  validated at load against every registered transport's maximum handover
-  dimension.
+  configuration rather than per-coder because they describe the relay's own queue,
+  not any coder's behavior. A `scheduling-quantum-bytes` key was specified here
+  and is withdrawn along with the cross-target round-robin it budgeted; see
+  `design.md`.
 - **Relay** — `src/relay/delivery/**` gains the pending queue, the admission-quota
-  and scheduling policy, undelivered-queue reporting, and handover dispatch.
+  policy, undelivered-queue reporting, and handover dispatch. Cross-target
+  scheduling is deliberately absent: each target is served by its own worker and
+  the relay arbitrates between none of them.
 - **Transports** — `src/transports/{contract,quiescence,mod,ui}.rs`,
   `src/pty/**`, `src/tmux/**`, `src/acp/**`. All five `TransportImpl` variants
   are covered: Tmux, Acp, and Pty implement the contract, Ui implements it and

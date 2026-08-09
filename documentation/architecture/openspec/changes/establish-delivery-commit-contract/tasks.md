@@ -32,12 +32,9 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Scheduling
 
-- [ ] Ensure no elapsed-time path can resolve a `Pending` entry: it leaves that state only by authorization, positively observed transport teardown, or graceful shutdown
-- [ ] Implement per-target FIFO covering mail and raw as one order
-- [ ] Implement byte-budgeted round-robin across targets: canonical payload bytes as the cost unit, exactly one quantum of credit per visit with no carry-over, ineligible targets skipped
+- [ ] Ensure no elapsed-time path can resolve a `Pending` entry whose target is reachable: it leaves that state only by authorization, positively observed transport teardown, sustained unreachability past `[delivery].unreachable-dwell-ms`, or graceful shutdown
+- [ ] Make the per-target FIFO guarantee explicit and tested: mail and raw as one order, defined as worker-enqueue linearization rather than request or admission order
 - [ ] Form batches against both handover components, stopping at whichever of envelope count or canonical payload bytes binds first
-- [ ] Debit the visit's remaining credit at authorization, in the same atomic operation as the `Pending` to `Authorized` transition
-- [ ] Revalidate the quantum against the largest byte component when a transport registers or changes its declared maxima, refusing registration rather than admitting an unschedulable transport
 - [ ] Keep an activity-advanced target unauthorizable, even when the later observation matches the prompt-readiness template
 - [ ] Reschedule `Pending` entries to a new generation on respawn; never re-invoke `Authorized` entries
 - [ ] Resolve still-`Pending` members `dropped_on_shutdown` on graceful shutdown, and `Authorized` members from evidence
@@ -117,15 +114,15 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 ### Configuration
 
 - [x] Delete the five per-coder keys and their loader, validation, and default machinery
-- [x] Add the `relay.toml` `[delivery]` table with submission timeout, quantum, fence-observation bound, the four admission-quota keys, and the two undelivered-reporting keys
-- [x] Validate `scheduling-quantum-bytes` at load against every registered transport's maximum handover dimension
+- [x] Add the `relay.toml` `[delivery]` table with submission timeout, fence-observation bound, the four admission-quota keys, and the two undelivered-reporting keys
 - [x] Add the `[delivery]` unreachable-dwell key that bounds how long a target may be continuously unreachable before its `Pending` members resolve
+- [x] Delete the `scheduling-quantum-bytes` key, its default, range, and load-time validation against transport handover maxima, now that no scheduling policy consumes it
 - [x] Delete `prime_timeout_ms` and `readiness_timeout_ms` from `DeliveryEnvelope`
 
 ### Documentation
 
-- [ ] Update operator docs to state that no setting bounds how long a delivery waits for its target, on any transport, and to describe `submission-timeout-ms` as bounding relay-side execution rather than that wait
-- [ ] Document that a `Pending` entry for a never-ready target holds its admission quota indefinitely, naming per-target quota as the bound on the consequence and the undelivered-queue inscriptions as how to observe it
+- [ ] Update operator docs to state that no setting bounds how long a delivery waits for a reachable-but-unready target on any transport, that `unreachable-dwell-ms` bounds continuous unreachability only, and that `submission-timeout-ms` bounds relay-side execution rather than either wait
+- [ ] Document that a `Pending` entry for a reachable-but-never-ready target holds its admission quota indefinitely, distinguishing it from a continuously unreachable target whose members resolve past the dwell, and naming per-target quota as the bound on the consequence and the undelivered-queue inscriptions as how to observe it
 - [ ] State the crash-recovery limitation: guarantees hold for a surviving relay process and graceful shutdown only
 - [ ] Reconcile `session-relay/spec.md` hub prose (requirement total, the partition description advertising prime/wedge timeouts)
 - [ ] Refresh the MCP tool inventory after the `raww` schema change: restart the server, verify tool inventory client-side, and record the outcome in the lane handoff
@@ -148,7 +145,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Cover the two axes independently: a healthy-but-unready target holds its member indefinitely, and an unreachable one resolves its member only after the dwell threshold
 - [ ] Cover that unreachability shorter than the threshold resolves nothing and the member still delivers afterward, and that a target flapping across the threshold boundary resolves each member exactly once
 - [ ] Cover that `look` is served on an unreachable target and reports the health level, while `raww` to the same target is gated
-- [ ] Cover that no elapsed duration resolves a `Pending` entry, releases its quota, or produces a receipt for it
+- [ ] Cover that no elapsed duration resolves a `Pending` entry whose target is reachable, releases its quota, or produces a receipt for it
 - [x] Cover the warning dedup: many entries crossing together emit one inscription for their target, and the target re-arms after its queue empties
 - [x] Cover that the aggregate is suppressed when nothing is `Pending`, and that neither emission changes any outcome, quota, or scheduling position
 - [ ] Assert the teeth of the ordering and absence tests by reverting each mechanism and confirming the test fails

@@ -502,8 +502,8 @@ async fn submit_task(
 /// batch and guard identities.
 ///
 /// One member per batch today: the worker submits tasks one at a time, so a
-/// batch is a batch of one until byte-budgeted round-robin lands and starts
-/// forming real ones.
+/// batch is a batch of one until batch formation against the transport's
+/// maximum handover dimensions lands and starts forming real ones.
 fn authorize_member(task: &AsyncDeliveryTask) {
     super::super::admission::authorize(task.message_id.as_str(), BatchId::mint());
 }
