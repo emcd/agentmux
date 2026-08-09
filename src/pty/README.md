@@ -1,5 +1,13 @@
 # src/pty/
 
+> **Work-in-progress — not production-ready.** The Pty transport landed early in
+> the 0.9.0 cycle, but it is marked explicitly WIP and further hardening is
+> deferred to the next release cycle. Known deferred gaps:
+> `agentmux:issues/runtime/8` (lazy Pty spawn panics in a tokio worker) and
+> `agentmux:issues/runtime/9` (a delivery can spawn a member of a held bundle),
+> both milestone 0.10.0. This module is compiled only when the `pty` Cargo
+> feature is enabled.
+
 Pty transport: libghostty-vt-backed delivery with portable-pty child process
 management. Compiled only when the `pty` Cargo feature is enabled; the default
 `cargo build` does NOT pull libghostty-vt or portable-pty and does NOT invoke
@@ -16,9 +24,10 @@ are documented in `documentation/development/README.md` Zig-free Pty Builds.
 - `delivery` — worker-thread target writes and outcome resolution. The Pty
   worker is the only thread that can apply bytes to the libghostty-vt
   terminal (the terminal is `!Send + !Sync`); handover readiness is observed
-  on demand through `PtyTransport::is_ready_for_handover` before authorization,
-  and an authorized write resolves from its master-write result without a
-  prompt, prime, or quiescence wait.
+  on demand through `PtyTransport::is_ready_for_handover` before authorization.
+  A batch is partitioned into per-member packing units before the first write,
+  each unit's bytes are buffered and written as one primitive, and each member
+  resolves from its own unit's write result — no group-wide outcome is applied.
 - `state` — cross-thread shared state (`PtyShared`, `PtyConfigSnapshot`,
   `SnapshotRequest`/`SnapshotResponse`) plus the look and prompt observer
   consumers (`PtyOutputView`, `PtyPromptProbe`).

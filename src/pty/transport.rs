@@ -83,6 +83,18 @@ const WORKER_IDLE_POLL: Duration = Duration::from_millis(10);
 /// Poll interval for the reader thread when the master returns
 /// `WouldBlock`.
 const READER_IDLE_POLL: Duration = Duration::from_millis(5);
+/// Bound on how long a partial-startup cleanup may wait for a thread to finish
+/// before giving up on joining it.
+///
+/// A worker thread stalled inside the uninterruptible
+/// `libghostty_vt::Terminal::new` can never be forced to return, so a cleanup
+/// that must not hang startup observes `is_finished()` within this bound and
+/// then detaches rather than blocking. The child is already killed and reaped,
+/// and the shutdown flag is latched, so a detached worker that eventually
+/// returns exits without publishing stale readiness.
+const STARTUP_CLEANUP_JOIN_BOUND: Duration = Duration::from_secs(2);
+/// Poll cadence for the bounded startup-cleanup observation.
+const STARTUP_CLEANUP_POLL: Duration = Duration::from_millis(10);
 /// Agentmux-pty version string returned by the `on_xtversion`
 /// callback. The relay-tui can display it for the operator.
 const PTY_VERSION_STRING: &str = concat!("agentmux-pty ", env!("CARGO_PKG_VERSION"));
@@ -642,7 +654,7 @@ impl Drop for StartupGuard {
         // PTY master closes (this unblocks the reader's
         // `read()` via `Ok(0` EOF); the reader's `Err(_)` arm
         // also flips `child_exited`, but EOF is the
-        // typical-path), then join the reader + worker.
+        // typical-path), then observe the reader + worker.
         self.shutdown_flag.store(true, Ordering::Release);
 
         let child_arc = self.child.take();
@@ -655,12 +667,55 @@ impl Drop for StartupGuard {
             }
         }
 
-        if let Some(handle) = self.reader_handle.take() {
-            let _ = handle.join();
+        // Join what can be observed to finish, bounded. The reader exits on EOF
+        // after the child kill, so it normally completes immediately; the
+        // worker may be stalled inside the uninterruptible `Terminal::new`,
+        // which nothing can force to return. Cleanup must not hang startup on
+        // that stall, so each join is a bounded `is_finished()` observation
+        // that gives up (detaching the thread) rather than blocking. The child
+        // is already killed and reaped, and the shutdown flag is latched, so a
+        // detached worker that eventually returns exits without publishing
+        // stale readiness.
+        if let Some(handle) = self.reader_handle.take()
+            && !observe_thread_finished(handle, STARTUP_CLEANUP_JOIN_BOUND)
+        {
+            eprintln!(
+                "[pty] startup cleanup could not observe the reader thread finish within \
+                 {STARTUP_CLEANUP_JOIN_BOUND:?}; leaving it to exit on its own"
+            );
         }
-        if let Some(handle) = self.worker_handle.take() {
-            let _ = handle.join();
+        if let Some(handle) = self.worker_handle.take()
+            && !observe_thread_finished(handle, STARTUP_CLEANUP_JOIN_BOUND)
+        {
+            eprintln!(
+                "[pty] startup cleanup could not observe the worker thread finish within \
+                 {STARTUP_CLEANUP_JOIN_BOUND:?}; it may be stalled in Terminal::new and is \
+                 left running to exit on its own"
+            );
         }
+    }
+}
+
+/// Boundedly observes a thread's completion instead of blocking on it.
+///
+/// Polls [`thread::JoinHandle::is_finished`] until the thread finishes or the
+/// bound elapses, joining once it is observed finished. Returns `true` when the
+/// thread was observed to finish and `false` when the bound elapsed first. On
+/// `false`, the handle is dropped without joining, detaching the thread.
+///
+/// A blocking `join` cannot be used here: nothing can interrupt an in-process
+/// `Terminal::new`, so a cleanup that joined outright would relocate the stall
+/// it exists to end.
+fn observe_thread_finished(handle: thread::JoinHandle<()>, bound: Duration) -> bool {
+    let deadline = std::time::Instant::now() + bound;
+    while !handle.is_finished() && std::time::Instant::now() < deadline {
+        thread::sleep(STARTUP_CLEANUP_POLL);
+    }
+    if handle.is_finished() {
+        let _ = handle.join();
+        true
+    } else {
+        false
     }
 }
 
@@ -1095,16 +1150,23 @@ fn run_worker(
             }
         }
 
-        // 3. If a delivery is in progress, resolve its write result.
+        // 3. If a delivery is in progress, resolve its write result. A group
+        //    that absorbed a raw barrier during its partition returns it here,
+        //    after the group's own writes, so the barrier is delivered on the
+        //    next iteration rather than ahead of the buffered group it must
+        //    follow.
         if let Some(d) = delivery.as_mut() {
             match d.step(&target_session) {
-                super::delivery::DeliveryStep::Done => {
+                super::delivery::DeliveryStep::Done {
+                    pending_raw: next_raw,
+                } => {
                     publish(
                         &readiness,
                         mirror_state.as_ref(),
                         WorkerReadinessState::Available,
                     );
                     delivery = None;
+                    pending_raw = next_raw;
                     continue;
                 }
             }
@@ -1125,30 +1187,22 @@ fn run_worker(
             Ok(DeliveryCommand::Envelope {
                 envelope,
                 outcome_tx,
-            }) => match super::delivery::Delivery::start_envelope_group(
-                envelope,
-                outcome_tx,
-                &mut write_rx,
-                &writer,
-                &target_session,
-            ) {
-                Ok(d) => {
-                    publish(
-                        &readiness,
-                        mirror_state.as_ref(),
-                        WorkerReadinessState::Busy,
-                    );
-                    delivery = Some(d);
-                    continue;
-                }
-                Err(failure) => {
-                    // Failure outcomes were already sent inside
-                    // start_envelope_group; the worker just needs
-                    // to honor the pending raw (if any).
-                    pending_raw = failure.pending_raw;
-                    continue;
-                }
-            },
+            }) => {
+                let d = super::delivery::Delivery::start_envelope_group(
+                    envelope,
+                    outcome_tx,
+                    &mut write_rx,
+                    &writer,
+                    &target_session,
+                );
+                publish(
+                    &readiness,
+                    mirror_state.as_ref(),
+                    WorkerReadinessState::Busy,
+                );
+                delivery = Some(d);
+                continue;
+            }
             Ok(DeliveryCommand::Raw {
                 content,
                 append_enter,
@@ -1178,13 +1232,17 @@ fn run_worker(
     }
 }
 
-/// Abandon an in-flight delivery by resolving it as `Failed` with a
-/// `pty_child_exited` reason. Called from the child-exit branch of the
-/// worker event loop so the caller's `OutcomeFuture` does not hang
-/// after the worker has observed child death and refused to drive
-/// the delivery to its terminal classification. Best-effort: a
-/// `send` failure (the caller has dropped their receiver) is silently
-/// swallowed.
+/// Abandon an in-flight delivery on child exit.
+///
+/// Called from the child-exit branch of the worker event loop so the caller's
+/// `OutcomeFuture` does not hang after the worker has observed child death.
+/// A group's writes have already happened synchronously at partition time, so
+/// each member keeps the outcome its own unit's write recorded (submission
+/// success terminalizes `delivered`; a later child exit is target-health
+/// observability, not a second delivery outcome), and only an absorbed raw
+/// barrier takes the failure. A raw-only delivery is resolved with the
+/// supplied failure. Best-effort: a `send` failure (the caller has dropped
+/// their receiver) is silently swallowed.
 fn abandon_in_flight(delivery: &mut Option<super::delivery::Delivery>, target_session: &str) {
     if let Some(mut d) = delivery.take() {
         d.abandon_into_failed(
@@ -1516,6 +1574,25 @@ mod tests {
             Some("pty_child_exited"),
             "expected reason_code pty_child_exited, got {:?}",
             outcome.reason_code,
+        );
+
+        // Branch 3: `observe_thread_finished` joins a thread that finishes
+        // within the bound and detaches one that does not, never blocking
+        // startup on an uninterruptible stall. A worker stuck in
+        // `Terminal::new` must not hold the cleanup open forever.
+        let quick = thread::spawn(|| {});
+        while !quick.is_finished() {
+            thread::yield_now();
+        }
+        assert!(
+            observe_thread_finished(quick, Duration::from_secs(2)),
+            "a finished thread should be observed and joined",
+        );
+
+        let slow = thread::spawn(|| thread::sleep(Duration::from_millis(100)));
+        assert!(
+            !observe_thread_finished(slow, Duration::from_millis(10)),
+            "a thread not finished by the bound should be detached, not joined",
         );
     }
 }

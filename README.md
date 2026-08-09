@@ -5,6 +5,13 @@ lets agent sessions exchange structured messages and coordinate work without
 being tied to one specific coding product or harness. It supports agent
 harnesses running in tmux panes and ACP-backed sessions.
 
+> **The Pty transport is work-in-progress and not production-ready.** It is not
+> yet a supported way to run coder sessions in 0.9.0: known deferred gaps are
+> `agentmux:issues/runtime/8` (lazy Pty spawn panics in a tokio worker) and
+> `agentmux:issues/runtime/9` (a delivery can spawn a member of a held bundle),
+> both targeted for the 0.10.0 cycle. Until they land, treat Pty-backed members
+> as experimental.
+
 ## Disclaimer
 
 This project is **not affiliated with** [agentmux.app](https://agentmux.app/)
