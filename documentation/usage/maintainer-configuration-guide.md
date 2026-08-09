@@ -107,16 +107,55 @@ A target the relay cannot reach at all — no tmux server, a dead ACP
 child — is not merely slow, and waiting will not fix it. Once a target
 has been continuously unreachable for `[delivery].unreachable-dwell-ms`
 (default `30000`), its waiting messages resolve as `not_submitted` with
-reason code `delivery_target_unreachable`, and the sender receives a
-terminal-outcome receipt. An unreachability that ends inside the dwell
-costs nothing.
+reason code `delivery_target_unreachable`, and a terminal-outcome receipt
+is sent to the sender if that sender is still routable — see below. An
+unreachability that ends inside the dwell costs nothing.
 
 So: unreachable is bounded by the dwell; reachable-but-unready is not
 bounded at all. For the latter, what is bounded is the queue rather than
-the wait — per-target admission quota caps how many envelopes one unready
-target can hold, and the undelivered-queue inscriptions report the depth
-and age of what is waiting. Both live in the `relay.toml` `[delivery]`
-table.
+the wait. A message queued for a target that stays reachable but never
+becomes ready keeps its admission quota for as long as it waits, which
+may be forever — per-target admission quota caps how many such envelopes
+one target can hold, and once that cap is reached further sends to it are
+rejected at the request boundary rather than queued. The undelivered-queue
+inscriptions report the depth and age of what is waiting. All of these
+live in the `relay.toml` `[delivery]` table.
+
+`submission-timeout-ms` is in that table too and is **not** a bound on
+either wait. It bounds the relay's own supervised execution *after* a
+batch is authorized — how long the relay's own code may spend handing
+bytes to a transport — and says nothing about target health. Note that it
+does not yet fire: the execution watchdog it configures is not
+implemented, so setting the key today changes nothing. It is documented
+here because the distinction it draws is the one operators most often get
+wrong, not because it is currently in force.
+
+### What survives a relay crash
+
+Nothing in the queue does. The pending queue is in-memory and
+non-durable, so a relay that dies unexpectedly takes its queued messages
+with it: they are not recovered on restart, and their senders receive no
+terminal-outcome receipt, because the process that would have issued one
+is gone.
+
+Every guarantee above — that an authorized batch reaches a terminal
+outcome, that a non-delivered outcome is resolved and recorded, that
+admission quota is released when a member resolves — holds for a
+**surviving relay process** and for **graceful shutdown**. Graceful
+shutdown is handled: messages still waiting resolve `dropped_on_shutdown`
+rather than vanishing. An abrupt death is not, and is not planned to be.
+Durability would require persisting the queue, which is deliberately out
+of scope.
+
+**Receipts are best-effort, and this is true of every outcome above, not
+just of shutdown.** A terminal-outcome receipt is delivered only if the
+original sender's session is routable at the moment the outcome resolves.
+If it is not, the receipt is dropped: the relay does not persist it, does
+not queue it for later, and does not retry. The outcome itself is still
+recorded, so an operator can always recover it from the inscriptions even
+when no sender was there to be told. Read "the sender is told" throughout
+this section as "the sender is told if reachable, and the inscriptions
+record it either way".
 
 ### `policies.toml` — authorization policy presets
 

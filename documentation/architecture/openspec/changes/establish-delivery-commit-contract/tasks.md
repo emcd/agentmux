@@ -121,9 +121,9 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Documentation
 
-- [ ] Update operator docs to state that no setting bounds how long a delivery waits for a reachable-but-unready target on any transport, that `unreachable-dwell-ms` bounds continuous unreachability only, and that `submission-timeout-ms` bounds relay-side execution rather than either wait
-- [ ] Document that a `Pending` entry for a reachable-but-never-ready target holds its admission quota indefinitely, distinguishing it from a continuously unreachable target whose members resolve past the dwell, and naming per-target quota as the bound on the consequence and the undelivered-queue inscriptions as how to observe it
-- [ ] State the crash-recovery limitation: guarantees hold for a surviving relay process and graceful shutdown only
+- [x] Update operator docs to state that no setting bounds how long a delivery waits for a reachable-but-unready target on any transport, that `unreachable-dwell-ms` bounds continuous unreachability only, and that `submission-timeout-ms` bounds relay-side execution rather than either wait
+- [x] Document that a `Pending` entry for a reachable-but-never-ready target holds its admission quota indefinitely, distinguishing it from a continuously unreachable target whose members resolve past the dwell, and naming per-target quota as the bound on the consequence and the undelivered-queue inscriptions as how to observe it
+- [x] State the crash-recovery limitation: guarantees hold for a surviving relay process and graceful shutdown only
 - [ ] Reconcile `session-relay/spec.md` hub prose (requirement total, the partition description advertising prime/wedge timeouts)
 - [ ] Refresh the MCP tool inventory after the `raww` schema change: restart the server, verify tool inventory client-side, and record the outcome in the lane handoff
 
