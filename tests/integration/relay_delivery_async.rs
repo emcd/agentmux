@@ -384,3 +384,123 @@ fn relay_raww_submits_through_copy_mode_pane() {
 
     let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
 }
+
+/// Mail and raw are one per-target FIFO, not two.
+///
+/// The existing FIFO test covers repeated mail. This one interleaves the two
+/// request kinds against a single target, because the property that could break
+/// is not ordering within a kind — each kind reaches the transport through its
+/// own request handler, and nothing in either handler consults the other's
+/// queue. What holds them in one order is that both call the same
+/// `enqueue_async_delivery` for the same worker key, and that
+/// `try_existing_worker` performs `sender.send` while holding the registry
+/// lock. That lock is the linearization point: two concurrent senders to one
+/// target serialize on it, and because the channel is unbounded the send cannot
+/// block, so channel order is lock-acquisition order.
+///
+/// The guarantee is therefore **worker-enqueue linearization, not request or
+/// admission order** — admission is reserved earlier, in each handler, so a
+/// request may reserve quota first and still lose the race to enqueue. This
+/// test drives the requests sequentially, which is what lets it assert an
+/// expected order at all; a concurrent variant could only assert that some
+/// single order was observed, which is a weaker property than the one at issue.
+///
+/// Ordering is read off the pane rather than off inscriptions so the assertion
+/// covers the whole path, including the transport's internal channel, which is
+/// what preserves a raw barrier's position relative to the envelopes around it.
+#[test]
+fn relay_interleaves_mail_and_raw_in_one_per_target_order() {
+    if !tmux_available() {
+        eprintln!("skipping relay delivery test because tmux is unavailable");
+        return;
+    }
+
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
+
+    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
+    spawn_session(&paths.tmux_socket, "bravo", "exec cat");
+
+    // Mail, raw, mail — so a raw entry is bracketed by envelopes on both sides.
+    // Ordering that only ever placed raw first or last could be produced by the
+    // two kinds occupying separate queues drained in a fixed sequence, which is
+    // precisely the arrangement this asserts against.
+    let markers = ["ORDER-MAIL-ONE", "ORDER-RAW-TWO", "ORDER-MAIL-THREE"];
+
+    let send_mail = |marker: &str, request_id: &str| {
+        let response = dispatch_request(
+            RelayRequest::Send {
+                request_id: Some(request_id.to_string()),
+                requester_session: "alpha".to_string(),
+                message: marker.to_string(),
+                targets: vec!["bravo@party".to_string()],
+                broadcast: false,
+                quiet_window_ms: Some(70),
+                on_behalf_of: None,
+            },
+            &config_root,
+            bundle_name,
+            &paths.runtime_directory,
+        )
+        .expect("async send should be accepted");
+        let RelayResponse::Send { results, .. } = response else {
+            panic!("expected send response");
+        };
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].outcome, SendOutcome::Queued);
+    };
+
+    send_mail(markers[0], "req-order-1");
+
+    let raw = dispatch_request(
+        RelayRequest::Raww {
+            request_id: Some("req-order-2".to_string()),
+            requester_session: "alpha".to_string(),
+            target_session: "bravo@party".to_string(),
+            text: markers[1].to_string(),
+            no_enter: false,
+            on_behalf_of: None,
+        },
+        &config_root,
+        bundle_name,
+        &paths.runtime_directory,
+    )
+    .expect("raww request should be accepted");
+    let RelayResponse::Raww { status, .. } = raw else {
+        panic!("expected raww response");
+    };
+    assert_eq!(status, "queued");
+
+    send_mail(markers[2], "req-order-3");
+
+    for marker in markers {
+        wait_for_pane_contains(
+            &paths.tmux_socket,
+            "bravo",
+            marker,
+            Duration::from_millis(4_000),
+        );
+    }
+
+    let snapshot = capture_pane(&paths.tmux_socket, "bravo", "-200");
+    let positions: Vec<usize> = markers
+        .iter()
+        .map(|marker| {
+            snapshot
+                .find(marker)
+                .unwrap_or_else(|| panic!("marker {marker} should exist in pane"))
+        })
+        .collect();
+    assert!(
+        positions.windows(2).all(|pair| pair[0] < pair[1]),
+        "mail and raw must land in one per-target order; positions={positions:?}, \
+         snapshot={snapshot:?}"
+    );
+
+    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
+}
