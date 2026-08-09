@@ -877,11 +877,28 @@ impl Transport for PtyTransport {
             envelope: Box::new(envelope),
             outcome_tx,
         };
-        if write_tx.blocking_send(cmd).is_err() {
-            // Channel closed; the consumer is gone. The OutcomeFuture
-            // was returned to the caller; it will resolve to an error
-            // because the consumer (worker thread) dropped the
-            // outcome_tx when it shut down.
+        // Non-blocking submission: the relay documents this write seam as
+        // non-blocking (src/relay/delivery/dispatch/worker.rs), and the
+        // worker design rests on that holding. A full channel must not park
+        // a delivery-runtime worker thread. On a full or closed channel the
+        // item comes back unchanged; resolve the outcome immediately with a
+        // terminal failure so the relay's collector never waits on it.
+        if let Err(error) = write_tx.try_send(cmd) {
+            let DeliveryCommand::Envelope {
+                envelope,
+                outcome_tx,
+            } = error.into_inner()
+            else {
+                unreachable!("mailw only enqueues Envelope commands");
+            };
+            let _ = outcome_tx.send(SingleDeliveryOutcome {
+                target_session: String::new(),
+                message_id: envelope.message_id.clone(),
+                outcome: crate::transports::SendOutcome::Failed,
+                reason_code: Some("channel_full".to_string()),
+                reason: Some("pty internal write channel full or closed".to_string()),
+                details: None,
+            });
         }
         outcome_rx
     }
@@ -904,8 +921,19 @@ impl Transport for PtyTransport {
             append_enter,
             outcome_tx,
         };
-        if write_tx.blocking_send(cmd).is_err() {
-            // Channel closed; the consumer is gone.
+        // Non-blocking submission; see `mailw` for the contract.
+        if let Err(error) = write_tx.try_send(cmd) {
+            let DeliveryCommand::Raw { outcome_tx, .. } = error.into_inner() else {
+                unreachable!("raww only enqueues Raw commands");
+            };
+            let _ = outcome_tx.send(SingleDeliveryOutcome {
+                target_session: String::new(),
+                message_id: String::new(),
+                outcome: crate::transports::SendOutcome::Failed,
+                reason_code: Some("channel_full".to_string()),
+                reason: Some("pty internal write channel full or closed".to_string()),
+                details: None,
+            });
         }
         outcome_rx
     }
@@ -1594,5 +1622,142 @@ mod tests {
             !observe_thread_finished(slow, Duration::from_millis(10)),
             "a thread not finished by the bound should be detached, not joined",
         );
+    }
+}
+
+/// Inline write-seam test. `mailw`/`raww` on a full or closed write channel
+/// must resolve the outcome immediately (`Failed` + `channel_full`) rather
+/// than parking a delivery-runtime worker thread on `blocking_send` — the
+/// relay documents that seam as non-blocking
+/// (`src/relay/delivery/dispatch/worker.rs`), and the worker design rests on
+/// that holding. The channel is a private transport field, so the full/closed
+/// state can only be injected from inside the module; the block contains
+/// exactly one `#[test]` function (per the project rule for inline private
+/// tests), covering both seams against both channel states.
+#[cfg(test)]
+mod write_seam_tests {
+    use super::*;
+    use crate::configuration::{BundleMember, TargetConfiguration};
+    use crate::envelope::AddressIdentity;
+    use crate::transports::{DeliveryEnvelope, DeliveryMessage, SendOutcome};
+
+    fn test_envelope(message_id: &str) -> DeliveryEnvelope {
+        DeliveryEnvelope {
+            message_id: message_id.to_string(),
+            message: DeliveryMessage {
+                body: "test body".to_string(),
+                created_at: "2026-08-01T00:00:00Z".to_string(),
+                namespace: "test-ns".to_string(),
+                sender: AddressIdentity {
+                    session_name: "sender@test-ns".to_string(),
+                    display_name: None,
+                },
+                target: AddressIdentity {
+                    session_name: "target@test-ns".to_string(),
+                    display_name: None,
+                },
+                cc: Vec::new(),
+                authenticated_identity: None,
+                on_behalf_of: None,
+            },
+            append_enter: true,
+            choice_decider_sessions: Vec::new(),
+            quiet_window: Duration::from_millis(50),
+            is_receipt: false,
+        }
+    }
+
+    fn test_transport() -> PtyTransport {
+        PtyTransport::new(
+            BundleMember {
+                id: "test-session".to_string(),
+                name: None,
+                working_directory: None,
+                target: TargetConfiguration::Ui,
+                coder_session_id: None,
+                policy_id: None,
+                environment: Vec::new(),
+            },
+            PtyTargetConfiguration {
+                initial_command: "/bin/sh".to_string(),
+                resume_command: "/bin/sh".to_string(),
+                prompt_readiness: None,
+                cols: 120,
+                rows: 40,
+                working_directory: None,
+                term_protocol: TermProtocol::default(),
+            },
+            None,
+        )
+    }
+
+    /// Fill `capacity` slots of a fresh channel so the next `try_send` sees
+    /// `Full`, then inject it as the transport's write channel.
+    fn transport_with_full_channel() -> PtyTransport {
+        let (write_tx, _write_rx) = mpsc::channel::<DeliveryCommand>(WRITE_CHANNEL_CAPACITY);
+        for _ in 0..WRITE_CHANNEL_CAPACITY {
+            let (outcome_tx, _outcome_rx) = oneshot::channel::<SingleDeliveryOutcome>();
+            write_tx
+                .blocking_send(DeliveryCommand::Raw {
+                    content: String::new(),
+                    append_enter: false,
+                    outcome_tx,
+                })
+                .expect("fill write channel");
+        }
+        let mut transport = test_transport();
+        transport.write_tx = Some(write_tx);
+        transport
+    }
+
+    #[test]
+    fn mailw_and_raww_resolve_immediately_when_the_channel_is_full_or_closed() {
+        // Full channel: every slot is occupied, so `try_send` refuses without
+        // blocking. Both seams must resolve the outcome immediately with
+        // `Failed` + `channel_full`, never parking a delivery-runtime worker.
+        let mut transport = transport_with_full_channel();
+
+        let mailw_outcome = Transport::mailw(&mut transport, test_envelope("msg-1"))
+            .blocking_recv()
+            .expect("mailw must resolve immediately on a full channel");
+        assert_eq!(mailw_outcome.outcome, SendOutcome::Failed);
+        assert_eq!(
+            mailw_outcome.reason_code.as_deref(),
+            Some("channel_full"),
+            "a full write channel must report channel_full, got {:?}",
+            mailw_outcome.reason_code,
+        );
+        assert_eq!(mailw_outcome.message_id, "msg-1");
+
+        let raww_outcome = Transport::raww(&mut transport, "raw text".to_string(), true)
+            .blocking_recv()
+            .expect("raww must resolve immediately on a full channel");
+        assert_eq!(raww_outcome.outcome, SendOutcome::Failed);
+        assert_eq!(raww_outcome.reason_code.as_deref(), Some("channel_full"));
+
+        // Closed channel: the consumer is gone, so `try_send` refuses the item
+        // back unchanged. Same immediate terminal resolution.
+        let (write_tx, write_rx) = mpsc::channel::<DeliveryCommand>(WRITE_CHANNEL_CAPACITY);
+        drop(write_rx);
+        let mut transport = test_transport();
+        transport.write_tx = Some(write_tx);
+
+        let mailw_outcome = Transport::mailw(&mut transport, test_envelope("msg-2"))
+            .blocking_recv()
+            .expect("mailw must resolve immediately on a closed channel");
+        assert_eq!(mailw_outcome.outcome, SendOutcome::Failed);
+        assert_eq!(
+            mailw_outcome.reason_code.as_deref(),
+            Some("channel_full"),
+            "a closed write channel must report channel_full, got {:?}",
+            mailw_outcome.reason_code,
+        );
+        assert_eq!(mailw_outcome.message_id, "msg-2");
+
+        let raww_outcome = Transport::raww(&mut transport, "raw text".to_string(), true)
+            .blocking_recv()
+            .expect("raww must resolve immediately on a closed channel");
+        assert_eq!(raww_outcome.outcome, SendOutcome::Failed);
+        assert_eq!(raww_outcome.reason_code.as_deref(), Some("channel_full"));
     }
 }
