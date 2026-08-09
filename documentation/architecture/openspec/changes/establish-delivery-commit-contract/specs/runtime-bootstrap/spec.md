@@ -15,7 +15,6 @@ file SHALL use kebab-case TOML keys and MAY contain:
 
   | Key | Default | Range | Governs |
   |---|---|---|---|
-  | `scheduling-quantum-bytes` | `262_144` | `65_536..=16_777_216` | a target's credit per rotation visit, in canonical payload bytes |
   | `submission-timeout-ms` | `5_000` | `500..=60_000` | how long an authorized batch's ingestion may run before the relay initiates the generation fence |
   | `fence-observation-timeout-ms` | `5_000` | `100..=60_000` | the budget for each of the generation fence's two cessation observations, so total acknowledgment is bounded by twice this value |
   | `queued-envelopes-max` | `10_000` | `1..=1_000_000` | relay-global admission quota, envelope count |
@@ -66,18 +65,6 @@ the safest intent.
 validation at load with a structured error naming both keys and both values. A
 per-target limit above the global one is unreachable and therefore always a
 configuration mistake.
-
-`scheduling-quantum-bytes` SHALL be greater than or equal to the
-**canonical-payload-byte component** of every registered transport's maximum
-handover dimensions. A value below any registered byte component SHALL fail
-validation at load with a structured error naming the key, the configured value,
-and the transport whose byte component exceeds it. The envelope-count component
-is not compared against the quantum, which is denominated in bytes.
-
-Because transports register after configuration load, this constraint SHALL also
-be revalidated when a transport registers or changes its declared maxima; see the
-`delivery-quiescence` capability's `Async Queue Lifecycle and Ordering`
-requirement for the refusal behavior.
 
 **The undelivered-queue keys govern reporting only.** `undelivered-warning-ms`
 and `undelivered-report-interval-ms` SHALL NOT influence any member's outcome,
@@ -138,14 +125,6 @@ and pre-flight configuration validation with structured validation errors.
 - **THEN** relay startup fails with a structured error naming the key and the
   permitted range
 - **AND** `agentmux check configuration` reports the same invalid artifact
-
-#### Scenario: Reject a quantum below a registered byte maximum
-
-- **WHEN** `[delivery].scheduling-quantum-bytes` is less than the
-  canonical-payload-byte component of any registered transport's maximum handover
-  dimensions
-- **THEN** relay startup fails with a structured validation error naming the key,
-  the configured value, and the transport whose byte component exceeds it
 
 #### Scenario: Reject zero for a delivery setting
 

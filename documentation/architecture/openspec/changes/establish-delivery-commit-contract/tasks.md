@@ -33,11 +33,8 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 ### Scheduling
 
 - [ ] Ensure no elapsed-time path can resolve a `Pending` entry whose target is reachable: it leaves that state only by authorization, positively observed transport teardown, sustained unreachability past `[delivery].unreachable-dwell-ms`, or graceful shutdown
-- [ ] Implement per-target FIFO covering mail and raw as one order
-- [ ] Implement byte-budgeted round-robin across targets: canonical payload bytes as the cost unit, exactly one quantum of credit per visit with no carry-over, ineligible targets skipped
+- [ ] Make the per-target FIFO guarantee explicit and tested: mail and raw as one order, defined as worker-enqueue linearization rather than request or admission order
 - [ ] Form batches against both handover components, stopping at whichever of envelope count or canonical payload bytes binds first
-- [ ] Debit the visit's remaining credit at authorization, in the same atomic operation as the `Pending` to `Authorized` transition
-- [ ] Revalidate the quantum against the largest byte component when a transport registers or changes its declared maxima, refusing registration rather than admitting an unschedulable transport
 - [ ] Keep an activity-advanced target unauthorizable, even when the later observation matches the prompt-readiness template
 - [ ] Reschedule `Pending` entries to a new generation on respawn; never re-invoke `Authorized` entries
 - [ ] Resolve still-`Pending` members `dropped_on_shutdown` on graceful shutdown, and `Authorized` members from evidence
@@ -117,9 +114,9 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 ### Configuration
 
 - [x] Delete the five per-coder keys and their loader, validation, and default machinery
-- [x] Add the `relay.toml` `[delivery]` table with submission timeout, quantum, fence-observation bound, the four admission-quota keys, and the two undelivered-reporting keys
-- [x] Validate `scheduling-quantum-bytes` at load against every registered transport's maximum handover dimension
+- [x] Add the `relay.toml` `[delivery]` table with submission timeout, fence-observation bound, the four admission-quota keys, and the two undelivered-reporting keys
 - [x] Add the `[delivery]` unreachable-dwell key that bounds how long a target may be continuously unreachable before its `Pending` members resolve
+- [ ] Delete the `scheduling-quantum-bytes` key, its default, range, and load-time validation against transport handover maxima, now that no scheduling policy consumes it
 - [x] Delete `prime_timeout_ms` and `readiness_timeout_ms` from `DeliveryEnvelope`
 
 ### Documentation

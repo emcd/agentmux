@@ -323,36 +323,43 @@ on its own is rejected at admission rather than queued unsendable.
 - Capacity is **atomically reserved at admission, before `queued` is returned**,
   and released at the member's terminal transition — whether that is a pre-commit
   drop or a post-commit resolution.
-- Scheduling is FIFO per target. Across targets it is **byte-budgeted
-  round-robin**, specified rather than named:
-  - **cost unit** — canonical payload bytes, the same unit as admission quota, so
-    one accounting serves both;
-  - **quantum** — a relay-configured byte value, which SHALL be **greater than or
-    equal to the canonical-payload-byte component of every registered transport's
-    maximum handover dimensions**. Configuring it lower is a validation error at
-    load;
-  - **per-visit credit** — exactly one quantum, with no carry-over. One spend
-    limit, not two;
-  - **oversized item** — cannot exist. Because the quantum is at least the
-    largest permitted byte component, and admission already rejects an envelope
-    exceeding the transport's maximum handover dimensions, every admissible item
-    fits within one quantum;
-  - **eligible rotation** — only targets with pending work and a transport
-    reporting `is_ready_for_handover` are visited; ineligible targets are skipped.
+- Scheduling is FIFO per target, where FIFO means worker-enqueue linearization:
+  mail and raw reach a target through one keyed worker, and the order that
+  worker's channel establishes is the order delivered. A request may reserve
+  admission before another and still lose the enqueue race, so admission order is
+  not delivery order and only the latter is guaranteed.
+- **Across targets, nothing is scheduled, and that is deliberate.** Each target
+  has its own worker; the relay does not arbitrate between them.
 
-  **A deficit counter was specified here and has been removed.** Classical DRR
-  accumulates unspent quantum so an item larger than one quantum can eventually
-  be sent, and the oversized-item rule above excludes that case by construction.
-  The counter therefore had no work to do, while the anti-monopoly cap it needed
-  reduced available credit back to one quantum anyway. Carrying both a carry-over
-  rule and a cap produced two incompatible spend limits — a visit could claim
-  "remaining quantum plus deficit", up to two quanta, while an acceptance
-  scenario forbade exceeding one. Removing the counter leaves a single limit and
-  slightly stronger fairness: every eligible target is visited each rotation and
-  receives a full quantum.
+  An earlier revision of this document specified byte-budgeted round-robin with a
+  configured quantum, per-visit credit, and debit-at-authorization. It is
+  withdrawn. The quantum was required to be at least the largest permitted
+  handover byte component while batch formation was already capped at that same
+  component, so one quantum always afforded a full batch and the credit could
+  bind only on a second batch within a visit — and visits existed only because a
+  rotation did. The budget was there to be fair within a rotation; the rotation
+  was there to allocate the budget.
 
-  This replaces an earlier "no target may be starved", which named a property
-  without defining a mechanism that could be tested for it.
+  The withdrawn design had already caught this defect one level down and not
+  recognised it. It carried a deficit counter, then deleted it on the reasoning
+  that a carry-over rule plus the anti-monopoly cap fairness requires produced
+  two incompatible spend limits on one quantity. The quantum stands in exactly
+  that relation to the handover maxima — an outer limit constructed so it can
+  never bind — and the same argument was not applied to it. Worth recording,
+  because a visible self-correction reads as evidence that the neighbourhood was
+  examined, and here it was not: the correction was evidence about the paragraph
+  it appeared in and nothing more.
+
+  **Targets do contend — that is not an argument for restoring it.** Tmux targets
+  in a bundle share one tmux server and socket; ACP bootstrap enters a shared
+  blocking pool; and a transport whose write seam blocks occupies a
+  delivery-runtime worker thread. A global byte quantum measures none of these:
+  not runtime occupancy, not channel slots, not tmux-server capacity. A
+  resource-grounded policy would be denominated per shared resource and would owe
+  a throughput or fairness objective, which nothing requires today. And a
+  transport blocking the write seam violates the non-blocking handover contract —
+  that is a defect to repair at its source, not a load to schedule around.
+  Scheduling on top of it would bound a symptom and leave the cause.
 - Admission quota is released through the guard's terminal transition
   (*Decision 6*) rather than by the collector, so a panicked task cannot leak it.
 - The policy lives in relay configuration, not `coders.toml`, because it is a
@@ -903,7 +910,7 @@ transport's existing prime/wedge/quiescence logic cannot coexist**, and it is
 smaller than any transport's task list. Three tiers follow.
 
 **Tier A — relay-local, coexistence-safe.** The queue entry state model,
-admission and its quotas, per-target FIFO, byte-budgeted round-robin, the guard
+admission and its quotas, per-target FIFO, the guard
 and terminal CAS, typed submission evidence, and undelivered-queue reporting are
 bookkeeping the relay performs over whatever the transport does. A transport that
 still waits internally is not wrong under them; its entry simply holds `Authorized`

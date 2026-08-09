@@ -50,12 +50,17 @@ perform target observation via the `DeliveryEnvelope.quiet_window: Duration`
 field. The `prime_timeout_ms` and `readiness_timeout_ms` envelope fields are
 removed, as are the per-coder configuration keys that populated them.
 
-**How long a message may wait for readiness is not bounded, by a transport timer
-or by any relay setting.** A `Pending` entry waits until its target becomes ready,
-until that target's transport is positively observed torn down, or until the relay
-shuts down. Elapsed waiting SHALL NOT resolve an entry, because the length of a
-target's turn is not evidence about the target and no bound the relay could pick
-would be anything but a guess about work it does not control.
+**How long a message may wait for a reachable target to become ready is not
+bounded, by a transport timer or by any relay setting.** A `Pending` entry waits
+until its target becomes ready, until that target's transport is positively
+observed torn down, until that transport has been continuously observed
+`Unreachable` past `[delivery].unreachable-dwell-ms`, or until the relay shuts
+down. Elapsed waiting SHALL NOT resolve an entry whose target is reachable,
+because the length of a target's turn is not evidence about the target and no
+bound the relay could pick would be anything but a guess about work it does not
+control. Sustained unreachability is a different case, admitted deliberately and
+bounded by the dwell: there, duration qualifies an observation repeatedly made
+rather than substituting for one never made.
 
 #### Scenario: Hand over after the target becomes ready
 
@@ -191,55 +196,40 @@ no authorization SHALL occur across a raw barrier, nor younger work across older
 except where the emergency raw mode defined in the `transport-contracts`
 capability applies.
 
-Scheduling across targets SHALL be **byte-budgeted round-robin**. Maximum
-handover dimensions have two components — envelope count and canonical payload
-bytes — and the two are used for different purposes, so each rule below names
-which:
+**The ordering guarantee is worker-enqueue linearization, not request arrival
+order.** Mail and raw both reach a target through the same keyed worker, and the
+order established is the order in which sends reach that worker's channel. A
+request that reserves admission before another may still lose the race to enqueue
+and be delivered second. Admission order and delivery order are therefore
+distinct, and only the latter is guaranteed. Stating this precisely matters
+because the weaker property is the one the implementation provides and the one a
+test can hold it to.
 
-- **cost unit** — canonical payload bytes, the same unit as admission quota, so
-  one accounting serves both. Envelope count is not a scheduling cost;
-- **quantum** — a relay-configured byte value, compared against the
-  **canonical-payload-byte component** of every registered transport's maximum
-  handover dimensions. It SHALL be greater than or equal to the largest such byte
-  component. Configuring it lower SHALL be a validation error at load. The count
-  component is not compared against the quantum, since the quantum is denominated
-  in bytes;
-- **per-visit credit** — exactly one quantum. A target's available credit on a
-  rotation visit SHALL be one quantum, and unspent credit SHALL NOT carry
-  forward. **There is one spend limit, and it is the quantum;**
-- **batch formation** — a batch SHALL satisfy **both** components of its target
-  transport's maximum handover dimensions: no more envelopes than the count
-  maximum, and no more canonical payload bytes than the byte maximum. Whichever
-  binds first stops the batch. A batch SHALL additionally not exceed the visiting
-  target's remaining credit for that visit;
-- **debit timing** — credit SHALL be debited by a batch's canonical payload bytes
-  **at authorization**, in the same atomic operation as the `Pending` →
-  `Authorized` transition. Debiting at admission would charge work that may never
-  be authorized; debiting at resolution would let a target be visited repeatedly
-  while its earlier batches are still in flight;
-- **eligible rotation** — only targets with pending work whose transport reports
-  `is_ready_for_handover` are visited; ineligible targets are skipped;
-- **revalidation** — when the set of registered transports changes, or a
-  registered transport's declared maximum handover dimensions change, the relay
-  SHALL revalidate the configured quantum against the new largest byte component.
-  If the quantum no longer satisfies the constraint, the relay SHALL refuse to
-  register that transport and SHALL record the refusal, rather than silently
-  admitting a transport whose handover it cannot schedule.
+**Cross-target scheduling fairness is deliberately out of scope.** Each target is
+served by its own worker, and the relay does not arbitrate between targets. No
+rotation, credit, or per-visit budget is specified, and none may be introduced
+without first naming the resource being allocated and the fairness guarantee
+being offered.
 
-**Why there is no deficit counter.** Classical deficit round-robin accumulates
-unspent quantum so that an item larger than one quantum can eventually be sent.
-This design excludes that case by construction: the quantum is at least the
-largest permitted byte component, and admission rejects an envelope exceeding its
-transport's maximum handover dimensions, so every admissible item fits within one
-quantum and at least one batch is always formable per visit. A carry-over counter
-would therefore have no work to do, and capping it — which anti-monopoly fairness
-requires — reduces available credit back to exactly one quantum in every case.
-Carrying both a carry-over rule and a cap produced two incompatible spend limits;
-removing the counter leaves one.
+An earlier revision specified byte-budgeted round-robin with a configured
+quantum. It is withdrawn, and the reason is recorded because the mistake is easy
+to repeat. The quantum was required to be at least the largest permitted handover
+byte component, while batch formation was already capped at that same component —
+so one quantum always afforded at least one full batch, and the credit could
+constrain only a second batch within one visit. Visits existed only because a
+rotation existed. The budget was there to be fair within a rotation, and the
+rotation was there to allocate the budget.
 
-Fairness is unaffected and slightly stronger: every eligible target is visited
-each rotation and receives a full quantum, so no target can be starved and none
-can bank credit to monopolise a later rotation.
+**Targets do contend, and that is not an argument for restoring it.** Tmux
+targets in one bundle share a single tmux server and socket; ACP bootstrap enters
+a shared blocking pool; and a transport whose write seam blocks can occupy a
+delivery-runtime worker thread. None of these is measured by a global byte
+quantum, which represents neither runtime occupancy nor channel slots nor
+tmux-server capacity. A resource-grounded policy would be denominated per shared
+resource and would state a throughput or fairness objective. No such objective is
+required today. A transport that blocks the write seam is a contract violation to
+be repaired at its source rather than a load to be scheduled around; see the
+`transport-abstraction` capability's non-blocking handover requirement.
 
 **No elapsed duration SHALL resolve a `Pending` entry whose target is
 reachable.** A `Pending` entry leaves that state only by being authorized, by its
@@ -308,26 +298,13 @@ any coder.
 - **THEN** the batch is authorized and submitted normally
 - **BECAUSE** the entry was never disqualified by how long it waited
 
-#### Scenario: Skip an unready target
+#### Scenario: An unready target is not authorized
 
 - **WHEN** a target has pending work but its transport does not report
   `is_ready_for_handover`
-- **THEN** the rotation skips it
-- **AND** it accrues no credit toward a later visit
-
-#### Scenario: Credit does not accumulate across rotations
-
-- **WHEN** a target is skipped, or spends less than its quantum, across several
-  consecutive rotations
-- **THEN** its credit on the next visit is exactly one quantum
-- **AND** it cannot consume more than one quantum on any single visit
-
-#### Scenario: Reject a quantum smaller than a registered byte maximum
-
-- **WHEN** the configured scheduling quantum is less than the canonical-payload-
-  byte component of any registered transport's maximum handover dimensions
-- **THEN** configuration load fails with a structured error naming the key, the
-  configured value, and the transport whose byte component exceeds it
+- **THEN** none of its entries are authorized
+- **AND** they remain `Pending` with their admission quota still reserved
+- **AND** no elapsed duration converts that unreadiness into an outcome
 
 #### Scenario: Batch formation obeys both handover components
 
@@ -335,22 +312,7 @@ any coder.
   component or the canonical-payload-byte component of its transport's maximum
   handover dimensions
 - **THEN** the batch stops at whichever component binds first
-- **AND** the remainder stays `Pending` for a later rotation
-
-#### Scenario: Debit credit at authorization
-
-- **WHEN** a batch transitions from `Pending` to `Authorized`
-- **THEN** the target's remaining credit for that visit is debited by the batch's
-  canonical payload bytes in the same atomic operation
-- **AND** the debit does not wait for the batch to resolve
-
-#### Scenario: Refuse a transport whose handover the quantum cannot cover
-
-- **WHEN** a transport registers, or changes its declared maximum handover
-  dimensions, such that the configured quantum is below its byte component
-- **THEN** the relay refuses to register that transport and records the refusal
-- **AND** it does not silently admit a transport whose handover it cannot
-  schedule
+- **AND** the remainder stays `Pending` for a later handover
 
 ### Requirement: Asynchronous Terminal-Outcome Receipt
 

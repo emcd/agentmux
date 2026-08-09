@@ -453,15 +453,18 @@ pub struct RelayRuntimeConfiguration {
     pub peers: Vec<PeerConfiguration>,
 }
 
-/// Resolved `[delivery]` settings: the relay's scheduling quantum, its two
-/// post-authorization bounds, the four admission quotas, and the two
-/// undelivered-queue reporting intervals.
+/// Resolved `[delivery]` settings: the two post-authorization bounds, the
+/// unreachable dwell, the four admission quotas, and the two undelivered-queue
+/// reporting intervals.
 ///
-/// No field here bounds how long the relay waits for a target to become ready.
-/// A `Pending` entry waits indefinitely by design, and the per-target quota — not
-/// a clock — is what bounds the consequence. `submission_timeout_ms` bounds
-/// ingestion, not readiness: it covers the transport consuming bytes after the
-/// relay has already observed the target ready.
+/// No field here bounds how long the relay waits for a *reachable* target to
+/// become ready. Such an entry waits indefinitely by design, and the per-target
+/// quota — not a clock — is what bounds the consequence. `submission_timeout_ms`
+/// bounds ingestion, not readiness: it covers the transport consuming bytes
+/// after the relay has already observed the target ready. `unreachable_dwell_ms`
+/// is the one field that does resolve a waiting entry, and only on sustained
+/// unreachability — an observation repeatedly made, not a guess standing in for
+/// one never made.
 ///
 /// The two undelivered-queue fields govern reporting only. Their sole effect on
 /// elapse is an inscription; neither influences a member's outcome, releases
