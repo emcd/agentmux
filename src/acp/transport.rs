@@ -2,12 +2,19 @@
 //!
 //! `AcpTransport` owns the per-target `PersistentAcpWorkerRuntime` (moved here
 //! from the relay delivery worker, which previously threaded it through
-//! `spawn_blocking`). [`Transport::mailw`] enqueues a structured delivery
-//! message on the transport's internal channel and returns an outcome future;
-//! the internal delivery task renders each message into pane-envelope text,
-//! combines a contiguous group into one ACP turn under the token budget, drives
-//! it to a terminal state (folding in what used to be the reader thread's
-//! `on_completion` body), and resolves the future for each contributing task.
+//! `spawn_blocking`). [`Transport::mailw`] hands a structured delivery message
+//! to the internal delivery task, which renders each message into pane-envelope
+//! text, combines a contiguous group into one ACP turn under the token budget,
+//! and resolves the future for each contributing task.
+//!
+//! The framed `session/prompt` write is the delivery boundary: every member of
+//! the group resolves `Delivered` immediately when the write succeeds, before
+//! replay-buffer locks or `on_dispatched` run. Active-prompt refusal and
+//! serialization failure resolve `not_submitted`; a write or flush error that
+//! cannot prove zero bytes left resolves `submission_unknown`. The turn's later
+//! completion, permission requests, or connection close are target-health
+//! observability — they drive readiness and the respawn signal, never a second
+//! delivery outcome for an already-resolved member.
 //!
 //! Choices (tool-call permissions) resolve through the relay-injected
 //! [`Chooser`] (see [`crate::acp::permission`]); the transport never calls the
@@ -34,7 +41,6 @@ use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 use crate::acp::client::{AcpGenerationHandle, SharedReplay};
@@ -57,16 +63,12 @@ use crate::transports::{
 use crate::transports::{SendOutcome, WorkerReadinessState};
 
 // ACP delivery failure taxonomy (see the relay delivery README for the full
-// catalogue). These mirror the codes the relay completion path used before the
-// transport move so the wire outcomes are unchanged.
-const ACP_REASON_CODE_STOP_CANCELLED: &str = "acp_stop_cancelled";
-/// Prompt-dispatch failure; surfaced to the worker's respawn classifier.
-pub const ACP_ERROR_CODE_PROMPT_FAILED: &str = "runtime_acp_prompt_failed";
-/// Connection-closed failure; surfaced to the worker's respawn classifier.
-pub const ACP_ERROR_CODE_CONNECTION_CLOSED: &str = "runtime_acp_connection_closed";
-/// Transport-unavailable failure; surfaced to the worker's respawn classifier.
-pub const ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE: &str = "acp_child_unavailable";
-
+// catalogue). The delivery outcomes the ACP transport now produces are typed:
+// `Delivered` (framed write succeeded), `NotSubmitted` (positive non-delivery:
+// active-prompt refusal or serialization failure), and `SubmissionUnknown`
+// (a write/flush error without proof that zero bytes left). Connection close
+// after a successful write is target-health observability, not a delivery
+// outcome.
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
 
@@ -638,17 +640,53 @@ impl AcpTransport {
         self.set_readiness(WorkerReadinessState::Unavailable);
     }
 
-    /// Creates an unavailable outcome preserving the caller's message_id and
-    /// this transport's target_session.
-    fn unavailable_outcome_with_id(&self, message_id: &str) -> SingleDeliveryOutcome {
-        failed_outcome_with_code(
-            self.target_session.clone(),
-            message_id.to_string(),
-            ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE,
-            "ACP transport unavailable (no runtime)",
-            None,
-        )
+    /// Installs a write channel for unit tests, so `mailw`/`raww` can reach
+    /// their enqueue-refusal paths without a live delivery task.
+    ///
+    /// Sets the transport `Available` (the precondition `mailw`/`raww` check
+    /// before `try_send`) and points `write_tx` at a fresh single-slot channel
+    /// (the smallest capacity that both refusal classes need). When `prefill`
+    /// is set, one raw item occupies the slot so the next `try_send` returns
+    /// `Full`. Returns a guard owning the channel's receiver: retaining it
+    /// keeps the channel open, dropping it closes the channel (the next
+    /// `try_send` returns `Closed`). The receiver is dropped normally with the
+    /// guard — the test never leaks it.
+    ///
+    /// This mirrors the relay's `_for_testing` export convention
+    /// (e.g. `second_claim_is_live_conflict_for_testing`): a `#[doc(hidden)]`
+    /// public seam so `tests/unit` can drive the public transport interface
+    /// without widening production API surface.
+    #[doc(hidden)]
+    #[must_use]
+    pub fn install_write_channel_for_testing(&mut self, prefill: bool) -> WriteChannelGuard {
+        self.set_readiness(WorkerReadinessState::Available);
+        let (tx, rx) = mpsc::channel::<WriteItem>(1);
+        if prefill {
+            tx.try_send(WriteItem::Raw {
+                content: "filler".to_string(),
+                append_enter: true,
+                outcome_tx: tokio::sync::oneshot::channel().0,
+            })
+            .expect("prefill the single-slot write channel");
+        }
+        self.write_tx = Some(tx);
+        WriteChannelGuard { rx }
     }
+}
+
+/// Guard owning the write-channel receiver installed by
+/// [`AcpTransport::install_write_channel_for_testing`].
+///
+/// Retaining it keeps the channel open (a `prefill`ed channel stays
+/// saturated, so the next `try_send` returns `Full`); dropping it closes the
+/// channel (the next `try_send` returns `Closed`). Dropping the guard also
+/// drops the receiver it owns, so the test never leaks the channel.
+#[doc(hidden)]
+pub struct WriteChannelGuard {
+    // Intentionally never read: the guard exists so the receiver is dropped
+    // with it, closing the channel at the end of the test's scope.
+    #[expect(dead_code)]
+    rx: mpsc::Receiver<WriteItem>,
 }
 
 impl GenerationFence for AcpTransport {
@@ -727,46 +765,118 @@ impl Transport for AcpTransport {
 
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
         let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
-        if let Some(tx) = self.write_tx.as_ref() {
-            if let Err(error) = tx.try_send(WriteItem::Envelope {
-                envelope: Box::new(envelope),
-                outcome_tx,
-            }) {
-                // Channel full or closed — resolve with a terminal outcome,
-                // preserving the envelope's message_id. The rejected item is the
-                // Envelope we just submitted; mailw never enqueues a Raw.
-                let WriteItem::Envelope {
-                    outcome_tx,
-                    envelope,
-                } = error.into_inner()
-                else {
-                    unreachable!("mailw only enqueues Envelope write items");
-                };
-                let _ = outcome_tx.send(self.unavailable_outcome_with_id(&envelope.message_id));
+        // An authorized batch starts a supervised submission executor
+        // synchronously or is refused synchronously — it must never wait in the
+        // transport's staging channel behind an in-flight turn. The relay only
+        // authorizes when this transport reports Available, so a not-ready
+        // reading here is the stale-readiness case: refuse before partition with
+        // `not_submitted` (positive evidence nothing was written).
+        if !self.is_ready_for_handover() {
+            let _ = outcome_tx.send(not_submitted_outcome(
+                self.target_session.clone(),
+                envelope.message_id.clone(),
+                "ACP transport is not ready to start a submission",
+            ));
+            return outcome_rx;
+        }
+        let Some(tx) = self.write_tx.as_ref() else {
+            // No live delivery task: refusal before partition — nothing was
+            // written, so the member resolves `not_submitted`.
+            let _ = outcome_tx.send(not_submitted_outcome(
+                self.target_session.clone(),
+                envelope.message_id.clone(),
+                "ACP transport has no runtime",
+            ));
+            return outcome_rx;
+        };
+        // Accept synchronously: mark Busy so the relay's next authorization
+        // check holds the following batch in `Pending` instead of enqueueing it
+        // behind this turn — the staging queue this contract removes.
+        set_shared_readiness(&self.shared, WorkerReadinessState::Busy);
+        if let Err(error) = tx.try_send(WriteItem::Envelope {
+            envelope: Box::new(envelope),
+            outcome_tx,
+        }) {
+            // The write channel refused the item. Classify the refusal so the
+            // post-refusal readiness is truthful: a Closed channel means the
+            // delivery task has exited (its receiver is gone), so Busy must not
+            // linger masking a dead executor — publish Unavailable. A Full
+            // channel means the delivery task is alive but saturated; Busy
+            // stays truthful until the task drains and settles Available. The
+            // rejected item is the Envelope we just submitted; mailw never
+            // enqueues a Raw.
+            let channel_closed = matches!(&error, mpsc::error::TrySendError::Closed(_));
+            if channel_closed {
+                set_shared_readiness(&self.shared, WorkerReadinessState::Unavailable);
             }
-        } else {
-            let _ = outcome_tx.send(self.unavailable_outcome_with_id(&envelope.message_id));
+            let WriteItem::Envelope {
+                outcome_tx,
+                envelope,
+            } = error.into_inner()
+            else {
+                unreachable!("mailw only enqueues Envelope write items");
+            };
+            let _ = outcome_tx.send(not_submitted_outcome(
+                self.target_session.clone(),
+                envelope.message_id.clone(),
+                if channel_closed {
+                    "ACP write channel closed (delivery task exited)"
+                } else {
+                    "ACP write channel full (delivery task saturated)"
+                },
+            ));
         }
         outcome_rx
     }
 
     fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
         let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
-        if let Some(tx) = self.write_tx.as_ref() {
-            if let Err(error) = tx.try_send(WriteItem::Raw {
-                content,
-                append_enter,
-                outcome_tx,
-            }) {
-                // The rejected item is the Raw we just submitted; raww never
-                // enqueues an Envelope.
-                let WriteItem::Raw { outcome_tx, .. } = error.into_inner() else {
-                    unreachable!("raww only enqueues Raw write items");
-                };
-                let _ = outcome_tx.send(self.unavailable_outcome_with_id(""));
+        if !self.is_ready_for_handover() {
+            let _ = outcome_tx.send(not_submitted_outcome(
+                self.target_session.clone(),
+                String::new(),
+                "ACP transport is not ready to start a submission",
+            ));
+            return outcome_rx;
+        }
+        let Some(tx) = self.write_tx.as_ref() else {
+            let _ = outcome_tx.send(not_submitted_outcome(
+                self.target_session.clone(),
+                String::new(),
+                "ACP transport has no runtime",
+            ));
+            return outcome_rx;
+        };
+        // Accept synchronously: mark Busy so the relay holds the next batch
+        // rather than enqueuing it behind this turn.
+        set_shared_readiness(&self.shared, WorkerReadinessState::Busy);
+        if let Err(error) = tx.try_send(WriteItem::Raw {
+            content,
+            append_enter,
+            outcome_tx,
+        }) {
+            // Classify the refusal so the post-refusal readiness is truthful: a
+            // Closed channel means the delivery task has exited, so Busy must
+            // not linger masking a dead executor — publish Unavailable. A Full
+            // channel means the delivery task is alive but saturated; Busy
+            // stays truthful until the task drains. The rejected item is the
+            // Raw we just submitted; raww never enqueues an Envelope.
+            let channel_closed = matches!(&error, mpsc::error::TrySendError::Closed(_));
+            if channel_closed {
+                set_shared_readiness(&self.shared, WorkerReadinessState::Unavailable);
             }
-        } else {
-            let _ = outcome_tx.send(self.unavailable_outcome_with_id(""));
+            let WriteItem::Raw { outcome_tx, .. } = error.into_inner() else {
+                unreachable!("raww only enqueues Raw write items");
+            };
+            let _ = outcome_tx.send(not_submitted_outcome(
+                self.target_session.clone(),
+                String::new(),
+                if channel_closed {
+                    "ACP write channel closed (delivery task exited)"
+                } else {
+                    "ACP write channel full (delivery task saturated)"
+                },
+            ));
         }
         outcome_rx
     }
@@ -1097,20 +1207,6 @@ fn is_raw_write_item(item: &WriteItem) -> bool {
     matches!(item, WriteItem::Raw { .. })
 }
 
-/// True when a settled [`SingleDeliveryOutcome`] indicates the underlying
-/// agent has died and the worker should respawn. The decision rides on the
-/// observable failure (the outcome's `reason_code`) rather than the
-/// transport's readiness state. `SerializationFailed` is intentionally NOT
-/// a respawn trigger: a bad message cannot be retried by respawning the
-/// agent.
-fn outcome_requires_respawn(outcome: &SingleDeliveryOutcome) -> bool {
-    outcome.outcome == SendOutcome::Failed
-        && matches!(
-            outcome.reason_code.as_deref(),
-            Some(ACP_ERROR_CODE_CONNECTION_CLOSED) | Some(ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE),
-        )
-}
-
 /// The ordered actions `acp_delivery_task` must execute after receiving
 /// one head item from the write channel. Produced by [`plan_inner_actions`];
 /// consumed by `execute_delivery_plan`.
@@ -1388,14 +1484,17 @@ fn execute_delivery_plan(
                 drain_and_resolve_shutdown(rx);
                 return;
             }
-            let result = submit_raw_turn(client, ctx, content.as_str(), append_enter);
-            let _ = outcome_tx.send(result.clone());
-            // The raw path runs through `submit_envelope_turn`, so the
-            // outcome is a settled `SingleDeliveryOutcome` and the same
-            // observable-event rule applies.
-            if outcome_requires_respawn(&result) {
-                raise_respawn_signal(respawn_needed_tx);
-            }
+            // The raw path resolves at the framed write inside
+            // `submit_envelope_turn`; respawn is raised from the observability
+            // path there, not from a post-hoc outcome check here.
+            submit_raw_turn(
+                client,
+                ctx,
+                respawn_needed_tx,
+                content.as_str(),
+                append_enter,
+                outcome_tx,
+            );
         }
     }
 }
@@ -1419,56 +1518,55 @@ fn flush_envelope_group(
     let mut decider_sessions = batch.decider_sessions.drain(..);
     let mut outcome_senders = batch.outcome_senders.drain(..);
 
-    let mut last_outcome: Option<SingleDeliveryOutcome> = None;
     for group in groups {
         let group_msg_ids: Vec<String> = message_ids.by_ref().take(group.member_count).collect();
         let group_deciders: Vec<Vec<String>> =
             decider_sessions.by_ref().take(group.member_count).collect();
         let group_senders: Vec<tokio::sync::oneshot::Sender<SingleDeliveryOutcome>> =
             outcome_senders.by_ref().take(group.member_count).collect();
-        let head_msg_id = group_msg_ids.first().cloned().unwrap_or_default();
         let head_deciders = group_deciders.into_iter().next().unwrap_or_default();
-        let outcome = submit_envelope_turn(
+        let members = group_msg_ids.into_iter().zip(group_senders).collect();
+        submit_envelope_turn(
             client,
             ctx,
+            respawn_needed_tx,
             &group.combined_prompt,
-            &head_msg_id,
+            members,
             &head_deciders,
         );
-        for (sender_msg_id, tx) in group_msg_ids.into_iter().zip(group_senders) {
-            let mut sender_outcome = outcome.clone();
-            sender_outcome.message_id = sender_msg_id;
-            let _ = tx.send(sender_outcome);
-        }
-        last_outcome = Some(outcome);
-    }
-
-    // The signal flows from the observable outcome (the reason a turn did
-    // not land cleanly), not from the readiness state. The driver-owned
-    // respawn monitor reads this and drives replacement.
-    if let Some(outcome) = last_outcome
-        && outcome_requires_respawn(&outcome)
-    {
-        raise_respawn_signal(respawn_needed_tx);
     }
 }
 
-/// Submits one combined prompt as an ACP turn, blocking until completion.
-/// Resolves when the prompt's `PromptCompletion` callback fires, the agent
-/// process closes, the dispatcher refuses, serialization fails, or shutdown
-/// is requested. No elapsed-time path bounds the wait on the ACP side; the
-/// relay's submission-timeout watchdog bounds the supervised code's runtime
-/// only after it is armed, which it becomes when the relay records
-/// submission evidence at write time.
+/// Submits one combined prompt as an ACP turn and resolves every member of the
+/// group from the submission evidence.
+///
+/// The framed `session/prompt` write is the delivery boundary: `Submitted`
+/// (member resolves `Delivered`) is recorded immediately after the write
+/// succeeds, before replay-buffer locks or `on_dispatched` run. The turn's
+/// later completion, permission requests, or connection close are target-health
+/// observability — they drive readiness and the respawn signal, never a second
+/// delivery outcome for an already-resolved member. Active-prompt refusal and
+/// serialization failure map to `not_submitted`; a stdin write or flush error
+/// without proof that zero bytes left maps to `submission_unknown`. No
+/// elapsed-time path bounds the wait on the ACP side; the relay's
+/// submission-timeout watchdog bounds the supervised code's runtime only after
+/// it is armed, which it becomes when the relay records submission evidence at
+/// write time.
 fn submit_envelope_turn(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
+    respawn_needed_tx: &tokio::sync::watch::Sender<u64>,
     prompt: &str,
-    message_id: &str,
+    members: Vec<(String, tokio::sync::oneshot::Sender<SingleDeliveryOutcome>)>,
     decider_sessions: &[String],
-) -> SingleDeliveryOutcome {
+) {
     let pending_choice: Arc<Mutex<Option<ChoiceMade>>> = Arc::new(Mutex::new(None));
     let completion_slot: Arc<Mutex<Option<PromptCompletion>>> = Arc::new(Mutex::new(None));
+
+    let head_message_id = members
+        .first()
+        .map(|(message_id, _)| message_id.clone())
+        .unwrap_or_default();
 
     let shared_for_dispatch = Arc::clone(ctx.shared);
     let on_dispatched: DispatchHandler = Box::new(move || {
@@ -1477,7 +1575,7 @@ fn submit_envelope_turn(
 
     let on_permission = if let Some(chooser) = ctx.chooser {
         let correlation = ChoiceCorrelation {
-            message_id: message_id.to_string(),
+            message_id: head_message_id,
             target_session: ctx.target_session.to_string(),
             decider_sessions: decider_sessions.to_vec(),
         };
@@ -1504,89 +1602,126 @@ fn submit_envelope_turn(
         *completion_writer.lock().expect("completion slot mutex") = Some(completion);
     });
 
-    let dispatch = client.prompt(
-        ctx.session_id,
-        prompt,
-        Some(on_dispatched),
-        Some(on_permission),
-        on_completion,
-    );
+    // `Submitted` is returned immediately after the framed write succeeds,
+    // before replay-buffer locks or `on_dispatched` — so the member evidence is
+    // recorded (resolved below) before either can block or panic.
+    let dispatch = client.prompt(ctx.session_id, prompt, Some(on_permission), on_completion);
 
     match dispatch {
         PromptDispatchOutcome::Submitted => {
-            // No elapsed-time path bounds this wait on the ACP side. The
-            // relay's submission-timeout watchdog bounds the supervised code's
-            // runtime only after it is armed, which it becomes when the relay
-            // records submission evidence at write time. Returns true if the
-            // prompt completed, false if shutdown was requested.
-            let completed = loop {
-                if client.wait_for_prompt_complete(ACP_PROMPT_WAIT_POLL_INTERVAL) {
-                    break true;
-                }
-                if shutdown_requested() {
-                    break false;
-                }
-            };
-            if !completed {
-                let _ = completion_slot
-                    .lock()
-                    .expect("completion slot mutex")
-                    .take();
-                let _ = pending_choice.lock().expect("pending_choice mutex").take();
-                set_turn_readiness(ctx, WorkerReadinessState::Unavailable);
-                let mut outcome = dropped_on_shutdown_outcome();
-                outcome.target_session = ctx.target_session.to_string();
-                outcome.message_id = message_id.to_string();
-                return outcome;
+            // The framed write succeeded: every member of this group resolves
+            // `Delivered` at the write, before the replay-buffer locks or
+            // `on_dispatched` below.
+            for (message_id, sender) in members {
+                let _ = sender.send(delivered_outcome(
+                    ctx.target_session.to_string(),
+                    message_id,
+                ));
             }
-            let completion = completion_slot
-                .lock()
-                .expect("completion slot mutex")
-                .take();
-            let pending = pending_choice.lock().expect("pending_choice mutex").take();
-            let (final_state, outcome) = build_acp_completion_result(
-                completion,
-                pending,
-                ctx.target_session.to_string(),
-                message_id.to_string(),
-                ctx.target_session,
+            // Replay-buffer locks + on_dispatched (Busy) follow the evidence
+            // recording; the turn lifecycle is observability only.
+            client.note_prompt_dispatched(prompt, Some(on_dispatched));
+            observe_acp_turn(
+                client,
+                ctx,
+                respawn_needed_tx,
+                &completion_slot,
+                &pending_choice,
             );
-            set_turn_readiness(ctx, final_state);
-            outcome
         }
         PromptDispatchOutcome::TransportUnavailable { reason } => {
+            // A stdin write or flush error without proof that zero bytes left
+            // cannot assert non-delivery: the member resolves submission_unknown.
             set_turn_readiness(ctx, WorkerReadinessState::Unavailable);
-            failed_outcome_with_code(
-                ctx.target_session.to_string(),
-                message_id.to_string(),
-                ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE,
-                "ACP child stdin write failed",
-                Some(json!({ "reason": reason })),
-            )
+            raise_respawn_signal(respawn_needed_tx);
+            for (message_id, sender) in members {
+                let _ = sender.send(submission_unknown_outcome(
+                    ctx.target_session.to_string(),
+                    message_id,
+                    &reason,
+                ));
+            }
         }
         PromptDispatchOutcome::SerializationFailed(reason) => {
-            set_turn_readiness(ctx, WorkerReadinessState::Unavailable);
-            failed_outcome_with_code(
-                ctx.target_session.to_string(),
-                message_id.to_string(),
-                ACP_ERROR_CODE_PROMPT_FAILED,
-                "ACP session/prompt dispatch failed",
-                Some(json!({ "reason": reason })),
-            )
+            // Active-prompt refusal and serialization failure are positive
+            // non-delivery: nothing was written, so the member resolves
+            // not_submitted. The transport is healthy, so readiness stays as-is.
+            for (message_id, sender) in members {
+                let _ = sender.send(not_submitted_outcome(
+                    ctx.target_session.to_string(),
+                    message_id,
+                    &reason,
+                ));
+            }
         }
     }
 }
 
-/// Submits raw content as an ACP turn (no envelope framing). Waits
-/// unbounded on completion, agent close, or shutdown — same contract as
-/// the envelope path; no elapsed-time bound is applied here either.
+/// Observes the turn lifecycle after a `Submitted` framed write. The member
+/// already resolved `Delivered` at the write, so this wait drives readiness and
+/// the respawn signal only: a normal completion returns the worker to
+/// `Available`, a connection close marks it `Unavailable` and raises the respawn
+/// signal, and an abandoned wait (shutdown) leaves the worker draining.
+fn observe_acp_turn(
+    client: &mut AcpStdioClient,
+    ctx: &TurnContext,
+    respawn_needed_tx: &tokio::sync::watch::Sender<u64>,
+    completion_slot: &Arc<Mutex<Option<PromptCompletion>>>,
+    pending_choice: &Arc<Mutex<Option<ChoiceMade>>>,
+) {
+    // No elapsed-time path bounds this wait on the ACP side. The relay's
+    // submission-timeout watchdog bounds the supervised code's runtime only
+    // after it is armed, which it becomes when the relay records submission
+    // evidence at write time. Returns true if the prompt completed, false if
+    // shutdown was requested.
+    let completed = loop {
+        if client.wait_for_prompt_complete(ACP_PROMPT_WAIT_POLL_INTERVAL) {
+            break true;
+        }
+        if shutdown_requested() {
+            break false;
+        }
+    };
+    if !completed {
+        let _ = completion_slot
+            .lock()
+            .expect("completion slot mutex")
+            .take();
+        let _ = pending_choice.lock().expect("pending_choice mutex").take();
+        set_turn_readiness(ctx, WorkerReadinessState::Unavailable);
+        return;
+    }
+    let completion = completion_slot
+        .lock()
+        .expect("completion slot mutex")
+        .take();
+    let pending = pending_choice.lock().expect("pending_choice mutex").take();
+    let (final_state, requires_respawn) = build_acp_turn_observability(completion, pending);
+    set_turn_readiness(ctx, final_state);
+    if requires_respawn {
+        raise_respawn_signal(respawn_needed_tx);
+    }
+}
+
+/// Submits raw content as an ACP turn (no envelope framing). The framed write
+/// is the delivery boundary exactly as in the envelope path; no elapsed-time
+/// bound is applied here either.
 fn submit_raw_turn(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
+    respawn_needed_tx: &tokio::sync::watch::Sender<u64>,
     content: &str,
     _append_enter: bool,
-) -> SingleDeliveryOutcome {
-    submit_envelope_turn(client, ctx, content, "", &[])
+    outcome_tx: tokio::sync::oneshot::Sender<SingleDeliveryOutcome>,
+) {
+    submit_envelope_turn(
+        client,
+        ctx,
+        respawn_needed_tx,
+        content,
+        vec![(String::new(), outcome_tx)],
+        &[],
+    );
 }
 
 fn delivered_outcome(target_session: String, message_id: String) -> SingleDeliveryOutcome {
@@ -1600,125 +1735,71 @@ fn delivered_outcome(target_session: String, message_id: String) -> SingleDelive
     }
 }
 
-fn failed_outcome(
+fn not_submitted_outcome(
     target_session: String,
     message_id: String,
-    reason: impl Into<String>,
+    reason: &str,
 ) -> SingleDeliveryOutcome {
     SingleDeliveryOutcome {
         target_session,
         message_id,
-        outcome: SendOutcome::Failed,
-        reason_code: None,
-        reason: Some(reason.into()),
+        outcome: SendOutcome::NotSubmitted,
+        reason_code: Some("not_submitted".to_string()),
+        reason: Some(reason.to_string()),
         details: None,
     }
 }
 
-fn failed_outcome_with_code(
+fn submission_unknown_outcome(
     target_session: String,
     message_id: String,
-    reason_code: &str,
-    reason: impl Into<String>,
-    details: Option<Value>,
+    reason: &str,
 ) -> SingleDeliveryOutcome {
     SingleDeliveryOutcome {
         target_session,
         message_id,
-        outcome: SendOutcome::Failed,
-        reason_code: Some(reason_code.to_string()),
-        reason: Some(reason.into()),
-        details,
+        outcome: SendOutcome::SubmissionUnknown,
+        reason_code: Some("submission_unknown".to_string()),
+        reason: Some(reason.to_string()),
+        details: None,
     }
 }
 
-fn build_acp_completion_result(
+/// Classifies a settled turn's lifecycle for target-health observability.
+///
+/// The member already resolved `Delivered` at the framed write, so the turn's
+/// completion and any operator-choice outcome never produce a second delivery
+/// outcome — they only drive the worker's readiness and the respawn signal. A
+/// normal completion returns the worker to `Available`; a connection close
+/// marks it `Unavailable` and requests a respawn; an abandoned wait (shutdown)
+/// leaves the worker draining. `ProtocolError` and an unsupported stop reason
+/// keep the worker `Available`, because the agent is still responsive and a
+/// bad turn is not a recoverable failure.
+fn build_acp_turn_observability(
     completion: Option<PromptCompletion>,
     pending_choice_outcome: Option<ChoiceMade>,
-    target_session: String,
-    message_id: String,
-    target_member_id: &str,
-) -> (WorkerReadinessState, SingleDeliveryOutcome) {
-    if let Some(ChoiceMade::Cancelled {
-        reason_code,
-        reason,
-        ..
-    }) = pending_choice_outcome
-    {
-        return (
-            WorkerReadinessState::Available,
-            failed_outcome_with_code(
-                target_session,
-                message_id,
-                reason_code.as_str(),
-                reason.unwrap_or_else(|| "choice request was cancelled".to_string()),
-                Some(json!({ "target_session": target_member_id })),
-            ),
-        );
+) -> (WorkerReadinessState, bool) {
+    if let Some(ChoiceMade::Cancelled { .. }) = pending_choice_outcome {
+        return (WorkerReadinessState::Available, false);
     }
 
     let Some(completion) = completion else {
-        // No completion observed before the wait was abandoned: shutdown. Report
-        // the dropped-on-shutdown outcome (not a generic failure), matching the
-        // queued-write drop path and the tmux transport.
-        return (
-            WorkerReadinessState::Available,
-            SingleDeliveryOutcome {
-                target_session,
-                message_id,
-                outcome: SendOutcome::DroppedOnShutdown,
-                reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
-                reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
-                details: None,
-            },
-        );
+        // No completion observed before the wait was abandoned: shutdown. The
+        // member already resolved `Delivered` at the write; the worker is
+        // draining rather than accepting more turns.
+        return (WorkerReadinessState::Unavailable, false);
     };
 
     match completion {
         PromptCompletion::Completed { stop_reason } => match stop_reason.as_str() {
-            "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" => (
-                WorkerReadinessState::Available,
-                delivered_outcome(target_session, message_id),
-            ),
-            "cancelled" => (
-                WorkerReadinessState::Available,
-                failed_outcome_with_code(
-                    target_session,
-                    message_id,
-                    ACP_REASON_CODE_STOP_CANCELLED,
-                    "ACP turn completed with stopReason=cancelled",
-                    None,
-                ),
-            ),
-            other => (
-                WorkerReadinessState::Available,
-                failed_outcome(
-                    target_session,
-                    message_id,
-                    format!("ACP returned unsupported stopReason '{other}'"),
-                ),
-            ),
+            "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" => {
+                (WorkerReadinessState::Available, false)
+            }
+            "cancelled" => (WorkerReadinessState::Available, false),
+            _ => (WorkerReadinessState::Available, false),
         },
-        PromptCompletion::ProtocolError(reason) => (
-            WorkerReadinessState::Available,
-            failed_outcome_with_code(
-                target_session,
-                message_id,
-                ACP_ERROR_CODE_PROMPT_FAILED,
-                "ACP session/prompt failed",
-                Some(json!({ "target_session": target_member_id, "reason": reason })),
-            ),
-        ),
-        PromptCompletion::ConnectionClosed { reason } => (
-            WorkerReadinessState::Unavailable,
-            failed_outcome_with_code(
-                target_session,
-                message_id,
-                ACP_ERROR_CODE_CONNECTION_CLOSED,
-                "ACP connection closed before prompt response",
-                Some(json!({ "target_session": target_member_id, "reason": reason })),
-            ),
-        ),
+        PromptCompletion::ProtocolError(_) => (WorkerReadinessState::Available, false),
+        PromptCompletion::ConnectionClosed { .. } => (WorkerReadinessState::Unavailable, true),
     }
 }
 

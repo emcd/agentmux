@@ -20,10 +20,7 @@ pub use persistent_runtime::{
 };
 pub use render::{replay_entries_to_snapshot_entries, snapshot_entries_to_plain_lines};
 pub use replay::REPLAY_BUFFER_MAX_ENTRIES;
-pub use transport::{
-    ACP_ERROR_CODE_CONNECTION_CLOSED, ACP_ERROR_CODE_PROMPT_FAILED,
-    ACP_ERROR_CODE_TRANSPORT_UNAVAILABLE, AcpTransport,
-};
+pub use transport::AcpTransport;
 pub use worker_driver::{AcpDriverServices, AcpWorkerDriver};
 
 use crate::transports::ToolCallStatus;

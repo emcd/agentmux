@@ -322,36 +322,42 @@ fn run_tui(
                     let dispatch_outcome = client.prompt(
                         &session,
                         &prompt_text,
-                        None,
                         Some(permission_handler),
                         on_completion,
                     );
                     match dispatch_outcome {
-                        agentmux::acp::PromptDispatchOutcome::Submitted => match completion_rx
-                            .recv()
-                        {
-                            Ok(agentmux::acp::PromptCompletion::Completed { stop_reason }) => {
-                                let (replay_entries, new_cursor) =
-                                    client.replay_entries_since(replay_cursor);
-                                replay_cursor = new_cursor;
-                                let replay_messages = replay_entries_to_messages(replay_entries);
-                                for msg in replay_messages {
-                                    let _ = tx.send(AppEvent::Message(msg));
+                        agentmux::acp::PromptDispatchOutcome::Submitted => {
+                            // The framed write succeeded; record the prompt-path
+                            // replay entry and fire the dispatch callback after the
+                            // evidence is established.
+                            client.note_prompt_dispatched(&prompt_text, None);
+                            match completion_rx.recv() {
+                                Ok(agentmux::acp::PromptCompletion::Completed { stop_reason }) => {
+                                    let (replay_entries, new_cursor) =
+                                        client.replay_entries_since(replay_cursor);
+                                    replay_cursor = new_cursor;
+                                    let replay_messages =
+                                        replay_entries_to_messages(replay_entries);
+                                    for msg in replay_messages {
+                                        let _ = tx.send(AppEvent::Message(msg));
+                                    }
+                                    let _ = tx.send(AppEvent::PromptComplete(stop_reason));
                                 }
-                                let _ = tx.send(AppEvent::PromptComplete(stop_reason));
+                                Ok(agentmux::acp::PromptCompletion::ProtocolError(reason)) => {
+                                    let _ = tx.send(AppEvent::Error(reason));
+                                }
+                                Ok(agentmux::acp::PromptCompletion::ConnectionClosed {
+                                    reason,
+                                }) => {
+                                    let _ = tx.send(AppEvent::Error(reason));
+                                }
+                                Err(_) => {
+                                    let _ = tx.send(AppEvent::Error(
+                                        "ACP completion channel disconnected".to_string(),
+                                    ));
+                                }
                             }
-                            Ok(agentmux::acp::PromptCompletion::ProtocolError(reason)) => {
-                                let _ = tx.send(AppEvent::Error(reason));
-                            }
-                            Ok(agentmux::acp::PromptCompletion::ConnectionClosed { reason }) => {
-                                let _ = tx.send(AppEvent::Error(reason));
-                            }
-                            Err(_) => {
-                                let _ = tx.send(AppEvent::Error(
-                                    "ACP completion channel disconnected".to_string(),
-                                ));
-                            }
-                        },
+                        }
                         agentmux::acp::PromptDispatchOutcome::TransportUnavailable { reason } => {
                             let _ = tx.send(AppEvent::Error(reason));
                         }

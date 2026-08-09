@@ -11,9 +11,12 @@
 use std::time::{Duration, Instant};
 
 use agentmux::acp::AcpTransport;
-use agentmux::envelope::PromptBatchSettings;
+use agentmux::envelope::{AddressIdentity, PromptBatchSettings};
 use agentmux::relay::{LookFreshness, LookSnapshotSource};
-use agentmux::transports::{LookMode, LookSnapshotPayload, Transport};
+use agentmux::transports::{
+    DeliveryEnvelope, DeliveryMessage, LookMode, LookSnapshotPayload, SendOutcome, Transport,
+    WorkerReadinessState,
+};
 
 const TEST_MAX_PROMPT_TOKENS: usize = 4096;
 
@@ -164,5 +167,99 @@ fn retirement_never_moves_backwards() {
         transport.retire_respawn_signal(first),
         None,
         "a late retirement of an older cause must not resurrect an answered one"
+    );
+}
+
+fn test_envelope(message_id: &str) -> DeliveryEnvelope {
+    DeliveryEnvelope {
+        message_id: message_id.to_string(),
+        message: DeliveryMessage {
+            body: format!("body {message_id}"),
+            created_at: "1970-01-01T00:00:00Z".to_string(),
+            namespace: "party".to_string(),
+            sender: AddressIdentity {
+                session_name: "alpha".to_string(),
+                display_name: None,
+            },
+            target: AddressIdentity {
+                session_name: "beta".to_string(),
+                display_name: None,
+            },
+            cc: vec![],
+            authenticated_identity: None,
+            on_behalf_of: None,
+        },
+        append_enter: true,
+        choice_decider_sessions: vec![],
+        quiet_window: Duration::ZERO,
+        is_receipt: false,
+    }
+}
+
+/// A Closed write channel means the delivery task has exited, so `mailw` and
+/// `raww` must refuse with `not_submitted` and publish `Unavailable` rather
+/// than linger `Busy` masking a dead executor. The guard's receiver is dropped
+/// at test scope end (no leak); dropping the guard closes the channel.
+#[test]
+fn mailw_and_raww_on_closed_channel_publish_unavailable() {
+    let mut transport = AcpTransport::new(test_batch_settings(), None);
+    let guard = transport.install_write_channel_for_testing(false);
+    drop(guard);
+
+    let outcome = Transport::mailw(&mut transport, test_envelope("m1"))
+        .try_recv()
+        .expect("mailw refusal resolves synchronously");
+    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
+    assert_eq!(
+        transport.readiness(),
+        WorkerReadinessState::Unavailable,
+        "closed channel must publish Unavailable, not linger Busy",
+    );
+
+    let mut transport = AcpTransport::new(test_batch_settings(), None);
+    let guard = transport.install_write_channel_for_testing(false);
+    drop(guard);
+
+    let outcome = Transport::raww(&mut transport, "hello".to_string(), true)
+        .try_recv()
+        .expect("raww refusal resolves synchronously");
+    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
+    assert_eq!(
+        transport.readiness(),
+        WorkerReadinessState::Unavailable,
+        "closed channel must publish Unavailable, not linger Busy",
+    );
+}
+
+/// A Full write channel means the delivery task is alive but saturated, so the
+/// refusal keeps `Busy` truthful until the live task drains and settles
+/// `Available`. The guard (owning the receiver) is retained for the test's
+/// lifetime so the channel stays open and prefilled.
+#[test]
+fn mailw_and_raww_on_full_channel_stay_busy() {
+    let mut transport = AcpTransport::new(test_batch_settings(), None);
+    let _guard = transport.install_write_channel_for_testing(true);
+
+    let outcome = Transport::mailw(&mut transport, test_envelope("m2"))
+        .try_recv()
+        .expect("mailw refusal resolves synchronously");
+    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
+    assert_eq!(
+        transport.readiness(),
+        WorkerReadinessState::Busy,
+        "full channel keeps Busy while the delivery task is alive and saturated",
+    );
+
+    let mut transport = AcpTransport::new(test_batch_settings(), None);
+    let _guard = transport.install_write_channel_for_testing(true);
+
+    let outcome = Transport::raww(&mut transport, "hello".to_string(), true)
+        .try_recv()
+        .expect("raww refusal resolves synchronously");
+    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
+    assert_eq!(
+        transport.readiness(),
+        WorkerReadinessState::Busy,
+        "full channel keeps Busy while the delivery task is alive and saturated",
     );
 }
