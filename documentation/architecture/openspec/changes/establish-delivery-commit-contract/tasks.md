@@ -33,7 +33,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 ### Scheduling
 
 - [ ] Ensure no elapsed-time path can resolve a `Pending` entry whose target is reachable: it leaves that state only by authorization, positively observed transport teardown, sustained unreachability past `[delivery].unreachable-dwell-ms`, or graceful shutdown
-- [ ] Make the per-target FIFO guarantee explicit and tested: mail and raw as one order, defined as worker-enqueue linearization rather than request or admission order
+- [x] Make the per-target FIFO guarantee explicit and tested: mail and raw as one order, defined as worker-enqueue linearization rather than request or admission order
 - [ ] Form batches against both handover components, stopping at whichever of envelope count or canonical payload bytes binds first
 - [ ] Keep an activity-advanced target unauthorizable, even when the later observation matches the prompt-readiness template
 - [ ] Reschedule `Pending` entries to a new generation on respawn; never re-invoke `Authorized` entries

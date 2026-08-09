@@ -142,6 +142,26 @@ pub(super) enum WorkerDispatch {
     Closing(AsyncDeliveryTask),
 }
 
+/// Hands a task to an existing worker, and in doing so fixes its position in
+/// that target's queue.
+///
+/// **This is the per-target FIFO's linearization point, and the order it
+/// establishes is worker-enqueue order — not request order and not admission
+/// order.** `sender.send` runs while the registry lock is held, so two senders
+/// racing toward one target serialize here, and because the channel is unbounded
+/// the send cannot block and channel order is therefore lock-acquisition order.
+///
+/// Admission is reserved earlier, in each request handler, so a request may
+/// reserve its quota first and still lose this race. Nothing corrects for that,
+/// and nothing should: admission answers whether the queue has room, while this
+/// answers where in the queue the work lands. Documenting the weaker of the two
+/// is deliberate, because it is the one the implementation provides and the one
+/// a test can hold it to.
+///
+/// Mail and raw are one order rather than two because both reach this function
+/// through `enqueue_async_delivery` with the same worker key. No handler
+/// consults the other's queue, so this shared path is the whole of the
+/// mechanism.
 pub(super) fn try_existing_worker(
     key: &AsyncWorkerKey,
     task: AsyncDeliveryTask,
