@@ -16,7 +16,6 @@ use crate::{
         policies_configuration_path, relay_configuration_path,
     },
     relay::{POLICIES_FORMAT_VERSION, RelayError, relay_error},
-    transports::HandoverDimensions,
 };
 
 use super::context::{AuthorizationContext, PolicyControls, PolicyScope, UiSessionAuthorization};
@@ -33,12 +32,6 @@ const MAX_CHOICES_PENDING_MAX: usize = 4096;
 /// before any executor could be observed, so the two most dangerous
 /// misconfigurations would be indistinguishable from an "unlimited" intent. No
 /// value denotes unlimited.
-const DELIVERY_SCHEDULING_QUANTUM_BYTES: DeliveryRange = DeliveryRange::new(
-    "delivery.scheduling-quantum-bytes",
-    262_144,
-    65_536,
-    16_777_216,
-);
 const DELIVERY_SUBMISSION_TIMEOUT_MS: DeliveryRange =
     DeliveryRange::new("delivery.submission-timeout-ms", 5_000, 500, 60_000);
 const DELIVERY_FENCE_OBSERVATION_TIMEOUT_MS: DeliveryRange =
@@ -191,8 +184,6 @@ struct RawRelayChoicesSection {
 #[derive(Debug, Deserialize, Default)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RawRelayDeliverySection {
-    #[serde(default)]
-    scheduling_quantum_bytes: Option<u64>,
     #[serde(default)]
     submission_timeout_ms: Option<u64>,
     #[serde(default)]
@@ -471,7 +462,6 @@ pub struct RelayRuntimeConfiguration {
 /// quota, nor alters scheduling.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DeliveryConfiguration {
-    pub scheduling_quantum_bytes: u64,
     pub submission_timeout_ms: u64,
     pub fence_observation_timeout_ms: u64,
     pub unreachable_dwell_ms: u64,
@@ -486,7 +476,6 @@ pub struct DeliveryConfiguration {
 impl Default for DeliveryConfiguration {
     fn default() -> Self {
         Self {
-            scheduling_quantum_bytes: DELIVERY_SCHEDULING_QUANTUM_BYTES.default,
             submission_timeout_ms: DELIVERY_SUBMISSION_TIMEOUT_MS.default,
             fence_observation_timeout_ms: DELIVERY_FENCE_OBSERVATION_TIMEOUT_MS.default,
             unreachable_dwell_ms: DELIVERY_UNREACHABLE_DWELL_MS.default,
@@ -561,11 +550,7 @@ fn resolve_delivery_configuration(
         queued_bytes_max,
         path,
     )?;
-    let scheduling_quantum_bytes =
-        DELIVERY_SCHEDULING_QUANTUM_BYTES.resolve(section.scheduling_quantum_bytes, path)?;
-    reject_quantum_below_handover_maximum(scheduling_quantum_bytes, path)?;
     Ok(DeliveryConfiguration {
-        scheduling_quantum_bytes,
         submission_timeout_ms: DELIVERY_SUBMISSION_TIMEOUT_MS
             .resolve(section.submission_timeout_ms, path)?,
         fence_observation_timeout_ms: DELIVERY_FENCE_OBSERVATION_TIMEOUT_MS
@@ -581,36 +566,6 @@ fn resolve_delivery_configuration(
         undelivered_report_interval_ms: DELIVERY_UNDELIVERED_REPORT_INTERVAL_MS
             .resolve(section.undelivered_report_interval_ms, path)?,
     })
-}
-
-/// Rejects a scheduling quantum smaller than the largest canonical-payload-byte
-/// component any transport declares.
-///
-/// A rotation visit grants the quantum as credit. If that credit cannot cover one
-/// maximal handover, the target holding such a handover is visited forever
-/// without ever being able to submit it, so the misconfiguration is a stall
-/// rather than a slowdown. The envelope-count component is deliberately not
-/// compared: the quantum is denominated in bytes.
-fn reject_quantum_below_handover_maximum(
-    scheduling_quantum_bytes: u64,
-    path: &Path,
-) -> Result<(), RelayError> {
-    let (session_type, canonical_bytes_max) =
-        HandoverDimensions::largest_declared_canonical_bytes();
-    if scheduling_quantum_bytes >= canonical_bytes_max {
-        return Ok(());
-    }
-    Err(relay_error(
-        "validation_invalid_arguments",
-        "relay delivery scheduling quantum is below a transport's maximum handover payload",
-        Some(json!({
-            "path": path.display().to_string(),
-            "field": DELIVERY_SCHEDULING_QUANTUM_BYTES.field,
-            "value": scheduling_quantum_bytes,
-            "session_type": session_type,
-            "canonical_bytes_max": canonical_bytes_max,
-        })),
-    ))
 }
 
 /// Rejects a per-target quota that exceeds its relay-global counterpart, naming

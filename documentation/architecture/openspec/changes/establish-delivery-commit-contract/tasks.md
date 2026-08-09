@@ -116,7 +116,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Delete the five per-coder keys and their loader, validation, and default machinery
 - [x] Add the `relay.toml` `[delivery]` table with submission timeout, fence-observation bound, the four admission-quota keys, and the two undelivered-reporting keys
 - [x] Add the `[delivery]` unreachable-dwell key that bounds how long a target may be continuously unreachable before its `Pending` members resolve
-- [ ] Delete the `scheduling-quantum-bytes` key, its default, range, and load-time validation against transport handover maxima, now that no scheduling policy consumes it
+- [x] Delete the `scheduling-quantum-bytes` key, its default, range, and load-time validation against transport handover maxima, now that no scheduling policy consumes it
 - [x] Delete `prime_timeout_ms` and `readiness_timeout_ms` from `DeliveryEnvelope`
 
 ### Documentation

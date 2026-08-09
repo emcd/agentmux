@@ -362,10 +362,6 @@ pub struct HandoverDimensions {
 /// large message but a mistake, so that admission rejects it at the request
 /// boundary instead of queueing something no partition could carry.
 ///
-/// It equals the default `[delivery].scheduling-quantum-bytes`, which the spec
-/// requires to be at least the largest declared byte component. Equality is the
-/// intended relationship: a rotation visit's credit exactly covers one maximal
-/// handover.
 const HANDOVER_CANONICAL_BYTES_MAX: u64 = 262_144;
 
 /// Most envelopes one handover may carry on a transport that coalesces a group
@@ -397,41 +393,6 @@ impl HandoverDimensions {
             }),
             SessionType::Pubsub => None,
         }
-    }
-
-    /// The largest canonical-payload-byte component any transport declares, with
-    /// the session type that declared it.
-    ///
-    /// This is what `[delivery].scheduling-quantum-bytes` must be at least: a
-    /// rotation visit whose credit is smaller than some transport's maximal
-    /// handover could never grant enough to submit one, and that target would be
-    /// visited forever without progressing.
-    ///
-    /// Session types with no delivery path contribute nothing — they accept no
-    /// handover, so no quantum is too small for them.
-    #[must_use]
-    pub fn largest_declared_canonical_bytes() -> (SessionType, u64) {
-        const ALL: [SessionType; 5] = [
-            SessionType::Tmux,
-            SessionType::Acp,
-            SessionType::Pty,
-            SessionType::Ui,
-            SessionType::Pubsub,
-        ];
-        ALL.into_iter()
-            .filter_map(|session_type| {
-                Self::for_session_type(session_type)
-                    .map(|dimensions| (session_type, dimensions.canonical_bytes_max))
-            })
-            // Folded rather than `max_by_key` so a tie keeps the first declaring
-            // session type: every transport declares the same byte component
-            // today, and a rejection that names them in declaration order reads
-            // less arbitrarily than one naming whichever landed last.
-            .fold(None, |largest, candidate| match largest {
-                Some((_, bytes)) if candidate.1 <= bytes => largest,
-                _ => Some(candidate),
-            })
-            .expect("at least one session type declares handover dimensions")
     }
 }
 

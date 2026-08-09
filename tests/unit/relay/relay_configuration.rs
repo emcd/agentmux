@@ -363,7 +363,6 @@ fn delivery_defaults_when_relay_toml_absent() {
             .expect("load relay configuration")
             .delivery;
 
-    assert_eq!(delivery.scheduling_quantum_bytes, 262_144);
     assert_eq!(delivery.submission_timeout_ms, 5_000);
     assert_eq!(delivery.fence_observation_timeout_ms, 5_000);
     assert_eq!(delivery.queued_envelopes_max, 10_000);
@@ -378,7 +377,6 @@ fn delivery_defaults_when_relay_toml_absent() {
 fn loads_explicit_delivery_settings() {
     let delivery = load_delivery(
         "[delivery]\n\
-         scheduling-quantum-bytes = 524288\n\
          submission-timeout-ms = 1500\n\
          fence-observation-timeout-ms = 2500\n\
          queued-envelopes-max = 5000\n\
@@ -390,7 +388,6 @@ fn loads_explicit_delivery_settings() {
     )
     .expect("load delivery configuration");
 
-    assert_eq!(delivery.scheduling_quantum_bytes, 524_288);
     assert_eq!(delivery.submission_timeout_ms, 1_500);
     assert_eq!(delivery.fence_observation_timeout_ms, 2_500);
     assert_eq!(delivery.queued_envelopes_max, 5_000);
@@ -509,40 +506,6 @@ fn accepts_per_target_quota_equal_to_global() {
     .expect("accept per-target quota equal to global");
 
     assert_eq!(delivery.queued_envelopes_per_target_max, 100);
-}
-
-/// A quantum inside its own numeric range can still be too small to carry one
-/// maximal handover, which is a stall rather than a slowdown, so the two bounds
-/// are checked independently.
-#[test]
-fn rejects_quantum_below_a_transport_handover_maximum() {
-    let error = load_delivery("[delivery]\nscheduling-quantum-bytes = 65536\n")
-        .expect_err("reject quantum below the largest declared handover payload");
-
-    assert_eq!(error.code, "validation_invalid_arguments");
-    assert_eq!(
-        detail(&error, "field").and_then(serde_json::Value::as_str),
-        Some("delivery.scheduling-quantum-bytes"),
-    );
-    assert_eq!(
-        detail(&error, "value").and_then(serde_json::Value::as_u64),
-        Some(65_536),
-    );
-    assert_eq!(
-        detail(&error, "canonical_bytes_max").and_then(serde_json::Value::as_u64),
-        Some(262_144),
-    );
-    assert!(detail(&error, "session_type").is_some());
-}
-
-/// The control for the rejection above: equality is the intended relationship, so
-/// a quantum exactly at the largest declared handover payload is accepted.
-#[test]
-fn accepts_quantum_equal_to_the_handover_maximum() {
-    let delivery = load_delivery("[delivery]\nscheduling-quantum-bytes = 262144\n")
-        .expect("accept quantum equal to the largest declared handover payload");
-
-    assert_eq!(delivery.scheduling_quantum_bytes, 262_144);
 }
 
 #[test]
