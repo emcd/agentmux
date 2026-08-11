@@ -133,7 +133,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Cover the fail-stop path: cessation not observed when the second window elapses leaves the fence negative, blocks replacement, and still resolves every member. The protocol half is covered in `unit/delivery_fence.rs` against a controllable generation. The worker-level half — the fail-stopped registry entry, the refusal of every later send, and raw inheriting that gate — has no reachable trigger: forcing a negative verdict needs a generation that survives forced termination, and on every real transport termination is what ends it. It wants either a fake transport injectable into the worker loop or a stub that can ignore SIGKILL, neither of which exists
 - [ ] Cover that a UI generation terminates without an owned child, and that fencing a Tmux generation leaves the server running
 - [ ] Cover that an unbound member resolves `not_submitted` under every trigger, and that a recorded `Submitted` is not downgraded by a generation replacement
-- [ ] Cover that siblings of one packing unit never receive different outcomes from one evidence record
+- [x] Cover that siblings of one packing unit never receive different outcomes from one evidence record
 - [ ] Cover that a `Pending` entry survives an arbitrarily long wait and is still authorized and delivered when its target finally becomes ready
 - [ ] Cover the two axes independently: a healthy-but-unready target holds its member indefinitely, and an unreachable one resolves its member only after the dwell threshold
 - [ ] Cover that unreachability shorter than the threshold resolves nothing and the member still delivers afterward, and that a target flapping across the threshold boundary resolves each member exactly once

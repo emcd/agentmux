@@ -943,3 +943,66 @@ mod tests {
         ));
     }
 }
+
+/// One evidence record answers for every sibling bound to its unit.
+///
+/// Its own block rather than an addition to the module above, which already
+/// carries a test. Inline for the same reason that one is: no public interface
+/// can drive a multi-member unit until batch formation lands and the relay hands
+/// over more than one envelope at a time, and the ledger is deliberately
+/// `pub(in crate::relay)` — the public seam for transports is `PartitionSink`,
+/// and widening `declare_packing_unit`/`terminalize` to reach them from a test
+/// would publish the delivery ledger itself.
+///
+/// The property is *identity* of outcome across siblings, not agreement. Values
+/// that merely happen to match are what the record replaced: before it, each
+/// member was resolved from the value its own fan-out branch computed, so
+/// sibling disagreement was unrepresentable only by the discipline of the
+/// branch. Reading one record makes it unrepresentable structurally.
+#[cfg(test)]
+mod sibling_agreement_tests {
+    use super::*;
+
+    #[test]
+    fn every_sibling_of_a_unit_resolves_from_the_one_recorded_evidence() {
+        let target = AdmissionTargetKey::new(
+            "sibling-test",
+            Path::new("/nonexistent/sibling-test"),
+            "target",
+        );
+        let members = ["sibling-a", "sibling-b", "sibling-c"];
+        for id in members {
+            admit(id, target.clone(), SessionType::Tmux, 1).expect("admit");
+            authorize(id, BatchId::mint()).expect("authorize");
+        }
+
+        let unit = declare_packing_unit(&members).expect("a fully bindable set binds");
+        record_unit_evidence(unit, SubmissionEvidence::Submitted);
+        // Write-once, asserted through the outcome rather than the record: a
+        // resumed fan-out that recorded again must not be able to move an outcome
+        // a sibling has already been resolved from. `NotSubmitted` is chosen
+        // deliberately over another `Submitted` — it is the one value whose
+        // leaking through would turn a delivered member into a positive claim
+        // that nothing was written.
+        record_unit_evidence(unit, SubmissionEvidence::NotSubmitted);
+
+        // Ordering matters: the last sibling is the one whose read races its
+        // unit's release, because that terminalization brings `unresolved_members`
+        // to zero and drops the record. It resolves from the same evidence only
+        // because `terminalize` reads before it decrements.
+        for id in members {
+            let transition = terminalize(id);
+            let TerminalTransition::Won {
+                evidence, bound, ..
+            } = transition
+            else {
+                panic!("sibling {id} did not win its terminal transition: {transition:?}");
+            };
+            assert_eq!(
+                (evidence, bound),
+                (SubmissionEvidence::Submitted, true),
+                "sibling {id} resolved from something other than its unit's record",
+            );
+        }
+    }
+}
