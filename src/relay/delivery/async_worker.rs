@@ -21,7 +21,7 @@ use crate::transports::{OutputView, WorkerFailureReason, WorkerReadinessState};
 use super::admission::TerminalTransition;
 use super::guard::{GuardKey, GuardTrigger, SubmissionEvidence};
 
-use super::super::stream::{RelayStreamEvent, send_event_to_registered_ui};
+use super::super::stream::{RelayStreamEvent, StreamEventSendOutcome, send_event_to_registered_ui};
 use super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, RELAY_NAMESPACE, RelayError, SCHEMA_VERSION,
     SendOutcome, SendResult, SenderReturnRoute, canonical_session_id,
@@ -133,10 +133,22 @@ pub(super) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
 pub(super) enum WorkerDispatch {
     /// The task was accepted by a live, non-closing worker.
     Accepted,
-    /// No live worker is registered for the key (absent, or its receiver was
-    /// dropped); the task is returned so the caller can spawn one or, for an ACP
-    /// target, report it unavailable.
+    /// No worker is registered for the key at all; the task is returned so the
+    /// caller can spawn one or, for an ACP target, report it unavailable.
+    ///
+    /// Distinct from [`Dropped`](Self::Dropped) because the two mean opposite
+    /// things to an observer even though they mean the same thing to a spawner.
+    /// Nothing was ever there, so no path closed.
     Missing(AsyncDeliveryTask),
+    /// A worker *was* registered and its receiver has since been dropped. The
+    /// entry is removed here and the task returned, so a spawner treats this
+    /// exactly like [`Missing`](Self::Missing).
+    ///
+    /// It is a separate variant because a notification path that existed and
+    /// closed SHALL be counted and recorded, while one that never existed is an
+    /// ordinary offline state. Collapsing them — as an earlier version of this
+    /// enum did — makes that distinction unrepresentable at every call site.
+    Dropped(AsyncDeliveryTask),
     /// The worker is draining for shutdown and will not poll its receiver again;
     /// the task is returned so the caller drops it best-effort.
     Closing(AsyncDeliveryTask),
@@ -198,7 +210,7 @@ pub(super) fn try_existing_worker(
                     release_pending_slot(worker.pending.as_ref());
                 }
                 workers.remove(key);
-                return Ok(WorkerDispatch::Missing(returned));
+                return Ok(WorkerDispatch::Dropped(returned));
             }
         }
     }
@@ -770,7 +782,41 @@ fn deliver_terminal_outcome_receipt(
     // Route to the sender's live worker only; drop on any non-delivery (no live
     // worker, or a bounded ACP queue that is full). Never spawn a worker for a
     // receipt — that is the deliberate boundary against deferred delivery.
-    let _ = try_existing_worker(&sender_key, receipt);
+    //
+    // An absent worker is an ordinary state and is not counted: the sender has
+    // no delivery path at all, the same class of condition as a sender with no
+    // attached UI, and counting it would fire constantly for offline senders.
+    //
+    // Everything else is a path that existed and did not carry the outcome. A
+    // dropped receiver is the important one: the sender *was* reachable, so this
+    // is a notification path that closed rather than one that was never there,
+    // and the contract requires a closed or dropped path be counted and
+    // recorded. A draining worker and an unreadable registry are the relay's own
+    // problems and count for the same reason.
+    match try_existing_worker(&sender_key, receipt) {
+        Ok(WorkerDispatch::Accepted) | Ok(WorkerDispatch::Missing(_)) => {}
+        Ok(WorkerDispatch::Dropped(_)) => {
+            note_outcome_notification_failure(
+                "receipt",
+                task.message_id.as_str(),
+                "sender_worker_receiver_dropped",
+            );
+        }
+        Ok(WorkerDispatch::Closing(_)) => {
+            note_outcome_notification_failure(
+                "receipt",
+                task.message_id.as_str(),
+                "sender_worker_closing",
+            );
+        }
+        Err(error) => {
+            note_outcome_notification_failure(
+                "receipt",
+                task.message_id.as_str(),
+                error.code.as_str(),
+            );
+        }
+    }
 }
 
 /// Builds the receipt delivery task addressed back to the original sender. The
@@ -945,7 +991,49 @@ pub(super) fn emit_sender_delivery_outcome_event(
     };
     // Route the sender's delivery-outcome event back to the sender within its
     // home bundle, which differs from the target's bundle for cross-bundle sends.
-    let _ = send_event_to_registered_ui(sender_namespace, sender_session, &event);
+    //
+    // Notification runs after the terminal transition and the quota release, and
+    // its failure changes neither: the member is already resolved, and refusing
+    // to release quota because nobody heard about it would leak the reservation
+    // over a reporting problem. So the failure is counted and recorded here
+    // rather than propagated.
+    match send_event_to_registered_ui(sender_namespace, sender_session, &event) {
+        // Nobody was listening. Not a failure — a sender with no attached UI is
+        // an ordinary state, and counting it would drown the real signal.
+        Ok(StreamEventSendOutcome::Delivered | StreamEventSendOutcome::NoUiEndpoint) => {}
+        Ok(StreamEventSendOutcome::Disconnected) => {
+            note_outcome_notification_failure("stream", message_id, "sender_ui_disconnected");
+        }
+        Err(error) => {
+            note_outcome_notification_failure("stream", message_id, error.to_string().as_str());
+        }
+    }
+}
+
+/// Running total of terminal-outcome notifications that could not be delivered.
+///
+/// Process-local and monotonic. It exists so the condition is *countable* rather
+/// than only individually observable: a single failed receipt is noise, and a
+/// climbing total is a sender that has stopped hearing about its own deliveries.
+static OUTCOME_NOTIFICATION_FAILURES: AtomicU64 = AtomicU64::new(0);
+
+/// Counts and records one failed terminal-outcome notification.
+///
+/// Deliberately returns nothing. The caller has already performed the terminal
+/// transition and released admission quota, and there is no recovery available
+/// here — the member is resolved whether or not anyone was told. Recording is
+/// the whole remedy.
+fn note_outcome_notification_failure(channel: &str, message_id: &str, reason: &str) {
+    let total = OUTCOME_NOTIFICATION_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
+    emit_inscription(
+        "relay.send.async.notification_failed",
+        &json!({
+            "channel": channel,
+            "message_id": message_id,
+            "reason": reason,
+            "notification_failures_total": total,
+        }),
+    );
 }
 
 #[cfg(test)]

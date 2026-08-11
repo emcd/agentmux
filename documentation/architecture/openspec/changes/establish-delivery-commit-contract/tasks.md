@@ -28,7 +28,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Release quota and outcome barriers at terminalization, but release the target's FIFO, raw barrier, and replacement only on a positive fence verdict
 - [ ] Make unwind, channel closure, task or thread exit, generation replacement, and graceful shutdown all route through that one order; no lifecycle path selects an outcome of its own
 - [x] Make collectors carry guard keys rather than own resolution; remove the `JoinError` branch in `src/relay/delivery/dispatch/outcomes.rs` that returns without producing an outcome
-- [ ] Ensure outcome-notification failure is counted and recorded without blocking the terminal transition or the quota release
+- [x] Ensure outcome-notification failure is counted and recorded without blocking the terminal transition or the quota release. The ordering half was already structural — the terminal CAS and quota release run before any notification — so the work was the counting: both outcome-notification channels discarded their result with `let _ =`. A sender with no attached UI and a sender with no live worker are deliberately **not** counted, being ordinary states rather than failures; a disconnected UI, a draining worker, and an unreadable registry are
 
 ### Scheduling
 
