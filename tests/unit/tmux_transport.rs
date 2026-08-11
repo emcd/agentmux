@@ -96,7 +96,13 @@ fn tmux_mailw_before_startup_resolves_immediately() {
     let outcome = Transport::mailw(&mut transport, envelope(false))
         .blocking_recv()
         .expect("stopped delivery thread must resolve mailw");
-    assert_eq!(outcome.outcome, SendOutcome::Failed);
+    // `not_submitted`, not `failed`: the refusal happens before the delivery
+    // thread exists, so no packing unit was declared and nothing was written.
+    // That is provable non-delivery, and the sender is entitled to be told the
+    // stronger of the two true answers. The reason code still names which refusal
+    // it was, because the guard can establish that nothing was written but not
+    // why the transport declined.
+    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
     assert_eq!(
         outcome.reason_code.as_deref(),
         Some("transport_not_started")

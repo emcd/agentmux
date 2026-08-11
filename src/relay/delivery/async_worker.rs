@@ -631,6 +631,47 @@ pub(super) fn complete_task_outcome_from_trigger(task: &AsyncDeliveryTask, trigg
     );
 }
 
+/// Terminalizes one member refused on the delivery path *before* its packing
+/// unit was declared, deriving the outcome from the guard and carrying the
+/// refusal's own cause.
+///
+/// A refusal is not a lifecycle trigger — nothing gave up on the member, the
+/// relay declined to write it — but it shares the property that makes triggers
+/// safe: it must not choose its own spelling. Passing an explicit `Err` here
+/// reported `failed`, the undifferentiated spelling, for a member the evidence
+/// order can prove was never submitted. `failed` and `not_submitted` are both
+/// true of it, and the sender was being told the weaker one.
+///
+/// The split of responsibilities is the point. The **outcome** comes from the
+/// guard, so a member that turned out to be bound after all would report
+/// `submission_unknown` rather than a non-delivery claim this call cannot
+/// support. The **reason** comes from the refusal, because "no such member" and
+/// "delivery channel full" are what a sender needs and the evidence order cannot
+/// know either.
+pub(super) fn complete_task_refusal(task: &AsyncDeliveryTask, reason_code: &str, reason: &str) {
+    let Some((evidence, guard)) = resolve_terminal_transition(task) else {
+        return;
+    };
+    // Unlike a trigger, a refusal fires at a known point: before any write. So a
+    // member with no recorded evidence — a receipt, which was never admitted —
+    // still resolves `not_submitted` rather than falling back to unknown. Nothing
+    // was written, and that is a fact about where this call sits rather than an
+    // inference from the ledger.
+    let evidence = evidence.unwrap_or(SubmissionEvidence::NotSubmitted);
+    report_terminal_outcome(
+        task,
+        Ok(SendResult {
+            target_session: task.target_session.clone(),
+            message_id: task.message_id.clone(),
+            outcome: evidence.outcome(),
+            reason_code: Some(reason_code.to_string()),
+            reason: Some(reason.to_string()),
+            details: None,
+        }),
+        guard,
+    );
+}
+
 pub(super) fn complete_task_outcome(
     task: &AsyncDeliveryTask,
     outcome: Result<SendResult, RelayError>,
