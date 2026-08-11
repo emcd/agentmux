@@ -62,6 +62,21 @@ pub(super) struct AcpStubOptions {
     pub(super) configured_session_id: Option<String>,
     pub(super) tool_call_on_prompt: bool,
     pub(super) tool_call_id: String,
+    /// Stop draining stdin once `session/new` has been answered, while staying
+    /// alive and holding the pipe open.
+    ///
+    /// This is the only state that parks the relay's own executor mid-write: the
+    /// agent is healthy, the target is reachable, and the relay is blocked in a
+    /// `write_line_to_stdin` whose pipe buffer has filled. Every other stall the
+    /// stub can produce is the agent being slow to *answer*, which resolves at the
+    /// framed write and so never reaches the execution watchdog at all.
+    ///
+    /// Blocks on a fifo rather than sleeping, for the reason the initialize hang
+    /// does: a `sleep` subprocess inherits the agent's stdout, so killing the
+    /// agent would leave that pipe open and the relay's reader would never observe
+    /// EOF — turning a positive fence verdict into a negative one for a reason
+    /// belonging entirely to the harness.
+    pub(super) stop_reading_stdin_after_new: bool,
 }
 
 impl Default for AcpStubOptions {
@@ -88,6 +103,7 @@ impl Default for AcpStubOptions {
             configured_session_id: None,
             tool_call_on_prompt: false,
             tool_call_id: "tc-stub-1".to_string(),
+            stop_reading_stdin_after_new: false,
         }
     }
 }
@@ -139,6 +155,8 @@ disconnect_on_prompt="${DISCONNECT_ON_PROMPT:-none}"
 request_permission_on_prompt="${REQUEST_PERMISSION_ON_PROMPT:-0}"
 tool_call_on_prompt="${TOOL_CALL_ON_PROMPT:-0}"
 tool_call_id="${TOOL_CALL_ID:-tc-stub-1}"
+stop_reading_stdin_after_new="${STOP_READING_STDIN_AFTER_NEW:-0}"
+stop_reading_fifo="${ACP_STOP_READING_FIFO:-}"
 
 while IFS= read -r line; do
   printf '%s\n' "$line" >> "$log_file"
@@ -177,6 +195,13 @@ while IFS= read -r line; do
         printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32002,"message":"new failed"}}\n' "$id"
       else
         printf '{"jsonrpc":"2.0","id":%s,"result":{"sessionId":"%s"}}\n' "$id" "$new_session_id"
+      fi
+      if [ "$stop_reading_stdin_after_new" = "1" ]; then
+        # Alive, healthy, and no longer draining stdin. Blocking in-process on a
+        # fifo with no writer, so nothing inherits stdout and killing this shell
+        # closes the pipe the relay's reader is watching.
+        [ -p "$stop_reading_fifo" ] || mkfifo "$stop_reading_fifo"
+        read stopped < "$stop_reading_fifo" || true
       fi
       ;;
     *'"method":"session/prompt"'*)
@@ -363,6 +388,19 @@ pub(super) fn write_configuration(
             .to_string(),
         ),
         ("TOOL_CALL_ID", options.tool_call_id.clone()),
+        (
+            "STOP_READING_STDIN_AFTER_NEW",
+            if options.stop_reading_stdin_after_new {
+                "1"
+            } else {
+                "0"
+            }
+            .to_string(),
+        ),
+        (
+            "ACP_STOP_READING_FIFO",
+            root.join("acp_stop_reading.fifo").display().to_string(),
+        ),
     ];
 
     let mut env_toml = String::new();
@@ -473,6 +511,35 @@ pub(super) fn dispatch_send_result(
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     startup_bundle(config_root, tmux_socket)?;
     dispatch_request(acp_send_request(), config_root, "party", tmux_socket)
+}
+
+/// Starts the bundle and dispatches a send whose body is `body_bytes` long.
+///
+/// The size is the point rather than the content: a body larger than the pipe
+/// buffer between the relay and an agent that has stopped reading is what parks
+/// the relay's own executor inside its framed write, which is the only state the
+/// execution watchdog exists to bound. Well under the 256 KiB handover maximum,
+/// so admission accepts it.
+pub(super) fn dispatch_sized_send_result(
+    config_root: &ConfigurationRoots,
+    tmux_socket: &Path,
+    body_bytes: usize,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
+    startup_bundle(config_root, tmux_socket)?;
+    dispatch_sized_send_without_startup_result(config_root, tmux_socket, body_bytes)
+}
+
+/// Dispatches a sized send against an already-started bundle.
+pub(super) fn dispatch_sized_send_without_startup_result(
+    config_root: &ConfigurationRoots,
+    tmux_socket: &Path,
+    body_bytes: usize,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
+    let mut request = acp_send_request();
+    if let RelayRequest::Send { message, .. } = &mut request {
+        *message = "x".repeat(body_bytes);
+    }
+    dispatch_request(request, config_root, "party", tmux_socket)
 }
 
 pub(super) fn dispatch_send_without_startup_result(

@@ -470,3 +470,172 @@ fn release_hung_initialize(root: &Path) {
         let _ = writer.write_all(b"go\n");
     }
 }
+
+/// The execution watchdog against a real executor parked mid-write.
+///
+/// This is the state the watchdog exists for and the only one that reaches it:
+/// the agent is alive, the target is reachable and healthy, and the relay is
+/// blocked inside its own framed write because the pipe buffer filled and the
+/// agent stopped draining it. Neither of the two delivery-model conditions —
+/// relay shutting down, transport unhealthy — fires, so without a bound the
+/// member stays `Authorized` forever, holding quota and blocking the target FIFO.
+///
+/// It also restores the coverage the shutdown-driven fence test above records as
+/// owed: termination's teeth against a *steady-state* generation. There the
+/// cooperative step can end the agent on its own, so the resolution is
+/// legitimately a race. Here it cannot — a shell blocked reading a fifo observes
+/// no flag and answers no channel drop, so only killing the child can free the
+/// relay's parked write, and only that makes cessation observable.
+///
+/// **What this does not discriminate.** Whether the member terminalized at the
+/// bound or at the verdict. Step 3 kills the child, which fails the parked write,
+/// which resolves the member through the transport's own evidence — legitimately
+/// inside the second observation window, since evidence stays admissible right
+/// through it. So the ordering between the terminal outcome and the verdict is
+/// genuinely either way, and asserting one would be asserting a race. The
+/// single-cut rule is pinned by the protocol tests in `unit/delivery_fence.rs`
+/// and by there being one call site; what is pinned here is everything else.
+#[test]
+fn an_executor_blocked_past_the_bound_is_fenced_and_its_member_resolved() {
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+
+    let options = AcpStubOptions {
+        stop_reading_stdin_after_new: true,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    configure_delivery(DeliveryConfiguration {
+        submission_timeout_ms: 500,
+        fence_observation_timeout_ms: 500,
+        ..DeliveryConfiguration::default()
+    });
+
+    // Comfortably past a pipe's 64 KiB buffer and well under the 256 KiB
+    // handover maximum, so admission accepts it and the write cannot complete.
+    let result = send_result(
+        dispatch_sized_send_result(&config_root, &tmux_socket, 150_000)
+            .expect("relay request should parse"),
+    );
+    assert_eq!(result.outcome, SendOutcome::Queued);
+
+    let pid_path = acp_child_pid_path(temporary.path());
+    let first_agents = await_recorded_child_pids(&pid_path, "bravo");
+
+    await_inscription(
+        &inscriptions,
+        "relay.delivery.watchdog.armed",
+        "\"target_session\":\"bravo\"",
+    );
+
+    let verdict = await_inscription(
+        &inscriptions,
+        "relay.delivery.fence.verdict",
+        "\"trigger\":\"submission_timeout\"",
+    );
+    assert!(
+        verdict.contains("\"target_session\":\"bravo\""),
+        "the watchdog fence must be scoped to the wedged target: {verdict}"
+    );
+    assert!(
+        verdict.contains("\"verdict\":\"positive\""),
+        "killing the child frees the parked write, so cessation must be observed: {verdict}"
+    );
+    // Not incidental, and the reason this scenario can hold termination to
+    // account where the shutdown-driven test above cannot. A shell blocked
+    // reading a fifo observes no cooperative flag and answers no dropped
+    // channel, so the first window must elapse unsatisfied and step 3 must be
+    // what frees the write. A `cooperative` resolution here would mean the agent
+    // ended for some reason of the harness's own, and every assertion below it
+    // would be measuring that instead.
+    assert!(
+        verdict.contains("\"resolution\":\"forced\""),
+        "only forced termination can free an executor parked in a full pipe: {verdict}"
+    );
+
+    for pid in first_agents.iter().copied() {
+        await_process_gone(pid);
+    }
+
+    // `submission_unknown`, and specifically not a failure spelling. Bytes had
+    // already gone into the pipe when the fence landed, so non-delivery is not
+    // provable — and the bound asserts nothing about the target's health either
+    // way, which is what keeps it distinct from the timers this change retires.
+    let completed = await_inscription(
+        &inscriptions,
+        "relay.send.async.completed",
+        "\"target_session\":\"bravo\"",
+    );
+    assert!(
+        completed.contains("\"outcome\":\"submission_unknown\""),
+        "a member bound to a unit and cut short must resolve unknown: {completed}"
+    );
+
+    // A positive verdict releases replacement, so the worker builds a fresh
+    // generation in place and its bootstrap starts a second agent. This is the
+    // half a negative verdict would fail-stop, and the opposite of what the
+    // shutdown-driven fence above asserts.
+    await_recorded_agents(&pid_path, "bravo", first_agents.len() + 1);
+}
+
+/// The watchdog must not arm on an agent that is merely slow to answer.
+///
+/// This is the failure the whole arming precondition guards against, and the
+/// reason the bound sat unarmed until submission evidence moved to the write
+/// boundary. The stub takes the prompt and never responds, so the turn runs
+/// indefinitely — but the member resolved `delivered` at the framed write, so
+/// nothing is in flight and there is nothing for a bound anchored at
+/// authorization to measure.
+///
+/// Its teeth are in the precondition it inverts: move ACP's member resolution
+/// back to the end of the turn and the member stays in flight, the watchdog arms
+/// inside half a second, and a healthy agent gets fenced mid-inference.
+#[test]
+fn a_long_agent_turn_never_arms_the_execution_watchdog() {
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+
+    let options = AcpStubOptions {
+        never_respond_to_prompt: true,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    configure_delivery(DeliveryConfiguration {
+        submission_timeout_ms: 500,
+        fence_observation_timeout_ms: 500,
+        ..DeliveryConfiguration::default()
+    });
+
+    let result = send_result(dispatch_send(&config_root, &tmux_socket));
+    assert_eq!(result.outcome, SendOutcome::Queued);
+
+    // Resolved at the write, while the turn it belongs to is still running.
+    let completed = await_inscription(
+        &inscriptions,
+        "relay.send.async.completed",
+        "\"target_session\":\"bravo\"",
+    );
+    assert!(
+        completed.contains("\"outcome\":\"delivered\""),
+        "the framed write is the delivery boundary: {completed}"
+    );
+
+    // Several multiples of the bound, with the turn still in flight the whole
+    // time. An armed watchdog would have fenced this target by now.
+    std::thread::sleep(Duration::from_millis(2_500));
+    let log = std::fs::read_to_string(&inscriptions).unwrap_or_default();
+    assert!(
+        !log.contains("relay.delivery.watchdog.armed"),
+        "an agent that is slow to answer must not arm the execution watchdog: {log}"
+    );
+    assert!(
+        !log.contains("\"trigger\":\"submission_timeout\""),
+        "no fence may be initiated against a healthy target mid-turn: {log}"
+    );
+}
