@@ -597,8 +597,8 @@ impl TransportImpl {
     #[must_use]
     pub fn reports_own_partition(&self) -> bool {
         match self {
-            Self::Tmux(_) => true,
-            Self::Acp(_) | Self::Ui(_) | Self::Pubsub => false,
+            Self::Acp(_) | Self::Tmux(_) => true,
+            Self::Ui(_) | Self::Pubsub => false,
             #[cfg(feature = "pty")]
             Self::Pty(_) => false,
             #[cfg(not(feature = "pty"))]

@@ -291,6 +291,9 @@ and declaring afterwards. That stays a per-transport boundary test.
 
 Adoption is per-transport. `TransportImpl::reports_own_partition` says which
 transports report their own; the relay declares a singleton unit for the rest.
+ACP additionally distinguishes *who* declared a turn's unit through `TurnUnit`,
+because its raw path reaches the same submission function with a synthetic member
+id it cannot declare against.
 Raw is relay-declared permanently, in either case: neither `Transport::raww` nor
 Pty's `DeliveryCommand::Raw` carries a message id, so no transport can name the
 member at its raw write.
@@ -298,7 +301,7 @@ member at its raw write.
 | Transport | Unit | Reports its own |
 |-----------|------|-----------------|
 | Tmux | one token-budget group per paste | yes |
-| ACP | one budget group per `session/prompt` | not yet |
+| ACP | one budget group per `session/prompt` | yes |
 | Pty | one member per write | not yet |
 | UI | one member | no — relay declares |
 

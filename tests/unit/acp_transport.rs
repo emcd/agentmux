@@ -8,15 +8,36 @@
 //! relay look path used to provide via `await_acp_worker_prime_for_look`, now
 //! living behind the handle so it survives the startup and respawn windows.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use agentmux::acp::AcpTransport;
 use agentmux::envelope::{AddressIdentity, PromptBatchSettings};
 use agentmux::relay::{LookFreshness, LookSnapshotSource};
 use agentmux::transports::{
-    DeliveryEnvelope, DeliveryMessage, LookMode, LookSnapshotPayload, SendOutcome, Transport,
+    DeliveryEnvelope, DeliveryMessage, LookMode, LookSnapshotPayload, PackingUnitId,
+    PartitionError, PartitionSink, SendOutcome, SubmissionEvidence, Transport,
     WorkerReadinessState,
 };
+
+/// A sink for tests that never submit a turn.
+///
+/// Every use below drives readiness predicates, look capture, or handover state
+/// and reaches no `session/prompt`, so nothing is ever declared. Refusing rather
+/// than accepting is deliberate: if one of these tests ever did reach a
+/// submission, the turn would produce no effect and the test would notice,
+/// whereas an accepting stub would let it write with a unit the ledger never
+/// issued.
+fn no_declarations_sink() -> Arc<dyn PartitionSink> {
+    struct NoDeclarations;
+    impl PartitionSink for NoDeclarations {
+        fn declare(&self, _member_ids: &[&str]) -> Result<PackingUnitId, PartitionError> {
+            Err(PartitionError::MemberNotBindable)
+        }
+        fn record(&self, _unit: PackingUnitId, _evidence: SubmissionEvidence) {}
+    }
+    Arc::new(NoDeclarations)
+}
 
 const TEST_MAX_PROMPT_TOKENS: usize = 4096;
 
@@ -29,7 +50,7 @@ fn test_batch_settings() -> PromptBatchSettings {
 
 #[test]
 fn acp_output_view_prime_waits_then_times_out_while_initializing() {
-    let transport = AcpTransport::new(test_batch_settings(), None);
+    let transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
     let view = transport
         .give_output()
         .expect("ACP transport always publishes a handle");
@@ -75,7 +96,7 @@ fn acp_output_view_prime_waits_then_times_out_while_initializing() {
 
 #[test]
 fn acp_output_view_zero_prime_timeout_returns_immediately() {
-    let transport = AcpTransport::new(test_batch_settings(), None);
+    let transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
     let view = transport.give_output().expect("handle");
 
     let started = Instant::now();
@@ -120,7 +141,7 @@ fn acp_output_view_zero_prime_timeout_returns_immediately() {
 /// current, so the newer cause outlives the older cause's answer by arithmetic.
 #[test]
 fn retiring_a_classified_cause_leaves_a_cause_published_since_it_outstanding() {
-    let transport = AcpTransport::new(test_batch_settings(), None);
+    let transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
     assert_eq!(
         transport.respawn_signal_outstanding(),
         None,
@@ -148,7 +169,7 @@ fn retiring_a_classified_cause_leaves_a_cause_published_since_it_outstanding() {
 /// resurrect a cause that a later retirement already answered.
 #[test]
 fn retirement_never_moves_backwards() {
-    let transport = AcpTransport::new(test_batch_settings(), None);
+    let transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
     transport.signal_respawn();
     let first = transport
         .respawn_signal_outstanding()
@@ -202,7 +223,7 @@ fn test_envelope(message_id: &str) -> DeliveryEnvelope {
 /// at test scope end (no leak); dropping the guard closes the channel.
 #[test]
 fn mailw_and_raww_on_closed_channel_publish_unavailable() {
-    let mut transport = AcpTransport::new(test_batch_settings(), None);
+    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
     let guard = transport.install_write_channel_for_testing(false);
     drop(guard);
 
@@ -216,7 +237,7 @@ fn mailw_and_raww_on_closed_channel_publish_unavailable() {
         "closed channel must publish Unavailable, not linger Busy",
     );
 
-    let mut transport = AcpTransport::new(test_batch_settings(), None);
+    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
     let guard = transport.install_write_channel_for_testing(false);
     drop(guard);
 
@@ -237,7 +258,7 @@ fn mailw_and_raww_on_closed_channel_publish_unavailable() {
 /// lifetime so the channel stays open and prefilled.
 #[test]
 fn mailw_and_raww_on_full_channel_stay_busy() {
-    let mut transport = AcpTransport::new(test_batch_settings(), None);
+    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
     let _guard = transport.install_write_channel_for_testing(true);
 
     let outcome = Transport::mailw(&mut transport, test_envelope("m2"))
@@ -250,7 +271,7 @@ fn mailw_and_raww_on_full_channel_stay_busy() {
         "full channel keeps Busy while the delivery task is alive and saturated",
     );
 
-    let mut transport = AcpTransport::new(test_batch_settings(), None);
+    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
     let _guard = transport.install_write_channel_for_testing(true);
 
     let outcome = Transport::raww(&mut transport, "hello".to_string(), true)

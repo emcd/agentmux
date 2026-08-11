@@ -290,6 +290,7 @@ pub(super) fn build_acp_driver_services(
     let choices_pending_max = bootstrap.choices_pending_max;
 
     AcpDriverServices {
+        partition_sink: ledger_partition_sink(),
         mirror_state: {
             let namespace = namespace.clone();
             let runtime_directory = runtime_directory.clone();
