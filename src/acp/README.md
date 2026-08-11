@@ -142,10 +142,14 @@ classifies `wedged` any more — Tmux stopped in
 `bound-tmux-readiness-wait` and Pty's classifier was deleted with the
 rest of the wedge machinery, because a settled non-prompt frame cannot
 be told apart from a permission dialog or a coder working silently.
-ACP has no elapsed-time bound today; the relay's
-submission-timeout watchdog (when armed) bounds the supervised code's
-runtime instead, but arming depends on relay-side submission-evidence
-work that is not yet in this slice.
+ACP has no elapsed-time bound of its own; the relay's
+submission-timeout watchdog bounds the supervised code's runtime
+instead. It can do so because `submit_envelope_turn` resolves every
+member at the framed write rather than at the end of the turn, so the
+bound covers the relay's execution and not the agent's inference. A
+respawn gap needs no exemption either: with no live runtime `mailw`
+refuses synchronously with `not_submitted`, so no member sits
+authorized across one.
 
 ## Terminal-outcome receipt rendering
 

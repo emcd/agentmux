@@ -70,6 +70,17 @@ pub(super) struct AsyncWorkerEntry {
     /// registered (so the shutdown-barrier count still reflects a worker that is
     /// still draining) until the worker unregisters at the end of its run.
     pub closing: bool,
+    /// Set when this target's generation fence returned a negative verdict:
+    /// cessation was not observed, so an old generation may still be able to write
+    /// to the target.
+    ///
+    /// The entry is deliberately kept registered for the rest of the relay's life
+    /// once this is set. Holding the key is *how* no replacement is admitted —
+    /// every spawner elects itself by installing an entry, so an entry that never
+    /// leaves means no second generation can start alongside one that might still
+    /// be writing. Recovery is by operator action, which is the fail-stop the
+    /// fence chooses over an ordering hazard.
+    pub fail_stopped: bool,
 }
 
 pub(super) fn build_worker_key(
@@ -152,6 +163,17 @@ pub(super) enum WorkerDispatch {
     /// The worker is draining for shutdown and will not poll its receiver again;
     /// the task is returned so the caller drops it best-effort.
     Closing(AsyncDeliveryTask),
+    /// The target's generation fence returned a negative verdict, so the relay
+    /// admits no further writes to it — including the replacement generation a
+    /// spawner would otherwise start.
+    ///
+    /// Distinct from [`Closing`](Self::Closing) because the two are opposite
+    /// claims. A closing worker is the relay stopping on purpose, and its members
+    /// are honestly reported as dropped on shutdown; a fail-stopped one is the
+    /// relay unable to establish that an old generation stopped, which is a
+    /// condition the sender must be told about rather than have spelled as a
+    /// shutdown.
+    FailStopped(AsyncDeliveryTask),
 }
 
 /// Hands a task to an existing worker, and in doing so fixes its position in
@@ -188,6 +210,12 @@ pub(super) fn try_existing_worker(
     })?;
 
     if let Some(worker) = workers.get(key) {
+        // Read before `closing`: a fail-stopped target is fail-stopped whether or
+        // not the relay later starts shutting down, and reporting it as a
+        // shutdown drop would spell an ordering hazard as an orderly stop.
+        if worker.fail_stopped {
+            return Ok(WorkerDispatch::FailStopped(task));
+        }
         if worker.closing {
             // The worker is draining for shutdown and will not poll its receiver
             // again; bounce the task rather than accepting it into a dead queue.
@@ -250,6 +278,7 @@ pub(super) fn register_worker(
                 last_failure: None,
                 acp_output_view: None,
                 closing: false,
+                fail_stopped: false,
             },
         );
     }
@@ -284,9 +313,28 @@ pub(super) fn register_worker_if_absent(
             last_failure: None,
             acp_output_view: None,
             closing: false,
+            fail_stopped: false,
         },
     );
     Ok(Some(owner))
+}
+
+/// Marks a target fail-stopped after a negative generation-fence verdict, so
+/// every further send to it is refused rather than queued or handed to a
+/// replacement generation.
+///
+/// The entry is left in place afterwards and never removed by its worker. That is
+/// the mechanism, not an oversight: registration is the election a spawner has to
+/// win, so an entry that outlives its worker is exactly "admit no replacement for
+/// this target". `raww` needs no separate barrier because it reaches the target
+/// through this same registry lookup.
+pub(super) fn mark_worker_fail_stopped(key: &AsyncWorkerKey, owner: WorkerOwner) {
+    if let Ok(mut workers) = async_delivery_registry().workers.lock()
+        && let Some(entry) = workers.get_mut(key)
+        && entry.owner == owner
+    {
+        entry.fail_stopped = true;
+    }
 }
 
 /// Marks a worker as closing so it bounces new sends while its entry stays
@@ -807,6 +855,13 @@ fn deliver_terminal_outcome_receipt(
                 "receipt",
                 task.message_id.as_str(),
                 "sender_worker_closing",
+            );
+        }
+        Ok(WorkerDispatch::FailStopped(_)) => {
+            note_outcome_notification_failure(
+                "receipt",
+                task.message_id.as_str(),
+                "sender_worker_fail_stopped",
             );
         }
         Err(error) => {

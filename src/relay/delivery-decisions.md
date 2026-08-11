@@ -238,6 +238,30 @@ all applying regardless of which answer won):
 - Whether tmux client death cuts server-owned deferred effects remains
   unestablished. The Tmux fence verdict inherits that gap.
 
+**Arming, 2026-08-10.** The precondition was checked against source rather than
+against the task list before arming: all three transports resolve their outcome
+future at the write boundary (`acp/transport.rs` `submit_envelope_turn`,
+`tmux/transport.rs` at `inject_literal_text`, `pty/delivery.rs` `write_unit`), and
+ACP's respawn gap needs no exemption because `mailw` refuses synchronously with no
+live runtime rather than holding an authorized member across one.
+
+Two consequences of arming that were not visible from the decision itself, both
+following from what `generation_ceased` requires per transport:
+
+- **A fenced Pty generation costs the coder child.** Pty's cessation predicate
+  includes `child_reaped`, so a positive verdict means the child is already dead
+  and the replacement generation spawns a fresh one. The coder loses its session
+  state. This is not gratuitous — reaching the watchdog at all means an executor
+  was parked in a write the child had stopped draining — but it is a real cost
+  that a Tmux fence does not carry, since Tmux's predicate is over its own threads
+  and the pane survives untouched.
+- **A negative verdict is permanent for the process.** The target's registry entry
+  is retained deliberately, because registration is the election a spawner must
+  win; holding the key is the whole no-replacement mechanism. Recovery is a relay
+  restart. Chosen over the alternative in full knowledge: a target that accepts
+  nothing is recoverable by operator action, and a target that two generations may
+  be writing to concurrently is not.
+
 ---
 
 ## D8 — ACP is excluded from emergency raw, on protocol grounds

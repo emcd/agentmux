@@ -278,8 +278,69 @@ Two rules that are easy to get wrong and are load-bearing:
   observed cessation in step 4 does. Both timeout and failure route to the
   negative branch.
 
-A **negative** verdict admits no replacement for that target and holds its raw
-barrier, while still resolving every member through the guard. **[specified]**
+Two things initiate a fence: graceful shutdown, and the execution watchdog
+described below. **[built]**
+
+A **positive** verdict tears the old generation down and builds a replacement in
+place — an ACP driver from the worker's retained bootstrap, every other transport
+lazily from the next task. A **negative** verdict marks the target fail-stopped:
+its registry entry is held for the rest of the process's life, which is what makes
+a replacement unelectable, and every further send is refused with
+`delivery_target_fail_stopped`. Raw needs no separate barrier — `raww` reaches the
+target through that same registry lookup. Either verdict resolves every
+still-unresolved member through the guard. **[built]**
+
+## The execution watchdog
+
+The one gap the two-condition delivery model (relay shutting down / transport
+unhealthy) cannot close: an executor **alive, with a healthy target, stuck in our
+own code** — parked in a blocking write whose buffer is full. Neither condition
+fires and the member stays `Authorized` forever, holding quota and blocking the
+target FIFO.
+
+```
+  authorization ──────────────────────────────────► resolution
+        │                                                ▲
+        │◄────── submission-timeout-ms ──────►│          │
+        │                                     │          │
+        │                              elapsed, still    │
+        │                              unresolved        │
+        │                                     │          │
+        │                                     ▼          │
+        │                          initiate generation fence
+        │                          terminalize NOTHING here
+        │                                     │          │
+        │                          ┌──────────┴───────┐  │
+        │                          │ evidence still   ├──┘
+        │                          │ admissible       │
+        │                          │ through both     │
+        │                          │ observation      │
+        │                          │ windows          │
+        │                          └──────────┬───────┘
+        │                                     ▼
+        │                              fence verdict
+        │                        THE SINGLE RESOLUTION CUT
+        │                    still-unresolved members terminalize
+        │                    through the guard's evidence order
+```
+
+Anchored at authorization, so the bound covers the whole supervised path including
+rendering and submission. It is admissible beside the "no elapsed duration decides
+anything" rule only because it bounds **the relay's own code**: it states nothing
+about target health and produces no failure spelling. Its members resolve
+`submission_unknown` because not knowing is what actually happened.
+
+It measures relay execution rather than the agent's inference only because every
+transport resolves its outcome future at the write boundary — ACP after the framed
+`session/prompt` write, Tmux at the `inject_literal_text` invocation, Pty at the
+buffered `write_all`. Break that property in any transport and the watchdog starts
+fencing healthy targets mid-turn. **[built]**
+
+Terminalizing at the bound rather than at the verdict would destroy evidence the
+fence is about to produce: a bound member with no record wins `submission_unknown`,
+and a cooperative stop that then proves nothing was written could no longer be
+accepted. One cut at the verdict preserves the evidence order instead of racing
+it.
 
 ## What the relay does not do
 

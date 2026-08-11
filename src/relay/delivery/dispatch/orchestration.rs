@@ -200,6 +200,12 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
             super::super::async_worker::complete_task_on_shutdown(&task);
             Ok(())
         }
+        // Reported as an error rather than resolved as a delivery outcome: nothing
+        // was admitted for this task yet, and the condition is about the target
+        // rather than about this message. The sender is told the target is
+        // fail-stopped so it stops sending, instead of collecting one
+        // indistinguishable non-delivery receipt per attempt.
+        WorkerDispatch::FailStopped(task) => Err(fail_stopped_error(&task)),
         // A worker that was never there and one whose receiver has since dropped
         // are the same instruction to a spawner: there is no live worker, make
         // one. They differ only for an observer counting closed notification
@@ -269,6 +275,7 @@ fn dispatch_to_installed_owner(
             super::super::async_worker::complete_task_on_shutdown(&task);
             Ok(())
         }
+        WorkerDispatch::FailStopped(task) => Err(fail_stopped_error(&task)),
         WorkerDispatch::Missing(task) | WorkerDispatch::Dropped(task) => {
             Err(super::super::super::relay_error(
                 "internal_unexpected_failure",
@@ -277,6 +284,20 @@ fn dispatch_to_installed_owner(
             ))
         }
     }
+}
+
+/// The error a fail-stopped target refuses every send with.
+///
+/// It names the condition rather than the message, because the message is not
+/// what went wrong: the relay could not establish that a previous generation had
+/// stopped writing to this target, and starting a second one alongside it is the
+/// hazard the fence exists to avoid.
+fn fail_stopped_error(task: &AsyncDeliveryTask) -> RelayError {
+    super::super::super::relay_error(
+        "delivery_target_fail_stopped",
+        "target is fail-stopped: a previous generation was not observed to cease",
+        Some(json!({"target_session": task.target_session})),
+    )
 }
 
 #[cfg(test)]
