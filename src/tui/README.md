@@ -122,7 +122,7 @@ auto-opens it.
   - `default-bundle` from active `ui.toml` configuration
   - the first available bundle, else an empty browsing context,
 - delivery outcome vocabulary:
-  - `accepted`, `success`, `timeout`, `failed`,
+  - `accepted`, `success`, `failed`, `not_submitted`, `submission_unknown`,
 - recipient completion via `@` token triggers plus explicit manual trigger,
 - `@`-prefixed tokens trigger immediate completion proposals after one suffix character,
 - completion candidates span every bundle visible to the operator: the active
