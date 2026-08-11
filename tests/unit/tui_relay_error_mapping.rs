@@ -18,6 +18,7 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
+use std::time::Duration;
 
 use agentmux::runtime::error::RuntimeError;
 use agentmux::tui::{TuiLaunchOptions, workbench::Workbench};
@@ -46,9 +47,19 @@ fn temporary_socket_path() -> (SocketGuard, PathBuf) {
     (SocketGuard { path: path.clone() }, path)
 }
 
+/// See the note on `FRAME_WAIT_BUDGET` in `relay_stream.rs`: bounds the failure
+/// mode so a regression that stops a frame being sent fails rather than parks.
+const FRAME_WAIT_BUDGET: Duration = Duration::from_secs(5);
+
 fn read_json_line(reader: &mut BufReader<UnixStream>) -> Value {
+    reader
+        .get_ref()
+        .set_read_timeout(Some(FRAME_WAIT_BUDGET))
+        .expect("set frame read timeout");
     let mut line = String::new();
-    reader.read_line(&mut line).expect("read json line");
+    reader.read_line(&mut line).unwrap_or_else(|source| {
+        panic!("no frame within {FRAME_WAIT_BUDGET:?}: {source}");
+    });
     serde_json::from_str(line.trim_end()).expect("decode json line")
 }
 
