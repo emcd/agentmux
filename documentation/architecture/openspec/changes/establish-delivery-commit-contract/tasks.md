@@ -20,7 +20,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Reject at admission an envelope whose canonical payload exceeds the target transport's maximum handover dimensions
 - [x] Reject a `Pubsub` target synchronously at admission with the existing not-implemented error, queueing and authorizing nothing
 - [x] Implement authorization as a relay-local transition that creates the batch's owner in the same atomic operation
-- [ ] Implement the relay-owned guard: keyed on `(batch, member, attempt)` at authorization, atomically bound to `PackingUnit ID` at partition — creation at authorization is done; the `PackingUnit ID` binding lands with partition, and stands in meanwhile on whether the member was handed to a transport
+- [ ] Implement the relay-owned guard: keyed on `(batch, member, attempt)` at authorization, atomically bound to `PackingUnit ID` at partition — creation at authorization is done, and the binding is now a real `PackingUnit ID` recorded before the first target-side effect rather than a boolean standing in for one. What remains is the partition itself: one member per unit today, because each transport coalesces internally without reporting its partition back
 - [x] Implement the single terminal CAS, releasing admission quota on that transition and nowhere else
 - [x] Implement the guard resolution order once: unit record if present, else `not_submitted` for a member never bound to a unit, else `submission_unknown`
 - [ ] Implement the mandatory post-authorization execution watchdog bounded by `[delivery].submission-timeout-ms`, anchored at authorization. Arming REQUIRES the transport submission-evidence tasks below: until a transport records `Submitted` at write time, its outcome future resolves only after the target has finished responding, so a bound anchored at authorization measures the agent's inference and fences a healthy target mid-turn. Land the two together
@@ -70,7 +70,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Add the typed evidence enum — `Submitted`, `NotSubmitted`, `SubmissionUnknown` — and map undifferentiated errors to `SubmissionUnknown`
 - [ ] Make partition deterministic and recorded to the guard before any target-side effect
 - [ ] Record one immutable per-unit evidence record before member fan-out, and resume fan-out from it after a panic
-- [ ] Resolve an unbound member `not_submitted`, keyed on unit binding rather than on the manner of failure
+- [x] Resolve an unbound member `not_submitted`, keyed on unit binding rather than on the manner of failure
 - [ ] Resolve every member from its own unit's record; remove group-wide outcome application
 
 ### Fencing

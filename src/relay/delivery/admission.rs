@@ -35,7 +35,8 @@ use std::{
 use serde_json::json;
 
 use super::guard::{
-    AttemptId, BatchId, GuardKey, QueueEntryState, SubmissionEvidence, resolve_from_evidence,
+    AttemptId, BatchId, GuardKey, PackingUnitId, QueueEntryState, SubmissionEvidence,
+    resolve_from_evidence,
 };
 use crate::configuration::{BundleConfiguration, SessionType};
 use crate::relay::DeliveryConfiguration;
@@ -163,11 +164,17 @@ struct AdmittedEntry {
     state: QueueEntryState,
     /// Assigned at authorization and never reassigned; `None` while `Pending`.
     guard: Option<GuardKey>,
-    /// Set when the member is handed to a transport, which is the moment a
-    /// target-side effect becomes possible. It is the discriminator in the
-    /// guard's evidence order between a provable `not_submitted` and an honest
-    /// `submission_unknown`.
-    handed_to_transport: bool,
+    /// The packing unit this member was partitioned into, recorded before the
+    /// unit's first target-side effect and never reassigned. It is the
+    /// discriminator in the guard's evidence order between a provable
+    /// `not_submitted` and an honest `submission_unknown` — binding, rather than
+    /// the manner of the failure that ended the attempt.
+    ///
+    /// One member per unit today, because the relay submits one member per batch
+    /// and each transport coalesces internally without reporting its partition
+    /// back. Transport-reported partitions replace the minting site, not this
+    /// field or the order that reads it.
+    unit: Option<PackingUnitId>,
     /// The immutable evidence record for the member's packing unit, once its
     /// submission has produced one. Every member outcome is derived from this
     /// rather than from live state, so a panic partway through fan-out resumes
@@ -340,7 +347,7 @@ pub(in crate::relay) fn admit_with_limits(
             admitted_at: Instant::now(),
             state: QueueEntryState::Pending,
             guard: None,
-            handed_to_transport: false,
+            unit: None,
             unit_evidence: None,
         },
     );
@@ -401,18 +408,27 @@ pub(in crate::relay) fn authorize(message_id: &str, batch: BatchId) -> Option<Gu
     Some(key)
 }
 
-/// Records that the member has been handed to its transport, which is the point
-/// a target-side effect becomes possible.
+/// Binds the member to the packing unit that will carry it, before that unit
+/// produces any target-side effect.
 ///
-/// Until this is set, the guard can positively prove nothing was written; after
-/// it, partial effect cannot be excluded. Recording it is therefore what keeps a
-/// lifecycle trigger from over-claiming in either direction.
-pub(in crate::relay) fn note_handed_to_transport(message_id: &str) {
+/// Until a member is bound the guard can positively prove nothing was written;
+/// after it, partial effect cannot be excluded. Recording the binding ahead of
+/// the effect is therefore what keeps a lifecycle trigger from over-claiming in
+/// either direction, and it is why the evidence order reads binding rather than
+/// asking how the attempt ended.
+///
+/// Binding is write-once. A second bind for the same member would mean the
+/// partition changed after it was recorded, which the contract forbids — a
+/// member belongs to exactly one unit and no member joins a batch after
+/// authorization — so the first binding stands.
+pub(in crate::relay) fn bind_to_packing_unit(message_id: &str, unit: PackingUnitId) {
     let Ok(mut state) = lock_ledger() else {
         return;
     };
-    if let Some(entry) = state.entries.get_mut(message_id) {
-        entry.handed_to_transport = true;
+    if let Some(entry) = state.entries.get_mut(message_id)
+        && entry.unit.is_none()
+    {
+        entry.unit = Some(unit);
     }
 }
 
@@ -495,7 +511,7 @@ pub(in crate::relay) fn terminalize(message_id: &str) -> TerminalTransition {
         }
     }
     TerminalTransition::Won {
-        evidence: resolve_from_evidence(entry.unit_evidence, entry.handed_to_transport),
+        evidence: resolve_from_evidence(entry.unit_evidence, entry.unit),
         guard: entry.guard,
     }
 }
