@@ -328,7 +328,8 @@ handle. They are limitations, not bugs to be discovered later.
    process and graceful shutdown only. Nothing persists across a process
    boundary.
 
-5. **`agentmux:issues/relay/62` has no regression test.** The original was
-   deleted along with the transport-owned wait it exercised. The structural
-   argument (no transport-internal queue remains to absorb into) is sound but
-   unproven.
+5. *(Closed.)* `agentmux:issues/relay/62` now has a regression test again —
+   `pty_delivery_writes_every_member_of_a_partitioned_group` in
+   `tests/unit/pty_transport.rs`, behind the `pty` feature. It asserts on the
+   bytes the writer received rather than on outcomes, because a resolved member
+   with no bytes behind it was the defect's signature.

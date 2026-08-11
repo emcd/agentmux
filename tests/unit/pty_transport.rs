@@ -129,6 +129,29 @@ impl std::io::Write for FailingWriter {
     }
 }
 
+/// A `Write` that always succeeds and appends into a sink the test still holds.
+///
+/// `FailingWriter` records bytes too, but it is boxed as `dyn Write` before the
+/// delivery takes it, so nothing can read them back afterwards. Sharing the sink
+/// is what makes the bytes assertable.
+struct RecordingWriter {
+    sink: Arc<Mutex<Vec<u8>>>,
+}
+
+impl std::io::Write for RecordingWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.sink
+            .lock()
+            .expect("recording sink")
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn envelope_for(
     message_id: &str,
     body: &str,
@@ -209,6 +232,85 @@ fn pty_delivery_resolves_each_member_from_its_own_evidence() {
     assert_eq!(outcome2.outcome, SendOutcome::Failed);
     assert_eq!(outcome2.message_id, "member-2");
     assert_eq!(outcome2.reason_code.as_deref(), Some("pty_write_failed"));
+}
+
+/// Every member of a partitioned group gets its own bytes written, not merely
+/// its own outcome.
+///
+/// This is the `agentmux:issues/relay/62` regression. The defect was a member
+/// absorbed into a flush group *after* that group's single write had already
+/// happened: it was pushed onto the group but never written anywhere, while the
+/// group resolved every member identically. Its sender was told `Delivered` for
+/// bytes that never left the relay.
+///
+/// Asserting on outcomes cannot catch that, because the outcome is precisely
+/// what was untrustworthy — the defect's signature is a resolved member with no
+/// bytes behind it. So this asserts on what the writer actually received.
+///
+/// The structural fix is that membership is fixed at partition time and every
+/// unit is written afterwards, one per member, so there is no longer a window
+/// between the write and the group's membership being final.
+#[test]
+fn pty_delivery_writes_every_member_of_a_partitioned_group() {
+    use agentmux::pty::delivery::{Delivery, DeliveryStep};
+    use agentmux::pty::transport::DeliveryCommand;
+    use agentmux::transports::SendOutcome;
+
+    const FIRST_BODY: &str = "RELAY62-FIRST-ENVELOPE";
+    const SECOND_BODY: &str = "RELAY62-SECOND-ENVELOPE";
+
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> =
+        Arc::new(Mutex::new(Box::new(RecordingWriter {
+            sink: Arc::clone(&sink),
+        })));
+    let (write_tx, mut write_rx) = mpsc::channel::<DeliveryCommand>(8);
+
+    let (outcome1_tx, outcome1_rx) = tokio::sync::oneshot::channel();
+    let (outcome2_tx, outcome2_rx) = tokio::sync::oneshot::channel();
+
+    // Queued before partition runs, so the drain absorbs it into the same group
+    // as the first envelope. That co-membership is what the defect required, and
+    // it is forced here rather than raced for.
+    write_tx
+        .blocking_send(DeliveryCommand::Envelope {
+            envelope: Box::new(envelope_for("relay62-second", SECOND_BODY, false)),
+            outcome_tx: outcome2_tx,
+        })
+        .expect("queue second envelope");
+
+    let mut delivery = Delivery::start_envelope_group(
+        Box::new(envelope_for("relay62-first", FIRST_BODY, false)),
+        outcome1_tx,
+        &mut write_rx,
+        &writer,
+        "test-session",
+    );
+
+    assert!(matches!(
+        delivery.step("test-session"),
+        DeliveryStep::Done { pending_raw: None }
+    ));
+
+    // Both resolve, and both resolve Delivered. On its own this is exactly the
+    // claim the defect made falsely, which is why it is not the assertion that
+    // carries this test.
+    let outcome1 = outcome1_rx.blocking_recv().expect("member 1 outcome");
+    let outcome2 = outcome2_rx.blocking_recv().expect("member 2 outcome");
+    assert_eq!(outcome1.outcome, SendOutcome::Delivered);
+    assert_eq!(outcome2.outcome, SendOutcome::Delivered);
+
+    let written = String::from_utf8_lossy(&sink.lock().expect("recording sink")).into_owned();
+    assert!(
+        written.contains(FIRST_BODY),
+        "the first member's body never reached the writer; written: {written:?}"
+    );
+    assert!(
+        written.contains(SECOND_BODY),
+        "the member absorbed during partition resolved {:?} but its body never \
+         reached the writer (relay/62); written: {written:?}",
+        outcome2.outcome,
+    );
 }
 
 /// A raw barrier absorbed during partition is handed back through
