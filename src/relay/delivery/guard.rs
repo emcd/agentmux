@@ -124,18 +124,23 @@ impl GuardTrigger {
 /// allowed to pick a spelling:
 ///
 /// 1. a recorded unit result, if the member's packing unit produced one;
-/// 2. otherwise `not_submitted`, when the member was never handed to a
-///    transport — nothing could have taken effect, so this is provable rather
-///    than inferred;
-/// 3. otherwise `submission_unknown`, because the member was in a transport's
-///    hands and partial effect cannot be excluded.
+/// 2. otherwise `not_submitted`, when the member was never bound to a packing
+///    unit — the partition is recorded before the first target-side effect, so
+///    an unbound member provably could not have been submitted;
+/// 3. otherwise `submission_unknown`, because the member's unit was in a
+///    transport's hands and partial effect cannot be excluded.
+///
+/// **The discriminator is unit binding, not the manner of failure.** Refusal,
+/// panic and cancellation all arrive here identically; what separates a provable
+/// `not_submitted` from an honest `submission_unknown` is whether a unit had
+/// been recorded for the member when the trigger fired.
 pub(in crate::relay) fn resolve_from_evidence(
     unit_evidence: Option<SubmissionEvidence>,
-    handed_to_transport: bool,
+    unit: Option<PackingUnitId>,
 ) -> SubmissionEvidence {
     match unit_evidence {
         Some(recorded) => recorded,
-        None if handed_to_transport => SubmissionEvidence::SubmissionUnknown,
+        None if unit.is_some() => SubmissionEvidence::SubmissionUnknown,
         None => SubmissionEvidence::NotSubmitted,
     }
 }
@@ -168,8 +173,21 @@ pub(in crate::relay) struct BatchId(u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(in crate::relay) struct AttemptId(u64);
 
+/// The unit of *target submission*, as distinct from [`BatchId`], the unit of
+/// *authorization*. A batch is not one atomic target write: a Tmux batch splits
+/// into token-budgeted prompts injected separately, and Pty and ACP do the
+/// analogous thing.
+///
+/// Assigned at partition and never reassigned. A member's binding to one is what
+/// the evidence order reads to tell a provable `not_submitted` from an honest
+/// `submission_unknown`, which is why the binding is recorded *before* the first
+/// target-side effect rather than alongside it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(in crate::relay) struct PackingUnitId(u64);
+
 static NEXT_BATCH_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_PACKING_UNIT_ID: AtomicU64 = AtomicU64::new(1);
 
 impl BatchId {
     /// Mints the next batch id. Process-local and monotonic; identities never
@@ -194,6 +212,12 @@ impl AttemptId {
     }
 }
 
+impl PackingUnitId {
+    pub(in crate::relay) fn mint() -> Self {
+        Self(NEXT_PACKING_UNIT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -209,25 +233,32 @@ mod tests {
         // transport — the record is what the member's siblings resolved from, and
         // disagreeing with it is the split-outcome hazard it exists to prevent.
         assert_eq!(
-            resolve_from_evidence(Some(SubmissionEvidence::Submitted), true),
+            resolve_from_evidence(
+                Some(SubmissionEvidence::Submitted),
+                Some(PackingUnitId::mint())
+            ),
             SubmissionEvidence::Submitted,
         );
         assert_eq!(
-            resolve_from_evidence(Some(SubmissionEvidence::NotSubmitted), true),
+            resolve_from_evidence(
+                Some(SubmissionEvidence::NotSubmitted),
+                Some(PackingUnitId::mint())
+            ),
             SubmissionEvidence::NotSubmitted,
         );
 
-        // No record, never handed over: nothing could have taken effect, so
-        // non-delivery is provable rather than inferred.
+        // No record, never bound to a unit: the partition is recorded before the
+        // first target-side effect, so non-delivery is provable rather than
+        // inferred.
         assert_eq!(
-            resolve_from_evidence(None, false),
+            resolve_from_evidence(None, None),
             SubmissionEvidence::NotSubmitted,
         );
 
-        // No record, but the member was in a transport's hands: partial effect
-        // cannot be excluded, so the honest answer is that we do not know.
+        // No record, but the member's unit was in a transport's hands: partial
+        // effect cannot be excluded, so the honest answer is that we do not know.
         assert_eq!(
-            resolve_from_evidence(None, true),
+            resolve_from_evidence(None, Some(PackingUnitId::mint())),
             SubmissionEvidence::SubmissionUnknown,
         );
     }

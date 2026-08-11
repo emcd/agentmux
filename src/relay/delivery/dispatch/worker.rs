@@ -29,7 +29,7 @@ use crate::transports::{OutcomeFuture, SingleDeliveryOutcome, TransportHealth, T
 
 use super::super::async_worker::{AsyncWorkerKey, WorkerOwner};
 use super::super::fence::{FenceInProgress, FenceResolution, FenceVerdict};
-use super::super::guard::{BatchId, GuardTrigger};
+use super::super::guard::{BatchId, GuardTrigger, PackingUnitId};
 use crate::runtime::inscriptions::emit_inscription;
 
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
@@ -466,7 +466,10 @@ async fn submit_task(
         // Recorded immediately before the call that can produce an effect, and
         // never earlier: the gap between authorization and this point is exactly
         // the window in which the guard can still prove nothing was written.
-        super::super::admission::note_handed_to_transport(task.message_id.as_str());
+        super::super::admission::bind_to_packing_unit(
+            task.message_id.as_str(),
+            PackingUnitId::mint(),
+        );
         (transport.mailw(envelope), false)
     } else {
         // Every coder submission marks handover too. Omitting it here let a
@@ -523,14 +526,20 @@ fn prepare_coder_write(
             let message = build_delivery_message(task, target_member, now_rfc3339().as_str());
             emit_envelope_metadata_inscription(&message, task.message_id.as_str());
             let envelope = build_coder_envelope(task, message);
-            // Marked immediately before the call that can produce a target-side
+            // Bound immediately before the call that can produce a target-side
             // effect. Everything above this line is relay-local rendering, so a
             // failure there is still provably non-delivery.
-            super::super::admission::note_handed_to_transport(task.message_id.as_str());
+            super::super::admission::bind_to_packing_unit(
+                task.message_id.as_str(),
+                PackingUnitId::mint(),
+            );
             Ok(transport.mailw(envelope))
         }
         DeliveryPayloadMode::RawInput => {
-            super::super::admission::note_handed_to_transport(task.message_id.as_str());
+            super::super::admission::bind_to_packing_unit(
+                task.message_id.as_str(),
+                PackingUnitId::mint(),
+            );
             Ok(transport.raww(task.message.clone(), task.append_enter))
         }
     }

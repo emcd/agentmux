@@ -200,7 +200,11 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
             super::super::async_worker::complete_task_on_shutdown(&task);
             Ok(())
         }
-        WorkerDispatch::Missing(task) => {
+        // A worker that was never there and one whose receiver has since dropped
+        // are the same instruction to a spawner: there is no live worker, make
+        // one. They differ only for an observer counting closed notification
+        // paths, which is not this path's concern.
+        WorkerDispatch::Missing(task) | WorkerDispatch::Dropped(task) => {
             // ACP workers are pre-created during startup and never lazily created
             // here. Reaching the new-worker path with an ACP task means its worker
             // has gone away, so report it unavailable rather than spin up a
@@ -265,11 +269,13 @@ fn dispatch_to_installed_owner(
             super::super::async_worker::complete_task_on_shutdown(&task);
             Ok(())
         }
-        WorkerDispatch::Missing(task) => Err(super::super::super::relay_error(
-            "internal_unexpected_failure",
-            "target worker was replaced while the delivery was being enqueued",
-            Some(json!({"target_session": task.target_session})),
-        )),
+        WorkerDispatch::Missing(task) | WorkerDispatch::Dropped(task) => {
+            Err(super::super::super::relay_error(
+                "internal_unexpected_failure",
+                "target worker was replaced while the delivery was being enqueued",
+                Some(json!({"target_session": task.target_session})),
+            ))
+        }
     }
 }
 

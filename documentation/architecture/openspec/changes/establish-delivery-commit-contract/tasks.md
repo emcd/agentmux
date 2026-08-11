@@ -20,7 +20,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Reject at admission an envelope whose canonical payload exceeds the target transport's maximum handover dimensions
 - [x] Reject a `Pubsub` target synchronously at admission with the existing not-implemented error, queueing and authorizing nothing
 - [x] Implement authorization as a relay-local transition that creates the batch's owner in the same atomic operation
-- [ ] Implement the relay-owned guard: keyed on `(batch, member, attempt)` at authorization, atomically bound to `PackingUnit ID` at partition — creation at authorization is done; the `PackingUnit ID` binding lands with partition, and stands in meanwhile on whether the member was handed to a transport
+- [ ] Implement the relay-owned guard: keyed on `(batch, member, attempt)` at authorization, atomically bound to `PackingUnit ID` at partition — creation at authorization is done, and the binding is now a real `PackingUnit ID` recorded before the first target-side effect rather than a boolean standing in for one. What remains is the partition itself: one member per unit today, because each transport coalesces internally without reporting its partition back
 - [x] Implement the single terminal CAS, releasing admission quota on that transition and nowhere else
 - [x] Implement the guard resolution order once: unit record if present, else `not_submitted` for a member never bound to a unit, else `submission_unknown`
 - [ ] Implement the mandatory post-authorization execution watchdog bounded by `[delivery].submission-timeout-ms`, anchored at authorization. Arming REQUIRES the transport submission-evidence tasks below: until a transport records `Submitted` at write time, its outcome future resolves only after the target has finished responding, so a bound anchored at authorization measures the agent's inference and fences a healthy target mid-turn. Land the two together
@@ -28,7 +28,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [ ] Release quota and outcome barriers at terminalization, but release the target's FIFO, raw barrier, and replacement only on a positive fence verdict
 - [ ] Make unwind, channel closure, task or thread exit, generation replacement, and graceful shutdown all route through that one order; no lifecycle path selects an outcome of its own
 - [x] Make collectors carry guard keys rather than own resolution; remove the `JoinError` branch in `src/relay/delivery/dispatch/outcomes.rs` that returns without producing an outcome
-- [ ] Ensure outcome-notification failure is counted and recorded without blocking the terminal transition or the quota release
+- [x] Ensure outcome-notification failure is counted and recorded without blocking the terminal transition or the quota release. The ordering half was already structural — the terminal CAS and quota release run before any notification — so the work was the counting: both outcome-notification channels discarded their result with `let _ =`. A sender with no attached UI and a sender with no live worker are deliberately **not** counted, being ordinary states rather than failures; a disconnected UI, a draining worker, and an unreadable registry are
 
 ### Scheduling
 
@@ -70,7 +70,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Add the typed evidence enum — `Submitted`, `NotSubmitted`, `SubmissionUnknown` — and map undifferentiated errors to `SubmissionUnknown`
 - [ ] Make partition deterministic and recorded to the guard before any target-side effect
 - [ ] Record one immutable per-unit evidence record before member fan-out, and resume fan-out from it after a panic
-- [ ] Resolve an unbound member `not_submitted`, keyed on unit binding rather than on the manner of failure
+- [x] Resolve an unbound member `not_submitted`, keyed on unit binding rather than on the manner of failure
 - [ ] Resolve every member from its own unit's record; remove group-wide outcome application
 
 ### Fencing
@@ -88,16 +88,9 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Make a successful primitive invocation not itself acknowledge the fence; only observed cessation does
 - [x] Make the fence positive only on observed cessation, and route both timeout and failure to the negative branch
 - [ ] Keep the fence negative when cessation is not observed: admit no replacement for that target, hold its raw barrier, record the condition, and still resolve every member through the guard. The negative registry state was deleted with the watchdog trigger, and shutdown exercises no replacement; lands again with arming
-- [ ] Block replacement and normal-raw ordering barriers until the fence is positive, while allowing `submission_unknown` to terminalize before it
+- [ ] Block replacement and raw ordering barriers until the fence is positive, while allowing `submission_unknown` to terminalize before it
+- [ ] Make raw wait for target-side ordering safety rather than for outcome terminality, which is the consumer side of the barrier above
 - [ ] Resolve a submission stopped by the fence before any effect as `not_submitted`
-
-### Raw mode
-
-- [ ] Add the `mode` field to the relay `raww` contract, defaulting to `normal`
-- [ ] Implement emergency mode overtaking `Pending` mail and bypassing the readiness gate on Tmux and Pty
-- [ ] Reject emergency mode on ACP, UI, and Pubsub with `validation_invalid_params` naming the supported set
-- [ ] Make normal raw wait for target-side ordering safety rather than for outcome terminality
-- [ ] Add `--mode` to `agentmux raww` and `mode` to the MCP `raww` schema as a plain optional enumerated string, not a nullable union
 
 ### Per-transport
 
@@ -125,11 +118,10 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Document that a `Pending` entry for a reachable-but-never-ready target holds its admission quota indefinitely, distinguishing it from a continuously unreachable target whose members resolve past the dwell, and naming per-target quota as the bound on the consequence and the undelivered-queue inscriptions as how to observe it
 - [x] State the crash-recovery limitation: guarantees hold for a surviving relay process and graceful shutdown only
 - [ ] Reconcile `session-relay/spec.md` hub prose (requirement total, the partition description advertising prime/wedge timeouts)
-- [ ] Refresh the MCP tool inventory after the `raww` schema change: restart the server, verify tool inventory client-side, and record the outcome in the lane handoff
 
 ### Tests
 
-- [ ] Remove `#[ignore]` from `pty_envelope_absorbed_during_wait_reaches_the_master`; it passing is the `agentmux:issues/relay/62` acceptance criterion
+- [x] Reinstate the coalesce-during-wait regression test; it passing is the `agentmux:issues/relay/62` acceptance criterion. Landed as `pty_delivery_writes_every_member_of_a_partitioned_group`, which forces two envelopes into one partitioned group and asserts both bodies reach the writer. It asserts on bytes rather than outcomes because the outcome is precisely what the defect made untrustworthy — a resolved member with no bytes behind it. An earlier framing of this task called for driving the relay queue instead of Pty's; that was wrong. The defect lived in Pty's group resolution and the fix lives in Pty's partition-then-write ordering, so a relay-level test would exercise neither, and a tmux-level one could not reproduce it at all since only Tmux ever committed after its wait
 - [ ] Cover exactly-once resolution under worker panic, collector panic, transport panic mid-partition and after partial submission, closed outcome channel, generation replacement in flight, and graceful shutdown with mixed `Pending`/`Authorized`
 - [ ] Cover that quota returns to zero after each of those, and that the per-target FIFO still makes progress
 - [x] Cover fence acknowledgment ordering: against an executor blocked in a primitive that observes no flag, the first observation window does not complete, and cessation is observed only after the termination primitive has been invoked
@@ -153,22 +145,14 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 ## Phase 2 — 0.9.x follow-on
 
 - [ ] Convert `TransportImpl::Ui` to the contract and delete its reconnect timeout constant and builder
-- [ ] Add the independent supervised writer for Pty emergency raw, with a defined interleaving rule
-- [ ] Extend emergency raw to overtake in-flight execution, which depends on that writer
 - [ ] Extend the guard surface beyond the minimum
-- [ ] Expose emergency raw mode in the TUI raww surface
 - [ ] Durable crash recovery, tracked separately
 
 ## Interim exceptions carried by Phase 1
 
-The specs describe the end state. These are the two places the core knowingly
-does not yet reach it. Both are implementation-phase exceptions rather than
-properties of the specified contract.
+The specs describe the end state. This is the one place the core knowingly does
+not yet reach it — an implementation-phase exception rather than a property of
+the specified contract.
 
 - **`TransportImpl::Ui` keeps its reconnect timer** until Phase 2 lands, so timer
   retirement is not yet universal.
-- **No transport provides a separately supervised writer**, so the clause
-  permitting emergency raw to bypass an in-flight submission is unreachable and
-  emergency raw always waits for target-side ordering safety. The requirement is
-  written against the end state so that adding the writer in Phase 2 does not
-  require reopening it.

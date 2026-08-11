@@ -170,63 +170,6 @@ unreachability is evidence that no wait will end it.
 - **AND** the most recent observation is recorded as diagnostics only, and does
   not accumulate toward any verdict
 
-### Requirement: Relay raww operation contract
-
-Relay SHALL expose a raw direct-write operation named `raww` for a single
-explicit target session.
-
-Request contract:
-- `target_session` (required)
-- `text` (required UTF-8 string)
-- `mode` (optional string, one of `normal` or `emergency`, default `normal`)
-- `no_enter` (optional boolean, default `false`)
-- `request_id` (optional)
-- optional bundle selector with same-bundle-only enforcement
-
-`raww` SHALL NOT support broadcast.
-
-**`mode` is an explicit opt-in to an ordering break.** An operator SHALL receive
-the ordering break only by asking for it: an existing `raww` call that omits
-`mode` behaves exactly as it did before this change. Adding the discriminator is
-a declared contract modification, not an implicit behavior change.
-
-- `normal` — preserves FIFO against pending mail for that target and waits for
-  target-side ordering safety of older work.
-- `emergency` — overtakes that target's `Pending` mail and bypasses the
-  prompt-readiness gate. It bypasses an in-flight submission only where the
-  target's transport provides a separately supervised writer with a defined
-  interleaving rule; otherwise it waits for target-side ordering safety.
-
-`emergency` SHALL be supported on Tmux and Pty targets only. On any other
-transport relay SHALL reject the request with `validation_invalid_params`,
-naming the target's transport and the supported set. ACP has no emergency raw:
-its recovery path is choose/cancel/teardown, not a second prompt.
-
-#### Scenario: Reject raww broadcast shape
-
-- **WHEN** caller attempts to invoke `raww` without one explicit
-  `target_session`
-- **THEN** relay rejects the request with `validation_invalid_params`
-
-#### Scenario: Default raww mode is normal
-
-- **WHEN** caller omits `mode`
-- **THEN** relay treats the request as `mode = "normal"`
-- **AND** the request preserves FIFO exactly as it did before this change
-
-#### Scenario: Reject an unrecognized raww mode
-
-- **WHEN** caller supplies a `mode` value other than `normal` or `emergency`
-- **THEN** relay rejects the request with `validation_invalid_params`
-
-#### Scenario: Reject emergency raww on an unsupported transport
-
-- **WHEN** caller invokes `raww` with `mode = "emergency"` against an ACP, UI, or
-  Pubsub target
-- **THEN** relay rejects the request with `validation_invalid_params`
-- **AND** the error names the target's transport and the transports that support
-  emergency mode
-
 ### Requirement: Relay raww transport behavior
 
 Relay raww transport execution SHALL map as follows:
@@ -243,46 +186,18 @@ Relay raww transport execution SHALL map as follows:
 Relay SHALL treat raww `text` as opaque input and SHALL NOT evaluate shell
 expansion or command substitution.
 
-**Ordering.** Mail and raw are variants of one per-target relay FIFO. `raww`
-bypasses readiness gating in `emergency` mode; bypassing work that is already
-executing requires a separately supervised writer, per the rule below.
+**Ordering.** Mail and raw are variants of one per-target relay FIFO.
 
-- **Normal raw** SHALL preserve FIFO: no authorization across a raw barrier, nor
-  younger work across older. It SHALL wait for **target-side ordering safety** of
-  older mail, which requires that execution has ceased — not merely that an
-  outcome has become terminal. A ledger transition to `submission_unknown` does
-  not prove a still-running submission cannot take effect later. Normal raw waits
-  regardless of whether a separately supervised writer exists; the writer changes
-  what *emergency* raw may do, not what FIFO means.
-- **Emergency raw** SHALL overtake that target's `Pending` mail and its
-  readiness gate. Where the transport provides no separately supervised writer,
-  it SHALL wait for target-side ordering safety of older in-flight execution,
-  using the generation fence. Where the transport does provide one, it MAY
-  proceed against in-flight execution under that writer's defined interleaving
-  rule.
+Raw SHALL preserve FIFO: no authorization across a raw barrier, nor younger work
+across older. It SHALL wait for **target-side ordering safety** of older mail,
+which requires that execution has ceased — not merely that an outcome has become
+terminal. A ledger transition to `submission_unknown` does not prove a
+still-running submission cannot take effect later, so terminality is the weaker
+condition and is not sufficient here.
 
-Older `Pending` mail overtaken by an emergency raw SHALL be neither retried nor
-reclassified; it keeps its place in the queue and resolves normally. This is a
-documented ordering break.
-
-**Emergency raw SHALL NOT bypass a submission already in flight unless the
-transport provides a separately supervised writer with a defined interleaving
-rule.** Where no such writer exists, emergency raw SHALL wait for target-side
-ordering safety of older in-flight execution.
-
-The constraint is a property of the transports, not a scheduling preference. On
-Pty, raw and envelope submission share one worker channel and one writer mutex:
-routing around the mutex permits byte interleaving that corrupts both writes, and
-taking it blocks exactly as the normal path would. Tmux has the analogous
-constraint on its command path. Overtaking an unfenced in-flight attempt without
-an interleaving rule is a deliberate corruption hazard, not a latency
-optimisation.
-
-> **Interim exception.** No transport provides a separately supervised writer
-> today, so the first clause is currently unreachable on every transport and
-> emergency raw always waits. This is an implementation-phase state, not a
-> narrower contract: the requirement is written against the end state so that
-> adding the writer does not require reopening it.
+Target-side ordering safety is established by the generation fence's positive
+verdict, which is why the raw barrier is held until that verdict rather than
+until the outcome resolves.
 
 #### Scenario: Route raww to acp via session/prompt path
 
@@ -297,38 +212,19 @@ optimisation.
 - **THEN** relay treats `no_enter` as `false`
 - **AND** appends Enter after injected text
 
-#### Scenario: Normal raw preserves FIFO against pending mail
+#### Scenario: Raw preserves FIFO against pending mail
 
-- **WHEN** a `normal` raww is submitted for a target that has older `Pending`
-  mail
+- **WHEN** a raww is submitted for a target that has older `Pending` mail
 - **THEN** the older mail is authorized first
 - **AND** the raw write follows it
 
-#### Scenario: Emergency raw overtakes pending mail
+#### Scenario: Raw waits for target-side ordering safety, not terminality
 
-- **WHEN** an `emergency` raww is submitted for a Tmux or Pty target that has
-  older `Pending` mail
-- **THEN** the raw write is authorized ahead of that mail
-- **AND** the prompt-readiness gate is bypassed for it
-- **AND** the overtaken mail remains `Pending` and is neither retried nor
-  reclassified
-
-#### Scenario: Emergency raw still waits for in-flight execution
-
-- **WHEN** an `emergency` raww is submitted for a target with an authorized
-  batch already executing
-- **AND** that target's transport provides no separately supervised writer
-- **THEN** the raw write waits for target-side ordering safety of that execution
-- **AND** it does not interleave with the in-flight submission
-
-#### Scenario: Emergency raw proceeds where a supervised writer exists
-
-- **WHEN** an `emergency` raww is submitted for a target whose transport provides
-  a separately supervised writer with a defined interleaving rule
-- **AND** that target has an authorized batch already executing
-- **THEN** the raw write proceeds under that interleaving rule
-- **AND** it does not wait for target-side ordering safety of the in-flight
-  submission
+- **WHEN** a raww is submitted for a target with an authorized batch already
+  executing
+- **AND** that batch's outcome has resolved `submission_unknown`
+- **THEN** the raw write still waits for the generation fence's positive verdict
+- **AND** it does not proceed on the terminal outcome alone
 
 #### Scenario: Terminal outcome does not release the raw barrier
 

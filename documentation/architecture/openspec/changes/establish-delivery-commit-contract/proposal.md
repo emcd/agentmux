@@ -32,9 +32,11 @@ into a Pty flush group *during* the wait are pushed onto the group
 (`src/pty/delivery.rs:174`) but never written, while `send_group_outcomes`
 (`:847`) resolves every member identically. Their senders are told the group's
 outcome — `Delivered` on the normal path — for bytes that never left the relay.
-A red regression test pins this at `c96a45e`. Wedge detection has been *masking*
-it by cutting waits short, so retiring the timers widens the window; the fix and
-the retirement must land together.
+A red regression test pinned this originally and was deleted along with the
+transport-owned wait it exercised, so the defect currently has no test proving it
+fixed; reinstating one against the relay-owned queue is the acceptance criterion.
+Wedge detection has been *masking* it by cutting waits short, so retiring the
+timers widens the window; the fix and the retirement must land together.
 
 ## What Changes
 
@@ -95,9 +97,9 @@ the retirement must land together.
   without adjudicating it.
 - **Fix `agentmux:issues/relay/62` structurally.** With the relay owning the
   queue there is no transport-internal queue for a message to be absorbed into
-  after a write, so the defect becomes unreachable rather than patched. Removing
-  the `#[ignore]` from `pty_envelope_absorbed_during_wait_reaches_the_master` is
-  the acceptance criterion.
+  after a write, so the defect becomes unreachable rather than patched. A
+  reinstated coalesce-during-wait regression test, driving the relay queue rather
+  than Pty's, is the acceptance criterion.
 - **Make outcomes report evidence rather than position.** `delivered` requires
   transport-specific *positive* evidence of injection — `inject_literal_text`
   returning `Ok`, `write_all` to the master succeeding, a prompt accepted — and a
@@ -132,26 +134,31 @@ are. Every receipt that fires today for a real reason keeps firing:
 | Prompt never returned within a window | inference from absence | **retired** |
 | Relay queue residency exceeded | inference from absence | **retired**; the entry keeps waiting and the condition is reported by inscription |
 
-**`raww` gains two modes.** Normal raw keeps today's FIFO batch-barrier ordering
-— a raw item flushes buffered mail first, then delivers as its own write
-(`src/transports/contract.rs:120-124`) — and waits for target-side ordering
-safety of older mail. **Operator emergency raw** (Tmux and Pty) overtakes
-`Pending` mail and bypasses readiness gating, with a documented ordering break,
-selected explicitly through the MCP tool and CLI rather than changing existing
-`raww` calls. It bypasses an in-flight submission only where the transport
-provides a separately supervised writer with a defined interleaving rule, and no
-transport provides one today: Pty's raw and envelope paths share one worker
-channel and writer mutex, so an escape hatch around a blocked worker would either
-block identically or interleave bytes. The requirement states that condition
-rather than the current conclusion, so the follow-on writer does not have to
-reopen it.
+**`raww` keeps one ordering and gains no modes.** Raw keeps today's FIFO
+batch-barrier ordering — a raw item flushes buffered mail first, then delivers as
+its own write (`src/transports/contract.rs:120-124`) — and waits for target-side
+ordering safety of older mail, which requires that execution has ceased rather
+than merely that an outcome has become terminal.
+
+An operator emergency mode that overtakes `Pending` mail and bypasses readiness
+gating was specified here and has been **removed from this change's scope
+entirely**, on the operator's 2026-08-10 call. It is not deferred to this
+change's Phase 2; it is filed as a standalone future item at
+`agentmux:todos/transports/8`, where it is scoped to Tmux and Pty only. ACP is
+structurally excluded rather than merely unimplemented: ACP raw is another
+`session/prompt` and the client enforces one active prompt, so overtaking during
+an active turn yields a serialization refusal rather than steering, and ACP has
+no byte-stream primitive to type past with. Its recovery path is
+choose/cancel/teardown.
 
 **One behavior change to state rather than discover:** Pty raw today interrupts
-an in-flight envelope wait (`src/pty/delivery.rs:634-665`). Under normal raw that
-interruption is removed, and emergency raw replaces it — **in the core phase**,
-so no gap opens between phases. What remains follow-on is the independent
-supervised writer that would let emergency raw overtake an *executing*
-submission.
+an in-flight envelope wait (`src/pty/delivery.rs:634-665`). That interruption is
+removed by this change and **nothing replaces it in this scope**. An earlier
+draft preserved the capability by substitution, with relay-side emergency
+overtaking standing in for the in-transport interrupt; with emergency raw out of
+scope, the capability is lost until `agentmux:todos/transports/8` lands. This is
+an accepted regression rather than an oversight — the operator confirmed the
+capability is unused today.
 
 **Crash recovery is out of scope.** 0.9.0 guarantees hold for a surviving relay
 process and graceful shutdown. Seam constraints that keep durability reachable —
@@ -178,18 +185,10 @@ relay/62's structural fix; **and the minimum authorization guard and generation
 fence** — guard creation atomic with authorization, terminal CAS with
 exactly-once quota release, supervision of invocation/worker/collector/executor
 exits, transport-generation identity, and enough fence authority that a
-replacement cannot start and normal raw cannot pass until old execution ceased.
+replacement cannot start and raw cannot pass until old execution ceased.
 
-The core also carries **the raw mode discriminator and minimum relay-side
-ordering logic** — an explicit mode on the `raww` contract, with emergency mode
-overtaking `Pending` mail so an operator retains the ability to type past a
-target that will not become ready. The discriminator cannot be deferred while
-the behavior ships: existing `raww` has no field distinguishing normal FIFO from
-overtaking, so mode and behavior ship together or neither does.
-
-**0.9.x follow-on.** UI transport conversion; the independent supervised writer
-and the in-flight-overtake extension that depends on it; the guard surface beyond
-that minimum.
+**0.9.x follow-on.** UI transport conversion; the guard surface beyond that
+minimum.
 
 **The governing invariant, and why the guard cannot be deferred:** *no transition
 to `Authorized` may occur unless an owner capable of terminalizing and releasing
@@ -208,17 +207,20 @@ If the minimum guard cannot fit the core, the correct response is to defer the
 irreversible `Authorized` model **and** the timer retirement together, not to
 ship an unowned state — the timers are what currently bound a stuck delivery.
 
-**Interim exceptions, stated as implementation-phase exceptions rather than as
-properties of the specified contract.** The deltas describe the end state; these
-are places the 0.9.0 core knowingly does not yet reach it:
+**Interim exception, stated as an implementation-phase exception rather than as a
+property of the specified contract.** The deltas describe the end state; this is
+where the 0.9.0 core knowingly does not yet reach it:
 
 - **UI keeps its reconnect timer** until conversion lands, so timer retirement is
   not yet universal. The specs describe universal retirement as the contract; the
   core phase carries a named exception for `TransportImpl::Ui`.
-Pty's raw-interrupt capability is **not** among them. It is preserved in the core
-phase by substitution: relay-side raw overtaking of `Pending` mail replaces the
-in-transport interrupt, since the wait that interrupt targeted is what moves to
-`Pending`. Same operator capability, relay-side.
+
+Pty's raw-interrupt capability is **not** an interim exception either — it is
+simply removed. An earlier draft preserved it by substitution, with relay-side
+emergency overtaking standing in for the in-transport interrupt. With emergency
+raw out of scope the substitution is gone and the capability lapses until
+`agentmux:todos/transports/8` lands. Recorded as an accepted regression, since
+the operator confirmed the capability is unused.
 
 ## Capabilities
 
@@ -229,7 +231,7 @@ async queue lifecycle and terminal-outcome semantics.
 
 ### Modified Capabilities
 
-36 deltas across seven capabilities. The `specs` artifact is authoritative; this
+34 deltas across six capabilities. The `specs` artifact is authoritative; this
 inventory is reconciled against it.
 
 - `transport-abstraction` (7 MODIFIED, 3 ADDED, 4 REMOVED) — the commit
@@ -244,10 +246,10 @@ inventory is reconciled against it.
   REMOVED: `Three-State Delivery Classifier`, `Prime Timeout Envelope Field`,
   `ACP Prime Timeout Envelope Field Consumption`, `Generalized Wedge/Prime State
   Machine`.
-- `transport-contracts` (4 MODIFIED, 4 REMOVED) — MODIFIED:
+- `transport-contracts` (3 MODIFIED, 4 REMOVED) — MODIFIED:
   `Prompt-Readiness Template Gating` (gates authorization uniformly; no
-  per-transport failure inference), `Relay raww operation contract` (mode
-  discriminator), `Relay raww transport behavior` (ordering, Pty and UI arms),
+  per-transport failure inference), `Relay raww transport behavior` (Pty and UI
+  arms, and raw's wait on target-side ordering safety rather than terminality),
   `ACP Transport Error Code` (separates the synchronous code from the delivery
   outcome, and bounds the outcome to positively observed terminal lifecycle).
   REMOVED: `ACP Prime Timeout`, `Tmux Prime Timeout`, `Pty Prime Timeout`, `Pty
@@ -266,9 +268,8 @@ inventory is reconciled against it.
   five removed descriptor keys.
 - `runtime-bootstrap` (1 MODIFIED) — `Relay Configuration File` gains the
   `[delivery]` table that replaces them.
-- `cli-surface` (2 MODIFIED) — `Send Timeout Override Flags by Transport` (its
-  key enumeration is now relay-level), `CLI raww command surface` (`--mode`).
-- `mcp-tool-surface` (1 MODIFIED) — `MCP raww request contract` (`mode`).
+- `cli-surface` (1 MODIFIED) — `Send Timeout Override Flags by Transport` (its
+  key enumeration is now relay-level).
 
 **Deliberately not modified**, recorded so they read as decisions rather than
 omissions:
@@ -284,9 +285,8 @@ omissions:
   normative for all five transports and already forbids it. The ACP-specific work
   is carried in `tasks.md` and tracked at `agentmux:todos/relay/128` rather than
   duplicated as spec text.
-- `tui-surface` / `TUI raww *` — the TUI dispatches normal raw only; `mode`
-  defaults to `normal`, so no TUI contract changes. Exposing emergency mode in
-  the TUI is follow-on.
+- `tui-surface` / `TUI raww *` — raw carries no mode discriminator, so the TUI's
+  raww surface is unchanged by this change.
 
 `session-relay/spec.md` carries hub *prose* that goes stale (a requirement total,
 a partition description advertising "prime/wedge timeouts"). Not requirement
@@ -335,10 +335,10 @@ text, so it takes no delta; reconciled as a sync/archive task.
   with the existing not-implemented error — nothing queued, nothing authorized,
   no terminal outcome and no receipt. Pty's write moves after its wait; Tmux is
   closest to the target shape already.
-- **Tests** — removing `#[ignore]` from
-  `pty_envelope_absorbed_during_wait_reaches_the_master` is the relay/62
-  acceptance criterion. Per project alpha defaults, no test asserts that a
-  removed config key is now rejected.
+- **Tests** — a reinstated coalesce-during-wait regression test against the
+  relay-owned queue is the relay/62 acceptance criterion; the original was
+  deleted with the transport-owned wait it exercised. Per project alpha defaults,
+  no test asserts that a removed config key is now rejected.
 - **Feature gate** — `src/pty/**` is behind the `pty` Cargo feature, which
   neither `cargo nextest run` nor default clippy builds, and the pre-commit
   `cargo-clippy-pty` hook is file-scoped. Default, `--features pty`, and the ACP

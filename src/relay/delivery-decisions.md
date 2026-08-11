@@ -1,0 +1,330 @@
+# Relay Delivery — Architectural Decision Record
+
+Why the delivery contract has the shape described in
+[`delivery-architecture.md`](delivery-architecture.md). Append-only: superseded
+decisions stay, marked as superseded, because the reasoning that was rejected is
+usually the reasoning someone proposes again.
+
+Each entry records what was given up, not only what was chosen.
+
+---
+
+## D1 — Retire every absence-inference timer
+
+**Status:** decided, implemented
+
+Three separately named defects were one defect: **a transport inferring delivery
+failure from the absence of change, and reporting it as non-delivery for bytes it
+may already have committed.**
+
+- *Wedge detection* inferred failure from an unchanged screen. On Pty it reached
+  that verdict in under a second, so an agent sitting on a tool-permission dialog
+  failed its deliveries almost immediately.
+- *Prime timeout* inferred failure from absence of output. A pane awaiting a
+  keystroke is silent and perfectly healthy.
+- *Readiness timeout* inferred "gave up" from a prompt that never returned —
+  honest on Tmux where nothing was injected, but still abandoning a healthy
+  long-horizon agent turn while phrasing it as a fact about the pane.
+
+The live `Delivery Classifier` requirement already stated the rule these violated:
+only a positively observed terminal event — process death, a closed connection, a
+protocol error — is sound evidence of failure, and an unchanged screen is not. It
+sat four paragraphs above a timer that fired on absence.
+
+**Given up:** the timers were also the only thing bounding a stuck delivery.
+Retiring them without a replacement is what generated most of the machinery in
+D3–D5. That cost was paid link by link and was not priced in aggregate at the
+time — see D10.
+
+---
+
+## D2 — Put no bound in their place
+
+**Status:** decided, implemented
+
+An earlier draft replaced the timers with a relay-level residency bound resolving
+an `expired` outcome. **Rejected**: that is the same inference relocated. Elapsed
+waiting still decided an outcome, and because expiry terminalizes and releases
+quota, it dropped mail that would have landed once a long agent turn finished.
+
+A `Pending` entry whose target is reachable now waits indefinitely. The `expired`
+outcome was deleted along with the timers.
+
+**What replaced them** is not a bound at all: relay-level admission quota
+enforced positively at send time, plus undelivered-queue inscriptions that report
+a long wait without adjudicating it.
+
+**Given up, explicitly:** a `Pending` entry for a reachable-but-never-ready target
+holds its admission quota forever. Per-target quota is the bound on the
+*consequence*, not on the wait. A target busy long enough will start refusing new
+sends at admission. This is documented operator-facing behaviour, not an
+oversight.
+
+**No configuration key may be added that bounds how long a delivery waits for a
+reachable target.** This is a standing constraint on future work, not a current
+implementation state.
+
+---
+
+## D3 — `Authorized` exists because the relay must give up the right to reclaim
+
+**Status:** decided, implemented
+
+`Authorized` is frequently misread as a handshake with the transport. It is not:
+the transport is never told about it and never acknowledges it. It is the relay
+making a promise **to itself** — *from here on I will not take this message back.*
+
+That is the entire content of the state, and it maps directly onto the defect the
+contract exists to fix:
+
+- **Before** authorization the relay may truthfully report non-delivery. Nothing
+  was written, so the statement is true.
+- **After** authorization it may not. Bytes may already be moving, so any
+  relay-side decision to call it undelivered risks being a lie.
+
+`Authorized` is the line between "safe to report non-delivery from policy" and
+"must report from evidence." `agentmux:issues/relay/62` is the same error from
+the other side — Pty reporting `Delivered` for bytes that never left the relay.
+Both are reporting from position rather than from evidence.
+
+**Given up:** an irreversible state requires an owner. See D4.
+
+---
+
+## D4 — The guard cannot be deferred past `Authorized`
+
+**Status:** decided, implemented
+
+An earlier draft deferred the authorization guard on the grounds that
+exactly-once resolution is already not guaranteed today. That was wrong on a
+dimension it did not check.
+
+This change introduces per-target and relay-global quota in count and bytes which
+**releases only at the terminal transition**. An unowned `Authorized` entry
+therefore does not merely lose a receipt — it **leaks quota permanently and
+blocks the target FIFO**, since it can neither expire nor retry. Today's
+collector panic at least releases its pending slot. Deferring the guard would
+*regress* resource accounting rather than hold it constant.
+
+**The governing invariant:** *no transition to `Authorized` may occur unless an
+owner capable of terminalizing and releasing it is created in the same atomic
+operation.*
+
+**Corollary, recorded so it is not rediscovered:** if the minimum guard cannot fit
+a phase, the correct response is to defer the irreversible `Authorized` model
+**and** the timer retirement together — not to ship an unowned state.
+
+---
+
+## D5 — Sustained unreachability is bounded; unreadiness is not
+
+**Status:** decided, implemented
+
+`[delivery].unreachable-dwell-ms` resolves members whose target has been
+continuously `Unreachable` past the threshold. This looks like a timer and is
+routinely challenged as one.
+
+The distinction is epistemic, not mechanical. Duration here **qualifies a
+repeatedly-made observation** rather than **substituting for an absent one**:
+
+- Unreadiness: we observe nothing. A silent pane and a working agent are
+  indistinguishable. Elapsed time adds no information, so a bound would be pure
+  inference — exactly D1's defect.
+- Unreachability: we observe a failure, repeatedly, every probe. The dwell asks
+  how long that positive observation has persisted.
+
+*Sustained unreachability is itself evidence, in a way that sustained busyness is
+not. Same clock, opposite epistemics.*
+
+Any return to `Healthy` resets the dwell, so a transient unreachability resolves
+nothing.
+
+---
+
+## D6 — Withdraw cross-target round-robin scheduling
+
+**Status:** decided, withdrawn from scope
+
+The proposal specified a byte-budgeted round-robin across targets, with a
+`scheduling-quantum-bytes` key.
+
+It was withdrawn after the question *"if transports signal readiness, what is the
+scheduler for?"* went unanswered. Each target is served by its own worker; the
+relay arbitrates between none of them. A scheduler polling readiness flags would
+duplicate the notification closure the transports already invoke.
+
+The quantum had a defect of its own: it had to be at least as large as the
+largest handover byte component, while batch formation was already capped there —
+so it could never bind on a first batch. Two limits on one quantity, the same
+defect the design had already caught once in a deficit counter.
+
+`scheduling-quantum-bytes`, its default, range, and load-time validation were all
+deleted.
+
+**Given up:** nothing observable. No fairness property was lost because no
+contention point existed to be fair about.
+
+**Correction recorded:** an early defence of this withdrawal claimed targets "do
+not contend." That was false. The counterexamples raised at the time were Pty's
+blocking submission enqueue, the shared bundle tmux socket, and ACP bootstrap's
+shared blocking pool. The Pty instance has since been fixed — `mailw`/`raww` now
+use `try_send`, and the remaining Pty `blocking_send` calls are snapshot
+requests, child-output forwarding, and a test channel fill, none of them on the
+relay submission path. The shared tmux socket and the ACP bootstrap pool remain
+live contention points.
+
+The conclusion survived on different ground regardless: no elapsed duration
+converts unreadiness into an outcome, whether or not targets contend.
+
+---
+
+## D7 — Execution watchdog over per-transport stalled-execution health
+
+**Status:** decided 2026-08-10, watchdog retained
+
+The one gap the two-condition model (relay shutting down / transport unhealthy)
+does not close: an executor **alive, with a healthy target, stuck in our own
+code**. Concretely, a worker parked in a blocking write to a target's pipe when
+the child has stopped draining and the buffer is full — Pty's `write_all` to the
+master, ACP's `write_line_to_stdin` to the child's stdin under a shared mutex.
+Both sites carry comments acknowledging the state. Neither shutdown nor
+unhealthy fires; the member stays `Authorized` forever, holding quota and
+blocking the target FIFO.
+
+Two candidate answers were argued at length.
+
+**Candidate A — non-blocking writes plus a health dwell.** Convert the blocking
+writes, treat sustained non-writability as a `TransportHealth` transition, let
+the existing fence tear down the stream, and delete `submission-timeout-ms`.
+
+**Rejected**, on two grounds, both from AuxBE:
+
+1. Non-blocking descriptors stop an OS thread parking; they do not make a
+   submission *complete*. A partial write is already a target-side effect but not
+   a valid message, and it has no sound classification — `Submitted` is untrue,
+   `not_submitted` is false, and `submission_unknown` plus reuse is unsafe
+   because the retained suffix can later complete or interleave. With a 256 KiB
+   handover maximum against a typical 64 KiB pipe buffer, mid-frame stalls are
+   reachable rather than theoretical.
+2. It relocates the liveness problem into a pending writer future rather than
+   ending it. A timer declaring that future unhealthy would be an execution
+   watchdog by another name.
+
+**Candidate B — the specced authorization-anchored watchdog.** Retained, decided
+on implementation cost rather than elegance. Once submission evidence is recorded
+at the successful write boundary, the watchdog does not fire on a healthy agent's
+subsequent long turn, and it reuses the fence that is already built. Candidate A
+would need a new per-transport stalled-execution model, partial-write ownership
+and cessation integration, a new dwell policy, coverage of the Tmux `read_to_end`
+case, and a proof that tmux client death cuts server-owned deferred effects that
+neither reviewer could establish from source.
+
+**Given up:** the watchdog is a duration-anchored trigger, which sits uneasily
+beside D1 and D2. It is admissible only because it bounds **the relay's own
+supervised code** between authorization and evidence, states nothing about target
+health, and produces no failure spelling. It must not arm before submission
+evidence lands — until a transport records `Submitted` at write time, its outcome
+future resolves only after the target has finished responding, so a bound
+anchored at authorization would measure the agent's inference and fence a healthy
+target mid-turn.
+
+**Conditions carried onto the watchdog work** (all from candidate A's analysis,
+all applying regardless of which answer won):
+
+- The authorization-to-write TOCTOU window is real on ACP and Pty; both gate
+  reads are explicitly advisory.
+- Tmux `drain_invocation_pipes` parking in `read_to_end` is a distinct unbounded
+  point from the reap loop, and any completion predicate must cover both.
+- Whether tmux client death cuts server-owned deferred effects remains
+  unestablished. The Tmux fence verdict inherits that gap.
+
+---
+
+## D8 — ACP is excluded from emergency raw, on protocol grounds
+
+**Status:** decided, corrected 2026-08-10
+
+Emergency raw mode overtakes `Pending` mail and bypasses readiness gating on Tmux
+and Pty. ACP, UI, and Pubsub reject it.
+
+The exclusion was briefly challenged as unprincipled, on the theory that it was
+merely an artifact of raw and mail sharing one ordered channel — which is equally
+true of Tmux and Pty. **That challenge was wrong.** The real reason is protocol
+shape:
+
+- ACP raw is implemented as another `session/prompt`, and the client enforces one
+  active prompt. Bypassing readiness while an older turn is active yields a
+  serialization refusal, not steering.
+- ACP has no byte-stream or key-input primitive analogous to Tmux and Pty. There
+  is nothing to "type past" with.
+- An ACP agent blocked on a tool-call approval — the case that most looks like it
+  needs steering — resolves through the relay-injected `Chooser`, not through
+  text. Arbitrary raw text cannot safely enter that protocol turn. `choose` is the
+  correct surface.
+
+The useful distinction is **not** per-transport but per-sense:
+
+- Overtaking **`Pending` mail** is relay-side queue reordering. It is cheap,
+  needs no new writer, and is mechanically transport-agnostic — but it delivers
+  *steering* only where the transport can accept the resulting raw handover. ACP
+  is the counterexample described immediately above: reordering the queue merely
+  moves the raw `session/prompt` to the front, where an active turn fails it on
+  single-flight serialization. Mechanically possible everywhere; useful on Tmux
+  and Pty.
+- Overtaking an **in-flight submission** needs a separately supervised writer with
+  a defined interleaving rule. No transport provides one; deferred to 0.9.x.
+
+---
+
+## D9 — Per-target FIFO is worker-enqueue linearization
+
+**Status:** decided, implemented, tested
+
+FIFO per target is guaranteed, defined as **worker-enqueue linearization** — not
+request order and not admission order.
+
+`try_existing_worker` holds the registry lock across `sender.send`, and the
+channel is unbounded so the send cannot block; therefore channel order equals
+lock-acquisition order. Mail and raw are one order because both reach it through
+`enqueue_async_delivery`.
+
+**Given up:** a request may reserve admission quota first and still lose the
+enqueue race. Admission order is deliberately *not* the guarantee, because
+admission and enqueue are separate operations and making them one would
+serialize admission behind the registry lock.
+
+---
+
+## D10 — On how this change grew
+
+**Status:** recorded, not a technical decision
+
+Recorded at the operator's request, because the growth pattern is more reusable
+than any single decision above.
+
+The change began as "remove some erroneously-triggered timeouts" and became a
+delivery commit protocol. The chain:
+
+> delete the timers → the wait must live somewhere observable → relay-owned queue
+> → unbounded queues need capacity accounting → admission quota → quota releases
+> only at the terminal transition → an entry that never terminalizes leaks it →
+> guard → the guard needs to know what happened → typed submission evidence → a
+> blocked-but-alive executor produces no event → watchdog → the watchdog cannot
+> just kill things → fence.
+
+Every arrow is load-bearing. None was priced against the one before it. The total
+was never re-examined until the operator asked whether the scheduler should exist
+at all (D6), which removed nine tasks in one question.
+
+Two halves got welded together and are worth separating when reasoning about
+scope:
+
+- **The defect fix** — evidence recorded at write time, per packing unit, each
+  member resolved from its own record. This is `issues/relay/61` and `/62`, the
+  original complaint, and a minority of the work.
+- **The machinery that makes indefinite waiting safe** — queue, quota, guard,
+  watchdog, fence, generation replacement, raw mode. All downstream of D2 alone.
+
+The second half is not what was asked for. It is what "no bound at all" costs.
+D2 remains the right call; the cost should be named rather than absorbed
+silently.
