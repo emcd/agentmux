@@ -589,18 +589,40 @@ pub(super) fn complete_task_on_shutdown(task: &AsyncDeliveryTask) {
 ///
 /// `Some((None, _))` is the receipt case — reportable, with no recorded evidence
 /// because nothing was ever admitted to record any against.
-fn resolve_terminal_transition(
-    task: &AsyncDeliveryTask,
-) -> Option<(Option<SubmissionEvidence>, Option<GuardKey>)> {
+fn resolve_terminal_transition(task: &AsyncDeliveryTask) -> Option<TerminalResolution> {
     match super::admission::terminalize(task.message_id.as_str()) {
-        TerminalTransition::Won { evidence, guard } => Some((Some(evidence), guard)),
+        TerminalTransition::Won {
+            evidence,
+            bound,
+            guard,
+        } => Some(TerminalResolution {
+            evidence: Some(evidence),
+            bound,
+            guard,
+        }),
         TerminalTransition::AlreadyTerminal => None,
         // Never admitted, so nothing else can be racing to resolve it.
-        TerminalTransition::NoReservation if !task.admitted => Some((None, None)),
+        TerminalTransition::NoReservation if !task.admitted => Some(TerminalResolution {
+            evidence: None,
+            bound: false,
+            guard: None,
+        }),
         // Admitted, but its reservation is gone: the winner already terminalized
         // it and cleaned up. Reporting here would be the duplicate.
         TerminalTransition::NoReservation => None,
     }
+}
+
+/// What the terminal transition established about one member, for the callers
+/// that turn it into a reported outcome.
+struct TerminalResolution {
+    /// `None` for a member that was never admitted — a terminal-outcome receipt,
+    /// which has no ledger entry and so no evidence recorded against it.
+    evidence: Option<SubmissionEvidence>,
+    /// Whether the member was bound to a packing unit, which is what decides
+    /// whether its evidence may override a producer's own outcome.
+    bound: bool,
+    guard: Option<GuardKey>,
 }
 
 /// Terminalizes one member because a lifecycle trigger fired, with no outcome of
@@ -611,7 +633,15 @@ fn resolve_terminal_transition(
 /// handed to a transport resolves `not_submitted`, because the relay can prove
 /// it, while the same panic after handover resolves `submission_unknown`.
 pub(super) fn complete_task_outcome_from_trigger(task: &AsyncDeliveryTask, trigger: GuardTrigger) {
-    let Some((evidence, guard)) = resolve_terminal_transition(task) else {
+    // Boundness is not consulted here: a trigger brings no outcome of its own, so
+    // the guard is already the only source and there is nothing for the evidence
+    // to have authority *over*.
+    let Some(TerminalResolution {
+        evidence,
+        bound: _,
+        guard,
+    }) = resolve_terminal_transition(task)
+    else {
         return;
     };
     // A receipt carries no recorded evidence, so a trigger on one can only be
@@ -649,7 +679,14 @@ pub(super) fn complete_task_outcome_from_trigger(task: &AsyncDeliveryTask, trigg
 /// "delivery channel full" are what a sender needs and the evidence order cannot
 /// know either.
 pub(super) fn complete_task_refusal(task: &AsyncDeliveryTask, reason_code: &str, reason: &str) {
-    let Some((evidence, guard)) = resolve_terminal_transition(task) else {
+    // Boundness is not consulted here either, for the same reason as the trigger
+    // path: the outcome already comes from the guard rather than from a producer.
+    let Some(TerminalResolution {
+        evidence,
+        bound: _,
+        guard,
+    }) = resolve_terminal_transition(task)
+    else {
         return;
     };
     // Unlike a trigger, a refusal fires at a known point: before any write. So a
@@ -681,7 +718,12 @@ pub(super) fn complete_task_outcome(
     // being told to stay silent means another path already resolved this member:
     // emitting anything below would be the duplicate resolution the guard exists
     // to prevent.
-    let Some((evidence, guard)) = resolve_terminal_transition(task) else {
+    let Some(TerminalResolution {
+        evidence,
+        bound,
+        guard,
+    }) = resolve_terminal_transition(task)
+    else {
         return;
     };
     // The transport's outcome is the evidence, so it is reported as given —
@@ -690,37 +732,82 @@ pub(super) fn complete_task_outcome(
     // claim of non-delivery, so it surfaces as `submission_unknown` rather than
     // as `failed` or `timeout`.
     let outcome = outcome.map(|result| match evidence {
-        Some(evidence) => reconcile_with_evidence(result, evidence),
+        Some(evidence) => reconcile_with_evidence(result, evidence, bound),
         None => result,
     });
     report_terminal_outcome(task, outcome, guard);
 }
 
-/// Replaces a reported outcome's spelling with the guard's recorded evidence
-/// where the evidence says something the spelling cannot support.
+/// Resolves a member's reported outcome against its packing unit's record.
 ///
-/// `Delivered` and `NotSubmitted` are positive claims a transport is entitled to
-/// make and are left alone. Everything else is an undifferentiated failure from
-/// the guard's point of view: partial effect cannot be excluded, so reporting it
-/// as a failure would assert a non-delivery the relay cannot stand behind.
-/// `dropped_on_shutdown` is preserved as its own spelling, because it names when
-/// the relay stopped rather than what happened at the target.
-fn reconcile_with_evidence(result: SendResult, evidence: SubmissionEvidence) -> SendResult {
-    if evidence != SubmissionEvidence::SubmissionUnknown
-        || matches!(
-            result.outcome,
-            SendOutcome::Delivered | SendOutcome::NotSubmitted | SendOutcome::DroppedOnShutdown
-        )
-    {
+/// For a **bound** member the record answers, and every producer spelling gives
+/// way to it — `delivered`, `not_submitted` and `dropped_on_shutdown` included.
+/// The record is what its siblings resolved from, so a member disagreeing with it
+/// is the split outcome the unit-owned record exists to make impossible.
+///
+/// For an **unbound** member the producer's spelling stands, because there is no
+/// record to be authoritative with: its evidence is the guard's inference from
+/// absence rather than a report of what a write proved.
+fn reconcile_with_evidence(
+    result: SendResult,
+    evidence: SubmissionEvidence,
+    bound: bool,
+) -> SendResult {
+    // An unbound member has no unit record to be authoritative *with*: its
+    // evidence is the guard's inference from absence, not a report of what a
+    // write proved. Its producer's spelling stands — safe now in a way it was not
+    // before the refusal sites were routed through the guard, because those
+    // spellings are already what the evidence order would derive.
+    if !bound {
         return result;
     }
+    // Bound: the unit's record is the answer, and the value the producer computed
+    // for itself is discarded even when the two agree. Agreement was never the
+    // property worth having — one record read by every member of the unit is,
+    // because it makes disagreement between siblings unrepresentable rather than
+    // merely absent.
+    //
+    // Causal metadata survives, because the record holds submission evidence and
+    // not causes: `pty_write_failed` with an EPIPE behind it is worth more to a
+    // sender than the generic code for whatever outcome it resolved to.
+    //
+    // A code that merely *labels* an outcome does not survive, because it no
+    // longer describes the outcome it is attached to — `delivered` sitting on a
+    // `submission_unknown` contradicts the field beside it and tells the sender
+    // two different things.
+    let reason_code = result
+        .reason_code
+        .filter(|code| !labels_an_outcome(code.as_str()))
+        .unwrap_or_else(|| evidence.reason_code().to_string());
     SendResult {
-        outcome: SendOutcome::SubmissionUnknown,
-        reason_code: result
-            .reason_code
-            .or_else(|| Some(evidence.reason_code().to_string())),
+        outcome: evidence.outcome(),
+        reason_code: Some(reason_code),
         ..result
     }
+}
+
+/// Whether a reason code restates an outcome rather than explaining one.
+///
+/// Every terminal [`SendOutcome`] wire label belongs here, not just the ones a
+/// producer happens to emit today: a label this misses is silent, surfacing as a
+/// reason code that contradicts the outcome beside it rather than as an error.
+///
+/// `queued` and `peer_unavailable` are deliberately absent. Neither can reach
+/// this mapping — `queued` is the synchronous admission answer rather than a
+/// member's terminal outcome, and `peer_unavailable` belongs to a forwarded
+/// cross-relay target, which has no local transport and so is never bound. The
+/// exhaustive match in `evidence_authority_tests` is what keeps this list honest
+/// as the vocabulary grows.
+fn labels_an_outcome(reason_code: &str) -> bool {
+    matches!(
+        reason_code,
+        "delivered"
+            | "timeout"
+            | "failed"
+            | "not_submitted"
+            | "submission_unknown"
+            | DROPPED_ON_SHUTDOWN_REASON_CODE
+    )
 }
 
 /// Emits the observability floor for a resolved member and routes its receipt.
@@ -1360,5 +1447,141 @@ mod tests {
         );
 
         unregister_worker(&sender_key, owner);
+    }
+}
+
+/// The evidence-authority rule, pinned on its own.
+///
+/// Its own block rather than an addition to the module above, which already
+/// carries more than one test and is debt this change should not extend. Inline
+/// because the two inputs that discriminate the arms — a transport that wrote
+/// before declaring, and a bound member reached by a shutdown drain — are a
+/// contract violation and an interleaving that no harness can arrange, and
+/// because the alternative is making a relay-internal reconciliation rule public
+/// so a test can reach it.
+#[cfg(test)]
+mod evidence_authority_tests {
+    use super::*;
+
+    fn result(outcome: SendOutcome, reason_code: &str) -> SendResult {
+        SendResult {
+            target_session: "target".to_string(),
+            message_id: "message".to_string(),
+            outcome,
+            reason_code: Some(reason_code.to_string()),
+            reason: Some("the producer's own account of what happened".to_string()),
+            details: None,
+        }
+    }
+
+    /// Binding, not the evidence value, decides whether a unit's record may
+    /// override the outcome its producer computed.
+    ///
+    /// The discrimination is the whole point and it cannot be driven from any
+    /// public surface: the cases that separate the two arms are contract
+    /// violations and shutdown interleavings that no harness can arrange, which is
+    /// why this is pinned against the mapping directly.
+    #[test]
+    fn only_a_bound_members_unit_record_may_override_its_producer() {
+        // THE HAZARD. An unbound member's `NotSubmitted` is the guard's inference
+        // from absence, not a report of a write. A transport that wrote before
+        // declaring would otherwise have `delivered` replaced by a provable claim
+        // that nothing was written — inventing the one direction this contract
+        // exists to prevent. Its producer's spelling stands.
+        let untouched = reconcile_with_evidence(
+            result(SendOutcome::Delivered, "delivered"),
+            SubmissionEvidence::NotSubmitted,
+            false,
+        );
+        assert_eq!(untouched.outcome, SendOutcome::Delivered);
+
+        // Bound: the record answers, and the producer's value is discarded even
+        // where the two would have agreed. Agreement was never the property worth
+        // having — one record read by every member of the unit is.
+        let overridden = reconcile_with_evidence(
+            result(SendOutcome::Delivered, "delivered"),
+            SubmissionEvidence::SubmissionUnknown,
+            true,
+        );
+        assert_eq!(overridden.outcome, SendOutcome::SubmissionUnknown);
+
+        // A BOUND `dropped_on_shutdown` is overwritten too. Reachable in
+        // production: the relay declares raw's singleton unit before calling
+        // `raww`, so a raw write still sitting in a transport's channel when the
+        // shutdown drain reaches it is bound. Task 41 requires an `Authorized`
+        // member to resolve from evidence, so the policy spelling does not survive
+        // binding.
+        let bound_shutdown = reconcile_with_evidence(
+            result(SendOutcome::DroppedOnShutdown, "dropped_on_shutdown"),
+            SubmissionEvidence::SubmissionUnknown,
+            true,
+        );
+        assert_eq!(bound_shutdown.outcome, SendOutcome::SubmissionUnknown);
+
+        // The unbound `Pending` case task 41 established keeps its policy
+        // spelling, and keeps it *because* it is unbound rather than by a special
+        // case in the mapping.
+        let pending_shutdown = reconcile_with_evidence(
+            result(SendOutcome::DroppedOnShutdown, "dropped_on_shutdown"),
+            SubmissionEvidence::NotSubmitted,
+            false,
+        );
+        assert_eq!(pending_shutdown.outcome, SendOutcome::DroppedOnShutdown);
+
+        // A reason code that merely labelled the superseded outcome does not
+        // survive: `delivered` on a `submission_unknown` would contradict the
+        // field beside it.
+        assert_eq!(
+            overridden.reason_code.as_deref(),
+            Some("submission_unknown")
+        );
+
+        // A causal code does survive, because it says something no verdict can.
+        // The record holds evidence, not causes.
+        let diagnosed = reconcile_with_evidence(
+            result(SendOutcome::Failed, "pty_write_failed"),
+            SubmissionEvidence::SubmissionUnknown,
+            true,
+        );
+        assert_eq!(diagnosed.outcome, SendOutcome::SubmissionUnknown);
+        assert_eq!(diagnosed.reason_code.as_deref(), Some("pty_write_failed"));
+        assert_eq!(
+            diagnosed.reason.as_deref(),
+            Some("the producer's own account of what happened")
+        );
+
+        // Every outcome label is classified, and this match is exhaustive so a
+        // new `SendOutcome` variant cannot be added without deciding which side
+        // it falls on. That enforcement belongs here rather than in the
+        // classifier: a missed label produces contradictory metadata rather than
+        // a failure, so nothing in production would notice.
+        for outcome in [
+            SendOutcome::Queued,
+            SendOutcome::Delivered,
+            SendOutcome::Timeout,
+            SendOutcome::DroppedOnShutdown,
+            SendOutcome::Failed,
+            SendOutcome::NotSubmitted,
+            SendOutcome::SubmissionUnknown,
+            SendOutcome::PeerUnavailable,
+        ] {
+            let (label, is_label) = match outcome {
+                SendOutcome::Delivered => ("delivered", true),
+                SendOutcome::Timeout => ("timeout", true),
+                SendOutcome::DroppedOnShutdown => ("dropped_on_shutdown", true),
+                SendOutcome::Failed => ("failed", true),
+                SendOutcome::NotSubmitted => ("not_submitted", true),
+                SendOutcome::SubmissionUnknown => ("submission_unknown", true),
+                // Cannot reach this mapping: the synchronous admission answer,
+                // and a forwarded cross-relay target that is never bound.
+                SendOutcome::Queued => ("queued", false),
+                SendOutcome::PeerUnavailable => ("peer_unavailable", false),
+            };
+            assert_eq!(
+                labels_an_outcome(label),
+                is_label,
+                "{label} is classified as an outcome label, or deliberately is not",
+            );
+        }
     }
 }

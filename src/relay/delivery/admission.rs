@@ -551,6 +551,19 @@ pub(in crate::relay) enum TerminalTransition {
     /// so has none.
     Won {
         evidence: SubmissionEvidence,
+        /// Whether the member was bound to a packing unit.
+        ///
+        /// Reported separately because `evidence` cannot carry it: an **unbound**
+        /// member resolves `NotSubmitted`, and a **bound** member whose unit
+        /// recorded `NotSubmitted` resolves `NotSubmitted` too. Same value,
+        /// different authority — the first is the guard's inference from absence,
+        /// the second is a transport's report of what its write proved.
+        ///
+        /// Only the second may override a producer's own outcome. Treating the
+        /// first as authoritative would let a transport that wrote before
+        /// declaring have its `delivered` replaced by a provable-non-delivery
+        /// claim, which is the one direction this contract must never invent.
+        bound: bool,
         guard: Option<GuardKey>,
     },
     /// Another caller already terminalized this member. Report nothing: doing so
@@ -615,6 +628,7 @@ pub(in crate::relay) fn terminalize(message_id: &str) -> TerminalTransition {
     });
     TerminalTransition::Won {
         evidence: resolve_from_evidence(unit_evidence, entry.unit),
+        bound: entry.unit.is_some(),
         guard: entry.guard,
     }
 }
