@@ -386,14 +386,22 @@ impl TmuxTransport {
                 mpsc::error::TrySendError::Full(item) | mpsc::error::TrySendError::Closed(item),
             ) = ch.try_send(item)
         {
-            let (outcome_sender, message_id) = match item {
-                WriteItem::Envelope(env, sender) => (sender, env.message_id),
-                WriteItem::Raw(_, _, sender) => (sender, String::new()),
+            // An envelope refused here never reached `paste_group`, so no packing
+            // unit was declared for it and nothing was written: `not_submitted` is
+            // provable rather than inferred. Raw keeps `failed` because the relay
+            // declared its singleton unit before calling `raww` — a bound member
+            // cannot claim non-delivery, and the relay's own reconciliation
+            // rewrites its spelling from the unit's evidence.
+            let (outcome_sender, message_id, outcome) = match item {
+                WriteItem::Envelope(env, sender) => {
+                    (sender, env.message_id, SendOutcome::NotSubmitted)
+                }
+                WriteItem::Raw(_, _, sender) => (sender, String::new(), SendOutcome::Failed),
             };
             let _ = outcome_sender.send(SingleDeliveryOutcome {
                 target_session: String::new(),
                 message_id,
-                outcome: SendOutcome::Failed,
+                outcome,
                 reason_code: Some("channel_full".to_string()),
                 reason: Some("internal write channel full or closed".to_string()),
                 details: None,
@@ -471,10 +479,15 @@ impl Transport for TmuxTransport {
             } else {
                 "mailw called after the delivery thread stopped"
             };
+            // Refused before the delivery thread could accept it, so no packing
+            // unit was declared and nothing was written. Both reason codes this
+            // arm produces — `transport_not_started` and
+            // `tmux_delivery_thread_stopped` — are provable non-delivery, so the
+            // outcome is `not_submitted` and the code says which refusal it was.
             let _ = sender.send(SingleDeliveryOutcome {
                 target_session: String::new(),
                 message_id: envelope.message_id.clone(),
-                outcome: SendOutcome::Failed,
+                outcome: SendOutcome::NotSubmitted,
                 reason_code: Some(reason_code.to_string()),
                 reason: Some(reason.to_string()),
                 details: None,
@@ -812,11 +825,15 @@ fn paste_group(
     let pane_target = match resolve_active_pane_target(tmux_socket_path, target_session) {
         Ok(pane) => pane,
         Err(reason) => {
+            // The pane could not be resolved, so no paste was attempted and no
+            // member of this flush group was ever declared. Nothing was written
+            // for any of them, which `not_submitted` states and `failed` only
+            // implies.
             for (envelope, sender) in group.drain(..) {
                 let _ = sender.send(SingleDeliveryOutcome {
                     target_session: target_session.to_string(),
                     message_id: envelope.message_id.clone(),
-                    outcome: SendOutcome::Failed,
+                    outcome: SendOutcome::NotSubmitted,
                     reason_code: Some(TMUX_TARGET_UNAVAILABLE_CODE.to_string()),
                     reason: Some(reason.clone()),
                     details: None,
@@ -1149,7 +1166,11 @@ mod tests {
         let outcome = Transport::mailw(&mut transport, test_envelope())
             .blocking_recv()
             .expect("stopped delivery thread must resolve mailw");
-        assert_eq!(outcome.outcome, SendOutcome::Failed);
+        // The twin of the `transport_not_started` case in
+        // `tests/unit/tmux_transport.rs`: same arm, same reasoning. Refused
+        // before any declaration, so `not_submitted` is provable and the reason
+        // code carries which refusal it was.
+        assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
         assert_eq!(
             outcome.reason_code.as_deref(),
             Some("tmux_delivery_thread_stopped")
