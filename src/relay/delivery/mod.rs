@@ -5,6 +5,7 @@ mod dispatch;
 pub(in crate::relay) mod fence;
 pub(in crate::relay) mod guard;
 pub(in crate::relay) mod observability;
+mod partition;
 mod quiescence;
 
 pub(in crate::relay) use self::async_worker::{

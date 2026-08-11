@@ -33,9 +33,9 @@ use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
-    Chooser, DeliveryEnvelope, GenerationFence, OutputView, StartupContext, Transport,
-    TransportError, TransportHealth, TransportStatus, UnreachableSince, WorkerFailureReason,
-    WorkerReadinessState,
+    Chooser, DeliveryEnvelope, GenerationFence, OutputView, PartitionSink, StartupContext,
+    Transport, TransportError, TransportHealth, TransportStatus, UnreachableSince,
+    WorkerFailureReason, WorkerReadinessState,
 };
 
 use super::{AcpBootstrapError, AcpTransport, bootstrap_acp_worker_runtime};
@@ -109,6 +109,10 @@ pub struct AcpDriverServices {
     pub invalidate_choices: InvalidateChoicesFn,
     /// Re-entrant operator-choice resolver threaded into every [`StartupContext`].
     pub chooser: Chooser,
+    /// The relay's guard, for reporting which members share one `session/prompt`.
+    /// Handed to the transport at construction; see
+    /// [`PartitionSink`](crate::transports::PartitionSink).
+    pub partition_sink: Arc<dyn PartitionSink>,
 }
 
 impl std::fmt::Debug for AcpDriverServices {
@@ -188,6 +192,7 @@ impl AcpWorkerDriver {
             transport: Arc::new(Mutex::new(AcpTransport::new(
                 batch_settings,
                 Some(Arc::clone(&services.mirror_state)),
+                Arc::clone(&services.partition_sink),
             ))),
             namespace,
             runtime_directory,

@@ -13,8 +13,85 @@
 //! `crate::relay::{SendOutcome, ...}` keeps resolving for existing relay and wire
 //! consumers.
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+/// The unit of *target submission*, as distinct from the batch the relay
+/// authorized. A batch is not one atomic target write: a Tmux batch splits into
+/// token-budgeted prompts injected separately, and Pty and ACP do the analogous
+/// thing.
+///
+/// That partition is invisible to the relay, which hands over one envelope at a
+/// time, so the transport reports it back through the relay-injected
+/// [`PartitionSink`](super::contract::PartitionSink). The id lives here rather
+/// than in the relay because the sink's signature has to name it and
+/// `src/transports` may not import `crate::relay`.
+///
+/// Assigned at partition and never reassigned. A member's binding to one is what
+/// the guard's evidence order reads to tell a provable `not_submitted` from an
+/// honest `submission_unknown`, which is why the binding is recorded *before* the
+/// first target-side effect rather than alongside it.
+///
+/// In practice the relay mints and a transport quotes back the id it was given.
+/// That is a convention, not something the type enforces: [`mint`](Self::mint)
+/// has to be public because any implementer of
+/// [`PartitionSink`](super::contract::PartitionSink) — including one outside this
+/// crate — must be able to produce an id to return. Minting an id the ledger
+/// never issued binds nothing, so the failure mode is a unit no member belongs
+/// to rather than a member bound to a unit the guard does not know about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PackingUnitId(u64);
+
+static NEXT_PACKING_UNIT_ID: AtomicU64 = AtomicU64::new(1);
+
+impl PackingUnitId {
+    /// Mints the next id. Process-local and monotonic; identities never outlive
+    /// the relay process, because the ledger holding them is in-memory.
+    #[must_use]
+    pub fn mint() -> Self {
+        Self(NEXT_PACKING_UNIT_ID.fetch_add(1, Ordering::Relaxed))
+    }
+
+    #[must_use]
+    pub fn value(self) -> u64 {
+        self.0
+    }
+}
+
+/// Typed evidence about whether a packing unit produced a target-side effect.
+///
+/// An undifferentiated error maps to [`SubmissionUnknown`](Self::SubmissionUnknown),
+/// never [`NotSubmitted`](Self::NotSubmitted). Only a primitive that can prove
+/// nothing was written may claim the latter: a Tmux paste is a body write
+/// followed by an Enter, and a Pty unit is several `write_all` calls, so both can
+/// fail *after* partial effect.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubmissionEvidence {
+    /// The target-side primitive positively reported success.
+    Submitted,
+    /// Positive evidence that no side effect occurred.
+    NotSubmitted,
+    /// Side effects cannot be excluded.
+    SubmissionUnknown,
+}
+
+/// Why the relay refused to bind a proposed packing unit.
+///
+/// A refusal obliges the transport to produce **no target-side effect for that
+/// proposed unit**. The reason is deliberately not enumerated per member: the
+/// answer is the same whichever member vetoed, and a transport that could tell
+/// them apart would be tempted to write the rest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartitionError {
+    /// At least one proposed member is no longer eligible to be bound — already
+    /// terminal, already bound to another unit, or no longer admitted.
+    MemberNotBindable,
+    /// The relay could not reach its ledger. Treated exactly like the above by
+    /// the transport: no effect for this unit.
+    LedgerUnavailable,
+}
 
 /// Per-target delivery outcome for `send`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

@@ -10,9 +10,41 @@ use std::{
 use agentmux::pty::{
     PtyConfigSnapshot, PtyOutputView, PtyPromptProbe, PtyShared, SnapshotResponse,
 };
-use agentmux::transports::{LookMode, LookSnapshotPayload, OutputView};
+use agentmux::transports::{
+    LookMode, LookSnapshotPayload, OutputView, PackingUnitId, PartitionError, PartitionSink,
+    SubmissionEvidence,
+};
 use regex::Regex;
 use tokio::sync::mpsc;
+
+/// A sink that accepts every declaration and remembers the evidence recorded
+/// against each unit.
+///
+/// Accepting is what the relay does for a member it has admitted, so these tests
+/// stay on the path production takes; a refusing sink would skip every write and
+/// they would be testing the refusal instead of the partition.
+#[derive(Default)]
+struct RecordingSink {
+    declared: Mutex<Vec<Vec<String>>>,
+    recorded: Mutex<Vec<(PackingUnitId, SubmissionEvidence)>>,
+}
+
+impl PartitionSink for RecordingSink {
+    fn declare(&self, member_ids: &[&str]) -> Result<PackingUnitId, PartitionError> {
+        self.declared
+            .lock()
+            .expect("declared mutex")
+            .push(member_ids.iter().map(|id| (*id).to_string()).collect());
+        Ok(PackingUnitId::mint())
+    }
+
+    fn record(&self, unit: PackingUnitId, evidence: SubmissionEvidence) {
+        self.recorded
+            .lock()
+            .expect("recorded mutex")
+            .push((unit, evidence));
+    }
+}
 
 fn shared_with(script: Vec<SnapshotResponse>) -> (PtyShared, thread::JoinHandle<()>) {
     let (tx, mut rx) = mpsc::channel::<agentmux::pty::SnapshotRequest>(8);
@@ -217,6 +249,7 @@ fn pty_delivery_resolves_each_member_from_its_own_evidence() {
         &mut write_rx,
         &writer,
         "test-session",
+        &RecordingSink::default(),
     );
 
     // First member's write succeeded; the second's failed.
@@ -285,6 +318,7 @@ fn pty_delivery_writes_every_member_of_a_partitioned_group() {
         &mut write_rx,
         &writer,
         "test-session",
+        &RecordingSink::default(),
     );
 
     assert!(matches!(
@@ -346,6 +380,7 @@ fn pty_delivery_returns_a_raw_barrier_absorbed_during_partition() {
         &mut write_rx,
         &writer,
         "test-session",
+        &RecordingSink::default(),
     );
 
     // The group resolves first; the raw barrier rides out on the Done step.
@@ -377,5 +412,88 @@ fn pty_delivery_returns_a_raw_barrier_absorbed_during_partition() {
     assert_eq!(
         raw_outcome.outcome,
         agentmux::transports::SendOutcome::Delivered
+    );
+}
+
+/// A terminal-outcome receipt is written even though nothing will declare a unit
+/// for it, while a peer member whose declaration is refused is not.
+///
+/// The two halves are one test because the contrast is the point: a refused
+/// declaration MUST suppress the write, and a receipt MUST be written anyway.
+/// A receipt bypasses admission, so it holds no ledger entry, and a ledger cannot
+/// tell a member it never had from one that already terminalized — which is why
+/// asking about a receipt returns the same refusal as asking about a terminal
+/// member, and why the receipt has to be excluded from the question rather than
+/// answered by it. Without the exclusion every terminal-outcome receipt routed
+/// back to a Pty sender is silently dropped, which no other test would notice:
+/// receipts are relay-originated, so nothing downstream is waiting on one.
+#[test]
+fn pty_delivery_writes_a_receipt_no_unit_covers() {
+    use agentmux::pty::delivery::{Delivery, DeliveryStep};
+    use agentmux::pty::transport::DeliveryCommand;
+
+    /// Stands in for a ledger holding no entry for either member — which is what
+    /// a receipt's message id always finds, since it was never admitted.
+    struct RefusingSink;
+    impl PartitionSink for RefusingSink {
+        fn declare(&self, _member_ids: &[&str]) -> Result<PackingUnitId, PartitionError> {
+            Err(PartitionError::MemberNotBindable)
+        }
+        fn record(&self, _unit: PackingUnitId, _evidence: SubmissionEvidence) {}
+    }
+
+    let sink = Arc::new(Mutex::new(Vec::new()));
+    let writer: Arc<Mutex<Box<dyn std::io::Write + Send>>> =
+        Arc::new(Mutex::new(Box::new(RecordingWriter {
+            sink: Arc::clone(&sink),
+        })));
+    let (write_tx, mut write_rx) = mpsc::channel::<DeliveryCommand>(8);
+
+    let (receipt_tx, receipt_rx) = tokio::sync::oneshot::channel();
+    let (peer_tx, peer_rx) = tokio::sync::oneshot::channel();
+
+    write_tx
+        .blocking_send(DeliveryCommand::Envelope {
+            envelope: Box::new(envelope_for("peer-member", "peer body", false)),
+            outcome_tx: peer_tx,
+        })
+        .expect("queue peer envelope");
+
+    let mut delivery = Delivery::start_envelope_group(
+        Box::new(envelope_for("receipt-member", "receipt body", true)),
+        receipt_tx,
+        &mut write_rx,
+        &writer,
+        "test-session",
+        &RefusingSink,
+    );
+    assert!(matches!(
+        delivery.step("test-session"),
+        DeliveryStep::Done { pending_raw: None }
+    ));
+
+    // The receipt was written and resolved on its own terms.
+    let receipt_outcome = receipt_rx
+        .blocking_recv()
+        .expect("a receipt resolves through its own outcome sender");
+    assert_eq!(receipt_outcome.message_id, "receipt-member");
+
+    // The peer member's declaration was refused, so it was never written and its
+    // sender was dropped unresolved — the guard owns it now and derives
+    // `not_submitted` from its being unbound.
+    assert!(
+        peer_rx.blocking_recv().is_err(),
+        "a refused declaration must suppress the write and leave the member to the guard",
+    );
+
+    let written = String::from_utf8(sink.lock().expect("recording sink").clone())
+        .expect("written bytes are utf-8");
+    assert!(
+        written.contains("receipt body"),
+        "the receipt's bytes must reach the master: {written}",
+    );
+    assert!(
+        !written.contains("peer body"),
+        "a member with no declaration behind it must not be written: {written}",
     );
 }

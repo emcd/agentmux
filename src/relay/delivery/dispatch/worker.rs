@@ -25,11 +25,13 @@ use super::payload::{
     build_delivery_message, emit_envelope_metadata_inscription, resolve_target_member,
 };
 
-use crate::transports::{OutcomeFuture, SingleDeliveryOutcome, TransportHealth, TransportImpl};
+use crate::transports::{
+    OutcomeFuture, PartitionError, SingleDeliveryOutcome, TransportHealth, TransportImpl,
+};
 
 use super::super::async_worker::{AsyncWorkerKey, WorkerOwner};
 use super::super::fence::{FenceInProgress, FenceOutcome, FenceResolution, FenceVerdict};
-use super::super::guard::{BatchId, GuardTrigger, PackingUnitId};
+use super::super::guard::{BatchId, GuardTrigger};
 use crate::runtime::inscriptions::emit_inscription;
 
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
@@ -785,13 +787,13 @@ fn submit_task(
         return None;
     } else if matches!(transport, TransportImpl::Ui(_)) {
         let envelope = build_ui_envelope(&task);
-        // Recorded immediately before the call that can produce an effect, and
+        // Declared immediately before the call that can produce an effect, and
         // never earlier: the gap between authorization and this point is exactly
         // the window in which the guard can still prove nothing was written.
-        super::super::admission::bind_to_packing_unit(
-            task.message_id.as_str(),
-            PackingUnitId::mint(),
-        );
+        if declare_singleton_unit(&task).is_err() {
+            super::super::async_worker::release_pending_slot(pending);
+            return None;
+        }
         (transport.mailw(envelope), false)
     } else {
         // Every coder submission marks handover too. Omitting it here let a
@@ -800,8 +802,17 @@ fn submit_task(
         // have landed. That is the exact inversion the evidence order exists to
         // prevent.
         match prepare_coder_write(&task, transport) {
-            Ok(future) => (future, true),
-            Err(error) => {
+            CoderWrite::Submitted(future) => (future, true),
+            CoderWrite::Undeclared => {
+                // The relay refused to bind a unit, so no write was attempted and
+                // this caller has no outcome to report: the member is either
+                // already terminal — someone else reported it — or the ledger
+                // could not be reached, in which case uniqueness cannot be
+                // established and reporting is worse than staying silent.
+                super::super::async_worker::release_pending_slot(pending);
+                return None;
+            }
+            CoderWrite::Refused(error) => {
                 // Refused before any target-side effect, so nothing reached the
                 // target and reporting the refusal is sound.
                 //
@@ -848,33 +859,80 @@ fn authorize_member(task: &AsyncDeliveryTask) {
 /// out-of-band metadata inscription) then go through `mailw`, where the transport
 /// renders its own pane envelope; raw-input tasks go through `raww` with the
 /// task's `append_enter`.
-fn prepare_coder_write(
-    task: &AsyncDeliveryTask,
-    transport: &mut TransportImpl,
-) -> Result<OutcomeFuture, RelayError> {
+fn prepare_coder_write(task: &AsyncDeliveryTask, transport: &mut TransportImpl) -> CoderWrite {
     match task.payload_mode {
         DeliveryPayloadMode::EnvelopeMessage => {
-            let target_member = resolve_target_member(task)?;
+            let target_member = match resolve_target_member(task) {
+                Ok(member) => member,
+                Err(error) => return CoderWrite::Refused(error),
+            };
             let message = build_delivery_message(task, target_member, now_rfc3339().as_str());
             emit_envelope_metadata_inscription(&message, task.message_id.as_str());
             let envelope = build_coder_envelope(task, message);
-            // Bound immediately before the call that can produce a target-side
+            // Declared immediately before the call that can produce a target-side
             // effect. Everything above this line is relay-local rendering, so a
             // failure there is still provably non-delivery.
-            super::super::admission::bind_to_packing_unit(
-                task.message_id.as_str(),
-                PackingUnitId::mint(),
-            );
-            Ok(transport.mailw(envelope))
+            //
+            // Skipped for a transport that reports its own partition: binding here
+            // would consume the member's one write-once binding, and the
+            // transport's `declare` for the group it actually pastes would then be
+            // refused. This arm shrinks as each transport adopts the sink.
+            if !transport.reports_own_partition() && declare_singleton_unit(task).is_err() {
+                return CoderWrite::Undeclared;
+            }
+            CoderWrite::Submitted(transport.mailw(envelope))
         }
         DeliveryPayloadMode::RawInput => {
-            super::super::admission::bind_to_packing_unit(
-                task.message_id.as_str(),
-                PackingUnitId::mint(),
-            );
-            Ok(transport.raww(task.message.clone(), task.append_enter))
+            // Raw stays relay-declared, permanently. Neither transport can name
+            // the member at its raw write — ACP routes `submit_raw_turn` through
+            // `submit_envelope_turn` with a synthetic empty member id, and neither
+            // `Transport::raww` nor Pty's `DeliveryCommand::Raw` carries a message
+            // id — so the relay is the only layer that knows which member this
+            // singleton unit covers.
+            if declare_singleton_unit(task).is_err() {
+                return CoderWrite::Undeclared;
+            }
+            CoderWrite::Submitted(transport.raww(task.message.clone(), task.append_enter))
         }
     }
+}
+
+/// What `prepare_coder_write` did, distinguishing the two ways it can decline.
+///
+/// [`Refused`](Self::Refused) carries an error the sender should be told about;
+/// [`Undeclared`](Self::Undeclared) deliberately carries none. Collapsing them
+/// into one `Result` would report a failure for a member that may already have
+/// been resolved by whoever terminalized it, which is the duplicate resolution
+/// the guard exists to prevent.
+enum CoderWrite {
+    /// The write was submitted; its outcome resolves through this future.
+    Submitted(OutcomeFuture),
+    /// Refused before any target-side effect, with an error to report.
+    Refused(RelayError),
+    /// The relay declined to bind a packing unit, so no write was attempted and
+    /// no outcome is this caller's to report.
+    Undeclared,
+}
+
+/// Declares the one-member packing unit for a member the relay submits alone.
+///
+/// Every relay-side submission is a singleton unit today. A transport that
+/// coalesces gets its partition from [`PartitionSink`] instead, which is the
+/// point of the sink — a unit the relay mints here could only ever name the one
+/// member the relay handed over.
+///
+/// An un-admitted task declares nothing and reports success. A terminal-outcome
+/// receipt is the only one in production: it bypasses admission, so it holds no
+/// ledger entry, is bound to nothing, and is resolved by its own outcome rather
+/// than by the guard. Declaring it would be refused for a member the ledger never
+/// had — indistinguishable, from inside the ledger, from a member that already
+/// terminalized — and the refusal would drop a receipt the relay had committed to
+/// sending.
+fn declare_singleton_unit(task: &AsyncDeliveryTask) -> Result<(), PartitionError> {
+    if !task.admitted {
+        return Ok(());
+    }
+    super::super::admission::declare_packing_unit(&[task.message_id.as_str()]).map(|_| ())
 }
 
 /// Drains the worker on relay shutdown, bounded by the same fence the watchdog

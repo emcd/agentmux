@@ -50,9 +50,9 @@ use tokio::sync::{mpsc, oneshot};
 use crate::configuration::BundleMember;
 use crate::configuration::TermProtocol;
 use crate::transports::{
-    DeliveryEnvelope, GenerationFence, OutcomeFuture, OutputView, SingleDeliveryOutcome,
-    StartupContext, Transport, TransportError, TransportHealth, TransportReadiness,
-    TransportStatus, UnreachableSince, WorkerReadinessState,
+    DeliveryEnvelope, GenerationFence, OutcomeFuture, OutputView, PartitionSink,
+    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportHealth,
+    TransportReadiness, TransportStatus, UnreachableSince, WorkerReadinessState,
 };
 
 /// Mirrors the worker readiness state into the relay's global registry.
@@ -206,6 +206,13 @@ pub struct PtyTransport {
     /// `None` in tests that construct the transport without a relay
     /// registry.
     mirror_state: Option<PtyMirrorStateFn>,
+    /// The relay's guard, for reporting which member each write covers.
+    ///
+    /// Required rather than optional, unlike `mirror_state`: a missing mirror
+    /// costs a readiness publish, whereas a missing declaration would leave every
+    /// member unbound and let the guard claim `not_submitted` for bytes already
+    /// on the master.
+    partition_sink: Arc<dyn PartitionSink>,
 }
 
 impl std::fmt::Debug for PtyTransport {
@@ -239,6 +246,7 @@ impl PtyTransport {
         target_member: BundleMember,
         config: PtyTargetConfiguration,
         mirror_state: Option<PtyMirrorStateFn>,
+        partition_sink: Arc<dyn PartitionSink>,
     ) -> Self {
         let (prompt_regex, prompt_inspect_lines, prompt_idle_column) =
             match config.prompt_readiness.as_ref() {
@@ -269,6 +277,7 @@ impl PtyTransport {
         Self {
             target_member,
             shared,
+            partition_sink,
             started: false,
             configured_initial_command: config.initial_command.clone(),
             configured_working_directory: config.working_directory.clone(),
@@ -491,6 +500,7 @@ impl PtyTransport {
         let child_for_worker = child_arc.clone();
         let shutdown_flag_for_worker = self.shutdown_flag.clone();
         let mirror_state_for_worker = self.mirror_state.clone();
+        let partition_sink_for_worker = Arc::clone(&self.partition_sink);
         let readiness_for_worker = self.readiness.clone();
 
         let bytes_tx_for_reader = bytes_tx.clone();
@@ -513,6 +523,7 @@ impl PtyTransport {
                     shutdown_flag_for_worker,
                     mirror_state_for_worker,
                     readiness_for_worker,
+                    partition_sink_for_worker,
                 );
             })
             .map_err(|e| TransportError {
@@ -1033,11 +1044,16 @@ fn run_worker(
     // `None` in tests constructed without a relay registry; the
     // worker skips the publish in that case.
     mirror_state: Option<PtyMirrorStateFn>,
+    // Relay-injected partition sink. Required: the worker declares each
+    // member's unit before writing it, and a write with no declaration
+    // behind it is what lets the guard claim provable non-delivery for
+    // bytes that reached the master.
     // Cloned `Arc<Mutex<WorkerReadinessState>>` so the worker
     // thread can mutate the transport-local readiness state on
     // each lifecycle transition. Mirrors `AcpSharedState::readiness`
     // (see `src/acp/transport.rs`).
     readiness: Arc<Mutex<WorkerReadinessState>>,
+    partition_sink: Arc<dyn PartitionSink>,
 ) {
     // Construct the terminal INSIDE the worker thread. The terminal
     // is `!Send + !Sync` (raw FFI pointers inside); it cannot be moved
@@ -1222,6 +1238,7 @@ fn run_worker(
                     &mut write_rx,
                     &writer,
                     &target_session,
+                    partition_sink.as_ref(),
                 );
                 publish(
                     &readiness,
@@ -1688,7 +1705,28 @@ mod write_seam_tests {
                 term_protocol: TermProtocol::default(),
             },
             None,
+            // These fixtures never reach a write, so nothing is declared.
+            // Refusing rather than accepting means a fixture that ever did reach
+            // one would produce no effect and fail, where an accepting stub would
+            // write against a unit the ledger never issued.
+            Arc::new(NoDeclarations),
         )
+    }
+
+    struct NoDeclarations;
+    impl PartitionSink for NoDeclarations {
+        fn declare(
+            &self,
+            _member_ids: &[&str],
+        ) -> Result<crate::transports::PackingUnitId, crate::transports::PartitionError> {
+            Err(crate::transports::PartitionError::MemberNotBindable)
+        }
+        fn record(
+            &self,
+            _unit: crate::transports::PackingUnitId,
+            _evidence: crate::transports::SubmissionEvidence,
+        ) {
+        }
     }
 
     /// Fill `capacity` slots of a fresh channel so the next `try_send` sees

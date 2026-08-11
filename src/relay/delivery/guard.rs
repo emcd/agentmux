@@ -22,6 +22,11 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::transports::SendOutcome;
+// Both are transport-facing: `PartitionSink`'s signature names them, and
+// `src/transports` may not import `crate::relay`, so they are defined there and
+// re-exported here. The guard still owns what they *mean* — the evidence order
+// below and the outcome mapping on `SubmissionEvidence` are relay-private.
+pub(in crate::relay) use crate::transports::{PackingUnitId, SubmissionEvidence};
 
 /// Where a queue entry sits in the delivery lifecycle.
 ///
@@ -43,24 +48,6 @@ pub(in crate::relay) enum QueueEntryState {
     /// Resolved exactly once. Admission quota is released on entry to this state
     /// and nowhere else.
     Terminal,
-}
-
-/// Typed evidence about whether a member's submission produced a target-side
-/// effect.
-///
-/// An undifferentiated error maps to [`SubmissionUnknown`](Self::SubmissionUnknown),
-/// never [`NotSubmitted`](Self::NotSubmitted). Only a primitive that can prove
-/// nothing was written may claim the latter: a Tmux paste is a body write
-/// followed by an Enter, and a Pty unit is several `write_all` calls, so both can
-/// fail *after* partial effect.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(in crate::relay) enum SubmissionEvidence {
-    /// The target-side primitive positively reported success.
-    Submitted,
-    /// Positive evidence that no side effect occurred.
-    NotSubmitted,
-    /// Side effects cannot be excluded.
-    SubmissionUnknown,
 }
 
 impl SubmissionEvidence {
@@ -184,21 +171,8 @@ pub(in crate::relay) struct BatchId(u64);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(in crate::relay) struct AttemptId(u64);
 
-/// The unit of *target submission*, as distinct from [`BatchId`], the unit of
-/// *authorization*. A batch is not one atomic target write: a Tmux batch splits
-/// into token-budgeted prompts injected separately, and Pty and ACP do the
-/// analogous thing.
-///
-/// Assigned at partition and never reassigned. A member's binding to one is what
-/// the evidence order reads to tell a provable `not_submitted` from an honest
-/// `submission_unknown`, which is why the binding is recorded *before* the first
-/// target-side effect rather than alongside it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(in crate::relay) struct PackingUnitId(u64);
-
 static NEXT_BATCH_ID: AtomicU64 = AtomicU64::new(1);
 static NEXT_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_PACKING_UNIT_ID: AtomicU64 = AtomicU64::new(1);
 
 impl BatchId {
     /// Mints the next batch id. Process-local and monotonic; identities never
@@ -220,12 +194,6 @@ impl AttemptId {
 
     pub(in crate::relay) fn value(self) -> u64 {
         self.0
-    }
-}
-
-impl PackingUnitId {
-    pub(in crate::relay) fn mint() -> Self {
-        Self(NEXT_PACKING_UNIT_ID.fetch_add(1, Ordering::Relaxed))
     }
 }
 

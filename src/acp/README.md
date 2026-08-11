@@ -169,6 +169,18 @@ shape-specific behaviors:
   peer batch first and then submits the receipt alone on its own turn.
   The agent always observes a receipt on a turn by itself, separated
   from any peer message that may be queued beside it.
+- **No packing unit.** A receipt bypassed relay admission, so it holds
+  no ledger entry and belongs to no unit. `submit_singleton_envelope`
+  routes it with `TurnUnit::Untracked`, so `submit_envelope_turn`
+  declares nothing and records nothing for it, and the receipt resolves
+  through its own outcome sender. Declaring one would be *refused* — the
+  ledger cannot tell a member it never had from one that already
+  terminalized — and under the delivery contract a refused declaration
+  obliges the transport to produce no effect, which would silently drop
+  the receipt. `Untracked` is deliberately distinct from
+  `TurnUnit::RelayDeclared` (used for raw, which *is* bound and resolves
+  through the guard). See `src/relay/delivery-architecture.md`,
+  "Members no unit covers".
 - **Zero quiet-window on ACP receivers.** The relay's
   `build_coder_envelope` zeros `quiet_window` on the envelope when the
   receipt's resolved target transport is ACP, satisfying the

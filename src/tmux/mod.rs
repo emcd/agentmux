@@ -20,4 +20,6 @@ mod prompt_probe;
 pub mod transport;
 
 pub use prompt_probe::{PanePromptProbe, PromptReadinessEvaluation};
-pub use transport::{ReadinessNotifier, TmuxOutputView, TmuxTransport, render_paste_text};
+pub use transport::{
+    ReadinessNotifier, TmuxOutputView, TmuxTransport, coalescing_runs, render_paste_text,
+};

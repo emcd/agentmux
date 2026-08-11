@@ -35,7 +35,8 @@ use crate::envelope::{PromptBatchSettings, batch_envelope_groups};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::transports::{
     DeliveryEnvelope, GenerationFence, LookMode, LookSnapshotPayload, OutcomeFuture, OutputView,
-    SendOutcome, SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportHealth,
+    PackingUnitId, PartitionError, PartitionSink, SendOutcome, SingleDeliveryOutcome,
+    StartupContext, SubmissionEvidence, Transport, TransportError, TransportHealth,
     TransportReadiness, TransportStatus, UnreachableSince,
 };
 
@@ -119,6 +120,12 @@ struct DeliveryTaskContext {
 /// delivery task drains the channel, groups contiguous envelopes, and pastes.
 pub struct TmuxTransport {
     batch_settings: PromptBatchSettings,
+    /// The relay's guard, for reporting which members share one paste.
+    ///
+    /// Cloned into the delivery thread rather than reached through the relay:
+    /// the partition is decided in `paste_group`, on that thread, between the
+    /// token-budget split and the injection it brackets.
+    partition_sink: Arc<dyn PartitionSink>,
     sender: Option<mpsc::Sender<WriteItem>>,
     task_handle: Option<thread::JoinHandle<()>>,
     task_context: Option<DeliveryTaskContext>,
@@ -220,10 +227,12 @@ impl TmuxTransport {
     pub fn new(
         batch_settings: PromptBatchSettings,
         readiness_notifier: Option<ReadinessNotifier>,
+        partition_sink: Arc<dyn PartitionSink>,
     ) -> Self {
         Self {
             batch_settings,
             readiness_notifier,
+            partition_sink,
             sender: None,
             task_handle: None,
             task_context: None,
@@ -359,9 +368,10 @@ impl TmuxTransport {
         let shutdown_flag = Arc::clone(&self.shutdown_flag);
         let batch_settings = self.batch_settings;
         let invocation = Arc::clone(&self.invocation);
+        let partition_sink = Arc::clone(&self.partition_sink);
         let task_handle = thread::spawn(move || {
             publish_tmux_invocations(invocation);
-            run_delivery_task(receiver, ctx, shutdown_flag, batch_settings);
+            run_delivery_task(receiver, ctx, shutdown_flag, batch_settings, partition_sink);
         });
         self.sender = Some(sender);
         self.task_handle = Some(task_handle);
@@ -541,6 +551,7 @@ fn run_delivery_task(
     ctx: DeliveryTaskContext,
     shutdown_flag: Arc<AtomicBool>,
     batch_settings: PromptBatchSettings,
+    partition_sink: Arc<dyn PartitionSink>,
 ) {
     let tmux_socket_path = tmux_socket_path_for_runtime_directory(ctx.runtime_directory.as_path());
 
@@ -568,6 +579,7 @@ fn run_delivery_task(
                         &ctx.target_session,
                         &shutdown_flag,
                         batch_settings,
+                        partition_sink.as_ref(),
                     );
                 }
                 return;
@@ -589,6 +601,7 @@ fn run_delivery_task(
                         &ctx.target_session,
                         &shutdown_flag,
                         batch_settings,
+                        partition_sink.as_ref(),
                     );
                 }
                 let _ = sender.send(deliver_raw(
@@ -617,6 +630,7 @@ fn run_delivery_task(
                             &ctx.target_session,
                             &shutdown_flag,
                             batch_settings,
+                            partition_sink.as_ref(),
                         );
                     }
                     let _ = sender.send(deliver_raw(
@@ -636,6 +650,7 @@ fn run_delivery_task(
                             &ctx.target_session,
                             &shutdown_flag,
                             batch_settings,
+                            partition_sink.as_ref(),
                         );
                     }
                     break;
@@ -649,6 +664,7 @@ fn run_delivery_task(
                             &ctx.target_session,
                             &shutdown_flag,
                             batch_settings,
+                            partition_sink.as_ref(),
                         );
                     }
                     drain_remaining_as_dropped(&mut receiver, &ctx.target_session);
@@ -713,12 +729,67 @@ fn flush_and_resolve(
     target_session: &str,
     shutdown_flag: &AtomicBool,
     batch_settings: PromptBatchSettings,
+    partition_sink: &dyn PartitionSink,
 ) {
     if shutdown_flag.load(Ordering::Acquire) {
         drain_group_as_dropped(group, target_session);
         return;
     }
-    paste_group(group, tmux_socket_path, target_session, batch_settings);
+    paste_group(
+        group,
+        tmux_socket_path,
+        target_session,
+        batch_settings,
+        partition_sink,
+    );
+}
+
+/// Splits a flush group into runs that may be coalesced into one paste,
+/// returning each run's length in order. A terminal-outcome receipt forms a run
+/// of its own.
+///
+/// This is a correctness barrier, not presentation. A receipt bypasses admission
+/// and belongs to no packing unit, while its peer groupmates belong to one, so a
+/// paste carrying both would tie two members to one fate that only one of them
+/// has: when the peers' declaration is refused, the prompt must produce no effect
+/// — and the receipt, which needed no declaration, would be dropped with it. It
+/// cannot be rescued after the fact either, because the budget group's combined
+/// prompt is a single string, so there is no receipt-only text left to write.
+/// Separating them before budgeting is what makes the refusal path drop only
+/// members the guard owns.
+///
+/// ACP reaches the same rule from the other direction — receipts are its flush
+/// barrier so they never coalesce with peer traffic — and Pty writes one member
+/// per primitive, so neither needs this.
+pub fn coalescing_runs(is_receipt: &[bool]) -> Vec<usize> {
+    let mut runs: Vec<usize> = Vec::new();
+    let mut previous_was_peer = false;
+    for &receipt in is_receipt {
+        if receipt || !previous_was_peer {
+            runs.push(1);
+        } else if let Some(last) = runs.last_mut() {
+            *last += 1;
+        }
+        previous_was_peer = !receipt;
+    }
+    runs
+}
+
+/// Declares the guard-tracked members of one prompt, or nothing when the prompt
+/// carries none.
+///
+/// A prompt made up entirely of terminal-outcome receipts has no tracked member,
+/// and an empty declaration is refused by the ledger. `Ok(None)` says the prompt
+/// may be written with no unit behind it, which is correct: nothing in it is
+/// resolved by the guard.
+fn declare_tracked_members(
+    partition_sink: &dyn PartitionSink,
+    member_ids: &[&str],
+) -> Result<Option<PackingUnitId>, PartitionError> {
+    if member_ids.is_empty() {
+        return Ok(None);
+    }
+    partition_sink.declare(member_ids).map(Some)
 }
 
 /// Renders the group's structured messages into pane-envelope text, combines
@@ -732,6 +803,7 @@ fn paste_group(
     tmux_socket_path: &Path,
     target_session: &str,
     batch_settings: PromptBatchSettings,
+    partition_sink: &dyn PartitionSink,
 ) {
     if group.is_empty() {
         return;
@@ -764,16 +836,60 @@ fn paste_group(
         .iter()
         .map(|(envelope, _)| render_paste_text(envelope))
         .collect();
-    let budget_groups = batch_envelope_groups(&rendered, batch_settings);
+    // Split at receipt boundaries before budgeting, so no prompt ever mixes a
+    // receipt with peer traffic. See `coalescing_runs` for why that separation is
+    // a correctness requirement rather than presentation.
+    let runs = coalescing_runs(&group.iter().map(|(e, _)| e.is_receipt).collect::<Vec<_>>());
+    let budget_groups: Vec<_> = {
+        let mut rendered_rest = rendered.as_slice();
+        let mut groups = Vec::new();
+        for run_length in runs {
+            let (run, rest) = rendered_rest.split_at(run_length);
+            rendered_rest = rest;
+            groups.extend(batch_envelope_groups(run, batch_settings));
+        }
+        groups
+    };
 
     let mut members = group.drain(..);
     for budget_group in budget_groups {
         // Slice the parallel sender vector to this prompt's contributing members.
-        let prompt_members: Vec<(String, OutcomeSender)> = members
+        let prompt_members: Vec<(String, OutcomeSender, bool)> = members
             .by_ref()
             .take(budget_group.member_count)
-            .map(|(envelope, sender)| (envelope.message_id, sender))
+            .map(|(envelope, sender)| (envelope.message_id, sender, !envelope.is_receipt))
             .collect();
+        // This is the partition the relay cannot see: one paste carries every
+        // member of this budget group, so they share one fate and must resolve
+        // from one record. Declared before the injection below, because after it
+        // partial effect cannot be excluded for any of them.
+        // Terminal-outcome receipts bypass admission, so they hold no ledger
+        // entry and belong to no unit. Declaring one would be refused — the
+        // ledger cannot tell a member it never had from one that already
+        // terminalized — and the refusal would drop the whole prompt, receipt and
+        // peer traffic alike. Receipts never reach here mixed with peer traffic —
+        // `coalescing_runs` above puts each in its own run — so this filter yields
+        // either every member or none, and the refusal arm below can only ever
+        // drop members the guard owns.
+        let member_ids: Vec<&str> = prompt_members
+            .iter()
+            .filter(|(_, _, tracked)| *tracked)
+            .map(|(message_id, _, _)| message_id.as_str())
+            .collect();
+        let unit = match declare_tracked_members(partition_sink, &member_ids) {
+            Ok(unit) => unit,
+            Err(_) => {
+                // The relay refused the whole proposed unit, so this prompt must
+                // produce no effect. Dropping the senders without resolving is
+                // the correct handover back: the guard owns these members now and
+                // resolves each from the evidence order, which — since none of
+                // them was bound — proves `not_submitted` rather than guessing.
+                // Sending an outcome here would be the duplicate resolution the
+                // guard exists to prevent.
+                drop(prompt_members);
+                continue;
+            }
+        };
         // Envelope-mode writes always submit with Enter; the combined prompt is
         // pasted once for the whole budget group.
         let inject_result = inject_literal_text(
@@ -782,7 +898,21 @@ fn paste_group(
             budget_group.combined_prompt.as_str(),
             true,
         );
-        for (message_id, sender) in prompt_members {
+        // A paste is a body write followed by an Enter, so a failure cannot
+        // exclude partial effect: the group's evidence is `SubmissionUnknown`
+        // rather than `NotSubmitted`. Recorded before the fan-out below, so a
+        // member the fan-out never reaches still resolves from what this paste
+        // proved instead of from its own absence.
+        if let Some(unit) = unit {
+            partition_sink.record(
+                unit,
+                match &inject_result {
+                    Ok(()) => SubmissionEvidence::Submitted,
+                    Err(_) => SubmissionEvidence::SubmissionUnknown,
+                },
+            );
+        }
+        for (message_id, sender, _) in prompt_members {
             let outcome = match &inject_result {
                 Ok(()) => SingleDeliveryOutcome {
                     target_session: target_session.to_string(),
@@ -961,6 +1091,7 @@ mod observation_edge_tests {
 mod tests {
     use super::*;
     use crate::envelope::AddressIdentity;
+    use crate::transports::{PackingUnitId, PartitionError};
 
     fn test_envelope() -> DeliveryEnvelope {
         DeliveryEnvelope {
@@ -996,7 +1127,22 @@ mod tests {
             thread::yield_now();
         }
 
-        let mut transport = TmuxTransport::new(PromptBatchSettings::default(), None);
+        // No relay-admitted member exists here — the delivery thread is already
+        // stopped, so nothing is ever declared — which is the only situation in
+        // which a sink that records nothing is the right stand-in.
+        struct NoDeclarations;
+        impl PartitionSink for NoDeclarations {
+            fn declare(&self, _member_ids: &[&str]) -> Result<PackingUnitId, PartitionError> {
+                Err(PartitionError::MemberNotBindable)
+            }
+            fn record(&self, _unit: PackingUnitId, _evidence: SubmissionEvidence) {}
+        }
+
+        let mut transport = TmuxTransport::new(
+            PromptBatchSettings::default(),
+            None,
+            Arc::new(NoDeclarations),
+        );
         transport.sender = Some(sender);
         transport.task_handle = Some(task_handle);
 

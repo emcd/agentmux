@@ -60,7 +60,7 @@ use crate::transports::{
     SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportHealth,
     TransportStatus,
 };
-use crate::transports::{SendOutcome, WorkerReadinessState};
+use crate::transports::{PartitionSink, SendOutcome, SubmissionEvidence, WorkerReadinessState};
 
 // ACP delivery failure taxonomy (see the relay delivery README for the full
 // catalogue). The delivery outcomes the ACP transport now produces are typed:
@@ -98,6 +98,14 @@ struct AcpSharedState {
     /// and the `on_dispatched` closure reach it through the shared `Arc`. `None`
     /// in tests constructed without a relay registry.
     mirror_state: Option<ReadinessMirror>,
+    /// The relay's guard, for reporting which members share one `session/prompt`.
+    ///
+    /// Travels on the shared state for the same reason `mirror_state` does: the
+    /// partition is decided inside the delivery task, which reaches everything
+    /// through this `Arc`. Required rather than optional — a turn whose group it
+    /// could not declare would have to resolve its members from evidence about a
+    /// write that was never theirs alone.
+    partition_sink: Arc<dyn PartitionSink>,
     /// Handles for the permission resolver threads this generation has spawned.
     ///
     /// Retained rather than detached: a permission resolver blocks on an
@@ -386,7 +394,11 @@ impl std::fmt::Debug for AcpTransport {
 
 impl AcpTransport {
     #[must_use]
-    pub fn new(batch_settings: PromptBatchSettings, mirror_state: Option<ReadinessMirror>) -> Self {
+    pub fn new(
+        batch_settings: PromptBatchSettings,
+        mirror_state: Option<ReadinessMirror>,
+        partition_sink: Arc<dyn PartitionSink>,
+    ) -> Self {
         Self {
             runtime: None,
             chooser: None,
@@ -394,6 +406,7 @@ impl AcpTransport {
                 readiness: Mutex::new(WorkerReadinessState::Initializing),
                 replay: Mutex::new(None),
                 mirror_state,
+                partition_sink,
                 permission_executors: Mutex::new(Vec::new()),
             }),
             write_tx: None,
@@ -1184,8 +1197,23 @@ fn submit_singleton_envelope(
     envelope: Box<DeliveryEnvelope>,
     outcome_tx: tokio::sync::oneshot::Sender<SingleDeliveryOutcome>,
 ) {
+    // A receipt bypassed admission, so no unit exists for it and declaring one
+    // would be refused — which, before this was distinguished, silently dropped
+    // every terminal-outcome receipt routed back to an ACP sender.
+    let unit = if envelope.is_receipt {
+        TurnUnit::Untracked
+    } else {
+        TurnUnit::DeclareHere
+    };
     let mut batch = EnvelopeBatch::from_head(&envelope, outcome_tx);
-    flush_envelope_group(client, ctx, batch_settings, respawn_needed_tx, &mut batch);
+    flush_envelope_group(
+        client,
+        ctx,
+        batch_settings,
+        respawn_needed_tx,
+        &mut batch,
+        unit,
+    );
 }
 
 /// True when the write item is an envelope flagged as a terminal-outcome
@@ -1450,7 +1478,16 @@ fn execute_delivery_plan(
             drain_and_resolve_shutdown(rx);
             return;
         }
-        flush_envelope_group(client, ctx, batch_settings, respawn_needed_tx, &mut batch);
+        // Peer traffic only: receipts are a flush barrier and never coalesce
+        // into this path, so every member here holds a ledger entry.
+        flush_envelope_group(
+            client,
+            ctx,
+            batch_settings,
+            respawn_needed_tx,
+            &mut batch,
+            TurnUnit::DeclareHere,
+        );
     }
 
     // Execute the boundary action.
@@ -1511,6 +1548,7 @@ fn flush_envelope_group(
     batch_settings: &PromptBatchSettings,
     respawn_needed_tx: &tokio::sync::watch::Sender<u64>,
     batch: &mut EnvelopeBatch,
+    unit: TurnUnit,
 ) {
     let groups = crate::envelope::batch_envelope_groups(&batch.rendered, *batch_settings);
     batch.rendered.clear();
@@ -1533,8 +1571,37 @@ fn flush_envelope_group(
             &group.combined_prompt,
             members,
             &head_deciders,
+            unit,
         );
     }
+}
+
+/// Who declared the packing unit a turn is about to write.
+///
+/// Not a bare `Option<&dyn PartitionSink>`, because the distinction is about
+/// ownership rather than availability: raw's unit is declared by the relay and
+/// declaring it again here would be refused as a second binding. The reason this
+/// layer cannot declare raw's is that it cannot name the member — `submit_raw_turn`
+/// reaches this function with a synthetic empty message id, since neither
+/// `Transport::raww` nor the write channel carries the real one.
+#[derive(Clone, Copy)]
+enum TurnUnit {
+    /// An envelope group: declare it here, from the members about to be written.
+    DeclareHere,
+    /// A raw write: the relay already declared its singleton unit and records its
+    /// evidence through the member-keyed ledger entry point.
+    RelayDeclared,
+    /// A terminal-outcome receipt: no unit exists for it anywhere, because it
+    /// bypassed admission and holds no ledger entry.
+    ///
+    /// Distinct from [`RelayDeclared`](Self::RelayDeclared) even though both
+    /// decline to declare here, because the reason is different and the
+    /// difference is load-bearing: raw *is* bound and resolves through the guard,
+    /// while a receipt is bound to nothing and resolves only through its own
+    /// outcome sender. Declaring one would be refused — the ledger cannot tell a
+    /// member it never had from one that already terminalized — and the refusal
+    /// would silently drop a receipt the relay committed to sending.
+    Untracked,
 }
 
 /// Submits one combined prompt as an ACP turn and resolves every member of the
@@ -1558,7 +1625,38 @@ fn submit_envelope_turn(
     prompt: &str,
     members: Vec<(String, tokio::sync::oneshot::Sender<SingleDeliveryOutcome>)>,
     decider_sessions: &[String],
+    unit: TurnUnit,
 ) {
+    // Declared before the framed write below, from the members this turn's one
+    // `session/prompt` will carry. After the write, partial effect cannot be
+    // excluded for any of them.
+    let declared = match unit {
+        TurnUnit::DeclareHere => {
+            let member_ids: Vec<&str> = members
+                .iter()
+                .map(|(message_id, _)| message_id.as_str())
+                .collect();
+            match ctx.shared.partition_sink.declare(&member_ids) {
+                Ok(unit) => Some(unit),
+                Err(_) => {
+                    // The relay refused the whole proposed unit, so this turn
+                    // must produce no effect. Dropping the senders unresolved
+                    // hands the members back to the guard, which derives
+                    // `not_submitted` from their being unbound; sending an
+                    // outcome here would be a second resolution for a member the
+                    // relay may already have resolved.
+                    drop(members);
+                    return;
+                }
+            }
+        }
+        TurnUnit::RelayDeclared | TurnUnit::Untracked => None,
+    };
+    let record = |evidence: SubmissionEvidence| {
+        if let Some(unit) = declared {
+            ctx.shared.partition_sink.record(unit, evidence);
+        }
+    };
     let pending_choice: Arc<Mutex<Option<ChoiceMade>>> = Arc::new(Mutex::new(None));
     let completion_slot: Arc<Mutex<Option<PromptCompletion>>> = Arc::new(Mutex::new(None));
 
@@ -1610,7 +1708,10 @@ fn submit_envelope_turn(
         PromptDispatchOutcome::Submitted => {
             // The framed write succeeded: every member of this group resolves
             // `Delivered` at the write, before the replay-buffer locks or
-            // `on_dispatched` below.
+            // `on_dispatched` below. The unit's record is written first, so a
+            // member this fan-out never reaches still resolves from what the
+            // write proved rather than from its own absence.
+            record(SubmissionEvidence::Submitted);
             for (message_id, sender) in members {
                 let _ = sender.send(delivered_outcome(
                     ctx.target_session.to_string(),
@@ -1633,6 +1734,7 @@ fn submit_envelope_turn(
             // cannot assert non-delivery: the member resolves submission_unknown.
             set_turn_readiness(ctx, WorkerReadinessState::Unavailable);
             raise_respawn_signal(respawn_needed_tx);
+            record(SubmissionEvidence::SubmissionUnknown);
             for (message_id, sender) in members {
                 let _ = sender.send(submission_unknown_outcome(
                     ctx.target_session.to_string(),
@@ -1645,6 +1747,7 @@ fn submit_envelope_turn(
             // Active-prompt refusal and serialization failure are positive
             // non-delivery: nothing was written, so the member resolves
             // not_submitted. The transport is healthy, so readiness stays as-is.
+            record(SubmissionEvidence::NotSubmitted);
             for (message_id, sender) in members {
                 let _ = sender.send(not_submitted_outcome(
                     ctx.target_session.to_string(),
@@ -1721,6 +1824,7 @@ fn submit_raw_turn(
         content,
         vec![(String::new(), outcome_tx)],
         &[],
+        TurnUnit::RelayDeclared,
     );
 }
 
@@ -2053,7 +2157,31 @@ mod handover_readiness_tests {
 
     #[test]
     fn handover_readiness_matrix_and_delivery_task_handle_retention() {
-        let mut transport = AcpTransport::new(PromptBatchSettings::default(), None);
+        // Nothing is ever declared here: the test drives readiness predicates
+        // and never submits a turn, which is the only situation in which a sink
+        // that binds nothing is the right stand-in.
+        struct NoDeclarations;
+        impl PartitionSink for NoDeclarations {
+            fn declare(
+                &self,
+                _member_ids: &[&str],
+            ) -> Result<crate::transports::PackingUnitId, crate::transports::PartitionError>
+            {
+                Err(crate::transports::PartitionError::MemberNotBindable)
+            }
+            fn record(
+                &self,
+                _unit: crate::transports::PackingUnitId,
+                _evidence: SubmissionEvidence,
+            ) {
+            }
+        }
+
+        let mut transport = AcpTransport::new(
+            PromptBatchSettings::default(),
+            None,
+            Arc::new(NoDeclarations),
+        );
 
         // Initial state is `Initializing` — not ready for handover.
         assert_eq!(

@@ -63,9 +63,23 @@ not enforce or check that invariant.
 The marker is included in the rendered text so the token-budget
 batching and paste-budget counts stay consistent with the actual
 pane bytes. The marker line and the rendered pane envelope are
-contiguous in the pasted prompt; within a coalesced group every
-receipt gets its own marker line; peer envelopes that coalesce beside
-a receipt render normally.
+contiguous in the pasted prompt.
+
+**A receipt is never pasted alongside peer traffic.** `coalescing_runs`
+splits a flush group at receipt boundaries *before* token budgeting, so
+every receipt is injected alone and peer envelopes coalesce only within
+peer-only runs. That separation is a correctness barrier rather than
+presentation: a receipt bypasses relay admission and so belongs to no
+packing unit, while its peer groupmates belong to one. A prompt carrying
+both would tie them to a single fate that only the peers have — when the
+peers' declaration is refused the prompt must produce no effect, and the
+receipt, which needed no declaration, would be dropped with it. It could
+not be rescued afterwards either, because a budget group's combined
+prompt is one string with no receipt-only text left to write.
+
+ACP reaches the same rule from the other direction (receipts are its
+flush barrier), and Pty writes one member per primitive, so neither needs
+this. See `src/relay/delivery-architecture.md`, "Members no unit covers".
 
 The `render_paste_text` helper is the per-envelope rendering seam
 and is `pub` so the rendering behavior can be tested directly

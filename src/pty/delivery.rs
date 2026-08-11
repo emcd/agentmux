@@ -15,7 +15,10 @@ use std::{io::Write, sync::Arc};
 
 use tokio::sync::{mpsc, oneshot};
 
-use crate::transports::{DeliveryEnvelope, SendOutcome, SingleDeliveryOutcome};
+use crate::transports::{
+    DeliveryEnvelope, PackingUnitId, PartitionSink, SendOutcome, SingleDeliveryOutcome,
+    SubmissionEvidence,
+};
 
 use super::transport::DeliveryCommand;
 
@@ -95,6 +98,7 @@ impl Delivery {
         write_rx: &mut mpsc::Receiver<DeliveryCommand>,
         writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
         target_session: &str,
+        partition_sink: &dyn PartitionSink,
     ) -> Delivery {
         // Partition: fix the batch's membership before the first write. A raw
         // item encountered during the scan ends the partition.
@@ -126,14 +130,54 @@ impl Delivery {
 
         // Write after the partition: one unit per member, buffered then written.
         // Each member's outcome derives from its own unit's write result.
+        //
+        // One member per unit is a commitment here rather than a current
+        // limitation. Coalescing several members into one write would smear a
+        // partial write's evidence across all of them: the bytes of an earlier
+        // member could have landed while a later member's did not, and a shared
+        // unit could only report one answer for both.
+        //
+        // Each member is therefore declared immediately before its own write
+        // rather than all of them being declared before the first. With no unit
+        // spanning members there is no shared fate to establish up front, and a
+        // refusal for one member must not hold back a groupmate whose write is
+        // independent of it.
         let members = group
             .into_iter()
-            .map(|(envelope, outcome_tx)| {
-                let outcome = write_unit(writer, &envelope, target_session);
-                MemberDelivery {
+            .filter_map(|(envelope, outcome_tx)| {
+                // A terminal-outcome receipt bypassed admission and holds no
+                // ledger entry, so it belongs to no unit. Declaring one would be
+                // refused — the ledger cannot tell a member it never had from one
+                // that already terminalized — and the refusal would drop a
+                // receipt the relay committed to sending.
+                if envelope.is_receipt {
+                    let outcome = write_unit(writer, &envelope, target_session, None);
+                    return Some(MemberDelivery {
+                        outcome_tx,
+                        outcome,
+                    });
+                }
+                let unit = match partition_sink.declare(&[envelope.message_id.as_str()]) {
+                    Ok(unit) => unit,
+                    Err(_) => {
+                        // Refused: this member gets no write. Dropping its sender
+                        // unresolved hands it back to the guard, which derives
+                        // `not_submitted` from its being unbound — true, because
+                        // nothing was written for it.
+                        drop(outcome_tx);
+                        return None;
+                    }
+                };
+                let outcome = write_unit(
+                    writer,
+                    &envelope,
+                    target_session,
+                    Some((partition_sink, unit)),
+                );
+                Some(MemberDelivery {
                     outcome_tx,
                     outcome,
-                }
+                })
             })
             .collect();
 
@@ -252,6 +296,9 @@ fn write_unit(
     writer: &Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
     envelope: &DeliveryEnvelope,
     target_session: &str,
+    // `None` for a member no unit covers: a terminal-outcome receipt, which
+    // bypassed admission and is resolved by its own outcome rather than the guard.
+    unit: Option<(&dyn PartitionSink, PackingUnitId)>,
 ) -> SingleDeliveryOutcome {
     let text = envelope.message.render_pane_envelope(&envelope.message_id);
     let mut buffer = Vec::with_capacity(text.len() + RECEIPT_MARKER.len() + 2);
@@ -268,9 +315,26 @@ fn write_unit(
             .map_err(|_| std::io::Error::other("pty writer mutex poisoned"))?;
         guard.write_all(&buffer)
     })();
+    // Recorded after the writer guard drops and before this member's outcome is
+    // returned, so a step loop that never resolves the member still leaves the
+    // guard something to resolve it from.
+    //
+    // A failed `write_all` records `SubmissionUnknown`, not `NotSubmitted`: it
+    // reports how many bytes it wrote only on success, so a failure cannot
+    // exclude a partial write reaching the master. The returned outcome keeps its
+    // existing `failed` spelling — changing that is sender-visible and belongs to
+    // the refusal-spelling task, not here.
     match result {
-        Ok(()) => delivered_outcome(target_session, &envelope.message_id),
+        Ok(()) => {
+            if let Some((sink, unit)) = unit {
+                sink.record(unit, SubmissionEvidence::Submitted);
+            }
+            delivered_outcome(target_session, &envelope.message_id)
+        }
         Err(error) => {
+            if let Some((sink, unit)) = unit {
+                sink.record(unit, SubmissionEvidence::SubmissionUnknown);
+            }
             let mut outcome =
                 failed_outcome(target_session, "pty_write_failed", &error.to_string());
             outcome.message_id = envelope.message_id.clone();
