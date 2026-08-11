@@ -192,9 +192,7 @@ expensive; they do not imply that durability exists.
 
 Relay SHALL preserve FIFO ordering per target session and SHALL NOT deduplicate
 or coalesce queued messages. Mail and raw are variants of one per-target FIFO:
-no authorization SHALL occur across a raw barrier, nor younger work across older,
-except where the emergency raw mode defined in the `transport-contracts`
-capability applies.
+no authorization SHALL occur across a raw barrier, nor younger work across older.
 
 **The ordering guarantee is worker-enqueue linearization, not request arrival
 order.** Mail and raw both reach a target through the same keyed worker, and the

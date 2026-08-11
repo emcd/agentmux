@@ -396,7 +396,7 @@ Residency's three apparent jobs have owners that do not require it:
 |---|---|---|
 | Bound queue memory | admission quota, count and bytes, per target and relay-global | positive accounting, enforced before `queued` is returned |
 | Resolve mail to a dead target | `transport_unavailable` | positively observed terminal lifecycle |
-| Unstick a live but blocked target | emergency raw; operator teardown | positive action |
+| Unstick a live but blocked target | operator teardown | positive action |
 
 Only the fourth job is real, and it is the guarantee. "Resolves exactly once"
 turns out to be three claims wearing one sentence, and only one of them is lost:
@@ -696,94 +696,53 @@ So the ordering rule is:
   outcome terminality. A ledger transition to `submission_unknown` does not prove
   a still-running submission cannot take effect later.
 
-**Two raw modes**, because one rule cannot serve both purposes:
+**One raw mode.** Raw preserves FIFO and waits for target-side ordering safety.
+There is no discriminator on the `raww` contract and no overtaking path.
 
-- **Normal raw** preserves FIFO and waits for target-side ordering safety.
-- **Operator emergency raw** (Tmux and Pty only) **overtakes `Pending` mail and
-  bypasses readiness gating.** It bypasses an in-flight submission only where the
-  transport provides a separately supervised writer with a defined interleaving
-  rule; no transport provides one today, so today it waits. ACP has no emergency
-  raw — its recovery path is choose/cancel/teardown, not a second prompt.
+#### Withdrawn: operator emergency raw
 
-That boundary is not a preference; it is what the transports permit. On Pty, raw
-and envelope submission share one worker channel and one writer mutex
-(`src/pty/transport.rs:168-180`; `src/pty/delivery.rs:357-368`, `:398-407`).
-An emergency path cannot bypass a worker already blocked in submission: routing
-around the mutex permits byte interleaving that corrupts both writes, and taking
-the mutex blocks exactly as the normal path would. Tmux has the analogous
-constraint on its command path. So emergency raw is scoped to what is achievable
-without a second supervised writer — overtaking work that has not been authorized
-— and a separately supervised independent writer with a defined interleaving rule
-is named as follow-up work rather than assumed to exist.
+An earlier draft of this design specified a second mode — operator emergency raw,
+on Tmux and Pty only, overtaking a target's `Pending` mail and bypassing the
+readiness gate, selected through an explicit `mode` field on the `raww` contract,
+the CLI `--mode` flag, and the MCP schema. It is **withdrawn from this change
+entirely** on the operator's 2026-08-10 call, and filed as a standalone item at
+`agentmux:todos/transports/8`. It is not deferred to this change's Phase 2.
 
-**Operator surface:** an explicit mode on the `raww` contract, surfaced through
-both the MCP tool and the CLI. It is a declared contract modification, not an
-implicit behavior change to existing `raww` calls — an operator gets the ordering
-break only by asking for it.
+Recorded because the reasoning is worth keeping and because the withdrawal
+changed a claim this design previously made:
 
-**Documented ordering break:** older `Pending` mail is neither retried nor
-reclassified.
+- **ACP was never a candidate, on protocol grounds rather than scheduling ones.**
+  ACP raw is another `session/prompt`, and the client enforces one active prompt.
+  Overtaking during an active turn yields a serialization refusal, not steering,
+  and ACP has no byte-stream primitive to type past with. A tool-approval block —
+  the case that most resembles needing to steer — resolves through the
+  relay-injected `Chooser`, not through text. A challenge that the ACP exclusion
+  was merely an artifact of raw and mail sharing one channel was raised in review
+  and is wrong: Tmux and Pty share their channels too.
+- **Overtaking an in-flight submission was never achievable on any transport.**
+  On Pty, raw and envelope submission share one worker channel and one writer
+  mutex; routing around it permits byte interleaving that corrupts both writes,
+  and taking it blocks exactly as the normal path would. Tmux has the analogous
+  constraint on its command path. Only overtaking *unauthorized* work was ever in
+  scope, which is relay-side queue reordering.
+- **Queue reordering is mechanically transport-agnostic but not uniformly
+  useful.** It delivers steering only where the transport can accept the
+  resulting raw handover, which is why the capability is Tmux and Pty rather than
+  universal.
 
-Emergency raw waits for target-side ordering safety of older in-flight execution
-**wherever the transport provides no separately supervised writer** — which is
-every transport today. An earlier draft said it does not bypass an in-flight
-submission and also warned that an older authorized attempt might act after it;
-both cannot hold, and the second was the wrong one to keep.
+**The capability this removes, stated rather than discovered.** Pty raw today
+interrupts an in-flight envelope readiness wait (`src/pty/delivery.rs:634-665`).
+That mechanism cannot survive this change literally, because the wait it
+interrupts is exactly what moves to relay `Pending`; keeping it would mean keeping
+an in-transport readiness wait and reopening the liveness hole. The earlier draft
+preserved the *capability* by substitution — relay-side emergency overtaking
+standing in for the in-transport interrupt, both shipping in the core phase so no
+window opened. With emergency raw withdrawn, the substitution is gone and the
+capability lapses until `agentmux:todos/transports/8` lands.
 
-The condition is stated rather than the conclusion, because the conclusion is
-phase-dependent and the condition is not. Overtaking an *unfenced* attempt is a
-deliberate interleaving hazard in any phase; overtaking one under a supervised
-writer's defined interleaving rule is the follow-on capability. Writing the rule
-categorically would make the spec forbid what the follow-on implements.
-
-**The operator-recovery capability is preserved in the core phase**, by
-substitution rather than by carrying the old mechanism.
-
-Pty raw today interrupts an in-flight envelope readiness wait
-(`src/pty/delivery.rs:634-665`). That mechanism cannot be preserved literally,
-because the wait it interrupts is exactly what moves to relay `Pending`; keeping
-it would mean keeping an in-transport readiness wait and reopening the liveness
-hole. After the move, a Pty submission is a millisecond-scale `write_all` pair
-with nothing left to interrupt.
-
-So the **core phase includes the raw mode discriminator and the minimum
-relay-side ordering logic**: an explicit mode on the `raww` contract, plus
-emergency mode overtaking that target's `Pending` mail and its readiness gate.
-The capability at stake is *"my message is stuck waiting on a pane that will not
-become ready, and I need to type past it"* — the stuck message simply moved from
-an in-transport wait to relay `Pending`, and raw jumps it there instead.
-
-**The discriminator cannot be deferred while the behavior ships.** Existing
-`raww` carries no field distinguishing the two behaviors, so deferring it would
-force one of three broken choices: make every raw overtake `Pending` (violating
-normal FIFO and the explicit opt-in), keep FIFO for all raw (failing the Pty
-recovery substitution the core promises), or add the discriminator anyway
-(contradicting the phase boundary). Mode and behavior ship together or neither
-does.
-
-Core emergency mode overtakes `Pending` **only**, and waits for target-side
-ordering safety of older in-flight execution using the fence that is also now in
-core. Default and existing `raww` calls remain normal FIFO. This is surface
-moved, not a new writer or a new race.
-
-**Follow-on**: the independent supervised writer and the in-flight-overtake
-extension that depends on it.
-
-*Note on justification:* the core's liveness does **not** rest on a submission
-being a "millisecond-scale write". It rests on submission primitives being
-supervised, fenced, and interruptible per *Decision 1*. The short write is why
-little is lost by not overtaking in-flight execution — not why the wait is
-bounded.
-
-Emergency raw exists because raw input is how an operator intervenes when
-something is stuck, and a rule that makes intervention wait on the stuck thing is
-the wrong rule.
-
-**Acknowledged behavior change:** Pty raw today explicitly interrupts an
-in-flight envelope wait (`src/pty/delivery.rs:634-665`). An earlier draft claimed
-"no ordering change", which was false. Under normal raw that interruption is
-removed, and core emergency mode replaces it — both ship in the core phase, so no
-window exists in which the capability is absent.
+This is an accepted regression, not an oversight: the operator confirmed the
+capability is unused today. It is recorded here so that a future reader finds a
+decision rather than an omission.
 
 ### Decision 10 — The contract applies to every transport, and there are five
 

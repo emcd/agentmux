@@ -88,16 +88,9 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Make a successful primitive invocation not itself acknowledge the fence; only observed cessation does
 - [x] Make the fence positive only on observed cessation, and route both timeout and failure to the negative branch
 - [ ] Keep the fence negative when cessation is not observed: admit no replacement for that target, hold its raw barrier, record the condition, and still resolve every member through the guard. The negative registry state was deleted with the watchdog trigger, and shutdown exercises no replacement; lands again with arming
-- [ ] Block replacement and normal-raw ordering barriers until the fence is positive, while allowing `submission_unknown` to terminalize before it
+- [ ] Block replacement and raw ordering barriers until the fence is positive, while allowing `submission_unknown` to terminalize before it
+- [ ] Make raw wait for target-side ordering safety rather than for outcome terminality, which is the consumer side of the barrier above
 - [ ] Resolve a submission stopped by the fence before any effect as `not_submitted`
-
-### Raw mode
-
-- [ ] Add the `mode` field to the relay `raww` contract, defaulting to `normal`
-- [ ] Implement emergency mode overtaking `Pending` mail and bypassing the readiness gate on Tmux and Pty
-- [ ] Reject emergency mode on ACP, UI, and Pubsub with `validation_invalid_params` naming the supported set
-- [ ] Make normal raw wait for target-side ordering safety rather than for outcome terminality
-- [ ] Add `--mode` to `agentmux raww` and `mode` to the MCP `raww` schema as a plain optional enumerated string, not a nullable union
 
 ### Per-transport
 
@@ -125,7 +118,6 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 - [x] Document that a `Pending` entry for a reachable-but-never-ready target holds its admission quota indefinitely, distinguishing it from a continuously unreachable target whose members resolve past the dwell, and naming per-target quota as the bound on the consequence and the undelivered-queue inscriptions as how to observe it
 - [x] State the crash-recovery limitation: guarantees hold for a surviving relay process and graceful shutdown only
 - [ ] Reconcile `session-relay/spec.md` hub prose (requirement total, the partition description advertising prime/wedge timeouts)
-- [ ] Refresh the MCP tool inventory after the `raww` schema change: restart the server, verify tool inventory client-side, and record the outcome in the lane handoff
 
 ### Tests
 
@@ -153,22 +145,14 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 ## Phase 2 — 0.9.x follow-on
 
 - [ ] Convert `TransportImpl::Ui` to the contract and delete its reconnect timeout constant and builder
-- [ ] Add the independent supervised writer for Pty emergency raw, with a defined interleaving rule
-- [ ] Extend emergency raw to overtake in-flight execution, which depends on that writer
 - [ ] Extend the guard surface beyond the minimum
-- [ ] Expose emergency raw mode in the TUI raww surface
 - [ ] Durable crash recovery, tracked separately
 
 ## Interim exceptions carried by Phase 1
 
-The specs describe the end state. These are the two places the core knowingly
-does not yet reach it. Both are implementation-phase exceptions rather than
-properties of the specified contract.
+The specs describe the end state. This is the one place the core knowingly does
+not yet reach it — an implementation-phase exception rather than a property of
+the specified contract.
 
 - **`TransportImpl::Ui` keeps its reconnect timer** until Phase 2 lands, so timer
   retirement is not yet universal.
-- **No transport provides a separately supervised writer**, so the clause
-  permitting emergency raw to bypass an in-flight submission is unreachable and
-  emergency raw always waits for target-side ordering safety. The requirement is
-  written against the end state so that adding the writer in Phase 2 does not
-  require reopening it.
