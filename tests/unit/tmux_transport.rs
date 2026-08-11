@@ -1,8 +1,35 @@
 //! Unit coverage for Tmux handover observation and pane rendering.
 
+use std::sync::{Arc, Mutex};
+
 use agentmux::envelope::PromptBatchSettings;
 use agentmux::tmux::{TmuxTransport, render_paste_text};
-use agentmux::transports::{DeliveryEnvelope, DeliveryMessage, SendOutcome, Transport};
+use agentmux::transports::{
+    DeliveryEnvelope, DeliveryMessage, PackingUnitId, PartitionError, PartitionSink, SendOutcome,
+    SubmissionEvidence, Transport,
+};
+
+/// A sink that accepts every declaration and remembers what it was told.
+///
+/// Declaring is what a real relay does for members it has admitted, so accepting
+/// keeps the transport on the path it takes in production; the record is what
+/// lets a test say which members the transport claimed shared a write.
+#[derive(Default)]
+struct RecordingSink {
+    declared: Mutex<Vec<Vec<String>>>,
+}
+
+impl PartitionSink for RecordingSink {
+    fn declare(&self, member_ids: &[&str]) -> Result<PackingUnitId, PartitionError> {
+        self.declared
+            .lock()
+            .expect("recording sink mutex")
+            .push(member_ids.iter().map(|id| (*id).to_string()).collect());
+        Ok(PackingUnitId::mint())
+    }
+
+    fn record(&self, _unit: PackingUnitId, _evidence: SubmissionEvidence) {}
+}
 
 fn envelope(is_receipt: bool) -> DeliveryEnvelope {
     DeliveryEnvelope {
@@ -32,7 +59,11 @@ fn envelope(is_receipt: bool) -> DeliveryEnvelope {
 
 #[test]
 fn tmux_handover_is_not_accepted_before_startup() {
-    let transport = TmuxTransport::new(PromptBatchSettings::default(), None);
+    let transport = TmuxTransport::new(
+        PromptBatchSettings::default(),
+        None,
+        Arc::new(RecordingSink::default()),
+    );
 
     assert!(!transport.is_ready_for_handover());
     assert!(matches!(
@@ -55,7 +86,12 @@ fn tmux_transport_render_paste_text_emits_receipt_marker_for_receipt_only() {
 
 #[test]
 fn tmux_mailw_before_startup_resolves_immediately() {
-    let mut transport = TmuxTransport::new(PromptBatchSettings::default(), None);
+    let sink = Arc::new(RecordingSink::default());
+    let mut transport = TmuxTransport::new(
+        PromptBatchSettings::default(),
+        None,
+        Arc::clone(&sink) as Arc<dyn PartitionSink>,
+    );
 
     let outcome = Transport::mailw(&mut transport, envelope(false))
         .blocking_recv()
@@ -64,5 +100,17 @@ fn tmux_mailw_before_startup_resolves_immediately() {
     assert_eq!(
         outcome.reason_code.as_deref(),
         Some("transport_not_started")
+    );
+    // The refusal happens before any delivery thread exists, so no packing unit
+    // was declared for this member. That is the difference between the guard
+    // being able to prove `not_submitted` for it and having to fall back to
+    // `submission_unknown`: binding, not the manner of the refusal, is what the
+    // evidence order reads.
+    assert!(
+        sink.declared
+            .lock()
+            .expect("recording sink mutex")
+            .is_empty(),
+        "a write refused before startup must leave its member unbound",
     );
 }

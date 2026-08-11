@@ -74,7 +74,9 @@ use crate::envelope::{AddressIdentity, EnvelopeRenderInput, PromptBatchSettings,
 // Delivery/look wire vocabulary. Canonical home is the sibling `vocabulary`
 // module (below `crate::relay` in dependency order), so the transport contract
 // never depends on relay. The relay re-exports these from its own contract.
-use crate::transports::vocabulary::{LookSnapshotPayload, SendOutcome};
+use crate::transports::vocabulary::{
+    LookSnapshotPayload, PackingUnitId, PartitionError, SendOutcome, SubmissionEvidence,
+};
 
 /// A pending delivery outcome handed back by the non-blocking write methods
 /// ([`Transport::mailw`], [`Transport::raww`]). It resolves to the terminal
@@ -200,6 +202,64 @@ impl UnreachableSince {
             since: *since.get_or_insert_with(Instant::now),
         }
     }
+}
+
+/// How a transport reports the partition it chose to the relay's guard.
+///
+/// The relay hands over one envelope at a time and cannot see what a transport
+/// does with them: ACP coalesces a budget group into one `session/prompt`, Tmux
+/// splits a batch into token-budgeted pastes, Pty writes each member on its own.
+/// That partition decides which members share a fate, so the guard has to learn
+/// it from the only layer that knows.
+///
+/// The two calls bracket the write:
+///
+/// 1. [`declare`](Self::declare) names the members about to share one submission
+///    and returns the id that binds them, **before** the first target-side
+///    effect. A transport that gets [`Err`] MUST produce no effect for that
+///    proposed unit — the relay has already established, for at least one of
+///    those members, that nothing was written, and writing anyway would make
+///    that a false claim.
+/// 2. [`record`](Self::record) states what the submission proved, once. It is
+///    what every member of the unit resolves from, including members whose own
+///    fan-out never completed.
+///
+/// **What this can and cannot enforce.** Everything after `record` returns is
+/// structural relay state — no transport can make two members of one unit
+/// disagree, because there is one record and they all read it. What it cannot
+/// enforce is the ordering *before* `declare`: nothing here stops a transport
+/// side-effecting first and declaring afterwards, which would report
+/// `not_submitted` for bytes already on the wire. That stays a per-transport
+/// boundary test, not a property of this trait.
+///
+/// Relay-injected as an `Arc<dyn PartitionSink>` for the same reason as ACP's
+/// `MirrorStateFn` and Pty's `PtyMirrorStateFn`: `src/transports` and the
+/// concrete transports may not import `crate::relay`, so the relay closes over
+/// its own ledger and hands down an opaque handle.
+///
+/// Implementations must be usable from a blocking writer thread — `&self`,
+/// `Send + Sync`, and synchronous. Deliberately not a channel send: routing a
+/// declaration through a bounded queue would let a full queue stall the write
+/// path, which is `agentmux:issues/pty/2`.
+pub trait PartitionSink: Send + Sync {
+    /// Declares that `member_ids` will share one submission, returning the id
+    /// that binds them.
+    ///
+    /// All-or-nothing: an [`Err`] means no member was bound and the transport
+    /// owes the unit no effect. A member already terminal, already bound, or no
+    /// longer admitted vetoes the whole proposed unit — its groupmates then
+    /// resolve `not_submitted`, which is true of them, because no effect
+    /// occurred.
+    ///
+    /// `member_ids` must be non-empty and free of duplicates; either is refused.
+    /// Both would leave the unit's record with a member count no sequence of
+    /// terminalizations can bring to zero, so the record would outlive the
+    /// process — a malformed declaration is rejected rather than half-honoured.
+    fn declare(&self, member_ids: &[&str]) -> Result<PackingUnitId, PartitionError>;
+
+    /// Records what the unit's submission proved. Write-once; the first record
+    /// stands, because it is what any already-resolved member reported.
+    fn record(&self, unit: PackingUnitId, evidence: SubmissionEvidence);
 }
 
 pub trait Transport: GenerationFence {
@@ -466,12 +526,22 @@ impl TransportImpl {
     /// path, and correctness never depends on one — the level the relay reads is
     /// authoritative, and a missing wakeup only defers a delivery to the next
     /// poll.
+    ///
+    /// `partition_sink` is required for the opposite reason. Tmux pastes a whole
+    /// budget group in one injection, so its members share a fate; without a sink
+    /// there would be no way to say so, and each member would be resolved from
+    /// evidence about a write that was never its own.
     #[must_use]
     pub fn tmux(
         batch_settings: PromptBatchSettings,
         readiness_notifier: Option<crate::tmux::ReadinessNotifier>,
+        partition_sink: Arc<dyn PartitionSink>,
     ) -> Self {
-        Self::Tmux(TmuxTransport::new(batch_settings, readiness_notifier))
+        Self::Tmux(TmuxTransport::new(
+            batch_settings,
+            readiness_notifier,
+            partition_sink,
+        ))
     }
 
     /// Builds a UI stream-broadcast transport for one target. The relay
@@ -508,6 +578,32 @@ impl TransportImpl {
             config,
             mirror_state,
         ))
+    }
+
+    /// The transport declares its own packing units through its
+    /// [`PartitionSink`], so the relay must not declare a singleton unit for a
+    /// member it hands over.
+    ///
+    /// A member has exactly one write-once binding. A relay declaration would
+    /// consume it and the transport's declaration for the group it actually
+    /// writes would be refused, which under the contract means the transport
+    /// produces no effect at all.
+    ///
+    /// Temporary. It exists only while the transports adopt the sink one commit
+    /// at a time; when the last one has, the relay stops declaring for coder
+    /// targets entirely and this predicate goes with it. Raw is unaffected either
+    /// way — it stays relay-declared, because no transport can name the member at
+    /// its raw write.
+    #[must_use]
+    pub fn reports_own_partition(&self) -> bool {
+        match self {
+            Self::Tmux(_) => true,
+            Self::Acp(_) | Self::Ui(_) | Self::Pubsub => false,
+            #[cfg(feature = "pty")]
+            Self::Pty(_) => false,
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => false,
+        }
     }
 
     /// The target can be captured by `look`.

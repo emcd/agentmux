@@ -26,7 +26,7 @@
 //! of the same entry is a no-op.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
     time::{Duration, Instant},
@@ -41,7 +41,7 @@ use super::guard::{
 use crate::configuration::{BundleConfiguration, SessionType};
 use crate::relay::DeliveryConfiguration;
 use crate::runtime::inscriptions::emit_inscription;
-use crate::transports::HandoverDimensions;
+use crate::transports::{HandoverDimensions, PartitionError};
 
 use super::super::{RelayError, canonical_session_id, relay_error};
 
@@ -175,11 +175,6 @@ struct AdmittedEntry {
     /// back. Transport-reported partitions replace the minting site, not this
     /// field or the order that reads it.
     unit: Option<PackingUnitId>,
-    /// The immutable evidence record for the member's packing unit, once its
-    /// submission has produced one. Every member outcome is derived from this
-    /// rather than from live state, so a panic partway through fan-out resumes
-    /// from the recorded result instead of inventing one for the remainder.
-    unit_evidence: Option<SubmissionEvidence>,
 }
 
 /// Per-target usage. An entry is one envelope, so the count is the number of
@@ -197,12 +192,33 @@ struct TargetUsage {
     warned: bool,
 }
 
+/// One packing unit's shared record.
+///
+/// The evidence is unit-owned rather than copied into each member: a transport
+/// submits a unit, not a member, so one submission produces exactly one result
+/// and every member bound to that unit must resolve from the same one. Copying
+/// it per member would make disagreement representable, which is the split
+/// outcome the guard exists to prevent.
+#[derive(Clone, Copy, Debug)]
+struct UnitRecord {
+    /// Written once, before any member outcome is derived from it. A later record
+    /// is ignored, because the first one is what any resumed fan-out must agree
+    /// with.
+    evidence: Option<SubmissionEvidence>,
+    /// How many bound members have yet to terminalize. The record is dropped when
+    /// this reaches zero, so the map tracks live units rather than growing by one
+    /// entry per unit the relay ever submitted.
+    unresolved_members: usize,
+}
+
 #[derive(Default)]
 struct LedgerState {
     /// Live reservations by message id. The authoritative record of what is
     /// reserved: the counters below are maintained in the same locked section, so
     /// they cannot drift from it.
     entries: HashMap<String, AdmittedEntry>,
+    /// Live packing units by id, holding the evidence their members resolve from.
+    units: HashMap<PackingUnitId, UnitRecord>,
     global: TargetUsage,
     per_target: HashMap<AdmissionTargetKey, TargetUsage>,
 }
@@ -348,7 +364,6 @@ pub(in crate::relay) fn admit_with_limits(
             state: QueueEntryState::Pending,
             guard: None,
             unit: None,
-            unit_evidence: None,
         },
     );
     Ok(())
@@ -408,43 +423,120 @@ pub(in crate::relay) fn authorize(message_id: &str, batch: BatchId) -> Option<Gu
     Some(key)
 }
 
-/// Binds the member to the packing unit that will carry it, before that unit
-/// produces any target-side effect.
+/// Mints a packing unit and binds every proposed member to it, or binds none.
 ///
-/// Until a member is bound the guard can positively prove nothing was written;
-/// after it, partial effect cannot be excluded. Recording the binding ahead of
-/// the effect is therefore what keeps a lifecycle trigger from over-claiming in
-/// either direction, and it is why the evidence order reads binding rather than
-/// asking how the attempt ended.
+/// Called before the unit produces any target-side effect. Until a member is
+/// bound the guard can positively prove nothing was written; after it, partial
+/// effect cannot be excluded. Recording the binding ahead of the effect is what
+/// keeps a lifecycle trigger from over-claiming in either direction, and it is
+/// why the evidence order reads binding rather than asking how the attempt ended.
 ///
-/// Binding is write-once. A second bind for the same member would mean the
-/// partition changed after it was recorded, which the contract forbids — a
-/// member belongs to exactly one unit and no member joins a batch after
-/// authorization — so the first binding stands.
-pub(in crate::relay) fn bind_to_packing_unit(message_id: &str, unit: PackingUnitId) {
-    let Ok(mut state) = lock_ledger() else {
-        return;
-    };
-    if let Some(entry) = state.entries.get_mut(message_id)
-        && entry.unit.is_none()
-    {
-        entry.unit = Some(unit);
+/// **The validation has to happen inside this lock, and the refusal has to be a
+/// refusal.** The tempting alternative — bind whoever is still bindable and
+/// return the id anyway — lets a member that terminalized a moment earlier
+/// resolve `not_submitted`, a *positive* claim that nothing was written, while
+/// the transport goes on to write the group it had already composed. Binding
+/// after declaration is harmless by comparison: the evidence order falls back to
+/// `submission_unknown` once a member is bound, so a late binding costs precision
+/// rather than correctness. The asymmetry is the whole reason for the `Result`.
+///
+/// A member that vetoes therefore vetoes its **whole** proposed unit, and its
+/// groupmates resolve `not_submitted` because no effect occurred for them either.
+/// That is an accepted cost, not an oversight: declaring the bindable subset was
+/// considered and rejected, because a transport handed a partial unit would have
+/// to re-derive which members its already-composed payload actually covers, and
+/// getting that wrong reintroduces exactly the false-non-delivery this prevents.
+///
+/// Binding is write-once, so a member already bound is not bindable: a second
+/// bind would mean the partition changed after it was recorded, which the
+/// contract forbids.
+pub(in crate::relay) fn declare_packing_unit(
+    member_ids: &[&str],
+) -> Result<PackingUnitId, PartitionError> {
+    // Shape first, above the lock: the slice is immutable for this synchronous
+    // call and neither check reads ledger state, so nothing here can go stale
+    // before the binding below. Both malformed shapes corrupt the record's member
+    // count rather than the binding itself — and the count is what decides when
+    // the record may be dropped. A
+    // duplicate binds one entry once but counts it twice, so the single
+    // terminalization never reaches zero and the record outlives the process. An
+    // empty declaration mints a unit no member will ever terminalize, with the
+    // same result. Neither is reachable from Tmux's current group construction;
+    // that is a fact about today's caller, not a property of the boundary.
+    if member_ids.is_empty() {
+        return Err(PartitionError::MemberNotBindable);
     }
+    let unique: HashSet<&str> = member_ids.iter().copied().collect();
+    if unique.len() != member_ids.len() {
+        return Err(PartitionError::MemberNotBindable);
+    }
+    let Ok(mut state) = lock_ledger() else {
+        return Err(PartitionError::LedgerUnavailable);
+    };
+    let all_bindable = member_ids.iter().all(|id| {
+        state
+            .entries
+            .get(*id)
+            .is_some_and(|entry| entry.state == QueueEntryState::Authorized && entry.unit.is_none())
+    });
+    if !all_bindable {
+        return Err(PartitionError::MemberNotBindable);
+    }
+    let unit = PackingUnitId::mint();
+    for id in member_ids {
+        if let Some(entry) = state.entries.get_mut(*id) {
+            entry.unit = Some(unit);
+        }
+    }
+    state.units.insert(
+        unit,
+        UnitRecord {
+            evidence: None,
+            unresolved_members: member_ids.len(),
+        },
+    );
+    Ok(unit)
 }
 
-/// Records the immutable evidence for the member's packing unit, before any
-/// member outcome is derived from it.
+/// Records the immutable evidence for a packing unit, before any member outcome
+/// is derived from it.
 ///
 /// Written once; a later record is ignored, because the first one is what any
-/// resumed fan-out must agree with.
-pub(in crate::relay) fn record_unit_evidence(message_id: &str, evidence: SubmissionEvidence) {
+/// resumed fan-out must agree with. A record for a unit whose members have all
+/// terminalized is dropped rather than resurrected — there is no one left to
+/// resolve from it.
+pub(in crate::relay) fn record_unit_evidence(unit: PackingUnitId, evidence: SubmissionEvidence) {
     let Ok(mut state) = lock_ledger() else {
         return;
     };
-    if let Some(entry) = state.entries.get_mut(message_id)
-        && entry.unit_evidence.is_none()
+    write_unit_evidence(&mut state, unit, evidence);
+}
+
+/// Records evidence against whatever unit the member is bound to.
+///
+/// The relay's own outcome path knows which member resolved, not which unit
+/// carried it, and it stays that way once transports declare their own units:
+/// the id then belongs to the transport, and the relay would have no way to name
+/// it. A member with no unit records nothing — it was never submitted, and the
+/// evidence order already resolves it from that fact.
+///
+/// The write is the same write-once one, so a transport that recorded through
+/// its sink during the write has already won and this call changes nothing.
+pub(in crate::relay) fn record_evidence_for_member(message_id: &str, evidence: SubmissionEvidence) {
+    let Ok(mut state) = lock_ledger() else {
+        return;
+    };
+    let Some(unit) = state.entries.get(message_id).and_then(|entry| entry.unit) else {
+        return;
+    };
+    write_unit_evidence(&mut state, unit, evidence);
+}
+
+fn write_unit_evidence(state: &mut LedgerState, unit: PackingUnitId, evidence: SubmissionEvidence) {
+    if let Some(record) = state.units.get_mut(&unit)
+        && record.evidence.is_none()
     {
-        entry.unit_evidence = Some(evidence);
+        record.evidence = Some(evidence);
     }
 }
 
@@ -510,8 +602,19 @@ pub(in crate::relay) fn terminalize(message_id: &str) -> TerminalTransition {
             state.per_target.remove(&entry.target);
         }
     }
+    // The unit record is read before it is released, so the last member of a unit
+    // still resolves from the same evidence its groupmates did.
+    let unit_evidence = entry.unit.and_then(|unit| {
+        let record = state.units.get_mut(&unit)?;
+        let evidence = record.evidence;
+        record.unresolved_members = record.unresolved_members.saturating_sub(1);
+        if record.unresolved_members == 0 {
+            state.units.remove(&unit);
+        }
+        evidence
+    });
     TerminalTransition::Won {
-        evidence: resolve_from_evidence(entry.unit_evidence, entry.unit),
+        evidence: resolve_from_evidence(unit_evidence, entry.unit),
         guard: entry.guard,
     }
 }
@@ -764,4 +867,65 @@ fn lock_ledger() -> Result<std::sync::MutexGuard<'static, LedgerState>, RelayErr
             None,
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The all-or-nothing declaration is the invariant this whole partition
+    /// mechanism rests on, and it is crate-private by design: the ledger is a
+    /// process-global holding the one lock under which binding happens, and no
+    /// public interface can drive a multi-member unit until batch formation lands
+    /// and the relay starts handing over more than one envelope at a time.
+    ///
+    /// What it pins is the refusal, because the refusal is what makes a claim of
+    /// non-delivery safe. A partial bind would let one member resolve
+    /// `not_submitted` — a positive claim nothing was written — while its
+    /// groupmates ride a write that did happen.
+    #[test]
+    fn a_declaration_binds_every_member_or_none() {
+        let target = AdmissionTargetKey::new(
+            "partition-test",
+            Path::new("/nonexistent/partition-test"),
+            "target",
+        );
+        let bindable = "partition-test-bindable";
+        let terminal = "partition-test-terminal";
+        for id in [bindable, terminal] {
+            admit(id, target.clone(), SessionType::Tmux, 1).expect("admit");
+            authorize(id, BatchId::mint()).expect("authorize");
+        }
+        // One member leaves the set of bindable members behind its groupmate's
+        // back, which is the race the lock exists to adjudicate.
+        terminalize(terminal);
+
+        assert_eq!(
+            declare_packing_unit(&[bindable, terminal]),
+            Err(PartitionError::MemberNotBindable),
+        );
+        // A malformed member list is refused for a different reason than an
+        // ineligible member, and the reason matters: both shapes would leave the
+        // unit's record with a member count no sequence of terminalizations can
+        // bring to zero, leaking it for the process lifetime. Neither is
+        // reachable from today's Tmux group construction, which is exactly why
+        // the boundary rather than the caller has to reject them.
+        assert_eq!(
+            declare_packing_unit(&[]),
+            Err(PartitionError::MemberNotBindable),
+        );
+        assert_eq!(
+            declare_packing_unit(&[bindable, bindable]),
+            Err(PartitionError::MemberNotBindable),
+        );
+        // The survivor stays unbound, so the guard can still prove nothing was
+        // written for it rather than falling back to `submission_unknown`.
+        assert!(matches!(
+            terminalize(bindable),
+            TerminalTransition::Won {
+                evidence: SubmissionEvidence::NotSubmitted,
+                ..
+            },
+        ));
+    }
 }

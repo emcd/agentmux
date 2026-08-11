@@ -23,6 +23,7 @@ use serde_json::{Value, json};
 use super::outcomes;
 use super::payload::{build_delivery_message, resolve_target_member};
 use super::worker::{AcpWorkerBootstrap, WorkerTransportContext};
+use crate::relay::delivery::partition::ledger_partition_sink;
 
 use crate::relay::delivery::async_worker::{
     AsyncWorkerKey, install_acp_worker_output_view, set_worker_failure, set_worker_readiness,
@@ -131,7 +132,11 @@ pub(super) async fn build_worker_transport(
     };
     match target_member.target.session_type() {
         SessionType::Tmux => {
-            let transport = TransportImpl::tmux(batch_settings, Some(readiness_notifier));
+            let transport = TransportImpl::tmux(
+                batch_settings,
+                Some(readiness_notifier),
+                ledger_partition_sink(),
+            );
             // tmux ignores the `choose` resolver (it raises no operator choices),
             // so a cancelling no-op chooser satisfies the `StartupContext` contract.
             let startup = StartupContext {

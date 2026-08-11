@@ -35,8 +35,9 @@ use crate::envelope::{PromptBatchSettings, batch_envelope_groups};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::transports::{
     DeliveryEnvelope, GenerationFence, LookMode, LookSnapshotPayload, OutcomeFuture, OutputView,
-    SendOutcome, SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportHealth,
-    TransportReadiness, TransportStatus, UnreachableSince,
+    PartitionSink, SendOutcome, SingleDeliveryOutcome, StartupContext, SubmissionEvidence,
+    Transport, TransportError, TransportHealth, TransportReadiness, TransportStatus,
+    UnreachableSince,
 };
 
 /// Default tmux look window applied when the caller omits a window size.
@@ -119,6 +120,12 @@ struct DeliveryTaskContext {
 /// delivery task drains the channel, groups contiguous envelopes, and pastes.
 pub struct TmuxTransport {
     batch_settings: PromptBatchSettings,
+    /// The relay's guard, for reporting which members share one paste.
+    ///
+    /// Cloned into the delivery thread rather than reached through the relay:
+    /// the partition is decided in `paste_group`, on that thread, between the
+    /// token-budget split and the injection it brackets.
+    partition_sink: Arc<dyn PartitionSink>,
     sender: Option<mpsc::Sender<WriteItem>>,
     task_handle: Option<thread::JoinHandle<()>>,
     task_context: Option<DeliveryTaskContext>,
@@ -220,10 +227,12 @@ impl TmuxTransport {
     pub fn new(
         batch_settings: PromptBatchSettings,
         readiness_notifier: Option<ReadinessNotifier>,
+        partition_sink: Arc<dyn PartitionSink>,
     ) -> Self {
         Self {
             batch_settings,
             readiness_notifier,
+            partition_sink,
             sender: None,
             task_handle: None,
             task_context: None,
@@ -359,9 +368,10 @@ impl TmuxTransport {
         let shutdown_flag = Arc::clone(&self.shutdown_flag);
         let batch_settings = self.batch_settings;
         let invocation = Arc::clone(&self.invocation);
+        let partition_sink = Arc::clone(&self.partition_sink);
         let task_handle = thread::spawn(move || {
             publish_tmux_invocations(invocation);
-            run_delivery_task(receiver, ctx, shutdown_flag, batch_settings);
+            run_delivery_task(receiver, ctx, shutdown_flag, batch_settings, partition_sink);
         });
         self.sender = Some(sender);
         self.task_handle = Some(task_handle);
@@ -541,6 +551,7 @@ fn run_delivery_task(
     ctx: DeliveryTaskContext,
     shutdown_flag: Arc<AtomicBool>,
     batch_settings: PromptBatchSettings,
+    partition_sink: Arc<dyn PartitionSink>,
 ) {
     let tmux_socket_path = tmux_socket_path_for_runtime_directory(ctx.runtime_directory.as_path());
 
@@ -568,6 +579,7 @@ fn run_delivery_task(
                         &ctx.target_session,
                         &shutdown_flag,
                         batch_settings,
+                        partition_sink.as_ref(),
                     );
                 }
                 return;
@@ -589,6 +601,7 @@ fn run_delivery_task(
                         &ctx.target_session,
                         &shutdown_flag,
                         batch_settings,
+                        partition_sink.as_ref(),
                     );
                 }
                 let _ = sender.send(deliver_raw(
@@ -617,6 +630,7 @@ fn run_delivery_task(
                             &ctx.target_session,
                             &shutdown_flag,
                             batch_settings,
+                            partition_sink.as_ref(),
                         );
                     }
                     let _ = sender.send(deliver_raw(
@@ -636,6 +650,7 @@ fn run_delivery_task(
                             &ctx.target_session,
                             &shutdown_flag,
                             batch_settings,
+                            partition_sink.as_ref(),
                         );
                     }
                     break;
@@ -649,6 +664,7 @@ fn run_delivery_task(
                             &ctx.target_session,
                             &shutdown_flag,
                             batch_settings,
+                            partition_sink.as_ref(),
                         );
                     }
                     drain_remaining_as_dropped(&mut receiver, &ctx.target_session);
@@ -713,12 +729,19 @@ fn flush_and_resolve(
     target_session: &str,
     shutdown_flag: &AtomicBool,
     batch_settings: PromptBatchSettings,
+    partition_sink: &dyn PartitionSink,
 ) {
     if shutdown_flag.load(Ordering::Acquire) {
         drain_group_as_dropped(group, target_session);
         return;
     }
-    paste_group(group, tmux_socket_path, target_session, batch_settings);
+    paste_group(
+        group,
+        tmux_socket_path,
+        target_session,
+        batch_settings,
+        partition_sink,
+    );
 }
 
 /// Renders the group's structured messages into pane-envelope text, combines
@@ -732,6 +755,7 @@ fn paste_group(
     tmux_socket_path: &Path,
     target_session: &str,
     batch_settings: PromptBatchSettings,
+    partition_sink: &dyn PartitionSink,
 ) {
     if group.is_empty() {
         return;
@@ -774,6 +798,28 @@ fn paste_group(
             .take(budget_group.member_count)
             .map(|(envelope, sender)| (envelope.message_id, sender))
             .collect();
+        // This is the partition the relay cannot see: one paste carries every
+        // member of this budget group, so they share one fate and must resolve
+        // from one record. Declared before the injection below, because after it
+        // partial effect cannot be excluded for any of them.
+        let member_ids: Vec<&str> = prompt_members
+            .iter()
+            .map(|(message_id, _)| message_id.as_str())
+            .collect();
+        let unit = match partition_sink.declare(&member_ids) {
+            Ok(unit) => unit,
+            Err(_) => {
+                // The relay refused the whole proposed unit, so this prompt must
+                // produce no effect. Dropping the senders without resolving is
+                // the correct handover back: the guard owns these members now and
+                // resolves each from the evidence order, which — since none of
+                // them was bound — proves `not_submitted` rather than guessing.
+                // Sending an outcome here would be the duplicate resolution the
+                // guard exists to prevent.
+                drop(prompt_members);
+                continue;
+            }
+        };
         // Envelope-mode writes always submit with Enter; the combined prompt is
         // pasted once for the whole budget group.
         let inject_result = inject_literal_text(
@@ -781,6 +827,18 @@ fn paste_group(
             &pane_target,
             budget_group.combined_prompt.as_str(),
             true,
+        );
+        // A paste is a body write followed by an Enter, so a failure cannot
+        // exclude partial effect: the group's evidence is `SubmissionUnknown`
+        // rather than `NotSubmitted`. Recorded before the fan-out below, so a
+        // member the fan-out never reaches still resolves from what this paste
+        // proved instead of from its own absence.
+        partition_sink.record(
+            unit,
+            match &inject_result {
+                Ok(()) => SubmissionEvidence::Submitted,
+                Err(_) => SubmissionEvidence::SubmissionUnknown,
+            },
         );
         for (message_id, sender) in prompt_members {
             let outcome = match &inject_result {
@@ -961,6 +1019,7 @@ mod observation_edge_tests {
 mod tests {
     use super::*;
     use crate::envelope::AddressIdentity;
+    use crate::transports::{PackingUnitId, PartitionError};
 
     fn test_envelope() -> DeliveryEnvelope {
         DeliveryEnvelope {
@@ -996,7 +1055,22 @@ mod tests {
             thread::yield_now();
         }
 
-        let mut transport = TmuxTransport::new(PromptBatchSettings::default(), None);
+        // No relay-admitted member exists here — the delivery thread is already
+        // stopped, so nothing is ever declared — which is the only situation in
+        // which a sink that records nothing is the right stand-in.
+        struct NoDeclarations;
+        impl PartitionSink for NoDeclarations {
+            fn declare(&self, _member_ids: &[&str]) -> Result<PackingUnitId, PartitionError> {
+                Err(PartitionError::MemberNotBindable)
+            }
+            fn record(&self, _unit: PackingUnitId, _evidence: SubmissionEvidence) {}
+        }
+
+        let mut transport = TmuxTransport::new(
+            PromptBatchSettings::default(),
+            None,
+            Arc::new(NoDeclarations),
+        );
         transport.sender = Some(sender);
         transport.task_handle = Some(task_handle);
 

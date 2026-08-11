@@ -248,6 +248,60 @@ long agent turn produces a backlog of `Pending` entries in the relay queue —
 Any return to `Healthy` resets the dwell, so a transient unreachability resolves
 nothing.
 
+## Reporting the partition
+
+The relay hands over one envelope at a time and cannot see what a transport does
+with them. ACP coalesces a budget group into one `session/prompt`; Tmux splits a
+batch into token-budgeted pastes; Pty writes each member separately. That
+partition decides which members share a fate, so the guard has to learn it from
+the layer that chose it.
+
+`PartitionSink` (`transports/contract.rs`) is that seam, injected as an
+`Arc<dyn PartitionSink>` at transport construction — the same shape as ACP's
+`MirrorStateFn` and Pty's `PtyMirrorStateFn`, and for the same reason:
+`src/transports` may not import `crate::relay`. The relay's implementation is
+`relay/delivery/partition.rs`, which delegates to the admission ledger.
+
+Two calls bracket the write:
+
+```
+  declare(&[member_ids]) -> Result<PackingUnitId, PartitionError>
+      before the first target-side effect
+      binds every proposed member or none, under the ledger lock
+      Err obliges the transport to produce NO effect for that unit
+
+  record(unit, evidence)
+      once, before member fan-out
+      the one record every member of the unit resolves from
+```
+
+`declare` refuses rather than binding a subset, and that asymmetry is the point.
+Binding *late* costs precision — the evidence order falls back to
+`submission_unknown` once a member is bound. Binding *partially* costs
+correctness: a member that terminalized a moment earlier would resolve
+`not_submitted`, a positive claim that nothing was written, while the transport
+went on to write the group it had already composed. A vetoing member therefore
+vetoes its whole proposed unit, and its groupmates resolve `not_submitted`
+because no effect occurred for them either.
+
+What the seam enforces is everything after `record` returns: there is one record
+per unit, so two members of one unit cannot disagree. What it cannot enforce is
+the ordering before `declare` — nothing stops a transport side-effecting first
+and declaring afterwards. That stays a per-transport boundary test.
+
+Adoption is per-transport. `TransportImpl::reports_own_partition` says which
+transports report their own; the relay declares a singleton unit for the rest.
+Raw is relay-declared permanently, in either case: neither `Transport::raww` nor
+Pty's `DeliveryCommand::Raw` carries a message id, so no transport can name the
+member at its raw write.
+
+| Transport | Unit | Reports its own |
+|-----------|------|-----------------|
+| Tmux | one token-budget group per paste | yes |
+| ACP | one budget group per `session/prompt` | not yet |
+| Pty | one member per write | not yet |
+| UI | one member | no — relay declares |
+
 ## Generation fencing
 
 A transport *generation* is one instance of a transport plus everything it owns —

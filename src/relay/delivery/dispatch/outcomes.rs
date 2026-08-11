@@ -118,7 +118,7 @@ pub(super) fn collect_outcome(
             // The unit's evidence is recorded before any member outcome is
             // derived from it, so a resumed fan-out agrees with what the first
             // pass reported instead of inventing a result for the remainder.
-            super::super::admission::record_unit_evidence(
+            super::super::admission::record_evidence_for_member(
                 task.message_id.as_str(),
                 evidence_from_outcome(&outcome),
             );

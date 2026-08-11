@@ -17,9 +17,10 @@ pub use crate::pty::{PtyTargetConfiguration, PtyTransport};
 pub use crate::tmux::TmuxTransport;
 pub use contract::{
     ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryMessage, GenerationFence,
-    HandoverDimensions, LookMode, OutcomeFuture, OutputView, PromptReadinessTemplate,
-    SingleDeliveryOutcome, StartupContext, ThingToChoose, Transport, TransportError,
-    TransportHealth, TransportImpl, TransportReadiness, TransportStatus, UnreachableSince,
+    HandoverDimensions, LookMode, OutcomeFuture, OutputView, PartitionSink,
+    PromptReadinessTemplate, SingleDeliveryOutcome, StartupContext, ThingToChoose, Transport,
+    TransportError, TransportHealth, TransportImpl, TransportReadiness, TransportStatus,
+    UnreachableSince,
 };
 pub use diagnostics::{
     DIAGNOSTIC_MESSAGE_IDS_MAXIMUM, DeliveryDiagnosticContext, emit_delivery_progress,
@@ -29,6 +30,7 @@ pub use ui::{
     UiTransportServices,
 };
 pub use vocabulary::{
-    DeliveryPayloadMode, LookFreshness, LookSnapshotPayload, LookSnapshotSource, SendOutcome,
-    StructuredEntry, ToolCallStatus, WorkerFailureReason, WorkerReadinessState,
+    DeliveryPayloadMode, LookFreshness, LookSnapshotPayload, LookSnapshotSource, PackingUnitId,
+    PartitionError, SendOutcome, StructuredEntry, SubmissionEvidence, ToolCallStatus,
+    WorkerFailureReason, WorkerReadinessState,
 };
