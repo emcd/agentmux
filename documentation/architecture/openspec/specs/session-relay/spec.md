@@ -2,7 +2,15 @@
 
 ## Purpose
 
-The session-relay specification has been partitioned into 8 capability-scoped sibling specs (97 base requirements total: 94 relocated from the prior single-file spec at 44d59dd plus 3 ADDED by `add-pty-transport` archive at 774f116). The canonical normative content lives in those partition specs, not in this file. This file is the hub for navigation and archive-order safety:
+The session-relay specification has been partitioned into 8 capability-scoped sibling specs. The canonical normative content lives in those partition specs, not in this file. This file is the hub for navigation and for the delta-path rule below.
+
+The partition began with 97 requirements (94 relocated from the prior single-file spec at 44d59dd, plus 3 ADDED by the `add-pty-transport` archive at 774f116). That is a fact about where the partition started, not a count to keep current: the live total is whatever the eight specs hold, and
+
+```
+grep -h '^### Requirement' openspec/specs/{addressing-routing,delivery-quiescence,transport-contracts,authorization-scope,look-and-stream-events,choice-decisions,bundle-lifecycle,environment-variables}/spec.md | wc -l
+```
+
+answers it without a number here going stale between archives.
 
 - new requirements in the session-relay capability domain MUST land in the appropriate partition spec, not here;
 - existing active OpenSpec changes whose deltas target a requirement now in a partition spec MUST relocate their delta spec file from `specs/session-relay/spec.md` to the appropriate `specs/<partition>/spec.md` before archiving;
@@ -25,19 +33,28 @@ The normative requirements previously governed: bundle membership configuration,
 
 ## Future capability (not yet a live sibling spec)
 
-`runtime-api` is reserved for the embeddable runtime API capability owned by active change `embeddable-runtime-api`. When that change archives, `openspec/specs/runtime-api/spec.md` will be created with its 10 ADDED requirements (embeddable runtime boundary, public dispatch handler contract, identity descriptor separation, configurable embedded runtime roots, principal provisioning boundary, transport parity, content-type envelope discrimination, topology-independent relay semantics, ACK timeout cleanup). Until then, runtime-api does not appear as a live sibling.
+`runtime-api` is reserved for the embeddable runtime API capability owned by the `embeddable-runtime-api` change. When that change archives, `openspec/specs/runtime-api/spec.md` will be created from its ADDED requirements, and the row belongs in the `## Partitions` table above at that point. Until then, runtime-api is not a live sibling.
 
-## OpenSpec archive-order notes
+The change's own delta spec is the authority on what it will contain; this note deliberately does not restate its requirements or count them, because a copy here would drift with every edit the change makes and nothing would notice.
 
-The following requirements are targeted by in-flight change `deliver-async-terminal-outcomes` (relay/53, merged at `f2aea4e`, implementation-gated, not yet archived). Their delta spec file at `documentation/architecture/openspec/changes/deliver-async-terminal-outcomes/specs/session-relay/spec.md` has been split by this partition change into the resulting paths below; relay/53's archive will resolve them by requirement name:
+## Delta path migration
 
-- `Asynchronous Terminal-Outcome Receipt` (ADDED) -> `documentation/architecture/openspec/changes/deliver-async-terminal-outcomes/specs/delivery-quiescence/spec.md`
-- `Async Delivery Observability` (MODIFIED) -> `documentation/architecture/openspec/changes/deliver-async-terminal-outcomes/specs/delivery-quiescence/spec.md`
-- `Tmux Prime Timeout` (MODIFIED) -> `documentation/architecture/openspec/changes/deliver-async-terminal-outcomes/specs/transport-contracts/spec.md`
+The rule below is permanent and applies to every change, not to a particular
+set of them. A delta targeting a requirement that lives in a partition spec is
+authored at `<change>/specs/<partition>/spec.md`, never at
+`<change>/specs/session-relay/spec.md`.
 
-OpenSpec's `opsx-sync` resolves MODIFIED deltas and ADDS ADDED requirements by requirement name; the delta's `### Requirement:` text is portable across paths, only the containing `specs/<capability>/spec.md` directory changes. All three relay/53 targets now live in their per-partition delta spec paths.
+`opsx-sync` resolves MODIFIED deltas and adds ADDED requirements **by
+requirement name**, so a delta's `### Requirement:` text is portable across
+paths; only the containing `specs/<capability>/spec.md` directory changes.
 
-Six active OpenSpec changes total previously referenced `session-relay`. The original seven-change set (`add-container-sandboxing`, `add-do-action-tool`, `add-pty-transport`, `add-about-surface-and-description-fields`, `deliver-async-terminal-outcomes` (relay/53), `embeddable-runtime-api`, `add-e2e-test-harness`) was reduced to six when `add-pty-transport` archived at 774f116 -- its delta spec landed in `archive/2026-07-15-add-pty-transport/` and its 3 live ADDED requirements (Pty Prime Timeout, Pty Wedged State Detection, Pty Default Per-Coder Dimensions) are now part of the 97-requirement session-relay base. The `partition-session-relay-spec` change migrates each active delta directory atomically; change owners rebase from master before archive to pick up the migrated paths. See `agentmux:todos/general/31` for the per-change mapping.
+This section previously tracked the one-time migration of the changes that were
+in flight when the partition landed, naming each and its pending delta targets.
+That migration is complete — the last of them, `deliver-async-terminal-outcomes`
+(relay/53), archived on 2026-07-16 — so the roster is gone rather than
+maintained. A hub that lists which changes are currently in flight is a document
+that is wrong the moment a change archives, and `openspec list` answers that
+question without drifting.
 
 ## Requirements
 
