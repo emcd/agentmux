@@ -302,8 +302,29 @@ member at its raw write.
 |-----------|------|-----------------|
 | Tmux | one token-budget group per paste | yes |
 | ACP | one budget group per `session/prompt` | yes |
-| Pty | one member per write | not yet |
+| Pty | one member per write | yes |
 | UI | one member | no — relay declares |
+
+Pty's one-member-per-unit is a commitment rather than a limitation: coalescing
+would smear a partial write's evidence across members, since an earlier member's
+bytes could land while a later member's did not and a shared unit could only
+report one answer for both.
+
+### Members no unit covers
+
+A terminal-outcome receipt bypasses admission — it holds no quota reservation and
+no ledger entry — so it belongs to no packing unit and is resolved by its own
+outcome sender rather than by the guard. Nothing declares one: not the relay
+(`declare_singleton_unit` returns early for an un-admitted task) and not a
+transport (each excludes receipt members from its declaration).
+
+This is not an optimisation. Asking the ledger about a receipt returns
+`MemberNotBindable`, the *same* answer it gives for a member that already
+terminalized, because a winning terminal transition removes the entry and absence
+cannot distinguish the two. Under the contract a refused declaration obliges the
+transport to produce no effect — so a declared receipt is a dropped receipt, and
+the drop is silent, since receipts are relay-originated and nothing downstream
+waits on one.
 
 ## Generation fencing
 

@@ -31,7 +31,7 @@ use crate::transports::{
 
 use super::super::async_worker::{AsyncWorkerKey, WorkerOwner};
 use super::super::fence::{FenceInProgress, FenceOutcome, FenceResolution, FenceVerdict};
-use super::super::guard::{BatchId, GuardTrigger, PackingUnitId};
+use super::super::guard::{BatchId, GuardTrigger};
 use crate::runtime::inscriptions::emit_inscription;
 
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
@@ -920,8 +920,19 @@ enum CoderWrite {
 /// coalesces gets its partition from [`PartitionSink`] instead, which is the
 /// point of the sink — a unit the relay mints here could only ever name the one
 /// member the relay handed over.
-fn declare_singleton_unit(task: &AsyncDeliveryTask) -> Result<PackingUnitId, PartitionError> {
-    super::super::admission::declare_packing_unit(&[task.message_id.as_str()])
+///
+/// An un-admitted task declares nothing and reports success. A terminal-outcome
+/// receipt is the only one in production: it bypasses admission, so it holds no
+/// ledger entry, is bound to nothing, and is resolved by its own outcome rather
+/// than by the guard. Declaring it would be refused for a member the ledger never
+/// had — indistinguishable, from inside the ledger, from a member that already
+/// terminalized — and the refusal would drop a receipt the relay had committed to
+/// sending.
+fn declare_singleton_unit(task: &AsyncDeliveryTask) -> Result<(), PartitionError> {
+    if !task.admitted {
+        return Ok(());
+    }
+    super::super::admission::declare_packing_unit(&[task.message_id.as_str()]).map(|_| ())
 }
 
 /// Drains the worker on relay shutdown, bounded by the same fence the watchdog

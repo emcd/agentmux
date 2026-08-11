@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 
 use agentmux::envelope::PromptBatchSettings;
-use agentmux::tmux::{TmuxTransport, render_paste_text};
+use agentmux::tmux::{TmuxTransport, coalescing_runs, render_paste_text};
 use agentmux::transports::{
     DeliveryEnvelope, DeliveryMessage, PackingUnitId, PartitionError, PartitionSink, SendOutcome,
     SubmissionEvidence, Transport,
@@ -113,4 +113,45 @@ fn tmux_mailw_before_startup_resolves_immediately() {
             .is_empty(),
         "a write refused before startup must leave its member unbound",
     );
+}
+
+/// A terminal-outcome receipt never shares a paste with peer traffic.
+///
+/// The rule exists because the two have different fates. Peer members belong to
+/// a packing unit and a refused declaration obliges the transport to produce no
+/// effect for them; a receipt belongs to no unit and needs no declaration. Put
+/// them in one prompt and the refusal takes the receipt down with the peers — and
+/// it cannot be rescued afterwards, because the prompt is one combined string
+/// with no receipt-only text left to write. The sender of a message that failed
+/// to deliver then silently never learns it failed.
+///
+/// Asserted over the run split rather than through a paste, because reaching
+/// `paste_group` needs a live tmux pane while the separation that makes the
+/// refusal path safe is decided here.
+#[test]
+fn tmux_never_coalesces_a_receipt_with_peer_traffic() {
+    // A receipt between peers splits the run three ways rather than joining
+    // either neighbour.
+    assert_eq!(coalescing_runs(&[false, false, true, false]), vec![2, 1, 1]);
+    // Consecutive receipts do not coalesce with each other either: each is its
+    // own turn, matching how ACP treats them as flush barriers.
+    assert_eq!(coalescing_runs(&[true, true]), vec![1, 1]);
+    // Peers alone still coalesce, which is the whole point of batching.
+    assert_eq!(coalescing_runs(&[false, false, false]), vec![3]);
+    assert_eq!(coalescing_runs(&[]), Vec::<usize>::new());
+
+    // Whatever the split, every member lands in exactly one run and order is
+    // preserved — a run table that dropped or duplicated a member would lose or
+    // double-write it.
+    for flags in [
+        vec![true, false, false, true],
+        vec![false, true, true, false, false],
+        vec![true],
+    ] {
+        assert_eq!(
+            coalescing_runs(&flags).iter().sum::<usize>(),
+            flags.len(),
+            "runs must partition the group exactly: {flags:?}",
+        );
+    }
 }

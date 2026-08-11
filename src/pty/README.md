@@ -49,6 +49,16 @@ receipt builder — see `build_coder_envelope` in
 at the relay's terminal-resolution chokepoint; the Pty transport does
 not enforce or check that invariant.
 
+A receipt is also written **without declaring a packing unit**. It
+bypassed relay admission, so it holds no ledger entry and belongs to no
+unit; asking the ledger about one returns the same refusal it gives for a
+member that already terminalized, and under the delivery contract a
+refused declaration obliges the transport to write nothing — so declaring
+a receipt would silently drop it. `start_envelope_group` therefore checks
+`is_receipt` before declaring and writes such a member with no unit,
+resolving it through its own outcome sender. See
+`src/relay/delivery-architecture.md`, "Members no unit covers".
+
 The marker line and the rendered pane envelope are written
 contiguously under the same `writer.lock()` so the marker and the
 envelope cannot be interleaved with another write on the same Pty

@@ -35,9 +35,9 @@ use crate::envelope::{PromptBatchSettings, batch_envelope_groups};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::transports::{
     DeliveryEnvelope, GenerationFence, LookMode, LookSnapshotPayload, OutcomeFuture, OutputView,
-    PartitionSink, SendOutcome, SingleDeliveryOutcome, StartupContext, SubmissionEvidence,
-    Transport, TransportError, TransportHealth, TransportReadiness, TransportStatus,
-    UnreachableSince,
+    PackingUnitId, PartitionError, PartitionSink, SendOutcome, SingleDeliveryOutcome,
+    StartupContext, SubmissionEvidence, Transport, TransportError, TransportHealth,
+    TransportReadiness, TransportStatus, UnreachableSince,
 };
 
 /// Default tmux look window applied when the caller omits a window size.
@@ -744,6 +744,54 @@ fn flush_and_resolve(
     );
 }
 
+/// Splits a flush group into runs that may be coalesced into one paste,
+/// returning each run's length in order. A terminal-outcome receipt forms a run
+/// of its own.
+///
+/// This is a correctness barrier, not presentation. A receipt bypasses admission
+/// and belongs to no packing unit, while its peer groupmates belong to one, so a
+/// paste carrying both would tie two members to one fate that only one of them
+/// has: when the peers' declaration is refused, the prompt must produce no effect
+/// — and the receipt, which needed no declaration, would be dropped with it. It
+/// cannot be rescued after the fact either, because the budget group's combined
+/// prompt is a single string, so there is no receipt-only text left to write.
+/// Separating them before budgeting is what makes the refusal path drop only
+/// members the guard owns.
+///
+/// ACP reaches the same rule from the other direction — receipts are its flush
+/// barrier so they never coalesce with peer traffic — and Pty writes one member
+/// per primitive, so neither needs this.
+pub fn coalescing_runs(is_receipt: &[bool]) -> Vec<usize> {
+    let mut runs: Vec<usize> = Vec::new();
+    let mut previous_was_peer = false;
+    for &receipt in is_receipt {
+        if receipt || !previous_was_peer {
+            runs.push(1);
+        } else if let Some(last) = runs.last_mut() {
+            *last += 1;
+        }
+        previous_was_peer = !receipt;
+    }
+    runs
+}
+
+/// Declares the guard-tracked members of one prompt, or nothing when the prompt
+/// carries none.
+///
+/// A prompt made up entirely of terminal-outcome receipts has no tracked member,
+/// and an empty declaration is refused by the ledger. `Ok(None)` says the prompt
+/// may be written with no unit behind it, which is correct: nothing in it is
+/// resolved by the guard.
+fn declare_tracked_members(
+    partition_sink: &dyn PartitionSink,
+    member_ids: &[&str],
+) -> Result<Option<PackingUnitId>, PartitionError> {
+    if member_ids.is_empty() {
+        return Ok(None);
+    }
+    partition_sink.declare(member_ids).map(Some)
+}
+
 /// Renders the group's structured messages into pane-envelope text, combines
 /// them into token-budget-bounded prompts, and pastes each combined prompt as
 /// one injection — the same greedy split the ACP transport applies to its
@@ -788,25 +836,47 @@ fn paste_group(
         .iter()
         .map(|(envelope, _)| render_paste_text(envelope))
         .collect();
-    let budget_groups = batch_envelope_groups(&rendered, batch_settings);
+    // Split at receipt boundaries before budgeting, so no prompt ever mixes a
+    // receipt with peer traffic. See `coalescing_runs` for why that separation is
+    // a correctness requirement rather than presentation.
+    let runs = coalescing_runs(&group.iter().map(|(e, _)| e.is_receipt).collect::<Vec<_>>());
+    let budget_groups: Vec<_> = {
+        let mut rendered_rest = rendered.as_slice();
+        let mut groups = Vec::new();
+        for run_length in runs {
+            let (run, rest) = rendered_rest.split_at(run_length);
+            rendered_rest = rest;
+            groups.extend(batch_envelope_groups(run, batch_settings));
+        }
+        groups
+    };
 
     let mut members = group.drain(..);
     for budget_group in budget_groups {
         // Slice the parallel sender vector to this prompt's contributing members.
-        let prompt_members: Vec<(String, OutcomeSender)> = members
+        let prompt_members: Vec<(String, OutcomeSender, bool)> = members
             .by_ref()
             .take(budget_group.member_count)
-            .map(|(envelope, sender)| (envelope.message_id, sender))
+            .map(|(envelope, sender)| (envelope.message_id, sender, !envelope.is_receipt))
             .collect();
         // This is the partition the relay cannot see: one paste carries every
         // member of this budget group, so they share one fate and must resolve
         // from one record. Declared before the injection below, because after it
         // partial effect cannot be excluded for any of them.
+        // Terminal-outcome receipts bypass admission, so they hold no ledger
+        // entry and belong to no unit. Declaring one would be refused — the
+        // ledger cannot tell a member it never had from one that already
+        // terminalized — and the refusal would drop the whole prompt, receipt and
+        // peer traffic alike. Receipts never reach here mixed with peer traffic —
+        // `coalescing_runs` above puts each in its own run — so this filter yields
+        // either every member or none, and the refusal arm below can only ever
+        // drop members the guard owns.
         let member_ids: Vec<&str> = prompt_members
             .iter()
-            .map(|(message_id, _)| message_id.as_str())
+            .filter(|(_, _, tracked)| *tracked)
+            .map(|(message_id, _, _)| message_id.as_str())
             .collect();
-        let unit = match partition_sink.declare(&member_ids) {
+        let unit = match declare_tracked_members(partition_sink, &member_ids) {
             Ok(unit) => unit,
             Err(_) => {
                 // The relay refused the whole proposed unit, so this prompt must
@@ -833,14 +903,16 @@ fn paste_group(
         // rather than `NotSubmitted`. Recorded before the fan-out below, so a
         // member the fan-out never reaches still resolves from what this paste
         // proved instead of from its own absence.
-        partition_sink.record(
-            unit,
-            match &inject_result {
-                Ok(()) => SubmissionEvidence::Submitted,
-                Err(_) => SubmissionEvidence::SubmissionUnknown,
-            },
-        );
-        for (message_id, sender) in prompt_members {
+        if let Some(unit) = unit {
+            partition_sink.record(
+                unit,
+                match &inject_result {
+                    Ok(()) => SubmissionEvidence::Submitted,
+                    Err(_) => SubmissionEvidence::SubmissionUnknown,
+                },
+            );
+        }
+        for (message_id, sender, _) in prompt_members {
             let outcome = match &inject_result {
                 Ok(()) => SingleDeliveryOutcome {
                     target_session: target_session.to_string(),

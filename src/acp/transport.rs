@@ -1197,8 +1197,23 @@ fn submit_singleton_envelope(
     envelope: Box<DeliveryEnvelope>,
     outcome_tx: tokio::sync::oneshot::Sender<SingleDeliveryOutcome>,
 ) {
+    // A receipt bypassed admission, so no unit exists for it and declaring one
+    // would be refused — which, before this was distinguished, silently dropped
+    // every terminal-outcome receipt routed back to an ACP sender.
+    let unit = if envelope.is_receipt {
+        TurnUnit::Untracked
+    } else {
+        TurnUnit::DeclareHere
+    };
     let mut batch = EnvelopeBatch::from_head(&envelope, outcome_tx);
-    flush_envelope_group(client, ctx, batch_settings, respawn_needed_tx, &mut batch);
+    flush_envelope_group(
+        client,
+        ctx,
+        batch_settings,
+        respawn_needed_tx,
+        &mut batch,
+        unit,
+    );
 }
 
 /// True when the write item is an envelope flagged as a terminal-outcome
@@ -1463,7 +1478,16 @@ fn execute_delivery_plan(
             drain_and_resolve_shutdown(rx);
             return;
         }
-        flush_envelope_group(client, ctx, batch_settings, respawn_needed_tx, &mut batch);
+        // Peer traffic only: receipts are a flush barrier and never coalesce
+        // into this path, so every member here holds a ledger entry.
+        flush_envelope_group(
+            client,
+            ctx,
+            batch_settings,
+            respawn_needed_tx,
+            &mut batch,
+            TurnUnit::DeclareHere,
+        );
     }
 
     // Execute the boundary action.
@@ -1524,6 +1548,7 @@ fn flush_envelope_group(
     batch_settings: &PromptBatchSettings,
     respawn_needed_tx: &tokio::sync::watch::Sender<u64>,
     batch: &mut EnvelopeBatch,
+    unit: TurnUnit,
 ) {
     let groups = crate::envelope::batch_envelope_groups(&batch.rendered, *batch_settings);
     batch.rendered.clear();
@@ -1546,7 +1571,7 @@ fn flush_envelope_group(
             &group.combined_prompt,
             members,
             &head_deciders,
-            TurnUnit::DeclareHere,
+            unit,
         );
     }
 }
@@ -1559,12 +1584,24 @@ fn flush_envelope_group(
 /// layer cannot declare raw's is that it cannot name the member — `submit_raw_turn`
 /// reaches this function with a synthetic empty message id, since neither
 /// `Transport::raww` nor the write channel carries the real one.
+#[derive(Clone, Copy)]
 enum TurnUnit {
     /// An envelope group: declare it here, from the members about to be written.
     DeclareHere,
     /// A raw write: the relay already declared its singleton unit and records its
     /// evidence through the member-keyed ledger entry point.
     RelayDeclared,
+    /// A terminal-outcome receipt: no unit exists for it anywhere, because it
+    /// bypassed admission and holds no ledger entry.
+    ///
+    /// Distinct from [`RelayDeclared`](Self::RelayDeclared) even though both
+    /// decline to declare here, because the reason is different and the
+    /// difference is load-bearing: raw *is* bound and resolves through the guard,
+    /// while a receipt is bound to nothing and resolves only through its own
+    /// outcome sender. Declaring one would be refused — the ledger cannot tell a
+    /// member it never had from one that already terminalized — and the refusal
+    /// would silently drop a receipt the relay committed to sending.
+    Untracked,
 }
 
 /// Submits one combined prompt as an ACP turn and resolves every member of the
@@ -1613,7 +1650,7 @@ fn submit_envelope_turn(
                 }
             }
         }
-        TurnUnit::RelayDeclared => None,
+        TurnUnit::RelayDeclared | TurnUnit::Untracked => None,
     };
     let record = |evidence: SubmissionEvidence| {
         if let Some(unit) = declared {
