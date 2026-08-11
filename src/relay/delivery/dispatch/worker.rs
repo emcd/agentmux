@@ -60,6 +60,52 @@ pub(super) struct InflightMember {
     pub(super) authorized_at: Instant,
 }
 
+/// What a worker builds its transport from, fixed at spawn and reused for every
+/// generation it goes on to build.
+///
+/// The transport *kind* is a property of the target, settled by configuration
+/// before any message exists. Holding that decision here rather than reading it
+/// off whichever task arrives first is what lets construction happen once at
+/// spawn, and what makes a replacement generation the same construction as the
+/// original rather than a second code path that has to agree with it.
+pub(super) enum WorkerTransportSource {
+    /// ACP targets, whose runtime comes from a driver-owned supervised bootstrap.
+    Acp(AcpWorkerBootstrap),
+    /// Every other target, from inputs the spawn site resolved.
+    Direct(WorkerTransportContext),
+}
+
+/// The construction inputs for a non-ACP transport, resolved at the spawn site.
+///
+/// Every field was already in the spawn site's hands — it is holding the task
+/// that elected it — so the lazy read this replaces was never buying information.
+/// It only deferred a construction failure past the point where the sender could
+/// still be told synchronously, and left the worker with two construction paths
+/// where the target only ever justified one.
+#[derive(Clone)]
+pub(super) struct WorkerTransportContext {
+    pub(super) namespace: String,
+    pub(super) runtime_directory: std::path::PathBuf,
+    pub(super) target_session: String,
+    /// `None` only for a relay-wide (UI) target. A configured coder target whose
+    /// member is missing fails resolution instead of arriving here as `None`,
+    /// which is what lets the builder treat absence as "UI" without a second flag.
+    pub(super) target_member: Option<BundleMember>,
+}
+
+impl WorkerTransportContext {
+    /// Resolves a worker's construction inputs from the task electing its spawn.
+    pub(super) fn resolve(task: &AsyncDeliveryTask) -> Result<Self, RelayError> {
+        let target_member = resolve_target_member(task)?.cloned();
+        Ok(Self {
+            namespace: task.bundle.bundle_name.clone(),
+            runtime_directory: task.runtime_directory.clone(),
+            target_session: task.target_session.clone(),
+            target_member,
+        })
+    }
+}
+
 #[derive(Clone)]
 pub(super) struct AcpWorkerBootstrap {
     pub(super) target_member: BundleMember,
@@ -83,10 +129,10 @@ pub(super) fn spawn_async_delivery_worker(
     owner: WorkerOwner,
     receiver: UnboundedReceiver<AsyncDeliveryTask>,
     pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    bootstrap: Option<AcpWorkerBootstrap>,
+    source: WorkerTransportSource,
 ) {
     delivery_runtime_handle().spawn(async move {
-        run_async_delivery_worker(key, owner, receiver, pending, bootstrap).await;
+        run_async_delivery_worker(key, owner, receiver, pending, source).await;
     });
 }
 
@@ -123,18 +169,17 @@ async fn run_async_delivery_worker(
     owner: WorkerOwner,
     mut receiver: UnboundedReceiver<AsyncDeliveryTask>,
     pending: std::sync::Arc<std::sync::atomic::AtomicUsize>,
-    bootstrap: Option<AcpWorkerBootstrap>,
+    source: WorkerTransportSource,
 ) {
     // Hold one `TransportImpl` for this target's lifetime. The transport KIND is
-    // the only target-type-dependent decision, and it is fixed at construction
-    // from the configured `session_type()` (transport-abstraction spec): ACP
-    // targets get the bootstrap driver here; every other target's transport is
-    // built lazily from its first task (a non-ACP worker has no bundle member at
-    // spawn time — the task carries it) and then latched. Delivery is uniform:
-    // the loop submits `mailw`/`raww` for every target with no registry-based
-    // re-routing and no transport-deliverability gate. ACP lifecycle, readiness
-    // mirroring, and respawn live entirely in the driver and its internal task;
-    // the loop never names an ACP type.
+    // the only target-type-dependent decision, and it is fixed by configuration
+    // (transport-abstraction spec) before this worker exists — which is why it is
+    // built here, from the source the spawn site resolved, rather than off
+    // whichever task happens to arrive first. Delivery is then uniform: the loop
+    // submits `mailw`/`raww` for every target with no registry-based re-routing
+    // and no transport-deliverability gate. ACP lifecycle, readiness mirroring,
+    // and respawn live entirely in the driver and its internal task; the loop
+    // never names an ACP type.
     //
     // The loop is a concurrent produce-and-collect: it submits each task to the
     // transport via the non-blocking `mailw`/`raww` seam and concurrently collects
@@ -143,26 +188,60 @@ async fn run_async_delivery_worker(
     // delivery task now, so the worker no longer batches, hoists quiescence, or
     // owns `spawn_blocking`.
     let batch_settings = super::prompt_batch_settings();
-    // `None` until the transport is constructed: eagerly for ACP (bootstrap),
-    // lazily from the first task's `session_type()` for every other target.
+    // Subscribed before any level is read, and before the transport that will
+    // poke it exists. The contract requires subscribe-before-check precisely so
+    // a change occurring between the check and the subscription cannot be missed;
+    // creating this first makes that ordering unrepresentable rather than
+    // merely observed.
     //
-    // An ACP worker starts its bootstrap here but does not wait on it. Awaiting
-    // it made the loop below — and therefore this worker's shutdown gate —
-    // unreachable for as long as the bootstrap took, which for an agent parked
-    // in its `initialize` handshake is forever: no fence ever began and no
-    // verdict was ever emitted, not even the honest negative one. The queue is
-    // still held until the bootstrap settles, so delivery semantics are
-    // unchanged; what the loop gains is the ability to observe shutdown while
-    // that wait is happening.
-    let mut bootstrap_settled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>> = None;
-    let mut transport: Option<TransportImpl> = match bootstrap.as_ref() {
-        Some(bootstrap) => {
-            let (transport, settled) = build_acp_generation(&key, bootstrap, batch_settings);
-            bootstrap_settled = settled;
-            Some(transport)
-        }
-        None => None,
-    };
+    // Correctness never depends on it. The authoritative state is the level the
+    // worker reads, and a lost wakeup only delays a delivery to the next poll
+    // below.
+    let readiness_changed = std::sync::Arc::new(tokio::sync::Notify::new());
+    // Observed before anything is constructed, not only inside the loop below.
+    // Constructing first would start a target for a relay on its way out — a Tmux
+    // pane or a Pty child spawned for a generation that can only be torn down
+    // again, off-runtime and possibly blocking, delaying the exit it cannot serve.
+    // The same invariant is why `initialize_acp_target_for_startup` checks
+    // shutdown before creating a worker at all rather than only while waiting on
+    // one. The prior lazy construction had this for free, because it ran inside
+    // `submit_task` and therefore only after the loop's gate had already passed.
+    if shutdown_requested() {
+        shutdown_before_generation(&key, owner, &mut receiver, pending.as_ref());
+        return;
+    }
+    // The first generation. An ACP worker starts its bootstrap here but does not
+    // wait on it: awaiting made the loop below — and therefore this worker's
+    // shutdown gate — unreachable for as long as the bootstrap took, which for an
+    // agent parked in its `initialize` handshake is forever. The queue is held
+    // until the bootstrap settles either way, so delivery semantics are unchanged;
+    // what the loop gains is the ability to observe shutdown during that wait.
+    let (mut transport, mut bootstrap_settled) =
+        match build_generation(&key, &source, batch_settings, &readiness_changed).await {
+            Ok(built) => built,
+            Err(error) => {
+                // Construction failed, so this worker has no transport and never
+                // will. Resolve everything it was elected to carry rather than
+                // installing a dead transport the health gate would then hold
+                // through the whole dwell before reporting a generic unreachable.
+                // Unregistering — rather than fail-stopping — is deliberate: no
+                // generation ever started, so there is nothing a replacement could
+                // race, and the next send is free to try again.
+                //
+                // Unregistering happens BEFORE the drain, and the order is the
+                // whole of its correctness. `try_existing_worker` holds the
+                // registry lock across `sender.send`, so once the entry is gone no
+                // send can still be in flight — whereas draining first leaves the
+                // entry accepting, and a send landing between the drain observing
+                // empty and the unregister is lost with the receiver: no terminal
+                // outcome, no quota release. That is the accept-after-drain race
+                // `close_worker` exists to prevent on the shutdown path, and this
+                // path has to close the same way.
+                super::super::async_worker::unregister_worker(&key, owner);
+                resolve_queued_tasks_with_error(&mut receiver, pending.as_ref(), &error);
+                return;
+            }
+        };
     let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
     // In-flight writes: each entry awaits one transport `OutcomeFuture` and yields
     // its originating task so the collect arm can complete it. Completion order is
@@ -181,16 +260,6 @@ async fn run_async_delivery_worker(
     // target's FIFO order survives the wait. At most one: taking a second member
     // off the channel while this one waits would reorder the target's queue.
     let mut held: Option<AsyncDeliveryTask> = None;
-    // Subscribed before any level is read, and before the transport that will
-    // poke it exists. The contract requires subscribe-before-check precisely so
-    // a change occurring between the check and the subscription cannot be missed;
-    // creating this first makes that ordering unrepresentable rather than
-    // merely observed.
-    //
-    // Correctness never depends on it. The authoritative state is the level the
-    // worker reads, and a lost wakeup only delays a delivery to the next poll
-    // below.
-    let readiness_changed = std::sync::Arc::new(tokio::sync::Notify::new());
     // Graceful shutdown and the execution watchdog are what fence a generation.
     // Both bounds are the relay's own `[delivery]` settings, read once per worker.
     let delivery = super::super::admission::delivery_configuration();
@@ -205,9 +274,6 @@ async fn run_async_delivery_worker(
     // be elected, and stays alive only to observe shutdown.
     let mut fail_stopped = false;
     let submit_context = SubmitContext {
-        key: &key,
-        batch_settings,
-        readiness_changed: &readiness_changed,
         unreachable_dwell: Duration::from_millis(delivery.unreachable_dwell_ms),
     };
 
@@ -232,7 +298,7 @@ async fn run_async_delivery_worker(
             }
             shutdown_drain(
                 &key,
-                transport.as_mut(),
+                &mut transport,
                 &mut inflight,
                 &mut inflight_members,
                 &mut receiver,
@@ -284,7 +350,6 @@ async fn run_async_delivery_worker(
         // windows still resolves its own members through the collect arm.
         if watchdog.is_none()
             && !fail_stopped
-            && let Some(transport) = transport.as_mut()
             && let Some(oldest) = inflight_members
                 .values()
                 .map(|member| member.authorized_at)
@@ -300,15 +365,14 @@ async fn run_async_delivery_worker(
                     "unresolved_members": inflight_members.len(),
                 }),
             );
-            watchdog = Some(FenceInProgress::begin(transport, fence_observation));
+            watchdog = Some(FenceInProgress::begin(&mut transport, fence_observation));
         }
         // Advanced before the select rather than inside it, so the collect arm
         // keeps running through both observation windows: the fence's whole point
         // is that a member resolving in time reports its own evidence.
-        let watchdog_verdict = match (watchdog.as_mut(), transport.as_mut()) {
-            (Some(fence), Some(transport)) => fence.advance(transport, Instant::now()),
-            _ => None,
-        };
+        let watchdog_verdict = watchdog
+            .as_mut()
+            .and_then(|fence| fence.advance(&mut transport, Instant::now()));
         if let Some(outcome) = watchdog_verdict {
             watchdog = None;
             emit_fence_verdict(&key, "submission_timeout", outcome, inflight_members.len());
@@ -321,16 +385,42 @@ async fn run_async_delivery_worker(
                     // does on shutdown: the cooperative step is the stop signal,
                     // and tearing down first would strip the effect paths the
                     // observation reads.
-                    if let Some(transport) = transport.as_mut() {
-                        transport.shutdown();
-                    }
-                    transport = None;
-                    bootstrap_settled = None;
-                    if let Some(bootstrap) = bootstrap.as_ref() {
-                        let (built, settled) =
-                            build_acp_generation(&key, bootstrap, batch_settings);
-                        bootstrap_settled = settled;
-                        transport = Some(built);
+                    transport.shutdown();
+                    // The replacement is the same construction as the original,
+                    // from the same source, so a target cannot acquire a second
+                    // transport kind by being fenced.
+                    match build_generation(&key, &source, batch_settings, &readiness_changed).await
+                    {
+                        Ok((built, settled)) => {
+                            transport = built;
+                            bootstrap_settled = settled;
+                        }
+                        Err(error) => {
+                            // No replacement could be built. The old generation
+                            // did cease, so nothing can race a later worker —
+                            // resolve what this one still holds and let the next
+                            // send elect a fresh one, exactly as a failed first
+                            // construction does.
+                            //
+                            // Unregistered before the drain for the same reason it
+                            // is there: while the entry is live a send can land
+                            // between the drain observing empty and the entry
+                            // going, and it would be lost with the receiver.
+                            super::super::async_worker::unregister_worker(&key, owner);
+                            if let Some(task) = held.take() {
+                                super::super::async_worker::complete_task_outcome(
+                                    &task,
+                                    Err(error.clone()),
+                                );
+                                super::super::async_worker::release_pending_slot(pending.as_ref());
+                            }
+                            resolve_queued_tasks_with_error(
+                                &mut receiver,
+                                pending.as_ref(),
+                                &error,
+                            );
+                            return;
+                        }
                     }
                 }
                 FenceVerdict::Negative => {
@@ -373,8 +463,7 @@ async fn run_async_delivery_worker(
                 &mut inflight,
                 &mut inflight_members,
                 pending.as_ref(),
-            )
-            .await;
+            );
         }
         tokio::select! {
             maybe_task = receiver.recv(), if !senders_dropped && bootstrap_settled_now && held.is_none() && watchdog.is_none() => {
@@ -404,8 +493,7 @@ async fn run_async_delivery_worker(
                             &mut inflight,
                             &mut inflight_members,
                             pending.as_ref(),
-                        )
-                        .await;
+                        );
                     }
                     None => senders_dropped = true,
                 }
@@ -427,6 +515,42 @@ async fn run_async_delivery_worker(
         }
     }
     super::super::async_worker::unregister_worker(&key, owner);
+}
+
+/// Ends a worker that was elected before a shutdown it observed before building
+/// anything.
+///
+/// Closes the entry first so nothing new is accepted, drains what it already
+/// holds through the ordinary shutdown spelling, then unregisters — the same
+/// order the loop's own shutdown drain uses, for the same reason. Deliberately
+/// constructs no transport: a relay on its way out has no use for a target, and
+/// starting one here would spawn a pane or a child purely to tear it down.
+fn shutdown_before_generation(
+    key: &AsyncWorkerKey,
+    owner: WorkerOwner,
+    receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
+    pending: &std::sync::atomic::AtomicUsize,
+) {
+    super::super::async_worker::close_worker(key, owner);
+    super::super::async_worker::drop_pending_async_tasks_on_shutdown(receiver, pending);
+    super::super::async_worker::unregister_worker(key, owner);
+}
+
+/// Resolves every task still queued for a worker that cannot deliver, reporting
+/// the construction failure that made it so.
+///
+/// Used only where the worker is about to end without a transport. The tasks were
+/// admitted but never authorized, so they are terminalized with the real cause
+/// rather than left in a receiver nothing will poll.
+fn resolve_queued_tasks_with_error(
+    receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
+    pending: &std::sync::atomic::AtomicUsize,
+    error: &RelayError,
+) {
+    while let Ok(task) = receiver.try_recv() {
+        super::super::async_worker::complete_task_outcome(&task, Err(error.clone()));
+        super::super::async_worker::release_pending_slot(pending);
+    }
 }
 
 /// Records one fence verdict, naming what triggered the fence.
@@ -484,34 +608,52 @@ fn terminalize_unresolved_members(
     inflight.abort_all();
 }
 
-/// Builds one ACP generation: its driver transport and the flag that says when
-/// its bootstrap has settled.
+/// Builds one generation's transport, plus the flag that says when an ACP
+/// bootstrap has settled (`None` for every other kind, which has no such wait).
 ///
-/// Factored out because a worker builds one at spawn and another after a positive
-/// fence verdict, and the two must be the same construction. Non-ACP targets have
-/// no analogue: their transport is built lazily from the next task, so a
-/// replacement generation is made by clearing the slot.
-fn build_acp_generation(
+/// One function for both the worker's first generation and every replacement it
+/// builds after a positive fence verdict. They must be the same construction: a
+/// replacement that differed from the original would be a second transport kind
+/// for one target, which the transport-abstraction contract does not allow.
+async fn build_generation(
     key: &AsyncWorkerKey,
-    bootstrap: &AcpWorkerBootstrap,
+    source: &WorkerTransportSource,
     batch_settings: PromptBatchSettings,
-) -> (
-    TransportImpl,
-    Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-) {
-    let services = build_acp_driver_services(key, bootstrap);
-    let mut transport = TransportImpl::acp(
-        bootstrap.target_member.clone(),
-        bootstrap.runtime_directory.clone(),
-        key.namespace.clone(),
-        services,
-        batch_settings,
-    );
-    let settled = match &mut transport {
-        TransportImpl::Acp(driver) => Some(driver.start_bootstrap()),
-        _ => None,
-    };
-    (transport, settled)
+    readiness_changed: &std::sync::Arc<tokio::sync::Notify>,
+) -> Result<
+    (
+        TransportImpl,
+        Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ),
+    RelayError,
+> {
+    match source {
+        WorkerTransportSource::Acp(bootstrap) => {
+            let services = build_acp_driver_services(key, bootstrap);
+            let mut transport = TransportImpl::acp(
+                bootstrap.target_member.clone(),
+                bootstrap.runtime_directory.clone(),
+                key.namespace.clone(),
+                services,
+                batch_settings,
+            );
+            // The bootstrap runs supervised in the background; construction itself
+            // cannot fail here, which is why only the Direct arm returns an error.
+            let settled = match &mut transport {
+                TransportImpl::Acp(driver) => Some(driver.start_bootstrap()),
+                _ => None,
+            };
+            Ok((transport, settled))
+        }
+        WorkerTransportSource::Direct(context) => {
+            let notify = std::sync::Arc::clone(readiness_changed);
+            let readiness_notifier: crate::tmux::ReadinessNotifier =
+                std::sync::Arc::new(move || notify.notify_waiters());
+            let transport =
+                build_worker_transport(context, key, batch_settings, readiness_notifier).await?;
+            Ok((transport, None))
+        }
+    }
 }
 
 /// The fixed context one worker submits under.
@@ -519,12 +661,7 @@ fn build_acp_generation(
 /// Grouped rather than passed as parallel parameters: these are the settings the
 /// worker resolves once at spawn and applies to every task, as distinct from the
 /// per-task state that changes underneath them.
-struct SubmitContext<'a> {
-    key: &'a AsyncWorkerKey,
-    batch_settings: PromptBatchSettings,
-    /// Handed to each transport as it is constructed, so a level change wakes the
-    /// worker instead of waiting out a poll interval.
-    readiness_changed: &'a std::sync::Arc<tokio::sync::Notify>,
+struct SubmitContext {
     /// How long a target may be *continuously* unreachable before a held member
     /// resolves rather than keeping its place in the queue.
     unreachable_dwell: Duration,
@@ -569,40 +706,14 @@ fn target_unreachable_result(task: &AsyncDeliveryTask, dwell: Duration) -> SendR
 /// Returns the task unconsumed when its target reported that it cannot take a
 /// handover. Nothing has happened to it in that case — no authorization, no
 /// batch, no quota movement — and the caller holds it for a later attempt.
-async fn submit_task(
+fn submit_task(
     task: AsyncDeliveryTask,
-    context: &SubmitContext<'_>,
-    transport: &mut Option<TransportImpl>,
+    context: &SubmitContext,
+    transport: &mut TransportImpl,
     inflight: &mut JoinSet<InflightOutcome>,
     inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
     pending: &std::sync::atomic::AtomicUsize,
 ) -> Option<AsyncDeliveryTask> {
-    if transport.is_none() {
-        let notify = std::sync::Arc::clone(context.readiness_changed);
-        let readiness_notifier: crate::tmux::ReadinessNotifier =
-            std::sync::Arc::new(move || notify.notify_waiters());
-        match build_worker_transport(
-            &task,
-            context.key,
-            context.batch_settings,
-            readiness_notifier,
-        )
-        .await
-        {
-            Ok(built) => {
-                *transport = Some(built);
-            }
-            Err(error) => {
-                super::super::async_worker::complete_task_outcome(&task, Err(error));
-                super::super::async_worker::release_pending_slot(pending);
-                return None;
-            }
-        }
-    }
-    let transport = transport
-        .as_mut()
-        .expect("worker transport constructed above");
-
     // Readiness gates authorization, not submission. A target that cannot take a
     // handover now must not have a batch authorized against it: authorization is
     // the linearization point, and quota releases only at the terminal
@@ -785,37 +896,34 @@ fn prepare_coder_write(
 /// threads were not observed to stop — so calling it there would run the bounded
 /// fence straight into the unbounded wait it exists to replace. Cessation has
 /// already been initiated by the fence's forced step; what is abandoned is the
-/// waiting, and the process is exiting anyway. The transport is `None` if no task
-/// ever arrived to construct it.
+/// waiting, and the process is exiting anyway.
 async fn shutdown_drain(
     key: &AsyncWorkerKey,
-    transport: Option<&mut TransportImpl>,
+    transport: &mut TransportImpl,
     inflight: &mut JoinSet<InflightOutcome>,
     inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
     receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
     pending: &std::sync::atomic::AtomicUsize,
     fence_observation: Duration,
 ) {
-    if let Some(transport) = transport {
-        let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
-        let mut fence = FenceInProgress::begin(transport, fence_observation);
-        let outcome = loop {
-            if let Some(outcome) = fence.advance(transport, Instant::now()) {
-                break outcome;
-            }
-            tokio::select! {
-                joined = inflight.join_next_with_id(), if !inflight.is_empty() => {
-                    if let Some(joined) = joined {
-                        collect_outcome(joined, inflight_members, pending);
-                    }
-                }
-                _ = tokio::time::sleep(poll_interval) => {}
-            }
-        };
-        emit_fence_verdict(key, "graceful_shutdown", outcome, inflight_members.len());
-        if outcome.verdict == FenceVerdict::Positive {
-            transport.shutdown();
+    let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
+    let mut fence = FenceInProgress::begin(transport, fence_observation);
+    let outcome = loop {
+        if let Some(outcome) = fence.advance(transport, Instant::now()) {
+            break outcome;
         }
+        tokio::select! {
+            joined = inflight.join_next_with_id(), if !inflight.is_empty() => {
+                if let Some(joined) = joined {
+                    collect_outcome(joined, inflight_members, pending);
+                }
+            }
+            _ = tokio::time::sleep(poll_interval) => {}
+        }
+    };
+    emit_fence_verdict(key, "graceful_shutdown", outcome, inflight_members.len());
+    if outcome.verdict == FenceVerdict::Positive {
+        transport.shutdown();
     }
     // Any member still in the table was never joined — its collector neither
     // resolved nor panicked, so the drain left it unresolved. Terminalize it

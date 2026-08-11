@@ -523,9 +523,27 @@ fn send_json(stream: &mut UnixStream, payload: Value) {
     stream.flush().expect("flush frame");
 }
 
+/// How long a test will wait for one frame before failing.
+///
+/// Exists to bound the *failure* mode, not the success one: a frame the relay
+/// actually sends arrives in well under a millisecond here, so this is roughly
+/// five thousand times the normal latency. What it buys is that a regression
+/// which stops the relay sending that frame fails the test instead of parking
+/// the reader forever — the difference between a red CI run and one that never
+/// finishes. A partial frame arriving across the bound would surface as a decode
+/// failure rather than a hang, which is still a failure; frames are written in a
+/// single `write_all`, so it is not a case that arises today.
+const FRAME_WAIT_BUDGET: Duration = Duration::from_secs(5);
+
 fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
+    reader
+        .get_ref()
+        .set_read_timeout(Some(FRAME_WAIT_BUDGET))
+        .expect("set frame read timeout");
     let mut line = String::new();
-    let read = reader.read_line(&mut line).expect("read frame");
+    let read = reader.read_line(&mut line).unwrap_or_else(|source| {
+        panic!("no frame within {FRAME_WAIT_BUDGET:?}: {source}");
+    });
     assert!(read > 0, "expected frame");
     serde_json::from_str::<Value>(line.trim_end()).expect("decode frame")
 }
