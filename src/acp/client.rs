@@ -250,7 +250,7 @@ fn spawn_command(
     environment: &[(String, String)],
     retry_on_text_busy: bool,
     retries_remaining: u8,
-) -> Result<Child, String> {
+) -> io::Result<Child> {
     let mut command = Command::new(parts[0]);
     command
         .args(&parts[1..])
@@ -273,7 +273,7 @@ fn spawn_command(
                 retries_remaining - 1,
             )
         }
-        Err(source) => Err(format!("spawn ACP stdio command failed: {source}")),
+        Err(source) => Err(source),
     }
 }
 
@@ -294,10 +294,10 @@ impl AcpStdioClient {
         working_directory: &Path,
         environment: &[(String, String)],
         retry_on_text_busy: bool,
-    ) -> Result<Self, String> {
+    ) -> io::Result<Self> {
         let parts: Vec<&str> = command_template.split_whitespace().collect();
         if parts.is_empty() {
-            return Err("ACP command template is empty".to_string());
+            return Err(io::Error::other("ACP command template is empty"));
         }
         let mut child = spawn_command(
             &parts,
@@ -309,11 +309,11 @@ impl AcpStdioClient {
         let stdin = child
             .stdin
             .take()
-            .ok_or_else(|| "ACP stdio child stdin unavailable".to_string())?;
+            .ok_or_else(|| io::Error::other("ACP stdio child stdin unavailable"))?;
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| "ACP stdio child stdout unavailable".to_string())?;
+            .ok_or_else(|| io::Error::other("ACP stdio child stdout unavailable"))?;
 
         let stdin = Arc::new(Mutex::new(stdin));
         let replay_buffer: SharedReplay = Arc::new(Mutex::new(Vec::new()));

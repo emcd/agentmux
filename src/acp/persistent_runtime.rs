@@ -14,6 +14,7 @@
 //! instead, which it can do because submission evidence is recorded at
 //! the framed write rather than at the end of the turn.
 
+use std::io::ErrorKind;
 use std::path::Path;
 
 use serde_json::Value;
@@ -29,6 +30,10 @@ const ACP_ERROR_CODE_SESSION_NEW_FAILED: &str = "runtime_acp_session_new_failed"
 /// Capability-gap detected at bootstrap; failures with this code are
 /// permanent (respawn cannot resolve a missing capability).
 const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
+/// Spawn failure that is a property of the configured command, not of the
+/// moment: the binary does not exist, or exists but exec is denied. Retrying
+/// with the same command reproduces the failure, so respawn cannot resolve it.
+const ACP_ERROR_CODE_SPAWN_PERMANENT: &str = "runtime_acp_spawn_permanent";
 
 /// The persistent ACP runtime owned by an [`super::transport::AcpTransport`]:
 /// the stdio client and the resolved session id used for every prompt.
@@ -47,11 +52,16 @@ pub struct AcpBootstrapError {
 
 impl AcpBootstrapError {
     /// Permanent failures are conditions respawn cannot resolve: a capability
-    /// gap means the agent fundamentally cannot host the session, so retrying
-    /// with the same binary reproduces the failure.
+    /// gap means the agent fundamentally cannot host the session, and a
+    /// spawn failure rooted in the configured command (missing binary, denied
+    /// exec) reproduces identically on retry. Both mean retrying with the
+    /// same binary reproduces the failure.
     #[must_use]
     pub fn is_permanent(&self) -> bool {
-        self.code == ACP_ERROR_CODE_MISSING_CAPABILITY
+        matches!(
+            self.code.as_str(),
+            ACP_ERROR_CODE_MISSING_CAPABILITY | ACP_ERROR_CODE_SPAWN_PERMANENT
+        )
     }
 }
 
@@ -129,9 +139,20 @@ fn initialize_persistent_acp_worker_runtime(
                     .collect::<Vec<_>>(),
                 true,
             )
-            .map_err(|reason| AcpBootstrapError {
-                code: "runtime_startup_failed".to_string(),
-                reason,
+            .map_err(|error| {
+                let code = match error.kind() {
+                    ErrorKind::NotFound | ErrorKind::PermissionDenied => {
+                        ACP_ERROR_CODE_SPAWN_PERMANENT
+                    }
+                    // Everything else — including ETXTBSY that outlived its
+                    // spawn-site retries — is a property of the moment, not of
+                    // the command, so the respawn loop may retry it.
+                    _ => "runtime_startup_failed",
+                };
+                AcpBootstrapError {
+                    code: code.to_string(),
+                    reason: format!("spawn ACP stdio command failed: {error}"),
+                }
             })?
         }
         AcpChannel::Http => {
