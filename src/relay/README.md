@@ -3,6 +3,16 @@
 This directory contains relay internals and the public request/response types
 exported from `src/relay/mod.rs`.
 
+## Companion documents
+
+- [`delivery-architecture.md`](delivery-architecture.md) — diagrams of the
+  delivery path from `send` to terminal outcome, the relay/transport sequence,
+  generation fencing, and the known gaps. Start here when reloading context on
+  delivery.
+- [`delivery-decisions.md`](delivery-decisions.md) — why the delivery contract has
+  that shape: the retired timers, why no bound replaced them, why `Authorized`
+  exists, and the tradeoffs behind each. Append-only.
+
 ## Primary Responsibilities
 
 - Serve relay socket requests and stream-framed requests.
@@ -582,6 +592,11 @@ exported from `src/relay/mod.rs`.
   unexpected_response / io_error inscriptions.
 
 ### Delivery
+
+Diagrams and the decision history live in
+[`delivery-architecture.md`](delivery-architecture.md) and
+[`delivery-decisions.md`](delivery-decisions.md). The notes below are the
+operational details that do not fit a diagram.
 
 - Chat delivery is async-only; `delivery_mode` is no longer part of the relay
   send API. With the field removed, an internally tagged request silently
