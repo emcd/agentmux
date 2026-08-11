@@ -802,9 +802,18 @@ fn submit_task(
         match prepare_coder_write(&task, transport) {
             Ok(future) => (future, true),
             Err(error) => {
-                // Refused before any target-side effect: the member was never
-                // handed over, so the guard's evidence order can prove
-                // `not_submitted` rather than inferring the weaker unknown.
+                // Refused before any target-side effect, so nothing reached the
+                // target and reporting the refusal is sound.
+                //
+                // Note what this does *not* do: an explicit `Err` bypasses the
+                // guard's evidence order, so this reports `failed` rather than
+                // the `not_submitted` that order would derive from the member
+                // being unbound. Both are true — nothing was written — but
+                // `failed` is the undifferentiated spelling and `not_submitted`
+                // is the positive one, so the sender is told less than the relay
+                // can prove. Left as-is deliberately: changing an outcome
+                // spelling is contract-visible and belongs in a reviewed change,
+                // not a comment fix.
                 super::super::async_worker::complete_task_outcome(&task, Err(error));
                 super::super::async_worker::release_pending_slot(pending);
                 return None;
