@@ -21,8 +21,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::outcomes;
-use super::payload::{build_delivery_message, resolve_target_member, target_is_relay_wide};
-use super::worker::AcpWorkerBootstrap;
+use super::payload::{build_delivery_message, resolve_target_member};
+use super::worker::{AcpWorkerBootstrap, WorkerTransportContext};
 
 use crate::relay::delivery::async_worker::{
     AsyncWorkerKey, install_acp_worker_output_view, set_worker_failure, set_worker_readiness,
@@ -109,29 +109,38 @@ async fn start_transport_off_runtime(
     })?
 }
 
+/// Builds a non-ACP worker's transport from inputs resolved before the worker
+/// existed.
+///
+/// Takes a [`WorkerTransportContext`] rather than a delivery task because
+/// construction is a property of the *target*, not of whichever message happened
+/// to arrive first. Reading it off a task made that distinction unrepresentable
+/// and deferred every construction failure past the point where the spawn site
+/// could still report it to the sender synchronously.
 pub(super) async fn build_worker_transport(
-    task: &AsyncDeliveryTask,
+    context: &WorkerTransportContext,
     key: &AsyncWorkerKey,
     batch_settings: PromptBatchSettings,
     readiness_notifier: crate::tmux::ReadinessNotifier,
 ) -> Result<TransportImpl, RelayError> {
-    if target_is_relay_wide(task) {
+    let Some(target_member) = context.target_member.as_ref() else {
+        // No bundle member is the relay-wide (UI) target: `WorkerTransportContext`
+        // only resolves to `None` for one, since a configured coder target with no
+        // member fails resolution outright.
         return Ok(TransportImpl::ui(build_ui_transport_services(key)));
-    }
-    let target_member =
-        resolve_target_member(task)?.expect("configured non-relay-wide target must have a member");
+    };
     match target_member.target.session_type() {
         SessionType::Tmux => {
             let transport = TransportImpl::tmux(batch_settings, Some(readiness_notifier));
             // tmux ignores the `choose` resolver (it raises no operator choices),
             // so a cancelling no-op chooser satisfies the `StartupContext` contract.
-            let context = StartupContext {
-                namespace: task.bundle.bundle_name.clone(),
-                runtime_directory: task.runtime_directory.clone(),
+            let startup = StartupContext {
+                namespace: context.namespace.clone(),
+                runtime_directory: context.runtime_directory.clone(),
                 target_member: target_member.clone(),
                 choose: noop_tmux_chooser(),
             };
-            start_transport_off_runtime(transport, context, task.target_session.clone()).await
+            start_transport_off_runtime(transport, startup, context.target_session.clone()).await
         }
         SessionType::Ui => Ok(TransportImpl::ui(build_ui_transport_services(key))),
         SessionType::Pubsub => Ok(TransportImpl::Pubsub),
@@ -175,8 +184,8 @@ pub(super) async fn build_worker_transport(
             // transitions into the relay's global worker-state
             // registry at its lifecycle points.
             let pty_mirror_state: crate::pty::PtyMirrorStateFn = {
-                let namespace = task.bundle.bundle_name.clone();
-                let runtime_directory = task.runtime_directory.clone();
+                let namespace = context.namespace.clone();
+                let runtime_directory = context.runtime_directory.clone();
                 let target_session = target_member.id.clone();
                 Arc::new(move |state| {
                     set_worker_readiness(
@@ -189,9 +198,9 @@ pub(super) async fn build_worker_transport(
             };
             let transport =
                 TransportImpl::pty(target_member.clone(), pty_config, Some(pty_mirror_state));
-            let context = StartupContext {
-                namespace: task.bundle.bundle_name.clone(),
-                runtime_directory: task.runtime_directory.clone(),
+            let startup = StartupContext {
+                namespace: context.namespace.clone(),
+                runtime_directory: context.runtime_directory.clone(),
                 target_member: target_member.clone(),
                 choose: noop_tmux_chooser(),
             };
@@ -200,18 +209,18 @@ pub(super) async fn build_worker_transport(
             // triggering member through the whole dwell before reporting a generic
             // unreachable -- turning a spawn failure the relay already knew about
             // into a delayed guess.
-            start_transport_off_runtime(transport, context, task.target_session.clone()).await
+            start_transport_off_runtime(transport, startup, context.target_session.clone()).await
         }
         #[cfg(not(feature = "pty"))]
         SessionType::Pty => Err(relay_error(
             "internal_unexpected_failure",
             "PTY target configured but pty Cargo feature is disabled",
-            Some(json!({ "target_session": task.target_session })),
+            Some(json!({ "target_session": context.target_session })),
         )),
         SessionType::Acp => Err(relay_error(
             "internal_unexpected_failure",
             "ACP target reached the non-bootstrap worker construction path",
-            Some(json!({ "target_session": task.target_session })),
+            Some(json!({ "target_session": context.target_session })),
         )),
     }
 }

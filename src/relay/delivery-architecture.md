@@ -282,8 +282,9 @@ Two things initiate a fence: graceful shutdown, and the execution watchdog
 described below. **[built]**
 
 A **positive** verdict tears the old generation down and builds a replacement in
-place — an ACP driver from the worker's retained bootstrap, every other transport
-lazily from the next task. A **negative** verdict marks the target fail-stopped:
+place, from the same source the worker's first generation was built from — so a
+target cannot acquire a second transport kind by being fenced. A **negative**
+verdict marks the target fail-stopped:
 its registry entry is held for the rest of the process's life, which is what makes
 a replacement unelectable, and every further send is refused with
 `delivery_target_fail_stopped`. Raw needs no separate barrier — `raww` reaches the

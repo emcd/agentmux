@@ -13,7 +13,9 @@ use super::super::super::{AsyncDeliveryTask, RelayError};
 use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
 use super::super::async_worker::{WorkerDispatch, get_worker_failure, get_worker_readiness};
-use super::worker::{AcpWorkerBootstrap, spawn_async_delivery_worker};
+use super::worker::{
+    AcpWorkerBootstrap, WorkerTransportContext, WorkerTransportSource, spawn_async_delivery_worker,
+};
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::{WorkerFailureReason, WorkerReadinessState};
 
@@ -85,7 +87,13 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
                 })),
             )
         })? {
-            spawn_async_delivery_worker(key, owner, receiver, pending, Some(bootstrap));
+            spawn_async_delivery_worker(
+                key,
+                owner,
+                receiver,
+                pending,
+                WorkerTransportSource::Acp(bootstrap),
+            );
         }
     }
     let deadline = Instant::now() + Duration::from_millis(ACP_STARTUP_PRIME_TIMEOUT_MS);
@@ -225,6 +233,14 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
                     })),
                 ));
             }
+            // Resolved before anything is registered, from the task electing this
+            // worker. The transport kind is a property of the target rather than
+            // of this message, so resolving it here is what lets the worker build
+            // once at spawn — and it means a target whose member cannot be
+            // resolved is reported to this sender synchronously instead of being
+            // handed to a worker that would discover it later. Registering first
+            // would leave an entry with a live sender and no worker behind it.
+            let transport_context = WorkerTransportContext::resolve(&task)?;
             let (sender, receiver) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
             let pending = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             // The registry insert is the election, and it happens before anything
@@ -247,7 +263,13 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
                             Some(json!({"cause": source.to_string()})),
                         )
                     })?;
-                    spawn_async_delivery_worker(key, owner, receiver, pending, None);
+                    spawn_async_delivery_worker(
+                        key,
+                        owner,
+                        receiver,
+                        pending,
+                        WorkerTransportSource::Direct(transport_context),
+                    );
                     Ok(())
                 }
                 // Lost the election: someone installed between the lookup above and

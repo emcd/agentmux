@@ -246,8 +246,8 @@ exported from `src/relay/mod.rs`.
     The two verdicts differ in what happens to the target afterwards. A
     **positive** verdict established that nothing from the old generation can
     still write, so the worker tears that generation down and builds a
-    replacement in place — an ACP driver from the retained bootstrap, any other
-    transport lazily from the next task. A **negative** verdict could not
+    replacement in place, through the same `build_generation` its first one came
+    from. A **negative** verdict could not
     establish it, so the target is marked fail-stopped: its registry entry is
     held for the rest of the process's life, which is what makes a replacement
     generation unelectable, and every further send — `mailw` and `raww` alike,
