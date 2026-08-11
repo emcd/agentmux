@@ -29,7 +29,9 @@ occurs, and what any of that proves.
 `agentmux:issues/relay/62` is the cost of leaving that implicit: a Pty flush
 group's membership is mutable *after* its write, and `send_group_outcomes`
 (`:847`) resolves every member identically — some committed, some not, all
-reported the same. Red test at `c96a45e`. Wedge detection masks it by resolving
+reported the same. The red test that pinned this was deleted along with the
+transport-owned wait, leaving the defect currently unproven either way. Wedge
+detection masks it by resolving
 groups in ~150 ms, so retiring the timers widens the window; the fix and the
 retirement cannot be sequenced apart.
 

@@ -32,9 +32,11 @@ into a Pty flush group *during* the wait are pushed onto the group
 (`src/pty/delivery.rs:174`) but never written, while `send_group_outcomes`
 (`:847`) resolves every member identically. Their senders are told the group's
 outcome — `Delivered` on the normal path — for bytes that never left the relay.
-A red regression test pins this at `c96a45e`. Wedge detection has been *masking*
-it by cutting waits short, so retiring the timers widens the window; the fix and
-the retirement must land together.
+A red regression test pinned this originally and was deleted along with the
+transport-owned wait it exercised, so the defect currently has no test proving it
+fixed; reinstating one against the relay-owned queue is the acceptance criterion.
+Wedge detection has been *masking* it by cutting waits short, so retiring the
+timers widens the window; the fix and the retirement must land together.
 
 ## What Changes
 
@@ -95,9 +97,9 @@ the retirement must land together.
   without adjudicating it.
 - **Fix `agentmux:issues/relay/62` structurally.** With the relay owning the
   queue there is no transport-internal queue for a message to be absorbed into
-  after a write, so the defect becomes unreachable rather than patched. Removing
-  the `#[ignore]` from `pty_envelope_absorbed_during_wait_reaches_the_master` is
-  the acceptance criterion.
+  after a write, so the defect becomes unreachable rather than patched. A
+  reinstated coalesce-during-wait regression test, driving the relay queue rather
+  than Pty's, is the acceptance criterion.
 - **Make outcomes report evidence rather than position.** `delivered` requires
   transport-specific *positive* evidence of injection — `inject_literal_text`
   returning `Ok`, `write_all` to the master succeeding, a prompt accepted — and a
@@ -335,10 +337,10 @@ text, so it takes no delta; reconciled as a sync/archive task.
   with the existing not-implemented error — nothing queued, nothing authorized,
   no terminal outcome and no receipt. Pty's write moves after its wait; Tmux is
   closest to the target shape already.
-- **Tests** — removing `#[ignore]` from
-  `pty_envelope_absorbed_during_wait_reaches_the_master` is the relay/62
-  acceptance criterion. Per project alpha defaults, no test asserts that a
-  removed config key is now rejected.
+- **Tests** — a reinstated coalesce-during-wait regression test against the
+  relay-owned queue is the relay/62 acceptance criterion; the original was
+  deleted with the transport-owned wait it exercised. Per project alpha defaults,
+  no test asserts that a removed config key is now rejected.
 - **Feature gate** — `src/pty/**` is behind the `pty` Cargo feature, which
   neither `cargo nextest run` nor default clippy builds, and the pre-commit
   `cargo-clippy-pty` hook is file-scoped. Default, `--features pty`, and the ACP

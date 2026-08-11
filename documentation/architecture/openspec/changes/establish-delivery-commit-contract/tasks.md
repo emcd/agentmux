@@ -129,7 +129,7 @@ pre-commit `cargo-clippy-pty` hook is file-scoped.
 
 ### Tests
 
-- [ ] Remove `#[ignore]` from `pty_envelope_absorbed_during_wait_reaches_the_master`; it passing is the `agentmux:issues/relay/62` acceptance criterion
+- [ ] Reinstate the coalesce-during-wait regression test against the relay-owned queue; it passing is the `agentmux:issues/relay/62` acceptance criterion. The original `pty_envelope_absorbed_during_wait_reaches_the_master` was deleted along with the transport-owned wait it exercised, so there is currently no test proving the defect is fixed — only the structural argument that no transport-internal queue remains to absorb into. The replacement must drive the relay queue rather than Pty's, since that is where an envelope arriving mid-delivery now lands
 - [ ] Cover exactly-once resolution under worker panic, collector panic, transport panic mid-partition and after partial submission, closed outcome channel, generation replacement in flight, and graceful shutdown with mixed `Pending`/`Authorized`
 - [ ] Cover that quota returns to zero after each of those, and that the per-target FIFO still makes progress
 - [x] Cover fence acknowledgment ordering: against an executor blocked in a primitive that observes no flag, the first observation window does not complete, and cessation is observed only after the termination primitive has been invoked
