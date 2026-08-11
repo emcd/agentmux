@@ -201,8 +201,12 @@ pub(super) async fn build_worker_transport(
                     );
                 })
             };
-            let transport =
-                TransportImpl::pty(target_member.clone(), pty_config, Some(pty_mirror_state));
+            let transport = TransportImpl::pty(
+                target_member.clone(),
+                pty_config,
+                Some(pty_mirror_state),
+                ledger_partition_sink(),
+            );
             let startup = StartupContext {
                 namespace: context.namespace.clone(),
                 runtime_directory: context.runtime_directory.clone(),

@@ -572,11 +572,13 @@ impl TransportImpl {
         target_member: crate::configuration::BundleMember,
         config: crate::pty::PtyTargetConfiguration,
         mirror_state: Option<crate::pty::PtyMirrorStateFn>,
+        partition_sink: Arc<dyn PartitionSink>,
     ) -> Self {
         Self::Pty(crate::pty::PtyTransport::new(
             target_member,
             config,
             mirror_state,
+            partition_sink,
         ))
     }
 
@@ -589,18 +591,23 @@ impl TransportImpl {
     /// writes would be refused, which under the contract means the transport
     /// produces no effect at all.
     ///
-    /// Temporary. It exists only while the transports adopt the sink one commit
-    /// at a time; when the last one has, the relay stops declaring for coder
-    /// targets entirely and this predicate goes with it. Raw is unaffected either
-    /// way — it stays relay-declared, because no transport can name the member at
-    /// its raw write.
+    /// Every coder transport now reports its own, so this separates them from UI,
+    /// whose single member the relay declares because there is no coalescing to
+    /// report. It began as scaffolding for adopting the sink one transport at a
+    /// time and outlived that purpose: the distinction it draws is real.
+    ///
+    /// Two things it does not govern. Raw stays relay-declared whatever this
+    /// says, because no transport can name the member at its raw write. And an
+    /// un-admitted member — a terminal-outcome receipt — is declared by nobody;
+    /// the relay skips it before consulting this, and each transport excludes it
+    /// from its own declaration.
     #[must_use]
     pub fn reports_own_partition(&self) -> bool {
         match self {
             Self::Acp(_) | Self::Tmux(_) => true,
             Self::Ui(_) | Self::Pubsub => false,
             #[cfg(feature = "pty")]
-            Self::Pty(_) => false,
+            Self::Pty(_) => true,
             #[cfg(not(feature = "pty"))]
             Self::Pty => false,
         }
