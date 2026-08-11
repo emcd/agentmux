@@ -99,7 +99,6 @@ pub enum PartitionError {
 pub enum SendOutcome {
     Queued,
     Delivered,
-    Timeout,
     DroppedOnShutdown,
     Failed,
     /// Positive evidence that no target-side effect occurred: the member was

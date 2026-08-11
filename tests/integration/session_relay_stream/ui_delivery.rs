@@ -279,7 +279,7 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
             // subscriber resolves it once the reconnect wait elapses, because
             // the transport can prove it never broadcast.
             if (phase == "delivered" && outcome == "success")
-                || (phase == "failed" && (outcome == "timeout" || outcome == "failed"))
+                || (phase == "failed" && outcome == "failed")
                 || phase == "not_submitted"
                 || phase == "submission_unknown"
             {

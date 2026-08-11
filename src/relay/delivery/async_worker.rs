@@ -802,7 +802,6 @@ fn labels_an_outcome(reason_code: &str) -> bool {
     matches!(
         reason_code,
         "delivered"
-            | "timeout"
             | "failed"
             | "not_submitted"
             | "submission_unknown"
@@ -912,7 +911,6 @@ fn is_non_delivered_outcome(outcome: &SendOutcome) -> bool {
     matches!(
         outcome,
         SendOutcome::Failed
-            | SendOutcome::Timeout
             | SendOutcome::DroppedOnShutdown
             // Both are terminal non-delivery outcomes and owe the sender a
             // receipt exactly as much as the others do. `not_submitted` is a
@@ -1083,7 +1081,6 @@ fn render_receipt_body(
         task.bundle.bundle_name.as_str(),
     );
     let outcome_word = match outcome {
-        SendOutcome::Timeout => "timed out",
         SendOutcome::DroppedOnShutdown => "dropped on relay shutdown",
         _ => "failed",
     };
@@ -1118,7 +1115,6 @@ pub(super) fn emit_sender_delivery_outcome_event(
 ) {
     let (phase, outcome) = match terminal_outcome {
         SendOutcome::Delivered => ("delivered", Some("success")),
-        SendOutcome::Timeout => ("failed", Some("timeout")),
         SendOutcome::DroppedOnShutdown => ("failed", Some("failed")),
         SendOutcome::Failed => ("failed", Some("failed")),
         // A cross-relay peer-unavailable outcome is reported synchronously on the
@@ -1327,9 +1323,11 @@ mod tests {
             Ok(SendResult {
                 target_session: target_session.to_string(),
                 message_id: "orig-message-id".to_string(),
-                outcome: SendOutcome::Timeout,
-                reason_code: Some("delivery_prime_timeout".to_string()),
-                reason: Some("no output before prime timeout".to_string()),
+                outcome: SendOutcome::NotSubmitted,
+                reason_code: Some("delivery_target_unreachable".to_string()),
+                reason: Some(
+                    "target could not be reached for longer than the configured dwell".to_string(),
+                ),
                 details: None,
             }),
         );
@@ -1429,9 +1427,11 @@ mod tests {
             Ok(SendResult {
                 target_session: sender_member_id.to_string(),
                 message_id: "receipt-message-id".to_string(),
-                outcome: SendOutcome::Timeout,
-                reason_code: Some("target_never_settled".to_string()),
-                reason: Some("tmux target did not become ready".to_string()),
+                outcome: SendOutcome::NotSubmitted,
+                reason_code: Some("delivery_target_unreachable".to_string()),
+                reason: Some(
+                    "target could not be reached for longer than the configured dwell".to_string(),
+                ),
                 details: None,
             }),
         );
@@ -1558,7 +1558,6 @@ mod evidence_authority_tests {
         for outcome in [
             SendOutcome::Queued,
             SendOutcome::Delivered,
-            SendOutcome::Timeout,
             SendOutcome::DroppedOnShutdown,
             SendOutcome::Failed,
             SendOutcome::NotSubmitted,
@@ -1567,7 +1566,6 @@ mod evidence_authority_tests {
         ] {
             let (label, is_label) = match outcome {
                 SendOutcome::Delivered => ("delivered", true),
-                SendOutcome::Timeout => ("timeout", true),
                 SendOutcome::DroppedOnShutdown => ("dropped_on_shutdown", true),
                 SendOutcome::Failed => ("failed", true),
                 SendOutcome::NotSubmitted => ("not_submitted", true),

@@ -280,6 +280,16 @@ impl Workbench {
         self.state.event_history.len()
     }
 
+    /// Recorded activity-log lines, newest first — the same order the events
+    /// overlay renders them in.
+    pub fn event_history_entries(&self) -> Vec<&str> {
+        self.state
+            .event_history
+            .iter()
+            .map(String::as_str)
+            .collect()
+    }
+
     /// Count of outstanding (not-yet-terminal) delivery acknowledgements.
     pub fn pending_deliveries_count(&self) -> usize {
         self.state.pending_deliveries_count()

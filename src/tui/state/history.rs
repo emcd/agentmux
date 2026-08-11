@@ -275,7 +275,10 @@ impl AppState {
                         self.pending_delivery_ids.remove(message_id);
                     }
                     if let Some(message_id) = message_id
-                        && matches!(relay_outcome, Some("success" | "timeout" | "failed"))
+                        && matches!(
+                            relay_outcome,
+                            Some("success" | "failed" | "not_submitted" | "submission_unknown")
+                        )
                     {
                         let _ = Self::remember_seen_id(
                             &mut self.terminal_delivery_message_ids,
@@ -525,7 +528,6 @@ fn map_chat_result_outcome(outcome: &SendOutcome) -> (&'static str, Option<&'sta
     match outcome {
         SendOutcome::Queued => ("accepted", None),
         SendOutcome::Delivered => ("success", None),
-        SendOutcome::Timeout => ("timeout", None),
         SendOutcome::DroppedOnShutdown => ("failed", Some("dropped_on_shutdown")),
         SendOutcome::Failed => ("failed", None),
         SendOutcome::PeerUnavailable => ("failed", Some("peer_unavailable")),
@@ -540,7 +542,7 @@ fn map_stream_outcome<'a>(
 ) -> (&'a str, Option<&'a str>) {
     let outcome = outcome.unwrap_or("<unknown>");
     match outcome {
-        "success" | "timeout" | "failed" => (outcome, reason_code),
+        "success" | "failed" | "not_submitted" | "submission_unknown" => (outcome, reason_code),
         _ => ("<unknown>", reason_code),
     }
 }
