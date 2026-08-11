@@ -343,8 +343,8 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
     // generic "worker unavailable" placeholder the startup poller sees from the
     // readiness state alone.
     assert_eq!(
-        bravo_failure["code"], "runtime_startup_failed",
-        "bravo startup failure should carry the bootstrap failure code, not the \
+        bravo_failure["code"], "runtime_acp_spawn_permanent",
+        "bravo startup failure should carry the permanent spawn-failure code, not the \
          generic unavailable placeholder: {listed_json}"
     );
     assert!(

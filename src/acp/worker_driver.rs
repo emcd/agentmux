@@ -245,6 +245,10 @@ impl AcpWorkerDriver {
             self.namespace.clone(),
             self.runtime_directory.clone(),
             self.target_member.clone(),
+            AbandonmentSignal {
+                abandoned: Arc::clone(&self.respawn_abandoned),
+                unreachable_since: Arc::clone(&self.unreachable_since),
+            },
             Arc::clone(&settled),
         )));
         settled
@@ -442,6 +446,7 @@ async fn initial_acp_bootstrap(
     namespace: String,
     runtime_directory: PathBuf,
     target_member: BundleMember,
+    abandonment: AbandonmentSignal,
     settled: Arc<AtomicBool>,
 ) {
     let target_session = target_member.id.clone();
@@ -485,12 +490,41 @@ async fn initial_acp_bootstrap(
                     "reason": error.reason,
                 }),
             );
-            // No delivery task is running to emit the respawn-needed signal, so
-            // prime it directly: the monitor will retry with backoff.
-            transport
-                .lock()
-                .expect("acp transport mutex poisoned")
-                .signal_respawn();
+            if error.is_permanent() {
+                // A permanent bootstrap failure gets no respawn signal: the
+                // monitor would only run one more attempt to discover the same
+                // permanence and abandon. Latch abandonment here instead, so the
+                // health axis reads unreachable immediately and the dwell clock
+                // starts at the transition rather than at a later enquiry.
+                abandonment.abandoned.store(true, Ordering::Release);
+                let _ = abandonment.unreachable_since.fold(false);
+                emit_inscription(
+                    "relay.acp.respawn.permanent_failure",
+                    &json!({
+                        "namespace": namespace,
+                        "target_session": target_session,
+                        "attempts": 1,
+                        "final_error_code": error.code,
+                        "reason": error.reason,
+                    }),
+                );
+                (services.broadcast_ui)(
+                    "acp_worker_respawn_completed",
+                    json!({
+                        "attempts": 1,
+                        "outcome": "permanent_failure",
+                        "final_error_code": error.code,
+                        "reason": error.reason,
+                    }),
+                );
+            } else {
+                // No delivery task is running to emit the respawn-needed signal,
+                // so prime it directly: the monitor will retry with backoff.
+                transport
+                    .lock()
+                    .expect("acp transport mutex poisoned")
+                    .signal_respawn();
+            }
         }
     }
     settled.store(true, Ordering::Release);
@@ -517,15 +551,17 @@ fn respawn_is_owed(signalled: bool, abandoned: bool, readiness: WorkerReadinessS
     signalled && !abandoned && matches!(readiness, WorkerReadinessState::Unavailable)
 }
 
-/// The health signals a respawn writes when it gives up on a target.
+/// The health signals a respawn (or a permanent initial-bootstrap failure)
+/// writes when it gives up on a target.
 ///
 /// Paired rather than passed separately because they are one fact recorded in
 /// two places — that the target is past recovery, and when that became true —
 /// and separating them is exactly how the instant came to be stamped at first
-/// enquiry instead of at the transition.
-struct AbandonmentSignal<'a> {
-    abandoned: &'a AtomicBool,
-    unreachable_since: &'a UnreachableSince,
+/// enquiry instead of at the transition. Owned so the pair can be handed to the
+/// spawned bootstrap task alongside the respawn monitor.
+struct AbandonmentSignal {
+    abandoned: Arc<AtomicBool>,
+    unreachable_since: Arc<UnreachableSince>,
 }
 
 struct AcpRespawnTarget {
@@ -639,8 +675,8 @@ async fn acp_respawn_monitor(
             target.runtime_directory.as_path(),
             &target.member,
             AbandonmentSignal {
-                abandoned: respawn_abandoned.as_ref(),
-                unreachable_since: unreachable_since.as_ref(),
+                abandoned: Arc::clone(&respawn_abandoned),
+                unreachable_since: Arc::clone(&unreachable_since),
             },
         )
         .await;
@@ -687,7 +723,7 @@ async fn run_acp_respawn(
     namespace: &str,
     runtime_directory: &Path,
     target_member: &BundleMember,
-    abandonment: AbandonmentSignal<'_>,
+    abandonment: AbandonmentSignal,
 ) {
     let target_session = target_member.id.as_str();
     // Release the dead runtime (joining its child + reader thread) but keep the
