@@ -227,21 +227,34 @@ exported from `src/relay/mod.rs`.
     fence as one future would stop collecting the very outcomes the fence exists
     to let it keep collecting. `acknowledge_fence` is a thin awaiting driver over
     the same state machine, so there is one implementation.
-    Graceful shutdown is the only thing that fences a generation today, in
-    `shutdown_drain`. The verdict is the resolution cut: still-unresolved members
-    terminalize there through the guard's evidence order from *either* verdict,
-    and only a positive one proceeds to the transport's own teardown — a negative
-    verdict is the finding that those executors were never observed to stop, so
-    reaping and joining them would run the bounded fence straight back into the
-    unbounded wait it exists to replace.
+    Two things fence a generation: graceful shutdown, in `shutdown_drain`, and
+    the execution watchdog, in the worker loop. The verdict is the resolution cut
+    for both: still-unresolved members terminalize there through the guard's
+    evidence order from *either* verdict, and only a positive one proceeds to the
+    transport's own teardown — a negative verdict is the finding that those
+    executors were never observed to stop, so reaping and joining them would run
+    the bounded fence straight back into the unbounded wait it exists to replace.
 
-    The **execution watchdog** that `[delivery].submission-timeout-ms` describes
-    is not armed. The bound is over the relay's own supervised code, and it only
-    *is* that once transports record submission evidence at write time: today
-    every coder transport resolves its outcome future after the target has
-    finished responding, so a bound anchored at authorization measures the
-    agent's inference and fences a healthy target mid-turn. Arming lands with the
-    transport-side submission-evidence work, not before it.
+    The **execution watchdog** bounds a member's time from authorization to
+    resolution by `[delivery].submission-timeout-ms`. It is a bound over the
+    relay's own supervised code and nothing else, which it *is* only because
+    every transport now resolves its outcome future at the write boundary rather
+    than at the end of the turn. It states nothing about target health and
+    produces no failure spelling: what it does on elapse is initiate the fence,
+    and what resolves the members is the evidence order at the verdict.
+
+    The two verdicts differ in what happens to the target afterwards. A
+    **positive** verdict established that nothing from the old generation can
+    still write, so the worker tears that generation down and builds a
+    replacement in place — an ACP driver from the retained bootstrap, any other
+    transport lazily from the next task. A **negative** verdict could not
+    establish it, so the target is marked fail-stopped: its registry entry is
+    held for the rest of the process's life, which is what makes a replacement
+    generation unelectable, and every further send — `mailw` and `raww` alike,
+    since both reach the target through that one lookup — is refused with
+    `delivery_target_fail_stopped`. Recovery is by operator action. That is the
+    deliberate trade: a target that accepts nothing is recoverable, and a target
+    two generations may be writing to concurrently is not.
   - `dispatch/mod.rs`: delivery dispatch re-export hub.
   - `dispatch/orchestration.rs`: delivery startup, ACP target priming, and the
     enqueue path that registers/feeds the per-target worker.

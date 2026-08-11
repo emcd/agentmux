@@ -1549,9 +1549,8 @@ fn flush_envelope_group(
 /// serialization failure map to `not_submitted`; a stdin write or flush error
 /// without proof that zero bytes left maps to `submission_unknown`. No
 /// elapsed-time path bounds the wait on the ACP side; the relay's
-/// submission-timeout watchdog bounds the supervised code's runtime only after
-/// it is armed, which it becomes when the relay records submission evidence at
-/// write time.
+/// submission-timeout watchdog bounds the supervised code's runtime instead,
+/// which it can do precisely because this function resolves at the write.
 fn submit_envelope_turn(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
@@ -1669,11 +1668,12 @@ fn observe_acp_turn(
     completion_slot: &Arc<Mutex<Option<PromptCompletion>>>,
     pending_choice: &Arc<Mutex<Option<ChoiceMade>>>,
 ) {
-    // No elapsed-time path bounds this wait on the ACP side. The relay's
-    // submission-timeout watchdog bounds the supervised code's runtime only
-    // after it is armed, which it becomes when the relay records submission
-    // evidence at write time. Returns true if the prompt completed, false if
-    // shutdown was requested.
+    // No elapsed-time path bounds this wait, and the relay's submission-timeout
+    // watchdog does not reach it either: every member of the turn resolved at the
+    // framed write, so nothing is in flight for the bound to be anchored against.
+    // That is the intended shape — this wait is over the agent's inference, which
+    // is exactly what the watchdog is not allowed to measure. Returns true if the
+    // prompt completed, false if shutdown was requested.
     let completed = loop {
         if client.wait_for_prompt_complete(ACP_PROMPT_WAIT_POLL_INTERVAL) {
             break true;

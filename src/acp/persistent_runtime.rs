@@ -11,8 +11,8 @@
 //! bound of its own — the wait resolves on completion, agent close,
 //! dispatcher refusal, serialization failure, or shutdown. The relay's
 //! submission-timeout watchdog bounds the supervised code's runtime
-//! only after it is armed, which it becomes when the relay records
-//! submission evidence at write time.
+//! instead, which it can do because submission evidence is recorded at
+//! the framed write rather than at the end of the turn.
 
 use std::path::Path;
 

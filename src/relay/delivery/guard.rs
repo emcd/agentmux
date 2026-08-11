@@ -103,6 +103,14 @@ pub(in crate::relay) enum GuardTrigger {
     ChannelClosed,
     /// The relay is shutting down gracefully.
     GracefulShutdown,
+    /// The relay's own supervised execution ran past
+    /// `[delivery].submission-timeout-ms` and its generation fence reached a
+    /// verdict with this member still unresolved.
+    ///
+    /// Like every other variant, it states when the owning path gave up, not what
+    /// happened at the target: the bound is over relay-side execution and asserts
+    /// nothing about target health.
+    ExecutionBound,
 }
 
 impl GuardTrigger {
@@ -113,6 +121,9 @@ impl GuardTrigger {
             Self::CollectorPanic => "delivery collector task panicked before resolving",
             Self::ChannelClosed => "transport outcome channel closed before resolving",
             Self::GracefulShutdown => "relay shut down before this member resolved",
+            Self::ExecutionBound => {
+                "relay execution exceeded the submission bound before this member resolved"
+            }
         }
     }
 }
@@ -222,11 +233,12 @@ impl PackingUnitId {
 mod tests {
     use super::*;
 
-    /// The evidence order is relay-private and, until the fence and the watchdog
-    /// land, no public path drives a lifecycle trigger — so this is the only
-    /// place its three-way discrimination can be exercised. It is worth pinning
-    /// directly: the ordering is what keeps a lifecycle event from choosing an
-    /// outcome, and each arm asserts something the others cannot.
+    /// The evidence order is relay-private, and the lifecycle triggers that drive
+    /// it — shutdown, a collector panic, the execution bound — each reach only one
+    /// or two of its arms from any single public path. Pinning it directly is what
+    /// exercises the three-way discrimination as a whole: the ordering is what
+    /// keeps a lifecycle event from choosing an outcome, and each arm asserts
+    /// something the others cannot.
     #[test]
     fn the_evidence_order_prefers_a_record_then_proof_then_honesty() {
         // A recorded unit result wins outright, even for a member that reached a
