@@ -32,7 +32,7 @@ use crate::transports::{
 use super::super::admission::canonical_payload_bytes;
 use super::super::async_worker::{AsyncWorkerKey, WorkerOwner};
 use super::super::fence::{FenceInProgress, FenceOutcome, FenceResolution, FenceVerdict};
-use super::super::guard::{BatchId, GuardTrigger};
+use super::super::guard::GuardTrigger;
 use super::batch::HandoverWindow;
 use crate::runtime::inscriptions::emit_inscription;
 
@@ -258,10 +258,13 @@ async fn run_async_delivery_worker(
     // still leaves the relay able to name — and therefore resolve — its member.
     let mut inflight_members: HashMap<tokio::task::Id, InflightMember> = HashMap::new();
     let mut senders_dropped = false;
-    // One member received but not yet authorized, because its target reported it
-    // could not take a handover. It stays `Pending` — quota reserved, nothing
-    // submitted, no batch minted — and is retried ahead of anything newer so the
-    // target's FIFO order survives the wait. At most one: taking a second member
+    // One member received but not yet authorized — the head of the next batch.
+    // It arrives here either straight off the channel, or because the last
+    // attempt found its target unable to take a handover, or because it did not
+    // fit the room the batch ahead of it left. In every case it stays `Pending` —
+    // quota reserved, nothing submitted, no batch minted — and is offered ahead
+    // of anything newer so the target's FIFO order survives the wait. At most
+    // one, and the receive arm is gated on its absence: taking a second member
     // off the channel while this one waits would reorder the target's queue.
     let mut held: Option<AsyncDeliveryTask> = None;
     // Graceful shutdown and the execution watchdog are what fence a generation.
@@ -277,9 +280,7 @@ async fn run_async_delivery_worker(
     // submits nothing, keeps its registry entry so no replacement generation can
     // be elected, and stays alive only to observe shutdown.
     let mut fail_stopped = false;
-    let submit_context = SubmitContext {
-        unreachable_dwell: Duration::from_millis(delivery.unreachable_dwell_ms),
-    };
+    let unreachable_dwell = Duration::from_millis(delivery.unreachable_dwell_ms);
     // Batch formation's state: how much this target's transport is already
     // holding, against the maxima it declares. Built from the first generation
     // and never rebuilt, because the dimensions follow the target's session type
@@ -467,20 +468,28 @@ async fn run_async_delivery_worker(
         let bootstrap_settled_now = bootstrap_settled
             .as_ref()
             .is_none_or(|settled| settled.load(std::sync::atomic::Ordering::Acquire));
-        // Retry the held member before accepting anything newer. Its target may
-        // have become ready since the last attempt; the poll arm below is what
-        // paces the retries, and is the bounded backstop the readiness contract
-        // requires so a missed notification only delays a delivery.
+        // The worker's only submission site. The receive arm below hands its task
+        // here rather than submitting it, so that forming, authorizing and
+        // submitting a batch is one path with one target gate at the head of it
+        // rather than two callers that have to agree. Costs no latency — nothing
+        // between that arm and here awaits.
+        //
+        // A member waiting on readiness retries here too. Its target may have
+        // become ready since the last attempt; the poll arm below is what paces
+        // the retries, and is the bounded backstop the readiness contract requires
+        // so a missed notification only delays a delivery.
         if held.is_some() && bootstrap_settled_now && watchdog.is_none() && !fail_stopped {
-            let task = held.take().expect("held member present in this branch");
-            held = submit_task(
-                task,
-                &submit_context,
+            let head = held.take().expect("held member present in this branch");
+            held = submit_batch(
+                head,
+                SubmitContext {
+                    unreachable_dwell,
+                    pending: pending.as_ref(),
+                    window: &mut window,
+                },
                 &mut transport,
                 &mut inflight,
                 &mut inflight_members,
-                pending.as_ref(),
-                &mut window,
             );
         }
         tokio::select! {
@@ -504,15 +513,10 @@ async fn run_async_delivery_worker(
                             super::super::async_worker::release_pending_slot(pending.as_ref());
                             continue;
                         }
-                        held = submit_task(
-                            task,
-                            &submit_context,
-                            &mut transport,
-                            &mut inflight,
-                            &mut inflight_members,
-                            pending.as_ref(),
-                            &mut window,
-                        );
+                        // Received, not yet authorized: exactly what `held`
+                        // means. The submission site at the top of the loop is
+                        // what turns it into the head of a batch.
+                        held = Some(task);
                     }
                     None => senders_dropped = true,
                 }
@@ -675,15 +679,21 @@ async fn build_generation(
     }
 }
 
-/// The fixed context one worker submits under.
+/// The relay-owned bookkeeping one batch is submitted against.
 ///
-/// Grouped rather than passed as parallel parameters: these are the settings the
-/// worker resolves once at spawn and applies to every task, as distinct from the
-/// per-task state that changes underneath them.
-struct SubmitContext {
+/// Grouped rather than passed as parallel parameters: quota, handover budget, and
+/// the dwell are the three things every member of a batch moves against, and they
+/// travel together through formation, authorization and submission.
+struct SubmitContext<'worker> {
     /// How long a target may be *continuously* unreachable before a held member
     /// resolves rather than keeping its place in the queue.
     unreachable_dwell: Duration,
+    /// The relay's pending-slot counter, released at each member's terminal
+    /// transition.
+    pending: &'worker std::sync::atomic::AtomicUsize,
+    /// How much this target's transport is already holding. Advanced only by a
+    /// batch that authorization accepted.
+    window: &'worker mut HandoverWindow,
 }
 
 /// The outcome for a member whose target was unreachable for longer than the
@@ -713,119 +723,260 @@ fn target_unreachable_result(task: &AsyncDeliveryTask, dwell: Duration) -> SendR
     }
 }
 
-/// Submits one task to its transport via the non-blocking write seam and spawns
-/// an in-flight collector for its outcome. On the worker's first task the
-/// transport is constructed from the target's configured `session_type()` and
-/// latched (`build_worker_transport`). Delivery is then uniform: `Ui` builds the
-/// stream envelope, coder transports (ACP/Tmux) render the framed envelope or
-/// submit raw input, and the forward-declared `Pubsub` stub yields an explicit
-/// not-implemented outcome (it is not deliverable). A construction or render
-/// failure completes the task immediately and releases its slot.
+/// Whether a target will take a handover right now.
 ///
-/// Returns the task unconsumed when its target reported that it cannot take a
-/// handover. Nothing has happened to it in that case — no authorization, no
-/// batch, no quota movement — and the caller holds it for a later attempt.
-fn submit_task(
+/// Read once per batch rather than once per member. That is what makes a batch a
+/// set: every member of it was authorized against one observation of the target,
+/// so there is no member whose authorization rests on a readiness its groupmates
+/// never saw.
+enum TargetGate {
+    /// Healthy and ready. A batch may be formed and authorized against it.
+    Open,
+    /// Cannot take a handover yet. Nothing has happened to the member in hand —
+    /// no authorization, no batch, no quota movement — so it is held.
+    Hold,
+    /// Continuously unreachable past the dwell.
+    Unreachable,
+}
+
+/// Reads both readiness axes for a target, in the order that bounds the wait.
+///
+/// Both are required and neither substitutes for the other. Health is read first
+/// because it is what bounds the wait, and an unreachable target is never
+/// authorized whatever readiness says — a transport that cannot reach its target
+/// has nothing useful to report about whether that target is at a prompt.
+fn gate_target(transport: &TransportImpl, unreachable_dwell: Duration) -> TargetGate {
+    match transport.health() {
+        // Waiting will not make this target ready, so its member resolves rather
+        // than keeping a place in a queue nothing will drain.
+        TransportHealth::Unreachable { since } if since.elapsed() >= unreachable_dwell => {
+            return TargetGate::Unreachable;
+        }
+        // Unreachable but not yet past the dwell: hold, exactly as an unready
+        // target is held. An unreachability that ends in time costs nothing.
+        TransportHealth::Unreachable { .. } => return TargetGate::Hold,
+        TransportHealth::Healthy => {}
+    }
+    if transport.is_ready_for_handover() {
+        TargetGate::Open
+    } else {
+        TargetGate::Hold
+    }
+}
+
+/// Forms one batch, authorizes it whole, and submits every member of it.
+///
+/// The three steps are in that order and the order is the contract: a batch's
+/// membership SHALL be fixed before any member of it is authorized, because
+/// mutable batch membership is what let one outcome be reported for members that
+/// were written and members that were not. Fixing membership first is also what
+/// makes the shared `BatchId` legal — minting one on the first member and handing
+/// it to members authorized later would be absorption into an already-authorized
+/// batch, which the contract forbids by name.
+///
+/// Returns whichever member the batch could not take, for the caller to hold. It
+/// is the head of the next batch, so the target's FIFO order survives: this is
+/// the only way a member leaves here without a terminal outcome.
+fn submit_batch(
+    head: AsyncDeliveryTask,
+    context: SubmitContext<'_>,
+    transport: &mut TransportImpl,
+    inflight: &mut JoinSet<InflightOutcome>,
+    inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
+) -> Option<AsyncDeliveryTask> {
+    // Pubsub is rejected rather than gated or batched. It reports unready like any
+    // transport with no delivery path, so gating it would hold a member no
+    // transport can ever accept, and there is nothing to authorize a batch
+    // against: its `mailw`/`raww` are `unimplemented!`.
+    if matches!(transport, TransportImpl::Pubsub) {
+        reject_undeliverable(&head, context.pending);
+        return None;
+    }
+    // Readiness gates authorization, not submission. A target that cannot take a
+    // handover now must not have a batch authorized against it: authorization is
+    // the linearization point, and quota releases only at the terminal
+    // transition, so authorizing early would commit members to a generation that
+    // cannot act on them. They stay `Pending` instead, which is a state they may
+    // occupy indefinitely — how long a target stays busy is not evidence about
+    // the target, and no elapsed duration converts this wait into an outcome.
+    //
+    // Reading the level here is deliberately advisory. It can go stale between
+    // this check and the writes below, and when it does the invocation fails and
+    // resolves through the guard's evidence order rather than being retried
+    // behind the sender's back.
+    match gate_target(transport, context.unreachable_dwell) {
+        TargetGate::Open => {}
+        TargetGate::Hold => return Some(head),
+        TargetGate::Unreachable => {
+            super::super::async_worker::complete_task_outcome(
+                &head,
+                Ok(target_unreachable_result(&head, context.unreachable_dwell)),
+            );
+            super::super::async_worker::release_pending_slot(context.pending);
+            return None;
+        }
+    }
+
+    // Formation runs against a scratch copy of the window, and the real one is
+    // advanced only once authorization has accepted the set. A refused batch is
+    // never handed to the transport, so a window that had already recorded it
+    // would be reserving room for work nothing is holding — and that room is only
+    // returned when the window closes, which is gated on flight the refused
+    // members never entered.
+    let mut proposed = *context.window;
+    let members = match form_batch(head, &mut proposed) {
+        BatchFormation::Fixed(members) => members,
+        BatchFormation::NoRoom(head) => return Some(*head),
+    };
+
+    // Authorization is the linearization point and the watchdog's anchor, so it
+    // happens once for the whole set, before any transport-specific branch, and
+    // the clock starts with it. Starting the clock after the writes would exclude
+    // the synchronous rendering and submission work the bound is supposed to
+    // cover. One anchor for the batch, because the batch is what was authorized
+    // at that instant.
+    let authorized_at = Instant::now();
+    let authorized = {
+        let member_ids: Vec<&str> = members
+            .iter()
+            .map(|task| task.message_id.as_str())
+            .collect();
+        let batch = super::super::admission::authorize_batch(&member_ids);
+        if let Some(batch) = batch {
+            // Which members were authorized together is otherwise invisible, and
+            // it is the antecedent of every per-member attribution downstream: a
+            // reader who can see the partition but not the batch can tell which
+            // members shared a submission without being able to tell which ones
+            // the relay committed to at the same instant.
+            emit_inscription(
+                "relay.delivery.batch.authorized",
+                &json!({
+                    "batch_id": batch.value(),
+                    "member_ids": member_ids,
+                    "member_count": member_ids.len(),
+                }),
+            );
+        }
+        batch.is_some()
+    };
+    if !authorized {
+        // Nothing transitioned, so nothing may be written: a write ahead of the
+        // relay's own linearization point would put an effect at the target that
+        // no authorization covers. Every member is provably unwritten, and
+        // `complete_task_refusal` is what turns that into an outcome — it takes
+        // the spelling from the guard's evidence order, which reads
+        // `not_submitted` for a member never bound to a unit, and the reason from
+        // here.
+        for task in &members {
+            super::super::async_worker::complete_task_refusal(
+                task,
+                "delivery_batch_not_authorized",
+                "the relay could not authorize this batch, so no member of it was submitted",
+            );
+            super::super::async_worker::release_pending_slot(context.pending);
+        }
+        return None;
+    }
+    *context.window = proposed;
+
+    for task in members {
+        submit_member(
+            task,
+            authorized_at,
+            transport,
+            inflight,
+            inflight_members,
+            context.pending,
+        );
+    }
+    None
+}
+
+/// Fixes one batch's membership, and records it against the proposed window.
+///
+/// # Why the set is the member in hand and nothing behind it
+///
+/// A batch is bounded by what **one invocation of the delivery seam** can carry,
+/// and `mailw` carries one envelope. Draining a prefix of the queue into a set
+/// and then submitting it therefore produces N invocations, not one — and the
+/// coder transports publish `Busy` on accepting the first, so members 2..N of
+/// such a set meet a `!is_ready_for_handover` refusal and resolve `not_submitted`
+/// instead of being held. Held is the correct answer for them: they are still
+/// owed a delivery, and the relay may not re-read readiness *inside* a batch
+/// without unfixing the membership it just fixed.
+///
+/// So the drain is not a batching decision the relay is free to make. It waits on
+/// the seam becoming a batch — `mailw` taking the set the relay authorized, with
+/// the transport partitioning it internally — at which point the transport is
+/// `Busy` for the whole set rather than after its first member, and this function
+/// grows the drain the window is already sized for.
+///
+/// Returns the fixed set, or the member to hold. A head that does not fit the room
+/// a batch still in flight left is held rather than skipped, because the window is
+/// a prefix of this target's FIFO and letting a smaller member behind it pass
+/// would reorder the queue.
+fn form_batch(head: AsyncDeliveryTask, proposed: &mut HandoverWindow) -> BatchFormation {
+    let head_bytes = canonical_payload_bytes(head.message.as_str());
+    if !proposed.admits(head_bytes) {
+        return BatchFormation::NoRoom(Box::new(head));
+    }
+    proposed.record(head_bytes);
+    BatchFormation::Fixed(vec![head])
+}
+
+/// What [`form_batch`] settled on.
+///
+/// Not a `Result`: neither arm is a failure. A window with no room for the head
+/// is the bound doing its job, and the member is owed a delivery exactly as it
+/// was before.
+enum BatchFormation {
+    /// The batch's membership, fixed and never revised. Never empty.
+    Fixed(Vec<AsyncDeliveryTask>),
+    /// The head did not fit the room a batch still in flight had left. Boxed so
+    /// the common arm does not carry a task-sized hole through every submission.
+    NoRoom(Box<AsyncDeliveryTask>),
+}
+
+/// Resolves a member whose target is the forward-declared `Pubsub` stub.
+///
+/// Not deliverable, and never authorized: producing an explicit terminal outcome
+/// is the alternative to calling an `unimplemented!` write.
+fn reject_undeliverable(task: &AsyncDeliveryTask, pending: &std::sync::atomic::AtomicUsize) {
+    super::super::async_worker::complete_task_outcome(
+        task,
+        Err(super::super::super::session_type_not_implemented(
+            task.target_session.as_str(),
+            SessionType::Pubsub,
+        )),
+    );
+    super::super::async_worker::release_pending_slot(pending);
+}
+
+/// Submits one already-authorized member to its transport via the non-blocking
+/// write seam and spawns an in-flight collector for its outcome. Delivery is
+/// uniform: `Ui` builds the stream envelope and coder transports (ACP/Tmux/Pty)
+/// render the framed envelope or submit raw input. A render or refusal failure
+/// completes the member immediately and releases its slot.
+///
+/// Every path from here is terminal for the member. Its batch was authorized
+/// before this ran, so there is no path that returns it to `Pending` and none
+/// that leaves it unresolved.
+fn submit_member(
     task: AsyncDeliveryTask,
-    context: &SubmitContext,
+    authorized_at: Instant,
     transport: &mut TransportImpl,
     inflight: &mut JoinSet<InflightOutcome>,
     inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
     pending: &std::sync::atomic::AtomicUsize,
-    window: &mut HandoverWindow,
-) -> Option<AsyncDeliveryTask> {
-    // Readiness gates authorization, not submission. A target that cannot take a
-    // handover now must not have a batch authorized against it: authorization is
-    // the linearization point, and quota releases only at the terminal
-    // transition, so authorizing early would commit a member to a generation that
-    // cannot act on it. The member stays `Pending` instead, which is a state it
-    // may occupy indefinitely — how long a target stays busy is not evidence
-    // about the target, and no elapsed duration converts this wait into an
-    // outcome.
-    //
-    // Reading the level here is deliberately advisory. It can go stale between
-    // this check and the write below, and when it does the invocation fails and
-    // resolves through the guard's evidence order rather than being retried
-    // behind the sender's back.
-    //
-    // Pubsub is excluded rather than gated. It reports unready like any transport
-    // with no delivery path, so gating it would hold a member no transport can
-    // ever accept; it is rejected synchronously below instead.
-    if !matches!(transport, TransportImpl::Pubsub) {
-        // Both axes are required, and neither substitutes for the other. Health
-        // is read first because it is what bounds the wait, and an unreachable
-        // target is never authorized whatever readiness says — a transport that
-        // cannot reach its target has nothing useful to report about whether that
-        // target is at a prompt.
-        match transport.health() {
-            // Continuously unreachable past the dwell. Waiting will not make this
-            // target ready, so the member resolves rather than keeping a place in
-            // a queue nothing will drain.
-            TransportHealth::Unreachable { since }
-                if since.elapsed() >= context.unreachable_dwell =>
-            {
-                super::super::async_worker::complete_task_outcome(
-                    &task,
-                    Ok(target_unreachable_result(&task, context.unreachable_dwell)),
-                );
-                super::super::async_worker::release_pending_slot(pending);
-                return None;
-            }
-            // Unreachable but not yet past the dwell: hold, exactly as an unready
-            // target is held. An unreachability that ends in time costs nothing.
-            TransportHealth::Unreachable { .. } => return Some(task),
-            TransportHealth::Healthy => {}
-        }
-        if !transport.is_ready_for_handover() {
-            return Some(task);
-        }
-        // The handover bound, and the last gate before authorization. A member
-        // that does not fit the open window stays `Pending` — quota reserved,
-        // nothing submitted — exactly as an unready target's member does, and is
-        // offered again when the window closes. Held rather than skipped: the
-        // window is a prefix of this target's FIFO, so a member that does not fit
-        // must delay the queue rather than let a smaller one behind it pass.
-        if !window.admits(canonical_payload_bytes(task.message.as_str())) {
-            return Some(task);
-        }
-    }
-
-    // Authorization is the linearization point and the watchdog's anchor, so it
-    // happens once, before any transport-specific branch, and the clock starts
-    // with it. Starting the clock after the write would exclude the synchronous
-    // rendering and submission work the bound is supposed to cover.
-    let authorized_at = Instant::now();
-    if !matches!(transport, TransportImpl::Pubsub) {
-        // The window records the member against its budget; the member still
-        // mints its own batch. Sharing one across a window would absorb envelopes
-        // into a batch already authorized, which the contract forbids by name —
-        // a shared batch needs its membership fixed *before* any member of it is
-        // authorized, and that mechanism does not exist yet.
-        window.record(canonical_payload_bytes(task.message.as_str()));
-        authorize_member(&task);
-    }
-
-    let (future, record_served) = if matches!(transport, TransportImpl::Pubsub) {
-        // Forward-declared stub: not deliverable. Its `mailw`/`raww` are
-        // `unimplemented!`, so produce an explicit terminal outcome instead of
-        // calling them.
-        super::super::async_worker::complete_task_outcome(
-            &task,
-            Err(super::super::super::session_type_not_implemented(
-                task.target_session.as_str(),
-                SessionType::Pubsub,
-            )),
-        );
-        super::super::async_worker::release_pending_slot(pending);
-        return None;
-    } else if matches!(transport, TransportImpl::Ui(_)) {
+) {
+    let (future, record_served) = if matches!(transport, TransportImpl::Ui(_)) {
         let envelope = build_ui_envelope(&task);
         // Declared immediately before the call that can produce an effect, and
         // never earlier: the gap between authorization and this point is exactly
         // the window in which the guard can still prove nothing was written.
         if declare_singleton_unit(&task).is_err() {
             super::super::async_worker::release_pending_slot(pending);
-            return None;
+            return;
         }
         (transport.mailw(envelope), false)
     } else {
@@ -843,7 +994,7 @@ fn submit_task(
                 // could not be reached, in which case uniqueness cannot be
                 // established and reporting is worse than staying silent.
                 super::super::async_worker::release_pending_slot(pending);
-                return None;
+                return;
             }
             CoderWrite::Refused(error) => {
                 // Refused before any target-side effect, so nothing reached the
@@ -859,7 +1010,7 @@ fn submit_task(
                     error.message.as_str(),
                 );
                 super::super::async_worker::release_pending_slot(pending);
-                return None;
+                return;
             }
         }
     };
@@ -873,20 +1024,6 @@ fn submit_task(
             authorized_at,
         },
     );
-    None
-}
-
-/// Performs the `Pending` to `Authorized` transition for one member, minting its
-/// batch and guard identities.
-///
-/// Still one member per batch. The handover window bounds how much work a target
-/// holds at once, but it is not a batch: it accumulates as members arrive, and a
-/// batch's membership SHALL be fixed before any member of it is authorized. Real
-/// multi-member batches need a mechanism that forms the set first and then
-/// authorizes it whole; until that exists, sharing a `BatchId` across a window
-/// would be absorption into an authorized batch.
-fn authorize_member(task: &AsyncDeliveryTask) {
-    super::super::admission::authorize(task.message_id.as_str(), BatchId::mint());
 }
 
 /// Builds a coder task's structured payload and submits it via the non-blocking

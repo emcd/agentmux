@@ -429,9 +429,8 @@ mod generation_replacement_tests {
     use super::*;
     use crate::configuration::{BundleConfiguration, SessionType};
     use crate::relay::delivery::admission::{
-        AdmissionTargetKey, admit, authorize, declare_packing_unit, record_unit_evidence,
+        AdmissionTargetKey, admit, authorize_batch, declare_packing_unit, record_unit_evidence,
     };
-    use crate::relay::delivery::guard::BatchId;
     use crate::relay::{DeliveryPayloadMode, SCHEMA_VERSION};
 
     /// A member whose unit recorded `Submitted` reports `delivered` when the
@@ -462,7 +461,7 @@ mod generation_replacement_tests {
             "target",
         );
         admit(message_id, target, SessionType::Tmux, 1).expect("admit");
-        authorize(message_id, BatchId::mint()).expect("authorize");
+        authorize_batch(&[message_id]).expect("authorize");
         let unit = declare_packing_unit(&[message_id]).expect("an authorized member binds");
         // The write happened and the transport said so. Everything after this is
         // the relay losing patience with its own executor, which changes nothing
@@ -543,8 +542,7 @@ mod unbound_resolution_tests {
 
     use super::*;
     use crate::configuration::{BundleConfiguration, SessionType};
-    use crate::relay::delivery::admission::{AdmissionTargetKey, admit, authorize};
-    use crate::relay::delivery::guard::BatchId;
+    use crate::relay::delivery::admission::{AdmissionTargetKey, admit, authorize_batch};
     use crate::relay::{DeliveryPayloadMode, SCHEMA_VERSION};
 
     /// A member never bound to a packing unit resolves `not_submitted` at the
@@ -596,7 +594,7 @@ mod unbound_resolution_tests {
             // which is the whole fixture: nothing was written and the ledger can
             // prove it.
             admit(message_id, target, SessionType::Tmux, 1).expect("admit");
-            authorize(message_id, BatchId::mint()).expect("authorize");
+            authorize_batch(&[message_id]).expect("authorize");
 
             let task = AsyncDeliveryTask {
                 admitted: true,

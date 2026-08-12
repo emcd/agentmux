@@ -111,7 +111,7 @@ rather than substituting for one never made.
 
 #### Scenario: A transport does not wait for readiness
 
-- **WHEN** a transport receives an authorized batch
+- **WHEN** a transport receives an authorized envelope
 - **THEN** it SHALL NOT wait on prompt readiness, target turn completion, target
   output, or an operator decision before submitting
 - **AND** it starts exactly one immediate submission attempt
@@ -121,9 +121,9 @@ rather than substituting for one never made.
 - **WHEN** a transport's readiness state changes between the relay's check and
   authorization
 - **AND** the resulting invocation is refused
-- **THEN** the batch's members resolve `not_submitted` or `submission_unknown`
-  per the transport contract
-- **AND** the relay SHALL NOT reclaim or retry the batch
+- **THEN** the refused invocation's members resolve `not_submitted` or
+  `submission_unknown` per the transport contract
+- **AND** the relay SHALL NOT reclaim or retry them
 
 ### Requirement: Delivery Results Without ACK Protocol
 
@@ -309,7 +309,7 @@ any coder.
 - **WHEN** a target's pending work would exceed either the envelope-count
   component or the canonical-payload-byte component of its transport's maximum
   handover dimensions
-- **THEN** the batch stops at whichever component binds first
+- **THEN** the handover stops at whichever component binds first
 - **AND** the remainder stays `Pending` for a later handover
 
 ### Requirement: Asynchronous Terminal-Outcome Receipt
@@ -672,9 +672,9 @@ refusal SHALL therefore be treated as a terminal evidence result, not a reclaim.
 owner capable of terminalizing and releasing every member of the batch is created
 in the **same atomic operation**. Authorization either synchronously refuses or
 synchronously starts one supervised submission executor. No `Authorized` batch
-SHALL wait in a relay or transport staging queue; a batch sitting behind an
-in-flight turn before partition is a post-authorization wait wearing a queue's
-clothing.
+SHALL wait in a relay or transport staging queue; an authorized invocation
+sitting behind an in-flight turn before partition is a post-authorization wait
+wearing a queue's clothing.
 
 Resolution SHALL be scoped precisely, because an indefinite `Pending` wait means
 completeness does not hold for every accepted member. The three claims are
@@ -814,7 +814,7 @@ change removed.
 
 #### Scenario: The execution bound does not override stronger evidence
 
-- **WHEN** the execution bound elapses for a batch in which one unit already
+- **WHEN** the execution bound elapses while one packing unit has already
   recorded `Submitted`
 - **THEN** that unit's members resolve `delivered`
 - **AND** only bound members lacking stronger evidence at the cut resolve
@@ -894,9 +894,9 @@ did not arrive, reported honestly, leaves the decision with the sender.
 
 #### Scenario: A refused invocation is terminal, not a reclaim
 
-- **WHEN** the relay invokes a transport with an authorized batch
+- **WHEN** the relay invokes a transport with an authorized envelope
 - **AND** the transport refuses the invocation
-- **THEN** the batch's members resolve from evidence
+- **THEN** the refused members resolve from evidence
 - **AND** the relay does not return them to `Pending` and does not retry them
 
 #### Scenario: An authorized batch never waits in a staging queue
@@ -904,7 +904,7 @@ did not arrive, reported honestly, leaves the decision with the sender.
 - **WHEN** a batch is authorized
 - **THEN** the transport either synchronously refuses it or synchronously starts
   one supervised submission executor
-- **AND** the batch is not parked behind an in-flight turn before partition
+- **AND** the invocation is not parked behind an in-flight turn before partition
 
 #### Scenario: Never retry an authorized batch
 

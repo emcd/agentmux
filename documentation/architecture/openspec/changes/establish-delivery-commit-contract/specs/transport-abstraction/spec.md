@@ -8,16 +8,26 @@ through two non-blocking write methods defined on the `Transport` trait in
 
 - `mailw` — structured relay message write. The relay SHALL populate routing,
   attribution, message body, timestamp, choice-decider, and quiescence fields
-  before calling the transport. **The invocation seam SHALL be a batch**: the
-  relay invokes with the set of envelopes it has authorized together, and the
-  transport SHALL NOT buffer the batch, coalesce it with a later one, or wait for
-  target readiness before submitting it. The transport SHALL render any
-  transport-specific representation internally and resolve each member with a
-  terminal `SingleDeliveryOutcome` derived from that member's packing-unit
+  before calling the transport. **The relay invokes per envelope**, and a
+  transport MAY coalesce consecutively received envelopes into one packing unit;
+  it SHALL NOT wait for target readiness before submitting. The transport SHALL
+  render any transport-specific representation internally and resolve each member
+  with a terminal `SingleDeliveryOutcome` derived from that member's packing-unit
   evidence.
-- `raww(content: String, mode: RawMode, append_enter: bool)` — raw input write,
-  carrying the explicit mode defined by the `transport-contracts` capability's
-  `Relay raww operation contract`.
+
+  Coalescing is permitted **because the partition is declared rather than
+  inferred**. An earlier draft of this requirement forbade a transport from
+  buffering or coalescing, on the grounds that a group formed inside a transport
+  made its membership unknowable to the relay — which is what allowed one outcome
+  to be reported for members with different fates. `PartitionSink` removed that
+  premise: a coalescing transport declares its unit's exact membership through the
+  relay before any target-side effect, so the group is recorded even though it is
+  timing-derived. The prohibition was guarding a hazard the declaration mechanism
+  now excludes, and a rule that forbids what all three coder transports do is a
+  rule that is not being enforced.
+- `raww(content: String, append_enter: bool)` — raw input write. The
+  `transport-contracts` capability's `Relay raww operation contract` governs its
+  request shape.
 
 **The invocation is fallible.** The relay's admission quota reserves count and
 bytes in the relay's own queue and nothing about a transport's channel, its live
@@ -25,8 +35,8 @@ worker generation, UI subscriber capacity, or any target resource. A transport
 SHALL be permitted to refuse an invocation, and a refusal SHALL be treated as a
 terminal evidence result rather than as a reclaim:
 
-- the transport returns the batch **unchanged**, before partition → every member
-  resolves `not_submitted`;
+- the transport returns the envelope **unchanged**, before partition → every
+  member it would have covered resolves `not_submitted`;
 - side effects **cannot be excluded** → the affected unit's members resolve
   `submission_unknown`.
 
@@ -58,17 +68,19 @@ members resolve from evidence.
 #### Scenario: ACP delivery via TransportImpl
 
 - **WHEN** the relay authorizes a batch for an ACP target
-- **THEN** it invokes `TransportImpl::Acp(t)` with the batch
-- **AND** the ACP transport partitions it, renders pane-envelope text internally,
-  and submits each unit as its own `session/prompt` request
-- **AND** it does not park the batch behind an in-flight turn
+- **THEN** it invokes `TransportImpl::Acp(t)` with each authorized envelope
+- **AND** the ACP transport partitions what it holds, having coalesced
+  consecutive invocations or not, renders pane-envelope text internally, and
+  submits each unit as its own `session/prompt` request
+- **AND** it does not park an invocation behind an in-flight turn
 
 #### Scenario: Tmux delivery via TransportImpl
 
 - **WHEN** the relay authorizes a batch for a Tmux target
-- **THEN** it invokes `TransportImpl::Tmux(t)` with the batch
-- **AND** the Tmux transport partitions it into token-budget prompts and injects
-  each separately
+- **THEN** it invokes `TransportImpl::Tmux(t)` with each authorized envelope
+- **AND** the Tmux transport partitions what it holds, having coalesced
+  consecutive invocations or not, into token-budget prompts and injects each
+  separately
 - **AND** it does not wait for pane quiescence, which the relay has already done
 
 #### Scenario: UI delivery via TransportImpl
@@ -84,8 +96,8 @@ members resolve from evidence.
 
 - **WHEN** a transport's write channel is full or closed, or its worker
   generation is dead
-- **THEN** it returns the batch unchanged without partitioning it
-- **AND** every member resolves `not_submitted`
+- **THEN** it returns the envelope unchanged without partitioning it
+- **AND** every member it would have covered resolves `not_submitted`
 - **AND** the relay does not return them to `Pending`
 
 #### Scenario: Shutdown resolves pending members
@@ -173,7 +185,8 @@ transport construction.
 
 #### Scenario: Packing stays with the transport
 
-- **WHEN** a developer looks for the logic that splits a batch into packing units
+- **WHEN** a developer looks for the logic that splits received envelopes into
+  packing units
 - **THEN** they find it in the owning transport module
 - **AND** the relay expresses its own limits only in envelope count and canonical
   payload bytes, never in rendered tokens
@@ -223,14 +236,14 @@ not block the relay request path: the send RPC returns `queued` at admission.
 
 #### Scenario: Member outcome resolves through the relay worker
 
-- **WHEN** the relay invokes a transport with an authorized batch
+- **WHEN** the relay invokes a transport with an authorized envelope
 - **THEN** each member resolves with a terminal `SingleDeliveryOutcome`
 - **AND** the relay worker maps that outcome onto its `SendResult` at the collect
   site, without the transport referencing any `crate::relay` type
 
-#### Scenario: Differing outcomes across units of one batch
+#### Scenario: Differing outcomes across packing units
 
-- **WHEN** unit 1 of a batch submits successfully and unit 2 fails
+- **WHEN** one packing unit submits successfully and another fails
 - **THEN** unit 1's members resolve `delivered`
 - **AND** unit 2's members resolve `not_submitted` or `submission_unknown`
 - **AND** neither result is applied to the other unit's members
@@ -410,7 +423,7 @@ delivery thread and be reached from other threads through a `SnapshotRequest`
 channel.
 
 **Pty SHALL buffer, then write** — the ordering Tmux already uses. The transport
-SHALL NOT write any member to the PTY master before the batch's partition is
+SHALL NOT write any member to the PTY master before that member's partition is
 recorded. Writing before the wait is what made a flush group's membership mutable
 after its write, which is the defect behind `agentmux:issues/relay/62`.
 
@@ -474,11 +487,11 @@ has not observed, and a bound that cannot be made true is worse than none.
   leaving as the unobserved window only what precedes its first check: the
   uninterruptible terminal construction and the handler installation beside it
 
-#### Scenario: Pty submits an authorized batch immediately
+#### Scenario: Pty submits an authorized envelope immediately
 
-- **WHEN** the relay invokes the Pty transport with an authorized batch
-- **THEN** the transport partitions it into one unit per member and records the
-  partition before writing any bytes
+- **WHEN** the relay invokes the Pty transport with an authorized envelope
+- **THEN** the transport partitions each received envelope into its own singleton
+  unit and records the partition before writing any bytes
 - **AND** writes each unit to the PTY master without waiting for quiescence
 - **AND** resolves each member from its own unit's evidence
 
@@ -587,8 +600,8 @@ truncated form, which is neither delivery nor absence.
 
 #### Scenario: Record the partition before any effect
 
-- **WHEN** a transport receives an authorized batch
-- **THEN** it partitions the batch and records the partition to the guard
+- **WHEN** a transport receives an authorized envelope
+- **THEN** it partitions what it holds and records the partition to the guard
 - **AND** it produces no target-side effect before that record exists
 
 #### Scenario: An unbound member resolves not_submitted
@@ -837,7 +850,7 @@ separate:
 | Quantity | Owner | Purpose |
 |---|---|---|
 | **Admission quota** | relay | how much may be queued per target and relay-global; enforced at admission |
-| **Maximum handover dimensions** | transport, static | the largest batch a transport will accept |
+| **Maximum handover dimensions** | transport, static | the most work the relay may have handed over at once |
 | **Acceptance capacity** | transport, dynamic | whether it can accept right now; surfaced as `is_ready_for_handover` |
 
 All relay-facing quantities SHALL be expressed in units the relay can evaluate
