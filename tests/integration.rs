@@ -18,3 +18,5 @@ mod session_relay_reconciliation;
 mod session_relay_stream;
 #[path = "integration/support/mod.rs"]
 mod support;
+#[path = "integration/transport_generation_fence.rs"]
+mod transport_generation_fence;
