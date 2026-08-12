@@ -220,15 +220,15 @@ until the outcome resolves.
 
 #### Scenario: Raw waits for target-side ordering safety, not terminality
 
-- **WHEN** a raww is submitted for a target with an authorized batch already
+- **WHEN** a raww is submitted for a target with an authorized invocation already
   executing
-- **AND** that batch's outcome has resolved `submission_unknown`
+- **AND** that invocation's members have resolved `submission_unknown`
 - **THEN** the raw write still waits for the generation fence's positive verdict
 - **AND** it does not proceed on the terminal outcome alone
 
 #### Scenario: Terminal outcome does not release the raw barrier
 
-- **WHEN** an older batch resolves `submission_unknown`
+- **WHEN** an older invocation's members resolve `submission_unknown`
 - **AND** its submission execution has not been fenced
 - **THEN** a waiting raw write does not proceed on the terminal outcome alone
 - **BECAUSE** a terminal outcome resolves the member but does not prove the
