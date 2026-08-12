@@ -29,9 +29,11 @@ use crate::transports::{
     OutcomeFuture, PartitionError, SingleDeliveryOutcome, TransportHealth, TransportImpl,
 };
 
+use super::super::admission::canonical_payload_bytes;
 use super::super::async_worker::{AsyncWorkerKey, WorkerOwner};
 use super::super::fence::{FenceInProgress, FenceOutcome, FenceResolution, FenceVerdict};
 use super::super::guard::{BatchId, GuardTrigger};
+use super::batch::HandoverWindow;
 use crate::runtime::inscriptions::emit_inscription;
 
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
@@ -278,6 +280,11 @@ async fn run_async_delivery_worker(
     let submit_context = SubmitContext {
         unreachable_dwell: Duration::from_millis(delivery.unreachable_dwell_ms),
     };
+    // Batch formation's state: how much this target's transport is already
+    // holding, against the maxima it declares. Built from the first generation
+    // and never rebuilt, because the dimensions follow the target's session type
+    // and a replacement generation is the same transport kind by contract.
+    let mut window = HandoverWindow::for_transport(&transport);
 
     loop {
         if shutdown_requested() {
@@ -332,6 +339,14 @@ async fn run_async_delivery_worker(
         // consumes what is ready already.
         while let Some(joined) = inflight.try_join_next_with_id() {
             collect_outcome(joined, &mut inflight_members, pending.as_ref());
+        }
+        // The handover window closes when the transport is holding nothing, and
+        // only then: while any member of it is still in flight the transport is
+        // still carrying that work, and admitting more would overrun the very
+        // dimensions it declared. Closing is what restores a whole handover's
+        // worth of room for the next member.
+        if inflight.is_empty() {
+            window.close();
         }
         if senders_dropped && inflight.is_empty() && held.is_none() && !fail_stopped {
             // No more producers, nothing in flight, and nothing waiting on
@@ -465,10 +480,11 @@ async fn run_async_delivery_worker(
                 &mut inflight,
                 &mut inflight_members,
                 pending.as_ref(),
+                &mut window,
             );
         }
         tokio::select! {
-            maybe_task = receiver.recv(), if !senders_dropped && bootstrap_settled_now && held.is_none() && watchdog.is_none() => {
+            maybe_task = receiver.recv(), if !senders_dropped && bootstrap_settled_now && held.is_none() && watchdog.is_none() && window.has_room() => {
                 match maybe_task {
                     Some(task) => {
                         if shutdown_requested() {
@@ -495,6 +511,7 @@ async fn run_async_delivery_worker(
                             &mut inflight,
                             &mut inflight_members,
                             pending.as_ref(),
+                            &mut window,
                         );
                     }
                     None => senders_dropped = true,
@@ -715,6 +732,7 @@ fn submit_task(
     inflight: &mut JoinSet<InflightOutcome>,
     inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
     pending: &std::sync::atomic::AtomicUsize,
+    window: &mut HandoverWindow,
 ) -> Option<AsyncDeliveryTask> {
     // Readiness gates authorization, not submission. A target that cannot take a
     // handover now must not have a batch authorized against it: authorization is
@@ -761,6 +779,15 @@ fn submit_task(
         if !transport.is_ready_for_handover() {
             return Some(task);
         }
+        // The handover bound, and the last gate before authorization. A member
+        // that does not fit the open window stays `Pending` — quota reserved,
+        // nothing submitted — exactly as an unready target's member does, and is
+        // offered again when the window closes. Held rather than skipped: the
+        // window is a prefix of this target's FIFO, so a member that does not fit
+        // must delay the queue rather than let a smaller one behind it pass.
+        if !window.admits(canonical_payload_bytes(task.message.as_str())) {
+            return Some(task);
+        }
     }
 
     // Authorization is the linearization point and the watchdog's anchor, so it
@@ -769,6 +796,12 @@ fn submit_task(
     // rendering and submission work the bound is supposed to cover.
     let authorized_at = Instant::now();
     if !matches!(transport, TransportImpl::Pubsub) {
+        // The window records the member against its budget; the member still
+        // mints its own batch. Sharing one across a window would absorb envelopes
+        // into a batch already authorized, which the contract forbids by name —
+        // a shared batch needs its membership fixed *before* any member of it is
+        // authorized, and that mechanism does not exist yet.
+        window.record(canonical_payload_bytes(task.message.as_str()));
         authorize_member(&task);
     }
 
@@ -846,9 +879,12 @@ fn submit_task(
 /// Performs the `Pending` to `Authorized` transition for one member, minting its
 /// batch and guard identities.
 ///
-/// One member per batch today: the worker submits tasks one at a time, so a
-/// batch is a batch of one until batch formation against the transport's
-/// maximum handover dimensions lands and starts forming real ones.
+/// Still one member per batch. The handover window bounds how much work a target
+/// holds at once, but it is not a batch: it accumulates as members arrive, and a
+/// batch's membership SHALL be fixed before any member of it is authorized. Real
+/// multi-member batches need a mechanism that forms the set first and then
+/// authorizes it whole; until that exists, sharing a `BatchId` across a window
+/// would be absorption into an authorized batch.
 fn authorize_member(task: &AsyncDeliveryTask) {
     super::super::admission::authorize(task.message_id.as_str(), BatchId::mint());
 }
