@@ -495,6 +495,20 @@ pub(in crate::relay) fn declare_packing_unit(
             unresolved_members: member_ids.len(),
         },
     );
+    // The partition is otherwise invisible. Every other step of a delivery leaves
+    // a record, but which members shared a fate — the thing that decides whose
+    // outcome is derived from whose evidence — could not be answered from the log
+    // at all. That is a gap in an arc whose subject is per-member attribution: a
+    // reader could see two members resolve identically without being able to tell
+    // whether that was one record answering for both or two records agreeing.
+    emit_inscription(
+        "relay.delivery.partition.declared",
+        &json!({
+            "unit_id": unit.value(),
+            "member_ids": member_ids,
+            "member_count": member_ids.len(),
+        }),
+    );
     Ok(unit)
 }
 
@@ -890,8 +904,13 @@ mod tests {
     /// The all-or-nothing declaration is the invariant this whole partition
     /// mechanism rests on, and it is crate-private by design: the ledger is a
     /// process-global holding the one lock under which binding happens, and no
-    /// public interface can drive a multi-member unit until batch formation lands
-    /// and the relay starts handing over more than one envelope at a time.
+    /// public interface can *drive* a multi-member unit. One is reachable — a
+    /// transport declares over whatever group it coalesced — but not
+    /// deterministically: the tmux delivery thread drains only what is already
+    /// queued and flushes as soon as the channel reports empty, with no coalesce
+    /// wait, so whether a second envelope joins is a race between the relay's
+    /// submit and that drain. Batch formation does not change this; a batch is the
+    /// unit of authorization and a packing unit the unit of submission.
     ///
     /// What it pins is the refusal, because the refusal is what makes a claim of
     /// non-delivery safe. A partial bind would let one member resolve
@@ -948,8 +967,11 @@ mod tests {
 ///
 /// Its own block rather than an addition to the module above, which already
 /// carries a test. Inline for the same reason that one is: no public interface
-/// can drive a multi-member unit until batch formation lands and the relay hands
-/// over more than one envelope at a time, and the ledger is deliberately
+/// can *drive* a multi-member unit — one is reachable, since a transport declares
+/// over whatever group it coalesced, but only opportunistically, because the tmux
+/// delivery thread drains what is already queued and flushes on an empty channel
+/// with no coalesce wait. A test asserting one would be asserting a race. The
+/// ledger is also deliberately
 /// `pub(in crate::relay)` — the public seam for transports is `PartitionSink`,
 /// and widening `declare_packing_unit`/`terminalize` to reach them from a test
 /// would publish the delivery ledger itself.
