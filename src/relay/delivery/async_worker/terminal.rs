@@ -520,3 +520,135 @@ mod generation_replacement_tests {
         );
     }
 }
+
+/// The evidence order's second rung, held at the helper every trigger reaches.
+///
+/// Its own block on the same terms as the others, and the count is deliberate
+/// rather than debt: each block has to argue its own exception, and that friction
+/// is what keeps a relay-internal test from being written where a public seam
+/// should have been built instead.
+///
+/// Scope is the whole point here, because the original task asserted this under
+/// *every* trigger and that was false. Two paths reach a terminal outcome for an
+/// unbound member and deliberately do not spell `not_submitted`:
+/// `complete_task_on_shutdown`, which reports `dropped_on_shutdown` as the task
+/// 41 policy, and the pre-write render and construction failures, which report
+/// `failed` through an explicit `Err`. Neither is a bypass — both are reporting
+/// semantics chosen for members whose delivery responsibility never transferred.
+/// So what is coverable is the rung at this helper, and the enumeration of
+/// triggers *below* it rather than of paths above it.
+#[cfg(test)]
+mod unbound_resolution_tests {
+    use std::path::{Path, PathBuf};
+
+    use super::*;
+    use crate::configuration::{BundleConfiguration, SessionType};
+    use crate::relay::delivery::admission::{AdmissionTargetKey, admit, authorize};
+    use crate::relay::delivery::guard::BatchId;
+    use crate::relay::{DeliveryPayloadMode, SCHEMA_VERSION};
+
+    /// A member never bound to a packing unit resolves `not_submitted` at the
+    /// trigger helper, whichever trigger fired.
+    ///
+    /// This is the guard's inference from absence, and it is sound because the
+    /// partition is recorded before the first target-side effect: an unbound
+    /// member provably could not have been submitted. The claim worth pinning is
+    /// that the *trigger does not enter into it* — a collector panic and a
+    /// graceful shutdown resolve the same member the same way, because only the
+    /// evidence order is consulted.
+    ///
+    /// `GracefulShutdown` is the sharp one and is included deliberately. Reaching
+    /// this helper it resolves `not_submitted`, while `complete_task_on_shutdown`
+    /// — a different function, for members still `Pending` — reports
+    /// `dropped_on_shutdown`. That pair is exactly the counterexample that made
+    /// the original "under every trigger" wording false, so covering the trigger
+    /// here records the distinction rather than papering over it.
+    ///
+    /// The match below forces a new `GuardTrigger` variant to be named before this
+    /// compiles. It does **not** force the variant into the array driving the
+    /// loop, so the enumeration is a tripwire rather than a proof of completeness;
+    /// stated rather than left to be assumed.
+    #[test]
+    fn an_unbound_member_resolves_not_submitted_under_any_trigger() {
+        let temporary = tempfile::TempDir::new().expect("temporary");
+        let inscriptions = temporary.path().join("inscriptions.log");
+        let _ = crate::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+
+        for trigger in [
+            GuardTrigger::CollectorPanic,
+            GuardTrigger::ChannelClosed,
+            GuardTrigger::GracefulShutdown,
+            GuardTrigger::ExecutionBound,
+        ] {
+            let message_id = match trigger {
+                GuardTrigger::CollectorPanic => "unbound-collector-panic",
+                GuardTrigger::ChannelClosed => "unbound-channel-closed",
+                GuardTrigger::GracefulShutdown => "unbound-graceful-shutdown",
+                GuardTrigger::ExecutionBound => "unbound-execution-bound",
+            };
+            let target = AdmissionTargetKey::new(
+                "unbound-test",
+                Path::new("/nonexistent/unbound-test"),
+                "target",
+            );
+            // Authorized, so the member has been carried toward a transport and is
+            // the case a trigger realistically finds. No unit is ever declared,
+            // which is the whole fixture: nothing was written and the ledger can
+            // prove it.
+            admit(message_id, target, SessionType::Tmux, 1).expect("admit");
+            authorize(message_id, BatchId::mint()).expect("authorize");
+
+            let task = AsyncDeliveryTask {
+                admitted: true,
+                bundle: BundleConfiguration {
+                    schema_version: SCHEMA_VERSION.to_string(),
+                    bundle_name: "unbound-test".to_string(),
+                    autostart: false,
+                    groups: Vec::new(),
+                    members: Vec::new(),
+                },
+                sender_namespace: "unbound-test".to_string(),
+                sender: super::super::reporting::relay_system_sender_member(),
+                authenticated_identity: None,
+                on_behalf_of: None,
+                all_target_sessions: Vec::new(),
+                target_session: "target".to_string(),
+                message: "body".to_string(),
+                message_id: message_id.to_string(),
+                quiescence: crate::relay::delivery::QuiescenceOptions::for_async(None),
+                runtime_directory: PathBuf::from("/nonexistent/unbound-test"),
+                payload_mode: DeliveryPayloadMode::EnvelopeMessage,
+                append_enter: true,
+                choice_decider_sessions: Vec::new(),
+                is_receipt: false,
+                sender_return_route: None,
+            };
+
+            complete_task_outcome_from_trigger(&task, trigger);
+
+            let completed = std::fs::read_to_string(&inscriptions)
+                .expect("inscriptions file")
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .find(|record| {
+                    record["event"] == "relay.send.async.completed"
+                        && record["details"]["message_id"] == message_id
+                })
+                .unwrap_or_else(|| panic!("{trigger:?} reported no terminal outcome"));
+
+            assert_eq!(
+                completed["details"]["outcome"], "not_submitted",
+                "{trigger:?} resolved an unbound member as something other than a \
+                 provable non-delivery",
+            );
+            // The trigger names why the member stopped being resolvable, and only
+            // that. A trigger leaking into the outcome is the failure this pair of
+            // assertions separates.
+            assert_eq!(
+                completed["details"]["reason"],
+                trigger.reason(),
+                "{trigger:?} did not contribute the reason",
+            );
+        }
+    }
+}
