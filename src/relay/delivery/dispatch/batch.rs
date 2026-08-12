@@ -21,14 +21,25 @@
 //! batch is authorized, because mutable batch membership is precisely what let
 //! one outcome be reported for members that were written and members that were
 //! not. A window accumulates as members arrive, so it is *not* a set authorized
-//! together and its extent must not be used as a batch. Members inside one window
-//! still each carry their own `BatchId` until an atomic batch-authorization
-//! mechanism — fix membership first, then authorize the whole set — exists to
-//! mint a shared one legally.
+//! together and its extent must not be used as a batch.
+//!
+//! The two stay distinct now that batches are formed rather than minted per
+//! member. A batch is the prefix drained at one instant, fixed and authorized
+//! whole; a window stays open until nothing is in flight, so it can span several
+//! batches authorized at different instants. That is exactly the difference the
+//! contract cares about, and it is why the window's counters bound the drain and
+//! never name the set.
 
 use crate::transports::{HandoverDimensions, TransportImpl};
 
 /// How much of a target's pending work is currently handed over to its transport.
+///
+/// `Copy` so a batch can be proposed against a scratch copy and the real window
+/// advanced only once that batch is authorized. Membership is fixed before
+/// authorization, so a proposal that authorization then refuses must leave the
+/// window exactly as it found it — otherwise the window would be reserving room
+/// for work no transport is holding.
+#[derive(Clone, Copy)]
 pub(super) struct HandoverWindow {
     /// `None` for a transport that accepts no handover at all (`Pubsub`), which
     /// is refused before it reaches here. Treated as unbounded rather than

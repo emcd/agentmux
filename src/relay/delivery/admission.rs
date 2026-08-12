@@ -396,31 +396,63 @@ pub(in crate::relay) fn rollback_admission(message_id: &str) {
     }
 }
 
-/// Authorizes one member: the `Pending` to `Authorized` transition, minting the
-/// batch's identities and creating the member's guard in the same atomic
-/// operation.
+/// Authorizes a whole batch: the `Pending` to `Authorized` transition for every
+/// member, minting the batch's identity and creating each member's guard in one
+/// atomic operation.
 ///
 /// This is the model's sole linearization point. It is a relay-local state
-/// transition on the relay's own queue entry — not a call, not a handshake, and
+/// transition on the relay's own queue entries — not a call, not a handshake, and
 /// not dependent on any transport observing anything — which is why it is
 /// trivially atomic and why there is no acceptance race to adjudicate.
 ///
-/// Returns the guard key on success. An entry already past `Pending` is not
-/// re-authorized and yields `None`: authorization is irrevocable, so a second
-/// one would be a second attempt at a member the relay has already committed.
-pub(in crate::relay) fn authorize(message_id: &str, batch: BatchId) -> Option<GuardKey> {
-    let mut state = lock_ledger().ok()?;
-    let entry = state.entries.get_mut(message_id)?;
-    if entry.state != QueueEntryState::Pending {
+/// **All members or none.** A batch is the unit of authorization and there is no
+/// partially-authorized batch, so the whole set is validated under the lock
+/// before any entry moves. Transitioning the members that happened to be
+/// `Pending` and reporting success would produce exactly that forbidden state:
+/// the relay would go on to submit a set whose membership no longer matches the
+/// one it authorized, which is the mutable membership that let one outcome be
+/// reported for members that were written and members that were not.
+///
+/// One `BatchId` is shared by the whole set and each member still mints its own
+/// `AttemptId`, because the batch names what was authorized together while the
+/// attempt names this member's single relay-authorized injection.
+///
+/// A member already past `Pending` vetoes the batch and yields `None`, as does a
+/// member the ledger does not know: authorization is irrevocable, so a second one
+/// would be a second attempt at a member the relay has already committed.
+pub(in crate::relay) fn authorize_batch(member_ids: &[&str]) -> Option<BatchId> {
+    // Shape first, above the lock, for the same reason `declare_packing_unit`
+    // checks it there: neither check reads ledger state. A duplicate would mint
+    // two attempts against one entry and leave only the second recorded, so the
+    // relay would believe it had authorized more members than it holds.
+    if member_ids.is_empty() {
         return None;
     }
-    let key = GuardKey {
-        batch,
-        attempt: AttemptId::mint(),
-    };
-    entry.state = QueueEntryState::Authorized;
-    entry.guard = Some(key);
-    Some(key)
+    let unique: HashSet<&str> = member_ids.iter().copied().collect();
+    if unique.len() != member_ids.len() {
+        return None;
+    }
+    let mut state = lock_ledger().ok()?;
+    let all_pending = member_ids.iter().all(|id| {
+        state
+            .entries
+            .get(*id)
+            .is_some_and(|entry| entry.state == QueueEntryState::Pending)
+    });
+    if !all_pending {
+        return None;
+    }
+    let batch = BatchId::mint();
+    for id in member_ids {
+        if let Some(entry) = state.entries.get_mut(*id) {
+            entry.state = QueueEntryState::Authorized;
+            entry.guard = Some(GuardKey {
+                batch,
+                attempt: AttemptId::mint(),
+            });
+        }
+    }
+    Some(batch)
 }
 
 /// Mints a packing unit and binds every proposed member to it, or binds none.
@@ -897,6 +929,70 @@ fn lock_ledger() -> Result<std::sync::MutexGuard<'static, LedgerState>, RelayErr
     })
 }
 
+/// A batch authorization binds every member or none, and a veto leaves the
+/// ledger exactly as it found it.
+///
+/// Inline for the same reason the declaration test below is: the ledger is a
+/// process-global whose transitions happen under one crate-private lock, and no
+/// public interface can drive a *multi-member* authorization — the relay forms a
+/// batch of one per invocation, so the veto this pins has no reachable trigger
+/// from outside. The single-member case a send does exercise cannot discriminate
+/// all-or-none from bind-what-you-can, because with one member the two agree.
+///
+/// What it pins is the refusal, because the refusal is what keeps the relay from
+/// writing an unauthorized member. Binding the still-`Pending` siblings and
+/// reporting success would produce a partially-authorized batch — membership
+/// that changed after the relay committed, which is the mutable membership the
+/// contract forbids by name.
+#[cfg(test)]
+mod batch_authorization_tests {
+    use super::*;
+    use crate::configuration::SessionType;
+    use std::path::Path;
+
+    #[test]
+    fn a_veto_leaves_every_sibling_unauthorized() {
+        let target = AdmissionTargetKey::new(
+            "batch-auth-test",
+            Path::new("/nonexistent/batch-auth-test"),
+            "target",
+        );
+        let bindable = "batch-auth-bindable";
+        let vetoing = "batch-auth-vetoing";
+        for id in [bindable, vetoing] {
+            admit(id, target.clone(), SessionType::Tmux, 1).expect("admit");
+        }
+        // The veto: one member is already past `Pending`, which is the state a
+        // second authorization of the same member would find.
+        authorize_batch(&[vetoing]).expect("the first authorization succeeds");
+
+        assert!(
+            authorize_batch(&[bindable, vetoing]).is_none(),
+            "a member already past Pending vetoes its whole batch"
+        );
+        // The sibling is the assertion with teeth. Moving the transition into the
+        // validation loop would leave it `Authorized` here despite the refusal,
+        // which is the partially-authorized batch the contract excludes.
+        assert!(
+            authorize_batch(&[bindable]).is_some(),
+            "the vetoed batch left its bindable sibling still Pending"
+        );
+
+        // An unknown member vetoes too, and for the same reason: the relay cannot
+        // commit to delivering something its ledger has never admitted.
+        let fresh = "batch-auth-fresh";
+        admit(fresh, target, SessionType::Tmux, 1).expect("admit");
+        assert!(
+            authorize_batch(&[fresh, "batch-auth-never-admitted"]).is_none(),
+            "an unadmitted member vetoes its whole batch"
+        );
+        assert!(
+            authorize_batch(&[fresh]).is_some(),
+            "the unknown member's batch left its sibling still Pending"
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -927,8 +1023,8 @@ mod tests {
         let terminal = "partition-test-terminal";
         for id in [bindable, terminal] {
             admit(id, target.clone(), SessionType::Tmux, 1).expect("admit");
-            authorize(id, BatchId::mint()).expect("authorize");
         }
+        authorize_batch(&[bindable, terminal]).expect("authorize");
         // One member leaves the set of bindable members behind its groupmate's
         // back, which is the race the lock exists to adjudicate.
         terminalize(terminal);
@@ -995,8 +1091,8 @@ mod sibling_agreement_tests {
         let members = ["sibling-a", "sibling-b", "sibling-c"];
         for id in members {
             admit(id, target.clone(), SessionType::Tmux, 1).expect("admit");
-            authorize(id, BatchId::mint()).expect("authorize");
         }
+        authorize_batch(&members).expect("authorize");
 
         let unit = declare_packing_unit(&members).expect("a fully bindable set binds");
         record_unit_evidence(unit, SubmissionEvidence::Submitted);
