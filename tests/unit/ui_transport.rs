@@ -7,13 +7,13 @@
 
 use std::sync::{
     Arc, Mutex,
-    atomic::{AtomicUsize, Ordering},
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use agentmux::envelope::AddressIdentity;
 use agentmux::transports::{
-    DeliveryEnvelope, DeliveryMessage, SendOutcome, Transport, UiBroadcastStatus,
+    DeliveryEnvelope, DeliveryMessage, GenerationFence, SendOutcome, Transport, UiBroadcastStatus,
     UiIncomingMessage, UiTransport, UiTransportServices,
 };
 
@@ -43,6 +43,18 @@ fn ui_envelope() -> DeliveryEnvelope {
         choice_decider_sessions: Vec::new(),
         quiet_window: Duration::from_millis(1),
         is_receipt: false,
+    }
+}
+
+/// Spins until `flag` is set, failing rather than hanging if it never is.
+fn wait_for(flag: &AtomicBool, description: &str) {
+    let started = Instant::now();
+    while !flag.load(Ordering::SeqCst) {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "timed out waiting for {description}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
     }
 }
 
@@ -134,6 +146,116 @@ fn ui_mailw_times_out_when_no_ui_reconnects() {
         routed_probes.load(Ordering::SeqCst) >= 1,
         "the routed reconnect probe should have run at least once",
     );
+}
+
+/// The UI generation's destructive fence step is revocation, and revocation is
+/// what makes the fence's second observation able to succeed.
+///
+/// UI owns no child, so `terminate_generation` has no process to signal. The
+/// tempting reading of that is that the step has nothing to do — and if it did
+/// nothing, a delivery already past the cooperative flag would go on to reach a
+/// subscriber after its generation had been terminated, which is the exact
+/// overlap the fence exists to prevent. So what is under test is that the step
+/// still has an effect without a child behind it.
+///
+/// The executor is parked inside the `routed` probe when the fence begins, which
+/// is what makes the two steps distinguishable: `is_fenced` is read at the top of
+/// the reconnect loop and this executor is already past it, so the cooperative
+/// request cannot reach it. Only the revocation check immediately before the
+/// broadcast can stop it.
+///
+/// The steps are driven directly rather than through `acknowledge_fence`, because
+/// the protocol's windows and verdicts are covered against a controllable
+/// generation in `unit/delivery_fence.rs`; what is wanted here is the real
+/// transport's response to each step, without racing a timer to deliver them.
+///
+/// Not asserted: the absence of a child process, because no UI code path spawns
+/// one and there is nothing to observe the absence of. The testable content of
+/// "no owned child" is that the destructive step still bites, which is what the
+/// broadcast count and the outcome pin.
+#[test]
+fn a_terminated_ui_generation_stops_emitting_without_a_child_to_signal() {
+    let probe_entered = Arc::new(AtomicBool::new(false));
+    let released = Arc::new(AtomicBool::new(false));
+    let broadcasts = Arc::new(AtomicUsize::new(0));
+
+    let services = UiTransportServices {
+        broadcast_incoming: {
+            let broadcasts = broadcasts.clone();
+            Arc::new(move |_incoming: &UiIncomingMessage| {
+                broadcasts.fetch_add(1, Ordering::SeqCst);
+                UiBroadcastStatus::Delivered
+            })
+        },
+        emit_phase: {
+            let probe_entered = probe_entered.clone();
+            let released = released.clone();
+            Arc::new(move |phase| {
+                // Park the executor inside the probe, where neither fence flag has
+                // been read yet on this iteration.
+                if phase.phase == "routed" {
+                    probe_entered.store(true, Ordering::SeqCst);
+                    while !released.load(Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                }
+                UiBroadcastStatus::Delivered
+            })
+        },
+    };
+
+    let mut transport = UiTransport::new(services);
+    let outcome_future = transport.mailw(ui_envelope());
+    wait_for(
+        &probe_entered,
+        "the delivery executor to enter the routed probe",
+    );
+
+    // An executor of this generation is running, so it has not ceased. Reading
+    // cessation as true here is the dangerous answer: it would let a replacement
+    // generation start alongside a live writer.
+    assert!(
+        !transport.generation_ceased(),
+        "a generation with a running executor must not report cessation",
+    );
+
+    transport.fence_generation();
+    transport.terminate_generation();
+    released.store(true, Ordering::SeqCst);
+
+    let outcome = block_on(outcome_future).expect("mailw outcome future resolves");
+
+    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
+    assert_eq!(outcome.reason_code.as_deref(), Some("ui_generation_fenced"));
+    // Pins the revoked rung specifically. Both rungs spell the same reason code,
+    // and only the reason text says which check stopped the executor — so without
+    // this, a delivery stopped by the cooperative flag would pass while proving
+    // nothing about the destructive step.
+    assert!(
+        outcome
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("terminated")),
+        "the outcome must name the revocation rather than the cooperative flag: {:?}",
+        outcome.reason,
+    );
+    assert_eq!(
+        broadcasts.load(Ordering::SeqCst),
+        0,
+        "a terminated generation must not emit to a subscriber",
+    );
+
+    // The observation the fence's second window would make. Polled rather than
+    // read once: the executor resolves its outcome before it returns, so the
+    // handle can still be live for an instant after the future settles.
+    let started = Instant::now();
+    while !transport.generation_ceased() {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "a revoked generation whose executor has resolved must cease",
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 #[test]
