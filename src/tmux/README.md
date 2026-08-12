@@ -107,10 +107,10 @@ in the prompt before token budgeting and paste injection.
 - `src/pty/README.md` — the Pty transport's receipt rendering
   writeup, which uses the same marker literal for cross-transport
   consistency.
-- `src/relay/delivery/async_worker.rs` — the relay-side terminal-
-  resolution chokepoint that builds receipts
-  (`complete_task_outcome` → `deliver_terminal_outcome_receipt` →
-  `build_terminal_outcome_receipt`) and the non-recursion
-  enforcement at the single spawn site.
+- `src/relay/delivery/async_worker/` — the relay-side terminal-
+  resolution chokepoint (`terminal.rs`, `complete_task_outcome`) and the
+  receipt construction it hands off to (`reporting.rs`,
+  `deliver_terminal_outcome_receipt` → `build_terminal_outcome_receipt`),
+  including the non-recursion enforcement at the single spawn site.
 - `documentation/development/README.md` — build prerequisites, lint /
   test gates, and the tmux test harness setup.

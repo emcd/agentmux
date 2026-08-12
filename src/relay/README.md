@@ -271,11 +271,19 @@ exported from `src/relay/mod.rs`.
     transport-type gate — and collects the resolved `OutcomeFuture`s. The
     blocking IO, quiescence/coalesce waits, ACP bootstrap/respawn, and readiness
     mirroring all live inside the transports now; the loop never names an ACP type.
-  - `async_worker.rs`: worker registry (tokio mpsc senders), shutdown
-    drain helpers, and the terminal-outcome resolution site
-    (`complete_task_outcome`). This single chokepoint records the `relay.log`
+  - `async_worker/`: split three ways along the boundary the module's own
+    tests already followed. `registry.rs` holds the worker registry (tokio
+    mpsc senders), the readiness/failure/output-view accessors, the ACP
+    pending-slot accounting, and the shutdown drain helpers; `terminal.rs`
+    holds the single terminal transition and the guard's evidence order
+    (`complete_task_outcome` and the rest of the `complete_task_*` family);
+    `reporting.rs` publishes the result. The dependency runs one way through
+    the middle — `terminal` decides an outcome and hands it to `reporting`,
+    which reaches back into `registry` only to route a receipt to a live
+    worker. This single chokepoint records the `relay.log`
     observability floor for every terminal outcome and, for a *non-delivered*
-    one (`Failed` incl. `pane_wedged`, `Timeout`, `DroppedOnShutdown`),
+    one (`Failed` incl. `pane_wedged`, `NotSubmitted`, `SubmissionUnknown`,
+    `DroppedOnShutdown`),
     best-effort delivers a **terminal-outcome receipt** back to the original
     sender. The receipt is a relay/system-originated (`relay@RELAY`) envelope
     naming the original `message_id`, target, outcome, and any `reason_code`,
@@ -723,7 +731,7 @@ behavior rather than incidents.
   backstop that calls the same `shutdown()` method if the transport is
   dropped without an explicit one; (c) the host's bounded
   `wait_for_async_delivery_shutdown`
-  (`src/relay/delivery/async_worker.rs:102-114`) bounds the join
+  (`src/relay/delivery/async_worker/registry.rs`) bounds the join
   window, and the relay binary tears its runtime down with
   `Runtime::shutdown_timeout` (`src/bin/agentmux.rs:11,47`, with a
   5s `RELAY_HOST_SHUTDOWN_TIMEOUT` constant) as a final guarantee so
