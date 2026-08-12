@@ -834,6 +834,88 @@ fn a_terminal_outcome_names_the_authorization_it_resolved_under() {
     );
 }
 
+/// The partition reaches the log, naming the unit and the members bound to it.
+///
+/// Every other step of a delivery already left a record; which members shared a
+/// fate did not. That is the step that decides whose outcome is derived from
+/// whose evidence, so without it a reader could see two members resolve
+/// identically and be unable to tell whether one record answered for both or two
+/// records happened to agree.
+///
+/// The target is the UI session for the same reason the batch-identity test above
+/// uses one: UI reports healthy and ready unconditionally, so it reaches the
+/// declaration, while a tmux target with no server behind it resolves during
+/// `Pending` and never declares anything.
+///
+/// A singleton is what this can assert deterministically. A multi-member unit is
+/// reachable — the tmux transport drains its channel and declares over the whole
+/// coalesced group — but only opportunistically: the drain takes what is
+/// *immediately available* and flushes when the channel is empty, with no
+/// coalesce wait. So whether a second envelope joins the group is a race, and a
+/// test asserting it would be flaky rather than strict.
+#[test]
+fn a_declared_partition_names_its_unit_and_members() {
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    dispatch_request(
+        RelayRequest::Send {
+            request_id: None,
+            requester_session: "alpha".to_string(),
+            message: "hello".to_string(),
+            targets: vec!["user@GLOBAL".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(1),
+            on_behalf_of: None,
+        },
+        &config_root,
+        "party",
+        &tmux_socket,
+    )
+    .expect("send response");
+
+    let declared = await_inscription_within(
+        &inscriptions,
+        "relay.delivery.partition.declared",
+        std::time::Duration::from_secs(45),
+    );
+    let record: serde_json::Value =
+        serde_json::from_str(declared.as_str()).expect("declaration inscription is json");
+    let payload = record
+        .get("details")
+        .expect("declaration carries a details object");
+
+    assert!(
+        payload
+            .get("unit_id")
+            .and_then(serde_json::Value::as_u64)
+            .is_some(),
+        "a declaration names the unit it minted: {declared}"
+    );
+    assert_eq!(
+        payload
+            .get("member_count")
+            .and_then(serde_json::Value::as_u64),
+        Some(1),
+        "a UI handover is one envelope, so its unit has one member: {declared}"
+    );
+    // The member ids are the point: a count alone would not say *which* members
+    // were bound, which is the only thing that makes a shared outcome auditable.
+    let members = payload
+        .get("member_ids")
+        .and_then(serde_json::Value::as_array)
+        .expect("a declaration names its members");
+    assert_eq!(members.len(), 1, "member_ids agrees with member_count");
+    assert!(
+        members[0].as_str().is_some_and(|id| !id.is_empty()),
+        "the bound member is named: {declared}"
+    );
+}
+
 /// One member, one terminal record. The guard's compare-and-swap is what makes
 /// that a property rather than a consequence of only one path happening to run.
 #[test]
