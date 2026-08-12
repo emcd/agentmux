@@ -122,11 +122,14 @@ fn relay_send_delivers_when_prompt_readiness_template_matches() {
     let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
 }
 
-// This assertion covers the pre-relocation contract where Tmux owned the
-// prompt-readiness wait and withheld injection. The transport now exposes an
-// advisory handover level; the relay must consume that level before this
-// non-injection invariant is meaningful.
-#[ignore = "requires relay-side handover admission gating"]
+/// A healthy target whose prompt-readiness template never matches holds its
+/// member rather than delivering to it.
+///
+/// The invariant predates the relocation of the wait, but what enforces it does
+/// not: Tmux used to own the prompt wait and withhold injection itself, and now
+/// the transport reports an advisory level that relay admission gates on. The
+/// observable contract is the same either way, which is the point — a member
+/// whose target is reachable but not at a prompt is held, not written.
 #[test]
 fn relay_send_times_out_when_prompt_readiness_never_matches() {
     if !tmux_available() {
@@ -413,11 +416,10 @@ fn relay_send_delivers_when_prompt_regex_requires_blank_separator_line() {
     let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
 }
 
-// This assertion covers the pre-relocation contract where Tmux owned the
-// prompt-readiness wait and withheld injection. The transport now exposes an
-// advisory handover level; the relay must consume that level before this
-// non-injection invariant is meaningful.
-#[ignore = "requires relay-side handover admission gating"]
+/// The same hold, reached through the idle-column half of the template rather
+/// than the regex half. Kept separate because the two are independently
+/// sufficient to make a pane unready, and a gate that consulted only one of them
+/// would pass the other test.
 #[test]
 fn relay_send_times_out_when_prompt_idle_column_does_not_match() {
     if !tmux_available() {

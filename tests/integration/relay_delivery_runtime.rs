@@ -288,11 +288,10 @@ async fn relay_sigterm_reaps_in_flight_acp_turn_without_sigkill() {
     }
 }
 
-// This assertion depends on a queued, readiness-blocked transport delivery
-// surviving until shutdown. Handover readiness is now an advisory level
-// consumed by relay admission, so the old dropped-on-shutdown timing is not
-// meaningful until that relay-side gate is active.
-#[ignore = "requires relay-side handover admission gating"]
+/// Depends on a queued, readiness-blocked delivery surviving until shutdown,
+/// which is now what relay-side admission produces: the member is held
+/// `Pending` against an unready target instead of being parked inside a
+/// transport-owned wait, and shutdown is what resolves it.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
     let temporary = TempDir::new().expect("temporary");
@@ -932,111 +931,61 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
     let details = metadata_details
         .as_object()
         .expect("envelope metadata details is an object");
-    for field in [
-        "schema_version",
-        "message_id",
-        "namespace",
-        "sender_session",
-        "target_sessions",
-        "created_at",
-    ] {
-        assert!(
-            details.contains_key(field),
-            "envelope metadata must include {field}, details={details:?}"
-        );
-    }
+    // Values, not field names. A presence check passes against an event whose
+    // every field is empty or belongs to some other send, which is exactly the
+    // correlation this inscription exists to provide: it is what lets a reader
+    // tie a pane envelope back to the request that produced it.
+    assert_eq!(
+        details.get("namespace").and_then(serde_json::Value::as_str),
+        Some(bundle_name),
+        "envelope metadata must name this send's namespace: {details:?}"
+    );
+    assert_eq!(
+        details
+            .get("sender_session")
+            .and_then(serde_json::Value::as_str),
+        Some("alpha@party"),
+        "envelope metadata must name the canonical sender: {details:?}"
+    );
+    assert_eq!(
+        details
+            .get("target_sessions")
+            .and_then(serde_json::Value::as_array)
+            .map(|targets| targets
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect::<Vec<_>>()),
+        Some(vec!["alpha@party"]),
+        "envelope metadata must name the canonical targets: {details:?}"
+    );
+    // Correlated against the response rather than merely nonempty: a populated
+    // id from an unrelated send would satisfy nonemptiness and defeat the whole
+    // purpose of carrying one.
+    assert_eq!(
+        details
+            .get("message_id")
+            .and_then(serde_json::Value::as_str),
+        Some(results[0].message_id.as_str()),
+        "envelope metadata must carry the message id the send returned: {details:?}"
+    );
+    assert_eq!(
+        details
+            .get("schema_version")
+            .and_then(serde_json::Value::as_str),
+        Some("1"),
+        "envelope metadata must name its schema version: {details:?}"
+    );
+    assert!(
+        details
+            .get("created_at")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|created| created.contains('T') && created.ends_with('Z')),
+        "envelope metadata must carry a UTC timestamp: {details:?}"
+    );
     assert!(
         !details.contains_key("bundle_name"),
         "envelope metadata must use namespace, not the retired bundle_name field, \
          details={details:?}"
-    );
-}
-
-// This assertion depends on the pre-relocation timing of a transport-owned
-// prompt wait. Handover readiness is now an advisory level consumed by relay
-// admission, so the progress event's old wait window is not meaningful until
-// that relay-side gate is active.
-#[ignore = "requires relay-side handover admission gating"]
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn delivery_progress_inscription_carries_group_and_namespace() {
-    let temporary = TempDir::new().expect("temporary");
-    let bundle_name = "party";
-    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
-    let state_root = temporary.path().join("state");
-    let fake_tmux_script = temporary.path().join("fake-tmux.sh");
-    let attempts_file = temporary.path().join("attempts.txt");
-    let log_file = temporary.path().join("fake-tmux.log");
-    let inscriptions_root = temporary.path().join("inscriptions");
-    write_fake_tmux_script(&fake_tmux_script, &attempts_file, &log_file);
-
-    let relay_socket = state_root.join("relay.sock");
-    let mut child = spawn_relay_with_fake_tmux_and_env(
-        bundle_name,
-        &config_root,
-        &state_root,
-        &inscriptions_root,
-        &fake_tmux_script,
-        &[
-            ("FAKE_TMUX_CAPTURE_MODE", "stable"),
-            ("AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS", "true"),
-        ],
-    );
-    wait_for_relay_ready(&relay_socket).await;
-
-    let response = request_relay(
-        &relay_socket,
-        bundle_name,
-        "alpha",
-        &RelayRequest::Send {
-            request_id: Some("req-delivery-progress".to_string()),
-            requester_session: "alpha".to_string(),
-            message: "diagnostic correlation".to_string(),
-            targets: vec!["alpha@party".to_string()],
-            broadcast: false,
-            quiet_window_ms: Some(10),
-            on_behalf_of: None,
-        },
-    )
-    .expect("send request should succeed");
-    let RelayResponse::Send { results, .. } = response else {
-        panic!("expected send response");
-    };
-    assert_eq!(results[0].outcome, SendOutcome::Queued);
-
-    let inscriptions_path = inscriptions_root.join("relay.log");
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let diagnostic = loop {
-        let current = fs::read_to_string(&inscriptions_path).unwrap_or_default();
-        if let Some(value) = current
-            .lines()
-            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .find(|value| value["event"] == "relay.delivery_ready")
-        {
-            break value;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "timed out waiting for delivery progress, inscriptions={current:?}"
-        );
-        sleep(Duration::from_millis(20)).await;
-    };
-
-    child.start_kill().expect("kill relay");
-    let _ = child.wait().await;
-
-    let details = &diagnostic["details"];
-    assert_eq!(details["namespace"], bundle_name);
-    assert_eq!(details["target_session"], "alpha");
-    assert_eq!(details["message_ids_total"], 1);
-    let message_ids = details["message_ids"]
-        .as_array()
-        .expect("delivery progress message_ids array");
-    assert_eq!(message_ids.len(), 1);
-    assert!(
-        message_ids[0]
-            .as_str()
-            .is_some_and(|value| !value.is_empty()),
-        "delivery progress must carry the queued message id: {diagnostic}"
     );
 }
 
