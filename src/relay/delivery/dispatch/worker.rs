@@ -11,7 +11,7 @@ use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver, task::JoinSet};
 use crate::{
     configuration::{BundleMember, SessionType},
     envelope::PromptBatchSettings,
-    runtime::signals::shutdown_requested,
+    runtime::signals::{budget_within_shutdown, shutdown_requested},
 };
 
 use super::super::super::{
@@ -37,6 +37,12 @@ use super::batch::HandoverWindow;
 use crate::runtime::inscriptions::emit_inscription;
 
 const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
+/// Held back from the shutdown fence for the work that follows its verdict:
+/// terminalizing members the collectors did not resolve, unregistering the
+/// worker, and returning to a caller that still has its own teardown to run. A
+/// fence that spent the entire remaining grace would satisfy its own bound and
+/// leave every one of those to be cut off by the forced exit.
+const SHUTDOWN_FENCE_RESERVE_MS: u64 = 300;
 
 /// What one in-flight collector task yields: the resolved transport outcome, or
 /// `None` if the outcome future was dropped before resolving.
@@ -1146,6 +1152,27 @@ async fn shutdown_drain(
     fence_observation: Duration,
 ) {
     let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
+    // Members still in the receiver were never authorized and never handed to a
+    // transport, so nothing about resolving them depends on whether the old
+    // generation ceased. Resolving them first makes the specified
+    // `dropped_on_shutdown` guarantee independent of how long the fence takes —
+    // which is the whole of the defect this ordering fixes, since a fence that
+    // outlived the process budget used to take these members down with it.
+    //
+    // Nothing can arrive after this point: `close_worker` has already returned,
+    // and `try_existing_worker` holds the registry lock across its send, so a
+    // sender either enqueued before the close (and is drained here) or observed
+    // the entry closing and never enqueued at all.
+    super::super::async_worker::drop_pending_async_tasks_on_shutdown(receiver, pending);
+    // One window, not the whole remaining grace: the fence spends *two* of these
+    // back to back, so a window sized at everything left would overrun the
+    // deadline by almost that much again. The reserve covers what still has to
+    // happen after the verdict — terminalizing whatever the collectors did not
+    // resolve, unregistering, and the caller's own teardown.
+    let fence_observation = budget_within_shutdown(
+        fence_observation,
+        Duration::from_millis(SHUTDOWN_FENCE_RESERVE_MS),
+    ) / 2;
     let mut fence = FenceInProgress::begin(transport, fence_observation);
     let outcome = loop {
         if let Some(outcome) = fence.advance(transport, Instant::now()) {
@@ -1174,5 +1201,8 @@ async fn shutdown_drain(
             GuardTrigger::GracefulShutdown,
         );
     }
+    // Defensive only. Nothing can have arrived since the pre-fence drain above,
+    // for the reason given there; this costs one `try_recv` and means a future
+    // change that reopens a producer during shutdown loses nothing silently.
     super::super::async_worker::drop_pending_async_tasks_on_shutdown(receiver, pending);
 }

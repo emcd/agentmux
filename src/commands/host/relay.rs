@@ -36,7 +36,10 @@ use crate::{
             BundleRuntimePaths, RelayRuntimePaths, RuntimeRootOverrides, RuntimeRoots,
             ensure_bundle_runtime_directory, ensure_relay_runtime_directory,
         },
-        signals::{install_shutdown_signal_handlers, shutdown_requested},
+        signals::{
+            arm_shutdown_deadline, budget_within_shutdown, install_shutdown_signal_handlers,
+            register_shutdown_grace, shutdown_requested,
+        },
         starter::ensure_starter_configuration_layout,
     },
 };
@@ -128,6 +131,12 @@ const RELAY_SHUTDOWN_WATCHDOG_GRACE_MS: u64 = 5_000;
 // cleanup (async-delivery drain, tmux teardown); workers that miss the window
 // are abandoned to runtime teardown and reported as timed out.
 const RELAY_SHUTDOWN_WORKER_DRAIN_TIMEOUT_MS: u64 = 1_500;
+// Headroom held back from the async-delivery drain for the work that follows it
+// inside cleanup: sentinel and socket removal, then per-bundle tmux teardown,
+// which spawns tmux clients and is the slowest of the three. A drain that spent
+// the whole remaining grace would satisfy its own bound and leave the teardown
+// to be cut off by the watchdog.
+const RELAY_SHUTDOWN_TEARDOWN_RESERVE_MS: u64 = 1_000;
 
 pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
     // Install SIGINT/SIGTERM handlers before any startup work. The handlers do
@@ -184,12 +193,26 @@ pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), 
 /// `eu-stack -p <relay pid>` or
 /// `gdb -p <relay pid> -ex "thread apply all bt" -ex quit`.
 fn spawn_shutdown_watchdog() -> Result<(), RuntimeError> {
+    // Registered before the thread exists, and therefore before any signal can
+    // be observed. The watchdog cannot arm the deadline until it notices the
+    // flag a poll interval later, and cleanup can begin inside that window —
+    // registering the grace up front is what lets whoever needs a budget first
+    // establish the deadline instead of concluding this process has none.
+    register_shutdown_grace(Duration::from_millis(RELAY_SHUTDOWN_WATCHDOG_GRACE_MS));
     thread::Builder::new()
         .name("shutdown-watchdog".to_string())
         .spawn(|| {
             while !shutdown_requested() {
                 thread::sleep(Duration::from_millis(RELAY_SHUTDOWN_POLL_INTERVAL_MS));
             }
+            // Publish the deadline before announcing it, and before sleeping the
+            // grace. This is the *later* of the two arming paths: cleanup can
+            // begin inside the poll interval above, and a step needing a budget
+            // there arms from the registered grace rather than waiting for this.
+            // First-arming-wins, so that earlier deadline is the one that
+            // stands — earlier than this observation, and therefore earlier than
+            // the forced exit it has to precede.
+            arm_shutdown_deadline(Duration::from_millis(RELAY_SHUTDOWN_WATCHDOG_GRACE_MS));
             emit_inscription(
                 "relay.shutdown.watchdog.armed",
                 &json!({ "grace_ms": RELAY_SHUTDOWN_WATCHDOG_GRACE_MS }),
@@ -628,7 +651,14 @@ fn cleanup_relay_host(
     bundle_paths: Vec<BundleRuntimePaths>,
 ) -> Result<(), RuntimeError> {
     let async_workers_remaining = if shutdown_requested() {
-        wait_for_async_delivery_shutdown(Duration::from_millis(1_500))
+        // Fitted to the watchdog grace rather than taken outright. The configured
+        // bound is the most this step may take; the deadline is what it must fit
+        // inside, and the reserve is for the socket removal and per-bundle tmux
+        // teardown below, which still have to run after this returns.
+        wait_for_async_delivery_shutdown(budget_within_shutdown(
+            Duration::from_millis(RELAY_SHUTDOWN_WORKER_DRAIN_TIMEOUT_MS),
+            Duration::from_millis(RELAY_SHUTDOWN_TEARDOWN_RESERVE_MS),
+        ))
     } else {
         0
     };
