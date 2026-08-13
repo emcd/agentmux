@@ -4,6 +4,8 @@ mod acp;
 mod cli;
 #[path = "integration/mcp/mod.rs"]
 mod mcp;
+#[path = "integration/relay_delivery_dwell.rs"]
+mod relay_delivery_dwell;
 #[path = "integration/runtime_bootstrap/mod.rs"]
 mod runtime_bootstrap;
 #[path = "integration/session_relay_delivery.rs"]
