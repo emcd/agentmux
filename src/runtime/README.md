@@ -39,7 +39,27 @@ shared by relay and MCP hosts.
     - `<config-root>/policies.toml`
     - `<config-root>/bundles/example.toml`
 - `signals.rs`
-  - process signal wiring and shutdown state checks.
+  - process signal wiring and shutdown state checks, plus the process-wide
+    **shutdown-work deadline**. Shutdown is one budget, not a set of unrelated
+    durations: every bounded step takes its share via `budget_within_shutdown`,
+    which fits a configured bound to what remains and withholds a reserve for the
+    steps behind it.
+
+    The deadline is established at the *first* of two events — the watchdog
+    observing the shutdown flag, or the first step needing a budget once
+    shutdown has been requested — which is why `register_shutdown_grace` runs
+    when the watchdog is spawned rather than when it fires. That is not the same
+    instant as the watchdog's forced exit and must not be documented as if it
+    were: it is earlier by however long the watchdog has yet to observe, and
+    earlier is the required direction. First-arming-wins keeps the earliest.
+
+    Three states, not two, and conflating any pair is a defect rather than a
+    simplification. A registered grace is the positive fact that this process
+    *will* have a deadline, so `None` from `shutdown_time_remaining` means
+    "never" (CLI and test harnesses — take the configured bound) rather than
+    "not yet"; `Some(ZERO)` means the grace is spent, and collapsing it into
+    `None` would restore a full wait exactly when there is least time for it. See
+    `src/relay/README.md` for the nesting diagram and why it is load-bearing.
 - `error.rs`
   - shared runtime error taxonomy and helpers.
 - `mod.rs`

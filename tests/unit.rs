@@ -35,6 +35,8 @@ mod runtime_paths;
 mod runtime_sockets;
 #[path = "unit/runtime_starter.rs"]
 mod runtime_starter;
+#[path = "unit/shutdown_clock.rs"]
+mod shutdown_clock;
 #[path = "unit/tmux_transport.rs"]
 mod tmux_transport;
 #[path = "unit/tui.rs"]

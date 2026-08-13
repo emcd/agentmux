@@ -235,6 +235,49 @@ exported from `src/relay/mod.rs`.
     executors were never observed to stop, so reaping and joining them would run
     the bounded fence straight back into the unbounded wait it exists to replace.
 
+    **Shutdown budgets nest, and the nesting is load-bearing.** Every bounded
+    step on the shutdown path runs inside the watchdog grace that ends in a
+    forced exit, so each sizes itself from what *remains* of one process-wide
+    deadline rather than from a duration configured in isolation:
+
+    ```
+    watchdog forced exit           the hard limit: grace starts when the
+    │                              watchdog OBSERVES the flag
+    │
+    shutdown-work deadline 5000ms  established at the FIRST of: watchdog
+    │                              observation, or the first step needing a
+    │                              budget after the signal. Never later than
+    │                              the forced exit; usually a poll earlier
+    ├── connection drain   1500ms
+    └── cleanup_relay_host
+        ├── async-delivery wait    min(1500ms, remaining − 1000ms reserve)
+        │   └── generation fence   min(configured, remaining − 300ms) / 2
+        │                          per window — the fence spends TWO
+        └── socket + tmux teardown ← what the 1000ms reserve is for
+    ```
+
+    The two deadlines are deliberately not the same instant. A step that waited
+    for the watchdog to publish before computing a budget would make every
+    shutdown depend on that thread being scheduled promptly under exactly the
+    load that makes shutdown slow; a step that assumed they coincided would hand
+    out a deadline later than the exit it must precede. Arming early is the safe
+    direction, and first-arming-wins keeps the earliest one.
+
+    The deadline lives in `runtime::signals`; `budget_within_shutdown` is how a
+    step takes its share. The rule exists because the durations have no
+    relationship otherwise: `[delivery].fence-observation-timeout-ms` is
+    operator-configurable to 60s and the fence spends two of those windows,
+    nested inside bounds that neither know nor validate against it. Before this,
+    raising a delivery timeout for an unrelated reason silently lost work on
+    every shutdown — an admitted member could reach *no* terminal outcome at all
+    when the process exited underneath the fence
+    (`agentmux:issues/relay/65`). Two consequences worth keeping in mind when
+    editing this path: a shutdown fence may be cut short and return a negative
+    verdict, which here is a fail-safe rather than a transport fault, and
+    members still queued to a worker resolve *before* the fence, because nothing
+    about a never-authorized member's outcome depends on whether a generation
+    ceased.
+
     The **execution watchdog** bounds a member's time from authorization to
     resolution by `[delivery].submission-timeout-ms`. It is a bound over the
     relay's own supervised code and nothing else, which it *is* only because

@@ -937,6 +937,61 @@ On graceful shutdown, still-`Pending` relay-owned members SHALL resolve
 Neither respawn nor shutdown SHALL select an outcome for an `Authorized` member.
 Both are triggers; the evidence order chooses.
 
+**Shutdown budgets SHALL nest.** Graceful shutdown runs under one process-wide
+**shutdown-work deadline**, and every bounded step on the shutdown path SHALL
+size itself from what remains of it rather than from a duration configured in
+isolation. A step SHALL reserve headroom for the steps that follow it, and a step
+whose configured bound exceeds the remaining budget SHALL be cut down to fit
+rather than allowed to overrun.
+
+The shutdown-work deadline is **distinct from, and never later than, the
+watchdog's forced exit.** It SHALL be established at the first of: the watchdog
+observing the shutdown signal, or the first step to need a budget once shutdown
+has been requested. The two differ by however long the watchdog has yet to
+observe, so a deadline established by a step is *earlier* than the forced exit
+rather than equal to it — which is the required direction. The specification
+deliberately does **not** require them to coincide: a step that waited for the
+watchdog to publish before computing a budget would make every shutdown depend on
+that thread being scheduled promptly under exactly the load that makes shutdown
+slow, and one that assumed they coincided would hand out a deadline later than
+the exit it must precede.
+
+The rule exists because the durations have no relationship otherwise:
+`[delivery].fence-observation-timeout-ms` is operator-configurable and the fence
+spends **two** of those windows, nested inside a delivery-worker wait and a
+watchdog grace that neither knows nor validates against it. Without this rule,
+raising a delivery timeout for an unrelated reason silently causes work behind
+the fence to be lost when the process exits underneath it.
+
+Consequently, a shutdown fence MAY be cut short by the deadline and return a
+**negative verdict**. That verdict is a fail-safe, not a report of a transport
+fault: the process is exiting, no replacement generation will be admitted, and
+unresolved members terminalize through the guard's evidence order exactly as
+they would on any other trigger.
+
+**Resolving a member SHALL NOT depend on a step it does not require.** Members
+that were never authorized and never handed to a transport SHALL resolve before
+the shutdown fence runs, because nothing about their outcome depends on whether
+a generation ceased. Ordering them after it made a guarantee that is
+fence-independent hostage to fence duration.
+
+#### Scenario: A shutdown fence cut short by the deadline still resolves every member
+
+- **WHEN** the shutdown deadline leaves less time than the configured fence
+  observation requires
+- **THEN** the fence observes for the remaining budget rather than the configured
+  duration
+- **AND** a negative verdict resolves unresolved members through the evidence order
+- **AND** no replacement generation is admitted, because the process is exiting
+
+#### Scenario: Never-authorized members resolve before the fence
+
+- **WHEN** relay shuts down gracefully with members still queued to a worker and
+  never authorized
+- **THEN** those members resolve `dropped_on_shutdown` before the generation
+  fence begins
+- **AND** their resolution does not depend on the fence's verdict or duration
+
 #### Scenario: Reschedule pending entries to a new generation
 
 - **WHEN** a transport generation is torn down and replaced within a surviving
