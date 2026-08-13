@@ -834,13 +834,22 @@ The threshold's cost is stated rather than hidden: a target that recovers just
 after it elapses will have had members bounced that could have been delivered.
 That is inherent to any health check, and the threshold is the tuning point.
 
-**Health gates writes and informs reads.** `raww` rides the same ordered channel
-as delivery and inherits the gate. `look` SHALL NOT be blocked by it: an operator
-looks at a target precisely when something is wrong with it, so refusing the
-snapshot removes the diagnostic exactly when it is needed. `look` instead carries
-the health level in its response metadata, which is strictly more informative
-than an error — the last output that was captured, plus how long the target has
-been unreachable.
+**Health gates writes and does not gate reads.** `raww` rides the same ordered
+channel as delivery and inherits the gate. A `look` is never rejected on account
+of its target's health: an operator looks at a target precisely when something is
+wrong with it, so refusing to even attempt the snapshot removes the diagnostic
+exactly when it is needed.
+
+What comes back is then the transport's own business, and this design promises no
+more than that. A tmux transport reports `Unreachable` *because* its pane cannot
+be observed, and that is the same pane a snapshot would be captured from, so the
+attempt fails on its own terms. The diagnostic difference that survives is
+therefore narrower than "the operator still sees the pane" — it is that the
+operator receives the transport's real error rather than a policy refusal.
+Carrying the health level in the response would be strictly more informative than
+either, and would be the version worth wanting; it is a response-shape change
+tracked separately as `agentmux:issues/relay/67`, not an assumption this design
+rests on.
 
 **Transports are constructed when their worker starts, not on first write.**
 Readiness and health are unanswerable for a transport that does not exist yet,

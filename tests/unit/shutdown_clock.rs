@@ -10,7 +10,7 @@
 //! These drive the arithmetic directly. What they deliberately do NOT claim is
 //! that a slow fence is now survivable end to end: forcing a fence to be slow
 //! needs a generation that outlives forced termination, which no real transport
-//! provides and which the arc already tracks as a missing test seam.
+//! provides, so covering it waits on an injectable transport seam.
 
 use std::time::Duration;
 
