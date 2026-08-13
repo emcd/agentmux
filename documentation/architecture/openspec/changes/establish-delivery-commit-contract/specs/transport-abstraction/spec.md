@@ -944,10 +944,17 @@ made repeatedly, and sustained unreachability is itself evidence in a way that
 sustained busyness is not.
 
 Health SHALL gate write paths and SHALL NOT gate `look`. `raww` shares the
-ordered delivery channel and inherits the gate. `look` SHALL remain available on
-an unreachable target and SHALL carry the health level in its response metadata:
-a target is inspected precisely when something is wrong with it, so withholding
-the snapshot removes the diagnostic exactly when it is needed.
+ordered delivery channel and inherits the gate. A `look` SHALL NOT be rejected on
+account of its target's health: a target is inspected precisely when something is
+wrong with it, so refusing to even attempt the snapshot removes the diagnostic
+exactly when it is needed.
+
+Whether a snapshot then comes back is the transport's own affair, and this
+requirement SHALL NOT be read as promising one. A tmux transport reports
+`Unreachable` *because* its pane cannot be observed, and that is the same pane a
+snapshot would be captured from, so the attempt fails on its own terms. An
+operator gets the transport's real error instead of a policy refusal, which is
+the diagnostic difference this requirement exists to preserve.
 
 #### Scenario: A busy target keeps waiting
 
@@ -971,11 +978,12 @@ the snapshot removes the diagnostic exactly when it is needed.
 - **AND** the members that were waiting are authorized normally once readiness
   allows
 
-#### Scenario: Look survives an unreachable target
+#### Scenario: Health does not reject a look
 
 - **WHEN** an operator looks at a target whose transport reports `Unreachable`
-- **THEN** the snapshot request is served rather than refused
-- **AND** the response carries the health level and how long it has held
+- **THEN** the request is dispatched to the transport rather than rejected on
+  health grounds
+- **AND** any failure returned is the transport's own snapshot failure
 
 #### Scenario: Health determination carries no relay dependency
 
