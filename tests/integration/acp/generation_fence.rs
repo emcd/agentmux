@@ -37,11 +37,22 @@ use super::helpers::*;
 /// reach — which is true of the *bootstrap* tests below, where the agent never
 /// answers, and false here.
 ///
-/// Termination's teeth against a steady-state generation were only demonstrable
-/// under the execution watchdog, which is no longer armed; if it is re-armed,
-/// restore the watchdog-driven variant of this test with it. What this test
-/// still holds down is the fate of the process, which is the part the relay's
-/// own account of a generation cannot fake.
+/// Termination's teeth live in the watchdog-driven variant below,
+/// `an_executor_blocked_past_the_bound_is_fenced_and_its_member_resolved`, and
+/// they are real: neutering ACP's `initiate_termination` fails that test and
+/// leaves this one passing. The watchdog does arm — for a member still
+/// unresolved past the bound, which is what a parked write produces — so the
+/// note that once stood here asking a future reader to restore a watchdog-driven
+/// variant has been overtaken by that test existing.
+///
+/// What this test holds down is the fate of the process. That is worth stating
+/// narrowly: with every explicit destructive step neutered — ACP's
+/// `initiate_termination`, its `bootstraps.initiate_termination`, and the
+/// driver's two task aborts — the child still dies and this test still passes,
+/// so the process fate it observes is carried by ownership rather than by the
+/// fence's step 3. Which is not a defect; a `Drop` that kills and waits is a
+/// sound way for a child to die. It does mean this test cannot be cited as
+/// evidence that the destructive step reaches anything.
 ///
 /// The second half asserts the invariant that lets the guard key drop its
 /// generation component: a fenced generation admits no replacement. The dying
