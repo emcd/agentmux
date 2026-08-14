@@ -1124,3 +1124,72 @@ mod sibling_agreement_tests {
         }
     }
 }
+
+/// The write-once terminal transition, contested.
+///
+/// Its own block for the reason the two above have theirs: each already carries a
+/// test. Inline because the ledger is `pub(in crate::relay)` by design — the
+/// public seam for transports is `PartitionSink`, and widening `terminalize` to
+/// reach it from `tests/` would publish the delivery ledger itself.
+///
+/// What makes this worth a test rather than a comment is that nothing else
+/// exercises the gate under contention. A probe on `terminalize` across every
+/// exactly-once test in this arc — the flapping target, the replaced generation,
+/// the mixed shutdown — records exactly **one** attempt per message. Their
+/// uniqueness assertions are therefore tripwires against a future second
+/// resolver, not demonstrations that the transition adjudicates one. Two
+/// resolvers do race in production, at the seam between a collector resolving a
+/// member and a fence cutting the same member short, and that race is not
+/// constructible from outside the relay.
+#[cfg(test)]
+mod terminal_contention_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Barrier};
+
+    /// Exactly one of many simultaneous resolvers may report a member.
+    ///
+    /// The barrier is what makes this a race rather than a sequence: without it
+    /// the threads would start far enough apart that the first would finish
+    /// before the second began, and the test would re-check the same
+    /// already-terminal path the arc's integration tests already take.
+    ///
+    /// Teeth: leaving the entry in the ledger after a win — the removal is the
+    /// actual gate, not the state comparison beside it — makes all eight win.
+    #[test]
+    fn only_one_of_many_racing_resolvers_wins_a_member() {
+        const RESOLVERS: usize = 8;
+        const MESSAGE: &str = "contention-test-member";
+
+        let target = AdmissionTargetKey::new(
+            "contention-test",
+            Path::new("/nonexistent/contention-test"),
+            "target",
+        );
+        admit(MESSAGE, target, SessionType::Tmux, 1).expect("admit");
+
+        let winners = Arc::new(AtomicUsize::new(0));
+        let barrier = Arc::new(Barrier::new(RESOLVERS));
+        let handles: Vec<_> = (0..RESOLVERS)
+            .map(|_| {
+                let winners = Arc::clone(&winners);
+                let barrier = Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    if matches!(terminalize(MESSAGE), TerminalTransition::Won { .. }) {
+                        winners.fetch_add(1, Ordering::SeqCst);
+                    }
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle.join().expect("resolver thread");
+        }
+
+        assert_eq!(
+            winners.load(Ordering::SeqCst),
+            1,
+            "a member owes exactly one answer no matter how many resolvers reach it"
+        );
+    }
+}
