@@ -37,7 +37,7 @@ use crate::transports::{
     DeliveryEnvelope, GenerationFence, LookMode, LookSnapshotPayload, OutcomeFuture, OutputView,
     PackingUnitId, PartitionError, PartitionSink, SendOutcome, SingleDeliveryOutcome,
     StartupContext, SubmissionEvidence, Transport, TransportError, TransportHealth,
-    TransportReadiness, TransportStatus, UnreachableSince,
+    TransportReadiness, TransportStatus, UnreachableSince, stopped_before_submission_outcome,
 };
 
 /// Default tmux look window applied when the caller omits a window size.
@@ -575,8 +575,8 @@ fn run_delivery_task(
     loop {
         // Check shutdown before blocking.
         if shutdown_flag.load(Ordering::Acquire) {
-            drain_group_as_dropped(&mut group, &ctx.target_session);
-            drain_remaining_as_dropped(&mut receiver, &ctx.target_session);
+            drain_group_as_stopped(&mut group, &ctx.target_session);
+            drain_remaining_as_stopped(&mut receiver, &ctx.target_session);
             return;
         }
 
@@ -680,7 +680,7 @@ fn run_delivery_task(
                             partition_sink.as_ref(),
                         );
                     }
-                    drain_remaining_as_dropped(&mut receiver, &ctx.target_session);
+                    drain_remaining_as_stopped(&mut receiver, &ctx.target_session);
                     return;
                 }
             }
@@ -688,46 +688,42 @@ fn run_delivery_task(
 
         // Check shutdown after processing.
         if shutdown_flag.load(Ordering::Acquire) {
-            drain_group_as_dropped(&mut group, &ctx.target_session);
-            drain_remaining_as_dropped(&mut receiver, &ctx.target_session);
+            drain_group_as_stopped(&mut group, &ctx.target_session);
+            drain_remaining_as_stopped(&mut receiver, &ctx.target_session);
             return;
         }
     }
 }
 
-/// Drain all remaining items from the channel and resolve their senders with
-/// DroppedOnShutdown, preserving each item's message_id.
-fn drain_remaining_as_dropped(receiver: &mut mpsc::Receiver<WriteItem>, target_session: &str) {
+/// Drain all remaining items from the channel and resolve their senders as
+/// stopped before submission, preserving each item's message_id.
+fn drain_remaining_as_stopped(receiver: &mut mpsc::Receiver<WriteItem>, target_session: &str) {
     while let Ok(item) = receiver.try_recv() {
         let (sender, message_id) = match item {
             WriteItem::Envelope(env, sender) => (sender, env.message_id),
             WriteItem::Raw(_, _, sender) => (sender, String::new()),
         };
-        let _ = sender.send(SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
+        let _ = sender.send(stopped_before_submission_outcome(
+            target_session.to_string(),
             message_id,
-            outcome: SendOutcome::DroppedOnShutdown,
-            reason_code: Some("dropped_on_shutdown".to_string()),
-            reason: Some("delivery dropped due to relay shutdown".to_string()),
-            details: None,
-        });
+        ));
     }
 }
 
-/// Drain a pending envelope group with DroppedOnShutdown, preserving message_ids.
-fn drain_group_as_dropped(
+/// Drain a pending envelope group as stopped before submission, preserving
+/// message_ids.
+///
+/// Every item here was still queued behind the flag check, so the token-budget
+/// partition never ran and no paste was issued for any of them.
+fn drain_group_as_stopped(
     group: &mut Vec<(DeliveryEnvelope, OutcomeSender)>,
     target_session: &str,
 ) {
     for (envelope, sender) in group.drain(..) {
-        let _ = sender.send(SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: envelope.message_id,
-            outcome: SendOutcome::DroppedOnShutdown,
-            reason_code: Some("dropped_on_shutdown".to_string()),
-            reason: Some("delivery dropped due to relay shutdown".to_string()),
-            details: None,
-        });
+        let _ = sender.send(stopped_before_submission_outcome(
+            target_session.to_string(),
+            envelope.message_id,
+        ));
     }
 }
 
@@ -745,7 +741,7 @@ fn flush_and_resolve(
     partition_sink: &dyn PartitionSink,
 ) {
     if shutdown_flag.load(Ordering::Acquire) {
-        drain_group_as_dropped(group, target_session);
+        drain_group_as_stopped(group, target_session);
         return;
     }
     paste_group(
@@ -1101,6 +1097,156 @@ mod observation_edge_tests {
                 );
             }
         }
+    }
+}
+
+/// What a stopped generation tells the group it was still holding.
+///
+/// Inline because the window under test cannot be produced from the public
+/// surface. Reaching [`drain_group_as_stopped`] through `mailw` needs the stop
+/// signal to land while the delivery thread holds an item and has not yet
+/// pasted; set it any earlier and the thread has already exited, so the write
+/// channel is closed and the refusal arm answers instead. Driving
+/// [`flush_and_resolve`] directly is the same code with that race removed.
+///
+/// The **reason code** is what gives the test teeth, and deliberately not an
+/// assertion that the sink was never asked to declare. `not_submitted` is a
+/// claim that nothing reached the target, and what stands behind it is that the
+/// flag is read *before* `paste_group`, where declaration and injection both
+/// live — but a sink assertion cannot see that ordering here. Moving the check
+/// below the paste leaves the sink untouched anyway, because pane resolution
+/// against a socket no server is listening on fails first: measured, not
+/// assumed. That reordering does change the reason code, to
+/// `tmux_target_unavailable`, so pinning the code is what fails when the
+/// ordering the outcome depends on is broken.
+///
+/// Pinning `generation_fenced` rather than merely "not `dropped_on_shutdown`"
+/// also pins the branch, and the genuine shutdown is then driven in the same
+/// fixture: the claim under test is a *discrimination*, and a fixture that only
+/// ever observes a fence cannot tell a transport that reads the cause from one
+/// that hardcodes it. The pairing asserts an unchanged **outcome** and a changed
+/// **reason** — deliberately not the `dropped_on_shutdown` spelling, which an
+/// authorized member may not resolve to at all. Only members the relay still
+/// holds as `Pending` carry that, and they never reach this channel.
+#[cfg(test)]
+mod stopped_generation_tests {
+    use super::*;
+    use crate::envelope::AddressIdentity;
+    use crate::transports::{PackingUnitId, PartitionError};
+
+    fn held_envelope() -> DeliveryEnvelope {
+        DeliveryEnvelope {
+            message_id: "held-message".to_string(),
+            message: crate::transports::DeliveryMessage {
+                body: "held body".to_string(),
+                created_at: "2026-08-01T00:00:00Z".to_string(),
+                namespace: "test-ns".to_string(),
+                sender: AddressIdentity {
+                    session_name: "sender@test-ns".to_string(),
+                    display_name: None,
+                },
+                target: AddressIdentity {
+                    session_name: "target@test-ns".to_string(),
+                    display_name: None,
+                },
+                cc: Vec::new(),
+                authenticated_identity: None,
+                on_behalf_of: None,
+            },
+            append_enter: true,
+            choice_decider_sessions: Vec::new(),
+            quiet_window: Duration::from_millis(50),
+            is_receipt: false,
+        }
+    }
+
+    /// A group the generation still held resolves `not_submitted`, and never
+    /// claims the relay shut down.
+    ///
+    /// The negative half is the regression: one flag served both the fence and
+    /// shutdown, so a generation fenced by the execution watchdog — with the
+    /// relay running perfectly well — told every sender behind it that the relay
+    /// had shut down. Both halves are asserted because the outcome and the
+    /// reason code reach a sender as separate fields, and pinning only the
+    /// outcome would let the false explanation survive beside a corrected
+    /// verdict.
+    #[test]
+    fn a_group_held_when_the_generation_stops_resolves_not_submitted() {
+        // Nothing is declared on this path, so a sink that refuses is the
+        // faithful stand-in: reaching it at all would already be the defect.
+        struct NoDeclarations;
+        impl PartitionSink for NoDeclarations {
+            fn declare(&self, _member_ids: &[&str]) -> Result<PackingUnitId, PartitionError> {
+                Err(PartitionError::MemberNotBindable)
+            }
+            fn record(&self, _unit: PackingUnitId, _evidence: SubmissionEvidence) {}
+        }
+
+        let (sender, receiver) = oneshot::channel();
+        let mut group = vec![(held_envelope(), sender)];
+        // Already stopped when the flush is reached: the fence's cooperative
+        // step and shutdown both leave the flag in exactly this state.
+        let stop_flag = AtomicBool::new(true);
+
+        flush_and_resolve(
+            &mut group,
+            Path::new("/nonexistent/tmux.sock"),
+            "target@test-ns",
+            &stop_flag,
+            PromptBatchSettings::default(),
+            &NoDeclarations,
+        );
+
+        assert!(group.is_empty(), "the held group is resolved, not retained");
+        let outcome = receiver
+            .blocking_recv()
+            .expect("a stopped generation resolves what it was holding");
+        assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
+        assert_eq!(
+            outcome.reason_code.as_deref(),
+            Some("generation_fenced"),
+            "the stop check runs before any pane resolution or paste"
+        );
+
+        // The positive control. Handlers are installed first, so the signal is
+        // caught rather than terminating the run; the guard clears the flag when
+        // it drops. Safe process-wide because nextest gives each test its own
+        // process.
+        let _guard = crate::runtime::signals::install_shutdown_signal_handlers()
+            .expect("install shutdown signal handlers");
+        let self_pid = i32::try_from(std::process::id()).expect("pid fits i32");
+        assert_eq!(
+            unsafe { libc::kill(self_pid, libc::SIGTERM) },
+            0,
+            "failed to signal this process"
+        );
+        while !crate::runtime::signals::shutdown_requested() {
+            std::thread::yield_now();
+        }
+
+        let (sender, receiver) = oneshot::channel();
+        let mut group = vec![(held_envelope(), sender)];
+        flush_and_resolve(
+            &mut group,
+            Path::new("/nonexistent/tmux.sock"),
+            "target@test-ns",
+            &stop_flag,
+            PromptBatchSettings::default(),
+            &NoDeclarations,
+        );
+        let outcome = receiver
+            .blocking_recv()
+            .expect("a shutdown generation resolves what it was holding");
+        assert_eq!(
+            outcome.outcome,
+            SendOutcome::NotSubmitted,
+            "shutdown is a trigger; it does not choose the outcome"
+        );
+        assert_eq!(
+            outcome.reason_code.as_deref(),
+            Some("relay_shutdown"),
+            "the write names the cause it was actually stopped by"
+        );
     }
 }
 

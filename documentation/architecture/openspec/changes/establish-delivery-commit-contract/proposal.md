@@ -88,8 +88,11 @@ timers widens the window; the fix and the retirement must land together.
   a relay-level residency bound resolving `expired`. That was the same inference
   relocated: elapsed waiting decided an outcome, and because expiry terminalizes
   and releases quota it dropped mail that would have landed once a long agent turn
-  finished. A `Pending` entry whose target is reachable now waits indefinitely, and
-  the `expired` outcome is deleted along with the timers. Sustained
+  finished. A `Pending` entry whose target is reachable now waits without a
+  duration bound — subject to one deliberate exception, a fail-stopped worker
+  resolving every member it holds rather than stranding them behind a generation
+  that can never be replaced — and the `expired` outcome is deleted along with
+  the timers. Sustained
   unreachability is bounded separately by `[delivery].unreachable-dwell-ms`,
   which qualifies a repeated observation rather than inferring from absence. What replaces them is a **relay-level admission
   quota and scheduling policy** — enforced positively at send time, per target and
