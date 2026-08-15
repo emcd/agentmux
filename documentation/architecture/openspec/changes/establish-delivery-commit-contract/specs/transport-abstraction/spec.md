@@ -344,6 +344,13 @@ A transport that does not track activity, or whose primitive is unavailable,
 SHALL populate the field with the constant `0`. A constantly-`0` signal can never
 advance, so such a target is never suppressed on this basis.
 
+**Tmux is the only transport required to track one.** ACP has no terminal to
+write to, and Pty — whose terminal writes would supply an obvious primitive —
+remains work-in-progress for this release, so it reports the constant. This is
+the fallback above being used as designed rather than a gap: the requirement is
+that a transport either supplies a real marker or supplies one that can never
+advance, and both are conformant.
+
 #### Scenario: Tmux probe populates the activity signal from window_activity
 
 - **WHEN** the Tmux probe observes and `#{window_activity}` returns a non-empty
@@ -358,12 +365,6 @@ advance, so such a target is never suppressed on this basis.
 - **THEN** the resulting activity generation is `0`
 - **AND** no advance is possible, so handover is never suppressed on this basis
   for that target
-
-#### Scenario: Pty probe populates the activity signal from last_change_atomic
-
-- **WHEN** the Pty probe observes
-- **THEN** the resulting activity generation is the current value of
-  `last_change_atomic` loaded with `Ordering::Acquire`
 
 #### Scenario: Activity advance suppresses handover
 

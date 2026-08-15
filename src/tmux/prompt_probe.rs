@@ -27,6 +27,10 @@ struct PromptReadinessMatcher {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PromptReadinessEvaluation {
     pub ready: bool,
+    /// Monotonic marker of bytes reaching the target's terminal, or `0` when the
+    /// primitive is unavailable. Carried alongside readiness rather than folded
+    /// into it because the relay, not the transport, is what classifies on it.
+    pub activity_generation: u64,
     pub mismatch_reason: Option<String>,
     pub inspected_block: Option<String>,
     pub regex_matched: Option<bool>,
@@ -69,12 +73,18 @@ impl PanePromptProbe for RealPanePromptProbe<'_> {
     fn next_evaluation(&mut self) -> Result<PromptReadinessEvaluation, String> {
         let pane_target = resolve_active_pane_target(self.tmux_socket, self.target_session)?;
         let snapshot = capture_pane_snapshot(self.tmux_socket, &pane_target)?;
-        prompt_readiness_matches(
+        let activity_generation =
+            super::pane::resolve_window_activity(self.tmux_socket, pane_target.as_str());
+        let evaluation = prompt_readiness_matches(
             self.tmux_socket,
             pane_target.as_str(),
             snapshot.as_str(),
             self.matcher.as_ref(),
-        )
+        )?;
+        Ok(PromptReadinessEvaluation {
+            activity_generation,
+            ..evaluation
+        })
     }
 }
 
