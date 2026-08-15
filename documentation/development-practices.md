@@ -202,6 +202,28 @@ cargo nextest run --features pty --run-ignored all -E 'test(/^pty_transport::/)'
 - If a candidate inline test fails any of these conditions, move it to
   `tests/unit` and widen visibility or restructure as needed.
 
+### Absence Assertions Need a Positive Control
+
+An assertion that something does **not** happen is satisfied by a mechanism
+that never runs. Pair it, in the same fixture, with a case where the thing
+**does** happen — otherwise the test passes identically against working code
+and against a feature that has been dead since the day it was written.
+
+This is not hypothetical. `relay_send_async_emits_no_receipt_for_a_delivered_outcome`
+asserted that a delivered outcome produces no terminal-outcome receipt. It
+passed throughout a period when the relay emitted **no receipts at all**,
+because every one was refused before it could be written — a live defect the
+test was shaped to miss. The positive control that found it required a receipt
+to arrive.
+
+The same shape accounts for three further findings in `agentmux:issues/relay/68`,
+where a batch barrier, a suppression rule, and a destructive fence step were each
+"covered" by a test that its own mechanism's deletion could not fail.
+
+When an absence assertion cannot be paired — the positive case is genuinely
+unreachable — say so in the test's doc comment rather than letting the green
+result imply coverage, and record what would make it reachable.
+
 ### Timing-Sensitive and Flaky Tests
 
 Tests that wait on an external signal (a file-watcher event, a process
@@ -224,7 +246,13 @@ against up front:
   contended local machine — validate timing-sensitive tests in CI on
   every supported platform before trusting a fixed budget, and prefer an
   intentionally generous budget over a tight one when the cost of waiting
-  a few extra seconds on failure is cheap.
+  a few extra seconds on failure is cheap. Note the asymmetry: asserting
+  that at least a duration elapsed is safe, since another machine can only
+  be slower, while asserting that elapsed time stayed *under* a ceiling is
+  the fragile direction. Where a property genuinely needs an upper bound to
+  be meaningful, prefer driving the code on a supplied clock and asserting
+  the step count, which is exact and costs no wall time, over widening the
+  ceiling until it no longer discriminates the thing it was written for.
 - **Watch for self-triggered feedback loops.** A process that reads or
   writes the same files it is watching can retrigger its own watcher
   (e.g., filesystem "access" events fired by the watcher's own reconcile
