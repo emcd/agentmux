@@ -842,28 +842,52 @@ fn submit_batch(
     // cover. One anchor for the batch, because the batch is what was authorized
     // at that instant.
     let authorized_at = Instant::now();
+    // Authorization transitions a queue entry, so it covers exactly the members
+    // that have one. Relay-originated work bypasses admission by design — a
+    // terminal-outcome receipt above all — and holds no entry, so there is nothing
+    // to transition and the absence of one is not a refusal.
+    //
+    // Filtering here rather than inside `authorize_batch` is forced: from inside
+    // the ledger an absent entry is ambiguous, because the terminal transition
+    // removes the entry it resolves, so "never admitted" and "already resolved by
+    // someone else" look identical. `AsyncDeliveryTask::admitted` is what
+    // distinguishes them, and it is only in hand here. `declare_singleton_unit`
+    // skips the partition step against the same flag for the same reason; this is
+    // the gate that did not inherit the rule, and a receipt refused for want of an
+    // authorization it can never hold is the sender's only notice of non-delivery,
+    // deleted.
     let authorized = {
         let member_ids: Vec<&str> = members
             .iter()
+            .filter(|task| task.admitted)
             .map(|task| task.message_id.as_str())
             .collect();
-        let batch = super::super::admission::authorize_batch(&member_ids);
-        if let Some(batch) = batch {
-            // Which members were authorized together is otherwise invisible, and
-            // it is the antecedent of every per-member attribution downstream: a
-            // reader who can see the partition but not the batch can tell which
-            // members shared a submission without being able to tell which ones
-            // the relay committed to at the same instant.
-            emit_inscription(
-                "relay.delivery.batch.authorized",
-                &json!({
-                    "batch_id": batch.value(),
-                    "member_ids": member_ids,
-                    "member_count": member_ids.len(),
-                }),
-            );
+        // A set holding no admitted member is relay-originated work alone. There
+        // is nothing to authorize and nothing that could refuse it, so it proceeds
+        // to submission. Stated as its own arm rather than left to
+        // `authorize_batch`, which rejects an empty list — correctly, since an
+        // empty *authorization* is a caller error.
+        if member_ids.is_empty() {
+            true
+        } else {
+            let batch = super::super::admission::authorize_batch(&member_ids);
+            if let Some(batch) = batch {
+                // Which members were authorized together is otherwise invisible, and
+                // it is the antecedent of every per-member attribution downstream: a
+                // reader who can see the partition but not the batch can tell which
+                // members shared a submission without being able to tell which ones
+                // the relay committed to at the same instant.
+                emit_inscription(
+                    "relay.delivery.batch.authorized",
+                    &json!({
+                        "batch_id": batch.value(),
+                        "member_ids": member_ids,
+                        "member_count": member_ids.len(),
+                    }),
+                );
+            }
+            batch.is_some()
         }
-        batch.is_some()
     };
     if !authorized {
         // Nothing transitioned, so nothing may be written: a write ahead of the
