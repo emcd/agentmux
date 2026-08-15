@@ -51,11 +51,32 @@ field. The `prime_timeout_ms` and `readiness_timeout_ms` envelope fields are
 removed, as are the per-coder configuration keys that populated them.
 
 **How long a message may wait for a reachable target to become ready is not
-bounded, by a transport timer or by any relay setting.** A `Pending` entry waits
-until its target becomes ready, until that target's transport is positively
-observed torn down, until that transport has been continuously observed
-`Unreachable` past `[delivery].unreachable-dwell-ms`, or until the relay shuts
-down. Elapsed waiting SHALL NOT resolve an entry whose target is reachable,
+bounded, by a transport timer or by any relay setting.** A `Pending` entry's *wait* ends
+when its target becomes ready, when that target's transport is positively
+observed torn down, when that transport has been continuously observed
+`Unreachable` past `[delivery].unreachable-dwell-ms`, or when the relay shuts
+down. It may also be resolved without having waited at all, by an immediate
+refusal carrying its own evidence: a transport that cannot be constructed, a
+target with no delivery path, a target member that cannot be resolved, or a batch
+that does not transition. Those are refusals rather than expiries, and this list
+is not the invariant.
+
+**One exception is deliberate and SHALL be read as such: a fail-stopped worker
+resolves every member it holds, including a `Pending` one whose target is
+reachable.** A negative fence verdict means the relay could not establish that
+the old generation stopped, so that worker submits nothing further and no
+replacement generation may be elected for its target. A member held behind it can
+therefore never be delivered by anything, and resolving it is the alternative to
+stranding it for the life of the process. This exception is reachable through a
+clock — the execution watchdog is anchored at authorization, so an *authorized*
+member overrunning `[delivery].submission-timeout-ms` is what initiates the
+fence — and the held member is resolved as a consequence of its worker becoming
+unusable rather than as a judgement about its own wait. It is named here because
+the requirement below would otherwise forbid it.
+
+Subject to that exception, the invariant constrains what duration may do rather
+than enumerating what may happen: elapsed waiting SHALL NOT resolve an entry whose
+target is reachable,
 because the length of a target's turn is not evidence about the target and no
 bound the relay could pick would be anything but a guess about work it does not
 control. Sustained unreachability is a different case, admitted deliberately and
