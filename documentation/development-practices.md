@@ -166,23 +166,20 @@ Pre-commit hooks and CI also use `cargo nextest run --locked
 --config-file ...`; if you only have `cargo test` installed, hooks
 will fail.
 
-Some tests are `#[ignore]`d because they are slow by nature rather than
-broken -- holding a generation's bootstrap open across a signal takes
-tens of seconds, and that is too much to pay on every commit. Those run
-at pre-push via the `cargo-nextest-generation-fence` hook, selected by
-module so a slow test added beside them is picked up automatically. Run
-them by hand with:
+The generation-fence tests are **not** `#[ignore]`d and need no special
+invocation. They once were, on the grounds that holding a bootstrap open
+across a signal cost tens of seconds, and a pre-push hook ran them by
+module selection. Both are gone: the whole `acp::generation_fence`
+module now runs inside the default suite in a few seconds. If you find a
+reference to a `cargo-nextest-generation-fence` hook or to running that
+module with `--run-ignored`, it is stale -- no such hook is configured
+and the selector would match nothing.
 
-```shell
-cargo nextest run --locked --config-file .auxiliary/configuration/nextest.toml \
-  --run-ignored ignored-only -E 'test(/^acp::generation_fence::/)'
-```
-
-Do not widen that to `--run-ignored ignored-only` across the whole
-suite: most `#[ignore]`s in this repository mark work that is blocked or
-unimplemented, not work that is slow, and running those would fail every
-push. The Pty fence tests are a third category again -- they need Zig
-0.15.x and the `pty` feature:
+Do not reach for `--run-ignored ignored-only` across the suite. Every
+remaining `#[ignore]` in this repository marks work that is blocked or
+unimplemented rather than merely slow, so running them fails by design
+rather than by accident. The Pty fence tests are a separate category
+again -- they need Zig 0.15.x and the `pty` feature:
 
 ```shell
 cargo nextest run --features pty --run-ignored all -E 'test(/^pty_transport::/)'
