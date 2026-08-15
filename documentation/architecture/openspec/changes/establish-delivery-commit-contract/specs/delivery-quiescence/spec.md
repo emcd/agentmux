@@ -658,6 +658,24 @@ observing anything. Cancellation competes only with this transition, and it
 competes relay-locally. Authorizing a batch SHALL authorize every member in it
 atomically; there is no partially-authorized batch.
 
+**Authorization covers admitted members and nothing else.** Relay-originated work
+holds no queue entry by design — a terminal-outcome receipt is created in response
+to another member's resolution, reserves no quota, and has no `Pending` state to
+leave — so there is nothing for the transition to act on. The relay SHALL attempt
+authorization only for members holding an admission reservation, and a formed set
+holding none SHALL proceed to submission without one. Absence of an authorization
+that cannot exist SHALL NOT be treated as a refusal: a receipt refused on those
+grounds deletes the only notice a sender receives that its message did not arrive,
+and deletes it in exactly the case the sender most needs it.
+
+This SHALL NOT be read as permission to submit an admitted member unauthorized.
+Where a formed set mixes the two, authorization SHALL cover its admitted members
+and the set SHALL be refused whole if that authorization fails. The distinction is
+the reservation, not the message's origin, and it SHALL be read from the task
+rather than inferred from the ledger — a terminal transition removes the entry it
+resolves, so an absent entry cannot by itself distinguish work that was never
+admitted from work another resolver already finished.
+
 After authorization the relay SHALL NOT reclaim the message, SHALL NOT retry it,
 and SHALL NOT assert non-delivery by inference. Positive evidence of
 non-submission remains reportable.
@@ -898,6 +916,23 @@ did not arrive, reported honestly, leaves the decision with the sender.
 - **AND** the transport refuses the invocation
 - **THEN** the refused members resolve from evidence
 - **AND** the relay does not return them to `Pending` and does not retry them
+
+#### Scenario: A receipt is not refused for want of an authorization it cannot hold
+
+- **GIVEN** a member resolves to a non-delivered outcome and its sender has a live
+  delivery worker
+- **WHEN** the relay submits the terminal-outcome receipt, which holds no
+  admission reservation
+- **THEN** authorization is not attempted for it
+- **AND** the receipt is submitted to the sender's transport rather than resolved
+  as unauthorized
+
+#### Scenario: An admitted member is still authorized beside relay-originated work
+
+- **WHEN** a formed set holds both an admitted member and relay-originated work
+- **THEN** authorization covers the admitted member
+- **AND** a failure to authorize it refuses the whole set rather than submitting
+  either
 
 #### Scenario: An authorized batch never waits in a staging queue
 

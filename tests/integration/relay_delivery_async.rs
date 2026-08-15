@@ -504,3 +504,123 @@ fn relay_interleaves_mail_and_raw_in_one_per_target_order() {
 
     let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
 }
+
+/// A *non-delivered* outcome must produce a receipt that reaches the sender.
+///
+/// The positive control the suppression test above has always lacked. Asserting
+/// that a delivered outcome produces no receipt says nothing on its own: a relay
+/// that emitted no receipts at all, ever, would satisfy it. Only a fixture where
+/// a receipt is required to arrive can tell suppression apart from a receipt path
+/// that does not work.
+///
+/// Every condition the receipt path needs is arranged rather than assumed. The
+/// sender has a live delivery worker, because a receipt routes only to an
+/// existing one and is dropped rather than spawning it. The sender's pane is a
+/// real tmux pane that can be read back. The failing target is unreachable from
+/// its first observation — no session backs it — so its member resolves
+/// `not_submitted` past the dwell, which is the outcome class that owes a
+/// receipt.
+#[test]
+fn relay_send_async_delivers_a_receipt_for_a_non_delivered_outcome() {
+    if !tmux_available() {
+        eprintln!("skipping receipt-delivery test because tmux is unavailable");
+        return;
+    }
+
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let bundle_name = "party";
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
+
+    agentmux::relay::configure_delivery(agentmux::relay::DeliveryConfiguration {
+        unreachable_dwell_ms: 400,
+        ..agentmux::relay::DeliveryConfiguration::default()
+    });
+
+    // Only alpha gets a session. bravo is configured but has no pane, so it is
+    // unreachable from the first observation.
+    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
+
+    // Prime alpha's delivery worker, which the receipt needs to already exist.
+    dispatch_request(
+        RelayRequest::Send {
+            request_id: Some("req-prime-alpha".to_string()),
+            requester_session: "bravo".to_string(),
+            message: "PRIME-ALPHA".to_string(),
+            targets: vec!["alpha@party".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(70),
+            on_behalf_of: None,
+        },
+        &config_root,
+        bundle_name,
+        &paths.runtime_directory,
+    )
+    .expect("priming send should be accepted");
+    wait_for_pane_contains(
+        &paths.tmux_socket,
+        "alpha",
+        "PRIME-ALPHA",
+        Duration::from_secs(5),
+    );
+
+    // alpha sends to the unreachable target; this is the send that owes a receipt.
+    let response = dispatch_request(
+        RelayRequest::Send {
+            request_id: Some("req-undeliverable".to_string()),
+            requester_session: "alpha".to_string(),
+            message: "UNDELIVERABLE-PAYLOAD".to_string(),
+            targets: vec!["bravo@party".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(70),
+            on_behalf_of: None,
+        },
+        &config_root,
+        bundle_name,
+        &paths.runtime_directory,
+    )
+    .expect("send to the unreachable target should be accepted");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
+    };
+    let undelivered_message_id = results[0].message_id.clone();
+
+    // The outcome resolves non-delivered, which is the precondition for a receipt.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let log = std::fs::read_to_string(&inscriptions).unwrap_or_default();
+        if log.contains(undelivered_message_id.as_str())
+            && log.contains("\"outcome\":\"not_submitted\"")
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the unreachable target's member never resolved: {log}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
+
+    // The receipt must reach alpha's pane.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let snapshot = capture_pane(&paths.tmux_socket, "alpha", "-200").replace('\n', "");
+        if snapshot.contains("was not delivered") {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the sender was never told its message was not delivered; \
+             alpha pane={snapshot:?} inscriptions={:?}",
+            std::fs::read_to_string(&inscriptions).unwrap_or_default()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
+}

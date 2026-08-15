@@ -110,31 +110,41 @@ async fn a_generation_that_never_ceases_is_fenced_negative() {
     assert_eq!(outcome.resolution, FenceResolution::Unobserved);
 }
 
-/// Acknowledgment is bounded end to end, not only before escalation.
+/// The awaiting driver spends both windows and returns.
 ///
-/// Steps 1 and 3 are signals that consume none of the budget, so a generation
-/// that never ceases costs two observation windows and no more. Without the
-/// second window being bounded — or with either observation implemented as a
-/// blocking join — this is where the unbounded wait would reappear.
+/// Deliberately **not** named for the twice-window bound, which it cannot
+/// discriminate. Wall time is the only thing observable through
+/// [`acknowledge_fence`], and separating two windows from three requires a
+/// ceiling inside a band one window wide — a bound that passes on the machine
+/// that wrote it and fails on a slower one. The exact window count is held by
+/// `window_count_tests` in `src/relay/delivery/fence.rs`, which drives the
+/// step-driven form on a synthetic clock and rules the question deterministically.
+///
+/// What this one adds over that is the driver itself: that the loop over
+/// `advance` actually spends the windows rather than short-circuiting them, and
+/// that it returns rather than hanging. The `timeout` catches the shape an
+/// elapsed-time assertion never could — an observation implemented as a blocking
+/// join, which never returns to be measured at all.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn acknowledgment_is_bounded_by_twice_the_observation_window() {
+async fn the_acknowledgment_driver_spends_both_windows_and_returns() {
     let mut generation = ControllableGeneration::new(false, false);
     let observation = Duration::from_millis(150);
 
     let started = Instant::now();
-    let outcome = acknowledge_fence(&mut generation, observation).await;
+    let outcome = tokio::time::timeout(
+        observation * 20,
+        acknowledge_fence(&mut generation, observation),
+    )
+    .await
+    .expect("acknowledgment must return rather than wait on a generation that never ceases");
     let elapsed = started.elapsed();
 
     assert_eq!(outcome.verdict, FenceVerdict::Negative);
+    // The load-bearing direction, and the safe one: a machine can only ever be
+    // slower, so a short-circuited window fails here on every platform.
     assert!(
         elapsed >= observation * 2,
         "both windows must actually be observed, not short-circuited: {elapsed:?}"
-    );
-    // Generous headroom over 2x: this asserts the absence of a *third* window or
-    // an unbounded join, not scheduler precision.
-    assert!(
-        elapsed < observation * 4,
-        "acknowledgment must stay bounded by twice the window: {elapsed:?}"
     );
 }
 

@@ -162,3 +162,97 @@ impl FenceInProgress {
         None
     }
 }
+
+/// The window count, driven on a synthetic clock.
+///
+/// Inline because [`FenceInProgress`] is crate-internal by design — the public
+/// seam is [`acknowledge_fence`], and re-exporting the step-driven form so a
+/// test in `tests/` could reach it would publish the protocol's internals as API
+/// for the test's sake alone.
+///
+/// It has to be step-driven. `acknowledge_fence` can only be observed through
+/// wall time, and no elapsed-time ceiling discriminates two windows from three
+/// without sitting inside a band one window wide — a bound that passes on the
+/// machine that wrote it and fails on a slower one. Supplying `now` instead makes
+/// the count exact and the test instant: the window below is an hour, and no time
+/// passes.
+#[cfg(test)]
+mod window_count_tests {
+    use super::*;
+
+    /// Never ceases, so every window runs to its end and the protocol cannot be
+    /// cut short by the generation stopping.
+    struct NeverCeases {
+        terminate_calls: usize,
+    }
+
+    impl GenerationFence for NeverCeases {
+        fn fence_generation(&mut self) {}
+
+        fn terminate_generation(&mut self) {
+            self.terminate_calls += 1;
+        }
+
+        fn generation_ceased(&self) -> bool {
+            false
+        }
+    }
+
+    /// Acknowledgment opens exactly two observation windows and then rules.
+    ///
+    /// The verdict arriving *at* the second window's end is the discriminating
+    /// step: a third window would return `None` there and keep observing. That is
+    /// a violation of the twice-window bound rather than a return of the old
+    /// unbounded wait — a third window still ends, and the fence still rules after
+    /// it. Which is exactly why it needs asserting here: a bound that has grown by
+    /// a window is invisible to any check that only asks whether the fence
+    /// terminates, and every timing-based ceiling loose enough to run on someone
+    /// else's machine admits one.
+    #[test]
+    fn a_fence_opens_exactly_two_windows_before_its_verdict() {
+        // Arbitrary and large. No wall time is spent on it, and a window this
+        // long leaves the sub-millisecond gap between `begin` and `start` unable
+        // to matter.
+        let observation = Duration::from_secs(3_600);
+        let mut generation = NeverCeases { terminate_calls: 0 };
+
+        let mut fence = FenceInProgress::begin(&mut generation, observation);
+        // Taken after `begin`, which reads the clock itself, so every instant
+        // below is at or after the deadline it is compared against.
+        let start = Instant::now();
+
+        assert!(
+            fence.advance(&mut generation, start).is_none(),
+            "the first window is still open"
+        );
+        assert_eq!(
+            generation.terminate_calls, 0,
+            "nothing is force-terminated while the cooperative window runs"
+        );
+
+        assert!(
+            fence
+                .advance(&mut generation, start + observation)
+                .is_none(),
+            "the first window ending escalates rather than ruling"
+        );
+        assert_eq!(generation.terminate_calls, 1);
+
+        assert!(
+            fence
+                .advance(&mut generation, start + observation + observation / 2)
+                .is_none(),
+            "the second window is still open"
+        );
+        assert_eq!(
+            generation.terminate_calls, 1,
+            "escalation happens once, not once per observation"
+        );
+
+        let outcome = fence
+            .advance(&mut generation, start + observation * 2)
+            .expect("the second window's end rules; a third window would keep observing");
+        assert_eq!(outcome.verdict, FenceVerdict::Negative);
+        assert_eq!(outcome.resolution, FenceResolution::Unobserved);
+    }
+}
