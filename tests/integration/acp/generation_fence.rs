@@ -929,3 +929,102 @@ fn a_generation_replaced_under_an_in_flight_member_resolves_it_once_and_frees_th
         "the follow-up member also resolves exactly once"
     );
 }
+
+/// A member still `Pending` when its target's generation is replaced is
+/// delivered by the replacement, rather than resolved against the generation it
+/// never reached.
+///
+/// This is the half of the respawn contract the replacement test above does not
+/// reach. That test sends its follow-up *after* the replacement has been
+/// observed, which shows the target accepts new work again; it says nothing
+/// about work that was already queued when the old generation died. The two
+/// states owe the sender opposite answers — an `Authorized` member resolves
+/// through the evidence order because it may have had an effect, while a
+/// `Pending` one was never handed to anything and is still owed its delivery.
+///
+/// The held member is produced by the transport being busy rather than by any
+/// contrivance: the parked member's prompt is in flight, ACP is single-flight,
+/// and the relay holds the next batch instead of parking it in a transport
+/// queue behind that turn. So `held` sits `Pending` in the worker across the
+/// watchdog fence, the verdict, and the new generation's bootstrap.
+///
+/// `delivered` is the discriminating outcome. Reaching it requires a framed
+/// write to have succeeded, and the only agent able to accept one is the
+/// replacement — the first stopped reading its stdin after `session/new`, which
+/// is what parked the member ahead of it. A `Pending` member dropped at the
+/// fence, or resolved against the old generation, cannot produce it.
+///
+/// The per-target quota is two so the second send is admitted rather than
+/// refused; the replacement test holds it at one precisely to prove the
+/// refusal, which is the opposite fixture.
+#[test]
+fn a_pending_member_survives_a_generation_replacement_and_the_new_one_delivers_it() {
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+
+    let options = AcpStubOptions {
+        stop_reading_stdin_after_new: true,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    configure_delivery(DeliveryConfiguration {
+        submission_timeout_ms: 2_000,
+        fence_observation_timeout_ms: 500,
+        queued_envelopes_per_target_max: 2,
+        ..DeliveryConfiguration::default()
+    });
+
+    let parked = send_result(
+        dispatch_sized_send_result(&config_root, &tmux_socket, 150_000)
+            .expect("relay request should parse"),
+    );
+    assert_eq!(parked.outcome, SendOutcome::Queued);
+
+    let pid_path = acp_child_pid_path(temporary.path());
+    let first_agents = await_recorded_child_pids(&pid_path, "bravo");
+
+    // Past authorization and inside the write. Sending the second member before
+    // this point would race it into the same batch, and it would be authorized
+    // against the generation about to die rather than held behind it.
+    await_inscription(
+        &inscriptions,
+        "relay.delivery.partition.declared",
+        parked.message_id.as_str(),
+    );
+
+    let held = send_result(
+        dispatch_send_without_startup_result(&config_root, &tmux_socket)
+            .expect("a per-target quota of two must admit a second send"),
+    );
+    assert_eq!(held.outcome, SendOutcome::Queued);
+
+    let verdict = await_inscription(
+        &inscriptions,
+        "relay.delivery.fence.verdict",
+        "\"trigger\":\"submission_timeout\"",
+    );
+    assert!(
+        verdict.contains("\"verdict\":\"positive\""),
+        "killing the child frees the parked write, so cessation must be observed: {verdict}"
+    );
+    await_recorded_agents(&pid_path, "bravo", first_agents.len() + 1);
+
+    assert_eq!(
+        await_outcome(&inscriptions, held.message_id.as_str()),
+        "delivered",
+        "a member still Pending at the replacement is owed delivery by the new generation"
+    );
+    assert_eq!(
+        completions_for(&inscriptions, held.message_id.as_str()),
+        1,
+        "the rescheduled member resolves exactly once"
+    );
+    assert_eq!(
+        completions_for(&inscriptions, parked.message_id.as_str()),
+        1,
+        "the member that was in flight across the replacement also resolves exactly once"
+    );
+}
