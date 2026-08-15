@@ -467,9 +467,9 @@ pub(super) fn build_ui_transport_services(key: &AsyncWorkerKey) -> UiTransportSe
 /// Builds the [`DeliveryEnvelope`] for a UI-routed task from the same structured
 /// [`DeliveryMessage`] coder transports receive; the UI transport reads its
 /// attribution fields to build the `incoming_message` stream event instead of
-/// rendering pane text. The UI transport owns its own reconnect cap
-/// ([`UI_RECONNECT_TIMEOUT_MS_DEFAULT`](crate::transports::ui::UI_RECONNECT_TIMEOUT_MS_DEFAULT));
-/// the relay no longer threads an external knob through the envelope.
+/// rendering pane text. No timing knob is threaded through the envelope, and the
+/// UI transport no longer keeps one of its own: a delivery resolves from the one
+/// broadcast it attempts.
 pub(super) fn build_ui_envelope(task: &AsyncDeliveryTask) -> DeliveryEnvelope {
     let target_member = task
         .bundle

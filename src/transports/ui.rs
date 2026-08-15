@@ -4,7 +4,7 @@
 //! relay stream broadcast. Promoting UI to a transport retires the relay-internal
 //! `Acp/Tmux/Ui/Pubsub` routing fork: the delivery worker now submits `mailw`
 //! against a [`TransportImpl::Ui`](crate::transports::TransportImpl) like any
-//! other target, and this module owns the broadcast + bounded UI-reconnect wait.
+//! other target, and this module owns the broadcast.
 //!
 //! ## Relay touchpoints as injected closures
 //!
@@ -19,9 +19,11 @@
 //!
 //! The TUI is a passive subscriber: there is no per-recipient render ack. A UI
 //! delivery succeeds when the stream event reaches a registered, connected UI
-//! endpoint. If no UI is connected, the transport polls up to its internal
-//! [`UI_RECONNECT_TIMEOUT_MS_DEFAULT`] cap for one to reconnect, then resolves
-//! `Timeout`. The transport builds its `incoming_message` event directly from
+//! endpoint. If none is connected the delivery resolves `not_submitted` at once,
+//! from that one attempt — nothing was emitted to any subscriber, which the
+//! transport observed rather than inferred, and a message sent to an unwatched
+//! target is not held waiting for someone to start watching.
+//! The transport builds its `incoming_message` event directly from
 //! the envelope's structured [`DeliveryMessage`](crate::transports::DeliveryMessage):
 //! it reads the relay-authored attribution as-is and never parses pane-envelope
 //! text.
@@ -29,7 +31,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
-use std::time::{Duration, Instant};
 
 use tokio::sync::oneshot;
 
@@ -38,23 +39,12 @@ use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
     DeliveryEnvelope, GenerationFence, OutputView, SendOutcome, SingleDeliveryOutcome,
     StartupContext, Transport, TransportError, TransportHealth, TransportReadiness,
-    TransportStatus,
+    TransportStatus, stopped_before_submission_outcome,
 };
 
-const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
-const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 const UI_RAW_WRITE_UNSUPPORTED_CODE: &str = "ui_raw_write_unsupported";
 const UI_GENERATION_FENCED_CODE: &str = "ui_generation_fenced";
-const UI_RECONNECT_ELAPSED_CODE: &str = "ui_reconnect_elapsed";
-const UI_RECONNECT_POLL_INTERVAL_MS: u64 = 100;
-/// Default cap on the UI reconnect wait when no UI endpoint is registered or the
-/// registered one is disconnected. Owned entirely by the UI transport — the
-/// relay no longer threads an external knob through the envelope for it
-/// (`DeliveryEnvelope.quiescence_timeout` was removed in `tmux-wedge-detection`).
-/// [`UiTransport::new`] seeds this; [`UiTransport::with_reconnect_timeout`]
-/// overrides it (tests inject a short budget so the no-UI timeout path resolves
-/// in milliseconds instead of blocking the full production window).
-const UI_RECONNECT_TIMEOUT_MS_DEFAULT: u64 = 30_000;
+const UI_NO_ENDPOINT_CODE: &str = "ui_no_endpoint";
 
 /// Transport-side outcome of one UI stream-broadcast attempt. Keeps the relay's
 /// stream-send taxonomy out of `transports`: the injected closures map the
@@ -63,8 +53,9 @@ const UI_RECONNECT_TIMEOUT_MS_DEFAULT: u64 = 30_000;
 pub enum UiBroadcastStatus {
     /// The event reached a registered, connected UI endpoint.
     Delivered,
-    /// No UI endpoint is registered, or the registered one is disconnected; the
-    /// caller may retry within its reconnect budget.
+    /// No UI endpoint is registered, or the registered one is disconnected.
+    /// Positive evidence that nothing reached a subscriber, which is why the
+    /// delivery may resolve `not_submitted` on it rather than an unknown.
     NoUi,
     /// The broadcast failed irrecoverably; carries the relay-side reason.
     Failed(String),
@@ -84,9 +75,7 @@ pub struct UiIncomingMessage {
 }
 
 /// One `delivery_outcome` phase the transport asks the relay to emit
-/// (`routed` / `delivered` / `failed`). The `routed` phase doubles as the
-/// reconnect probe: its [`UiBroadcastStatus`] tells the transport whether a UI
-/// is currently connected.
+/// (`routed` / `delivered` / `failed`).
 #[derive(Clone, Debug)]
 pub struct UiOutcomePhase {
     pub message_id: String,
@@ -100,7 +89,7 @@ pub struct UiOutcomePhase {
 /// reached a connected UI.
 pub type UiBroadcastFn = Arc<dyn Fn(&UiIncomingMessage) -> UiBroadcastStatus + Send + Sync>;
 /// Emits a `delivery_outcome` phase event; returns whether it reached a
-/// connected UI (used by the `routed` reconnect probe).
+/// connected UI.
 pub type UiPhaseFn = Arc<dyn Fn(UiOutcomePhase) -> UiBroadcastStatus + Send + Sync>;
 
 /// Relay-provided UI broadcast touchpoints, injected once when the transport is
@@ -123,14 +112,19 @@ impl std::fmt::Debug for UiTransportServices {
 /// Delivers relay messages to a target's registered UI subscribers.
 ///
 /// Held by `TransportImpl::Ui`. [`mailw`](Transport::mailw) broadcasts the
-/// message as a stream event on its own thread (so the write stays non-blocking),
-/// runs the bounded UI-reconnect wait, and resolves the [`OutcomeFuture`]. The UI
+/// message as a stream event on its own thread (so the write stays non-blocking)
+/// and resolves the [`OutcomeFuture`] from what that one attempt proved. The UI
 /// is not raw-writable ([`raww`](Transport::raww) resolves an unsupported
 /// outcome) and not lookable ([`give_output`](Transport::give_output) is `None`).
+///
+/// **There is no reconnect wait.** A bounded poll for a UI to come back was an
+/// absence timer with a budget only this transport knew, and elapsed time was
+/// deciding an outcome. The delivery now attempts once and reports what that
+/// attempt proved: an absent subscriber is a fact at the moment of the
+/// broadcast, not something to wait out.
 #[derive(Debug)]
 pub struct UiTransport {
     services: UiTransportServices,
-    reconnect_timeout: Duration,
     /// Shared with every delivery executor this generation spawns, so the
     /// generation can be asked to stop and then stripped of its ability to emit.
     generation: Arc<UiGeneration>,
@@ -175,20 +169,9 @@ impl UiTransport {
     pub fn new(services: UiTransportServices) -> Self {
         Self {
             services,
-            reconnect_timeout: Duration::from_millis(UI_RECONNECT_TIMEOUT_MS_DEFAULT),
             generation: Arc::new(UiGeneration::default()),
             executors: Vec::new(),
         }
-    }
-
-    /// Overrides the UI-reconnect wait cap seeded by [`new`](Self::new). The
-    /// production default is [`UI_RECONNECT_TIMEOUT_MS_DEFAULT`]; tests inject a
-    /// short budget so the no-UI timeout path resolves in milliseconds instead
-    /// of blocking the full production window.
-    #[must_use]
-    pub fn with_reconnect_timeout(mut self, reconnect_timeout: Duration) -> Self {
-        self.reconnect_timeout = reconnect_timeout;
-        self
     }
 }
 
@@ -213,7 +196,7 @@ impl GenerationFence for UiTransport {
 impl Transport for UiTransport {
     fn startup(&mut self, _context: StartupContext) -> Result<TransportStatus, TransportError> {
         // The UI transport has no runtime to establish; it is always ready and
-        // resolves connectivity per-delivery via the reconnect wait.
+        // resolves connectivity per-delivery, from the broadcast itself.
         Ok(TransportStatus {
             readiness: TransportReadiness::Ready,
         })
@@ -222,7 +205,6 @@ impl Transport for UiTransport {
     fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
         let (sender, receiver) = oneshot::channel();
         let services = self.services.clone();
-        let timeout = self.reconnect_timeout;
         let message_id = envelope.message_id.clone();
         let message = envelope.message;
         let incoming = UiIncomingMessage {
@@ -240,17 +222,12 @@ impl Transport for UiTransport {
             authenticated_identity: message.authenticated_identity,
             on_behalf_of: message.on_behalf_of,
         };
-        // Run the bounded reconnect wait off the async worker thread so `mailw`
-        // stays non-blocking; resolve the future when it settles.
+        // Still on its own thread even though the delivery no longer waits: the
+        // broadcast writes to a socket, and `mailw` is contractually
+        // non-blocking at the relay boundary.
         let generation = Arc::clone(&self.generation);
         let handle = thread::spawn(move || {
-            let outcome = run_ui_delivery(
-                &services,
-                timeout,
-                message_id,
-                &incoming,
-                generation.as_ref(),
-            );
+            let outcome = run_ui_delivery(&services, message_id, &incoming, generation.as_ref());
             let _ = sender.send(outcome);
         });
         // Drop the handles of executors that have already finished, so a
@@ -284,6 +261,14 @@ impl Transport for UiTransport {
         // lose track of: with no subscribers the broadcast is delivered to
         // nobody, which is an empty audience rather than an unreachable target.
         // Nothing here can fail to be observed, so nothing can start a dwell.
+        //
+        // Reporting unreachability instead was tried and withdrawn. It would let
+        // a member wait out `[delivery].unreachable-dwell-ms` for a UI to come
+        // back, which sounds like the reconnect wait's useful half — but nothing
+        // replays to a UI that reconnects, so the wait only helps a message that
+        // is still queued when the endpoint returns, and it costs a queued
+        // member its immediate honest answer. An absent subscriber is reported
+        // at the broadcast instead, where it is a fact rather than a forecast.
         TransportHealth::Healthy
     }
 
@@ -301,121 +286,89 @@ impl Transport for UiTransport {
 /// the body, and `delivered`/`failed` phases mirror the terminal state to the UI.
 fn run_ui_delivery(
     services: &UiTransportServices,
-    timeout: Duration,
     message_id: String,
     incoming: &UiIncomingMessage,
     generation: &UiGeneration,
 ) -> SingleDeliveryOutcome {
-    let start = Instant::now();
-    loop {
-        // The cooperative stop check. Reached at the top of every reconnect
-        // poll, so a fenced generation ceases within one poll interval without
-        // needing the destructive step. Resolving `not_submitted` is sound
-        // rather than conservative: no broadcast has been attempted on this
-        // iteration, so nothing can have reached a subscriber.
-        if generation.is_fenced() {
-            return terminal(
-                message_id,
-                SendOutcome::NotSubmitted,
-                Some(UI_GENERATION_FENCED_CODE.to_string()),
-                Some("UI generation was fenced before this delivery emitted".to_string()),
-            );
-        }
-        if shutdown_requested() {
+    // The cooperative stop check. Resolving `not_submitted` is sound rather than
+    // conservative: no broadcast has been attempted, so nothing can have reached
+    // a subscriber.
+    if generation.is_fenced() {
+        return terminal(
+            message_id,
+            SendOutcome::NotSubmitted,
+            Some(UI_GENERATION_FENCED_CODE.to_string()),
+            Some("UI generation was fenced before this delivery emitted".to_string()),
+        );
+    }
+    if shutdown_requested() {
+        // `not_submitted`, not `dropped_on_shutdown`. This member was authorized
+        // and handed to a transport, and the contract reserves the shutdown
+        // spelling for members the relay still holds as `Pending` — shutdown is
+        // a trigger, and the evidence order chooses the outcome. The cause
+        // survives in the reason code, which is the same split the coder
+        // transports use.
+        let stopped = stopped_before_submission_outcome(String::new(), message_id.clone());
+        let _ = (services.emit_phase)(UiOutcomePhase {
+            message_id,
+            phase: "failed",
+            outcome: Some("not_submitted"),
+            reason_code: stopped.reason_code.clone(),
+            reason: stopped.reason.clone(),
+        });
+        return stopped;
+    }
+
+    // `routed` announces the attempt; it no longer doubles as a reconnect probe,
+    // because there is no reconnect wait for it to drive. A disconnected
+    // endpoint is not anticipated on the health axis either — UI reports healthy
+    // unconditionally — it is discovered at the broadcast below and reported
+    // there as `ui_no_endpoint`.
+    let routed = (services.emit_phase)(UiOutcomePhase {
+        message_id: message_id.clone(),
+        phase: "routed",
+        outcome: None,
+        reason_code: None,
+        reason: None,
+    });
+    if let UiBroadcastStatus::Failed(reason) = routed {
+        return terminal(message_id, SendOutcome::Failed, None, Some(reason));
+    }
+
+    if generation.is_revoked() {
+        return terminal(
+            message_id,
+            SendOutcome::NotSubmitted,
+            Some(UI_GENERATION_FENCED_CODE.to_string()),
+            Some("UI generation was terminated before this delivery emitted".to_string()),
+        );
+    }
+    match (services.broadcast_incoming)(incoming) {
+        UiBroadcastStatus::Delivered => {
             let _ = (services.emit_phase)(UiOutcomePhase {
                 message_id: message_id.clone(),
-                phase: "failed",
-                outcome: Some("failed"),
-                reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
-                reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+                phase: "delivered",
+                outcome: Some("success"),
+                reason_code: None,
+                reason: None,
             });
-            return terminal(
-                message_id,
-                SendOutcome::DroppedOnShutdown,
-                Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
-                Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
-            );
+            terminal(message_id, SendOutcome::Delivered, None, None)
         }
-
-        // `routed` phase doubles as the reconnect probe.
-        match (services.emit_phase)(UiOutcomePhase {
-            message_id: message_id.clone(),
-            phase: "routed",
-            outcome: None,
-            reason_code: None,
-            reason: None,
-        }) {
-            UiBroadcastStatus::Delivered => {}
-            UiBroadcastStatus::NoUi => {
-                if let Some(outcome) = timeout_if_elapsed(&message_id, start, timeout) {
-                    return outcome;
-                }
-                thread::sleep(Duration::from_millis(UI_RECONNECT_POLL_INTERVAL_MS));
-                continue;
-            }
-            UiBroadcastStatus::Failed(reason) => {
-                return terminal(message_id, SendOutcome::Failed, None, Some(reason));
-            }
-        }
-
-        if generation.is_revoked() {
-            return terminal(
-                message_id,
-                SendOutcome::NotSubmitted,
-                Some(UI_GENERATION_FENCED_CODE.to_string()),
-                Some("UI generation was terminated before this delivery emitted".to_string()),
-            );
-        }
-        match (services.broadcast_incoming)(incoming) {
-            UiBroadcastStatus::Delivered => {
-                let _ = (services.emit_phase)(UiOutcomePhase {
-                    message_id: message_id.clone(),
-                    phase: "delivered",
-                    outcome: Some("success"),
-                    reason_code: None,
-                    reason: None,
-                });
-                return terminal(message_id, SendOutcome::Delivered, None, None);
-            }
-            UiBroadcastStatus::NoUi => {}
-            UiBroadcastStatus::Failed(reason) => {
-                return terminal(message_id, SendOutcome::Failed, None, Some(reason));
-            }
-        }
-
-        if let Some(outcome) = timeout_if_elapsed(&message_id, start, timeout) {
-            return outcome;
-        }
-        thread::sleep(Duration::from_millis(UI_RECONNECT_POLL_INTERVAL_MS));
-    }
-}
-
-/// Returns a `Timeout` outcome when the reconnect budget is exhausted, else
-/// `None` so the caller polls again.
-fn timeout_if_elapsed(
-    message_id: &str,
-    start: Instant,
-    timeout: Duration,
-) -> Option<SingleDeliveryOutcome> {
-    if start.elapsed() >= timeout {
-        // `not_submitted`, not `timeout`. The reconnect wait elapses only on the
-        // `NoUi` branch, which means no broadcast was ever attempted — so this is
-        // positive evidence that nothing reached a subscriber, and the transport
-        // is entitled to say so. Reporting elapsed time as its own outcome would
-        // be the absence-inferred spelling this delivery contract retires, and it
-        // would collapse into `submission_unknown` at the guard, understating
-        // what the transport actually knows.
-        return Some(terminal(
-            message_id.to_string(),
+        // The broadcast found no endpoint, which may equally be because none was
+        // ever registered — nothing upstream anticipates this, since UI reports
+        // healthy unconditionally. Nothing was emitted to any subscriber, and
+        // that is observed here rather than inferred from elapsed time, so the
+        // transport is entitled to the strong spelling and resolves at once.
+        UiBroadcastStatus::NoUi => terminal(
+            message_id,
             SendOutcome::NotSubmitted,
-            Some(UI_RECONNECT_ELAPSED_CODE.to_string()),
-            Some(format!(
-                "ui relay stream was disconnected for {}ms",
-                start.elapsed().as_millis()
-            )),
-        ));
+            Some(UI_NO_ENDPOINT_CODE.to_string()),
+            Some("no UI endpoint was registered for this target".to_string()),
+        ),
+        UiBroadcastStatus::Failed(reason) => {
+            terminal(message_id, SendOutcome::Failed, None, Some(reason))
+        }
     }
-    None
 }
 
 /// Builds a terminal outcome. `target_session` is left empty: the relay worker

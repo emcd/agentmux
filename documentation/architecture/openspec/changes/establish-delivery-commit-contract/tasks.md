@@ -157,16 +157,17 @@ Writing the flapping test therefore means orchestrating the second crossing so t
 
 ### Transports — UI
 
-- [ ] Convert `TransportImpl::Ui` to the contract: delete the reconnect timeout constant and its builder, and resolve a member with no UI endpoint through the unreachable axis and `[delivery].unreachable-dwell-ms` like any other target. Fix the same file's shutdown branch while there — it resolves an `Authorized` member `DroppedOnShutdown`, which `delivery-quiescence` forbids; its fenced branch already resolves `not_submitted` and is the shape to copy. The spelling change needs deltas against `look-and-stream-events` and `tui-surface`, which both map `dropped_on_shutdown` to a failed update
+- [x] Convert `TransportImpl::Ui` to the contract: delete the reconnect timeout constant and its builder, and fix the shutdown branch that resolved an `Authorized` member `DroppedOnShutdown`, which `delivery-quiescence` forbids. Both done; the shutdown branch now routes through the same `stopped_before_submission_outcome` the coder transports use, so the cause survives in the reason code while the outcome comes from the evidence order. **The last absence-inference timer is gone, so the change's retirement claim is now unqualified.** A delivery attempts one broadcast and resolves from what it proved: no subscriber is `not_submitted` with `ui_no_endpoint`, which is observed rather than inferred. **Two predictions in this task's own text were wrong.** *Routing a missing endpoint through the unreachable axis* was tried and withdrawn — it was this task's invention rather than a spec requirement, and it cost the unit fixtures the only unconditionally authorizable target they had, breaking three tests that assert on authorization and partition. Holding a member for the dwell buys a message still queued when a UI happens to return, which is worth little while nothing replays to a reconnecting UI; **operator's call was to resolve immediately**, accepting that a message sent during a TUI restart is not held. *Deltas against `look-and-stream-events` and `tui-surface`* are **not** needed: `dropped_on_shutdown` did not disappear, its producers narrowed. The relay still resolves it for members it holds as `Pending`, so both live mappings stay valid. Behaviour change worth knowing: `relay_send_waits_for_ui_reconnect_before_delivery` is deleted, because the capability it pinned is deliberately gone. The suite lost about 30 seconds with it — that wait was being served in three separate tests
 
 ## Interim exceptions
 
-None. The specs describe the end state and this change now reaches it: the UI
-conversion that was the one carried exception is a task above rather than a
-later phase.
+None, and none outstanding. The one carried exception was `TransportImpl::Ui`
+keeping its reconnect timer, which left timer retirement not-yet-universal. That
+conversion has landed, so the deltas' unqualified claim -- retirement across
+every `TransportImpl` variant, with no exception clause anywhere in them -- is
+now true of the code.
 
-It is listed here because the exception must not be reinstated by archiving
-early. The deltas require timer retirement of every `TransportImpl` variant and
-carry no exception clause, and `proposal.md` does not sync to the live specs --
-so archiving with the UI task open would install a live spec the code violates,
-with the excuse recorded only in a file that does not travel.
+Recorded because of how nearly it went the other way. `proposal.md` does not sync
+to the live specs, so archiving while that exception stood would have installed a
+live spec the code violated, with the excuse surviving only in a file that does
+not travel.

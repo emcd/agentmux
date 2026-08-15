@@ -555,13 +555,24 @@ fn undelivered_reporting_counts_pending_entries_and_not_authorized_ones() {
     std::thread::sleep(std::time::Duration::from_millis(600));
     report_undelivered_queue(reporting);
 
-    // Teeth for the count: nothing resolved during the window, so three is the
-    // depth of a queue that is still waiting rather than what a partial drain
-    // happened to leave behind.
+    // Teeth for the count: none of the three tmux members resolved during the
+    // window, so three is the depth of a queue that is still waiting rather than
+    // what a partial drain happened to leave behind.
+    //
+    // The UI member does resolve, and that is the fourth send's whole purpose
+    // now. It reports ready unconditionally and its broadcast finds no
+    // subscriber, so it terminalizes at once — which is exactly why the
+    // aggregate below counts three and not four. A resolved member is not an
+    // undelivered one.
+    let completions = read_inscriptions(&inscriptions, "relay.send.async.completed");
     assert_eq!(
-        count_inscriptions(&inscriptions, "relay.send.async.completed"),
-        0,
-        "no member resolves inside the dwell, so the queue depth is not a residue"
+        completions.len(),
+        1,
+        "only the UI member resolves inside the dwell: {completions:?}"
+    );
+    assert!(
+        !completions[0].contains("bravo"),
+        "no member held on an unreachable tmux target may resolve here: {completions:?}"
     );
 
     let aggregates = read_inscriptions(&inscriptions, "relay.delivery.undelivered");
@@ -736,7 +747,7 @@ fn a_configured_quota_binds_at_admission() {
                 request_id: None,
                 requester_session: "alpha".to_string(),
                 message: "hello".to_string(),
-                targets: vec!["user@GLOBAL".to_string()],
+                targets: vec!["bravo@party".to_string()],
                 broadcast: false,
                 quiet_window_ms: Some(1),
                 on_behalf_of: None,
@@ -747,8 +758,12 @@ fn a_configured_quota_binds_at_admission() {
         )
     };
 
-    // The UI target holds its entry through the reconnect wait, so the first
-    // reservation is still live when the second send is admitted.
+    // A tmux target with no server behind it is held rather than resolved — it
+    // is unreachable, but not yet for the dwell — so the first reservation is
+    // still live when the second send is admitted. The UI target will not do
+    // here: it reports ready unconditionally and its delivery now resolves from
+    // one broadcast attempt, so its reservation is released before the second
+    // send arrives.
     send().expect("the first send fits the configured per-target quota");
     let error = send().expect_err("the second send exceeds a per-target quota of one");
 
