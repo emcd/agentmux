@@ -58,7 +58,7 @@ use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
     ChoiceMade, DeliveryEnvelope, GenerationFence, LookMode, LookSnapshotPayload, OutputView,
     SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportHealth,
-    TransportStatus,
+    TransportStatus, stopped_before_submission_outcome,
 };
 use crate::transports::{PartitionSink, SendOutcome, SubmissionEvidence, WorkerReadinessState};
 
@@ -68,9 +68,8 @@ use crate::transports::{PartitionSink, SendOutcome, SubmissionEvidence, WorkerRe
 // active-prompt refusal or serialization failure), and `SubmissionUnknown`
 // (a write/flush error without proof that zero bytes left). Connection close
 // after a successful write is target-health observability, not a delivery
-// outcome.
-const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
-const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
+// outcome. A write this generation was still holding when it was stopped is
+// `NotSubmitted` too — see `stopped_generation_outcome`.
 
 /// Slice length for the single-flight ACP prompt-completion wait. Bounds how
 /// long the blocking thread parks before re-checking the shutdown gate.
@@ -1094,7 +1093,7 @@ fn acp_delivery_task(
 
     loop {
         if is_shutdown(&mut shutdown_rx) {
-            drain_and_resolve_shutdown(&mut rx);
+            drain_and_resolve_stopped(&mut rx);
             break;
         }
 
@@ -1114,8 +1113,8 @@ fn acp_delivery_task(
         // Check after receive — shutdown may have fired between the
         // pre-receive check and the actual receive.
         if is_shutdown(&mut shutdown_rx) {
-            resolve_head_as_shutdown(head);
-            drain_and_resolve_shutdown(&mut rx);
+            resolve_head_as_stopped(head);
+            drain_and_resolve_stopped(&mut rx);
             break;
         }
         let plan = plan_inner_actions(
@@ -1137,44 +1136,190 @@ fn acp_delivery_task(
     }
 }
 
-/// Resolves the head item's outcome sender with `dropped_on_shutdown_outcome`
-/// when shutdown fires after the head was received but before plan
-/// execution. Centralizes the post-receive shutdown resolution so the
-/// outer loop can hoist the shutdown check above the plan dispatch.
+/// Resolves the head item's outcome sender as stopped before submission when the
+/// generation is stopped after the head was received but before plan execution.
+/// Centralizes the post-receive resolution so the outer loop can hoist the check
+/// above the plan dispatch.
 /// Takes `head` by value so the moved `oneshot::Sender` can be consumed.
-fn resolve_head_as_shutdown(head: WriteItem) {
+fn resolve_head_as_stopped(head: WriteItem) {
     let outcome_tx = match head {
         WriteItem::Envelope { outcome_tx, .. } => outcome_tx,
         WriteItem::Raw { outcome_tx, .. } => outcome_tx,
     };
-    let _ = outcome_tx.send(dropped_on_shutdown_outcome());
+    let _ = outcome_tx.send(stopped_generation_outcome());
 }
 
 /// Drains all remaining items from the write channel and resolves their outcome
-/// senders with DroppedOnShutdown. Called when the shutdown/respawn signal fires.
-fn drain_and_resolve_shutdown(rx: &mut mpsc::Receiver<WriteItem>) {
+/// senders as stopped before submission. Called when the generation's stop
+/// signal fires.
+fn drain_and_resolve_stopped(rx: &mut mpsc::Receiver<WriteItem>) {
     while let Ok(item) = rx.try_recv() {
         let outcome_tx = match item {
             WriteItem::Envelope { outcome_tx, .. } => outcome_tx,
             WriteItem::Raw { outcome_tx, .. } => outcome_tx,
         };
-        let _ = outcome_tx.send(dropped_on_shutdown_outcome());
+        let _ = outcome_tx.send(stopped_generation_outcome());
     }
 }
 
-/// A DroppedOnShutdown outcome for writes resolved during relay shutdown. Mirrors
-/// the tmux transport's shutdown-drop outcome so the relay shutdown taxonomy
-/// reports `dropped_on_shutdown` (not a generic failure) uniformly across
-/// transports. (Respawn invalidation is a distinct path: it closes the channel,
-/// and the worker maps the dropped future to its own outcome.)
-fn dropped_on_shutdown_outcome() -> SingleDeliveryOutcome {
-    SingleDeliveryOutcome {
-        target_session: String::new(),
-        message_id: String::new(),
-        outcome: SendOutcome::DroppedOnShutdown,
-        reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
-        reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
-        details: None,
+/// The outcome for a write this generation was still holding when it was told to
+/// stop. Nothing was rendered into a turn and no `session/prompt` was issued for
+/// it, so `not_submitted` is what the transport can prove.
+///
+/// The identity fields are left empty exactly as they were when this resolved a
+/// shutdown: the relay looks the member up by the collector it awaited rather
+/// than by anything quoted back here. (Respawn invalidation is a distinct path:
+/// it closes the channel, and the worker maps the dropped future to its own
+/// outcome.)
+fn stopped_generation_outcome() -> SingleDeliveryOutcome {
+    stopped_before_submission_outcome(String::new(), String::new())
+}
+
+/// What a stopped generation tells the writes it was still holding.
+///
+/// Inline because both resolution points are internal to the delivery task and
+/// the window that reaches them cannot be arranged from outside it: the head
+/// case needs the stop signal to land between a receive and the plan dispatch
+/// that follows it immediately, and the queued case needs items behind a head
+/// that is being resolved. Calling the two functions directly is the same code
+/// with those races removed.
+///
+/// The regression being pinned is a false statement rather than a missing one.
+/// `fence_generation` clears the shutdown sender exactly as `shutdown()` does,
+/// so the delivery task read every fenced generation as a relay shutdown and
+/// told the sender so — while the relay carried on running. That is why the
+/// reason code is asserted alongside the outcome: they reach a sender as
+/// separate fields, and a corrected verdict beside the old explanation would
+/// still be wrong.
+#[cfg(test)]
+mod stopped_generation_tests {
+    use super::*;
+
+    use crate::envelope::AddressIdentity;
+    use crate::transports::DeliveryMessage;
+
+    /// An **envelope** write, deliberately not a raw one. Raw is relay-declared
+    /// before `raww` is ever called, so a raw item stopped in this channel is
+    /// already bound to a singleton unit and the relay reconciles its result to
+    /// that unit's record. Only an envelope is unbound here, so only an envelope
+    /// carries the producer's spelling through to the sender unchanged.
+    fn write_item(
+        message_id: &str,
+    ) -> (
+        WriteItem,
+        tokio::sync::oneshot::Receiver<SingleDeliveryOutcome>,
+    ) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let envelope = DeliveryEnvelope {
+            message_id: message_id.to_string(),
+            message: DeliveryMessage {
+                body: format!("body {message_id}"),
+                created_at: "1970-01-01T00:00:00Z".to_string(),
+                namespace: "party".to_string(),
+                sender: AddressIdentity {
+                    session_name: "alpha".to_string(),
+                    display_name: None,
+                },
+                target: AddressIdentity {
+                    session_name: "beta".to_string(),
+                    display_name: None,
+                },
+                cc: vec![],
+                authenticated_identity: None,
+                on_behalf_of: None,
+            },
+            append_enter: true,
+            choice_decider_sessions: vec![],
+            quiet_window: Duration::ZERO,
+            is_receipt: false,
+        };
+        (
+            WriteItem::Envelope {
+                envelope: Box::new(envelope),
+                outcome_tx: tx,
+            },
+            rx,
+        )
+    }
+
+    /// Resolves a head and one queued write through both stop paths, and reports
+    /// what each was told.
+    fn stop_and_collect() -> Vec<(&'static str, SingleDeliveryOutcome)> {
+        let (head, head_rx) = write_item("head");
+        let (queued, queued_rx) = write_item("queued");
+        let (tx, mut rx) = mpsc::channel(4);
+        tx.try_send(queued)
+            .expect("queue one write behind the head");
+
+        resolve_head_as_stopped(head);
+        drain_and_resolve_stopped(&mut rx);
+
+        [("head", head_rx), ("queued", queued_rx)]
+            .into_iter()
+            .map(|(label, receiver)| {
+                let outcome = receiver
+                    .blocking_recv()
+                    .unwrap_or_else(|_| panic!("the {label} write is resolved, not dropped"));
+                (label, outcome)
+            })
+            .collect()
+    }
+
+    /// Both post-receive resolution points report `not_submitted`, and name the
+    /// cause without inventing one.
+    ///
+    /// The genuine shutdown is driven in this same fixture rather than left to
+    /// the integration tests, because the claim under test is a
+    /// *discrimination*: a fixture that only ever observes a fence cannot tell a
+    /// transport that reads the cause from a transport that hardcodes one. The
+    /// pairing asserts an unchanged **outcome** and a changed **reason** —
+    /// deliberately not the `dropped_on_shutdown` spelling, which an authorized
+    /// member may not resolve to at all. Only members the relay still holds as
+    /// `Pending` carry that, and they never reach a transport channel, which is
+    /// why the fixture pairing has to take this shape.
+    #[test]
+    fn a_stopped_generation_resolves_held_writes_as_not_submitted() {
+        for (label, outcome) in stop_and_collect() {
+            assert_eq!(
+                outcome.outcome,
+                SendOutcome::NotSubmitted,
+                "the {label} write was never rendered into a turn",
+            );
+            assert_eq!(
+                outcome.reason_code.as_deref(),
+                Some("generation_fenced"),
+                "the {label} write must not report the relay as shut down",
+            );
+        }
+
+        // The positive control. Handlers are installed first, so the signal is
+        // caught rather than terminating the run; the guard clears the flag when
+        // it drops. Safe process-wide because nextest gives each test its own
+        // process.
+        let _guard = crate::runtime::signals::install_shutdown_signal_handlers()
+            .expect("install shutdown signal handlers");
+        let self_pid = i32::try_from(std::process::id()).expect("pid fits i32");
+        assert_eq!(
+            unsafe { libc::kill(self_pid, libc::SIGTERM) },
+            0,
+            "failed to signal this process"
+        );
+        while !crate::runtime::signals::shutdown_requested() {
+            std::thread::yield_now();
+        }
+
+        for (label, outcome) in stop_and_collect() {
+            assert_eq!(
+                outcome.outcome,
+                SendOutcome::NotSubmitted,
+                "shutdown is a trigger; it does not choose the {label} outcome",
+            );
+            assert_eq!(
+                outcome.reason_code.as_deref(),
+                Some("relay_shutdown"),
+                "the {label} write names the cause it was actually stopped by",
+            );
+        }
     }
 }
 
@@ -1441,12 +1586,12 @@ fn is_shutdown(shutdown_rx: &mut tokio::sync::oneshot::Receiver<()>) -> bool {
 /// context, and shutdown signal; this helper applies the plan without
 /// any further state-machine branching.
 ///
-/// Shutdown handling: between flush and boundary execution (and before
+/// Stop handling: between flush and boundary execution (and before
 /// any blocking submit), the helper checks `is_shutdown(&mut shutdown_rx)`.
-/// On a shutdown-during-execution, the pending batch's outcome senders
-/// are resolved with `dropped_on_shutdown_outcome`, the channel is
-/// drained via `drain_and_resolve_shutdown`, and the helper returns so
-/// the outer loop can break. Shutdown checks resolve held senders and
+/// On a stop-during-execution, the pending batch's outcome senders
+/// are resolved with `stopped_generation_outcome`, the channel is
+/// drained via `drain_and_resolve_stopped`, and the helper returns so
+/// the outer loop can break. Stop checks resolve held senders and
 /// drain queued work before any boundary submission.
 #[allow(clippy::too_many_arguments)]
 fn execute_delivery_plan(
@@ -1473,9 +1618,9 @@ fn execute_delivery_plan(
     if let Some(mut batch) = batch {
         if is_shutdown(shutdown_rx) {
             for tx in batch.outcome_senders.drain(..) {
-                let _ = tx.send(dropped_on_shutdown_outcome());
+                let _ = tx.send(stopped_generation_outcome());
             }
-            drain_and_resolve_shutdown(rx);
+            drain_and_resolve_stopped(rx);
             return;
         }
         // Peer traffic only: receipts are a flush barrier and never coalesce
@@ -1498,8 +1643,8 @@ fn execute_delivery_plan(
             outcome_tx,
         } => {
             if is_shutdown(shutdown_rx) {
-                let _ = outcome_tx.send(dropped_on_shutdown_outcome());
-                drain_and_resolve_shutdown(rx);
+                let _ = outcome_tx.send(stopped_generation_outcome());
+                drain_and_resolve_stopped(rx);
                 return;
             }
             submit_singleton_envelope(
@@ -1517,8 +1662,8 @@ fn execute_delivery_plan(
             outcome_tx,
         } => {
             if is_shutdown(shutdown_rx) {
-                let _ = outcome_tx.send(dropped_on_shutdown_outcome());
-                drain_and_resolve_shutdown(rx);
+                let _ = outcome_tx.send(stopped_generation_outcome());
+                drain_and_resolve_stopped(rx);
                 return;
             }
             // The raw path resolves at the framed write inside

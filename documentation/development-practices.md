@@ -283,6 +283,47 @@ against up front:
   follow-up to de-flake and re-enable it. An indefinitely ignored test is
   a silent coverage gap.
 
+## Claims and Evidence
+
+### A Mechanism Existing Is Not a Mechanism Governing
+
+The most common way a confident claim in this repository turns out false is
+this shape: read code, confirm a mechanism exists and does what its name says,
+then assert something about a **consequence** further down the path without
+tracing the path. The mechanism is real; it simply does not decide the thing
+being claimed. Nothing about the reading feels like guessing, which is why it
+keeps happening.
+
+Four instances, all recorded in the delivery-arc task history:
+
+- The execution watchdog arms off `inflight_members`. True — and used to assert
+  it "cannot see a `Pending` member", which is false: a held `Pending` member
+  coexists with in-flight authorized ones, and the fail-stop branch resolves it.
+- ACP's `fenced` flag is distinct from shutdown and correct for what it governs.
+  True — and used to assert ACP "already has the right shape", which is false:
+  `fence_generation` also clears the shutdown sender, so the delivery task reads
+  a fence as a shutdown and reports it that way.
+- Pty's `fence_generation` sets the same flag Tmux's does. True — and used to
+  assert Pty had the same defect, which is false: Pty's drain spells no outcome
+  at all, dropping its senders so the guard's evidence order answers.
+- The relay reconciles an outcome against recorded evidence. True — and used to
+  assert it would reconcile a shutdown-triggered resolution to
+  `dropped_on_shutdown`, which is false: for an unbound member the producer's
+  spelling stands untouched.
+
+The discipline is to name the two things separately before writing the claim.
+*This mechanism does X* is what you verified. *Therefore the caller reports Y*
+is a second claim about a path you have not read yet, and it needs its own read
+— of the consumer, not the producer. Where the consequence is the point of the
+sentence, trace to the site that actually emits it and cite that site.
+
+When a mutation or an experiment does not produce the failure you predicted,
+that gap is the finding: probe the branch for the state that decides it rather
+than reasoning about why it might be fine. A green result you cannot explain is
+never evidence for the explanation you happen to prefer. See also
+[Absence Assertions Need a Positive Control](#absence-assertions-need-a-positive-control),
+which is the same error wearing a test's clothes.
+
 ## Pre-Commit Validation
 
 Run validation before committing to avoid hook failures:

@@ -15,6 +15,7 @@ pub use crate::acp::{AcpDriverServices, AcpTransport, AcpWorkerDriver};
 #[cfg(feature = "pty")]
 pub use crate::pty::{PtyTargetConfiguration, PtyTransport};
 pub use crate::tmux::TmuxTransport;
+pub(crate) use contract::stopped_before_submission_outcome;
 pub use contract::{
     ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryMessage, GenerationFence,
     HandoverDimensions, LookMode, OutcomeFuture, OutputView, PartitionSink,
