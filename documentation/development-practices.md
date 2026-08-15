@@ -314,6 +314,15 @@ is a second claim about a path you have not read yet, and it needs its own read
 — of the consumer, not the producer. Where the consequence is the point of the
 sentence, trace to the site that actually emits it and cite that site.
 
+**A correction is a first draft.** The rewrite that fixes a known error is the
+least-audited sentence you will write, because you are in the posture of having
+just verified something and the replacement inherits confidence it has not
+earned. Both times this was caught here, the second error landed *inside the
+sentence rewritten to fix the first* — once contradicting, two sentences later,
+a mechanism the reviewer had supplied in the preceding message. Re-read a
+correction against the source with the same suspicion you would give an original
+claim, and expect no credit for the part you just got right.
+
 When a mutation or an experiment does not produce the failure you predicted,
 that gap is the finding: probe the branch for the state that decides it rather
 than reasoning about why it might be fine. A green result you cannot explain is
