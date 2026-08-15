@@ -2,16 +2,19 @@
 
 The spec deltas describe the whole contract. This file draws the phase line.
 
-**Phase 1 is the 0.9.0 core.** **Phase 2 is 0.9.x follow-on.** The line is where
-it is because the authorization guard cannot be deferred past the `Authorized`
-state: quota releases only at the terminal transition, so an unowned `Authorized`
-entry leaks quota permanently and blocks the target FIFO.
+**This change is delivered whole.** An earlier revision split it into a 0.9.0
+core and a 0.9.x follow-on; that split is dissolved, because the only obligatory
+item left on the far side of it was the UI conversion the deltas require
+outright. The constraint that drew the line still holds and is worth keeping:
+the authorization guard cannot be deferred past the `Authorized` state, since
+quota releases only at the terminal transition, so an unowned `Authorized` entry
+leaks quota permanently and blocks the target FIFO.
 
 Validate default, `--features pty`, and the ACP paths independently at every
 checkpoint — `src/pty/**` is behind a feature no default gate builds, and the
 pre-commit `cargo-clippy-pty` hook is file-scoped.
 
-## Phase 1 — 0.9.0 core
+## 0.9.0
 
 ### Relay queue, authorization, and guard
 
@@ -152,15 +155,18 @@ Writing the flapping test therefore means orchestrating the second crossing so t
 
   **Three tests have no teeth on the mechanism they name, and one has none reachable.** Filed as `agentmux:issues/relay/68` rather than fixed here, because each needs fixture work rather than an assertion change. `relay_interleaves_mail_and_raw_in_one_per_target_order` survives deleting the raw batch barrier at both flush sites; a probe shows the raw arrives with `group_len=0`, so the barrier never has anything to flush and the order observed comes from the single ordered channel. `relay_send_async_emits_no_receipt_for_a_delivered_outcome` survives emitting a receipt for *every* delivered outcome; the probe shows the receipts are built and then refused at admission with `delivery_batch_not_authorized`, so they never reach the pane the assertion reads, and a 3s wait before the snapshot does not change it. `a_fenced_acp_generation_leaves_no_surviving_child` survives neutering every explicit destructive step — `AcpTransport::terminate_generation`'s `initiate_termination`, its `bootstraps.initiate_termination`, and the driver's two task aborts — so the child dies by some other route; ownership/`Drop` at shutdown is the hypothesis the code comments support, but this sweep did not isolate it. `relay_send_async_processes_repeated_target_messages_in_fifo_order` has no revertible mechanism at all: the probe shows two flushes of `group_len=1`, so no within-group reordering can bite and cross-group order is structural in the single channel. It got the weaker check instead — reversing which marker each dispatch sends fails it — so the assertion discriminates order even though nothing local produces a violation. The separate-submit revert is also weaker than it looks: it fails through "async delivery did not complete within timeout" rather than through the separateness assertion
 
-## Phase 2 — 0.9.x follow-on
+### Transports — UI
 
-- [ ] Convert `TransportImpl::Ui` to the contract and delete its reconnect timeout constant and builder. **Carries a known live spec violation, deliberately deferred here rather than fixed in Phase 1.** `delivery-quiescence` requires that an `Authorized` member resolve through the guard's evidence order and never `dropped_on_shutdown`; that was corrected for Tmux and ACP when the stopped-generation task landed, but UI's shutdown branch still resolves an authorized member `DroppedOnShutdown` (`src/transports/ui.rs`, the `shutdown_requested()` arm of `run_ui_delivery`). It is a real violation shipping in 0.9.0, not a style point, and the operator has accepted it as such. Two reasons it belongs to this task rather than to a targeted fix: the reason code has wire mappings in other capabilities' live specs -- `look-and-stream-events` maps the relay terminal state to a failed update carrying `reason_code=dropped_on_shutdown`, and `tui-surface` maps it the same way -- so correcting it honestly means deltas against those too; and this conversion rewrites that delivery path regardless, so a fix now would be written twice. UI's fenced branch is already correct and is the shape to follow: it resolves `not_submitted` with its own reason code, which is what made it the reference when the coder transports were brought into line. Note the sender here is an operator or UI session served by a `delivery_outcome` stream frame rather than a coder receipt, which is why the sender-visible harm is smaller than the same defect was on the coder transports -- smaller, not absent
+- [ ] Convert `TransportImpl::Ui` to the contract: delete the reconnect timeout constant and its builder, and resolve a member with no UI endpoint through the unreachable axis and `[delivery].unreachable-dwell-ms` like any other target. Fix the same file's shutdown branch while there — it resolves an `Authorized` member `DroppedOnShutdown`, which `delivery-quiescence` forbids; its fenced branch already resolves `not_submitted` and is the shape to copy. The spelling change needs deltas against `look-and-stream-events` and `tui-surface`, which both map `dropped_on_shutdown` to a failed update
 
-## Interim exceptions carried by Phase 1
+## Interim exceptions
 
-The specs describe the end state. This is the one place the core knowingly does
-not yet reach it — an implementation-phase exception rather than a property of
-the specified contract.
+None. The specs describe the end state and this change now reaches it: the UI
+conversion that was the one carried exception is a task above rather than a
+later phase.
 
-- **`TransportImpl::Ui` keeps its reconnect timer** until Phase 2 lands, so timer
-  retirement is not yet universal.
+It is listed here because the exception must not be reinstated by archiving
+early. The deltas require timer retirement of every `TransportImpl` variant and
+carry no exception clause, and `proposal.md` does not sync to the live specs --
+so archiving with the UI task open would install a live spec the code violates,
+with the excuse recorded only in a file that does not travel.

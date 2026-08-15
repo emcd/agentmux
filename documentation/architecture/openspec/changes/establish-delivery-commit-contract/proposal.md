@@ -145,8 +145,8 @@ than merely that an outcome has become terminal.
 
 An operator emergency mode that overtakes `Pending` mail and bypasses readiness
 gating was specified here and has been **removed from this change's scope
-entirely**, on the operator's 2026-08-10 call. It is not deferred to this
-change's Phase 2; it is filed as a standalone future item at
+entirely**, on the operator's 2026-08-10 call. It is not deferred within this
+change either; it is filed as a standalone future item at
 `agentmux:todos/transports/8`, where it is scoped to Tmux and Pty only. ACP is
 structurally excluded rather than merely unimplemented: ACP raw is another
 `session/prompt` and the client enforces one active prompt, so overtaking during
@@ -175,13 +175,18 @@ outcomes.
 **Process-startup** recovery is not specified, because nothing persists across a
 process boundary in 0.9.0. Durable recovery is a follow-up issue.
 
-### Phased implementation
+### Scope
 
-One OpenSpec change, two implementation phases, per the operator's 2026-08-01
-scope call. The spec deltas describe the whole contract; `tasks.md` draws the
-line and Coordinator confirms it before implementation starts.
+One OpenSpec change, delivered whole. An earlier revision split it into a 0.9.0
+core and a 0.9.x follow-on, per the operator's 2026-08-01 scope call. That split
+has been dissolved: of the three items it deferred, two named intentions no
+requirement asks for and were deleted, and the third -- the UI transport
+conversion -- the deltas require present-tense with no exception clause. A phase
+boundary with one obligatory item on the far side of it is not a scope boundary,
+and keeping it invited an archive that would install a live spec the code
+violates.
 
-**0.9.0 — the core.** Relay-owned queue; admission, authorization, submission and
+**What this change delivers.** Relay-owned queue; admission, authorization, submission and
 resolution; admission-quota and scheduling policy; retirement of wedge, prime and
 readiness timers with no bound put in their place;
 relay/62's structural fix; **and the minimum authorization guard and generation
@@ -190,7 +195,7 @@ exactly-once quota release, supervision of invocation/worker/collector/executor
 exits, transport-generation identity, and enough fence authority that a
 replacement cannot start and raw cannot pass until old execution ceased.
 
-**0.9.x follow-on.** UI transport conversion.
+It also converts the UI transport, retiring the last absence timer.
 
 A "guard surface beyond that minimum" was carried here as a follow-on and has
 been dropped: no requirement in any delta describes one, so it named an intention
@@ -214,13 +219,11 @@ If the minimum guard cannot fit the core, the correct response is to defer the
 irreversible `Authorized` model **and** the timer retirement together, not to
 ship an unowned state — the timers are what currently bound a stuck delivery.
 
-**Interim exception, stated as an implementation-phase exception rather than as a
-property of the specified contract.** The deltas describe the end state; this is
-where the 0.9.0 core knowingly does not yet reach it:
-
-- **UI keeps its reconnect timer** until conversion lands, so timer retirement is
-  not yet universal. The specs describe universal retirement as the contract; the
-  core phase carries a named exception for `TransportImpl::Ui`.
+**There is no interim exception.** An earlier revision carried one -- UI keeping
+its reconnect timer, leaving timer retirement not-yet-universal -- on the
+strength of a phase boundary that no longer exists. The deltas require retirement
+across every `TransportImpl` variant and carry no exception clause, so the
+conversion is a task in this change rather than a caveat on it.
 
 Pty's raw-interrupt capability is **not** an interim exception either — it is
 simply removed. An earlier draft preserved it by substitution, with relay-side
