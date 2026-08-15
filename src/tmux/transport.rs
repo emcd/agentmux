@@ -178,25 +178,47 @@ enum PaneObservation {
     /// server, or a delivery task that has stopped.
     Unreachable,
     /// The pane was inspected, and this is what it said.
-    Observed { ready: bool },
+    Observed {
+        ready: bool,
+        /// tmux's window-activity marker at that observation, or `0` when the
+        /// format is unavailable. Carried but never classified on here: the
+        /// relay compares consecutive values, because only it knows which two
+        /// observations bracket a handover decision.
+        activity: u64,
+    },
 }
 
 impl PaneObservation {
     /// Whether replacing `self` with `next` changes either axis the relay reads.
+    ///
+    /// Activity is deliberately **not** an axis for this purpose. It advances on
+    /// every byte the target writes, so counting it would fire the notifier
+    /// continuously through an agent's turn — turning a wakeup that exists to
+    /// replace polling into a second, faster poll. The relay's own tick is what
+    /// re-reads activity; this closure exists for the transitions that are rare
+    /// and worth waking for.
     fn differs_from(self, next: Self) -> bool {
         !matches!(
             (self, next),
             (Self::Pending, Self::Pending)
                 | (Self::Unreachable, Self::Unreachable)
                 | (
-                    Self::Observed { ready: true },
-                    Self::Observed { ready: true }
+                    Self::Observed { ready: true, .. },
+                    Self::Observed { ready: true, .. }
                 )
                 | (
-                    Self::Observed { ready: false },
-                    Self::Observed { ready: false }
+                    Self::Observed { ready: false, .. },
+                    Self::Observed { ready: false, .. }
                 )
         )
+    }
+
+    /// The activity marker, or `0` for an observation that has none.
+    fn activity(self) -> u64 {
+        match self {
+            Self::Observed { activity, .. } => activity,
+            Self::Pending | Self::Unreachable => 0,
+        }
     }
 }
 
@@ -281,7 +303,7 @@ impl TmuxTransport {
                     target.prompt_readiness.as_ref(),
                 );
                 let next = match observed {
-                    Some(ready) => PaneObservation::Observed { ready },
+                    Some((ready, activity)) => PaneObservation::Observed { ready, activity },
                     None => PaneObservation::Unreachable,
                 };
                 // Notify on the edge only. A wakeup per tick would make the
@@ -521,7 +543,14 @@ impl Transport for TmuxTransport {
     }
 
     fn is_ready_for_handover(&self) -> bool {
-        matches!(self.observed(), PaneObservation::Observed { ready: true })
+        matches!(
+            self.observed(),
+            PaneObservation::Observed { ready: true, .. }
+        )
+    }
+
+    fn activity_generation(&self) -> u64 {
+        self.observed().activity()
     }
 
     fn health(&self) -> TransportHealth {
@@ -1062,12 +1091,12 @@ fn observe_pane_once(
     socket: &Path,
     target_session: &str,
     prompt_readiness: Option<&crate::configuration::PromptReadinessTemplate>,
-) -> Option<bool> {
+) -> Option<(bool, u64)> {
     let mut probe = RealPanePromptProbe::new(socket, target_session, prompt_readiness).ok()?;
     probe
         .next_evaluation()
         .ok()
-        .map(|evaluation| evaluation.ready)
+        .map(|evaluation| (evaluation.ready, evaluation.activity_generation))
 }
 
 #[cfg(test)]
@@ -1081,11 +1110,32 @@ mod observation_edge_tests {
     /// member waiting out the backstop interval it exists to avoid.
     #[test]
     fn an_observation_differs_only_when_an_axis_the_relay_reads_moves() {
+        // An activity marker moving under an unchanged `ready` is deliberately
+        // not a change: it advances on every byte the target writes, so waking
+        // the relay for it would replace one poll with a faster one.
+        assert!(
+            !PaneObservation::Observed {
+                ready: false,
+                activity: 7,
+            }
+            .differs_from(PaneObservation::Observed {
+                ready: false,
+                activity: 9,
+            }),
+            "activity alone must not wake the relay"
+        );
+
         let states = [
             PaneObservation::Pending,
             PaneObservation::Unreachable,
-            PaneObservation::Observed { ready: false },
-            PaneObservation::Observed { ready: true },
+            PaneObservation::Observed {
+                ready: false,
+                activity: 0,
+            },
+            PaneObservation::Observed {
+                ready: true,
+                activity: 0,
+            },
         ];
         for (index, current) in states.iter().enumerate() {
             for (other, next) in states.iter().enumerate() {

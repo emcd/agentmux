@@ -109,42 +109,43 @@ fn ui_mailw_broadcasts_incoming_and_resolves_delivered() {
     assert_eq!(phases, vec!["routed".to_string(), "delivered".to_string()]);
 }
 
+/// A delivery with no UI listening resolves `not_submitted` at once, from one
+/// attempt rather than a wait.
+///
+/// This replaces a bounded reconnect poll. The wait was an absence timer with a
+/// budget only this transport knew, and elapsed time decided the outcome. What
+/// it bought — a message still queued when a UI happens to come back — is worth
+/// little while nothing replays to a reconnecting UI, and it cost every send to
+/// an unwatched target thirty seconds before the sender heard anything.
+///
+/// `not_submitted` rather than a failure spelling: no subscriber received the
+/// broadcast, which the transport observed rather than inferred.
 #[test]
-fn ui_mailw_times_out_when_no_ui_reconnects() {
-    let routed_probes = Arc::new(AtomicUsize::new(0));
-
+fn a_broadcast_with_no_endpoint_resolves_not_submitted() {
+    let phases: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let services = UiTransportServices {
-        // No UI ever connects: the broadcast is never reached.
-        broadcast_incoming: Arc::new(|_incoming: &UiIncomingMessage| {
-            panic!("broadcast must not run while the routed probe reports NoUi")
-        }),
+        broadcast_incoming: Arc::new(|_incoming: &UiIncomingMessage| UiBroadcastStatus::NoUi),
         emit_phase: {
-            let routed_probes = routed_probes.clone();
+            let phases = phases.clone();
             Arc::new(move |phase| {
-                if phase.phase == "routed" {
-                    routed_probes.fetch_add(1, Ordering::SeqCst);
-                }
+                phases.lock().unwrap().push(phase.phase.to_string());
                 UiBroadcastStatus::NoUi
             })
         },
     };
 
-    // Inject a short reconnect budget so the no-UI timeout path resolves in
-    // milliseconds rather than blocking the full production window.
-    let mut transport =
-        UiTransport::new(services).with_reconnect_timeout(Duration::from_millis(50));
+    let mut transport = UiTransport::new(services);
     let outcome = block_on(transport.mailw(ui_envelope())).expect("mailw outcome future resolves");
 
-    // `not_submitted`, not `timeout`. The reconnect wait elapses only on the
-    // `NoUi` branch, so no broadcast was ever attempted and the transport can
-    // prove nothing reached a subscriber. Reporting elapsed time as its own
-    // outcome would understate what the transport knows, and would collapse to
-    // `submission_unknown` at the guard.
     assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
-    assert_eq!(outcome.reason_code.as_deref(), Some("ui_reconnect_elapsed"));
-    assert!(
-        routed_probes.load(Ordering::SeqCst) >= 1,
-        "the routed reconnect probe should have run at least once",
+    assert_eq!(outcome.reason_code.as_deref(), Some("ui_no_endpoint"));
+    // One attempt, not a poll. A `routed` phase that reported no endpoint used
+    // to send the executor back around a sleep loop; the absence of a second
+    // one is what shows the wait is gone rather than merely shortened.
+    assert_eq!(
+        phases.lock().unwrap().clone(),
+        vec!["routed".to_string()],
+        "the delivery attempts once and reports what that attempt proved"
     );
 }
 
@@ -158,9 +159,9 @@ fn ui_mailw_times_out_when_no_ui_reconnects() {
 /// overlap the fence exists to prevent. So what is under test is that the step
 /// still has an effect without a child behind it.
 ///
-/// The executor is parked inside the `routed` probe when the fence begins, which
-/// is what makes the two steps distinguishable: `is_fenced` is read at the top of
-/// the reconnect loop and this executor is already past it, so the cooperative
+/// The executor is parked inside the `routed` phase when the fence begins, which
+/// is what makes the two steps distinguishable: `is_fenced` is read once at the
+/// start of the delivery and this executor is already past it, so the cooperative
 /// request cannot reach it. Only the revocation check immediately before the
 /// broadcast can stop it.
 ///

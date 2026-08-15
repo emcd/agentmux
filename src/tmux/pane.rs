@@ -289,6 +289,34 @@ pub(crate) fn resolve_cursor_column(
         .map_err(|source| format!("failed to parse tmux cursor_x '{value}': {source}"))
 }
 
+/// Reads the pane's window-activity marker: tmux's own record of when bytes last
+/// reached that window, in epoch seconds.
+///
+/// Returns `0` for every failure — an old tmux without the format, a departed
+/// session, an unparseable value. That is the specified fallback rather than
+/// leniency: a constant `0` can never advance, so a target whose marker cannot
+/// be read is simply never suppressed on this basis. Reporting an error instead
+/// would make an unreadable marker look like activity, which is the one reading
+/// the signal must never invent.
+pub(crate) fn resolve_window_activity(tmux_socket: &Path, pane_target: &str) -> u64 {
+    let Ok(output) = run_tmux_command(
+        tmux_socket,
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            pane_target,
+            "#{window_activity}",
+        ],
+    ) else {
+        return 0;
+    };
+    String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u64>()
+        .unwrap_or(0)
+}
+
 pub(crate) fn inject_literal_text(
     tmux_socket: &Path,
     pane_target: &str,

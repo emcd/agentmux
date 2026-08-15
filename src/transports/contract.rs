@@ -323,6 +323,22 @@ pub trait Transport: GenerationFence {
     /// transport answers for itself or does not participate in delivery.
     fn is_ready_for_handover(&self) -> bool;
 
+    /// A monotonic marker that advances when bytes reach the target's terminal.
+    ///
+    /// Unlike readiness this **does** get a default, and the default is sound
+    /// rather than a guess: `0` never advances, so a transport that does not
+    /// track activity is simply never suppressed on this basis. That is the
+    /// specified fallback, and it is why a transport with no such primitive can
+    /// ignore this method entirely.
+    ///
+    /// Its **absence carries no meaning**. A target that is quiet may be hung,
+    /// may be waiting on an operator, or may be thinking, and nothing here
+    /// distinguishes them — which is why this signal can only ever withhold a
+    /// handover, never resolve an outcome.
+    fn activity_generation(&self) -> u64 {
+        0
+    }
+
     /// Reports whether this transport can reach its target at all.
     ///
     /// The second axis beside [`is_ready_for_handover`](Self::is_ready_for_handover),
@@ -758,6 +774,21 @@ impl TransportImpl {
             Self::Pty(transport) => transport.health(),
             #[cfg(not(feature = "pty"))]
             Self::Pty => TransportHealth::Healthy,
+        }
+    }
+
+    /// The selected transport's activity marker; see
+    /// [`Transport::activity_generation`]. Tmux is the only variant that tracks
+    /// one today, so every other arm reports the never-advancing `0`.
+    #[must_use]
+    pub fn activity_generation(&self) -> u64 {
+        match self {
+            Self::Tmux(transport) => transport.activity_generation(),
+            Self::Acp(_) | Self::Ui(_) | Self::Pubsub => 0,
+            #[cfg(feature = "pty")]
+            Self::Pty(_) => 0,
+            #[cfg(not(feature = "pty"))]
+            Self::Pty => 0,
         }
     }
 
