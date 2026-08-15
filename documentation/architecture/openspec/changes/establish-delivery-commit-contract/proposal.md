@@ -190,8 +190,12 @@ exactly-once quota release, supervision of invocation/worker/collector/executor
 exits, transport-generation identity, and enough fence authority that a
 replacement cannot start and raw cannot pass until old execution ceased.
 
-**0.9.x follow-on.** UI transport conversion; the guard surface beyond that
-minimum.
+**0.9.x follow-on.** UI transport conversion.
+
+A "guard surface beyond that minimum" was carried here as a follow-on and has
+been dropped: no requirement in any delta describes one, so it named an intention
+rather than an obligation. Durable crash recovery was listed alongside it and is
+likewise gone from this change — it is out of scope above, and tracked on its own.
 
 **The governing invariant, and why the guard cannot be deferred:** *no transition
 to `Authorized` may occur unless an owner capable of terminalizing and releasing
