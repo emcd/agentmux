@@ -57,10 +57,12 @@ This is a decoupling boundary, not an implementation preference. Readiness
 *determination* is transport-specific by nature and does not generalise: a prompt
 regex over a pane tail is meaningless for ACP, whose readiness is the completion
 of an earlier turn arriving on the wire protocol with no snapshot to inspect, and
-meaningless again for UI, whose readiness is subscriber connectivity. A relay
-that evaluated the template would be a relay that knows what a pane is, which the
-`transport-abstraction` capability's `Transport Module Boundaries` requirement
-forbids.
+meaningless again for UI, which reports itself unconditionally ready — a
+broadcast surface has no turn to complete and no pane to render, so subscriber
+presence is checked at the broadcast attempt itself rather than through
+readiness. A relay that evaluated the template would be a relay that knows what
+a pane is, which the `transport-abstraction` capability's `Transport Module
+Boundaries` requirement forbids.
 
 Readiness *scheduling* — deciding which target to visit, in what order, and when
 to authorize — remains relay-owned and is transport-agnostic. The two are
@@ -113,9 +115,10 @@ unreachability is evidence that no wait will end it.
 
 #### Scenario: A transport with no pane has no template to evaluate
 
-- **WHEN** the target's transport observes readiness from a wire protocol or
-  subscriber connectivity rather than pane output
-- **THEN** it reports `is_ready_for_handover` from that observation
+- **WHEN** the target's transport determines readiness from a wire protocol
+  observation, or reports itself unconditionally ready with no pane to observe
+  at all
+- **THEN** it reports `is_ready_for_handover` accordingly
 - **AND** the relay authorizes on the same level it reads for every other
   transport, with no transport-specific branch
 
@@ -566,8 +569,8 @@ Relay raww transport execution SHALL map as follows:
   `session/prompt`
 - pty target: write `text` to the PTY master; if `no_enter=false`, write the
   terminating newline after it
-- ui target: emit `text` as a relay stream event through the transport's injected
-  broadcaster closure
+- ui target: unsupported. `UiTransport::raww` resolves every member `Failed`
+  with `reason_code = ui_raw_write_unsupported` and writes nothing
 
 Relay SHALL treat raww `text` as opaque input and SHALL NOT evaluate shell
 expansion or command substitution.
@@ -669,28 +672,32 @@ Error code taxonomy addendum:
 - `internal_unexpected_failure` — relay-internal logic or lock failure;
   not a transport concern
 
-**The synchronous error code and the delivery outcome of the same spelling are
-distinct and SHALL NOT be conflated.** The error code is returned at the request
-boundary when a call cannot be accepted. The delivery outcome
-`transport_unavailable` resolves an already-queued member and is governed by a
-policy boundary:
+**The synchronous error code names no delivery outcome, and none is spelled
+`transport_unavailable`.** `SendOutcome` has no such variant: an in-flight
+member whose submission fails because the transport cannot be reached — an ACP
+stdin write erroring without proof that zero bytes left — cannot exclude a
+target-side effect and SHALL resolve `submission_unknown`, exactly as any other
+undifferentiated submission failure does. A `Pending` member is governed by a
+separate policy boundary:
 
-- it SHALL fire only on a **positively observed terminal lifecycle state** — the
-  transport was shut down, or its generation was torn down without replacement;
+- it SHALL resolve only on a **positively observed terminal lifecycle state** —
+  the transport was shut down, or its generation was torn down without
+  replacement — or on a sustained unreachability its transport reports as
+  `Unreachable` past `[delivery].unreachable-dwell-ms`;
+- because a `Pending` member was never bound to a packing unit, it resolves
+  `not_submitted` through the guard's evidence order, per the
+  `delivery-quiescence` capability's `Delivery Authorization and Terminal Guard`
+  requirement;
 - a **transient absence** — a respawn in progress, a generation being replaced, a
   UI subscriber that has disconnected but whose session is still registered —
   SHALL leave members `Pending`, until the absence resolves into readiness, into
-  a positively observed teardown, or into a sustained unreachability its
-  transport reports as `Unreachable` past `[delivery].unreachable-dwell-ms`.
-  Nothing converts the waiting itself into an outcome; what resolves the third
-  case is the repeated observation, not its duration alone.
-
-Otherwise `transport_unavailable` would become another inference from absence,
-retired at the transport and reintroduced at the relay.
+  a positively observed teardown, or into that sustained unreachability. Nothing
+  converts the waiting itself into an outcome; what resolves the unreachable case
+  is the repeated observation, not its duration alone.
 
 Selection between a terminal and a recovering lifecycle state SHALL be serialized
-with queue scheduling, so a member cannot be resolved `transport_unavailable` by
-one path while another is scheduling it against a live generation.
+with queue scheduling, so a member cannot be resolved by one path while another
+is scheduling it against a live generation.
 
 #### Scenario: ACP stdin write failure returns transport_unavailable
 
@@ -706,7 +713,15 @@ one path while another is scheduling it against a live generation.
 - **THEN** consumer can infer the ACP process is gone and may retry/reattach
 - **AND** can distinguish this from a non-retryable relay-internal failure
 
-#### Scenario: A respawn in progress does not resolve transport_unavailable
+#### Scenario: An in-flight submission failure resolves submission_unknown, not an error code
+
+- **WHEN** an authorized ACP member's stdin write fails without proof that zero
+  bytes left
+- **THEN** the member resolves `submission_unknown`
+- **AND** no `transport_unavailable`-spelled outcome is produced, because
+  `SendOutcome` has no such variant
+
+#### Scenario: A respawn in progress leaves pending members pending
 
 - **WHEN** a target's transport generation is being replaced
 - **AND** queued members are `Pending` for that target
@@ -714,13 +729,16 @@ one path while another is scheduling it against a live generation.
 - **AND** they resolve only if the replacement completes and they are authorized,
   or if the generation is instead torn down with no replacement
 
-#### Scenario: A torn-down transport without replacement resolves its pending members
+#### Scenario: A torn-down transport without replacement resolves its pending members as not_submitted
 
 - **WHEN** a transport is shut down, or its generation is torn down with no
   replacement
-- **THEN** its `Pending` members resolve `transport_unavailable`
+- **THEN** its `Pending` members resolve `not_submitted`
 - **AND** the outcome is issued from the positively observed lifecycle state, not
   from elapsed time
+- **BECAUSE** a `Pending` member was never bound to a packing unit, and the
+  guard's evidence order resolves an unbound member `not_submitted` regardless
+  of the triggering lifecycle event
 
 ### Requirement: Transport Capability Contract
 
