@@ -375,32 +375,6 @@ For `validation_missing_acp_capability`, error details SHALL include:
 - **WHEN** relay cannot complete ACP initialize handshake
 - **THEN** relay fails target processing with `runtime_acp_initialize_failed`
 
-### Requirement: ACP Stop-Reason Outcome Mapping
-
-Relay SHALL map ACP prompt terminal states into canonical send outcomes with
-stable reason-code behavior.
-
-Mapping SHALL include:
-
-- ACP terminal stop reasons (`end_turn`, `max_tokens`, `max_turn_requests`,
-  `refusal`) -> delivery outcome `delivered` with `reason_code = null`
-- ACP terminal stop reason `cancelled` -> delivery outcome `failed` with
-  `reason_code = acp_stop_cancelled`
-- ACP dropped-on-shutdown behavior -> delivery outcome `failed` with
-  `reason_code = dropped_on_shutdown`
-
-#### Scenario: Map successful ACP terminal stop reasons to delivered
-
-- **WHEN** ACP prompt turn completes with terminal stop reason `end_turn`
-- **THEN** relay reports target delivery outcome `delivered`
-- **AND** sets `reason_code = null`
-
-#### Scenario: Map cancelled to failed outcome
-
-- **WHEN** ACP prompt turn completes with stop reason `cancelled`
-- **THEN** relay reports target delivery outcome `failed`
-- **AND** sets `reason_code = acp_stop_cancelled`
-
 ### Requirement: ACP Terminal Readiness Tracking
 
 Relay SHALL use ACP terminal completion signals from the background reader to

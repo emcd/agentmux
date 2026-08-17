@@ -561,8 +561,8 @@ form; the `incoming_message` machine event fields are exempt from it.
 `delivery_outcome` payload SHALL include:
 
 - `message_id`
-- `phase` (`routed`|`delivered`|`failed`)
-- `outcome` (`success`|`timeout`|`failed`|null)
+- `phase` (`routed`|`delivered`|`failed`|`not_submitted`|`submission_unknown`)
+- `outcome` (`success`|`failed`|`not_submitted`|`submission_unknown`|null)
 - optional `reason_code`
 - optional `reason`
 
@@ -574,7 +574,17 @@ stream-path delivery updates and SHALL be keyed by `message_id`.
 Terminal updates SHALL keep existing external vocabulary:
 
 - delivered terminal: `phase=delivered`, `outcome=success`
-- failure terminal: `phase=failed`, `outcome` in (`timeout`|`failed`)
+- failure terminal: `phase=failed`, `outcome=failed`
+- provable non-delivery terminal: `phase=not_submitted`,
+  `outcome=not_submitted`
+- indeterminate-submission terminal: `phase=submission_unknown`,
+  `outcome=submission_unknown`
+
+`not_submitted` and `submission_unknown` SHALL each carry their own `phase` and
+`outcome` spelling rather than being reported as a failure terminal. They make
+opposite evidentiary claims — one asserts that no target-side effect occurred,
+the other that such an effect cannot be excluded — and collapsing either into
+`failed` would assert a non-delivery the relay cannot support.
 
 Relay terminal state `dropped_on_shutdown` SHALL map to:
 
@@ -609,6 +619,14 @@ Relay terminal state `dropped_on_shutdown` SHALL map to:
 - **WHEN** relay records terminal delivery outcome for message target
 - **THEN** relay pushes `delivery_outcome` event frame
 - **AND** includes canonical `phase` and `outcome` values
+
+#### Scenario: Emit an evidence-bearing terminal outcome under its own spelling
+
+- **WHEN** relay records a terminal delivery outcome of `not_submitted` or
+  `submission_unknown` for a message target
+- **THEN** `delivery_outcome` carries that spelling as both `phase` and
+  `outcome`
+- **AND** does not report it as `phase=failed`
 
 #### Scenario: Map dropped_on_shutdown to failed terminal update
 
