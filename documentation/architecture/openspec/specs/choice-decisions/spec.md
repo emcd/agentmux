@@ -116,9 +116,9 @@ Pending requests SHALL remain pending until one of:
   session/worker termination or aborted choice wait)
 
 Relay SHALL NOT apply timer-based auto-expiry for choice requests
-in alpha. The ACP prime timeout field
-(`[coders.<id>.acp].prime-timeout-ms`) remains independent from
-choice decision lifecycle.
+in alpha. No delivery-side timer exists to be independent from: the
+per-coder prime-timeout keys this requirement once distinguished
+itself from were removed by `establish-delivery-commit-contract`.
 
 #### Scenario: Keep choice request pending without timer expiry
 
