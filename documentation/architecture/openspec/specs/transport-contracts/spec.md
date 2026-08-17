@@ -505,7 +505,6 @@ Failure taxonomy SHALL include:
 - `runtime_acp_session_load_failed`
 - `runtime_acp_session_new_failed`
 - `runtime_acp_prompt_failed`
-- `acp_turn_timeout`
 - `runtime_acp_worker_unavailable`
 - `transport_unavailable` (ACP child write failure or reader thread exit)
 
