@@ -37,10 +37,9 @@ A coder-backed `[[sessions]]` entry SHALL carry:
 The session's transport SHALL be derived from the referenced coder's
 descriptor:
 
-- `[coders.tmux]` → Tmux-backed coder delivery (existing)
-- `[coders.acp]` → ACP-backed coder delivery (existing)
+- `[coders.tmux]` → Tmux-backed coder delivery
+- `[coders.acp]` → ACP-backed coder delivery
 - `[coders.pty]` → Pty-backed coder delivery via libghostty-vt + portable-pty
-  (new in `add-pty-transport`)
 
 The session entry SHALL NOT restate the transport; the coder descriptor is
 authoritative.
@@ -68,40 +67,29 @@ Descriptor fields SHALL be:
   - optional `prompt-regex`
   - optional `prompt-inspect-lines`
   - optional `prompt-idle-column`
-  - optional `prime-timeout-ms`
-  - optional `readiness-timeout-ms` (default `900_000`, range
-    `30_000..=3_600_000`)
 - `[coders.acp]`:
   - required `channel` (`stdio` | `http`)
   - for `channel = "stdio"`: required `command`
   - for `channel = "http"`: required `url`; optional `headers` entries
     (`name`, `value`)
-  - optional `prime-timeout-ms`
-- `[coders.pty]` (new in `add-pty-transport`):
+- `[coders.pty]`:
   - required `initial-command`
   - required `resume-command`
   - optional `prompt-regex`
   - optional `prompt-inspect-lines`
   - optional `prompt-idle-column`
   - optional `cols` (default 120) and `rows` (default 40)
-  - optional `prime-timeout-ms`
-  - optional `wedge-detection` (default `true`)
   - optional `term-protocol` (default `xterm-256color`)
 
 This enumeration is authoritative for what an operator may write, so it SHALL be
 kept complete as descriptor keys are added, and SHALL be reconciled against the
 loader rather than extended only with the key a change happens to introduce.
 
-Reconciling it here found four keys the loader has accepted while this list
-omitted them: `prime-timeout-ms` and `wedge-detection` under `[coders.tmux]`
-since `tmux-wedge-detection`, `prime-timeout-ms` under `[coders.acp]`, and
-`term-protocol` under `[coders.pty]`. Three are restored; `wedge-detection` is
-not, because this change removes the Tmux wedge classifier and its knob with it.
-That four keys accumulated undetected is the reason the reconciliation duty is
-stated rather than assumed.
-
-`wedge-detection` remains listed under `[coders.pty]`, which retains its
-classifier until `agentmux:issues/relay/61` supplies a Pty readiness bound.
+**No per-coder descriptor carries a delivery timeout.** How long a delivery may
+wait is a property of the relay's patience, not of any coder, and is configured
+relay-side per the `runtime-bootstrap` capability's `Relay Configuration File`
+requirement. The prompt-readiness keys above remain per-coder because a prompt
+frame genuinely is a property of the coder.
 
 ACP lifecycle selection constraints:
 
@@ -153,13 +141,6 @@ Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
 - **AND** the session is routed via the Pty transport
 - **AND** the Pty transport spawns the child under a portable-pty master
   sized to the per-coder `cols` and `rows` (defaults 120 x 40)
-
-#### Scenario: Accept a Tmux coder declaring a readiness timeout
-
-- **WHEN** a `[[coders]]` entry defines `[coders.tmux]` with
-  `readiness-timeout-ms` set to a value within the permitted range
-- **THEN** the system loads configuration successfully
-- **AND** the value governs the readiness bound for that coder's Tmux deliveries
 
 #### Scenario: Reject session with neither coder nor marker
 

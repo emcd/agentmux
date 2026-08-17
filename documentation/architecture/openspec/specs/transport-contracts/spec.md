@@ -39,68 +39,106 @@ inspected non-empty tail lines of pane output. The "pane output" source is
 transport-specific: Tmux reads from `capture-pane`; Pty reads from
 `Formatter::format_alloc(Format::Plain)` via the `PtyOutputView` look path.
 
-When `input_idle_cursor_column` is configured, relay SHALL treat the target as
-prompt-ready only when the transport reports the cursor at that configured
-column.
+When `input_idle_cursor_column` is configured, the transport SHALL report itself
+unable to accept a handover unless the cursor is at that configured column.
+
+**The template gates authorization, and it gates it for every transport that has
+one.** A target that is not prompt-ready SHALL NOT have a batch authorized for
+it. This is a change in what the template does: it previously gated injection on
+Tmux but on Pty only decided what the sender was told, because Pty had already
+written the bytes.
+
+**The template SHALL be evaluated by the transport that owns the target, never by
+the relay.** The relay learns the result only as the level it reads through
+`is_ready_for_handover`, and MUST NOT interpret `prompt_regex`, inspect pane
+output, or compare a cursor column itself.
+
+This is a decoupling boundary, not an implementation preference. Readiness
+*determination* is transport-specific by nature and does not generalise: a prompt
+regex over a pane tail is meaningless for ACP, whose readiness is the completion
+of an earlier turn arriving on the wire protocol with no snapshot to inspect, and
+meaningless again for UI, whose readiness is subscriber connectivity. A relay
+that evaluated the template would be a relay that knows what a pane is, which the
+`transport-abstraction` capability's `Transport Module Boundaries` requirement
+forbids.
+
+Readiness *scheduling* — deciding which target to visit, in what order, and when
+to authorize — remains relay-owned and is transport-agnostic. The two are
+separate concerns and only the second belongs to the relay.
 
 A readiness failure SHALL be distinguished by its cause. A **frame mismatch**
 (`prompt_regex` did not match the inspected tail) means the target has settled on
 content that is not its prompt. A **cursor mismatch** (`prompt_regex` matched but
 the reported cursor is not at `input_idle_cursor_column`) means the prompt frame
-is healthy and the operator has input pending. Both mean the same thing
-operationally — do not inject yet. What a transport may conclude from them
-differs by transport, and is stated per transport below rather than universally.
+is healthy and the operator has input pending.
 
-**On Tmux** the distinction SHALL be a **diagnostic** one rather than a predicate
-for terminal failure, and neither cause SHALL be treated as evidence that the
-target has failed. A target that is not prompt-ready is a target that is not
-ready *now*; the reason it is not ready is not knowable from the inspected tail.
-A permission dialog awaiting an operator, a compose box holding typed input, a
-coder producing no terminal output while working, and a hung process all present
-as a settled non-prompt frame. The distinction survives only as the reason
-reported if the wait later expires.
+**Both mean the same thing operationally on every transport — do not authorize
+yet — and neither SHALL be treated as evidence that the target has failed.** A
+target that is not prompt-ready is a target that is not ready *now*; the reason
+is not knowable from the inspected tail. A permission dialog awaiting an
+operator, a compose box holding typed input, a coder producing no terminal output
+while working, and a hung process all present as a settled non-prompt frame.
 
-**On Pty** a frame mismatch still resolves `SendOutcome::Failed` with
-`reason_code = "pane_wedged"` (see `Pty Wedged State Detection` and the scenario
-below). That inference has exactly the soundness problem described above. It is
-retained as a named temporary exception, because it is Pty's only terminal path
-until `agentmux:issues/relay/61` supplies a Pty readiness bound, and removing it
-first would leave Pty unable to end a wait at all. It SHALL NOT be read as
-establishing that a transport without a readiness bound may infer failure from
-rendered content. A cursor mismatch is not a failure predicate on either
-transport.
+The per-transport split that previously let Pty conclude failure from a frame
+mismatch is removed. No transport infers a terminal outcome from the template,
+and the distinction between the two causes survives only as diagnostic
+observability.
 
-For Tmux, a pane that never becomes prompt-ready — for either cause — SHALL be
-bounded by the flush group's readiness bound (see the `delivery-quiescence`
-capability's `Quiescence-Gated Delivery` requirement). That bound is the
-**unconditional termination guarantee** for the post-quiescence wait: it applies
-whatever the pane shows and whether or not a prime timeout is configured, and no
-signal defers it. It is not the only way a Tmux wait can end — an opted-in prime
-timeout, relay shutdown, and a positively observed probe or transport failure
-each remain terminal — but it is the only one guaranteed to arrive.
+A target that never becomes prompt-ready **while its transport remains healthy**
+SHALL leave its entry `Pending` indefinitely. No bound converts that wait into an
+outcome, because how long a target stays busy is not evidence about the target.
+The wait is reported through the `delivery-quiescence` capability's
+undelivered-queue inscriptions.
 
-> **Re-scoped 2026-07-15 against the post-`remove-operator-
-> interaction-delivery-gate` archive (master `2708884`).** The
-> prior draft included a per-transport "Operator-interaction
-> semantics differ between transports" subsection + three
-> `operator_interaction_active`-conditional scenarios (Tmux
-> silence, Pty always-false, Pty-doesn't-consult). All three
-> are obsolete after the upstream copy-mode gate was retired
-> (issues/relay/52). Pty wedge scenarios moved to the `Pty
-> Wedged State Detection` ADDED requirement.
+This is bounded by health, not by time. A transport that reports itself
+unreachable past the dwell threshold resolves its members per the
+`transport-abstraction` capability's `Transport Health as a Separate Axis`
+requirement — not because the wait grew long, but because sustained
+unreachability is evidence that no wait will end it.
 
-#### Scenario: Deliver when prompt-readiness template matches
+#### Scenario: Authorize when prompt-readiness template matches
 
 - **WHEN** target member has a prompt-readiness template
 - **AND** pane output is quiescent
 - **AND** `prompt_regex` matches the inspected multiline tail text
-- **THEN** relay injects the message
+- **THEN** relay authorizes the batch and the transport injects the message
+
+#### Scenario: The relay never evaluates the template itself
+
+- **WHEN** a target member has a prompt-readiness template
+- **THEN** the relay delivery subsystem does not compile `prompt_regex`, read
+  pane output, or compare a cursor column
+- **AND** it authorizes solely on the level the transport reports through
+  `is_ready_for_handover`
+
+#### Scenario: A transport with no pane has no template to evaluate
+
+- **WHEN** the target's transport observes readiness from a wire protocol or
+  subscriber connectivity rather than pane output
+- **THEN** it reports `is_ready_for_handover` from that observation
+- **AND** the relay authorizes on the same level it reads for every other
+  transport, with no transport-specific branch
+
+#### Scenario: A frame mismatch is not a failure on any transport
+
+- **WHEN** a target's output is quiescent and `prompt_regex` does not match
+- **THEN** no terminal outcome is issued on that basis
+- **AND** the entry remains `Pending`
+- **AND** this holds identically for Tmux, Pty, and every other transport
+
+#### Scenario: A cursor mismatch defers authorization
+
+- **WHEN** `prompt_regex` matches but the reported cursor is not at
+  `input_idle_cursor_column`
+- **THEN** relay does not authorize a batch for that target
+- **AND** issues no terminal outcome
 
 #### Scenario: Match prompt plus status with one multiline regex
 
 - **WHEN** target member uses one regex that spans prompt and status lines
 - **AND** pane output tail contains those lines in order
-- **THEN** relay treats target as prompt-ready
+- **THEN** the transport reports itself able to accept a handover
+- **AND** relay authorizes a batch for that target
 
 #### Scenario: Require idle input column before injection
 
@@ -110,7 +148,7 @@ each remain terminal — but it is the only one guaranteed to arrive.
 - **AND** `prompt_regex` matches inspected pane tail text
 - **AND** the transport-reported cursor position equals configured
   `input_idle_cursor_column`
-- **THEN** relay injects the message
+- **THEN** relay authorizes the batch and the message is injected
 
 #### Scenario: Do not inject while user is typing
 
@@ -120,56 +158,23 @@ each remain terminal — but it is the only one guaranteed to arrive.
 - **AND** `prompt_regex` matches inspected pane tail text
 - **AND** the transport-reported cursor position differs from configured
   `input_idle_cursor_column`
-- **THEN** relay does not inject the message
-- **AND** on Tmux, relay continues waiting until the target becomes prompt-ready,
-  the readiness bound elapses, an enabled prime timeout elapses, or relay shuts
-  down
+- **THEN** relay does not authorize a batch for that target
+- **AND** relay continues waiting until the target becomes prompt-ready or relay
+  shuts down
 - **AND** no terminal *failure* is issued on account of the pending input
-
-> A cursor mismatch is not a frame mismatch, so the narrowing that keeps an
-> elapsed prime timeout from adjudicating a settled non-matching frame does not
-> reach this case: a pane whose frame matches while the operator is mid-keystroke
-> still resolves on an enabled prime timeout. Whether it should is a live
-> question — the same "a target that answered is not a silent target" argument
-> applies — but narrowing it would change Pty, which this change holds fixed.
-> Carried to `agentmux:issues/relay/61` with the rest of the Pty bound work.
 
 #### Scenario: Do not inject into a pane awaiting an operator decision
 
-- **WHEN** a Tmux target is displaying a prompt that awaits an operator response,
+- **WHEN** a target is displaying a prompt that awaits an operator response,
   such as a tool-permission request
 - **AND** the pane is quiescent and `prompt_regex` does not match
-- **THEN** relay does not inject the message
+- **THEN** relay does not authorize a batch for that target
 - **AND** relay does not report a terminal failure on account of the settled
   non-prompt frame
 - **AND** the message is delivered once the operator answers and the pane returns
-  to its prompt, provided the readiness bound has not elapsed
+  to its prompt, however long the operator takes
 - **BECAUSE** a pane blocked on a human decision is neither ready nor failed, and
   the inspected tail cannot distinguish it from one that is
-
-#### Scenario: Time out when pane output never begins flowing
-
-- **WHEN** target member has a prompt-readiness template
-- **AND** `[coders.<id>.{tmux,pty}].prime-timeout-ms` is set to a
-  finite millisecond value
-- **AND** pane output never begins flowing within the prime window
-- **THEN** the transport resolves the flush group as
-  `SendOutcome::Timeout`
-- **AND** relay does not inject the message
-
-#### Scenario: Classify a Pty settled frame mismatch as wedged (default-on)
-
-- **WHEN** target member has a prompt-readiness template
-- **AND** the coder defines `[coders.pty]` with `wedge-detection` not disabled
-  (it defaults to enabled)
-- **AND** pane output reaches quiescence
-- **AND** `prompt_regex` does not match the inspected pane tail
-- **THEN** the Pty transport resolves the flush group as
-  `SendOutcome::Failed` with `reason_code = "pane_wedged"`
-- **AND** relay does not inject the message
-- **BECAUSE** Pty has no readiness bound until `agentmux:issues/relay/61`, so
-  this remains its only terminal path despite sharing the Tmux transport's
-  soundness problem
 
 #### Scenario: Deliver to a pane the operator has scrolled into copy-mode
 
@@ -180,15 +185,13 @@ each remain terminal — but it is the only one guaranteed to arrive.
 - **AND** the pane remains in copy-mode with the operator's scroll
   position undisturbed
 
-#### Scenario: Pty wedge detection opt-out preserves prior behavior
+#### Scenario: A never-ready target waits without resolving
 
-- **WHEN** target member has a prompt-readiness template
-- **AND** `[coders.<id>.pty].wedge-detection = false`
-- **AND** pane output reaches quiescence
-- **AND** template matching conditions are not true
-- **THEN** relay continues waiting until the pane becomes
-  prompt-ready, prime timeout fires (if enabled), or relay shuts
-  down
+- **WHEN** a target's prompt-readiness template never matches, for arbitrarily
+  long, while its transport keeps reporting itself reachable
+- **THEN** the entry remains `Pending` and no terminal outcome is issued for it
+- **AND** the most recent observation is recorded as diagnostics only, and does
+  not accumulate toward any verdict
 
 ### Requirement: Prompt-Readiness Template Validation
 
@@ -385,8 +388,6 @@ Mapping SHALL include:
   `reason_code = acp_stop_cancelled`
 - ACP dropped-on-shutdown behavior -> delivery outcome `failed` with
   `reason_code = dropped_on_shutdown`
-- ACP turn timeout -> delivery outcome `timeout` with
-  `reason_code = acp_turn_timeout`
 
 #### Scenario: Map successful ACP terminal stop reasons to delivered
 
@@ -399,12 +400,6 @@ Mapping SHALL include:
 - **WHEN** ACP prompt turn completes with stop reason `cancelled`
 - **THEN** relay reports target delivery outcome `failed`
 - **AND** sets `reason_code = acp_stop_cancelled`
-
-#### Scenario: Map ACP turn timeout to timeout outcome
-
-- **WHEN** ACP prompt turn does not complete before effective turn-wait timeout
-- **THEN** relay reports target delivery outcome `timeout`
-- **AND** sets `reason_code = acp_turn_timeout`
 
 ### Requirement: ACP Terminal Readiness Tracking
 
@@ -591,13 +586,31 @@ Request contract:
 ### Requirement: Relay raww transport behavior
 
 Relay raww transport execution SHALL map as follows:
+
 - tmux target: inject literal `text` into target pane; if `no_enter=false`,
   inject Enter after text
 - acp target: submit `text` using existing shared ACP worker/client path via
   `session/prompt`
+- pty target: write `text` to the PTY master; if `no_enter=false`, write the
+  terminating newline after it
+- ui target: emit `text` as a relay stream event through the transport's injected
+  broadcaster closure
 
 Relay SHALL treat raww `text` as opaque input and SHALL NOT evaluate shell
 expansion or command substitution.
+
+**Ordering.** Mail and raw are variants of one per-target relay FIFO.
+
+Raw SHALL preserve FIFO: no authorization across a raw barrier, nor younger work
+across older. It SHALL wait for **target-side ordering safety** of older mail,
+which requires that execution has ceased — not merely that an outcome has become
+terminal. A ledger transition to `submission_unknown` does not prove a
+still-running submission cannot take effect later, so terminality is the weaker
+condition and is not sufficient here.
+
+Target-side ordering safety is established by the generation fence's positive
+verdict, which is why the raw barrier is held until that verdict rather than
+until the outcome resolves.
 
 #### Scenario: Route raww to acp via session/prompt path
 
@@ -611,6 +624,28 @@ expansion or command substitution.
 - **WHEN** caller omits `no_enter`
 - **THEN** relay treats `no_enter` as `false`
 - **AND** appends Enter after injected text
+
+#### Scenario: Raw preserves FIFO against pending mail
+
+- **WHEN** a raww is submitted for a target that has older `Pending` mail
+- **THEN** the older mail is authorized first
+- **AND** the raw write follows it
+
+#### Scenario: Raw waits for target-side ordering safety, not terminality
+
+- **WHEN** a raww is submitted for a target with an authorized invocation already
+  executing
+- **AND** that invocation's members have resolved `submission_unknown`
+- **THEN** the raw write still waits for the generation fence's positive verdict
+- **AND** it does not proceed on the terminal outcome alone
+
+#### Scenario: Terminal outcome does not release the raw barrier
+
+- **WHEN** an older invocation's members resolve `submission_unknown`
+- **AND** its submission execution has not been fenced
+- **THEN** a waiting raw write does not proceed on the terminal outcome alone
+- **BECAUSE** a terminal outcome resolves the member but does not prove the
+  submission cannot still take effect
 
 ### Requirement: Relay raww response contract
 
@@ -661,6 +696,29 @@ Error code taxonomy addendum:
 - `internal_unexpected_failure` — relay-internal logic or lock failure;
   not a transport concern
 
+**The synchronous error code and the delivery outcome of the same spelling are
+distinct and SHALL NOT be conflated.** The error code is returned at the request
+boundary when a call cannot be accepted. The delivery outcome
+`transport_unavailable` resolves an already-queued member and is governed by a
+policy boundary:
+
+- it SHALL fire only on a **positively observed terminal lifecycle state** — the
+  transport was shut down, or its generation was torn down without replacement;
+- a **transient absence** — a respawn in progress, a generation being replaced, a
+  UI subscriber that has disconnected but whose session is still registered —
+  SHALL leave members `Pending`, until the absence resolves into readiness, into
+  a positively observed teardown, or into a sustained unreachability its
+  transport reports as `Unreachable` past `[delivery].unreachable-dwell-ms`.
+  Nothing converts the waiting itself into an outcome; what resolves the third
+  case is the repeated observation, not its duration alone.
+
+Otherwise `transport_unavailable` would become another inference from absence,
+retired at the transport and reintroduced at the relay.
+
+Selection between a terminal and a recovering lifecycle state SHALL be serialized
+with queue scheduling, so a member cannot be resolved `transport_unavailable` by
+one path while another is scheduling it against a live generation.
+
 #### Scenario: ACP stdin write failure returns transport_unavailable
 
 - **WHEN** relay attempts to write a prompt to ACP stdin
@@ -674,6 +732,22 @@ Error code taxonomy addendum:
 - **AND** error code is `transport_unavailable`
 - **THEN** consumer can infer the ACP process is gone and may retry/reattach
 - **AND** can distinguish this from a non-retryable relay-internal failure
+
+#### Scenario: A respawn in progress does not resolve transport_unavailable
+
+- **WHEN** a target's transport generation is being replaced
+- **AND** queued members are `Pending` for that target
+- **THEN** those members remain `Pending`
+- **AND** they resolve only if the replacement completes and they are authorized,
+  or if the generation is instead torn down with no replacement
+
+#### Scenario: A torn-down transport without replacement resolves its pending members
+
+- **WHEN** a transport is shut down, or its generation is torn down with no
+  replacement
+- **THEN** its `Pending` members resolve `transport_unavailable`
+- **AND** the outcome is issued from the positively observed lifecycle state, not
+  from elapsed time
 
 ### Requirement: Transport Capability Contract
 
@@ -765,233 +839,6 @@ targets and relay-wide targets.
 - **WHEN** a Pty-backed session registers with the relay
 - **THEN** its entry's `SessionType` derives `can_give_choices = false`
 
-### Requirement: ACP Prime Timeout
-
-The system SHALL surface a config-surfaced prime timeout knob for
-ACP-backed sessions, applied as the `prime-timeout-ms` TOML key
-under the per-coder `[coders.<id>.acp]` table. The key name is
-identical to the Tmux-side key `[coders.<id>.tmux].prime-timeout-ms`
-so operator vocabulary is symmetric across transports; the table
-itself namespaces the transport.
-
-The knob SHALL bound the time the ACP transport's internal delivery
-task waits, during the per-turn prompt completion wait for a flush
-group, for the target to produce a terminal ACP response before
-classifying the flush group as `unresponsive`. The knob is
-**opt-in**: when absent or `None`, the ACP transport preserves
-today's unbounded behavior.
-
-The prime timeout SHALL be communicated from the relay to the ACP
-transport through the generic
-`DeliveryEnvelope.prime_timeout_ms: Option<u64>` field introduced by
-the `tmux-wedge-detection` proposal. The relay populates this field
-from `[coders.<id>.acp].prime-timeout-ms` at envelope construction
-time, for ACP-backed sessions. The ACP transport consumes the field
-to bound the per-turn wait; it does NOT introduce a
-transport-prefixed envelope field on top of the generic one.
-
-The prime timer SHALL start at the moment the ACP transport's
-internal delivery task first enters the per-turn wait
-(`wait_for_prompt_complete`). The prime timer SHALL NOT reset on
-coalesce-during-wait when new envelopes are absorbed into the
-flush group; absorbed envelopes inherit the head envelope's prime
-timer anchor.
-
-The prime timer SHALL NOT classify a flush group as `unresponsive`
-while a `pending_choice_outcome` is in flight (an operator
-decision is pending). The prime timer continues to wait without
-firing until the choice resolves or the turn completes. This
-matches the non-expiring choice pending lifecycle contract.
-
-When the prime timer fires (no terminal `PromptCompletion` AND no
-pending choice within the prime window), the ACP transport SHALL
-resolve every sender in the flush group with `SendOutcome::Timeout`
-and `reason_code = "acp_turn_timeout"`. The transport SHALL NOT
-inject further messages into the wedge; the failure is terminal and
-the relay records a `delivery_prime_timeout` inscription event
-carrying `target_session`, `timeout_ms`, and `prime_wait_elapsed_ms`.
-The per-target readiness SHALL be latched to `Unavailable` so the
-worker's respawn-needed signal can re-bootstrap the runtime on the
-same path used for `PromptCompletion::ConnectionClosed`.
-
-The `acp_turn_timeout` reason code SHALL be reused; no new
-`SendOutcome` variant is introduced. The mapping is consistent
-with the `ACP Stop-Reason Outcome Mapping` requirement (which
-defines `acp_turn_timeout` as the canonical ACP timeout reason
-code).
-
-The prime timeout SHALL be config-only in v1. The pre-existing
-per-call override surfaces (`--acp-turn-timeout-ms` CLI flag and
-`acp_turn_timeout_ms` MCP payload field) are RETIRED — `send`
-carries no per-call timeout override field in v1 on either
-transport. Operators configure the deadline via the per-coder
-config key only. The retirement is symmetric with the
-`tmux-wedge-detection` retirement of `--quiescence-timeout-ms` and
-`quiescence_timeout_ms` for Tmux: v1 of both transports is fully
-config-only.
-
-#### Scenario: ACP prime timeout fires on unresponsive ACP target
-
-- **WHEN** the bundle config sets
-  `[coders.<id>.acp].prime-timeout-ms` to a finite millisecond
-  value
-- **AND** the ACP transport's internal delivery task first enters
-  the per-turn prompt completion wait for a flush group
-- **AND** the ACP target produces no terminal `PromptCompletion`
-  before the prime window elapses
-- **AND** no `pending_choice_outcome` is in flight
-- **THEN** every sender in the flush group receives
-  `SendOutcome::Timeout` with `reason_code = "acp_turn_timeout"`
-- **AND** no further message is injected into the target's
-  prompt
-- **AND** a `delivery_prime_timeout` inscription is emitted with
-  `target_session`, `timeout_ms`, and `prime_wait_elapsed_ms`
-
-#### Scenario: ACP prime timeout defaults preserve unbounded behavior
-
-- **WHEN** the bundle config does not set
-  `[coders.<id>.acp].prime-timeout-ms` (or sets it to `None`)
-- **THEN** the ACP transport does not classify any flush group
-  as `unresponsive`
-- **AND** the only terminal failure modes for a flush group are
-  the existing `ACP Stop-Reason Outcome Mapping` outcomes and
-  `DroppedOnShutdown`
-
-#### Scenario: ACP prime timeout does not fire during pending choice
-
-- **WHEN** the bundle config sets
-  `[coders.<id>.acp].prime-timeout-ms` to a finite millisecond
-  value
-- **AND** the ACP target's agent raises a tool-call permission
-  request mid-turn (the `pending_choice_outcome` slot is in
-  flight)
-- **AND** the prime window elapses without a terminal
-  `PromptCompletion`
-- **THEN** the ACP transport continues to wait
-- **AND** does NOT classify the flush group as `unresponsive`
-- **AND** the prime timer continues to count down without firing
-  while the choice is pending
-- **AND** once the choice resolves (`ChoiceMade::Chosen` or
-  `ChoiceMade::Cancelled`), the prime timer resumes counting
-  against the original anchor
-
-#### Scenario: ACP prime timer does not reset on coalesce-during-wait
-
-- **WHEN** the ACP transport's internal delivery task is
-  mid-turn for a flush group
-- **AND** a new envelope arrives and is absorbed into the flush
-  group via coalesce-during-wait
-- **THEN** the prime timer continues to count down against the
-  original prime window anchor (set at first wait start)
-- **AND** the absorbed envelope does NOT extend or restart the
-  prime window
-
-#### Scenario: ACP prime timeout uses the generic envelope field
-
-- **WHEN** an ACP-backed session has
-  `[coders.<id>.acp].prime-timeout-ms` set to a finite
-  millisecond value
-- **THEN** the relay populates
-  `DeliveryEnvelope.prime_timeout_ms` with that value at
-  envelope construction time
-- **AND** the ACP transport reads `prime_timeout_ms` to bound
-  the prime wait
-- **AND** no transport-prefixed envelope field (e.g.
-  `acp_prime_timeout_ms`) is introduced
-
-#### Scenario: ACP prime timeout uses the renamed operator knob
-
-- **WHEN** the bundle config sets
-  `[coders.<id>.acp].prime-timeout-ms` to a finite millisecond
-  value
-- **THEN** the `AcpTargetConfiguration.prime_timeout_ms` field
-  (renamed from `turn_timeout_ms`) is validated at configuration
-  load
-- **AND** the prime timeout becomes load-bearing for the target
-- **AND** operators who had configured the legacy
-  `turn-timeout-ms` key (a key that does not exist in v1) see a
-  `deny_unknown_fields` error from the raw loader on next bundle
-  load
-
-### Requirement: Tmux Prime Timeout
-
-The system SHALL surface a config-surfaced prime timeout knob for
-Tmux-backed sessions, applied as the `prime-timeout-ms` TOML key under
-the per-coder `[coders.<id>.tmux]` table (no `tmux-` prefix; the table
-itself namespaces the key). The knob SHALL bound the time the Tmux
-transport waits, during the quiescence wait for a flush group, for the
-target to produce observable output before classifying the flush
-group as `unresponsive`. The knob is **opt-in**: when absent or
-`None`, no prime-window verdict is issued. Its absence SHALL NOT be read as an
-unbounded wait; the Tmux readiness bound applies regardless (see the
-`delivery-quiescence` capability's `Quiescence-Gated Delivery` requirement).
-
-The prime timeout SHALL be communicated from the relay to the Tmux
-transport through a generic `DeliveryEnvelope.prime_timeout_ms:
-Option<u64>` field. The relay populates this field from
-`[coders.<id>.tmux].prime-timeout-ms` at envelope construction time.
-The field is generic across transports: the relay does not know which
-transport will consume it; the ACP delivery-side timeout follow-up
-will populate the same field for ACP sessions from a corresponding
-`[coders.<id>.acp].prime-timeout-ms` key.
-
-The prime timer SHALL start at the moment the Tmux transport's
-internal delivery task begins the quiescence wait for a flush group.
-The prime timer SHALL NOT reset on coalesce-during-wait when new
-envelopes are absorbed into the flush group during the prime window.
-The readiness bound SHALL share that anchor.
-
-No transport-observable operator rendering state (tmux copy-mode or a
-non-`root` client key-table) SHALL suppress the prime timer. A quiescence
-wait SHALL always progress toward one of its terminal classifications; the
-prime timer SHALL NOT be held off indefinitely on the basis of a rendering
-signal the relay cannot bound.
-
-When the prime timer fires (no observable output within the prime
-window), the Tmux transport SHALL resolve every sender in the flush group
-with `SendOutcome::Timeout`. The `Timeout` outcome SHALL remain a distinct
-terminal outcome and SHALL NOT be collapsed into `Failed`. As a non-delivered
-outcome it SHALL be surfaced to the sender through the Asynchronous
-Terminal-Outcome Receipt and recorded per Async Delivery Observability; it SHALL
-NOT be returned in the synchronous accept-time response.
-
-Reporting `Timeout` as a non-delivered outcome is sound for Tmux because
-injection into the pane follows the wait, so a fired timer provably precedes
-delivery.
-
-#### Scenario: Prime timeout fires on unresponsive target
-
-- **WHEN** the bundle config sets `[coders.<id>.tmux].prime-timeout-ms`
-  to a finite millisecond value
-- **AND** the Tmux transport's internal delivery task begins the
-  quiescence wait for a flush group
-- **AND** the target pane produces no observable output before the
-  prime window elapses
-- **THEN** every sender in the flush group receives
-  `SendOutcome::Timeout`
-- **AND** no message is injected into the pane
-
-#### Scenario: Absent prime timeout suppresses the prime verdict, not the bound
-
-- **WHEN** the bundle config does not set
-  `[coders.<id>.tmux].prime-timeout-ms` (or sets it to `None`)
-- **THEN** the Tmux transport does not classify any flush group as
-  `unresponsive` on the basis of the prime window
-- **AND** the readiness bound still applies to the flush group
-- **AND** the terminal failure modes for a flush group are `Timeout` from the
-  readiness bound and `Shutdown`
-
-#### Scenario: Prime timer does not reset on coalesce-during-wait
-
-- **WHEN** the Tmux transport's internal delivery task is
-  mid-prime-window for a flush group
-- **AND** a new envelope arrives and is absorbed into the flush group
-  via coalesce-during-wait
-- **THEN** the prime timer continues to count down against the
-  original prime window anchor (set at first wait start)
-- **AND** the absorbed envelope does NOT extend or restart the prime
-  window
-
 ### Requirement: Copy-Mode-Transparent Injection
 
 The Tmux transport SHALL inject the message body — and, when the write
@@ -1042,142 +889,6 @@ child's ability to receive input, do not affect what `capture-pane` and
 - **THEN** the body is delivered as bracketed paste
 - **AND** the target treats the embedded newlines as literal content rather
   than as submit keystrokes
-
-### Requirement: Pty Prime Timeout
-
-The system SHALL surface a config-surfaced prime timeout knob for Pty-backed
-sessions, applied as the `prime-timeout-ms` TOML key under the per-coder
-`[coders.<id>.pty]` table (no `pty-` prefix; the table itself namespaces the
-key). The knob SHALL bound the time the Pty transport waits, during the
-quiescence wait for a flush group, for the target to produce observable output
-before classifying the flush group as `unresponsive`. The knob is **opt-in**:
-when absent or `None`, the Pty transport preserves the unbounded behavior
-inherited from the shared wedge/prime state machine.
-
-The Pty prime timeout SHALL be communicated from the relay to the Pty transport
-through the same generic `DeliveryEnvelope.prime_timeout_ms: Option<u64>` field
-introduced by `tmux-wedge-detection`. The relay populates this field from
-`[coders.<id>.pty].prime-timeout-ms` at envelope construction time. The field
-is generic across transports: the relay does not know which transport will
-consume it; ACP's wedge-companion proposal populates the same field for ACP
-sessions.
-
-The prime timer semantics for Pty follow the merged `tmux-wedge-detection`
-proposal:
-
-- The prime timer SHALL start at the moment the Pty transport's internal
-  delivery task begins the quiescence wait for a flush group.
-- The prime timer SHALL NOT reset on coalesce-during-wait when new envelopes
-  are absorbed into the flush group during the prime window.
-- The prime timer SHALL fire when the prime window has elapsed with no
-  observable output from the target, regardless of any rendering-state
-  signal; Pty has no operator-interaction concept that suppresses
-  classification (the upstream copy-mode gate was retired by
-  `remove-operator-interaction-delivery-gate`, archived 2026-07-15).
-  Copy-mode and other rendering states do not impede injection or
-  affect what `cursor_x` and `capture-pane`-style probes report; the
-  prime timer always measures observable output, not rendering state.
-
-When the prime timer fires for a Pty target (no observable output within the
-prime window), the Pty transport SHALL resolve every sender in the flush group
-with `SendOutcome::Timeout`. The `Timeout` outcome SHALL remain a distinct
-terminal outcome and SHALL NOT be collapsed into `Failed`. The accept-time
-async response for the originating send remains `queued`; the terminal
-`Timeout` resolution is recorded per `Async Delivery Observability` and is
-not returned to the synchronous caller.
-
-> **Spec-alignment note (2026-07-16):** the prior wording
-> "The relay worker SHALL propagate that outcome to the MCP/CLI caller"
-> was an un-implemented in-band caller-propagation clause that was
-> mirrored from the Tmux Prime Timeout requirement; it is removed from
-> the Pty Prime Timeout delta for symmetry. The
-> `Timeout`-distinct-from-`Failed` invariant is preserved as the
-> shipped Pty behavior; an async sender-receipt surface for `Timeout`
-> (and `Wedged` / `dropped_on_shutdown`) is not in Pty's surface
-> today.
-
-#### Scenario: Pty prime timeout fires on unresponsive target
-
-- **WHEN** the bundle config sets `[coders.<id>.pty].prime-timeout-ms` to a
-  finite millisecond value
-- **AND** the Pty transport's internal delivery task begins the quiescence
-  wait for a flush group
-- **AND** the target produces no observable output before the prime window
-  elapses
-- **THEN** every sender in the flush group receives `SendOutcome::Timeout`
-- **AND** no message is injected into the PTY
-
-#### Scenario: Pty prime timeout defaults preserve unbounded behavior
-
-- **WHEN** the bundle config does not set
-  `[coders.<id>.pty].prime-timeout-ms` (or sets it to `None`)
-- **THEN** the Pty transport does not classify any flush group as
-  `unresponsive`
-- **AND** the only terminal failure modes for a flush group are `Failed` +
-  `reason_code = "pane_wedged"` (when wedge detection is enabled, the
-  default) and `Shutdown`
-
-### Requirement: Pty Wedged State Detection
-
-The system SHALL surface a config-surfaced wedge detection knob for Pty-backed
-sessions, applied as the `wedge-detection` boolean TOML key under the per-coder
-`[coders.<id>.pty]` table. The knob SHALL classify a settled, non-prompt-ready
-pane as `wedged` via the shared wedge/prime state machine in
-`src/transports/quiescence.rs`.
-
-Wedge detection defaults to **enabled** (`true`) for Pty, matching the merged
-`tmux-wedge-detection` rationale (cost of a silently-wedged pane is higher
-than cost of a false-positive wedge). Operators MAY opt out by setting
-`[coders.<id>.pty].wedge-detection = false`. The opt-out preserves the
-unbounded-wait behavior.
-
-A wedge detection SHALL fire when wedge detection is enabled and the Pty
-transport observes, during the quiescence wait for a flush group:
-
-- the pane output has been quiescent for at least one quiet window (probe
-  `observe()` returns `is_prompt_ready = false` and the
-  `activity_generation` field has not advanced since the previous
-  observation)
-- the prompt-readiness template does NOT match the inspected pane tail
-  (formatter `format_alloc(Format::Plain)` tail text does not match
-  `prompt_regex`)
-
-When wedge detection fires, the Pty transport SHALL resolve every sender in
-the flush group with `SendOutcome::Failed` and `reason_code = "pane_wedged"`.
-The classification SHALL be sticky: once the flush group is classified as
-wedged, the transport SHALL NOT re-evaluate across coalesce iterations.
-Per-message wedge deadlines within a flush group are out of scope.
-
-#### Scenario: Pty wedge fires on settled non-prompt-ready pane (default-on)
-
-- **WHEN** the bundle config does not set
-  `[coders.<id>.pty].wedge-detection` (or sets it to `true`)
-- **AND** the Pty transport's quiescence wait observes the pane becomes
-  quiescent
-- **AND** the prompt-readiness template does not match the inspected pane
-  tail (read via `Formatter::format_alloc(Format::Plain)`)
-- **THEN** every sender in the flush group receives `SendOutcome::Failed`
-  with `reason_code = "pane_wedged"`
-- **AND** no message is injected into the PTY
-
-#### Scenario: Pty wedge detection opt-out preserves unbounded behavior
-
-- **WHEN** the bundle config sets `[coders.<id>.pty].wedge-detection = false`
-- **THEN** the Pty transport continues to wait past quiescence until the
-  pane becomes prompt-ready or the relay shuts down
-- **AND** the only terminal failure modes for the flush group are `Timeout`
-  (if prime timeout is enabled and fires) and `Shutdown`
-
-#### Scenario: Pty wedge is sticky across coalesce iterations
-
-- **WHEN** the Pty transport's quiescence wait classifies a flush group as
-  `wedged`
-- **AND** new envelopes are absorbed into the flush group via
-  coalesce-during-wait before the wedge classification propagates
-- **THEN** every sender in the enlarged flush group receives the same wedge
-  outcome (`Failed` + `reason_code = "pane_wedged"`)
-- **AND** the transport does NOT re-evaluate wedge state across coalesce
-  iterations
 
 ### Requirement: Pty Default Per-Coder Dimensions
 

@@ -9,115 +9,165 @@ The relay delivery subsystem SHALL dispatch all agent delivery operations
 through two non-blocking write methods defined on the `Transport` trait in
 `src/transports/contract.rs`:
 
-- `mailw(envelope: DeliveryEnvelope) -> OutcomeFuture` — structured relay message
-  write. The relay SHALL populate routing, attribution, message body, timestamp,
-  choice-decider, and quiescence fields before calling the transport. The
-  transport SHALL enqueue the structured envelope in its internal ordered channel
-  and return an outcome future immediately. The transport SHALL render any
-  transport-specific representation internally and resolve the future with a
-  terminal `SingleDeliveryOutcome` when the write is delivered or reaches a
-  terminal failure state. `OutcomeFuture` is
-  `oneshot::Receiver<SingleDeliveryOutcome>`: it carries the transport-side
-  outcome, not the relay `SendResult`, preserving the transport contract's
-  independence from `crate::relay`. The relay worker maps the resolved
-  `SingleDeliveryOutcome` onto its `SendResult`.
-- `raww(content: String, append_enter: bool) -> OutcomeFuture` — raw input
-  write. The transport SHALL enqueue the raw write in its internal ordered
-  channel and return an outcome future immediately. `raww` items act as batch
-  barriers: the transport SHALL flush any buffered `mailw` items before
-  delivering the raw write, maintaining FIFO ordering across both write types.
+- `mailw` — structured relay message write. The relay SHALL populate routing,
+  attribution, message body, timestamp, choice-decider, and quiescence fields
+  before calling the transport. **The relay invokes per envelope**, and a
+  transport MAY coalesce consecutively received envelopes into one packing unit;
+  it SHALL NOT wait for target readiness before submitting. The transport SHALL
+  render any transport-specific representation internally and resolve each member
+  with a terminal `SingleDeliveryOutcome` derived from that member's packing-unit
+  evidence.
 
-Each transport type (ACP, Tmux, Ui, and Pubsub when it lands) SHALL implement
-these methods in its own module. The relay SHALL dispatch via a `TransportImpl`
-enum that delegates without dynamic allocation, and SHALL submit `mailw`/`raww`
-uniformly for every target with no transport-type routing fork in the delivery
-loop.
+  Coalescing is permitted **because the partition is declared rather than
+  inferred**. An earlier draft of this requirement forbade a transport from
+  buffering or coalescing, on the grounds that a group formed inside a transport
+  made its membership unknowable to the relay — which is what allowed one outcome
+  to be reported for members with different fates. `PartitionSink` removed that
+  premise: a coalescing transport declares its unit's exact membership through the
+  relay before any target-side effect, so the group is recorded even though it is
+  timing-derived. The prohibition was guarding a hazard the declaration mechanism
+  now excludes, and a rule that forbids what all three coder transports do is a
+  rule that is not being enforced.
+- `raww(content: String, append_enter: bool)` — raw input write. The
+  `transport-contracts` capability's `Relay raww operation contract` governs its
+  request shape.
+
+**The invocation is fallible.** The relay's admission quota reserves count and
+bytes in the relay's own queue and nothing about a transport's channel, its live
+worker generation, UI subscriber capacity, or any target resource. A transport
+SHALL be permitted to refuse an invocation, and a refusal SHALL be treated as a
+terminal evidence result rather than as a reclaim:
+
+- the transport returns the envelope **unchanged**, before partition → every
+  member it would have covered resolves `not_submitted`;
+- side effects **cannot be excluded** → the affected unit's members resolve
+  `submission_unknown`.
+
+The relay SHALL NOT reclaim or retry in either case.
+
+**A transport SHALL NOT wait.** Post-authorization execution SHALL NOT wait on
+prompt readiness, target turn completion, target output, or an operator decision.
+No authorized batch SHALL sit in a transport staging queue behind an in-flight
+turn. A submission primitive that can block SHALL be supervised and
+fenced/interruptible per the `Transport Generation Fencing and Termination
+Authority` requirement.
+
+Each transport type SHALL implement these methods in its own module. The relay
+SHALL dispatch via a `TransportImpl` enum that delegates without dynamic
+allocation, and SHALL submit uniformly for every target with no transport-type
+routing fork in the delivery loop. `TransportImpl` has **five** variants — `Acp`,
+`Tmux`, `Pty`, `Ui`, and `Pubsub` — and this contract applies to all of them.
 
 `mailw` and `raww` SHALL be the relay's only delivery seam. The relay worker
 SHALL NOT pre-render pane-envelope text before calling `mailw`; representation
-rendering belongs to the receiving transport. The `DeliveryEnvelope` type SHALL
-carry structured message data and per-write control hints, not rendered prompt
-text. The legacy synchronous methods — `deliver`, `prepare_delivery`, and
-`raw_write` — and the types that existed solely to serve them (`DeliveryContext`,
-`DeliveryResult`, `DeliveryPreparation`, `RawWriteResult`) SHALL NOT be retained.
+rendering belongs to the receiving transport. The legacy synchronous methods —
+`deliver`, `prepare_delivery`, and `raw_write` — and the types that existed
+solely to serve them SHALL NOT be retained.
 
-The trait methods SHALL be non-blocking at the relay boundary. The relay delivery
-worker runs a concurrent produce-and-collect loop that simultaneously submits new
-writes via `mailw`/`raww` and collects resolved outcome futures. The worker SHALL
-NOT block on pending futures before submitting new writes. On relay shutdown, the
-transport SHALL resolve all pending outcome futures with a `DroppedOnShutdown`
-result promptly.
+The trait methods SHALL be non-blocking at the relay boundary. On relay shutdown,
+still-pending relay-owned members resolve `dropped_on_shutdown`; authorized
+members resolve from evidence.
 
 #### Scenario: ACP delivery via TransportImpl
 
-- **WHEN** the relay delivery worker delivers to an ACP target
-- **THEN** it calls `TransportImpl::Acp(t).mailw(envelope)` with structured
-  message data and receives an outcome future
-- **AND** the ACP transport renders pane-envelope text internally, combines
-  accumulated rendered envelopes into one turn prompt, submits the turn, and
-  resolves the future with the turn outcome
+- **WHEN** the relay authorizes a batch for an ACP target
+- **THEN** it invokes `TransportImpl::Acp(t)` with each authorized envelope
+- **AND** the ACP transport partitions what it holds, having coalesced
+  consecutive invocations or not, renders pane-envelope text internally, and
+  submits each unit as its own `session/prompt` request
+- **AND** it does not park an invocation behind an in-flight turn
 
 #### Scenario: Tmux delivery via TransportImpl
 
-- **WHEN** the relay delivery worker delivers to a Tmux target
-- **THEN** it calls `TransportImpl::Tmux(t).mailw(envelope)` with structured
-  message data and receives an outcome future
-- **AND** the Tmux transport renders pane-envelope text internally, buffers the
-  rendered envelope, waits for pane quiescence using the per-envelope quiescence
-  hints, pastes all buffered envelopes, and resolves all pending outcome futures
+- **WHEN** the relay authorizes a batch for a Tmux target
+- **THEN** it invokes `TransportImpl::Tmux(t)` with each authorized envelope
+- **AND** the Tmux transport partitions what it holds, having coalesced
+  consecutive invocations or not, into token-budget prompts and injects each
+  separately
+- **AND** it does not wait for pane quiescence, which the relay has already done
 
 #### Scenario: UI delivery via TransportImpl
 
-- **WHEN** the relay delivery worker delivers to a `Ui` target
-- **THEN** it calls `TransportImpl::Ui(t).mailw(envelope)` with the same
-  structured message data used for coder transports
-- **AND** the UI transport emits the message as a relay stream event through its
-  injected broadcaster closure without parsing pane-envelope text
+- **WHEN** the relay authorizes a batch for a `Ui` target
+- **THEN** it invokes `TransportImpl::Ui(t)` with the same structured message
+  data used for coder transports
+- **AND** the UI transport emits the messages as relay stream events through its
+  injected broadcaster closure
 - **AND** no `Ui`/`Pubsub` delivery short-circuit appears in the dispatch path
 
-#### Scenario: Concurrent produce loop keeps feeding transport during quiescence wait
+#### Scenario: A transport refuses an invocation before partition
 
-- **WHEN** a `mailw` outcome future is pending and new tasks arrive in the relay
-  channel
-- **THEN** the relay worker submits them via `mailw` without waiting for the
-  earlier future to resolve
-- **AND** the transport absorbs the new envelopes into its current ordered buffer
+- **WHEN** a transport's write channel is full or closed, or its worker
+  generation is dead
+- **THEN** it returns the envelope unchanged without partitioning it
+- **AND** every member it would have covered resolves `not_submitted`
+- **AND** the relay does not return them to `Pending`
 
-#### Scenario: Raww acts as a batch barrier
+#### Scenario: Shutdown resolves pending members
 
-- **WHEN** the relay calls `raww` after one or more pending `mailw` calls on the
-  same transport
-- **THEN** the transport flushes the preceding `mailw` batch first
-- **AND** then delivers the raw write
-- **AND** subsequent `mailw` calls form a new batch
+- **WHEN** relay shutdown is requested
+- **THEN** still-`Pending` relay-owned members resolve `dropped_on_shutdown`
+- **AND** `Authorized` members resolve from evidence
 
-#### Scenario: Shutdown resolves pending futures
+#### Scenario: Startup never runs on an async runtime thread
 
-- **WHEN** relay shutdown is requested while outcome futures are pending
-- **THEN** each transport resolves all pending futures with `DroppedOnShutdown`
-  promptly
+- **WHEN** the relay invokes `Transport::startup` for any session type
+- **THEN** it runs the call on a blocking thread rather than on a runtime worker
+  thread, because `startup` is synchronous on the trait and every implementation
+  of it is therefore permitted to block
+- **AND** the relay SHALL NOT make that choice per session type, so that a
+  transport acquiring a blocking startup step later inherits the guarantee
+  rather than an assumption about what it used to do
+- **AND** because such a call cannot be aborted, each transport's `startup`
+  SHALL own the cleanup of anything it created, reaching its own conclusion even
+  when the caller awaiting it has gone away
 
 ### Requirement: Transport Module Boundaries
 
 ACP-specific delivery code SHALL reside in `src/acp/`. Tmux-specific delivery
 code SHALL reside in `src/tmux/`. Pty-specific delivery code SHALL reside in
 `src/pty/`. UI stream-broadcast delivery code SHALL reside in its own transport
-module (`UiTransport`), not in the relay delivery subsystem. The relay delivery
-subsystem SHALL NOT contain transport-specific logic; all transport dispatch SHALL
-go through `TransportImpl`. Specifically, the relay delivery subsystem SHALL NOT
-contain:
+module (`UiTransport`), not in the relay delivery subsystem.
 
-- quiescence scheduling or pane-identifier propagation,
+The boundary SHALL distinguish four concerns that were previously conflated:
+
+| Concern | Owner |
+|---|---|
+| **Queueing** — what is pending for a target, in what order, and for how long | **relay** |
+| **Readiness scheduling** — which target to visit, in what order, and when to authorize | **relay** |
+| **Readiness determination** — observing the target and deciding whether a handover can be taken now | **transport** |
+| **Rendering and packing** — target representation and partition into packing units | **transport** |
+
+Queueing and readiness scheduling SHALL move relay-side. Readiness determination,
+rendering, and packing SHALL remain transport-owned.
+
+**Readiness scheduling and readiness determination are different concerns and are
+owned by different sides.** Scheduling is transport-agnostic: it reasons about
+queues, order, and quota. Determination is transport-specific by nature and does
+not generalise — a prompt regex over a pane tail is meaningless for ACP, whose
+readiness is an earlier turn completing on the wire protocol with no snapshot to
+inspect, and meaningless again for UI, whose readiness is subscriber
+connectivity. Conflating them is what would put pane semantics inside the relay.
+
+The relay SHALL learn readiness only as the level it reads through
+`is_ready_for_handover`, refreshed by the transport-invoked notification closure
+described in the `Transport Handover Capacity and Readiness` requirement. Only
+the transport can render target text and count its tokens, so `prompt_tokens_max`
+likewise remains an internal packing-unit limit invisible to the relay.
+
+The relay delivery subsystem SHALL NOT contain transport-specific logic; all
+transport dispatch SHALL go through `TransportImpl`. Specifically, the relay
+delivery subsystem SHALL NOT contain:
+
 - batch-combining or prompt-packing logic,
 - pane-envelope rendering for coder transports,
-- per-transport `TargetConfiguration::Acp`/`Tmux`/`Pty`/`Ui`/`Pubsub` dispatch
-  arms for delivery, nor a relay-internal UI delivery path.
+- prompt-readiness evaluation: no `prompt_regex` compilation or matching, no pane
+  output inspection, and no cursor-column comparison,
+- per-transport `TargetConfiguration` dispatch arms for delivery, nor a
+  relay-internal UI delivery path.
 
-Every target SHALL be transport-delivered: `Ui` and `Pubsub` are first-class
-transports (`TransportImpl::Ui`, and `TransportImpl::Pubsub` forward-declared as
-a stub like the prior `Pty` stub), so the relay worker submits `mailw`/`raww`
-uniformly without a transport-deliverability capability flag. The only
-target-type-dependent step is transport construction.
+Every target SHALL be transport-delivered. The only target-type-dependent step is
+transport construction.
 
 #### Scenario: ACP code in src/acp/
 
@@ -127,22 +177,45 @@ target-type-dependent step is transport construction.
 #### Scenario: Tmux code in src/tmux/
 
 - **WHEN** a developer reads `src/relay/delivery/`
-- **THEN** no Tmux pane operations, quiescence scheduling, rendering, or session
-  lifecycle primitives are present
+- **THEN** no Tmux pane operations, rendering, or session lifecycle primitives are
+  present
 
 #### Scenario: Pty code in src/pty/
 
 - **WHEN** a developer reads `src/relay/delivery/`
-- **THEN** no Pty transport operations, libghostty-vt state access, portable-pty
-  I/O, or shared wedge/prime state machine logic are present
+- **THEN** no Pty transport operations, libghostty-vt state access, or
+  portable-pty I/O are present
+
+#### Scenario: Packing stays with the transport
+
+- **WHEN** a developer looks for the logic that splits received envelopes into
+  packing units
+- **THEN** they find it in the owning transport module
+- **AND** the relay expresses its own limits only in envelope count and canonical
+  payload bytes, never in rendered tokens
 
 #### Scenario: UI target delivered through its transport, not a relay path
 
 - **WHEN** the relay receives a delivery task for a `Ui` target
-- **THEN** it dispatches `mailw` through `TransportImpl::Ui` uniformly, with no
+- **THEN** it dispatches through `TransportImpl::Ui` uniformly, with no
   transport-type routing fork
 - **AND** no `TargetConfiguration::Ui | Pubsub` delivery arm or UI delivery
   short-circuit appears in the dispatch path
+
+#### Scenario: Queueing lives relay-side
+
+- **WHEN** a developer looks for the pending queue for a target
+- **THEN** they find one relay-owned queue rather than a per-transport buffer
+- **AND** no transport retains envelopes awaiting a readiness condition
+
+#### Scenario: Readiness determination stays with the transport
+
+- **WHEN** a developer looks for the logic that decides whether a target can take
+  a handover now
+- **THEN** they find it in the owning transport module
+- **AND** `src/relay/delivery/` contains no prompt-regex matching, pane
+  inspection, or cursor-column comparison
+- **AND** the relay reads only the `is_ready_for_handover` level
 
 ### Requirement: Choice Resolution via Injected Resolver
 
@@ -171,58 +244,50 @@ the `DeliveryContext`. There SHALL be no inbound event channel and no
 
 ### Requirement: Synchronous Delivery Completion
 
-`mailw()` and `raww()` SHALL each return an outcome future that resolves with a
-terminal `SingleDeliveryOutcome` when the write reaches a terminal state; the
-relay worker maps that outcome onto its `SendResult` (the future carries the
-transport-side type, not the relay `SendResult`, preserving the no-relay-dependency
-invariant). The relay worker performs sender fan-out by awaiting the returned
-futures; there is no transport-issued completion callback or event separate from
-the future. The transport SHALL NOT drop a write without resolving its outcome
-future. On relay shutdown, all pending futures SHALL resolve with a
-dropped/shutdown outcome promptly. This does not block the relay request path: the
-send RPC returns `Queued` at enqueue, and outcome futures are awaited only on the
-per-target worker.
+Each member of an authorized batch SHALL resolve with a terminal
+`SingleDeliveryOutcome`; the relay worker maps that outcome onto its `SendResult`
+(the outcome carries the transport-side type, not the relay `SendResult`,
+preserving the no-relay-dependency invariant).
 
-A transport that owns a background delivery task SHALL observe that task's
-liveness rather than infer it from the presence of a channel sender. For Tmux,
-when the delivery thread has stopped, subsequent `mailw()` and `raww()` calls
-SHALL resolve immediately with `SendOutcome::Failed` and
-`reason_code = "tmux_delivery_thread_stopped"`; they SHALL NOT remain queued
-behind a stale sender or leave their outcome futures pending. The existing
-immediate terminal failure for a channel that races closed remains required.
+**Outcomes are per packing unit, not per batch.** If one unit submits and another
+fails, their members SHALL receive different outcomes. A transport SHALL NOT
+apply one outcome to every member of a batch.
 
-#### Scenario: mailw future resolves on delivery
+Every member's outcome SHALL be **derived from its unit's immutable evidence
+record**, never from live re-inspection at fan-out time.
 
-- **WHEN** the relay worker calls `mailw(envelope)` on a transport
-- **THEN** it receives a future immediately
-- **AND** the future resolves with a terminal `SingleDeliveryOutcome` once the
-  transport delivers (or fails to deliver) the write, which the relay worker maps
-  onto its `SendResult` at the collect site
+The transport SHALL NOT drop a member without resolving it, and the relay-owned
+guard SHALL terminalize any member the transport fails to resolve, selecting the
+outcome by the guard resolution order defined in the `delivery-quiescence`
+capability's `Delivery Authorization and Terminal Guard` requirement. This does
+not block the relay request path: the send RPC returns `queued` at admission.
 
-#### Scenario: Shutdown resolves all pending futures
+#### Scenario: Member outcome resolves through the relay worker
 
-- **WHEN** relay shutdown is requested while outcome futures are pending
-- **THEN** each transport resolves all pending futures with a dropped/shutdown
-  `SingleDeliveryOutcome` promptly
+- **WHEN** the relay invokes a transport with an authorized envelope
+- **THEN** each member resolves with a terminal `SingleDeliveryOutcome`
+- **AND** the relay worker maps that outcome onto its `SendResult` at the collect
+  site, without the transport referencing any `crate::relay` type
 
-#### Scenario: Tmux observes a stopped delivery thread
+#### Scenario: Differing outcomes across packing units
 
-- **WHEN** a Tmux delivery thread has stopped after startup
-- **AND** the transport still holds stale channel state
-- **THEN** the transport observes the stopped thread before accepting a new
-  write
-- **AND** a subsequent `mailw()` or `raww()` future resolves immediately with
-  `SendOutcome::Failed`
-- **AND** the reason code is `tmux_delivery_thread_stopped`
-- **AND** the write is not parked on the stale channel
+- **WHEN** one packing unit submits successfully and another fails
+- **THEN** unit 1's members resolve `delivered`
+- **AND** unit 2's members resolve `not_submitted` or `submission_unknown`
+- **AND** neither result is applied to the other unit's members
 
-#### Scenario: Tmux resolves a write when the channel closes during submission
+#### Scenario: An earlier unit's success is not retracted
 
-- **WHEN** a Tmux delivery thread stops concurrently with a write submission
-- **AND** the channel reports `Full` or `Closed` from `try_send`
-- **THEN** the submitted write future resolves immediately with a terminal
-  failure outcome
-- **AND** the future does not remain pending
+- **WHEN** a transport fails or panics while submitting a later unit
+- **THEN** the members of already-submitted units keep their `delivered` outcome
+
+#### Scenario: The guard resolves what the transport does not
+
+- **WHEN** a transport returns without resolving some members
+- **THEN** the relay-owned guard terminalizes them by its evidence order — the
+  unit's record if one exists, `not_submitted` if the member was never bound to a
+  unit, `submission_unknown` otherwise
+- **AND** each member's admission quota is released exactly once
 
 ### Requirement: Concurrent Look via Output View Handle
 
@@ -382,652 +447,176 @@ out-of-band delivery metadata.
 ### Requirement: Worker Readiness Interface
 
 The relay SHALL expose worker readiness through a transport-agnostic interface,
-not an ACP-specific one. Any worker-driven transport (ACP today, Pty) that
-maintains a multi-state readiness lifecycle SHALL populate the same surface:
+not an ACP-specific one. Any worker-driven transport that maintains a multi-state
+readiness lifecycle SHALL populate the same surface:
 
 - a transport-neutral readiness enum `WorkerReadinessState` with variants
   `Initializing`, `Available`, `Busy`, `Recovering`, and `Unavailable`, carrying
   no ACP-specific naming;
-- a per-target registry field (`AsyncWorkerEntry.readiness`) holding one
-  `Option<WorkerReadinessState>` — keyed implicitly by the per-target worker key
-  `(namespace, runtime_directory, target_session)`, NOT a per-entry
-  transport-keyed map, because each target is served by exactly one transport;
+- a per-target registry field holding one `Option<WorkerReadinessState>`;
 - relay-internal mutator/reader `set_worker_readiness` / `get_worker_readiness`;
 - an in-process observer `subscribe_worker_readiness` (with publisher
   `publish_worker_readiness`) that yields the current readiness and every
   subsequent transition, and that MAY be subscribed before the worker registers
   and continues to receive transitions after the worker unregisters;
-- a public read `read_worker_readiness` returning `Option<&'static str>` with the
-  values `initializing` / `available` / `busy` / `recovering` / `unavailable`.
+- a public read `read_worker_readiness` returning `Option<&'static str>`.
+
+A transport SHALL NOT latch readiness to `Unavailable` on the basis of an
+absence-derived delivery failure, because no such failure exists under this
+contract. Readiness transitions SHALL be driven by positively observed lifecycle
+events.
 
 The interface SHALL NOT spell any of these symbols with an `acp`/`Acp` prefix.
-Transport-specific readiness *triggers* (e.g. ACP stdin-write and terminal
-stopReason mechanics; Pty flush-group dispatch and child exit) SHALL remain in
-the owning transport module (`src/acp` and `src/pty` respectively), which drives
-the shared interface rather than defining its own readiness type. Tmux does not
-drive a multi-state worker readiness lifecycle and is therefore not a populator
-of this interface.
+Transport-specific readiness *triggers* SHALL remain in the owning transport
+module, which drives the shared interface rather than defining its own readiness
+type.
 
 #### Scenario: ACP worker populates the shared readiness interface
 
 - **WHEN** the ACP worker transitions readiness (e.g. to `busy` on prompt-write
   success)
 - **THEN** it calls `set_worker_readiness` with a `WorkerReadinessState` value
-- **AND** in-process subscribers to `subscribe_worker_readiness` for that target
-  observe the transition
+- **AND** in-process subscribers observe the transition
 - **AND** `read_worker_readiness` returns the corresponding state string
 
 #### Scenario: Pty worker populates the shared readiness interface
 
-- **WHEN** the Pty worker transitions readiness (e.g. to `busy` while a flush
-  group is in flight, to `unavailable` on a `pane_wedged` outcome)
+- **WHEN** the Pty worker transitions readiness on a positively observed
+  lifecycle event, such as child exit
 - **THEN** it calls `set_worker_readiness` with a `WorkerReadinessState` value
-- **AND** in-process subscribers to `subscribe_worker_readiness` for that target
-  observe the transition
-- **AND** `read_worker_readiness` returns the corresponding state string
+- **AND** in-process subscribers observe the transition
 
 #### Scenario: Readiness surface carries no ACP-specific naming
 
 - **WHEN** a developer reads the worker readiness enum, registry field, observer,
   and public read
 - **THEN** none is spelled with an `acp`/`Acp` prefix
-- **AND** a second worker-driven transport can populate the same surface without
-  introducing a parallel readiness type
 
 #### Scenario: Subscription survives the worker registration window
 
-- **WHEN** a caller subscribes via `subscribe_worker_readiness` before the worker
-  for that target is registered
+- **WHEN** a caller subscribes before the worker for that target is registered
 - **THEN** the subscription is established against the per-target publisher
 - **AND** the caller observes transitions published once the worker exists and
   after it later unregisters
 
-### Requirement: Three-State Delivery Classifier
+#### Scenario: Readiness is not latched from an inferred failure
 
-Promptable transports that gate delivery on a quiescence wait SHALL classify
-each pending flush group, during the quiescence wait for that group, into
-one of three terminal states:
-
-- `running` — output is flowing or has settled at the prompt-readiness
-  match; the transport continues to wait normally and resolves the flush
-  group as `Delivered` when the prompt becomes ready.
-- `unresponsive` — during the quiescence wait for the flush group, no
-  observable output has been produced within the prime window, or the flush
-  group's readiness bound elapsed without the target becoming ready; the
-  transport resolves the flush group as `SendOutcome::Timeout`.
-- `wedged` — during the quiescence wait for the flush group, output has
-  settled and the prompt-readiness template's frame does not match; the
-  transport resolves the flush group as `SendOutcome::Failed` with a
-  transport-defined `reason_code` on the same `Failed` variant.
-
-The `wedged` classification is **unsound**. It infers a terminal failure from the
-absence of change in rendered content, which cannot distinguish a hung target
-from a permission dialog awaiting an operator, a compose box holding typed input,
-or a target working without output.
-
-Tmux SHALL NOT classify `wedged`. **Pty is the sole retained user of the
-classification, as a named temporary exception**: it is Pty's only terminal path
-today, and removing it before `agentmux:issues/relay/61` supplies a Pty readiness
-bound would leave Pty unable to end a wait at all. No other transport SHALL adopt
-`wedged`, and a transport lacking a readiness bound SHALL NOT read that lack as
-licence to classify `wedged`. Missing a bound is the condition that has so far
-kept Pty from dropping an unsound classification, not a criterion that makes the
-classification sound; the remedy is to supply the bound.
-
-Positive observation of activity remains a valid signal on every transport and
-continues to suppress injection. **For Tmux**, the absence of activity SHALL NOT
-be treated as a signal: only a positively observed terminal event — process
-death, a closed connection, a protocol error — is sound evidence of failure, and
-an unchanged screen is not. Pty's retained `wedged` classifier does infer failure
-from an unchanged screen; that it does is the defect `agentmux:issues/relay/61`
-closes, not an exemption this rule grants.
-
-Tmux exposes `pane_dead`, but only under `remain-on-exit`, which this system
-does not set; without it a dead process destroys the pane and the resulting
-probe failure already resolves the wait. That path is therefore left unbuilt
-deliberately rather than overlooked.
-
-A Tmux quiescence wait SHALL be bounded by the flush group's readiness bound
-(`DeliveryEnvelope.readiness_timeout_ms`; see the `delivery-quiescence`
-capability's `Quiescence-Gated Delivery` requirement). The bound covers the
-entire wait for the group, is anchored where the prime window is anchored, and
-SHALL NOT be deferred, extended, or suspended by any signal. When it elapses the
-classifier SHALL promote the flush group to a terminal state, selecting the
-outcome and reason from the most recent observation.
-
-Transports that receive no readiness bound are unaffected by the preceding
-paragraph. This requirement does not bound their waits, and the absence of a
-bound for them SHALL NOT be read as their being bounded by other means; see
-`agentmux:issues/relay/61`.
-
-In addition to the three terminal classifications above, the classifier
-SHALL recognize a non-terminal **Busy** pre-classification: when the
-target's positive terminal-output-write signal (see the `Positive
-Activity Signal` requirement) advances between two consecutive
-observation polls, the classifier SHALL:
-
-- treat the target as **Busy** for that iteration;
-- suppress all terminal classifications for that iteration —
-  `running` (Delivered), `unresponsive` (Timeout), AND `wedged`
-  (Failed) — regardless of what the readiness-prompt match or the
-  inspected-pane-tail emptiness says. While the
-  terminal-output-write signal continues to be reported across
-  iterations, the classifier SHALL NOT promote the flush group to
-  ANY terminal classification **for as long as the flush group's readiness
-  bound has not elapsed**;
-- reset the consecutive-mismatch counter the wedge classifier uses, so
-  any wedged-counter progress accumulated during a prior quiesced period
-  is cleared when terminal output resumes;
-- emit a `delivery_target_active` diagnostic inscription carrying
-  `target_session`, `pane_target` (when the probe surfaces one), and
-  `activity_delta` (the magnitude of the activity generation advance).
-  The diagnostic dedups by generation: an iteration whose activity
-  generation did not advance does not emit a duplicate.
-
-Where a readiness bound applies, Busy suppression is bounded rather than
-indefinite. The wedge-counter reset above is retained deliberately: the wedge
-condition requires continuous frame-absence, so counter progress accumulated
-before an activity burst SHALL NOT survive it, or a stale wedge start would
-combine with newly settled content and fire immediately. Bounding the wait is
-the readiness bound's responsibility, not the counter's.
-
-The `Busy` pre-classification SHALL NOT be surfaced as a terminal
-classification. The three terminal classifications remain `running`,
-`unresponsive`, and `wedged`; `Busy` is the classifier's way of
-saying "keep waiting, the target is alive" without committing to a
-terminal outcome.
-
-**Scope clarification.** The `Busy` pre-classification is triggered
-ONLY by the terminal-output-write signal — that is, bytes being
-written to the target's pane/screen. It does NOT trigger when the
-target's agent process is busy but is producing zero terminal bytes
-(e.g., silent model thinking, pre-output tool-call prep). This
-distinction is explicit: a target in silent thinking produces a
-constant `activity_generation` value across observations and the
-comparator never registers an advance. On a transport that still
-classifies `wedged` — Pty today — that target is reported as wedged,
-which is the false positive the Busy short-circuit was meant to
-prevent and cannot. On Tmux the case is now benign: the target simply
-remains pending until it produces output or the readiness bound
-elapses. This is one of the four indistinguishable cases that motivated
-removing the Tmux classifier, and it is why Pty's removal is tracked
-alongside its bound. The silent-thinking case
-is a real bug but requires a separate process-level aliveness
-signal (filed as a follow-up); it is out of scope for this change.
-
-**Branch ordering contract.** The Busy short-circuit SHALL be
-evaluated before any terminal-classification branch in the same
-observe-sleep-observe iteration. The required branch order in
-`quiescence_classify_step` (in `src/transports/quiescence.rs`), after
-the second observation capture, is:
-
-1. **Busy short-circuit** — when the activity generation advanced,
-   reset the wedge counter, emit `delivery_target_active`, return
-   `NeedsWait`.
-2. `delivery_ready` check — terminal: returns
-   `Done(Ok(snapshot_after.pane_target.unwrap_or_default()))` when
-   the snapshot is prompt-ready.
-3. Wedge-counter increment block.
-4. Wedge check (counter threshold or prime-window elapsed) —
-   `Done(Err(Wedged))`.
-5. Prime timeout check — `Done(Err(Timeout))`.
-
-This ordering is what implements the Busy-suppresses-all-terminal-
-classifications behavior above. In particular, Busy SHALL be
-evaluated BEFORE `delivery_ready`; a post-sleep observation that
-matches the prompt regex while the activity generation advanced
-during the same quiet window SHALL return `NeedsWait` (Busy), not
-`Done(Ok(...))` (Delivered). The wedge counter SHALL only advance
-during iterations in which the activity signal was also quiesced;
-this is an implicit guard from Busy returning early at step 1.
-
-The readiness bound is **not** a branch in this ordering. It is a precondition
-on the iteration's result: an iteration whose readiness bound has elapsed SHALL
-NOT return `NeedsWait` from any branch above, and any `NeedsWait` deadline the
-classifier returns SHALL be capped at the bound. Expressing the bound as a
-positional early return would be incorrect, because it would report the
-readiness outcome in an iteration where a higher-precedence outcome is
-available. The classifier SHALL evaluate every elapsed bound before selecting an
-outcome and then apply precedence.
-
-An elapsed readiness bound SHALL NOT pre-empt the `delivery_ready` branch. When
-the bound has elapsed and the observation is prompt-ready and the activity
-signal did not advance, the classifier SHALL resolve `Delivered`. Full outcome
-precedence within one iteration, highest first: delivery, then the prime
-timeout, then the readiness bound. Delivery ranks first because the bound exists
-to stop an unbounded wait rather than to refuse a success that is already
-available, and because the prompt-ready check already precedes the prime-timeout
-check in the branch order above. On a transport that still classifies `wedged` —
-Pty today — that classification sits between delivery and the prime timeout.
-
-The Busy pre-classification is unaffected by this. A prompt-ready observation
-whose activity generation advanced across the pair is still deferred rather than
-delivered; if the bound has elapsed in that iteration the group resolves
-terminally instead of returning `NeedsWait`.
-
-The `unresponsive` and `wedged` classifiers SHALL each be config-surfaced
-per the per-transport spec (see `transport-contracts` Tmux Prime Timeout for the
-Tmux surface and Pty Wedged State Detection for the Pty surface).
-
-- The Tmux `unresponsive` classifier's prime window SHALL be **opt-in**: absent
-  or `None` on `[coders.<id>.tmux].prime-timeout-ms` means no prime-window
-  verdict is issued. It does not mean the wait is unbounded; the Tmux readiness
-  bound still applies.
-- Tmux SHALL NOT surface a `wedged` knob. Tmux does not classify `wedged` at all,
-  so there is no behavior for a knob to select.
-- The Pty `wedged` classifier SHALL remain **opt-out**, defaulting to enabled,
-  until `agentmux:issues/relay/61` supplies a Pty readiness bound and the
-  classifier is removed with it. It is retained because it is Pty's only terminal
-  path, not because the classification is sound.
-
-No signal that the transport cannot bound SHALL suppress, defer, or otherwise
-gate a Tmux classification indefinitely. This applies to operator-observable
-rendering state on the Tmux transport — copy-mode or a non-`root` client
-key-table — which does not change what `capture-pane` or `cursor_x` report and
-does not impede injection (see the `transport-contracts` `Copy-Mode-Transparent
-Injection` requirement), so such states are not delivery preconditions. It
-applies equally to the terminal-output-write signal, which is likewise unbounded:
-a target may emit bytes indefinitely without ever becoming ready. A Tmux
-quiescence wait SHALL always progress toward one of its terminal
-classifications, and the readiness bound is the mechanism that guarantees it.
-(This does not affect the ACP transport's `pending_choice_outcome` pause, which
-is a distinct turn-blocking operator *decision* rather than a signal the
-transport cannot bound.)
-
-The classifier SHALL be evaluated at the transport's quiescence wait,
-NOT at the relay delivery worker. The relay SHALL NOT inspect
-`SingleDeliveryOutcome` to make delivery policy decisions; it only
-relays the outcome to the MCP/CLI caller and to the diagnostic stream.
-
-The three states are mutually exclusive at the moment of terminal
-classification. The classifier SHALL NOT combine them (for example, a
-flush group SHALL NOT resolve as `Timeout AND Failed`).
-
-#### Scenario: Tmux pane-content observation resolves to delivery or timeout
-
-- **WHEN** the Tmux transport's quiescence wait observes the target's
-  output state during the wait for a flush group
-- **THEN** the outcome it derives from that observation is exactly one of
-  `Delivered` or `Timeout`
-- **AND** no Tmux outcome carries `reason_code = "pane_wedged"`
-- **AND** the transport's terminal paths that are not derived from pane content —
-  relay shutdown, and a positively observed probe or transport failure — are
-  unaffected by this scenario
-- **AND** the relay worker treats the resulting `SingleDeliveryOutcome`
-  as terminal regardless of which classifier fired
-
-#### Scenario: A settled Tmux pane is not classified as failed
-
-- **WHEN** a Tmux pane is quiescent with the prompt frame absent, for any reason
-  — a hung coder, a permission dialog awaiting an operator, a compose box
-  holding typed input, or a coder working without terminal output
-- **THEN** the Tmux transport issues no terminal outcome on that basis
-- **AND** the flush group remains pending until the target becomes ready or the
-  readiness bound elapses
-- **AND** an elapsed prime timeout does not resolve the group either: the prime
-  window measures absence of observable output, and a settled frame is output
-- **BECAUSE** the four cases are indistinguishable from the inspected tail, so
-  classifying any of them as failed misreports three of them, and resolving them
-  on the prime timeout instead would draw the same inference under another name
-
-#### Scenario: Absent Tmux prime timeout suppresses the prime verdict, not the bound
-
-- **WHEN** the bundle config does not set
-  `[coders.<id>.tmux].prime-timeout-ms` (or sets it to `None`)
-- **THEN** the Tmux transport does not fire a prime-window `Timeout` for
-  unresponsive targets regardless of how long output remains absent
-- **AND** the flush group's readiness bound still applies
-- **AND** the terminal failure modes for the flush group are `Timeout` from the
-  readiness bound and `Shutdown`
-
-#### Scenario: Classification is unaffected by operator copy-mode
-
-- **WHEN** the target pane is in tmux copy-mode (for example, the operator
-  scrolled it with the mouse wheel)
-- **THEN** the classifier evaluates prompt-readiness against the pane's live
-  content, which copy-mode does not alter
-- **AND** a prompt-ready pane resolves as `Delivered`
-- **AND** the transport does NOT suppress or defer classification on account
-  of the copy-mode state
-
-#### Scenario: Group atomicity on failure classification
-
-- **WHEN** a promptable transport's quiescence wait classifies the flush group
-  into a non-delivered terminal state — `unresponsive` on either transport, or
-  `wedged` on Pty
-- **THEN** every sender in the flush group receives the same terminal
-  outcome
-- **AND** the transport does NOT classify individual envelopes
-  independently within the same flush group
-
-#### Scenario: Busy short-circuit suppresses terminal classification on an active Tmux target
-
-- **WHEN** the Tmux transport's quiescence wait observes the target's
-  activity signal advancing between two consecutive observation polls
-- **AND** the inspected pane tail does not match the prompt-readiness
-  template (the screen has not yet returned to the prompt because the
-  target is mid-generation)
-- **AND** the flush group's readiness bound has not elapsed
-- **THEN** the transport does NOT promote the flush group to any terminal
-  classification for that iteration
-- **AND** continues to wait for either the activity to settle and the
-  pane to become prompt-ready, or the prime window to elapse with no
-  activity observed, or the readiness bound to elapse
-- **AND** emits a `delivery_target_active` diagnostic inscription
-  carrying the activity delta
-
-#### Scenario: Delivery outranks a simultaneous readiness expiry
-
-- **WHEN** the flush group's readiness bound elapses in the same iteration in
-  which the observation is prompt-ready
-- **AND** the activity generation did not advance across the observation pair
-- **THEN** the classifier resolves `Delivered` and the message is injected
-- **AND** it does not resolve `Timeout` on account of the elapsed bound
-
-#### Scenario: Busy suppression ends at the readiness bound
-
-- **WHEN** a Tmux target's activity signal advances on every observation pair
-- **AND** the prompt-readiness template never matches
-- **AND** the flush group's readiness bound elapses
-- **THEN** the transport promotes the flush group to a terminal classification
-  rather than returning `NeedsWait` again
-- **AND** the outcome is `Timeout` with `reason_code = "target_never_settled"`
-- **BECAUSE** the terminal-output-write signal is unbounded, and suppression
-  keyed to an unbounded signal is an unbounded wait
-
-#### Scenario: Pty busy short-circuit suppresses wedged classification on active target
-
-- **WHEN** the Pty transport's quiescence wait observes the worker's
-  `last_change_atomic` advancing between two consecutive observation
-  polls (new bytes were applied to the libghostty-vt terminal)
-- **AND** the inspected screen tail does not match the prompt-readiness
-  template
-- **THEN** the transport does NOT classify the flush group as `wedged`
-- **AND** continues to wait for either the activity to settle and the
-  screen to become prompt-ready, or the prime window to elapse with no
-  activity observed
-
-#### Scenario: A transport without a readiness bound is unaffected
-
-- **WHEN** a flush group's `readiness_timeout_ms` is `None`
-- **THEN** the classifier applies no readiness bound to that group
-- **AND** its wait behavior is exactly as it was before this requirement gained
-  the bound
-- **BECAUSE** the shared state machine is used by transports whose readiness
-  contracts differ, and sharing the code path SHALL NOT impose a bound the
-  transport's own requirement has not defined
-
-#### Scenario: Busy short-circuit resets wedge counter
-
-- **WHEN** the wedge counter has accumulated to one or two consecutive
-  identical quiesced-mismatch signatures
-- **AND** the next observation reports an activity-signal advance
-- **THEN** the wedge counter is reset to zero
-- **AND** the counter starts accumulating again only after the activity
-  signal quiesces and the pane content remains settled at a non-prompt
-  state
-- **AND** the flush group's readiness bound is unaffected by the reset
-
-#### Scenario: Busy short-circuit defers Delivered during active output (branch-ordering contract)
-
-- **WHEN** the post-sleep observation matches the prompt-readiness
-  template (the snapshot would normally resolve the wait as
-  `Done(Ok(...))` via the `delivery_ready` branch)
-- **AND** the activity generation advanced between the two consecutive
-  observation polls
-- **THEN** the classifier fires the `Busy` short-circuit (returns
-  `NeedsWait`) rather than the `delivery_ready` branch
-- **AND** the wedge counter is reset to zero
-- **AND** the wait function continues to the next iteration, where
-  the `delivery_ready` check will resume only after the activity
-  generation has settled AND the snapshot continues to match the
-  prompt-readiness template across a consecutive observation pair
-- **AND** the classifier does NOT promote the flush group to
-  `Delivered` while activity is being reported, even momentarily
-  when the snapshot happens to match the prompt regex
-
-This scenario exists to make the branch-ordering contract testable
-in `tests/unit/tmux_transport.rs` and `tests/unit/pty_transport.rs`:
-a probe that advances `activity_generation` between observations
-while keeping `is_prompt_ready == true` MUST resolve as
-`QuiescenceAction::NeedsWait`, NOT `Ok(pane)`, until the activity
-generation quiesces across an observation pair.
-
-### Requirement: Prime Timeout Envelope Field
-
-The relay SHALL communicate a per-write prime-timeout bound to transports
-via a generic `DeliveryEnvelope.prime_timeout_ms: Option<u64>` field.
-The field SHALL be transport-neutral — the relay populates it from
-per-coder config without knowing which transport will consume it, and
-each transport that performs a prime wait MAY read it or ignore it.
-
-For Tmux-backed sessions, the relay populates
-`DeliveryEnvelope.prime_timeout_ms` from
-`[coders.<id>.tmux].prime-timeout-ms`. The ACP delivery-side timeout
-follow-up will populate the same field for ACP sessions from
-`[coders.<id>.acp].prime-timeout-ms` (or a parallel per-coder key under
-the ACP table).
-
-The field SHALL replace any prior transport-specific prime-timeout
-field shape. The relay SHALL NOT add per-transport timeout fields to
-`DeliveryEnvelope` — keeping the envelope transport-neutral preserves
-the decoupling arc.
-
-#### Scenario: Tmux prime timeout rides on the generic envelope field
-
-- **WHEN** a Tmux-backed session has
-  `[coders.<id>.tmux].prime-timeout-ms` set to a finite millisecond
-  value
-- **THEN** the relay populates `DeliveryEnvelope.prime_timeout_ms`
-  with that value at envelope construction time
-- **AND** the Tmux transport reads `prime_timeout_ms` to bound the
-  prime window
-
-#### Scenario: ACP follow-up consumes the same generic field
-
-- **WHEN** the ACP delivery-side timeout follow-up lands
-- **THEN** it populates `DeliveryEnvelope.prime_timeout_ms` from its
-  own per-coder config key for ACP sessions
-- **AND** does NOT introduce a transport-prefixed envelope field
-  (e.g. `acp_prime_timeout_ms`)
-
-#### Scenario: Transports ignore the field when not relevant
-
-- **WHEN** a transport does not perform a prime wait (e.g. UI today)
-- **THEN** it ignores `DeliveryEnvelope.prime_timeout_ms`
-- **AND** the relay still populates the field with the configured
-  value (the relay does not gate the population on transport type)
+- **WHEN** a delivery resolves `submission_unknown`
+- **THEN** the transport does not latch readiness to `Unavailable` on that basis
+- **AND** readiness continues to reflect positively observed lifecycle state
 
 ### Requirement: Transport-Internal Probe Seam for Testability
 
-Each promptable transport that owns a quiescence wait SHALL expose an
-internal probe trait that lets tests inject deterministic quiescence and
-prompt-readiness results. The probe trait SHALL be transport-internal (not
-part of the `Transport` contract) and SHALL NOT appear in
-`src/transports/contract.rs`.
+Each transport whose target can be observed SHALL expose an internal probe trait
+that lets tests inject deterministic readiness observations. The probe trait
+SHALL be transport-internal (not part of the `Transport` contract) and SHALL NOT
+appear in `src/transports/contract.rs`.
 
-The probe trait SHALL return the next observation on demand so tests can
-drive the classifier through specific sequences. The sequences a transport's
-tests SHALL cover are the terminal states that transport can actually reach:
-for Tmux, unresponsive, slow-prompt, and normal-flow; a wedged sequence is
-not among them, because Tmux no longer classifies `wedged`.
+The probe trait SHALL return the next observation on demand so tests can drive
+the relay's readiness scheduling through specific sequences. Because no transport
+classifies an observation into a terminal delivery state, no probe sequence
+SHALL assert a terminal failure derived from observation.
 
-#### Scenario: Tmux probe trait is transport-internal
+#### Scenario: Probe trait is transport-internal
 
-- **WHEN** a developer reads `src/tmux/quiescence_probe.rs`
-- **THEN** they find a `PaneQuiescenceProbe` trait used by
-  `wait_for_quiescent_pane_three_state`, both re-exported from `src/tmux/mod.rs`
-- **AND** the trait is not re-exported from `src/transports/`
-- **AND** the `Transport` trait in `src/transports/contract.rs` has no
-  knowledge of probes
+- **WHEN** a developer reads a transport's probe module
+- **THEN** the trait is not re-exported from `src/transports/`
+- **AND** the `Transport` trait in `src/transports/contract.rs` has no knowledge
+  of probes
 
-#### Scenario: Tmux unit tests cover the reachable canonical sequences
+#### Scenario: No probe sequence asserts an observation-derived failure
 
-- **WHEN** `cargo nextest run --test unit tmux_transport` runs
-- **THEN** it asserts the canonical probe sequences produce the
-  expected wait results:
-  - a probe that never produces output → `Err(DeliveryWaitError::Timeout)`
-  - a probe that quiesces at a prompt after several ticks → `Ok(pane_target)`
-  - a probe that produces output then settles at a prompt →
-    `Ok(pane_target)` without the prime timeout firing
-- **AND** no Tmux sequence asserts `Err(DeliveryWaitError::Wedged)`, which the
-  transport cannot produce
-
-#### Scenario: Readiness-bound coverage lives with the shared classifier
-
-- **WHEN** a developer looks for the tests covering the Tmux readiness bound
-- **THEN** they find them against the shared classifier both transports drive,
-  not duplicated per transport
-- **BECAUSE** the bound is applied by the shared state machine, and asserting it
-  through one transport's probe adapter would test the adapter rather than the
-  rule
-
-### Requirement: ACP Prime Timeout Envelope Field Consumption
-
-The ACP transport SHALL consume the generic
-`DeliveryEnvelope.prime_timeout_ms: Option<u64>` field on the
-envelope it receives via `mailw` / `raww`. The transport SHALL treat
-`None` as unbounded (preserving today's behavior); it SHALL treat
-`Some(ms)` as the prime window bound for the per-turn wait. The ACP
-transport SHALL NOT introduce a transport-prefixed envelope field on
-top of the generic `prime_timeout_ms` field.
-
-The prime timer anchor SHALL be "delivery task perspective" — the
-moment the ACP transport's internal delivery task first enters the
-per-turn `wait_for_prompt_complete` poll, NOT the moment the relay
-enqueues the task. The prime timer SHALL NOT reset on
-coalesce-during-wait; absorbed envelopes inherit the head envelope's
-prime timer anchor.
-
-The prime timer SHALL NOT fire while a `pending_choice_outcome` is
-in flight (an operator decision is pending). The transport SHALL
-continue to wait without firing the prime timer until the choice
-resolves or the turn completes.
-
-On prime-timer fire, the transport SHALL resolve the flush group
-with `SendOutcome::Timeout` and `reason_code = "acp_turn_timeout"`,
-latch the per-target readiness to `Unavailable`, and signal
-respawn-needed through the same path used for
-`PromptCompletion::ConnectionClosed`. The transport SHALL NOT inject
-further messages into the wedge.
-
-#### Scenario: ACP transport consumes the generic prime timeout field
-
-- **WHEN** an ACP target receives a `DeliveryEnvelope` with
-  `prime_timeout_ms = Some(ms)`
-- **THEN** the ACP transport reads the field and uses it as the
-  prime window bound for the per-turn wait
-- **AND** the transport does NOT introduce a separate
-  `acp_prime_timeout_ms` envelope field
-
-#### Scenario: ACP transport ignores prime timeout when None
-
-- **WHEN** an ACP target receives a `DeliveryEnvelope` with
-  `prime_timeout_ms = None`
-- **THEN** the ACP transport preserves today's unbounded behavior
-- **AND** the only terminal failure modes are the existing
-  `ACP Stop-Reason Outcome Mapping` outcomes and `DroppedOnShutdown`
-
-#### Scenario: ACP transport resolves flush group on prime timer fire
-
-- **WHEN** the ACP transport's prime timer fires for a flush group
-- **THEN** every sender in the flush group receives
-  `SendOutcome::Timeout` with `reason_code = "acp_turn_timeout"`
-- **AND** the per-target readiness is latched to `Unavailable`
-- **AND** the respawn-needed signal is raised so the worker's
-  `check_respawn_needed()` returns `true`
-- **AND** a `delivery_prime_timeout` inscription is emitted with
-  `target_session`, `timeout_ms`, and `prime_wait_elapsed_ms`
+- **WHEN** a transport's probe tests run
+- **THEN** no sequence asserts a terminal delivery failure produced from an
+  observation
+- **BECAUSE** observations feed relay scheduling, and scheduling produces no
+  terminal outcome
 
 ### Requirement: Positive Activity Signal
 
-Each promptable transport that owns a quiescence wait SHALL populate the
-cross-transport `WedgeObservation.activity_generation` field on every
-call to `WedgeProbe::observe` from a transport-native
-**terminal-output-write** primitive. The classifier compares this
-field across two consecutive observations to detect "did bytes flow
-between these two polls" independently of whether the captured
-pane/screen content visibly changed. The activity generation is a
-monotonic `u64`; the classifier treats an advance as a positive
-"terminal-output-write" signal.
+Each transport whose target produces observable output SHALL expose a
+cross-transport activity signal from a transport-native
+**terminal-output-write** primitive. The signal is a monotonic `u64` generation
+that advances when bytes flow to the target's terminal, independently of whether
+captured content visibly changed.
 
-**Scope (terminal-output-write, not process-busy):** the field carries
-a marker of "bytes being written to the target's terminal." It does
-NOT carry a marker of "the target's agent is busy regardless of byte
-output" — that is a separate problem requiring a process-level
-aliveness signal (filed as a follow-up). A target whose agent is in
-silent thinking with zero terminal bytes will populate this field
-with a constant value, and the wedge classifier will continue to
-fire on it as before.
+**The relay consumes this signal**; no transport classifies on it. An advance
+between two consecutive observations SHALL be treated by the relay as a positive
+indication that the target is active, and SHALL suppress handover for that
+iteration.
 
-The transport-native activity primitive SHALL be:
+**Scope (terminal-output-write, not process-busy):** the field carries a marker
+of bytes being written to the target's terminal. Its **absence SHALL NOT be
+treated as a signal of any kind.** A target that is quiet may be hung, may be
+awaiting an operator, or may be working silently, and nothing distinguishes them.
 
-- **Tmux**: `#{window_activity}` (the same primitive
-  `RealPaneQuiescenceProbe::wait_for_change` already polls). The Tmux
-  probe resolves the marker at observation time and parses it as a
-  `u64` epoch-seconds value. When `#{window_activity}` is unavailable
-  on the running tmux version (the existing
-  `resolve_window_activity_marker` returns `Ok(None)` for unknown /
-  invalid / bad format errors), the field SHALL be populated with `0`,
-  falling back to pre-change behavior for older tmux versions.
+A transport that does not track activity, or whose primitive is unavailable,
+SHALL populate the field with the constant `0`. A constantly-`0` signal can never
+advance, so such a target is never suppressed on this basis.
 
-- **Pty**: `last_change_atomic` on `PtyShared` (the `Arc<AtomicU64>`
-  the worker thread advances after each `vt_write` batch). The Pty
-  probe loads the atomic with `Ordering::Acquire`. The field is
-  already `u64`; no parsing needed.
+**Tmux is the only transport required to track one.** ACP has no terminal to
+write to, and Pty — whose terminal writes would supply an obvious primitive —
+remains work-in-progress for this release, so it reports the constant. This is
+the fallback above being used as designed rather than a gap: the requirement is
+that a transport either supplies a real marker or supplies one that can never
+advance, and both are conformant.
 
-The activity signal SHALL be transport-internal: the field is part of
-the cross-transport `WedgeObservation` type but does NOT appear in
-`DeliveryEnvelope`, `SingleDeliveryOutcome`, or any relay-facing API.
-A transport that does not track activity (or whose primitive is
-unavailable) populates the field with a constant (`0`), which falls
-back to the pre-change behavior for that transport.
+#### Scenario: Tmux probe populates the activity signal from window_activity
 
-#### Scenario: Tmux probe populates activity_generation from window_activity
-
-- **WHEN** the Tmux `TmuxAsWedgeProbe::observe` is called and
-  `#{window_activity}` returns a non-empty value
-- **THEN** the resulting `WedgeObservation.activity_generation` is the
-  parsed `u64` epoch-seconds value of that marker
+- **WHEN** the Tmux probe observes and `#{window_activity}` returns a non-empty
+  value
+- **THEN** the resulting activity generation is the parsed `u64` epoch-seconds
+  value of that marker
 
 #### Scenario: Tmux probe falls back to 0 when window_activity is unavailable
 
-- **WHEN** the Tmux `TmuxAsWedgeProbe::observe` is called and
-  `#{window_activity}` is unavailable on the running tmux version
-- **THEN** the resulting `WedgeObservation.activity_generation` is `0`
-- **AND** the classifier's Busy short-circuit never fires for this
-  probe (no activity advance is possible when the field is always `0`)
+- **WHEN** the Tmux probe observes and `#{window_activity}` is unavailable on the
+  running tmux version
+- **THEN** the resulting activity generation is `0`
+- **AND** no advance is possible, so handover is never suppressed on this basis
+  for that target
 
-#### Scenario: Pty probe populates activity_generation from last_change_atomic
+#### Scenario: Activity advance suppresses handover
 
-- **WHEN** the Pty `PtyQuiescenceProbe::observe` or
-  `WorkerTerminalProbe::observe` is called
-- **THEN** the resulting `WedgeObservation.activity_generation` is the
-  current value of `last_change_atomic` loaded with `Ordering::Acquire`
+- **WHEN** a target's activity generation advances between two consecutive relay
+  observations
+- **THEN** the relay does not authorize a batch for that target in that iteration
+- **AND** the entry remains `Pending`
 
-#### Scenario: Classifier compares activity_generation between observations
+#### Scenario: Absence of activity produces no outcome
 
-- **WHEN** two consecutive `WedgeObservation` snapshots have different
-  `activity_generation` values
-- **THEN** the classifier recognizes the second observation as
-  reporting activity since the first
-- **AND** enters the Busy pre-classification for that iteration
+- **WHEN** a target's activity generation does not advance across any number of
+  observations
+- **THEN** no terminal outcome is produced on that basis
+- **AND** the entry remains `Pending`, resolving only if it is later authorized,
+  if its transport is positively observed torn down, if that transport is
+  continuously observed `Unreachable` past `[delivery].unreachable-dwell-ms`, or
+  at relay shutdown
+- **BECAUSE** the absence of an activity advance is not evidence; sustained
+  unreachability is, which is why the dwell resolves an entry and a quiet screen
+  never does
 
 ### Requirement: Pty Transport Implementation
 
 The system SHALL provide a `PtyTransport` in `src/pty/transport.rs` that
-implements the existing `Transport` trait and is wired into
-`TransportImpl::Pty(PtyTransport)`. The transport SHALL own one
-`libghostty_vt::Terminal<'static, 'static>`, one `portable_pty` master, one
-reader thread, and one delivery task. Because all `libghostty_vt` types are
-`!Send + !Sync`, the terminal SHALL live on the delivery thread and be reached
-from other threads (the relay worker for `mailw`/`raww` dispatch is
-non-blocking — the transport enqueues onto an internal `mpsc::Sender`; the look
-path is the only direct cross-thread accessor) through a `SnapshotRequest`
-channel whose receiver lives on the worker thread. The reader thread feeds
-PTY output bytes through `bytes_tx` into the worker, which applies them to
-the terminal and advances the `last_change_atomic` shared with
-`PtyQuiescenceProbe`.
+implements the `Transport` trait and is wired into `TransportImpl::Pty`. The
+transport SHALL own one `libghostty_vt::Terminal<'static, 'static>`, one
+`portable_pty` master, one reader thread, and one delivery task. Because all
+`libghostty_vt` types are `!Send + !Sync`, the terminal SHALL live on the
+delivery thread and be reached from other threads through a `SnapshotRequest`
+channel.
+
+**Pty SHALL buffer, then write** — the ordering Tmux already uses. The transport
+SHALL NOT write any member to the PTY master before that member's partition is
+recorded. Writing before the wait is what made a flush group's membership mutable
+after its write, which is the defect behind `agentmux:issues/relay/62`.
+
+**Pty members SHALL be singleton packing units** unless a future change genuinely
+combines them into one write, because the transport writes each member with its
+own `write_all` pair. Each unit's outcome SHALL be derived from its own
+evidence, and one outcome SHALL NOT be applied to every member of a group.
+
+No envelope SHALL be absorbed into a batch after that batch is authorized.
 
 #### Scenario: Pty startup spawns the child PTY and installs effect handlers
 
@@ -1035,197 +624,551 @@ the terminal and advances the `last_change_atomic` shared with
   Pty-backed bundle member
 - **THEN** the transport opens a `portable_pty` master sized to the per-coder
   `cols` and `rows`
-- **AND** spawns the configured child command with `COLORTERM=truecolor` and
-  a `TERM` env-var value derived from the per-coder `term-protocol` field
-  (defaulting to `xterm-256color` when `term-protocol` is unset; see
-  `pty-terminal-protocols` for the configurable `term-protocol` surface)
+- **AND** spawns the configured child command with `COLORTERM=truecolor` and a
+  `TERM` env-var value derived from the per-coder `term-protocol` field
 - **AND** constructs a `libghostty_vt::Terminal` with the same dimensions and
-  installs the canonical effect handlers (`on_pty_write`, `on_size`,
-  `on_device_attributes`, `on_xtversion`, `on_title_changed`)
+  installs the canonical effect handlers
 - **AND** spawns the reader thread and the delivery task
-- **AND** the worker thread publishes `WorkerReadinessState::Available`
-  AFTER successful `Terminal::new` + handler installation, then signals the
-  init handshake so `startup_inner` returns `TransportStatus::Ready`
-- **AND** if `Terminal::new` fails, the worker signals the init handshake
-  with the error and `startup_inner` returns `TransportError` (the relay-side
-  guard then publishes `WorkerReadinessState::Unavailable`)
+- **AND** the worker thread publishes `WorkerReadinessState::Available` AFTER
+  successful `Terminal::new` + handler installation
 
-#### Scenario: Pty mailw enqueues and resolves via delivery task
+#### Scenario: Pty startup does not wait for the worker to initialize
 
-- **WHEN** the relay calls `TransportImpl::Pty(t).mailw(envelope)` for a
-  Pty-backed target
-- **THEN** the transport enqueues the envelope on its internal `mpsc::Sender`
-  and returns an `OutcomeFuture` immediately
-- **AND** the delivery task picks up the envelope, renders the pane-envelope
-  text via `DeliveryMessage::render_pane_envelope`, writes the bytes to the
-  PTY master, drains `on_pty_write` responses back to the master, waits for
-  quiescence via the shared wedge/prime state machine, and resolves the
-  outcome future with the corresponding `SingleDeliveryOutcome`
+- **WHEN** `startup` has spawned the child, the worker thread, and the reader
+  thread
+- **THEN** it returns `TransportReadiness::Pending` immediately rather than
+  waiting for the worker to report that it initialized
+- **AND** the worker publishes `WorkerReadinessState::Available` when it has
+  genuinely initialized, so `is_ready_for_handover` is what gates the handover
+  and the return value carries no readiness answer
+- **AND** a worker that never arrives is treated as a target that is never
+  ready — the entry stays `Pending`, bounded in consequence by per-target
+  admission quota rather than by a clock, exactly as for every other transport
+
+**Reason:** the wait could not be made safe in either direction. Unbounded it
+never reached a verdict. Bounded, its cleanup joined the worker thread, so a
+startup that timed out *because that thread had stalled* then blocked on the
+same stall — the bound relocated the hang rather than ending it. An in-process
+`Terminal::new` cannot be interrupted, so no cleanup can promise a cessation it
+has not observed, and a bound that cannot be made true is worse than none.
+
+#### Scenario: Pty initialization failure becomes a reachability signal
+
+- **WHEN** the Pty worker thread fails to construct its terminal, after
+  `startup` has already returned
+- **THEN** it publishes `WorkerReadinessState::Unavailable` and terminates its
+  child, so the reader observes EOF and the transport reports `Unreachable`
+- **AND** the member resolves through the unreachable dwell rather than waiting
+  on a runtime that is never coming, which is the treatment reserved for a
+  target that might still arrive
+
+#### Scenario: A teardown during initialization is not overwritten
+
+- **WHEN** shutdown is requested while the Pty worker is still initializing
+- **THEN** the worker SHALL NOT publish `Available` for a runtime already being
+  torn down
+- **AND** the worker SHALL check the shutdown flag at every point it controls,
+  leaving as the unobserved window only what precedes its first check: the
+  uninterruptible terminal construction and the handler installation beside it
+
+#### Scenario: Pty submits an authorized envelope immediately
+
+- **WHEN** the relay invokes the Pty transport with an authorized envelope
+- **THEN** the transport partitions each received envelope into its own singleton
+  unit and records the partition before writing any bytes
+- **AND** writes each unit to the PTY master without waiting for quiescence
+- **AND** resolves each member from its own unit's evidence
+
+#### Scenario: No envelope is absorbed into an authorized batch
+
+- **WHEN** a new envelope is admitted while a batch for the same target is
+  authorized
+- **THEN** it forms part of a later batch
+- **AND** it is not added to the in-flight batch
+- **BECAUSE** a mutable batch membership is what allowed one outcome to be
+  reported for members that were written and members that were not
 
 #### Scenario: Pty look renders formatter text + cursor via snapshot channel
 
-- **WHEN** the relay calls `OutputView::look` on the `PtyOutputView` returned
-  by `give_output`
+- **WHEN** the relay calls `OutputView::look` on the `PtyOutputView` returned by
+  `give_output`
 - **THEN** the look implementation sends a `SnapshotRequest` through the
-  `snapshot_tx` channel; the worker thread receives it, recreates the
-  formatter from `&terminal`, calls `format_alloc(Format::Plain)`, splits the
-  result on `\n`, takes the last `mode.lines.unwrap_or(40)` rows, and reads
-  the cursor position via `terminal.cursor_x()` / `terminal.cursor_y()`;
-  replies on the oneshot with a `SnapshotResponse` carrying the rendered tail
-  and cursor coordinates
-- **AND** the look implementation returns
+  `snapshot_tx` channel and returns
   `LookSnapshotPayload::Lines { snapshot_lines }`
 
 #### Scenario: Pty shutdown kills the child before joining transport threads
 
 - **WHEN** the relay calls `TransportImpl::Pty(t).shutdown()`
 - **THEN** the transport publishes `WorkerReadinessState::Unavailable`
-- **AND** sets `shutdown_flag = true` so the worker thread observes
-  the shutdown on its next loop iteration and exits cleanly
-- **AND** calls `child.kill()` followed by `child.wait()` on the child
-  handle the transport itself holds, BEFORE joining the reader
-  thread or the worker thread
-- **AND** joins the reader thread handle
-- **AND** joins the worker thread handle
-- **AND** clears the relay's reference handles (`write_tx`,
-  `bytes_tx`, child / reader / worker thread handles); the
-  transport itself owns `self.shared` until the `PtyTransport`
-  is dropped
-- **AND** for a direct long-running silent child (one that did
-  not spawn descendants inheriting the PTY slave fd), `shutdown`
-  completes without waiting for the child's natural exit — the
-  child is killed before any join. The regression test
-  `pty_transport_shutdown_returns_within_bound_for_live_silent_child`
-  asserts this direct-child case (5 s upper bound with a strict
-  < 1 s expectation) as evidence of the implemented behavior.
+- **AND** sets `shutdown_flag = true`
+- **AND** calls `child.kill()` followed by `child.wait()` BEFORE joining the
+  reader thread or the worker thread
+- **AND** joins the reader thread handle and the worker thread handle
 
-> **Spec-alignment note (2026-07-16):** the live contract is
-> deliberately scoped to the direct-child path the implementation
-> controls. The `child.kill()` + `child.wait()` sequence is
-> sequenced BEFORE the reader + worker joins, so the direct-child
-> case completes without waiting for the child's natural exit.
-> The implementation does NOT enforce a universal bound: a child
-> that spawned descendants inheriting the PTY slave fd (or any
-> external process keeping the slave open) is outside the
-> transport's control and is not part of the contract. The
-> `pty_transport_shutdown_returns_within_bound_for_live_silent_child`
-> test exercises the direct-child path; descendant-held slave fds
-> are outside the bounded guarantee.
+### Requirement: Packing Units and Typed Submission Evidence
 
-### Requirement: Generalized Wedge/Prime State Machine
+Transports SHALL partition an authorized batch into packing units before
+producing any target-side effect, and SHALL resolve every member from typed,
+per-unit evidence.
 
-The system SHALL provide a transport-agnostic wedge detection and prime
-timeout state machine in `src/transports/quiescence.rs`, shared by all
-promptable transports (Tmux, Pty). The state machine SHALL operate over
-a `WedgeProbe` trait that exposes a single-snapshot observation shape:
+A **batch** is the unit of authorization. A **packing unit** is the unit of
+target-side submission. They are not the same, and a batch SHALL NOT be treated
+as one atomic target write.
 
-- `observe(&mut self) -> Result<WedgeObservation, String>` — captures
-  the probe's current state as a single snapshot. The state machine
-  calls this twice per quiescence iteration (before and after the
-  `wait_for_change` round). Implementations read any underlying IPC /
-  state once and return a consistent snapshot.
-- `wait_for_change(&mut self, deadline: Instant) -> Result<(), DeliveryWaitError>`
-  — blocks until the next `observe()` call would differ from the
-  previous one, or the supplied `deadline` elapses. Returns `Ok(())`
-  on observed change; `Err(DeliveryWaitError::Timeout)` on deadline
-  elapsed with no change; `Err(DeliveryWaitError::Failed)` on probe
-  errors. The state machine SHALL pass the earliest applicable bound as the
-  `deadline`: the per-coder `prime_timeout_ms` when set, and the flush group's
-  readiness bound when one applies, whichever is sooner. A supplied deadline
-  SHALL NOT exceed a bound that applies to the group.
+**Partition SHALL be fixed and exact before the first target-side effect.** Every
+member belongs to exactly one unit, order is preserved, and no member is added to
+a batch after authorization. The transport SHALL assign `PackingUnit ID`s at
+partition and record the partition to the relay-owned guard before producing any
+effect. There SHALL be no absorption across batches.
 
-The single-snapshot shape is intentional: a multi-method trait
-would do 4-8x more work per iteration when the probe side-effects
-on each call, and the existing probe test fixtures'
-`abort_after_calls` counters would trip prematurely. The 16-probe
-test surface in `tests/unit/tmux_transport.rs` uses this two-method
-shape and preserves its `next_evaluation` cadence.
+An envelope whose rendered size alone exceeds the packing budget SHALL form its
+own unit.
 
-The `WedgeObservation` snapshot SHALL carry these fields (consistent
-across all transports; per-transport probes populate them from their
-native primitives):
+**Identities are explicit and immutable.** A `Batch ID` and `Member ID` are
+assigned at authorization, a `PackingUnit ID` at partition, and none is ever
+reassigned. Each authorization additionally carries a stable attempt ID. The full
+partition SHALL be retained for the batch's lifetime so resolution can attribute
+every member to the unit that carried it.
 
-- `inspected_tail: String` — the last `inspect_lines` rows formatted
-  for prompt-readiness matching. Empty / whitespace-only indicates
-  an empty pane (Unresponsive territory). A non-empty tail that is not
-  prompt-ready is wedge-class only when the mismatch is a frame mismatch;
-  see `mismatch` below.
-- `is_prompt_ready: bool` — whether the target is currently
-  prompt-ready. The state machine's `running` branch returns `Ok`
-  when this is `true`.
-- `pane_target: Option<String>` — active pane id (e.g. Tmux `%0`)
-  for diagnostic inscriptions. `None` when the probe does not
-  surface a pane target (e.g. Pty, which has no tmux-style pane
-  id); the state machine omits the field from diagnostics in that
-  case.
-- `mismatch: Option<ReadinessMismatch>` — readiness-mismatch
-  metadata when `is_prompt_ready = false`. The state machine uses
-  `mismatch.reason` for the wedge/prime-timeout `reason` payload,
-  falling back to deriving a generic reason from the inspected tail
-  when `None`. Its `regex_matched` field SHALL determine wedge-class
-  membership: a mismatch reported with `regex_matched = Some(true)` is a
-  cursor mismatch on a healthy prompt frame and SHALL NOT be wedge-class,
-  because it indicates pending operator input rather than a stuck target.
-- `activity_generation: u64` — terminal-output-write marker
-  populated at observation time. Tmux probes read
-  `#{window_activity}` parsed as a `u64` epoch-seconds value
-  (falling back to `0` when the format is unavailable on the
-  running tmux version). Pty probes read
-  `last_change_atomic.load(Ordering::Acquire)` from `PtyShared`. An
-  advance between two consecutive observations signals that
-  bytes were written to the target during the `quiet_window`,
-  triggering the `Busy` pre-classification (see the
-  `Three-State Delivery Classifier` requirement).
+**Submission evidence SHALL be typed**, not inferred from an error string:
 
-The state machine SHALL return the existing
-`DeliveryWaitError::{Timeout, Wedged}` variants declared in
-`src/transports/contract.rs`. Tmux and Pty SHALL share the state
-machine; the per-transport adapter is the only divergence. The
-Tmux transport constructs a small `TmuxAsWedgeProbe` adapter that
-maps the existing `PaneQuiescenceProbe` into the new generalized
-trait, preserving the 16-probe test surface in
-`tests/unit/tmux_transport.rs` unchanged. The Pty transport
-implements `WedgeProbe` directly in
-`src/pty/state.rs::{PtyQuiescenceProbe, WorkerTerminalProbe}`,
-populating `WedgeObservation` fields from a shared `PtyShared`
-handle.
+| Evidence | Meaning |
+|---|---|
+| `Submitted` | the target-side primitive positively reported success |
+| `NotSubmitted` | positive evidence that no side effect occurred |
+| `SubmissionUnknown` | side effects cannot be excluded |
 
-Sharing the state machine SHALL NOT impose one transport's bounds on another.
-A bound applies to a flush group only when that group's envelope carries it.
+An undifferentiated error SHALL map to `SubmissionUnknown`, never
+`NotSubmitted`. Only a primitive that can prove nothing was written may report
+`NotSubmitted`. A Tmux paste is a body write followed by Enter and a Pty unit is
+multiple `write_all` calls, so both can fail after partial effect.
 
-#### Scenario: Generalized state machine classifies based on probe results
+**A member that was never bound to a packing unit SHALL resolve `not_submitted`.**
+Because the partition is recorded before the first target-side effect, an unbound
+member provably could not have been submitted, whatever ended the attempt —
+refusal, panic, or cancellation. The discriminator is unit binding, not the manner
+of failure.
 
-- **WHEN** the shared wedge/prime state machine observes a flush
-  group whose probe reports `is_prompt_ready == false` with a frame
-  mismatch (prompt-readiness template does not match the inspected tail)
-- **AND** wedge detection is enabled (per-coder config)
-- **THEN** the state machine returns `DeliveryWaitError::Wedged { reason }`
-  after `WEDGE_CONSECUTIVE_TICKS` (3) identical wedge-class
-  evaluations, OR when the prime window has elapsed with a
-  wedge-class mismatch observed
-- **AND** the calling transport maps the error to
-  `SendOutcome::Failed` + `reason_code = "pane_wedged"`
+**Unit evidence SHALL be recorded atomically before any member fan-out.**
+Evidence is established per unit but guards terminalize per member, and resolving
+members one at a time from live state is not safe: a resolver that panics halfway
+through fan-out would leave some members `delivered` while their siblings were
+terminalized `submission_unknown` from identical target-side evidence. The
+sequence SHALL therefore be:
 
-#### Scenario: A cursor mismatch does not accumulate wedge evaluations
+1. the unit's submission produces one **immutable unit evidence record**, written
+   before any member outcome is derived;
+2. every member's terminal outcome is **derived from that record**;
+3. a panic during fan-out **resumes from the recorded unit result** rather than
+   inventing `submission_unknown` for the remainder.
 
-- **WHEN** the probe reports `is_prompt_ready == false` with a mismatch whose
-  `regex_matched` is `Some(true)`
-- **THEN** the evaluation is not wedge-class
-- **AND** the consecutive-mismatch counter does not advance for it
-- **AND** the state machine does not return `Wedged` regardless of how many such
-  evaluations occur
+**Per-transport terminal evidence and observation windows:**
 
-#### Scenario: Tmux adapter maps PaneQuiescenceProbe into WedgeProbe::observe
+| Transport | `delivered` evidence | Window closes at |
+|---|---|---|
+| Tmux | `inject_literal_text` returns `Ok` | submission; a later pane death is target-health observability |
+| Pty | the unit's `write_all` pair to the master succeeds | submission; a later child exit is target-health observability |
+| ACP | write and flush of the complete newline-delimited `session/prompt` JSON-RPC request succeeds | that framed write; the turn's later completion, permission requests, or connection close are target-health observability |
+| UI | the broadcast is accepted by at least one live subscriber | submission |
 
-- **WHEN** a Tmux-backed flush group's `TmuxAsWedgeProbe::observe`
-  is called
-- **THEN** the adapter invokes the underlying `PaneQuiescenceProbe`
-  exactly once and packages the result into a `WedgeObservation`
-  whose fields (`inspected_tail`, `is_prompt_ready`, `pane_target`,
-  `mismatch`, `activity_generation`) reflect the live pane state at
-  the moment of the call
-- **AND** the Tmux-side prime and Busy semantics match the merged
-  `tmux-wedge-detection` and `add-wedge-detection-busy-state`
-  proposals unchanged, except that Tmux no longer consumes the
-  state machine's `Wedged` result
+**Submission success terminalizes `delivered` on every transport.** A later
+positively observed exit or close SHALL be recorded as target health, not as a
+second delivery outcome for an already-resolved member. There is no `target
+failed` delivery outcome.
 
+A partially-succeeded write within one packing unit SHALL yield
+`submission_unknown` for that unit's members: the bytes may be on the target in
+truncated form, which is neither delivery nor absence.
+
+#### Scenario: Record the partition before any effect
+
+- **WHEN** a transport receives an authorized envelope
+- **THEN** it partitions what it holds and records the partition to the guard
+- **AND** it produces no target-side effect before that record exists
+
+#### Scenario: An unbound member resolves not_submitted
+
+- **WHEN** a transport fails, refuses, or panics before binding any member to a
+  packing unit
+- **THEN** every member resolves `not_submitted`
+- **BECAUSE** the partition precedes the first effect, so nothing could have been
+  submitted
+
+#### Scenario: An undifferentiated error is not evidence of absence
+
+- **WHEN** a submission primitive returns an error that cannot prove zero bytes
+  left
+- **THEN** the unit's members resolve `submission_unknown`
+- **AND** they do not resolve `not_submitted`
+
+#### Scenario: A partial write within a unit is unknown
+
+- **WHEN** a unit's body write succeeds and its terminating write fails
+- **THEN** that unit's members resolve `submission_unknown`
+
+#### Scenario: Siblings share one outcome from one record
+
+- **WHEN** a resolver panics partway through the member fan-out of a unit
+- **THEN** the remaining members resolve from the recorded unit evidence
+- **AND** every member of that unit carries the same outcome
+
+#### Scenario: An oversized envelope forms its own unit
+
+- **WHEN** a single envelope's rendered size exceeds the packing budget
+- **THEN** it is partitioned into a unit of its own
+- **AND** its outcome is not shared with any other member
+
+#### Scenario: A post-submission exit does not resolve a member twice
+
+- **WHEN** a unit's submission succeeds and the target process later exits
+- **THEN** the unit's members remain `delivered`
+- **AND** the exit is recorded as target-health observability
+
+### Requirement: Transport Generation Fencing and Termination Authority
+
+A transport generation SHALL be **torn down and fenced before its replacement
+begins**, so an old generation cannot submit after its `Authorized` entries were
+resolved against it. Without fencing, "resolved unknown" and "still able to act"
+coexist, which is a target-side ordering hazard.
+
+**Marking a generation fenced is not a fence.** A submission already past its
+check will still produce its effect, so a generation that is marked but not
+acknowledged can write to the target after its members have been resolved. Only a
+positive fence acknowledgment establishes that execution has ceased.
+
+**Fence acknowledgment SHALL follow an explicit five-step state machine.** Each
+step is distinct, and no step blocks:
+
+1. **Cooperative stop request** — mark the generation fenced. An executor that
+   checks the flag stops at its next check. This step is a signal, not a wait.
+2. **First bounded cessation observation** — observe for up to
+   `[delivery].fence-observation-timeout-ms` whether every generation-owned executor has
+   ceased. If all have, go to step 5 positive.
+3. **Forced generation termination** — invoke the transport's generation
+   termination primitive. **The invocation SHALL be non-blocking**: it initiates
+   termination and returns, consuming none of the acknowledgment budget. Waiting
+   for its effect belongs to step 4, not to the call.
+4. **Second bounded cessation observation** — observe for a further
+   `[delivery].fence-observation-timeout-ms`.
+5. **Verdict** — **positive** if every generation-owned executor has been
+   observed to cease; **negative** otherwise. Timeout and failure both route to
+   negative; there is no third outcome.
+
+Total acknowledgment is therefore bounded by **twice**
+`fence-observation-timeout-ms`, because steps 1 and 3 are non-blocking and only steps 2
+and 4 consume time.
+
+**Neither observation SHALL be a blocking join.** No runtime primitive can force
+a thread blocked in a syscall to return, so a blocking join would reintroduce the
+unbounded wait the bound exists to close. The supervisor observes cessation and
+gives up on its own clock.
+
+Steps 1 and 3 are genuinely different actions, and conflating them was a defect
+in an earlier draft. Step 1 asks an executor that is *able* to observe a flag to
+stop, and costs nothing when it works. Step 3 is the hard action for an executor
+that cannot observe anything, and it is destructive — it terminates a child or
+drops a broadcaster. Escalating straight to step 3 would destroy a child that was
+about to stop cooperatively.
+
+A generation supervisor SHALL retain the termination primitive **plus every
+submission and permission executor handle it owns**. An executor whose handle is
+discarded cannot be observed and cannot be fenced.
+
+**The escalation action is fixed, not configurable**, because only one class of
+action can unblock an executor that observes nothing. Step 3 SHALL invoke the
+**generation termination primitive** that the transport declares.
+
+Every transport SHALL declare such a primitive. Its contract is to **initiate
+cessation of every effect path the generation owns, and to return without
+blocking.** It is not "kill the child" — that is one implementation, and it does
+not generalise to a transport owning no child process or reaching its target
+through a process it does not own:
+
+| Transport | Step 3 initiates | Step 4 observes |
+|---|---|---|
+| ACP, Pty | signal the generation's child to terminate, closing the stdin pipe or pty master being written to | the child reaped and the executor returned |
+| Tmux | signal the generation's owned `tmux` client invocations to terminate. The tmux **server** is not owned by the generation and SHALL NOT be terminated — doing so would destroy the operator's sessions | those invocations exited and the executor returned |
+| UI | drop the generation's broadcaster handle and subscriber senders | no further frame emitted and the executor returned |
+
+**A successful primitive invocation does not acknowledge the fence.** Only
+*observed cessation* does. The primitive initiates; step 4 observes. Reaping a
+child and confirming an executor returned are observations, and they belong to
+step 4 where they are bounded — putting them inside step 3 would place unbounded
+waiting inside a call the bound does not cover.
+
+The primitive is what makes escalation effective rather than what makes it sound:
+it unblocks an executor blocked writing into the terminated path, so that
+step 4's observation can succeed where step 2's could not.
+
+When the verdict is **negative**, the supervisor SHALL NOT admit a replacement
+generation for that target, SHALL NOT release its raw barrier, and SHALL record
+the condition as observability.
+
+This is deliberately fail-stop: a target that stops accepting new generations is
+recoverable by operator action, and a target whose old generation might still
+write while a new one runs is not.
+
+A negative fence SHALL NOT hold any member's outcome open. Members resolve
+through the guard's evidence order regardless, so an unceasing executor stalls
+that target's lifecycle without stranding a single message.
+
+Three facts SHALL be kept separate:
+
+| Fact | Established by | Releases |
+|---|---|---|
+| **Outcome terminal** | guard transition to a terminal spelling | admission quota, receipts, outcome-level barriers |
+| **Execution ceased** | fence acknowledgment | nothing on its own |
+| **Target-side ordering safe** | execution ceased **and** no in-flight primitive can still take effect | the raw barrier |
+
+`submission_unknown` is **terminal**. It resolves the member, releases quota, and
+releases outcome-level barriers immediately. It does **not** establish that
+execution has stopped. `submission_unknown` MAY therefore terminalize before the
+fence is positive; **replacement and normal ordering barriers SHALL NOT proceed**
+until it is.
+
+A submission stopped by the fence before producing its effect SHALL resolve
+`not_submitted`, since the fence is positive evidence that nothing was written.
+
+#### Scenario: A positive fence stops the old generation
+
+- **WHEN** a generation's fence reaches a positive verdict
+- **THEN** no member of that generation is submitted afterwards
+- **AND** replacement and the raw barrier are released
+
+#### Scenario: A marked but unobserved generation is not fenced
+
+- **WHEN** a generation is marked fenced and its members are resolved without
+  cessation having been observed
+- **THEN** an in-flight submission may still produce a target-side effect
+- **AND** this SHALL NOT be treated as a fenced generation
+
+#### Scenario: A successful primitive invocation is not an acknowledgment
+
+- **WHEN** the generation termination primitive returns successfully
+- **AND** cessation has not yet been observed
+- **THEN** the fence is not yet positive
+- **AND** replacement and the raw barrier remain held until step 4 observes
+  cessation
+
+#### Scenario: A discarded executor handle cannot be fenced
+
+- **WHEN** a transport spawns a submission or permission executor without
+  retaining its handle
+- **THEN** the generation supervisor cannot observe its cessation
+- **AND** the transport does not satisfy this requirement
+
+#### Scenario: A cooperative stop is tried before forced termination
+
+- **WHEN** a generation is fenced and its executors observe the fenced flag
+- **THEN** they cease within the first bounded observation window
+- **AND** the termination primitive is never invoked
+- **BECAUSE** forced termination is destructive, and escalating straight to it
+  would terminate a child that was about to stop on its own
+
+#### Scenario: The first observation is bounded and escalates
+
+- **WHEN** `[delivery].fence-observation-timeout-ms` elapses without every
+  generation-owned executor having ceased
+- **THEN** the supervisor invokes the transport's generation termination
+  primitive
+- **AND** that invocation returns without blocking
+- **AND** a second bounded observation window of the same duration begins
+
+#### Scenario: Escalation succeeds within the post-escalation window
+
+- **WHEN** the termination primitive has been invoked
+- **AND** every generation-owned executor is observed to cease within the second
+  bounded window
+- **THEN** the fence becomes positive
+- **AND** replacement and the raw barrier are released
+
+#### Scenario: Escalation not observed to complete leaves the fence negative
+
+- **WHEN** the termination primitive has been invoked
+- **AND** at least one generation-owned executor has not been observed to cease
+  when the second bounded window elapses
+- **THEN** the fence remains negative
+- **AND** no replacement generation is admitted for that target and its raw
+  barrier is not released
+- **AND** the condition is recorded as observability
+- **BECAUSE** timeout and failure both route here; a supervisor that cannot
+  positively establish cessation SHALL NOT assume it
+
+#### Scenario: A transport without an owned child still terminates its generation
+
+- **WHEN** a UI generation is fenced and its executors do not cease within the
+  first bounded window
+- **THEN** the supervisor drops that generation's broadcaster handle and
+  subscriber senders
+- **AND** no further frame is emitted by that generation
+- **BECAUSE** the primitive's contract is positive cessation of every
+  generation-owned effect path, not the termination of a child process
+
+#### Scenario: Fencing a Tmux generation does not terminate the server
+
+- **WHEN** a Tmux generation's termination primitive is invoked
+- **THEN** only the generation's owned `tmux` client invocations are terminated
+- **AND** the tmux server and the operator's sessions are left running
+
+#### Scenario: A negative fence does not strand any member
+
+- **WHEN** a fence remains negative because cessation was not observed
+- **THEN** every member of that generation still resolves through the guard's
+  evidence order
+- **AND** each member's admission quota is released
+- **BECAUSE** outcome terminality does not require the fence to be positive
+
+#### Scenario: A fenced submission resolves not_submitted
+
+- **WHEN** the fence stops a submission before it produces any target-side effect
+- **THEN** that unit's members resolve `not_submitted`
+- **AND** they do not resolve `submission_unknown`
+
+### Requirement: Transport Handover Capacity and Readiness
+
+Three quantities that were previously conflated under "capacity" SHALL be
+separate:
+
+| Quantity | Owner | Purpose |
+|---|---|---|
+| **Admission quota** | relay | how much may be queued per target and relay-global; enforced at admission |
+| **Maximum handover dimensions** | transport, static | the most work the relay may have handed over at once |
+| **Acceptance capacity** | transport, dynamic | whether it can accept right now; surfaced as `is_ready_for_handover` |
+
+All relay-facing quantities SHALL be expressed in units the relay can evaluate
+without packing: **envelope count and canonical payload bytes**, where canonical
+bytes means the serialized envelope payload the relay already holds, not rendered
+target text. Declaring them in tokens would be circular, since only the transport
+can render and count those.
+
+`is_ready_for_handover` SHALL be **level-triggered**, readable on demand, and the
+transport contract's **only** readiness predicate. It SHALL have no default
+implementation: a default of `true` would authorize a busy target, and a default
+of `false` would strand it permanently, so a transport answers for itself or does
+not participate in delivery.
+
+An earlier `is_ready` answered the weaker question of whether a transport's
+machinery existed — Tmux answered it unconditionally true, and ACP and Pty
+counted `Busy` as ready — which is why it could not serve handover readiness. It
+has been **removed from the contract rather than redefined**, because two
+readiness predicates were confusable precisely under a name that does not say
+what it is ready *for*. A transport MAY keep an equivalent lifecycle predicate
+privately, and Pty does, gating its `OutputView` on the runtime existing so that
+`look` still reaches a target that is mid-turn.
+
+`is_ready_for_handover` is **advisory** — a stale reading yields a fallible
+invocation, not a guarantee.
+
+**No transport → relay back-edge.** The relay calls transports; transports SHALL
+NOT know relay interfaces. Where a transport signals upward it SHALL invoke an
+opaque closure the relay provided at construction, the pattern `PtyTransport`
+already uses for `mirror_state`. Correctness SHALL NOT depend on that
+notification: it is an edge hint, the authoritative state is the level the relay
+reads, and authorization is a relay-local transition. A lost wakeup delays a
+delivery until the next poll; it cannot lose one or resolve it without evidence.
+
+#### Scenario: Readiness is readable as a level
+
+- **WHEN** the relay needs to decide whether handover is useful
+- **THEN** it reads `is_ready_for_handover` directly
+- **AND** does not rely on having observed a transition
+
+#### Scenario: A lost notification only delays
+
+- **WHEN** a transport's readiness notification is not observed by the relay
+- **THEN** the relay discovers the change on its next poll
+- **AND** no message is lost or resolved without evidence
+
+#### Scenario: A transport signals upward through an injected closure
+
+- **WHEN** a transport needs to notify the relay of a readiness change
+- **THEN** it invokes a closure the relay supplied at construction
+- **AND** it does not reference any `crate::relay` type
+
+#### Scenario: Handover dimensions are declared in relay-evaluable units
+
+- **WHEN** a transport declares its maximum handover dimensions
+- **THEN** they are expressed in envelope count and canonical payload bytes
+- **AND** not in rendered tokens
+
+### Requirement: Transport Health as a Separate Axis
+
+A transport SHALL report **health** as a level distinct from handover readiness,
+carrying the instant it was first observed unreachable:
+
+| State | Meaning |
+|---|---|
+| `Healthy` | the transport can reach its target |
+| `Unreachable { since }` | the transport cannot observe or reach its target at all, first seen at `since` |
+
+Readiness and health answer different questions. Readiness says *when* a handover
+is useful; health says *whether* one is possible. A target that is busy and a
+target whose transport cannot reach it both fail a readiness check, and only the
+first is a reason to wait.
+
+A delivery attempt SHALL require both: the transport reports `Healthy` **and**
+reports `is_ready_for_handover`. Healthy-but-unready leaves the member `Pending`.
+
+The transport SHALL determine health and report when it began; the relay SHALL
+own the dwell threshold as `[delivery]` policy. A transport SHALL NOT reference a
+relay interface to report it, per `Transport Module Boundaries`.
+
+A member SHALL be resolved only after its target has been **continuously
+unreachable past the configured threshold**, never on a single failed
+observation. One observation that does not come back cannot distinguish a
+transient failure from a departed target, and a bounce asserts something to the
+sender that a wait does not.
+
+This threshold SHALL NOT be read as a delivery timeout. No bound converts a
+readiness wait into an outcome, because duration cannot substitute for an
+observation that was never made. Here duration qualifies observations that were
+made repeatedly, and sustained unreachability is itself evidence in a way that
+sustained busyness is not.
+
+Health SHALL gate write paths and SHALL NOT gate `look`. `raww` shares the
+ordered delivery channel and inherits the gate. A `look` SHALL NOT be rejected on
+account of its target's health: a target is inspected precisely when something is
+wrong with it, so refusing to even attempt the snapshot removes the diagnostic
+exactly when it is needed.
+
+Whether a snapshot then comes back is the transport's own affair, and this
+requirement SHALL NOT be read as promising one. A tmux transport reports
+`Unreachable` *because* its pane cannot be observed, and that is the same pane a
+snapshot would be captured from, so the attempt fails on its own terms. An
+operator gets the transport's real error instead of a policy refusal, which is
+the diagnostic difference this requirement exists to preserve.
+
+#### Scenario: A busy target keeps waiting
+
+- **WHEN** a transport reports `Healthy` and does not report
+  `is_ready_for_handover`
+- **THEN** its member stays `Pending`
+- **AND** no elapsed duration resolves it
+
+#### Scenario: A sustained-unreachable target resolves its members
+
+- **WHEN** a transport reports `Unreachable` continuously past the configured
+  threshold
+- **THEN** its still-`Pending` members resolve through the guard's evidence order
+- **AND** their admission quota is released on that terminal transition
+
+#### Scenario: A transient unreachability does not resolve anything
+
+- **WHEN** a transport reports `Unreachable` and reports `Healthy` again before
+  the threshold elapses
+- **THEN** no member was resolved
+- **AND** the members that were waiting are authorized normally once readiness
+  allows
+
+#### Scenario: Health does not reject a look
+
+- **WHEN** an operator looks at a target whose transport reports `Unreachable`
+- **THEN** the request is dispatched to the transport rather than rejected on
+  health grounds
+- **AND** any failure returned is the transport's own snapshot failure
+
+#### Scenario: Health determination carries no relay dependency
+
+- **WHEN** a transport determines its own health
+- **THEN** it references no `crate::relay` type
+- **AND** the relay supplies the dwell threshold rather than the transport
