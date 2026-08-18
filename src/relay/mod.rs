@@ -256,6 +256,24 @@ pub fn append_startup_failure(
     startup_state::append_startup_failure(runtime_directory, record)
 }
 
+/// Records that a session has been observed serving successfully, clearing any
+/// startup-failure records it left behind.
+///
+/// The recovery half of [`append_startup_failure`]: one records that a session
+/// failed to start, the other that it is now serving, and [`load_startup_failures`]
+/// reads what the two have left standing. Repeated calls for a session whose
+/// history is already clear are cheap.
+///
+/// # Errors
+///
+/// Returns the history read/write failure cause, or a lock-poisoned cause.
+pub fn note_session_served_successfully(
+    runtime_directory: &Path,
+    session_id: &str,
+) -> Result<(), String> {
+    startup_state::note_session_served_successfully(runtime_directory, session_id)
+}
+
 /// Persists and announces a bring-up pass's per-session startup failures,
 /// returning the persisted records.
 ///
