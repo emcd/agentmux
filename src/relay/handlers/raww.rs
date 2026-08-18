@@ -13,7 +13,7 @@ use super::super::connection::BundleCatalog;
 use super::super::delivery::admission::{
     AdmissionTargetKey, admit, canonical_payload_bytes, rollback_admission,
 };
-use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
+use super::super::delivery::enqueue_async_delivery;
 use super::super::identity::{PrincipalType, classify_principal_id};
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
@@ -437,9 +437,6 @@ fn execute_raww(
         target_session: target_member.id.clone(),
         message: text,
         message_id: message_id.clone(),
-        // Unbounded quiescence wait: an agent turn can run well past 30 seconds,
-        // and async delivery's only hard bound is relay lifetime (shutdown).
-        quiescence: QuiescenceOptions::for_async(None),
         runtime_directory: raww_runtime_directory,
         payload_mode: DeliveryPayloadMode::RawInput,
         append_enter: !no_enter,

@@ -74,7 +74,6 @@ fn envelope(body: &str) -> DeliveryEnvelope {
         },
         append_enter: false,
         choice_decider_sessions: Vec::new(),
-        quiet_window: Duration::from_millis(50),
         is_receipt: false,
     }
 }

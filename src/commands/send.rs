@@ -44,7 +44,6 @@ pub(super) fn run_agentmux_send(arguments: &[String]) -> Result<(), RuntimeError
             message: parsed.message.clone(),
             targets: parsed.targets.clone(),
             broadcast: parsed.broadcast,
-            quiet_window_ms: None,
             on_behalf_of: None,
         },
     )

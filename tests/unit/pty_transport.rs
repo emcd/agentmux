@@ -211,7 +211,6 @@ fn envelope_for(
         },
         append_enter: true,
         choice_decider_sessions: Vec::new(),
-        quiet_window: Duration::from_millis(50),
         is_receipt,
     }
 }

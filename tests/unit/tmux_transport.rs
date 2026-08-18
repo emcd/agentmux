@@ -52,7 +52,6 @@ fn envelope(is_receipt: bool) -> DeliveryEnvelope {
         },
         append_enter: true,
         choice_decider_sessions: Vec::new(),
-        quiet_window: std::time::Duration::from_millis(50),
         is_receipt,
     }
 }

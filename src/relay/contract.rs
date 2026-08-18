@@ -344,8 +344,6 @@ pub enum RelayRequest {
         message: String,
         targets: Vec<String>,
         broadcast: bool,
-        #[serde(default)]
-        quiet_window_ms: Option<u64>,
         /// Origin principal this request is forwarded on behalf of. Set only by a
         /// cross-relay forward (the origin requester's `principal_id`); absent
         /// otherwise. Advisory and opaque — the receiving relay honors it only

@@ -18,7 +18,7 @@ use super::super::delivery::admission::{
     AdmissionTargetKey, admit, canonical_payload_bytes, resolve_target_session_type,
     rollback_admission,
 };
-use super::super::delivery::{QuiescenceOptions, enqueue_async_delivery};
+use super::super::delivery::enqueue_async_delivery;
 use super::super::identity::{PrincipalType, classify_principal_id};
 use super::super::lifecycle::load_hosted_bundle;
 use super::super::routing::{
@@ -53,7 +53,6 @@ pub(in crate::relay) fn handle_send_routed(
         message,
         targets,
         broadcast,
-        quiet_window_ms,
         on_behalf_of,
     } = request
     else {
@@ -71,7 +70,6 @@ pub(in crate::relay) fn handle_send_routed(
             message,
             targets,
             broadcast,
-            quiet_window_ms,
             on_behalf_of,
         },
         configuration_roots,
@@ -113,7 +111,6 @@ fn handle_send(
         message,
         targets,
         broadcast,
-        quiet_window_ms,
         on_behalf_of,
     } = request;
     // Honor a peer-forwarded origin attribution only from a relay-principal
@@ -256,7 +253,6 @@ fn handle_send(
                     message: message.as_str(),
                     home_namespace,
                     request_id,
-                    quiet_window_ms,
                     peer_connection_manager,
                 },
             )
@@ -376,7 +372,6 @@ struct SendExecutionContext<'a> {
     message: &'a str,
     home_namespace: &'a str,
     request_id: Option<String>,
-    quiet_window_ms: Option<u64>,
     peer_connection_manager: Option<&'a PeerConnectionManager>,
 }
 
@@ -399,11 +394,9 @@ fn execute_send(
         message,
         home_namespace,
         request_id,
-        quiet_window_ms,
         peer_connection_manager,
     } = context;
     let sender_member = sender.to_bundle_member();
-    let quiescence = QuiescenceOptions::for_async(quiet_window_ms);
     let mut results = Vec::with_capacity(route.targets.len());
     // Every task carries the full recipient list so delivered envelopes can show
     // co-recipients elsewhere. Entries are canonical ids: local recipients as
@@ -447,7 +440,6 @@ fn execute_send(
                 target_session: target.session_id.clone(),
                 message: message.to_string(),
                 message_id: message_id.clone(),
-                quiescence,
                 runtime_directory: group.runtime_directory.clone(),
                 payload_mode: DeliveryPayloadMode::EnvelopeMessage,
                 append_enter: true,
@@ -508,7 +500,6 @@ fn execute_send(
             manager,
             target,
             message,
-            quiet_window_ms,
             request_id.clone(),
             // The origin's verified principal_id (None for socket-trust): stamped
             // as on_behalf_of so the peer knows who this relay forwards for.
@@ -630,7 +621,6 @@ fn forward_send_cross_relay(
     manager: &PeerConnectionManager,
     target: &RouteTarget,
     message: &str,
-    quiet_window_ms: Option<u64>,
     request_id: Option<String>,
     on_behalf_of: Option<&str>,
 ) -> SendResult {
@@ -660,7 +650,6 @@ fn forward_send_cross_relay(
         message: message.to_string(),
         targets: vec![foreign_session],
         broadcast: false,
-        quiet_window_ms,
         on_behalf_of: on_behalf_of.map(str::to_string),
     };
     match manager.forward(relay_id, &forwarded) {

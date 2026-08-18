@@ -203,7 +203,6 @@ fn forward_reports_peer_unavailable_when_unreachable() {
         message: "hello".to_string(),
         targets: vec!["claude@myapp".to_string()],
         broadcast: false,
-        quiet_window_ms: None,
         on_behalf_of: None,
     };
     let error = manager

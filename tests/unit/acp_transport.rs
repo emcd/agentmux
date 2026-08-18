@@ -212,7 +212,6 @@ fn test_envelope(message_id: &str) -> DeliveryEnvelope {
         },
         append_enter: true,
         choice_decider_sessions: vec![],
-        quiet_window: Duration::ZERO,
         is_receipt: false,
     }
 }

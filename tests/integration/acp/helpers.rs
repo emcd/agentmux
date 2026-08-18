@@ -476,7 +476,6 @@ fn acp_send_request() -> RelayRequest {
         message: "status?".to_string(),
         targets: vec!["bravo@party".to_string()],
         broadcast: false,
-        quiet_window_ms: Some(50),
         on_behalf_of: None,
     }
 }

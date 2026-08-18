@@ -6,7 +6,6 @@ pub(in crate::relay) mod fence;
 pub(in crate::relay) mod guard;
 pub(in crate::relay) mod observability;
 mod partition;
-mod quiescence;
 
 pub(in crate::relay) use self::async_worker::{
     acp_session_is_ready, get_output_view, get_worker_readiness,
@@ -20,4 +19,3 @@ pub(in crate::relay) use self::choice_state::{
 pub(in crate::relay) use self::dispatch::{
     enqueue_async_delivery, initialize_acp_target_for_startup, wait_for_async_delivery_shutdown,
 };
-pub(in crate::relay) use self::quiescence::QuiescenceOptions;

@@ -1013,11 +1013,6 @@ pub struct DeliveryEnvelope {
     /// Sessions authorized to decide choices raised during this envelope's
     /// delivery, threaded to [`ChoiceToMake::decider_sessions`].
     pub choice_decider_sessions: Vec<String>,
-    /// Quiescence poll window for the transport's internal delivery task.
-    /// The transport uses this as the quiet period before declaring the target
-    /// ready to receive a flush group. Ignored by transports with no
-    /// quiescence wait (ACP).
-    pub quiet_window: Duration,
     /// True when this envelope carries a terminal-outcome receipt (a
     /// relay/system-originated notice back to the original sender for a
     /// non-delivered outcome). Carried on the envelope so per-transport
