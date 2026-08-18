@@ -121,6 +121,26 @@ exported from `src/relay/mod.rs`.
     session owns — a tmux state query, a prune, principal registration, a
     panicked reconcile worker, a failed history write — still fail the whole
     operation, because a pass that cannot say what it did has nothing to report.
+  - **A recorded startup failure lasts until that session is next observed
+    serving.** `append_startup_failure` writes it; a successful startup or a
+    delivered send calls `note_session_served_successfully`, which clears every
+    record for that session. The history answers "is this session failing now",
+    not "has it ever failed". A session may fail more than once, so the
+    in-memory cache that keeps the hot delivery path off the history file is a
+    cache of *"this session's history is empty"* and is evicted by the next
+    recorded failure — not a per-process record of having cleared once, which
+    strands every failure after the first.
+  - **The history is not an input to health.** `list_bundle_state` derives
+    `startup_health` from readiness alone — healthy when every configured
+    session is ready, degraded when at least one is and at least one is not,
+    down when none are — and the readiness probe runs per list payload rather
+    than being carried forward from a startup pass. The `up`/`down` outcomes
+    report that same readiness, not the log. What the history feeds is
+    `startup_failure_count` and `recent_startup_failures`, which the TUI renders
+    as its own lines. So a record outliving its session's recovery costs the
+    diagnostic list its credibility — it reports a failure for a session that is
+    serving — rather than lowering the health verdict, and the two must not be
+    re-coupled by reading the log to decide readiness.
   - Both passes bring up **every configured member** through the one
     `startup_member` helper, and report `ready_session_count` from its results
     rather than from what they created. Reconcile's tmux phase creates only tmux

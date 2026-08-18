@@ -23,11 +23,16 @@ struct PersistedStartupFailureHistory {
 
 static STARTUP_FAILURE_HISTORY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
-// Per-process record of (runtime_directory, session_id) pairs that have
-// already had their startup failure entries cleared during this relay run.
+// Per-process record of (runtime_directory, session_id) pairs whose startup
+// failure entries have already been cleared and not since re-recorded.
 // Lets repeated successful serves skip the file lock + read/write entirely.
-// Entries persist for the relay's lifetime; the set is bounded by the number
-// of distinct sessions a relay handles.
+// The set is bounded by the number of distinct sessions a relay handles.
+//
+// This is a cache of "the history holds nothing for this session", not a
+// record of having once cleared it. `append_startup_failure` is what makes
+// that statement false again, so it is what evicts the entry — otherwise a
+// session that fails, recovers, and fails again keeps the second failure
+// forever, because the recovery that would clear it is deduplicated away.
 static SERVED_SESSIONS_CLEARED: OnceLock<Mutex<HashSet<(PathBuf, String)>>> = OnceLock::new();
 
 fn startup_failure_history_lock() -> &'static Mutex<()> {
@@ -50,9 +55,19 @@ pub(super) fn load_startup_failures(
 }
 
 /// Records that `session_id` has been observed serving successfully and clears
-/// any stale startup failure entries from its bundle history. Idempotent across
-/// the relay's lifetime via an in-memory dedup set, so callers on the hot
-/// delivery path pay only a mutex acquisition after the first call per session.
+/// any stale startup failure entries from its bundle history.
+///
+/// Repeated calls collapse to a mutex acquisition while the session's history
+/// is known-empty, so the hot delivery path does not pay a file lock and a
+/// read/write per delivery. The cache is re-armed by a newly recorded failure
+/// rather than lasting the process's lifetime: a session can fail more than
+/// once, and each recovery has to be able to clear the failure that preceded it.
+///
+/// Lock order: this acquires the served-sessions cache and **releases it**
+/// before [`clear_startup_failures_for_session`] takes the history lock.
+/// [`append_startup_failure`] nests the other way, holding the history lock
+/// while it evicts. Only that one nesting direction exists, so the two cannot
+/// deadlock — keep it that way.
 pub(super) fn note_session_served_successfully(
     runtime_directory: &Path,
     session_id: &str,
@@ -117,7 +132,24 @@ pub(super) fn append_startup_failure(
     }
 
     store_persisted_startup_failure_history(path.as_path(), &history)?;
+    // After the write, not before, and while the history lock is still held.
+    // Evicting first would leave a window where a concurrent successful serve
+    // clears the history, re-inserts the cache entry, and only then sees this
+    // record land — stranding it exactly as before. Evicting after means the
+    // worst a race can do is clear a failure a moment too eagerly, which the
+    // next failure re-records, rather than keep one that no longer applies.
+    forget_served_session(runtime_directory, record.session_id.as_str())?;
     Ok(record)
+}
+
+/// Drops the served-session cache entry for one session, so the next observed
+/// successful serve reaches the history again instead of being deduplicated.
+fn forget_served_session(runtime_directory: &Path, session_id: &str) -> Result<(), String> {
+    let mut guard = served_sessions_cleared()
+        .lock()
+        .map_err(|_| "failed to lock served sessions cache".to_string())?;
+    guard.remove(&(runtime_directory.to_path_buf(), session_id.to_string()));
+    Ok(())
 }
 
 /// Persists each recorded per-session startup failure to `runtime_directory`'s
