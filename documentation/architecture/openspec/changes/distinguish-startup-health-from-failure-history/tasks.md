@@ -1,6 +1,6 @@
 ## 1. Coverage
 
-- [ ] 1.1 Coverage that a bundle carrying a persisted startup-failure record
+- [x] 1.1 Coverage that a bundle carrying a persisted startup-failure record
   reports `startup_health=healthy` when every configured session is ready. This
   is the one direction from which the non-coupling of health and history can be
   demonstrated rather than merely asserted: an implementation that read the
@@ -13,6 +13,6 @@
 
 ## 2. Documentation
 
-- [ ] 2.1 Reconcile `src/relay/README.md`'s startup-failure section with the
+- [x] 2.1 Reconcile `src/relay/README.md`'s startup-failure section with the
   spec's vocabulary once the delta lands, so the subsystem note and the
   requirement describe the record's lifetime in the same terms
