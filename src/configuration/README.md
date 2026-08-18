@@ -60,6 +60,20 @@ that file entirely; it does not contribute keys to a copy in a later one. A
 malformed file is a fault rather than a reason to fall through, since falling
 through would silently run the configuration the operator was replacing.
 
+**A lookup can fail, and only one filesystem answer counts as absence.** The
+layer walk stops at the first layer that *supplies* the file, and it also stops
+at the first layer that cannot be asked. Nothing existing at the candidate path
+means that layer does not supply it and the walk continues; a permission error,
+a non-directory component along the relative path, or a path occupied by
+something other than a regular file all fault instead. Reading any of those as
+absence produces the same observable result as falling through for a malformed
+file — the shadowed layer's value quietly takes effect — except with nothing
+logged, since no file was ever opened to fail on. Bundle enumeration applies the
+same rule at each of the three points it touches the filesystem: opening a
+`bundles/` directory, taking each directory entry, and typing each `.toml` entry.
+Only an absent `bundles/` directory is absence, so a layer never contributes a
+silently short set that reads as the definitions it holds.
+
 Bundle definitions are the one directory-shaped artifact, and they **union by
 identifier**: a bundle only one layer defines is enumerated, and a definition
 shadowing one of the same identifier in a later layer is enumerated once, at the

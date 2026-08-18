@@ -43,8 +43,11 @@
   layer's value is not used, for a required and an optional artifact
 - [x] 4.3 Integration coverage for an unreadable `bundles/` directory, and for a
   layer with no `bundles/` directory still resolving from a later layer
-- [ ] 4.4 Coverage that `reconcile_bundles` retains its catalog when enumeration
-  faults, driven by making a layer unreadable rather than by injecting an error
+- [x] 4.4 Coverage that `reconcile_bundles` retains its catalog when enumeration
+  faults, driven by making a layer unreadable rather than by injecting an error.
+  Retention is asserted through the error code a connection receives while the
+  layer is dark: a retained bundle fails on the unreadable layer, where a
+  torn-down one would answer `validation_unknown_bundle`
 - [x] 4.5 Verify each permission fixture actually bites before relying on it,
   and report a skip rather than passing vacuously when it does not. Probing the
   applied mode covers more than a `geteuid` check — root, `CAP_DAC_OVERRIDE`,
@@ -55,14 +58,17 @@
   named `<identifier>.toml` under `bundles/`, both faulting rather than
   resolving from a later layer. These need no permission fixture, so they run
   everywhere the suite does, including as root
-- [ ] 4.7 Integration coverage for `check configuration`'s full policy against
+- [x] 4.7 Integration coverage for `check configuration`'s full policy against
   an unreadable layer: the finding is rendered, the checks after it still run,
-  and the command fails
+  and the command fails. Plus the two places the policy is easy to get wrong —
+  the suppressed no-bundles error, and quiet mode, where the finding line can be
+  the only surviving record of the layer fault because a fail-fast check ends
+  the run before the closing error carries it
 
 ## 5. Documentation
 
-- [ ] 5.1 Update `src/configuration/README.md` where it describes layer lookup
+- [x] 5.1 Update `src/configuration/README.md` where it describes layer lookup
   as infallible
-- [ ] 5.2 Record the absence-versus-failure distinction in the
+- [x] 5.2 Record the absence-versus-failure distinction in the
   `effective_configuration_path` doc comment, alongside the existing note on why
   per-file bespoke lookups were removed

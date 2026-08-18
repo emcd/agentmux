@@ -78,6 +78,14 @@ pub fn supplied_configuration_path(
 /// absence only: a layer that could not be read faults instead, because
 /// synthesizing a base-layer path there would report the file missing from a
 /// location nobody looked at while the layer that holds it goes unmentioned.
+///
+/// "Genuine absence" is narrow, and deliberately so: nothing existing at the
+/// candidate path, and nothing else. A permission error, an intermediate path
+/// component that is not a directory, and a path occupied by something other
+/// than a regular file are each a layer that could not answer rather than a
+/// layer answering no. The returned path is therefore only meaningful together
+/// with the `Ok`; on `Err` there is no path to report a file missing from,
+/// which is the point.
 pub fn effective_configuration_path(
     roots: &ConfigurationRoots,
     relative: impl AsRef<Path>,

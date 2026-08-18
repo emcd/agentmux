@@ -110,6 +110,11 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
 
     // Rendered before the checks that follow, so the operator sees the layer
     // problem ahead of anything it caused rather than after.
+    // Outside the quiet guard, unlike everything else on this stream. Findings
+    // reach standard error only through the closing error, and a fail-fast check
+    // after this point ends the run before that — leaving this line as the sole
+    // record that a layer could not be read. Quiet suppresses success output,
+    // not the diagnosis.
     for finding in &findings {
         println!("finding: {finding}");
     }

@@ -171,6 +171,16 @@ surface does with a reported failure is that surface's decision:
   faulted enumeration, leaving `catalog` and `state` untouched so the next
   filesystem event reconciles normally once the layer is readable again.
 
+  Retention is about the catalog, not about admission. A connection arriving
+  while the layer is unreadable still has to read the bundle definition, which
+  is inside the directory that cannot be traversed, so it fails — under the
+  load-fault policy above, naming the layer. That failure is what makes
+  retention observable rather than a weakening of it: a torn-down catalog would
+  have forgotten the bundle and answered `validation_unknown_bundle`, the same
+  answer it gives for a bundle the operator deleted. The distinction between
+  "cannot read this right now" and "this does not exist" is the whole change,
+  restated at the connection boundary.
+
 Alternative considered: a single uniform fail-fast, as the issue's summary
 phrases it. Rejected because it converts a recoverable configuration fault into
 relay termination — strictly worse than the status quo for the one consumer

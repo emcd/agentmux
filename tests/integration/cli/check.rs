@@ -1,11 +1,12 @@
 //! CLI coverage for `agentmux check configuration` — the read-only
 //! configuration pre-flight subcommand.
 
-use std::{fs, process::Command};
+use std::{fs, path::Path, process::Command};
 
 use tempfile::TempDir;
 
 use super::helpers::*;
+use crate::support::permissions::{deny_directory_access, report_permission_fixture_skip};
 
 fn config_and_state(temporary: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
     let config_root = temporary.path().join("config");
@@ -13,6 +14,20 @@ fn config_and_state(temporary: &TempDir) -> (std::path::PathBuf, std::path::Path
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     (config_root, state_root)
+}
+
+/// Writes a valid bundle definition into a layer that supplies nothing else.
+///
+/// Distinct from `write_bundle_configuration`, which also writes `coders.toml`:
+/// the unreadable-layer tests need an override that supplies the bundle while
+/// `coders.toml` still resolves from the layer beneath.
+fn write_shadowing_bundle(layer: &Path, bundle_name: &str) {
+    fs::create_dir_all(layer.join("bundles")).expect("create override bundles directory");
+    fs::write(
+        layer.join("bundles").join(format!("{bundle_name}.toml")),
+        "format-version = 1\n\n[[sessions]]\nid = \"shadowing\"\nname = \"shadowing\"\ndirectory = \"/tmp\"\ncoder = \"default\"\n",
+    )
+    .expect("write shadowing bundle");
 }
 
 #[test]
@@ -591,6 +606,209 @@ fn check_configuration_quiet_still_reports_a_failure() {
     assert!(
         stderr.contains("codex-session-id"),
         "quiet must not suppress the diagnosis: {stderr}"
+    );
+}
+
+// An unreadable layer is the condition this command exists to report, so it is
+// a finding rather than an abort: the remaining checks still run and still say
+// what they found, and the run fails at the end for the finding. The tests below
+// pin all three parts, plus the two places the policy is easy to get wrong — the
+// no-bundles error that would otherwise name the wrong problem, and quiet mode,
+// where a finding can be the only surviving record of the layer fault.
+
+#[test]
+fn check_configuration_renders_an_unreadable_layer_as_a_finding_and_still_fails() {
+    // The override supplies the bundle and the *base* bundles directory is the
+    // unreadable one, so per-bundle lookup answers from the override without
+    // reaching it while enumeration, which reads every layer, faults. That is
+    // what leaves a check after the finding with something to do.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    let override_layer = temporary.path().join("override");
+    write_shadowing_bundle(&override_layer, "alpha");
+
+    let base_bundles = config_root.join("bundles");
+    let Some(_restore) = deny_directory_access(&base_bundles) else {
+        report_permission_fixture_skip(
+            "check_configuration_renders_an_unreadable_layer_as_a_finding_and_still_fails",
+        );
+        return;
+    };
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "alpha",
+            "--configuration-directory",
+            override_layer.to_str().expect("override utf8"),
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stdout.contains("finding:") && stdout.contains(&base_bundles.display().to_string()),
+        "the finding must be rendered and must name the layer at fault: {stdout}"
+    );
+    assert!(
+        stdout.contains("ok: alpha"),
+        "the checks after the finding must still run: stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        !output.status.success(),
+        "a run with a finding must fail: stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("validation_unreadable_configuration_layer"),
+        "the failure must be attributed to the layer fault: {stderr}"
+    );
+}
+
+#[test]
+fn check_configuration_suppresses_the_no_bundles_error_when_a_layer_is_unreadable() {
+    // Enumeration returned nothing because it could not look, not because there
+    // is nothing there. Reporting "no bundle configurations found" would name the
+    // wrong problem and abort ahead of the finding that explains it.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    let override_layer = temporary.path().join("override");
+    write_shadowing_bundle(&override_layer, "alpha");
+
+    let override_bundles = override_layer.join("bundles");
+    let Some(_restore) = deny_directory_access(&override_bundles) else {
+        report_permission_fixture_skip(
+            "check_configuration_suppresses_the_no_bundles_error_when_a_layer_is_unreadable",
+        );
+        return;
+    };
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "--configuration-directory",
+            override_layer.to_str().expect("override utf8"),
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    assert!(!output.status.success(), "the run must still fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_unreadable_configuration_layer"),
+        "the failure must name the layer fault: {stderr}"
+    );
+    assert!(
+        !stderr.contains("no bundle configurations found"),
+        "an unreadable layer must not be reported as an empty one: {stderr}"
+    );
+}
+
+#[test]
+fn check_configuration_reports_a_later_failure_found_after_an_unreadable_layer() {
+    // The finding must not hijack the exit: a genuine validation failure found
+    // afterwards keeps its own code and its own field-level diagnosis, which is
+    // the output an operator acts on.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    fs::write(config_root.join("ui.toml"), "unknown-key = \"oops\"\n").expect("write ui.toml");
+    let override_layer = temporary.path().join("override");
+    write_shadowing_bundle(&override_layer, "alpha");
+
+    let base_bundles = config_root.join("bundles");
+    let Some(_restore) = deny_directory_access(&base_bundles) else {
+        report_permission_fixture_skip(
+            "check_configuration_reports_a_later_failure_found_after_an_unreadable_layer",
+        );
+        return;
+    };
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "alpha",
+            "--configuration-directory",
+            override_layer.to_str().expect("override utf8"),
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    assert!(!output.status.success(), "the run must fail");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("finding:"),
+        "the finding must still be rendered: {stdout}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("ui.toml"),
+        "the later failure must keep its own diagnosis: {stderr}"
+    );
+}
+
+#[test]
+fn check_configuration_quiet_still_renders_an_unreadable_layer_finding() {
+    // The one thing quiet does not suppress on stdout, and deliberately so. When
+    // a later check ends the run, the findings never reach the closing error, so
+    // this line is the only record that a layer could not be read. Quiet trades
+    // away success output, not the diagnosis.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    fs::write(config_root.join("ui.toml"), "unknown-key = \"oops\"\n").expect("write ui.toml");
+    let override_layer = temporary.path().join("override");
+    write_shadowing_bundle(&override_layer, "alpha");
+
+    let base_bundles = config_root.join("bundles");
+    let Some(_restore) = deny_directory_access(&base_bundles) else {
+        report_permission_fixture_skip(
+            "check_configuration_quiet_still_renders_an_unreadable_layer_finding",
+        );
+        return;
+    };
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "alpha",
+            "--quiet",
+            "--configuration-directory",
+            override_layer.to_str().expect("override utf8"),
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration --quiet");
+
+    assert!(!output.status.success(), "the run must fail");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("finding:") && stdout.contains(&base_bundles.display().to_string()),
+        "quiet must not suppress the layer finding: {stdout}"
+    );
+    assert!(
+        !stdout.contains("source coders.toml"),
+        "quiet must still suppress the source report: {stdout}"
     );
 }
 
