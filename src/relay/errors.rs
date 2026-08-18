@@ -34,6 +34,11 @@ pub(super) fn map_config(error: ConfigurationError) -> RelayError {
             "sender association is ambiguous",
             Some(json!({"working_directory": working_directory, "matches": matches})),
         ),
+        ConfigurationError::UnreadableConfigurationLayer { path, source } => relay_error(
+            UNREADABLE_LAYER_CODE,
+            "configuration layer could not be read",
+            Some(json!({"path": path, "cause": source.to_string()})),
+        ),
         ConfigurationError::Io { context, source } => relay_error(
             "internal_unexpected_failure",
             "bundle configuration could not be loaded",
@@ -41,6 +46,14 @@ pub(super) fn map_config(error: ConfigurationError) -> RelayError {
         ),
     }
 }
+
+/// The code an unreadable layer keeps wherever it crosses a boundary.
+///
+/// A caller cannot match on the `ConfigurationError` variant once the error has
+/// been mapped, so the code is what carries the distinction the whole change
+/// exists to preserve. Folding it into a general validation code would restore
+/// the ambiguity one layer up from where it was removed.
+pub(super) const UNREADABLE_LAYER_CODE: &str = "validation_unreadable_configuration_layer";
 
 pub(super) fn relay_error(code: &str, message: &str, details: Option<Value>) -> RelayError {
     RelayError {
@@ -107,6 +120,11 @@ pub(super) fn map_tui_config(error: ConfigurationError) -> RelayError {
             "validation_invalid_arguments",
             "failed to load tui configuration",
             Some(json!({"context": context, "cause": source.to_string()})),
+        ),
+        ConfigurationError::UnreadableConfigurationLayer { path, source } => relay_error(
+            UNREADABLE_LAYER_CODE,
+            "configuration layer could not be read",
+            Some(json!({"path": path, "cause": source.to_string()})),
         ),
         other => relay_error(
             "validation_invalid_arguments",

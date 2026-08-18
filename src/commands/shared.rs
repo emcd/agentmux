@@ -209,6 +209,16 @@ pub(super) fn map_bundle_load_error(source: ConfigurationError) -> RuntimeError 
                 path.display()
             ),
         ),
+        ConfigurationError::UnreadableConfigurationLayer {
+            ref path,
+            source: ref cause,
+        } => RuntimeError::validation(
+            "validation_unreadable_configuration_layer",
+            format!(
+                "configuration layer cannot supply {}: {cause}",
+                path.display()
+            ),
+        ),
         ConfigurationError::Io { context, source } => RuntimeError::io(context, source),
     }
 }

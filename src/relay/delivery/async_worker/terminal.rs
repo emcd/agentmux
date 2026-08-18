@@ -196,7 +196,7 @@ pub(in crate::relay::delivery) fn complete_task_outcome(
     // except where the recorded evidence is strictly more honest than the
     // spelling the transport chose. An undifferentiated failure cannot support a
     // claim of non-delivery, so it surfaces as `submission_unknown` rather than
-    // as `failed` or `timeout`.
+    // as `failed`.
     let outcome = outcome.map(|result| match evidence {
         Some(evidence) => reconcile_with_evidence(result, evidence, bound),
         None => result,

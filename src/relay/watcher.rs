@@ -204,9 +204,25 @@ fn reconcile_bundles(
     state: &mut ReconcileState,
     no_autostart: bool,
 ) {
-    let on_disk: HashSet<String> = effective_bundle_definitions(configuration_roots)
-        .into_keys()
-        .collect();
+    // Enumeration is ground truth for what exists on disk, and the unload pass
+    // below reads everything absent from it as deleted. A layer that cannot be
+    // enumerated therefore has to stop reconciliation outright: an empty or
+    // short result would be indistinguishable from the operator having removed
+    // those bundles, and the relay would tear down a running catalog over a
+    // permission bit. Faulting the host instead would be the same outage by
+    // another route, so this holds the last successful reconciliation and waits
+    // — the layer becoming readable again is itself a filesystem event, which
+    // brings the next pass.
+    let on_disk: HashSet<String> = match effective_bundle_definitions(configuration_roots) {
+        Ok(definitions) => definitions.into_keys().collect(),
+        Err(error) => {
+            emit_inscription(
+                "relay.bundle.reconcile_suppressed_unreadable_layer",
+                &json!({ "cause": error.to_string() }),
+            );
+            return;
+        }
+    };
     let loaded = catalog.loaded_bundle_names();
 
     // Disappeared: loaded bundles whose file is no longer on disk.
@@ -600,7 +616,12 @@ fn fingerprint_bundle_file(
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
 ) -> io::Result<[u8; 32]> {
-    let path = bundle_configuration_path(configuration_roots, bundle_name);
+    // An unreadable layer arrives here as an ordinary error, which the caller
+    // already treats as "leave this bundle as it is and reconcile on a later
+    // event" — the same retention the enumeration fault gets, reached by the
+    // path that was already there.
+    let path = bundle_configuration_path(configuration_roots, bundle_name)
+        .map_err(|source| io::Error::other(source.to_string()))?;
     let bytes = std::fs::read(&path)?;
     let mut hasher = Sha256::new();
     hasher.update(path.as_os_str().as_encoded_bytes());

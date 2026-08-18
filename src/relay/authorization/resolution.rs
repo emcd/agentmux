@@ -129,7 +129,8 @@ pub(super) fn resolve_relay_principal_controls(
             let Some(member) = bundle.members.iter().find(|member| member.id == session_id) else {
                 return Ok(conservative_default);
             };
-            let policies_path = policies_configuration_path(configuration_roots);
+            let policies_path =
+                policies_configuration_path(configuration_roots).map_err(map_config)?;
             resolve_session_policy_controls(
                 member,
                 &presets,

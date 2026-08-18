@@ -267,6 +267,12 @@ fn map_configuration_error(source: ConfigurationError, context: &str) -> Runtime
             format!("{context} {}: {}", path.display(), message),
         ),
         ConfigurationError::Io { context, source } => RuntimeError::io(context, source),
+        unreadable @ ConfigurationError::UnreadableConfigurationLayer { .. } => {
+            RuntimeError::validation(
+                "validation_unreadable_configuration_layer",
+                format!("{context}: {unreadable}"),
+            )
+        }
         other => RuntimeError::validation(
             "validation_invalid_arguments",
             format!("{context}: {other}"),

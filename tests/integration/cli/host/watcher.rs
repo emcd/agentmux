@@ -1,7 +1,8 @@
 //! Bundle-file watcher behavior: load new bundle, load held non-autostart bundle,
-//! unload removed bundle, reload modified bundle, preserve down-intent across
-//! edit, hold non-autostart bundle on edit, `--no-watch` reconcile-disable, and
-//! `watch-bundles = false` reconcile-disable.
+//! unload removed bundle, retain the catalog when a layer becomes unreadable,
+//! reload modified bundle, preserve down-intent across edit, hold non-autostart
+//! bundle on edit, `--no-watch` reconcile-disable, and `watch-bundles = false`
+//! reconcile-disable.
 
 use std::{
     fs,
@@ -18,6 +19,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::*;
+use crate::support::permissions::{deny_directory_access, report_permission_fixture_skip};
 
 /// Negative-assertion budget for `--no-watch` and `watch-bundles = false`
 /// tests: how long to wait after writing a runtime bundle before asserting
@@ -118,11 +120,11 @@ fn poll_hello_first_frame(
     }
 }
 
-/// Polls the relay inscriptions log until an entry with `event` naming
-/// `bundle_name` appears, returning `true` on a match or `false` once the
-/// deadline passes. Used to observe a watcher outcome that emits no stream frame
-/// (so it cannot be awaited on a keepalive connection).
-fn poll_inscription_event(inscriptions_root: &Path, event: &str, bundle_name: &str) -> bool {
+/// Polls the relay inscriptions log until an entry satisfies `matches`,
+/// returning `true` on a match or `false` once the deadline passes. Used to
+/// observe a watcher outcome that emits no stream frame (so it cannot be awaited
+/// on a keepalive connection).
+fn poll_inscriptions(inscriptions_root: &Path, matches: impl Fn(&Value) -> bool) -> bool {
     let log = inscriptions_root.join("relay.log");
     let deadline = Instant::now() + WATCHER_SIGNAL_WAIT_BUDGET;
     loop {
@@ -130,9 +132,7 @@ fn poll_inscription_event(inscriptions_root: &Path, event: &str, bundle_name: &s
             let found = contents
                 .lines()
                 .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-                .any(|entry| {
-                    entry["event"] == event && entry["details"]["bundle_name"] == bundle_name
-                });
+                .any(|entry| matches(&entry));
             if found {
                 return true;
             }
@@ -142,6 +142,22 @@ fn poll_inscription_event(inscriptions_root: &Path, event: &str, bundle_name: &s
         }
         thread::sleep(Duration::from_millis(50));
     }
+}
+
+/// Polls for an entry with `event` naming `bundle_name`.
+fn poll_inscription_event(inscriptions_root: &Path, event: &str, bundle_name: &str) -> bool {
+    poll_inscriptions(inscriptions_root, |entry| {
+        entry["event"] == event && entry["details"]["bundle_name"] == bundle_name
+    })
+}
+
+/// Polls for an entry with `event`, whatever it names.
+///
+/// The bundle-scoped variant cannot serve a reconciliation suppressed by an
+/// unreadable layer: enumeration never got far enough to know which bundles were
+/// involved, so the inscription names the layer rather than a bundle.
+fn poll_inscription_event_kind(inscriptions_root: &Path, event: &str) -> bool {
+    poll_inscriptions(inscriptions_root, |entry| entry["event"] == event)
 }
 
 // A bundle TOML file added at runtime is picked up by the watcher: the relay
@@ -382,6 +398,128 @@ fn host_relay_watcher_unloads_removed_bundle_file_at_runtime() {
     assert_eq!(
         after["response"]["error"]["code"],
         "validation_unknown_bundle"
+    );
+}
+
+// A layer that becomes unreadable at runtime holds the last successful
+// reconciliation rather than tearing the catalog down. Enumeration is ground
+// truth for the unload pass, so a layer that cannot be enumerated reads as every
+// bundle in it having been deleted — the relay would evict live sessions and
+// unload a running bundle over a permission bit, and the only trace would be an
+// ordinary unload. Retention is what makes the difference observable: the bundle
+// stays connectable and the suppression is inscribed.
+#[test]
+fn host_relay_watcher_retains_the_catalog_when_a_layer_becomes_unreadable() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["a"],
+        Some(true),
+    );
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+    assert_bundle_watch_started(&inscriptions_root);
+
+    // Denying access to the watched bundles directory is itself a filesystem
+    // event, so it drives the reconcile pass under test rather than merely
+    // arranging the state for one.
+    let bundles = config_root.join("bundles");
+    let Some(restore) = deny_directory_access(&bundles) else {
+        report_permission_fixture_skip(
+            "host_relay_watcher_retains_the_catalog_when_a_layer_becomes_unreadable",
+        );
+        shutdown_relay_if_present(&state_root, "alpha");
+        let _ = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT);
+        return;
+    };
+
+    let suppressed = poll_inscription_event_kind(
+        &inscriptions_root,
+        "relay.bundle.reconcile_suppressed_unreadable_layer",
+    );
+    // Admission reads the bundle file, which lives inside the directory just
+    // denied, so this connection cannot be admitted either way. Its *error code*
+    // is what separates the two worlds: a retained catalog still knows the
+    // bundle and fails on the layer it cannot read, while a torn-down one would
+    // have forgotten it and answered `validation_unknown_bundle` — the same
+    // answer it gives for a bundle the operator deleted.
+    let during = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
+    // Restored before shutdown so the relay's own teardown is not fighting a
+    // directory it cannot traverse.
+    drop(restore);
+    // Readable again, and serving without an intervening reload: the runtime
+    // that answers here is the one that was running before the layer went dark.
+    let after = poll_hello_first_frame(&state_root, "a@alpha", "socket-trust", |frame| {
+        frame["frame"] == "hello_ack"
+    });
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    let inscriptions = fs::read_to_string(inscriptions_root.join("relay.log"))
+        .expect("read relay inscriptions log");
+    assert!(
+        suppressed,
+        "expected relay.bundle.reconcile_suppressed_unreadable_layer; relay inscriptions: {inscriptions}"
+    );
+    assert_eq!(
+        during["response"]["error"]["code"], "validation_unreadable_configuration_layer",
+        "a retained bundle must fail on the unreadable layer rather than be forgotten: \
+         {during:?}; relay inscriptions: {inscriptions}"
+    );
+    assert_eq!(
+        after["frame"], "hello_ack",
+        "the bundle must still be served once the layer is readable again: {after:?}; \
+         relay inscriptions: {inscriptions}"
+    );
+    let disturbed: Vec<String> = inscriptions
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|entry| entry["details"]["bundle_name"] == "alpha")
+        .filter_map(|entry| {
+            entry["event"]
+                .as_str()
+                .filter(|event| {
+                    matches!(
+                        *event,
+                        "relay.bundle.unloaded" | "relay.bundle.reloaded" | "relay.bundle.loaded"
+                    )
+                })
+                .map(str::to_string)
+        })
+        .collect();
+    assert!(
+        disturbed.is_empty(),
+        "an unreadable layer must disturb neither the catalog nor the runtime, saw {disturbed:?}: \
+         {inscriptions}"
     );
 }
 
