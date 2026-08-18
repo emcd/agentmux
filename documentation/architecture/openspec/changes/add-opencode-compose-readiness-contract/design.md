@@ -8,10 +8,8 @@ implementation therefore performs a private second predicate after regex
 success and before the cursor check.
 
 The existing transport contract predates this predicate and describes regex
-and cursor matching as sufficient. It also describes template matching as a
-pre-injection condition for every transport, although Pty writes envelopes
-before its readiness wait. This change makes both parts of the contract agree
-with the implementation without adding configuration or a public API.
+and cursor matching as sufficient. This change makes the contract agree with
+the implementation without adding configuration or a public API.
 
 ## Goals / Non-Goals
 
@@ -23,8 +21,8 @@ with the implementation without adding configuration or a public API.
   boundary used by the implementation.
 - Specify that compose text is a readiness mismatch, not a terminal failure,
   and that non-OpenCode or malformed frames retain normal template semantics.
-- State the transport commitment boundary: Tmux readiness gates injection,
-  while Pty readiness resolves outcomes after bytes have been written.
+- Scope the predicate to Tmux, leaving Pty's evaluation of the same template
+  unchanged.
 - Keep the implementation private and prove the contract through the
   production-path test.
 
@@ -58,9 +56,9 @@ crate-private production path with no public seam.
 ### Treat compose text as a Tmux readiness mismatch
 
 Compose text sets readiness to false while retaining `regex_matched = true`
-and a diagnostic reason. Tmux does not interpret this mismatch as failure;
-the existing readiness bound and other terminal conditions remain responsible
-for ending the wait. A non-OpenCode matcher that succeeds bypasses the
+and a diagnostic reason. Tmux does not interpret this mismatch as failure: the
+entry stays `Pending` until the operator clears the box, exactly as it does for
+a frame or cursor mismatch. A non-OpenCode matcher that succeeds bypasses the
 OpenCode predicate and proceeds to its configured cursor check.
 
 ## Risks / Trade-offs

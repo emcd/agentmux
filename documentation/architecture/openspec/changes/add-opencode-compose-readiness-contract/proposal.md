@@ -31,8 +31,8 @@ None.
 ## Impact
 
 - Updates the transport-contracts OpenSpec delta and its implementation in
-  `src/tmux/prompt_probe.rs`; Tmux matching gates injection while Pty
-  matching resolves readiness outcomes after its pre-wait write.
+  `src/tmux/prompt_probe.rs`. The predicate is Tmux-only; Pty evaluates the
+  same template without it.
 - Extends the private production-path test with a malformed frame case and
   non-OpenCode preservation coverage.
 - No configuration keys, public APIs, dependencies, or persisted data change.
