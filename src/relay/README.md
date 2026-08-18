@@ -416,11 +416,11 @@ exported from `src/relay/mod.rs`.
     `UiTransport` and delivers via `mailw`. The relay-side stream-broadcast
     touchpoints are injected as closures by `dispatch/worker.rs`
     (`build_ui_transport_services`), so the transport never imports `crate::relay`.
-  - `quiescence.rs`: shared quiescence wait primitive and the bounded
-    delivery-diagnostic context. Progress inscriptions identify the target
-    namespace and carry up to 32 message ids from the current transport flush
-    group plus the uncapped `message_ids_total`, so coalesced non-head messages
-    remain traceable without unbounded log records.
+  - There is no quiescence module. Nothing here waits on a target: readiness is
+    a level the relay reads before authorizing, and a member that cannot be
+    handed over stays `Pending` rather than parking on a timer. See
+    `dispatch/worker.rs`'s `decide_gate` for the one place that judgement is
+    made.
 
 ## Runtime Behavior Notes
 

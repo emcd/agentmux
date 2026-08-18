@@ -340,7 +340,6 @@ mod tests {
     };
     use super::*;
     use crate::configuration::{BundleConfiguration, BundleMember, TargetConfiguration};
-    use crate::relay::delivery::QuiescenceOptions;
     use crate::relay::{DeliveryPayloadMode, SCHEMA_VERSION, SenderReturnRoute};
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
@@ -419,7 +418,6 @@ mod tests {
             target_session: target_session.to_string(),
             message: "body".to_string(),
             message_id: "orig-message-id".to_string(),
-            quiescence: QuiescenceOptions::for_async(None),
             runtime_directory: PathBuf::from(target_runtime),
             payload_mode: DeliveryPayloadMode::EnvelopeMessage,
             append_enter: true,

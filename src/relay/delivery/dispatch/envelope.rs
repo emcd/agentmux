@@ -16,12 +16,11 @@
 //! here so the transport builder is self-contained.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde_json::{Value, json};
 
 use super::outcomes;
-use super::payload::{build_delivery_message, resolve_target_member};
+use super::payload::build_delivery_message;
 use super::worker::{AcpWorkerBootstrap, WorkerTransportContext};
 use crate::relay::delivery::partition::ledger_partition_sink;
 
@@ -39,7 +38,7 @@ use crate::relay::{
     AsyncDeliveryTask, RelayError, errors::relay_error, identity::canonical_session_id,
 };
 
-use crate::configuration::{SessionType, TargetConfiguration};
+use crate::configuration::SessionType;
 use crate::envelope::PromptBatchSettings;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::transports::{
@@ -248,34 +247,15 @@ fn noop_tmux_chooser() -> Chooser {
 /// Builds the [`DeliveryEnvelope`] for a coder (ACP/tmux) task from its structured
 /// message. Envelope-mode writes always submit with Enter; the transport renders
 /// the pane envelope from `message` before paste/turn submission.
-///
-/// For terminal-outcome receipts addressed to an ACP sender the envelope's
-/// `quiet_window` is forced to zero, satisfying the
-/// "receipt-bypasses-quiescence" invariant on ACP. ACP ignores `quiet_window`
-/// today, but the construction is explicit at the relay so the invariant
-/// holds regardless of whether the ACP transport starts honoring it in a
-/// future change. Receipts addressed to Tmux/Pty senders keep the default
-/// async quiet-window so the per-transport quiescence behavior is unchanged
-/// for those senders.
 pub(super) fn build_coder_envelope(
     task: &AsyncDeliveryTask,
     message: DeliveryMessage,
 ) -> DeliveryEnvelope {
-    let target_is_acp = matches!(
-        resolve_target_member(task),
-        Ok(Some(member)) if matches!(member.target, TargetConfiguration::Acp(_))
-    );
-    let quiet_window = if task.is_receipt && target_is_acp {
-        Duration::ZERO
-    } else {
-        task.quiescence.quiet_window
-    };
     DeliveryEnvelope {
         message_id: task.message_id.clone(),
         message,
         append_enter: true,
         choice_decider_sessions: task.choice_decider_sessions.clone(),
-        quiet_window,
         is_receipt: task.is_receipt,
     }
 }
@@ -482,7 +462,6 @@ pub(super) fn build_ui_envelope(task: &AsyncDeliveryTask) -> DeliveryEnvelope {
         message,
         append_enter: task.append_enter,
         choice_decider_sessions: task.choice_decider_sessions.clone(),
-        quiet_window: task.quiescence.quiet_window,
         is_receipt: task.is_receipt,
     }
 }

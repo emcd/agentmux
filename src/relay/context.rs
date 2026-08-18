@@ -2,8 +2,8 @@ use std::path::PathBuf;
 
 use crate::configuration::{BundleConfiguration, BundleMember};
 
+use super::DeliveryPayloadMode;
 use super::identity::IdentityIntrospectRights;
-use super::{DeliveryPayloadMode, delivery::QuiescenceOptions};
 
 #[derive(Clone, Debug)]
 pub(super) struct SendRequestContext {
@@ -12,7 +12,6 @@ pub(super) struct SendRequestContext {
     pub(super) message: String,
     pub(super) targets: Vec<String>,
     pub(super) broadcast: bool,
-    pub(super) quiet_window_ms: Option<u64>,
     /// Origin attribution carried on a peer-forwarded request. Honored only when
     /// the authenticated requester is a relay principal (ingress); ignored for a
     /// regular session so a non-relay requester cannot self-assert it.
@@ -68,7 +67,6 @@ pub(super) struct AsyncDeliveryTask {
     pub(super) target_session: String,
     pub(super) message: String,
     pub(super) message_id: String,
-    pub(super) quiescence: QuiescenceOptions,
     pub(super) runtime_directory: PathBuf,
     pub(super) payload_mode: DeliveryPayloadMode,
     pub(super) append_enter: bool,

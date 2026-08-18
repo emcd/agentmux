@@ -188,7 +188,6 @@ async fn relay_sigterm_reaps_in_flight_acp_turn_without_sigkill() {
             message: "status?".to_string(),
             targets: vec!["bravo@party".to_string()],
             broadcast: false,
-            quiet_window_ms: Some(50),
             on_behalf_of: None,
         },
     )
@@ -324,7 +323,6 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
             message: "queued async message".to_string(),
             targets: vec!["alpha@party".to_string()],
             broadcast: false,
-            quiet_window_ms: None,
             on_behalf_of: None,
         },
     )
@@ -415,7 +413,6 @@ async fn relay_send_to_configured_pubsub_member_is_refused_at_admission_and_skip
             message: "to a pubsub member".to_string(),
             targets: vec!["pub1@party".to_string()],
             broadcast: false,
-            quiet_window_ms: None,
             on_behalf_of: None,
         },
     )
@@ -813,7 +810,6 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
             message: "A".repeat(6_000),
             targets: vec!["alpha@party".to_string()],
             broadcast: false,
-            quiet_window_ms: Some(50),
             on_behalf_of: None,
         },
     )
@@ -1032,7 +1028,6 @@ async fn relay_async_delivery_injects_even_while_pane_in_mode() {
             message: "interaction marker".to_string(),
             targets: vec!["alpha@party".to_string()],
             broadcast: false,
-            quiet_window_ms: Some(50),
             on_behalf_of: None,
         },
     )
@@ -1359,7 +1354,6 @@ send = "all"
             message: "cross-bundle co-recipient visibility".to_string(),
             targets: vec!["bravo@party".to_string(), "zulu@qa".to_string()],
             broadcast: false,
-            quiet_window_ms: Some(50),
             on_behalf_of: None,
         },
     )

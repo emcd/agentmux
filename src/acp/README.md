@@ -181,16 +181,11 @@ shape-specific behaviors:
   `TurnUnit::RelayDeclared` (used for raw, which *is* bound and resolves
   through the guard). See `src/relay/delivery-architecture.md`,
   "Members no unit covers".
-- **Zero quiet-window on ACP receivers.** The relay's
-  `build_coder_envelope` zeros `quiet_window` on the envelope when the
-  receipt's resolved target transport is ACP, satisfying the
-  "receipt bypasses quiescence" invariant at the envelope seam. ACP
-  ignores `quiet_window` today, but the construction is explicit at
-  the relay so the invariant holds regardless of whether the ACP
-  transport starts honoring it in a future change. Receipts addressed
-  to Tmux/Pty senders keep the default async quiet-window, so the
-  per-transport quiescence behavior is unchanged for those senders;
-  the ACP-only zero keeps the invariant ACP-scoped.
+- **No quiet window to bypass.** The "receipt bypasses quiescence"
+  invariant needs no envelope field to carry it: no transport waits on
+  target readiness at all, so a receipt cannot be held behind one. The
+  relay evaluates activity itself, before authorization, and hands over
+  only what it has already decided may be written.
 - **Empty choice-decider sessions.** A receipt task carries
   `choice_decider_sessions: Vec::new()`. The relay therefore does not
   authorize any UI session to decide a choice raised on the receipt

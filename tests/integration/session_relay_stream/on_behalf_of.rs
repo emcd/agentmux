@@ -101,7 +101,6 @@ fn local_send_to_ui_display_payload(
             message: "local attributed hello".to_string(),
             targets: vec![display_target.clone()],
             broadcast: false,
-            quiet_window_ms: None,
             on_behalf_of,
         },
         configuration_roots,

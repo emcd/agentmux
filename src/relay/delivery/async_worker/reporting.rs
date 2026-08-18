@@ -16,7 +16,6 @@ use time::format_description::well_known::Rfc3339;
 use crate::configuration::{BundleConfiguration, BundleMember, TargetConfiguration};
 use crate::runtime::inscriptions::emit_inscription;
 
-use crate::relay::delivery::QuiescenceOptions;
 use crate::relay::delivery::guard::GuardKey;
 use crate::relay::stream::{RelayStreamEvent, StreamEventSendOutcome, send_event_to_registered_ui};
 use crate::relay::{
@@ -259,7 +258,6 @@ fn build_terminal_outcome_receipt(
         target_session: sender_id,
         message: body,
         message_id: uuid::Uuid::new_v4().to_string(),
-        quiescence: QuiescenceOptions::for_async(None),
         runtime_directory: route.runtime_directory.clone(),
         payload_mode: DeliveryPayloadMode::EnvelopeMessage,
         append_enter: true,
@@ -529,7 +527,6 @@ mod tests {
             target_session: target_session.to_string(),
             message: "body".to_string(),
             message_id: "orig-message-id".to_string(),
-            quiescence: QuiescenceOptions::for_async(None),
             runtime_directory: PathBuf::from(target_runtime),
             payload_mode: DeliveryPayloadMode::EnvelopeMessage,
             append_enter: true,
@@ -662,7 +659,6 @@ mod receipt_non_recursion_tests {
             target_session: sender_member_id.to_string(),
             message: "receipt body".to_string(),
             message_id: "receipt-message-id".to_string(),
-            quiescence: QuiescenceOptions::for_async(None),
             runtime_directory: PathBuf::from(sender_runtime),
             payload_mode: DeliveryPayloadMode::EnvelopeMessage,
             append_enter: true,

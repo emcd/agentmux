@@ -24,7 +24,7 @@ The normative requirements previously governed: bundle membership configuration,
 |-----------|----------------|-------------|
 | Addressing & Routing | `openspec/specs/addressing-routing/spec.md` | Canonical IDs, namespace semantics, target resolution, list payloads, raww target resolution |
 | Delivery & Quiescence | `openspec/specs/delivery-quiescence/spec.md` | Send envelope, async queue lifecycle, terminal outcomes, ack semantics, and asynchronous terminal-outcome receipt |
-| Transport Contracts | `openspec/specs/transport-contracts/spec.md` | Per-transport execution contracts (tmux, ACP, raww, Pty): worker lifecycles, transport capability flags, prime/wedge timeouts, copy-mode-transparent injection, and inter-transport error codes |
+| Transport Contracts | `openspec/specs/transport-contracts/spec.md` | Per-transport execution contracts (tmux, ACP, raww, Pty): worker lifecycles, transport capability flags, copy-mode-transparent injection, and inter-transport error codes |
 | Authorization & Scope | `openspec/specs/authorization-scope/spec.md` | Policy presets, authorization vocabulary and evaluation, scope controls, uniform cross-bundle auth, UI sender validation, and per-operation authorization mappings |
 | Look & Stream Events | `openspec/specs/look-and-stream-events/spec.md` | Look operation (transport-agnostic + per-transport), persistent client streams, Hello registration, recipient routability, and stream event contracts |
 | Choice Decisions | `openspec/specs/choice-decisions/spec.md` | Choice/decision envelope, queue lifecycle, operator classes |

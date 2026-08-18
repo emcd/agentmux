@@ -75,10 +75,12 @@ A target whose activity signal advanced across an observation pair is not
 authorizable, even if the later observation happens to match the prompt-readiness
 template. An advancing activity signal defers handover on its own.
 
-The relay SHALL communicate the quiescence quiet period to transports that
-perform target observation via the `DeliveryEnvelope.quiet_window: Duration`
-field. The `prime_timeout_ms` and `readiness_timeout_ms` envelope fields are
-removed, as are the per-coder configuration keys that populated them.
+No quiet period is communicated to a transport. The relay evaluates activity
+itself, by comparing the target's activity signal across an observation pair,
+and a transport receives an envelope only once that evaluation has already
+been made. The `quiet_window`, `prime_timeout_ms` and `readiness_timeout_ms`
+envelope fields are removed, as are the per-coder configuration keys and the
+`quiet_window_ms` request field that populated them.
 
 **How long a message may wait for a reachable target to become ready is not
 bounded, by a transport timer or by any relay setting.** A `Pending` entry's *wait* ends
@@ -115,8 +117,7 @@ rather than substituting for one never made.
 
 #### Scenario: Hand over after the target becomes ready
 
-- **WHEN** a target's observable output remains unchanged for the configured
-  quiet window
+- **WHEN** a target's activity signal did not advance across an observation pair
 - **AND** the transport reports `is_ready_for_handover`
 - **THEN** the relay authorizes the batch and the transport submits it
 

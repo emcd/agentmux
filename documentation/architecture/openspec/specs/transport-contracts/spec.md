@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Per-transport execution contracts (tmux, ACP, raww, Pty): worker lifecycles, transport capability flags, prime/wedge timeouts, copy-mode-transparent injection, and inter-transport error codes.
+Per-transport execution contracts (tmux, ACP, raww, Pty): worker lifecycles, transport capability flags, copy-mode-transparent injection, and inter-transport error codes.
 
 ## Requirements
 

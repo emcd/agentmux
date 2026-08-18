@@ -1230,7 +1230,6 @@ mod stopped_generation_tests {
             },
             append_enter: true,
             choice_decider_sessions: vec![],
-            quiet_window: Duration::ZERO,
             is_receipt: false,
         };
         (
@@ -1330,10 +1329,6 @@ mod stopped_generation_tests {
 /// the receipt is its own turn and is observable on its own. The receipt
 /// resolves on completion, agent close, dispatcher refusal, serialization
 /// failure, or shutdown — no elapsed-time bound is applied here.
-/// `quiet_window` is unused on ACP and the
-/// relay's `build_coder_envelope` zeros it for receipts addressed to an
-/// ACP sender so the receipt-bypasses-quiescence invariant holds at the
-/// envelope seam.
 fn submit_singleton_envelope(
     client: &mut AcpStdioClient,
     ctx: &TurnContext,
@@ -2148,7 +2143,6 @@ mod delivery_plan_tests {
             },
             append_enter: true,
             choice_decider_sessions: vec![],
-            quiet_window: Duration::ZERO,
             is_receipt,
         }
     }
