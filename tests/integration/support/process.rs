@@ -50,6 +50,116 @@ pub(crate) fn strip_bring_up_context_std(
     command
 }
 
+/// Grace period a relay guard waits after SIGTERM before escalating to
+/// SIGKILL. Mirrors the shutdown path in `cli/helpers.rs::shutdown_relay_if_present`
+/// and gives the relay's generation fence time to reap its own ACP workers
+/// before the harness falls back to a hard kill that would orphan them a second
+/// time.
+pub(crate) const RELAY_GRACE_PERIOD: Duration = Duration::from_secs(2);
+
+/// RAII guard for an `agentmux host relay` child process spawned in a test.
+///
+/// A bare `Child` leaks when the test panics before reaching its manual
+/// `kill`/`wait` cleanup — the child is reparented to init and holds its
+/// temporary directory and relay socket indefinitely. This guard ensures the
+/// relay is terminated even on the panic path that cannot be written out
+/// longhand at each call site, mirroring `TmuxServerGuard` for the fake tmux
+/// server.
+///
+/// Termination is graceful: SIGTERM first so the relay's shutdown-time
+/// generation fence can reap its ACP-worker grandchildren, with a bounded
+/// wait before escalating to SIGKILL if the relay does not exit.
+pub(crate) struct RelayChildGuard {
+    child: Option<Child>,
+}
+
+impl RelayChildGuard {
+    pub(crate) fn new(child: Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    /// Consumes the guard and returns the inner `Child` without running the
+    /// `Drop` termination. Use when the test performs an explicit graceful
+    /// shutdown and bounded wait of its own (e.g. `shutdown_relay_if_present`
+    /// followed by `wait_with_output_bounded`).
+    pub(crate) fn into_inner(mut self) -> Option<Child> {
+        self.child.take()
+    }
+
+    /// Consumes the guard, waits for the child with the given budget, and
+    /// returns the captured output. Convenience over `into_inner` +
+    /// `wait_with_output_bounded`.
+    pub(crate) fn wait_with_output(self, budget: Duration) -> io::Result<Output> {
+        match self.into_inner() {
+            Some(child) => wait_with_output_bounded(child, budget),
+            None => Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "RelayChildGuard has no child",
+            )),
+        }
+    }
+}
+
+impl std::ops::Deref for RelayChildGuard {
+    type Target = Child;
+
+    fn deref(&self) -> &Self::Target {
+        self.child
+            .as_ref()
+            .expect("RelayChildGuard deref on empty guard")
+    }
+}
+
+impl std::ops::DerefMut for RelayChildGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.child
+            .as_mut()
+            .expect("RelayChildGuard deref_mut on empty guard")
+    }
+}
+
+impl Drop for RelayChildGuard {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        // Already exited — nothing to do; already reaped.
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => {}
+            Err(_) => return,
+        }
+        // Graceful termination first: the relay's shutdown fence reaps its
+        // ACP-worker grandchildren. A hard SIGKILL would bypass that fence and
+        // orphan those grandchildren a second time.
+        #[cfg(unix)]
+        {
+            let pid = child.id();
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGTERM);
+            }
+        }
+        // Bounded graceful window.
+        let deadline = Instant::now() + RELAY_GRACE_PERIOD;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    thread::sleep(WAIT_POLL_INTERVAL);
+                }
+                Err(_) => return,
+            }
+        }
+        // Escalate to SIGKILL and reap. `Child::kill` is SIGKILL on Unix and
+        // `Child::wait` reaps the zombie so the pid cannot be recycled.
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+}
+
 /// Default budget for waiting on a test-spawned child to exit. Sized
 /// so that even on heavily loaded CI a stuck child fails the test
 /// quickly rather than hanging the suite. On timeout, the child is
@@ -61,7 +171,7 @@ pub(crate) const HARNESS_CHILD_WAIT_DEFAULT: Duration = Duration::from_secs(10);
 /// a healthy child exiting near the deadline is observed with
 /// millisecond precision; large enough that the loop is not a busy
 /// spin.
-const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
+pub(crate) const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 /// Wait for `child` to exit, bounded by `budget`. Returns the
 /// captured `Output` on success. On timeout, sends SIGKILL to the
@@ -227,6 +337,68 @@ mod tests {
         assert!(
             elapsed < Duration::from_secs(3),
             "helper should not hang past the budget; elapsed={elapsed:?}"
+        );
+    }
+
+    /// Guard must send SIGTERM first, not SIGKILL — the relay's generation
+    /// fence relies on SIGTERM to reap its ACP workers. A child that traps
+    /// SIGTERM and touches a marker before exiting proves the SIGTERM branch
+    /// was taken; a straight SIGKILL would leave the marker absent.
+    #[test]
+    fn relay_child_guard_sends_sigterm_before_sigkill_and_reaps() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("sigterm-marker");
+        assert!(!marker.exists(), "marker should not exist before test");
+
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg(r#"trap 'touch "$1"; kill $! 2>/dev/null; exit 0' TERM; sleep 30 & wait"#)
+            .arg("sh")
+            .arg(&marker)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn trap child");
+        // Give the child time to install its SIGTERM handler before we
+        // send TERM via the guard's Drop. Without this, TERM may arrive
+        // before the trap is installed and the child dies with SIGTERM
+        // (status 15) without touching the marker, which would make the
+        // test flaky and would not prove SIGTERM vs SIGKILL.
+        thread::sleep(Duration::from_millis(200));
+        let pid = child.id();
+
+        let start = Instant::now();
+        {
+            let guard = RelayChildGuard::new(child);
+            drop(guard);
+        }
+        let elapsed = start.elapsed();
+
+        // Trap executes asynchronously after SIGTERM; poll briefly for the
+        // marker rather than asserting immediately.
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while !marker.exists() && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            marker.exists(),
+            "SIGTERM trap did not create marker at {}; guard may have sent SIGKILL directly",
+            marker.display()
+        );
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "Drop should be quick on SIGTERM (fence 2s not hit); elapsed={elapsed:?}"
+        );
+        // Pid should be reaped — kill -0 must fail with ESRCH.
+        let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        assert_ne!(
+            rc, 0,
+            "pid {pid} should be reaped after guard Drop; kill -0 succeeded"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH),
+            "expected ESRCH after reap"
         );
     }
 }

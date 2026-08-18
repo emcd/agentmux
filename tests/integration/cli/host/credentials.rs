@@ -26,30 +26,33 @@ fn host_relay_require_credentials_flag_rejects_socket_trust() {
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
-    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "host",
-            "relay",
-            "--no-autostart",
-            "--require-credentials",
-            "--configuration-directory",
-            &config_root.to_string_lossy(),
-            "--state-directory",
-            &state_root.to_string_lossy(),
-            "--inscriptions-directory",
-            &inscriptions_root.to_string_lossy(),
-        ])
-        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn agentmux host relay --require-credentials");
+    let child = process::RelayChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .args([
+                "host",
+                "relay",
+                "--no-autostart",
+                "--require-credentials",
+                "--configuration-directory",
+                &config_root.to_string_lossy(),
+                "--state-directory",
+                &state_root.to_string_lossy(),
+                "--inscriptions-directory",
+                &inscriptions_root.to_string_lossy(),
+            ])
+            .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn agentmux host relay --require-credentials"),
+    );
     wait_for_relay_ready(&state_root, "alpha");
 
     let frame = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
+    let output = child
+        .wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 
@@ -80,29 +83,32 @@ fn host_relay_without_require_credentials_accepts_socket_trust() {
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
-    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "host",
-            "relay",
-            "--no-autostart",
-            "--configuration-directory",
-            &config_root.to_string_lossy(),
-            "--state-directory",
-            &state_root.to_string_lossy(),
-            "--inscriptions-directory",
-            &inscriptions_root.to_string_lossy(),
-        ])
-        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn agentmux host relay");
+    let child = process::RelayChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .args([
+                "host",
+                "relay",
+                "--no-autostart",
+                "--configuration-directory",
+                &config_root.to_string_lossy(),
+                "--state-directory",
+                &state_root.to_string_lossy(),
+                "--inscriptions-directory",
+                &inscriptions_root.to_string_lossy(),
+            ])
+            .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn agentmux host relay"),
+    );
     wait_for_relay_ready(&state_root, "alpha");
 
     let frame = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
+    let output = child
+        .wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 
@@ -131,29 +137,32 @@ fn host_relay_require_credentials_from_relay_toml_rejects_socket_trust() {
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
-    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "host",
-            "relay",
-            "--no-autostart",
-            "--configuration-directory",
-            &config_root.to_string_lossy(),
-            "--state-directory",
-            &state_root.to_string_lossy(),
-            "--inscriptions-directory",
-            &inscriptions_root.to_string_lossy(),
-        ])
-        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn agentmux host relay with relay.toml require-session-credentials");
+    let child = process::RelayChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .args([
+                "host",
+                "relay",
+                "--no-autostart",
+                "--configuration-directory",
+                &config_root.to_string_lossy(),
+                "--state-directory",
+                &state_root.to_string_lossy(),
+                "--inscriptions-directory",
+                &inscriptions_root.to_string_lossy(),
+            ])
+            .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn agentmux host relay with relay.toml require-session-credentials"),
+    );
     wait_for_relay_ready(&state_root, "alpha");
 
     let frame = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
+    let output = child
+        .wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
 

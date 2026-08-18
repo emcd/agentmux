@@ -121,22 +121,24 @@ fn assert_lazy_pty_spawn_carries_the_relays_state_root(declared: &str) {
     // `--no-autostart` plus `autostart = false` keeps bring-up from starting the
     // member, so the spawn can only come from the delivery below. That is the
     // path under test; starting it at bring-up would prove the wrong thing.
-    let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "host",
-            "relay",
-            "--no-autostart",
-            "--configuration-directory",
-            &config_root.to_string_lossy(),
-            "--state-directory",
-            &state_root.to_string_lossy(),
-            "--inscriptions-directory",
-            &inscriptions_root.to_string_lossy(),
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn agentmux host relay --no-autostart");
+    let host_child = process::RelayChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .args([
+                "host",
+                "relay",
+                "--no-autostart",
+                "--configuration-directory",
+                &config_root.to_string_lossy(),
+                "--state-directory",
+                &state_root.to_string_lossy(),
+                "--inscriptions-directory",
+                &inscriptions_root.to_string_lossy(),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn agentmux host relay --no-autostart"),
+    );
     wait_for_relay_ready(&state_root, "alpha");
 
     // Hosts the bundle so delivery can route to it. Reconcile creates only Tmux
@@ -194,7 +196,9 @@ fn assert_lazy_pty_spawn_carries_the_relays_state_root(declared: &str) {
     let reported = await_report(&report);
 
     shutdown_relay_if_present(&state_root, "alpha");
-    process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT).ok();
+    host_child
+        .wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT)
+        .ok();
 
     assert_eq!(
         reported,
