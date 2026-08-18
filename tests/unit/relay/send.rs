@@ -720,6 +720,308 @@ fn a_backlogged_target_warns_once_while_the_aggregate_repeats() {
     );
 }
 
+/// Fake tmux with two switchable behaviours, addressed through sidecar files
+/// rather than arguments so a test can change what the target reports without
+/// restarting anything.
+///
+/// Substituted with `replace` rather than `format!`: the body is almost entirely
+/// `${...}` expansions, and doubling every brace for the formatter would bury
+/// the shell this fixture is actually made of.
+const STATEFUL_FAKE_TMUX: &str = r##"#!/usr/bin/env bash
+set -euo pipefail
+
+BUSY_FILE="@BUSY_FILE@"
+PASTED_FILE="@PASTED_FILE@"
+
+args=("$@")
+if [[ "${#args[@]}" -ge 2 && "${args[0]}" == "-S" ]]; then
+  args=("${args[@]:2}")
+fi
+if [[ "${#args[@]}" -eq 0 ]]; then
+  exit 1
+fi
+
+case "${args[0]}" in
+  display-message)
+    case "${args[4]-}" in
+      '#{pane_id}')
+        printf "%%1\n"
+        ;;
+      '#{window_activity}')
+        printf "1\n"
+        ;;
+      *)
+        printf "\n"
+        ;;
+    esac
+    ;;
+  capture-pane)
+    if [[ -f "${BUSY_FILE}" ]]; then
+      printf "agent is working\n"
+    else
+      printf "READY-FOR-HANDOVER\n"
+    fi
+    ;;
+  load-buffer)
+    cat - > /dev/null
+    ;;
+  paste-buffer)
+    printf "1\n" > "${PASTED_FILE}"
+    sleep 60
+    ;;
+  *)
+    :
+    ;;
+esac
+"##;
+
+/// Writes the fake tmux this fixture drives, and returns nothing: every knob it
+/// has is a file path the caller already holds.
+///
+/// Three behaviours, each load-bearing:
+///
+/// - **`capture-pane` reports a prompt until `busy_file` exists.** That is the
+///   readiness axis, and flipping it is what holds later members `Pending`. It is
+///   used rather than the activity marker because readiness is read from a cached
+///   observation the transport refreshes on its own clock: an advancing marker
+///   would only suppress a handover when two gate reads happened to straddle an
+///   observer poll, which is a race, while an unready pane suppresses every read
+///   after the flip.
+/// - **`paste-buffer` never returns.** The relay hands one member over and then
+///   waits, so that member stays `Authorized` for as long as the test needs. The
+///   sleep is bounded rather than infinite so the orphan it leaves reaps itself;
+///   nothing in the test outlives it.
+/// - **`display-message` answers a fixed pane and a constant activity marker.**
+///   A constant can never advance, so the activity axis never suppresses a
+///   handover and the readiness flip above is the only thing that does.
+fn write_stateful_fake_tmux(
+    script_path: &std::path::Path,
+    busy_file: &std::path::Path,
+    pasted_file: &std::path::Path,
+) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let body = STATEFUL_FAKE_TMUX
+        .replace(
+            "@BUSY_FILE@",
+            busy_file.to_str().expect("busy path is utf-8"),
+        )
+        .replace(
+            "@PASTED_FILE@",
+            pasted_file.to_str().expect("pasted path is utf-8"),
+        );
+    std::fs::write(script_path, body).expect("write stateful fake tmux");
+    std::fs::set_permissions(script_path, std::fs::Permissions::from_mode(0o755))
+        .expect("set stateful fake tmux executable");
+}
+
+/// Republishes the bundle's coder with a prompt-readiness template.
+///
+/// Without one the transport reports ready whenever the pane can be captured at
+/// all, so the fake tmux above would have no way to say "reachable, but not at a
+/// prompt" — the state that separates a held member from an unreachable one.
+fn write_prompt_readiness_coders(configuration_roots: &ConfigurationRoots) {
+    std::fs::write(
+        configuration_roots.base_layer().join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "shell"
+
+[coders.tmux]
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+prompt-regex = '^READY-FOR-HANDOVER$'
+"#,
+    )
+    .expect("write prompt-readiness coders file");
+}
+
+/// A warning counts what is *waiting* and ages from the oldest of those, not
+/// from the reservation ledger.
+///
+/// The two disagree on exactly one shape: a target holding an `Authorized`
+/// member and `Pending` members at the same time. `per_target` is incremented at
+/// admission and decremented at release, so it counts the member being written
+/// to right now; the waiting tally does not. Every other test in this file leaves
+/// them equal, which is why the fix they cover passes with either reading.
+///
+/// The fixture builds that shape deliberately. Member one meets a prompt-ready
+/// pane, is authorized, and is handed a paste that never returns — so it holds
+/// its reservation without ever leaving flight. The pane is then reported busy,
+/// and members two and three are admitted behind it: reachable target, no
+/// prompt, so the gate holds them and they wait.
+///
+/// Both halves are read off one report, and the aging half is separated by
+/// construction rather than by coincidence — the authorized member is aged past
+/// the bound the assertion uses before the waiting ones are even sent, so a
+/// report measuring from it cannot land under that bound however the machine is
+/// scheduled.
+#[test]
+fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
+    use agentmux::relay::{UndeliveredReporting, report_undelivered_queue};
+    use std::time::{Duration, Instant};
+
+    /// How far the authorized member is aged past the waiting ones. Also the
+    /// bound the age assertion uses: a report reading the authorized member is
+    /// at least this old by construction, and one reading the waiting members
+    /// is younger than the settle below.
+    const AGE_GAP_MS: u64 = 2_000;
+
+    let temporary = TempDir::new().expect("temporary");
+    let inscriptions = temporary.path().join("inscriptions.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+
+    let fake_tmux = temporary.path().join("fake-tmux");
+    let busy_file = temporary.path().join("target-busy");
+    let pasted_file = temporary.path().join("paste-started");
+    write_stateful_fake_tmux(&fake_tmux, &busy_file, &pasted_file);
+    // SAFETY: nextest runs each test in its own process, and this runs before
+    // the first dispatch spawns anything that could read the environment.
+    unsafe { std::env::set_var("AGENTMUX_TMUX_COMMAND", &fake_tmux) };
+
+    // The submission timeout is the one that matters here: at its five-second
+    // default the watchdog would fence the blocked member mid-test and
+    // terminalize the very reservation the mix depends on. The dwell is
+    // lengthened alongside it so a stray unobservable moment cannot resolve a
+    // waiting member either.
+    agentmux::relay::configure_delivery(agentmux::relay::DeliveryConfiguration {
+        submission_timeout_ms: 60_000,
+        unreachable_dwell_ms: 600_000,
+        ..Default::default()
+    });
+
+    let config_root = write_bundle(&temporary, "party");
+    write_tui_configuration(&config_root, "default");
+    write_prompt_readiness_coders(&config_root);
+    let tmux_socket = temporary.path().join("tmux.sock");
+
+    let send = || {
+        dispatch_request(
+            RelayRequest::Send {
+                request_id: None,
+                requester_session: "alpha".to_string(),
+                message: "hello".to_string(),
+                targets: vec!["bravo@party".to_string()],
+                broadcast: false,
+                quiet_window_ms: Some(1),
+                on_behalf_of: None,
+            },
+            &config_root,
+            "party",
+            &tmux_socket,
+        )
+        .expect("send response");
+    };
+
+    let first_admitted = Instant::now();
+    send();
+    // The paste marker is the fixture's own proof: the relay authorized this
+    // member and handed it to a write that will not return, so it holds an
+    // `Authorized` reservation for the rest of the test.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !pasted_file.exists() {
+        assert!(
+            Instant::now() < deadline,
+            "the first member never reached a paste, so no member is authorized"
+        );
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    // From here the pane is reachable but not at a prompt, so every later member
+    // is held at the gate instead of being authorized behind the first.
+    std::fs::write(&busy_file, b"1").expect("write busy marker");
+    while first_admitted.elapsed() < Duration::from_millis(AGE_GAP_MS) {
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    send();
+    send();
+    // Several worker ticks: long enough for both members to have been offered to
+    // the gate and held, and short enough that their age stays far below the gap
+    // above.
+    std::thread::sleep(Duration::from_millis(250));
+
+    // A zero threshold puts every waiting entry past it, so what the warning
+    // reports is decided by the scoping rule alone.
+    report_undelivered_queue(UndeliveredReporting {
+        warning: Duration::ZERO,
+        ..UndeliveredReporting::default()
+    });
+
+    // The ledger state the assertions below rest on, established rather than
+    // assumed: three members admitted against one target, none of them resolved,
+    // and exactly one of them authorized. Three live entries, one `Authorized`
+    // and two `Pending`.
+    assert_eq!(
+        count_bravo_queued_inscriptions(&inscriptions),
+        3,
+        "all three members must be admitted against the one target"
+    );
+    let completions = read_inscriptions(&inscriptions, "relay.send.async.completed");
+    assert!(
+        completions.is_empty(),
+        "no member may resolve while the paste is still in flight: {completions:?}"
+    );
+    let authorizations = read_inscriptions(&inscriptions, "relay.delivery.batch.authorized");
+    assert_eq!(
+        authorizations.len(),
+        1,
+        "only the member that met a prompt may be authorized: {authorizations:?}"
+    );
+
+    let warnings = read_inscriptions(&inscriptions, "relay.delivery.undelivered.warning");
+    assert_eq!(warnings.len(), 1, "one backlogged target warns once");
+    let record: serde_json::Value =
+        serde_json::from_str(warnings[0].as_str()).expect("warning is json");
+    let details = record.get("details").expect("warning carries details");
+    assert_eq!(
+        details
+            .get("target_session")
+            .and_then(serde_json::Value::as_str),
+        Some("bravo"),
+    );
+    // Reading `per_target` here would say three, because the authorized member
+    // still holds its reservation. It is being written to, not backlogged.
+    assert_eq!(
+        details
+            .get("undelivered_envelopes")
+            .and_then(serde_json::Value::as_u64),
+        Some(2),
+        "the warning carries the waiting count, not the reserved one: {}",
+        warnings[0]
+    );
+    // The same exclusion on the aging axis. The authorized member is the oldest
+    // entry this target has, so a report that aged from it would announce a
+    // target as backlogged since before either waiting member existed.
+    let oldest_age_ms = details
+        .get("oldest_age_ms")
+        .and_then(serde_json::Value::as_u64)
+        .expect("warning carries oldest_age_ms");
+    assert!(
+        oldest_age_ms < AGE_GAP_MS,
+        "the warning ages from the oldest waiting entry, not from the authorized one: {}",
+        warnings[0]
+    );
+
+    // The aggregate is read beside the warning so the two cannot be satisfied by
+    // different states of the queue.
+    let aggregates = read_inscriptions(&inscriptions, "relay.delivery.undelivered");
+    assert_eq!(aggregates.len(), 1, "one pass emits one aggregate");
+    let record: serde_json::Value =
+        serde_json::from_str(aggregates[0].as_str()).expect("aggregate is json");
+    assert_eq!(
+        record
+            .get("details")
+            .and_then(|details| details.get("undelivered_envelopes_total"))
+            .and_then(serde_json::Value::as_u64),
+        Some(2),
+        "the aggregate counts the same two waiting members: {}",
+        aggregates[0]
+    );
+}
+
 /// The `[delivery]` table has to reach the reservation, not merely parse.
 ///
 /// Publishing a per-target envelope quota of one and sending twice to a target
