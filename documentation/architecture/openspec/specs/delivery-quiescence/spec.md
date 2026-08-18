@@ -395,9 +395,11 @@ any `reason_code`, so the sender can correlate it to the `queued` result it
 received at accept time.
 
 Receipts SHALL be delivered for non-delivered terminal outcomes only:
-`not_submitted`, `submission_unknown`, and `dropped_on_shutdown`. A `delivered`
-outcome SHALL NOT produce a receipt; it is recorded per Async Delivery
-Observability only.
+`failed`, `not_submitted`, `submission_unknown`, and `dropped_on_shutdown`. A
+`delivered` outcome SHALL NOT produce a receipt; it is recorded per Async
+Delivery Observability only. `PeerUnavailable` is a cross-relay outcome
+reported synchronously on the send response, not a locally asynchronous
+terminal outcome, and produces no receipt here.
 
 Because no outcome is produced by elapsed waiting, a message queued for a target
 that stays reachable but never becomes ready produces **no receipt at all** while
@@ -438,7 +440,8 @@ SHALL be the authoritative result for a queued message.
 #### Scenario: Deliver a non-delivered outcome receipt through the sender's transport
 
 - **WHEN** a queued message to a target resolves as a non-delivered terminal
-  outcome (`not_submitted`, `submission_unknown`, or `dropped_on_shutdown`)
+  outcome (`failed`, `not_submitted`, `submission_unknown`, or
+  `dropped_on_shutdown`)
 - **AND** the original sender's session is routable
 - **THEN** relay delivers a terminal-outcome receipt to the sender through the
   sender's own transport
@@ -505,9 +508,11 @@ SHALL be the authoritative result for a queued message.
 
 Relay SHALL emit inscriptions for async queue lifecycle transitions.
 
-The terminal-outcome inscription SHALL cover every terminal outcome:
-`delivered`, `not_submitted`, `submission_unknown`, and
-`dropped_on_shutdown`. This inscription SHALL be
+The terminal-outcome inscription SHALL cover every locally asynchronous
+terminal outcome: `delivered`, `failed`, `not_submitted`, `submission_unknown`,
+and `dropped_on_shutdown`. `PeerUnavailable` is a cross-relay outcome reported
+synchronously on the send response, not a locally asynchronous one, and is
+outside this inscription's scope. This inscription SHALL be
 recorded regardless of whether a terminal-outcome receipt is delivered to the
 sender, so `relay.log` is a complete observability floor for terminal outcomes.
 
@@ -605,7 +610,7 @@ precisely because elapsing produces a record and nothing else.
 #### Scenario: Record terminal async outcome
 
 - **WHEN** an async queued target reaches a terminal state (`delivered`,
-  `not_submitted`, `submission_unknown`, or `dropped_on_shutdown`)
+  `failed`, `not_submitted`, `submission_unknown`, or `dropped_on_shutdown`)
 - **THEN** relay writes an inscription event containing target session,
   message id, and terminal outcome
 
