@@ -32,7 +32,8 @@ This directory owns the unified CLI surface for `agentmux`.
   - relay startup summary construction, JSON payload rendering, and per-bundle
     outcome helpers.
 - `bundle.rs`
-  - shared `up`/`down` transition execution helpers.
+  - shared `up`/`down` transition execution helpers, including the rendering of
+    per-session failure detail.
 - `up.rs`
   - `agentmux up` selector parsing and execution.
 - `down.rs`
@@ -73,6 +74,15 @@ This directory owns the unified CLI surface for `agentmux`.
   successfully.
 - `host relay --no-autostart` is process-only mode and must not report
   autostart failures for bundles.
+- A bundle that comes up with some sessions failing reports `outcome=degraded`
+  on both bring-up surfaces (`host relay`'s startup summary and `up`'s
+  transition summary), carrying the failed session ids and causes in `reason`
+  and `details.failed_sessions`, and counted in `degraded_bundle_count`. It is a
+  hosted outcome: it keeps `hosted_any`/`changed_any` true, stays out of
+  `failed_bundle_count`, and does not by itself make the host exit nonzero.
+  `outcome=failed` is reserved for a bundle with no ready session. The spelling
+  is the one `list` already reports as `startup_health`, under the same
+  predicate.
 - `host relay` watches the bundles configuration directory by default and
   reconciles loaded bundles on change (add/remove/modify); `--no-watch` disables
   this for the process lifetime.

@@ -361,6 +361,90 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
 }
 
 #[test]
+fn host_relay_autostart_summary_reports_a_partial_startup_as_degraded() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    // One tmux member reaches ready state; one ACP member cannot be spawned.
+    write_bundle_configuration_with_tmux_and_acp_failure(&config_root, "alpha");
+    write_tui_configuration(
+        &config_root,
+        Some("alpha"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for agentmux host relay");
+
+    // A partial startup is still a hosted relay: the process must not fail on
+    // account of it.
+    assert!(output.status.success(), "command should succeed");
+    let summary_json = parse_summary_json_line(&output.stdout);
+    let alpha = summary_json["bundles"]
+        .as_array()
+        .expect("startup summary bundles")
+        .iter()
+        .find(|bundle| bundle["bundle_name"] == "alpha")
+        .expect("alpha startup summary");
+
+    assert_eq!(
+        alpha["outcome"], "degraded",
+        "a partially started bundle must not report an unqualified hosted: {summary_json}"
+    );
+    assert_eq!(summary_json["degraded_bundle_count"], 1);
+    assert_eq!(summary_json["hosted_bundle_count"], 0);
+    assert_eq!(summary_json["failed_bundle_count"], 0);
+    assert_eq!(summary_json["hosted_any"], true);
+    assert!(
+        alpha["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("bravo")),
+        "degraded reason should name the failed session: {summary_json}"
+    );
+    let failed_sessions = alpha["details"]["failed_sessions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected failed_sessions detail: {summary_json}"));
+    assert!(
+        failed_sessions
+            .iter()
+            .any(|failure| failure["session_id"] == "bravo"),
+        "degraded detail should carry the per-session record: {summary_json}"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("session=bravo"),
+        "startup output should name the failed session: {stdout}"
+    );
+}
+
+#[test]
 fn host_relay_autostart_summary_folds_failed_session_reasons() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");

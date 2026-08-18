@@ -300,6 +300,48 @@ fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions
 }
 
 #[test]
+fn reconciliation_evaluates_readiness_and_reports_it_alongside_what_changed() {
+    if !tmux_available() {
+        eprintln!("skipping reconciliation test because tmux is unavailable");
+        return;
+    }
+
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "readiness_party";
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        bundle_name,
+        &[CoderSpec {
+            id: "default".to_string(),
+            initial_command: "sh -lc 'exec sleep 45'".to_string(),
+            resume_command: "sh -lc 'exec sleep 45'".to_string(),
+        }],
+        &[SessionSpec {
+            id: "alpha".to_string(),
+            name: "alpha".to_string(),
+            directory: temporary.path().to_path_buf(),
+            coder: "default".to_string(),
+        }],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
+
+    let created = reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
+    assert_eq!(created.created_sessions, vec!["alpha".to_string()]);
+    assert_eq!(created.ready_session_count, 1);
+    assert!(created.failed_startups.is_empty());
+
+    // The second pass creates nothing, so a report that counted only what it
+    // changed would say the bundle has no ready session. Readiness is evaluated
+    // for members the pass did not create, so the count survives.
+    let unchanged = reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
+    assert_eq!(unchanged.created_sessions, Vec::<String>::new());
+    assert_eq!(unchanged.ready_session_count, 1);
+    assert!(unchanged.failed_startups.is_empty());
+}
+
+#[test]
 fn reconciliation_registers_configured_members_in_unified_registry() {
     if !tmux_available() {
         eprintln!("skipping reconciliation test because tmux is unavailable");

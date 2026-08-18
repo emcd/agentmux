@@ -33,7 +33,7 @@ pub(in crate::relay) fn handle_request(
     match request {
         RelayRequest::Up => {
             authorize_bundle_principal(bundle, authorization, principal.as_ref())?;
-            listing::handle_bundle_up(bundle, bundle_catalog)
+            listing::handle_bundle_up(bundle, authorization, bundle_catalog)
         }
         RelayRequest::Down => {
             authorize_bundle_principal(bundle, authorization, principal.as_ref())?;

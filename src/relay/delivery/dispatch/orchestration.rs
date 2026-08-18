@@ -108,10 +108,12 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
         }
         let readiness =
             get_worker_readiness(namespace, runtime_directory, target_member.id.as_str());
+        // The same acceptance set `list` reports, so a session this poll counts
+        // ready is one `list` also calls ready.
+        if super::super::async_worker::acp_readiness_is_ready(readiness) {
+            return Ok(());
+        }
         match readiness {
-            Some(WorkerReadinessState::Available | WorkerReadinessState::Busy) => {
-                return Ok(());
-            }
             Some(WorkerReadinessState::Unavailable) => {
                 let recorded =
                     get_worker_failure(namespace, runtime_directory, target_member.id.as_str());
@@ -124,7 +126,10 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
                     }),
                 ));
             }
-            Some(WorkerReadinessState::Initializing | WorkerReadinessState::Recovering) | None => {
+            // Still settling. `Available`/`Busy` returned above, so this arm is
+            // reached only for `Initializing`, `Recovering`, and an unregistered
+            // worker.
+            _ => {
                 if Instant::now() >= deadline {
                     let recorded =
                         get_worker_failure(namespace, runtime_directory, target_member.id.as_str());

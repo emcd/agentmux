@@ -7,22 +7,24 @@ use crate::{
     runtime::{inscriptions::emit_inscription, paths::tmux_socket_path_for_runtime_directory},
 };
 
-use super::super::authorization::{AuthorizationContext, RouteAuthorization};
-use super::super::delivery::acp_session_ready_for_startup;
+use super::super::authorization::{AuthorizationContext, RouteAuthorization, choices_pending_max};
+use super::super::delivery::acp_session_is_ready;
 use super::super::lifecycle::{reconcile_loaded_bundle, shutdown_bundle_runtime};
 use super::super::routing::{
     Addressing, Capability, OperationProfile, requester_home_namespace, resolve_list_route,
 };
 use super::super::{
     BundleCatalog, BundleTransitionEntry, HostingIntent, ListedBundle, ListedBundleStartupHealth,
-    ListedBundleState, ListedSession, RelayError, RelayResponse, SCHEMA_VERSION,
-    canonical_session_id, load_startup_failures, relay_error,
+    ListedBundleState, ListedSession, NO_READY_SESSION_LEAD, PARTIAL_STARTUP_LEAD, RelayError,
+    RelayResponse, SCHEMA_VERSION, StartupFailureRecord, canonical_session_id,
+    fold_startup_failures, load_startup_failures, relay_error,
 };
 use super::routed::run_target_operation;
 use crate::tmux::pane::resolve_active_pane_target;
 
 pub(super) fn handle_bundle_up(
     bundle: &BundleConfiguration,
+    authorization: &AuthorizationContext,
     catalog: &BundleCatalog,
 ) -> Result<RelayResponse, RelayError> {
     // Bringing the bundle up sets its hosting intent to `Run` so the watcher
@@ -41,34 +43,86 @@ pub(super) fn handle_bundle_up(
             Some(json!({ "bundle_name": bundle.bundle_name })),
         )
     })?;
-    let report = reconcile_loaded_bundle(bundle, &paths)?;
+    // The reconcile pass starts every configured member, ACP targets included,
+    // so it needs the same pending-choice bound the startup path passes.
+    let report = reconcile_loaded_bundle(bundle, &paths, choices_pending_max(authorization))?;
     let changed = report.bootstrap_session.is_some()
         || !report.created_sessions.is_empty()
         || !report.pruned_sessions.is_empty();
-    let bundle_result = if changed {
-        BundleTransitionEntry {
-            bundle_name: bundle.bundle_name.clone(),
-            outcome: "hosted".to_string(),
-            reason_code: None,
-            reason: None,
+    // The outcome comes from readiness, not from what the pass created: a bundle
+    // whose sessions were all already running and ready changed nothing and is
+    // still up, while a session that was created but never became ready is a
+    // failure. `changed` continues to carry creation and pruning alone, so the
+    // idempotent `skipped` result keeps its existing meaning.
+    let bundle_result = if report.failed_startups.is_empty() {
+        if changed {
+            BundleTransitionEntry {
+                bundle_name: bundle.bundle_name.clone(),
+                outcome: "hosted".to_string(),
+                reason_code: None,
+                reason: None,
+                details: None,
+            }
+        } else {
+            BundleTransitionEntry {
+                bundle_name: bundle.bundle_name.clone(),
+                outcome: "skipped".to_string(),
+                reason_code: Some("already_hosted".to_string()),
+                reason: Some("bundle runtime is already hosted".to_string()),
+                details: None,
+            }
         }
     } else {
-        BundleTransitionEntry {
-            bundle_name: bundle.bundle_name.clone(),
-            outcome: "skipped".to_string(),
-            reason_code: Some("already_hosted".to_string()),
-            reason: Some("bundle runtime is already hosted".to_string()),
-        }
+        partially_started_entry(
+            bundle.bundle_name.as_str(),
+            report.ready_session_count,
+            &report.failed_startups,
+        )
     };
+    let degraded = bundle_result.outcome == "degraded";
+    let failed = bundle_result.outcome == "failed";
+    let hosted = bundle_result.outcome == "hosted";
     Ok(RelayResponse::BundleTransition {
         schema_version: SCHEMA_VERSION.to_string(),
         action: "up".to_string(),
         bundles: vec![bundle_result],
-        changed_bundle_count: usize::from(changed),
-        skipped_bundle_count: usize::from(!changed),
-        failed_bundle_count: 0,
-        changed_any: changed,
+        changed_bundle_count: usize::from(hosted),
+        degraded_bundle_count: usize::from(degraded),
+        skipped_bundle_count: usize::from(!hosted && !degraded && !failed),
+        failed_bundle_count: usize::from(failed),
+        changed_any: hosted || degraded,
     })
+}
+
+/// Builds the transition entry for a bundle whose bring-up recorded per-session
+/// failures: `degraded` when something is ready, `failed` when nothing is.
+///
+/// `degraded` is the spelling `bundle-lifecycle`'s startup-health model already
+/// uses for "at least one session ready and at least one startup attempt failed",
+/// and it is used here under that same predicate — `ready_session_count` comes
+/// from the shared readiness evaluation, not from what the pass created.
+fn partially_started_entry(
+    bundle_name: &str,
+    ready_session_count: usize,
+    failed_startups: &[StartupFailureRecord],
+) -> BundleTransitionEntry {
+    let degraded = ready_session_count > 0;
+    let lead = if degraded {
+        PARTIAL_STARTUP_LEAD
+    } else {
+        NO_READY_SESSION_LEAD
+    };
+    let (reason, details) = match fold_startup_failures(lead, failed_startups) {
+        Some(folded) => (folded.reason, Some(folded.details)),
+        None => (lead.to_string(), None),
+    };
+    BundleTransitionEntry {
+        bundle_name: bundle_name.to_string(),
+        outcome: if degraded { "degraded" } else { "failed" }.to_string(),
+        reason_code: Some("runtime_startup_failed".to_string()),
+        reason: Some(reason),
+        details,
+    }
 }
 
 pub(super) fn handle_bundle_down(
@@ -90,6 +144,7 @@ pub(super) fn handle_bundle_down(
             outcome: "unhosted".to_string(),
             reason_code: None,
             reason: None,
+            details: None,
         }
     } else {
         BundleTransitionEntry {
@@ -97,6 +152,7 @@ pub(super) fn handle_bundle_down(
             outcome: "skipped".to_string(),
             reason_code: Some("already_unhosted".to_string()),
             reason: Some("bundle runtime is already unhosted".to_string()),
+            details: None,
         }
     };
     Ok(RelayResponse::BundleTransition {
@@ -104,6 +160,9 @@ pub(super) fn handle_bundle_down(
         action: "down".to_string(),
         bundles: vec![bundle_result],
         changed_bundle_count: usize::from(changed),
+        // `down` has no per-session failure concept: a session either got pruned
+        // or was already gone.
+        degraded_bundle_count: 0,
         skipped_bundle_count: usize::from(!changed),
         failed_bundle_count: 0,
         changed_any: changed,
@@ -265,6 +324,16 @@ pub(in crate::relay) fn build_listed_bundle(
     })
 }
 
+/// Observational readiness for the `list` projection: it inspects a member's
+/// transport and starts nothing.
+///
+/// Deliberately not the same function the bring-up passes use — `startup_member`
+/// answers "bring this member up and tell me whether it is serving", this answers
+/// "is it serving right now" — but deliberately the same *condition*. Both bottom
+/// out in `resolve_active_pane_target` for tmux and in `acp_readiness_is_ready`
+/// for ACP, because `degraded` is defined as one state across `up` and `list`: a
+/// session one surface calls ready and the other calls failed makes the word
+/// mean nothing.
 fn session_ready_for_list(
     bundle: &BundleConfiguration,
     runtime_directory: &Path,
@@ -275,7 +344,7 @@ fn session_ready_for_list(
         TargetConfiguration::Tmux(_) => {
             resolve_active_pane_target(tmux_socket, member.id.as_str()).is_ok()
         }
-        TargetConfiguration::Acp(_) => acp_session_ready_for_startup(
+        TargetConfiguration::Acp(_) => acp_session_is_ready(
             bundle.bundle_name.as_str(),
             runtime_directory,
             member.id.as_str(),

@@ -292,11 +292,64 @@ pub(super) fn fake_tmux_search_path_file(script_path: &Path) -> PathBuf {
     script_path.with_extension("search-path")
 }
 
+/// Sidecar listing sessions the fake tmux creates but never returns a pane for.
+///
+/// Readiness is a pane lookup, so this is the deterministic way to produce a
+/// session that exists yet is not ready — no dependence on how fast a real pane's
+/// process exits.
+pub(super) fn fake_tmux_unready_sessions_file(script_path: &Path) -> PathBuf {
+    script_path.with_extension("unready")
+}
+
+/// Sidecar whose presence makes the fake tmux fail `has-session` with an error
+/// that is not a missing-session error, standing in for a tmux state query that
+/// fails for reasons no single session owns.
+pub(super) fn fake_tmux_query_failure_file(script_path: &Path) -> PathBuf {
+    script_path.with_extension("queryfail")
+}
+
+/// Marks `session_id` as created-but-never-ready for the fake tmux at
+/// `script_path`.
+pub(super) fn mark_fake_tmux_session_unready(script_path: &Path, session_id: &str) {
+    let path = fake_tmux_unready_sessions_file(script_path);
+    let mut existing = fs::read_to_string(&path).unwrap_or_default();
+    existing.push_str(session_id);
+    existing.push('\n');
+    fs::write(&path, existing).expect("write fake tmux unready sessions");
+}
+
+/// Makes every subsequent fake-tmux `has-session` query fail outright.
+pub(super) fn fail_fake_tmux_state_queries(script_path: &Path) {
+    fs::write(fake_tmux_query_failure_file(script_path), b"1")
+        .expect("write fake tmux query failure flag");
+}
+
+/// Sidecar listing sessions the fake tmux refuses to create.
+///
+/// Real tmux is unhelpfully tolerant here — it will happily create a session
+/// whose start directory does not exist — so a creation failure has to be
+/// arranged rather than provoked.
+pub(super) fn fake_tmux_create_failure_file(script_path: &Path) -> PathBuf {
+    script_path.with_extension("createfail")
+}
+
+/// Makes the fake tmux refuse to create `session_id`.
+pub(super) fn fail_fake_tmux_session_creation(script_path: &Path, session_id: &str) {
+    let path = fake_tmux_create_failure_file(script_path);
+    let mut existing = fs::read_to_string(&path).unwrap_or_default();
+    existing.push_str(session_id);
+    existing.push('\n');
+    fs::write(&path, existing).expect("write fake tmux create failure sessions");
+}
+
 pub(super) fn write_fake_tmux_script(path: &Path) {
     let sessions_file = path.with_extension("sessions");
     let owned_file = path.with_extension("owned");
     let log_file = fake_tmux_log_path(path);
     let search_path_file = fake_tmux_search_path_file(path);
+    let unready_file = fake_tmux_unready_sessions_file(path);
+    let query_failure_file = fake_tmux_query_failure_file(path);
+    let create_failure_file = fake_tmux_create_failure_file(path);
     let body = format!(
         r##"#!/usr/bin/env bash
 set -euo pipefail
@@ -305,7 +358,10 @@ SESSIONS_FILE="{sessions}"
 OWNED_FILE="{owned}"
 LOG_FILE="{log}"
 SEARCH_PATH_FILE="{search_path}"
-touch "${{SESSIONS_FILE}}" "${{OWNED_FILE}}" "${{LOG_FILE}}"
+UNREADY_FILE="{unready}"
+QUERY_FAILURE_FILE="{query_failure}"
+CREATE_FAILURE_FILE="{create_failure}"
+touch "${{SESSIONS_FILE}}" "${{OWNED_FILE}}" "${{LOG_FILE}}" "${{UNREADY_FILE}}" "${{CREATE_FAILURE_FILE}}"
 
 printf "%s\n" "$*" >> "${{LOG_FILE}}"
 printf "%s\n" "${{PATH-}}" > "${{SEARCH_PATH_FILE}}"
@@ -319,6 +375,10 @@ command_name="${{args[0]-}}"
 case "${{command_name}}" in
   has-session)
     target="${{args[2]#=}}"
+    if [[ -f "${{QUERY_FAILURE_FILE}}" ]]; then
+      echo "permission denied" >&2
+      exit 1
+    fi
     if [[ -s "${{SESSIONS_FILE}}" ]] && grep -Fxq "${{target}}" "${{SESSIONS_FILE}}"; then
       exit 0
     fi
@@ -347,6 +407,10 @@ case "${{command_name}}" in
     ;;
   new-session)
     session_name="${{args[3]}}"
+    if [[ -s "${{CREATE_FAILURE_FILE}}" ]] && grep -Fxq "${{session_name}}" "${{CREATE_FAILURE_FILE}}"; then
+      echo "permission denied" >&2
+      exit 1
+    fi
     printf "%s\n" "${{session_name}}" >> "${{SESSIONS_FILE}}"
     sort -u "${{SESSIONS_FILE}}" -o "${{SESSIONS_FILE}}"
     ;;
@@ -371,10 +435,16 @@ case "${{command_name}}" in
     : > "${{OWNED_FILE}}"
     ;;
   display-message)
+    target_session="${{args[3]-}}"
+    target_session="${{target_session#=}}"
     format_value="${{args[4]-}}"
     case "${{format_value}}" in
       '#{{pane_id}}')
-        printf "%%1\n"
+        if [[ -s "${{UNREADY_FILE}}" ]] && grep -Fxq "${{target_session}}" "${{UNREADY_FILE}}"; then
+          printf "\n"
+        else
+          printf "%%1\n"
+        fi
         ;;
       '#{{window_activity}}')
         printf "0\n"
@@ -399,6 +469,9 @@ esac
         owned = owned_file.display(),
         log = log_file.display(),
         search_path = search_path_file.display(),
+        unready = unready_file.display(),
+        query_failure = query_failure_file.display(),
+        create_failure = create_failure_file.display(),
     );
     fs::write(path, body).expect("write fake tmux script");
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("set fake tmux executable");

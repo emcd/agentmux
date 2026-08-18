@@ -488,15 +488,35 @@ pub(in crate::relay) fn get_output_view(
     }
 }
 
-pub(in crate::relay) fn acp_session_ready_for_startup(
+/// Whether a worker readiness state counts as a ready ACP session.
+///
+/// The single acceptance set for "this session is ready": the startup poll waits
+/// for it, and the `list` projection reports it. Two predicates here mean `up`
+/// and `list` can disagree about the same session, which is exactly the
+/// contradiction `degraded` was defined to avoid — it is specified as one
+/// condition across both surfaces.
+///
+/// `Busy` is ready. A session mid-turn is serving, not down; excluding it would
+/// report a bundle as degraded — or a single-member bundle as `down` — for the
+/// whole duration of an agent's turn. The registry already treats
+/// `Available | Busy` as the healthy pair when it clears a recorded failure.
+pub(in crate::relay) fn acp_readiness_is_ready(readiness: Option<WorkerReadinessState>) -> bool {
+    matches!(
+        readiness,
+        Some(WorkerReadinessState::Available | WorkerReadinessState::Busy)
+    )
+}
+
+pub(in crate::relay) fn acp_session_is_ready(
     namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
 ) -> bool {
-    matches!(
-        get_worker_readiness(namespace, runtime_directory, target_session),
-        Some(WorkerReadinessState::Available)
-    )
+    acp_readiness_is_ready(get_worker_readiness(
+        namespace,
+        runtime_directory,
+        target_session,
+    ))
 }
 
 /// Removes this target's registry entry, but only if `owner` still holds it.

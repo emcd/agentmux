@@ -8,6 +8,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use super::StartupFailureRecord;
+use crate::runtime::inscriptions::emit_inscription;
 
 const STARTUP_FAILURE_HISTORY_FILE: &str = "startup_failures.json";
 const STARTUP_FAILURE_HISTORY_SCHEMA_VERSION: u32 = 1;
@@ -117,6 +118,40 @@ pub(super) fn append_startup_failure(
 
     store_persisted_startup_failure_history(path.as_path(), &history)?;
     Ok(record)
+}
+
+/// Persists each recorded per-session startup failure to `runtime_directory`'s
+/// history and announces it, returning the persisted records with their assigned
+/// timestamps and sequences.
+///
+/// Every path that brings a bundle up records its per-session failures through
+/// here — relay-host autostart and reconcile/`up` alike — so a failure reported by
+/// one surface is the same record `list` and the TUI later read, and the
+/// `relay.session_start_failed` inscription has exactly one emitter.
+pub(super) fn persist_and_announce_startup_failures(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    failures: &[StartupFailureRecord],
+) -> Result<Vec<StartupFailureRecord>, String> {
+    let mut persisted_records = Vec::with_capacity(failures.len());
+    for failure in failures {
+        let persisted = append_startup_failure(runtime_directory, failure.clone())?;
+        emit_inscription(
+            "relay.session_start_failed",
+            &serde_json::json!({
+                "bundle_name": bundle_name,
+                "session_id": persisted.session_id,
+                "transport": persisted.transport,
+                "code": persisted.code,
+                "reason": persisted.reason,
+                "timestamp": persisted.timestamp,
+                "sequence": persisted.sequence,
+                "details": persisted.details,
+            }),
+        );
+        persisted_records.push(persisted);
+    }
+    Ok(persisted_records)
 }
 
 fn startup_failure_history_path(runtime_directory: &Path) -> PathBuf {

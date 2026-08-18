@@ -14,8 +14,8 @@ use super::identity::canonical_session_id;
 use super::startup_state::note_session_served_successfully;
 use super::stream::register_configured_session;
 use super::{
-    BundleStartupReport, ListedSessionTransport, ReconciliationReport, RelayError, ShutdownReport,
-    StartupFailureRecord, map_config, map_tui_config, relay_error,
+    BundleStartupReport, ReconciliationReport, RelayError, ShutdownReport, StartupFailureRecord,
+    map_config, map_tui_config, relay_error,
 };
 use crate::relay::authorization::{choices_pending_max, load_authorization_context};
 use crate::relay::delivery::initialize_acp_target_for_startup;
@@ -41,8 +41,8 @@ pub(super) fn reconcile_bundle(
     paths: &BundleRuntimePaths,
 ) -> Result<ReconciliationReport, RelayError> {
     let bundle = load_hosted_bundle(configuration_roots, paths)?;
-    let _authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
-    reconcile_loaded_bundle(&bundle, paths)
+    let authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
+    reconcile_loaded_bundle(&bundle, paths, choices_pending_max(&authorization))
 }
 
 /// Validates a bundle's configuration exactly as startup does — bundle and
@@ -216,22 +216,34 @@ pub(super) fn register_configured_bundle(
     register_configured_bundle_principals(&bundle)
 }
 
+/// Reconciles `bundle`'s configured sessions against tmux state and reports what
+/// changed alongside what is ready afterward.
+///
+/// A configured session that fails to be created does not abort the pass: a
+/// bundle is a set of sessions, and one failing is not a reason to withhold the
+/// rest — the same tolerance [`startup_loaded_bundle`] already applies. Failures
+/// that are not attributable to one session (a tmux state query, a prune, the
+/// principal registration) still fail the whole operation, because a pass that
+/// cannot say what it did or did not do has nothing to report.
 pub(super) fn reconcile_loaded_bundle(
     bundle: &BundleConfiguration,
     paths: &BundleRuntimePaths,
+    choices_pending_max: usize,
 ) -> Result<ReconciliationReport, RelayError> {
     let tmux_socket = paths.tmux_socket.as_path();
+    let runtime_directory = paths.runtime_directory.as_path();
     // Refresh the static registry shells for every configured member so the
     // reconcile/`up` path keeps the unified registry complete (offline members
     // included), independent of transport readiness.
     register_configured_bundle_principals(bundle)?;
-    let members = members_for_spawn(bundle, paths);
+    let mut members = members_for_spawn(bundle, paths);
+    members.sort_by(|left, right| left.id.cmp(&right.id));
     let configured_sessions = members
         .iter()
         .filter(|member| matches!(member.target, TargetConfiguration::Tmux(_)))
         .map(|member| member.id.clone())
         .collect::<HashSet<_>>();
-    let mut missing = members
+    let missing = members
         .iter()
         .filter(|member| matches!(member.target, TargetConfiguration::Tmux(_)))
         .filter_map(|member| match session_exists(tmux_socket, &member.id) {
@@ -244,7 +256,6 @@ pub(super) fn reconcile_loaded_bundle(
             ))),
         })
         .collect::<Result<Vec<_>, _>>()?;
-    missing.sort_by(|left, right| left.id.cmp(&right.id));
 
     let mut report = ReconciliationReport::default();
 
@@ -259,9 +270,15 @@ pub(super) fn reconcile_loaded_bundle(
     }
 
     if let Some(bootstrap_member) = missing.first().cloned() {
-        create_member_with_retry(tmux_socket, &bootstrap_member)?;
-        report.bootstrap_session = Some(bootstrap_member.id.clone());
-        report.created_sessions.push(bootstrap_member.id.clone());
+        match create_member_with_retry(tmux_socket, &bootstrap_member) {
+            Ok(()) => {
+                report.bootstrap_session = Some(bootstrap_member.id.clone());
+                report.created_sessions.push(bootstrap_member.id.clone());
+            }
+            Err(error) => report
+                .failed_startups
+                .push(creation_failure_record(&bootstrap_member, &error)),
+        }
     }
 
     let remaining = missing.into_iter().skip(1).collect::<Vec<_>>();
@@ -270,13 +287,21 @@ pub(super) fn reconcile_loaded_bundle(
         for member in remaining {
             let tmux_socket = tmux_socket.to_path_buf();
             handles.push(thread::spawn(move || {
-                create_member_with_retry(&tmux_socket, &member).map(|_| member.id.clone())
+                match create_member_with_retry(&tmux_socket, &member) {
+                    Ok(()) => Ok(member.id.clone()),
+                    // Boxed so the failure path does not widen every worker's
+                    // result to the size of a whole failure record.
+                    Err(error) => Err(Box::new(creation_failure_record(&member, &error))),
+                }
             }));
         }
         for handle in handles {
             match handle.join() {
                 Ok(Ok(created_session)) => report.created_sessions.push(created_session),
-                Ok(Err(error)) => return Err(error.into()),
+                Ok(Err(failure)) => report.failed_startups.push(*failure),
+                // A panicked worker leaves the pass unable to say whether that
+                // member was created, so it stays a whole-operation failure
+                // rather than being folded in as a per-session one.
                 Err(_) => {
                     return Err(relay_error(
                         "internal_unexpected_failure",
@@ -288,8 +313,158 @@ pub(super) fn reconcile_loaded_bundle(
         }
     }
 
+    // Every configured member is brought up here, not only the ones the tmux
+    // phase above created: a member that was already running may not be ready, a
+    // member this pass created may not have become ready, and a member with no
+    // tmux session to create at all — an ACP target — has not been started yet.
+    // Counting creations instead would call a bundle healthy on the strength of
+    // `new-session` returning, and would report a target `up` never tried to
+    // start as one that failed.
+    let pending = members
+        .iter()
+        .filter(|member| {
+            !report
+                .failed_startups
+                .iter()
+                .any(|failure| failure.session_id == member.id)
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let (ready_session_count, mut failed_startups) = startup_members(
+        bundle.bundle_name.as_str(),
+        runtime_directory,
+        tmux_socket,
+        &pending,
+        choices_pending_max,
+    )?;
+    report.ready_session_count = ready_session_count;
+    report.failed_startups.append(&mut failed_startups);
+
+    report.failed_startups = crate::relay::persist_startup_failures(
+        bundle.bundle_name.as_str(),
+        runtime_directory,
+        &report.failed_startups,
+    )
+    .map_err(|cause| {
+        relay_error(
+            "internal_unexpected_failure",
+            "failed to persist startup failure history during reconciliation",
+            Some(json!({ "bundle_name": bundle.bundle_name, "cause": cause })),
+        )
+    })?;
+
     let _ = cleanup_tmux_server_when_unowned(tmux_socket)?;
     Ok(report)
+}
+
+/// Records a member the reconcile pass could not create.
+fn creation_failure_record(
+    member: &BundleMember,
+    error: &TmuxLifecycleError,
+) -> StartupFailureRecord {
+    StartupFailureRecord {
+        session_id: member.id.clone(),
+        transport: member.target.session_type().into(),
+        code: "runtime_startup_failed".to_string(),
+        reason: "failed to create tmux session during reconciliation".to_string(),
+        timestamp: startup_timestamp(),
+        sequence: 0,
+        details: Some(json!({
+            "session_id": member.id,
+            "cause": error.message,
+            "error_code": error.code,
+        })),
+    }
+}
+
+/// Records a per-member bring-up failure.
+fn member_failure_record(
+    member: &BundleMember,
+    (code, reason, details): (String, String, Option<serde_json::Value>),
+) -> StartupFailureRecord {
+    StartupFailureRecord {
+        session_id: member.id.clone(),
+        transport: member.target.session_type().into(),
+        code,
+        reason,
+        timestamp: startup_timestamp(),
+        sequence: 0,
+        details,
+    }
+}
+
+/// Brings one configured member to ready state, or reports why it could not.
+///
+/// The single per-member bring-up step, shared by the startup pass and the
+/// reconcile/`up` pass. The two have to agree about what starting a member
+/// *means*, not merely about how to observe one: a transport the startup path
+/// initializes but the reconcile path only inspects would have `up` report the
+/// member failed for the sole reason that `up` never tried to start it.
+///
+/// Idempotent for every transport — a tmux member whose session exists is only
+/// checked for readiness, and an ACP member whose worker is already registered is
+/// left alone — so a repeated pass over a healthy bundle changes nothing.
+fn startup_member(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    tmux_socket: &Path,
+    member: &BundleMember,
+    choices_pending_max: usize,
+) -> Result<(), (String, String, Option<serde_json::Value>)> {
+    match &member.target {
+        TargetConfiguration::Tmux(_) => startup_tmux_member(tmux_socket, member),
+        TargetConfiguration::Acp(_) => initialize_acp_target_for_startup(
+            bundle_name,
+            runtime_directory,
+            member,
+            choices_pending_max,
+        ),
+        // Pty startup is recorded as ready when the per-coder config
+        // resolves cleanly. The bootstrap path constructs the Pty
+        // transport lazily when the dispatcher first references it;
+        // for the v1 startup-count accounting we record Pty members
+        // as ready alongside Tmux / ACP. The full Pty bootstrap
+        // path lands alongside the bootstrap-side refactor
+        // (referenced from the add-pty-transport OpenSpec §8
+        // worker readiness; not implemented in this commit).
+        TargetConfiguration::Pty(_) => Ok(()),
+        // `ui`/`pubsub` members have no implemented startup path; record a
+        // structured startup failure and exclude them from active routing.
+        TargetConfiguration::Ui | TargetConfiguration::Pubsub => Err((
+            "runtime_session_type_not_implemented".to_string(),
+            "session type delivery is not yet implemented".to_string(),
+            None,
+        )),
+    }
+}
+
+/// Brings up each member of `members`, returning how many reached ready state and
+/// a record for each that did not.
+fn startup_members(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    tmux_socket: &Path,
+    members: &[BundleMember],
+    choices_pending_max: usize,
+) -> Result<(usize, Vec<StartupFailureRecord>), RelayError> {
+    let mut ready_session_count = 0usize;
+    let mut failed_startups = Vec::<StartupFailureRecord>::new();
+    for member in members {
+        match startup_member(
+            bundle_name,
+            runtime_directory,
+            tmux_socket,
+            member,
+            choices_pending_max,
+        ) {
+            Ok(()) => {
+                clear_session_startup_failures(runtime_directory, member.id.as_str())?;
+                ready_session_count += 1;
+            }
+            Err(error) => failed_startups.push(member_failure_record(member, error)),
+        }
+    }
+    Ok((ready_session_count, failed_startups))
 }
 
 fn startup_loaded_bundle(
@@ -322,77 +497,16 @@ fn startup_loaded_bundle(
     // readiness; a Hello later flips a member online.
     register_configured_bundle_principals(bundle)?;
 
-    let mut ready_session_count = 0usize;
-    let mut failed_startups = Vec::<StartupFailureRecord>::new();
     let mut members = members_for_spawn(bundle, paths);
     members.sort_by(|left, right| left.id.cmp(&right.id));
 
-    for member in members {
-        match &member.target {
-            TargetConfiguration::Tmux(_) => match startup_tmux_member(tmux_socket, &member) {
-                Ok(()) => {
-                    clear_session_startup_failures(runtime_directory, member.id.as_str())?;
-                    ready_session_count += 1;
-                }
-                Err((code, reason, details)) => failed_startups.push(StartupFailureRecord {
-                    session_id: member.id.clone(),
-                    transport: ListedSessionTransport::Tmux,
-                    code,
-                    reason,
-                    timestamp: startup_timestamp(),
-                    sequence: 0,
-                    details,
-                }),
-            },
-            TargetConfiguration::Acp(_) => {
-                match initialize_acp_target_for_startup(
-                    bundle.bundle_name.as_str(),
-                    runtime_directory,
-                    &member,
-                    choices_pending_max,
-                ) {
-                    Ok(()) => {
-                        clear_session_startup_failures(runtime_directory, member.id.as_str())?;
-                        ready_session_count += 1;
-                    }
-                    Err((code, reason, details)) => failed_startups.push(StartupFailureRecord {
-                        session_id: member.id.clone(),
-                        transport: ListedSessionTransport::Acp,
-                        code,
-                        reason,
-                        timestamp: startup_timestamp(),
-                        sequence: 0,
-                        details,
-                    }),
-                }
-            }
-            // Pty startup is recorded as ready when the per-coder config
-            // resolves cleanly. The bootstrap path constructs the Pty
-            // transport lazily when the dispatcher first references it;
-            // for the v1 startup-count accounting we record Pty members
-            // as ready alongside Tmux / ACP. The full Pty bootstrap
-            // path lands alongside the bootstrap-side refactor
-            // (referenced from the add-pty-transport OpenSpec §8
-            // worker readiness; not implemented in this commit).
-            TargetConfiguration::Pty(_) => {
-                clear_session_startup_failures(runtime_directory, member.id.as_str())?;
-                ready_session_count += 1;
-            }
-            // `ui`/`pubsub` members have no implemented startup path; record a
-            // structured startup failure and exclude them from active routing.
-            TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
-                failed_startups.push(StartupFailureRecord {
-                    session_id: member.id.clone(),
-                    transport: member.target.session_type().into(),
-                    code: "runtime_session_type_not_implemented".to_string(),
-                    reason: "session type delivery is not yet implemented".to_string(),
-                    timestamp: startup_timestamp(),
-                    sequence: 0,
-                    details: None,
-                });
-            }
-        }
-    }
+    let (ready_session_count, failed_startups) = startup_members(
+        bundle.bundle_name.as_str(),
+        runtime_directory,
+        tmux_socket,
+        &members,
+        choices_pending_max,
+    )?;
 
     Ok(BundleStartupReport {
         ready_session_count,

@@ -844,23 +844,29 @@ pub(super) fn dispatch_raww(
     .expect("relay raww should parse")
 }
 
+/// Bundle paths for this module's flattened fixture layout.
+///
+/// Built rather than resolved: the fixture puts the socket directly in the
+/// temporary directory instead of under `bundles/party/`. These tests exercise
+/// ACP worker lifecycle, not path resolution, so the paths are stated to match
+/// the fixture and the state root coincides with the runtime directory.
+pub(super) fn flat_bundle_paths(root: &Path) -> BundleRuntimePaths {
+    BundleRuntimePaths {
+        state_root: root.to_path_buf(),
+        bundle_name: "party".to_string(),
+        runtime_directory: root.to_path_buf(),
+        tmux_socket: root.join("tmux.sock"),
+    }
+}
+
 fn startup_bundle(
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
 ) -> Result<(), agentmux::relay::RelayError> {
     ensure_fast_respawn_for_tests();
     let runtime_directory = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
-    // Built rather than resolved: this fixture flattens the layout, putting the
-    // socket directly in the temporary directory instead of under
-    // `bundles/party/`. These tests exercise ACP worker lifecycle, not path
-    // resolution, so the paths are stated to match the fixture and the state
-    // root coincides with the runtime directory.
-    let paths = BundleRuntimePaths {
-        state_root: runtime_directory.to_path_buf(),
-        bundle_name: "party".to_string(),
-        runtime_directory: runtime_directory.to_path_buf(),
-        tmux_socket: tmux_socket.to_path_buf(),
-    };
+    let mut paths = flat_bundle_paths(runtime_directory);
+    paths.tmux_socket = tmux_socket.to_path_buf();
     let _ = agentmux::relay::startup_bundle(config_root, &paths)?;
     Ok(())
 }

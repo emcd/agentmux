@@ -1,5 +1,57 @@
 ## MODIFIED Requirements
 
+### Requirement: Bundle Startup Evaluation Boundary
+
+Relay bundle startup SHALL evaluate outcomes in two deterministic phases:
+
+1. bundle preflight phase,
+2. per-session startup pass phase.
+
+When preflight succeeds, relay SHALL attempt startup for all configured
+sessions in that bundle during one startup pass.
+Startup outcome SHALL be computed after that startup pass completes.
+
+When preflight fails, relay SHALL:
+
+- mark bundle state as `down`,
+- set `state_reason_code=runtime_startup_failed`,
+- skip the per-session startup pass.
+
+Per-transport readiness predicates:
+
+- tmux session is ready when configured session exists and relay resolves an
+  active pane target.
+- ACP session is ready when its shared per-target worker can serve and lifecycle
+  selection succeeds (`session/load` or `session/new` per existing contract). A
+  worker busy with an in-flight turn can serve and SHALL be reported ready: an
+  agent's turn can last minutes, and treating it as unready would report a
+  healthy bundle as `degraded` — or a single-member bundle as `down` — for that
+  whole duration.
+
+Each per-transport predicate SHALL be evaluated identically wherever readiness is
+asserted, so a bring-up outcome and a list payload never disagree about whether
+one session is ready.
+
+#### Scenario: Attempt all configured sessions after successful preflight
+
+- **WHEN** preflight succeeds for a bundle startup request
+- **THEN** relay attempts startup for all configured sessions in that bundle
+- **AND** relay evaluates startup outcome only after the pass completes
+
+#### Scenario: Fail preflight before per-session startup pass
+
+- **WHEN** bundle preflight fails
+- **THEN** relay marks bundle `state=down`
+- **AND** sets `state_reason_code=runtime_startup_failed`
+- **AND** does not run the per-session startup pass
+
+#### Scenario: Report a busy ACP session as ready
+
+- **WHEN** a configured ACP session's worker is serving an in-flight turn
+- **THEN** the session is reported ready on the bring-up outcome and the list
+  payload alike
+- **AND** the bundle's state is not lowered on account of that session
+
 ### Requirement: Bundle Reconciliation
 
 The system SHALL provide a reconciliation operation that ensures all known
@@ -12,10 +64,14 @@ its caller. This matches the startup path, which already tolerates and records a
 per-session failure; a bundle is a set of sessions, and one failing is not a
 reason to withhold the rest.
 
-Reconciliation SHALL evaluate readiness for every configured session, not only
-for sessions it created, and SHALL apply the same readiness condition the
-startup path applies. A session that was created but is not ready SHALL be
-recorded as a failure rather than reported as a success.
+Reconciliation SHALL bring up every configured session through the same
+per-session startup step the startup path uses, and SHALL evaluate readiness from
+its result rather than from what reconciliation created. A session whose
+transport has no tmux session to create SHALL be started by that step rather than
+judged by observation alone; reporting such a session as failed because
+reconciliation never attempted to start it is a defect. A session that was
+started but is not ready SHALL be recorded as a failure rather than reported as a
+success.
 
 Errors that are not attributable to a single session — the bundle being absent
 from the runtime catalog, principal registration failing, or the session-state
@@ -54,6 +110,15 @@ query itself failing — SHALL continue to fail the whole operation.
 - **THEN** the system records it as a failed session with its cause
 - **AND** does not count it toward the bundle's ready sessions
 
+#### Scenario: Start a configured session that has no tmux session to create
+
+- **WHEN** reconciliation runs for a bundle whose configured sessions include a
+  transport that creates no tmux session
+- **THEN** the system starts that session through the same per-session startup
+  step the startup path uses
+- **AND** does not record it as failed on the grounds that it was not already
+  running
+
 #### Scenario: Evaluate readiness for an already-running session
 
 - **WHEN** reconciliation runs and a configured session already exists
@@ -91,7 +156,10 @@ Relay bundle lifecycle responses for `up/down` SHALL include:
 one configured session is ready afterward and at least one configured session
 failed to start. Readiness SHALL be the same condition the `Bundle Startup
 Health Model` requirement uses, so `degraded` names the same state on this
-contract that `startup_health` names on a list payload. It is a hosted outcome:
+contract that `startup_health` names on a list payload. One session SHALL NOT be
+ready on one of those surfaces and not ready on the other: a single readiness
+condition per transport SHALL serve both, since a word that resolves differently
+depending on which surface is asked names nothing. It is a hosted outcome:
 `changed_any` SHALL be true when
 `changed_bundle_count + degraded_bundle_count > 0`, and a degraded bundle SHALL
 NOT be counted in `failed_bundle_count`.

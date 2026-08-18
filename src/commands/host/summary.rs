@@ -2,7 +2,9 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     commands::{RelayHostStartupBundle, RelayHostStartupSummary, shared},
-    relay::{StartupFailureRecord, fold_startup_failures},
+    relay::{
+        NO_READY_SESSION_LEAD, PARTIAL_STARTUP_LEAD, StartupFailureRecord, fold_startup_failures,
+    },
     runtime::error::RuntimeError,
     runtime::inscriptions::emit_inscription,
 };
@@ -14,6 +16,10 @@ pub(super) fn build_startup_summary(
     let hosted_bundle_count = bundles
         .iter()
         .filter(|bundle| bundle.outcome == "hosted")
+        .count();
+    let degraded_bundle_count = bundles
+        .iter()
+        .filter(|bundle| bundle.outcome == "degraded")
         .count();
     let skipped_bundle_count = bundles
         .iter()
@@ -28,9 +34,12 @@ pub(super) fn build_startup_summary(
         host_mode: host_mode.to_string(),
         bundles,
         hosted_bundle_count,
+        degraded_bundle_count,
         skipped_bundle_count,
         failed_bundle_count,
-        hosted_any: hosted_bundle_count > 0,
+        // A degraded bundle is hosted: something in it is serving. Excluding it
+        // here would make a partially started relay look like it hosted nothing.
+        hosted_any: hosted_bundle_count + degraded_bundle_count > 0,
     }
 }
 
@@ -61,6 +70,10 @@ pub(super) fn startup_summary_payload(summary: &RelayHostStartupSummary) -> Valu
         json!(summary.hosted_bundle_count),
     );
     payload.insert(
+        "degraded_bundle_count".to_string(),
+        json!(summary.degraded_bundle_count),
+    );
+    payload.insert(
         "skipped_bundle_count".to_string(),
         json!(summary.skipped_bundle_count),
     );
@@ -83,6 +96,9 @@ pub(super) fn render_startup_summary(summary: &RelayHostStartupSummary) {
                 "bundle_count": summary.bundles.len(),
             }),
         ),
+    }
+    for bundle in &summary.bundles {
+        shared::render_failed_sessions(bundle.bundle_name.as_str(), bundle.details.as_ref());
     }
 }
 
@@ -121,19 +137,40 @@ pub(super) fn failed_autostart_bundle(
     bundle_name: &str,
     failed_startups: &[StartupFailureRecord],
 ) -> RelayHostStartupBundle {
-    let (reason, details) = match fold_startup_failures(failed_startups) {
-        Some(folded) => (folded.reason, Some(folded.details)),
-        None => (
-            "no configured session reached ready state".to_string(),
-            None,
-        ),
-    };
+    let (reason, details) = folded_reason(NO_READY_SESSION_LEAD, failed_startups);
     RelayHostStartupBundle {
         bundle_name: bundle_name.to_string(),
         outcome: "failed".to_string(),
         reason_code: Some("runtime_startup_failed".to_string()),
         reason: Some(reason),
         details,
+    }
+}
+
+/// Builds the summary for an autostart bundle that came up with at least one
+/// session ready and at least one session failing.
+///
+/// Without this the per-session causes the startup pass collected reach the
+/// operator only if they separately run `list` — the bundle reports an
+/// unqualified `hosted` and the failures are dropped on the floor.
+pub(super) fn degraded_startup_bundle(
+    bundle_name: &str,
+    failed_startups: &[StartupFailureRecord],
+) -> RelayHostStartupBundle {
+    let (reason, details) = folded_reason(PARTIAL_STARTUP_LEAD, failed_startups);
+    RelayHostStartupBundle {
+        bundle_name: bundle_name.to_string(),
+        outcome: "degraded".to_string(),
+        reason_code: Some("runtime_startup_failed".to_string()),
+        reason: Some(reason),
+        details,
+    }
+}
+
+fn folded_reason(lead: &str, failed_startups: &[StartupFailureRecord]) -> (String, Option<Value>) {
+    match fold_startup_failures(lead, failed_startups) {
+        Some(folded) => (folded.reason, Some(folded.details)),
+        None => (lead.to_string(), None),
     }
 }
 

@@ -18,11 +18,19 @@ reach the operator only if they separately run `list` or open the TUI.
   failure, matching the startup path's existing behaviour. Whole-bundle errors
   (catalog miss, principal registration failure, tmux state query failure)
   continue to fail fast.
-- Reconcile evaluates readiness for every configured member, rather than
-  treating a successful `new-session` as success and never inspecting a member it
-  did not create. A created-but-not-ready session becomes a recorded failure.
-  This is what lets the outcome reuse the `degraded` predicate rather than a
-  weaker one wearing the same name.
+- Reconcile brings up every configured member through the same per-session
+  startup step the startup path uses, rather than treating a successful
+  `new-session` as success and never inspecting a member it did not create. A
+  created-but-not-ready session becomes a recorded failure, and a member with no
+  tmux session to create — an ACP target — is started rather than judged by
+  observation. This is what lets the outcome reuse the `degraded` predicate
+  rather than a weaker one wearing the same name.
+- **BREAKING**: an ACP session whose worker is busy with an in-flight turn is
+  reported ready. The startup poll already accepted it; the `list` projection did
+  not, so a bundle whose ACP member was mid-turn reported `startup_health=degraded`
+  — or `state=down` when it was the only member — for the duration of the turn.
+  Making `up`'s outcome share that predicate forced the two to be reconciled, and
+  the list side was the wrong one.
 - **BREAKING**: the `up`/`down` transition payload gains `outcome=degraded` for
   a bundle that came up with at least one session failing, plus per-entry
   failure detail and a `degraded_bundle_count` aggregate. A consumer treating
@@ -55,7 +63,11 @@ None.
   `up`.
 - `bundle-lifecycle`: `Relay Bundle Lifecycle Result Contract` gains the
   `degraded` outcome and failed-session detail, and states that a per-session
-  startup failure does not fail the bundle transition.
+  startup failure does not fail the bundle transition; `Bundle Reconciliation`
+  states that reconcile brings up every configured session through the startup
+  path's per-session step; `Bundle Startup Evaluation Boundary` states that one
+  readiness predicate per transport serves every surface, and that a busy ACP
+  worker is ready.
 
 ## Impact
 
