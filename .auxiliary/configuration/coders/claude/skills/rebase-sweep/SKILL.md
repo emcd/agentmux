@@ -68,7 +68,25 @@ cd <worktree-path> && git rebase master
 Run these in parallel. If any rebase fails (conflict or error), report it
 immediately with the error output; do not abort the remaining rebases.
 
-### 7. Report results
+### 7. Repopulate agentsmgr-managed content in each worktree
+
+For each non-master worktree, run:
+
+```
+agentsmgr populate project 'github:emcd/agents-common@master#distribution' <worktree-path> --no-simulate
+```
+
+Run these in parallel, after all rebases in step 6 have succeeded. This content
+(`.auxiliary/agents/`, coder command/skill files, `.auxiliary/agents/standards/`)
+is agentsmgr-generated and git-excluded per worktree — each worktree has its own
+on-disk copy that a `git rebase` does not touch, since rebasing only replays
+tracked commits. Skipping this step leaves stale or orphaned generated content
+sitting in every worktree except whichever one last ran `agentsmgr populate`
+directly, and it silently accumulates: an old `instructions_target` output or a
+no-longer-distributed command file left behind by a prior template version does
+not get cleaned up on its own.
+
+### 8. Report results
 
 After all rebases complete, run `git worktree list` once more and display the
 final state. Flag any worktrees whose commit hash differs from master HEAD —
@@ -90,3 +108,6 @@ a situational awareness summary for the operator.
   treat it as unknown — report it and ask the operator before proceeding.
 - ACP sessions require human judgment for ambiguous snapshots. When in doubt,
   flag rather than classify as idle.
+- Run the agentsmgr populate step (7) only after every rebase in step 6 has
+  succeeded — a worktree still mid-conflict should not have its generated
+  content touched until the rebase itself is resolved.
