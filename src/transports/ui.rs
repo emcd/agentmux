@@ -279,11 +279,12 @@ impl Transport for UiTransport {
     }
 }
 
-/// Drives one UI delivery to a terminal [`SingleDeliveryOutcome`], polling for a
-/// UI to (re)connect up to `timeout`. Ports the relay's former
+/// Drives one UI delivery to a terminal [`SingleDeliveryOutcome`] in a single
+/// pass, with no wait for a UI to (re)connect. Ports the relay's former
 /// `deliver_one_target_ui` loop onto the injected broadcast closures: the
-/// `routed` phase probes connectivity, the `incoming_message` broadcast delivers
-/// the body, and `delivered`/`failed` phases mirror the terminal state to the UI.
+/// `routed` phase announces the attempt, the `incoming_message` broadcast
+/// delivers the body and is where an absent endpoint is discovered, and
+/// `delivered`/`failed` phases mirror the terminal state to the UI.
 fn run_ui_delivery(
     services: &UiTransportServices,
     message_id: String,

@@ -1,12 +1,41 @@
 use std::{
     collections::BTreeMap,
+    io::ErrorKind,
     path::{Path, PathBuf},
 };
 
 use super::{
-    ASSOCIATION_FILE, BUNDLE_EXTENSION, BUNDLES_DIRECTORY, CODERS_FILE, ConfigurationRoots,
-    POLICIES_FILE, RELAY_FILE, UI_FILE, USERS_FILE,
+    ASSOCIATION_FILE, BUNDLE_EXTENSION, BUNDLES_DIRECTORY, CODERS_FILE, ConfigurationError,
+    ConfigurationRoots, POLICIES_FILE, RELAY_FILE, UI_FILE, USERS_FILE,
 };
+
+/// What one layer answers for one candidate path.
+enum LayerAnswer {
+    Supplies,
+    DoesNotSupply,
+}
+
+/// Classifies one candidate path, distinguishing a layer that does not supply
+/// the file from a layer that cannot say.
+///
+/// Exactly one answer means the layer does not supply it: nothing exists at the
+/// path. Every other answer is about a path that *is* occupied, and each of them
+/// resolves to the same observable outcome if it is read as absence — a
+/// lower-precedence layer's value silently takes effect, which is the
+/// substitution this lookup exists to prevent. `NotADirectory` is included in
+/// the fault side deliberately: layer-list validation proves each supplied layer
+/// *root* is a directory and says nothing about intermediate components of a
+/// relative path beneath it.
+fn classify_candidate(candidate: &Path) -> Result<LayerAnswer, ConfigurationError> {
+    match std::fs::metadata(candidate) {
+        Ok(metadata) if metadata.is_file() => Ok(LayerAnswer::Supplies),
+        Ok(_) => Err(ConfigurationError::layer_path_not_a_file(candidate)),
+        // Also a dangling symlink, since `metadata` follows links exactly as the
+        // `is_file` probe this replaced did.
+        Err(source) if source.kind() == ErrorKind::NotFound => Ok(LayerAnswer::DoesNotSupply),
+        Err(source) => Err(ConfigurationError::unreadable_layer(candidate, source)),
+    }
+}
 
 /// The layer-supplied file for a path relative to the configuration roots: the
 /// first layer holding it as a regular file, or `None` when no layer does.
@@ -15,17 +44,24 @@ use super::{
 /// absent-file policy on top; source reporting needs the lookup without it,
 /// because a path synthesized for a file no layer supplies would be reported as
 /// though a layer supplied it.
-#[must_use]
+///
+/// `None` and `Err` are different answers on purpose. `None` means every layer
+/// was asked and none holds the file, which each artifact's own absence
+/// semantics then interpret. `Err` means a layer could not be asked, and the
+/// search stops there rather than continuing into the layers it was shadowing.
 pub fn supplied_configuration_path(
     roots: &ConfigurationRoots,
     relative: impl AsRef<Path>,
-) -> Option<PathBuf> {
+) -> Result<Option<PathBuf>, ConfigurationError> {
     let relative = relative.as_ref();
-    roots
-        .layers()
-        .iter()
-        .map(|layer| layer.join(relative))
-        .find(|candidate| candidate.is_file())
+    for layer in roots.layers() {
+        let candidate = layer.join(relative);
+        match classify_candidate(&candidate)? {
+            LayerAnswer::Supplies => return Ok(Some(candidate)),
+            LayerAnswer::DoesNotSupply => {}
+        }
+    }
+    Ok(None)
 }
 
 /// Resolves the effective file for a path relative to the configuration roots:
@@ -38,20 +74,23 @@ pub fn supplied_configuration_path(
 ///
 /// Falls back to the base layer when no layer holds it, so a missing file is
 /// reported against the location an operator would create it rather than
-/// against a layer that exists to shadow one.
-#[must_use]
+/// against a layer that exists to shadow one. That fallback answers genuine
+/// absence only: a layer that could not be read faults instead, because
+/// synthesizing a base-layer path there would report the file missing from a
+/// location nobody looked at while the layer that holds it goes unmentioned.
 pub fn effective_configuration_path(
     roots: &ConfigurationRoots,
     relative: impl AsRef<Path>,
-) -> PathBuf {
+) -> Result<PathBuf, ConfigurationError> {
     let relative = relative.as_ref();
-    supplied_configuration_path(roots, relative)
-        .unwrap_or_else(|| roots.base_layer().join(relative))
+    Ok(supplied_configuration_path(roots, relative)?
+        .unwrap_or_else(|| roots.base_layer().join(relative)))
 }
 
 /// Resolves path to shared coder definitions.
-#[must_use]
-pub fn coders_configuration_path(roots: &ConfigurationRoots) -> PathBuf {
+pub fn coders_configuration_path(
+    roots: &ConfigurationRoots,
+) -> Result<PathBuf, ConfigurationError> {
     effective_configuration_path(roots, CODERS_FILE)
 }
 
@@ -71,8 +110,10 @@ pub fn bundle_directory_layers(roots: &ConfigurationRoots) -> Vec<PathBuf> {
 
 /// Resolves path to one bundle definition file, an earlier layer shadowing a
 /// later one.
-#[must_use]
-pub fn bundle_configuration_path(roots: &ConfigurationRoots, bundle_name: &str) -> PathBuf {
+pub fn bundle_configuration_path(
+    roots: &ConfigurationRoots,
+    bundle_name: &str,
+) -> Result<PathBuf, ConfigurationError> {
     effective_configuration_path(
         roots,
         Path::new(BUNDLES_DIRECTORY).join(format!("{bundle_name}.{BUNDLE_EXTENSION}")),
@@ -83,23 +124,47 @@ pub fn bundle_configuration_path(roots: &ConfigurationRoots, bundle_name: &str) 
 /// earlier layer shadowing an entry of the same identifier in a later one.
 ///
 /// Bundle directories union rather than replace: whole-directory replacement
-/// would force a layer redefining one bundle to restate every other one. An
-/// unreadable directory contributes nothing, which is how the common case of a
-/// layer without a bundles directory resolves.
-#[must_use]
-pub fn effective_bundle_definitions(roots: &ConfigurationRoots) -> BTreeMap<String, PathBuf> {
+/// would force a layer redefining one bundle to restate every other one. A layer
+/// with no bundles directory contributes nothing, which is the ordinary case for
+/// a layer overriding only root-level artifacts.
+///
+/// Enumeration reaches the filesystem three times per layer — opening the
+/// directory, taking each iterator item, and typing each entry — and each is its
+/// own chance to turn a failure into an empty result. Only an absent directory
+/// is absence; everything else faults, so a layer never contributes a silently
+/// short set that reads as the definitions it holds.
+pub fn effective_bundle_definitions(
+    roots: &ConfigurationRoots,
+) -> Result<BTreeMap<String, PathBuf>, ConfigurationError> {
     let mut definitions = BTreeMap::new();
     // Reversed so the earliest layer is applied last and therefore wins.
     for directory in bundle_directory_layers(roots).into_iter().rev() {
-        let Ok(entries) = std::fs::read_dir(&directory) else {
-            continue;
+        let entries = match std::fs::read_dir(&directory) {
+            Ok(entries) => entries,
+            Err(source) if source.kind() == ErrorKind::NotFound => continue,
+            Err(source) => return Err(ConfigurationError::unreadable_layer(directory, source)),
         };
-        for entry in entries.flatten() {
+        for entry in entries {
+            // Not `flatten`: an item error truncates this layer's contribution
+            // while enumeration still reports success, which is the same
+            // substitution as an unreadable layer with less to show for it.
+            let entry =
+                entry.map_err(|source| ConfigurationError::unreadable_layer(&directory, source))?;
             let path = entry.path();
-            if !path.is_file()
-                || path.extension().and_then(|value| value.to_str()) != Some(BUNDLE_EXTENSION)
-            {
+            // Extension first, so an ordinary subdirectory or stray file under
+            // `bundles/` stays ignorable whatever its type, and only
+            // bundle-shaped names are held to being regular files.
+            if path.extension().and_then(|value| value.to_str()) != Some(BUNDLE_EXTENSION) {
                 continue;
+            }
+            match std::fs::metadata(&path) {
+                Ok(metadata) if metadata.is_file() => {}
+                Ok(_) => return Err(ConfigurationError::layer_path_not_a_file(path)),
+                // The entry was removed between enumeration and this probe. The
+                // removal raises its own filesystem event, so the watcher
+                // reconciles from that rather than from a fault here.
+                Err(source) if source.kind() == ErrorKind::NotFound => continue,
+                Err(source) => return Err(ConfigurationError::unreadable_layer(path, source)),
             }
             let Some(identifier) = path.file_stem().and_then(|value| value.to_str()) else {
                 continue;
@@ -107,30 +172,28 @@ pub fn effective_bundle_definitions(roots: &ConfigurationRoots) -> BTreeMap<Stri
             definitions.insert(identifier.to_string(), path);
         }
     }
-    definitions
+    Ok(definitions)
 }
 
 /// Resolves path to global user configuration file (`users.toml`).
-#[must_use]
-pub fn tui_configuration_path(roots: &ConfigurationRoots) -> PathBuf {
+pub fn tui_configuration_path(roots: &ConfigurationRoots) -> Result<PathBuf, ConfigurationError> {
     effective_configuration_path(roots, USERS_FILE)
 }
 
 /// Resolves path to UI-surface configuration file (`ui.toml`).
-#[must_use]
-pub fn ui_configuration_path(roots: &ConfigurationRoots) -> PathBuf {
+pub fn ui_configuration_path(roots: &ConfigurationRoots) -> Result<PathBuf, ConfigurationError> {
     effective_configuration_path(roots, UI_FILE)
 }
 
 /// Resolves path to authorization policy presets file.
-#[must_use]
-pub fn policies_configuration_path(roots: &ConfigurationRoots) -> PathBuf {
+pub fn policies_configuration_path(
+    roots: &ConfigurationRoots,
+) -> Result<PathBuf, ConfigurationError> {
     effective_configuration_path(roots, POLICIES_FILE)
 }
 
 /// Resolves path to relay settings file (`relay.toml`).
-#[must_use]
-pub fn relay_configuration_path(roots: &ConfigurationRoots) -> PathBuf {
+pub fn relay_configuration_path(roots: &ConfigurationRoots) -> Result<PathBuf, ConfigurationError> {
     effective_configuration_path(roots, RELAY_FILE)
 }
 
@@ -158,12 +221,14 @@ const ROOT_CONFIGURATION_ARTIFACTS: [&str; 6] = [
 /// exist and bury the ones that do. Bundle definitions are enumerated by
 /// [`effective_bundle_definitions`] instead, since they union a directory rather
 /// than resolve a single name.
-#[must_use]
 pub fn supplied_root_configuration_sources(
     roots: &ConfigurationRoots,
-) -> Vec<(&'static str, PathBuf)> {
-    ROOT_CONFIGURATION_ARTIFACTS
-        .into_iter()
-        .filter_map(|name| supplied_configuration_path(roots, name).map(|path| (name, path)))
-        .collect()
+) -> Result<Vec<(&'static str, PathBuf)>, ConfigurationError> {
+    let mut sources = Vec::new();
+    for name in ROOT_CONFIGURATION_ARTIFACTS {
+        if let Some(path) = supplied_configuration_path(roots, name)? {
+            sources.push((name, path));
+        }
+    }
+    Ok(sources)
 }

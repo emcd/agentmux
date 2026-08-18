@@ -17,9 +17,8 @@ use std::{
 
 use crate::{
     configuration::{
-        BUNDLE_EXTENSION, BUNDLES_DIRECTORY, ConfigurationError, ConfigurationRoots,
-        bundle_directory_layers, effective_bundle_definitions, load_ui_configuration,
-        supplied_root_configuration_sources,
+        BUNDLE_EXTENSION, BUNDLES_DIRECTORY, ConfigurationError, bundle_directory_layers,
+        effective_bundle_definitions, load_ui_configuration, supplied_root_configuration_sources,
     },
     relay::{RelayError, load_relay_runtime_configuration, preflight_bundle_configuration},
     runtime::{error::RuntimeError, starter::validate_supplied_configuration_layers},
@@ -61,11 +60,23 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
         .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
     let roots = shared::resolve_roots(&parsed.runtime)?;
 
+    // Findings that do not stop the run. This command is what an operator
+    // reaches for *because* something is wrong, so a layer it cannot read is the
+    // condition it exists to report rather than a reason to stop reporting.
+    // Collected here, rendered as they are found, and answered for at the end.
+    let mut findings: Vec<String> = Vec::new();
+
     // Discovery is a lookup, not validation, so it runs ahead of everything and
     // serves the source report and the validation loop from one enumeration. An
     // absent bundles directory yields no entries rather than an error, mirroring
     // the relay's own discovery.
-    let bundle_definitions = effective_bundle_definitions(&roots.configuration_roots);
+    let bundle_definitions = match effective_bundle_definitions(&roots.configuration_roots) {
+        Ok(definitions) => definitions,
+        Err(error) => {
+            findings.push(error.to_string());
+            BTreeMap::new()
+        }
+    };
     let bundle_names: Vec<String> = match parsed.bundle_id.as_deref() {
         Some(bundle_id) => vec![bundle_id.to_string()],
         None => bundle_definitions.keys().cloned().collect(),
@@ -77,13 +88,30 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
     // diagnosis the operator needs, and the error that follows names the layer
     // responsible. Withholding it there would blank the report on one of the few
     // runs that motivate having one.
+    // Resolved whether or not the report will be printed, so that an unreadable
+    // layer is a finding on the same terms in quiet mode. Tying the lookup to
+    // the flag would make `--quiet` change which policy the condition gets, not
+    // just how much is written.
+    let supplied_sources = match supplied_root_configuration_sources(&roots.configuration_roots) {
+        Ok(sources) => sources,
+        Err(error) => {
+            findings.push(error.to_string());
+            Vec::new()
+        }
+    };
     if !parsed.quiet {
         report_configuration_sources(
-            &roots.configuration_roots,
+            &supplied_sources,
             &bundle_definitions,
             &bundle_names,
             &current_directory,
         );
+    }
+
+    // Rendered before the checks that follow, so the operator sees the layer
+    // problem ahead of anything it caused rather than after.
+    for finding in &findings {
+        println!("finding: {finding}");
     }
 
     // A supplied layer that does not exist is reported rather than absorbed.
@@ -109,7 +137,11 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
     // defaults. An absent or valid ui.toml is a no-op.
     load_ui_configuration(&roots.configuration_roots).map_err(configuration_error_to_runtime)?;
 
-    if bundle_names.is_empty() {
+    // Suppressed when a layer could not be read: enumeration returned nothing
+    // because it could not look, and this error would name the wrong problem
+    // and abort ahead of the finding that explains it. The findings answer for
+    // the run instead.
+    if bundle_names.is_empty() && findings.is_empty() {
         return Err(RuntimeError::validation(
             "validation_no_bundles",
             // Every searched directory, not one: with an arbitrary layer list,
@@ -135,6 +167,17 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
             println!("ok: {bundle_name}");
         }
     }
+    // Answered for only after every other check has had its say. Reaching here
+    // with findings means the bundles that could be validated are valid and the
+    // configuration as a whole still is not, which is a failure — reporting it
+    // as success would leave the operator with a clean run and a deployment
+    // resolving from layers they did not intend.
+    if !findings.is_empty() {
+        return Err(RuntimeError::validation(
+            "validation_unreadable_configuration_layer",
+            findings.join("; "),
+        ));
+    }
     if !parsed.quiet {
         println!(
             "checked {} bundle configuration(s): all valid",
@@ -148,22 +191,23 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
 ///
 /// Runs before validation because validation is fail-fast: interleaving the two
 /// would truncate the report at the first invalid artifact, on precisely the run
-/// where the whole picture is most wanted. Resolving sources is a lookup that
-/// cannot fail, so it can complete first.
+/// where the whole picture is most wanted. The lookup that produces the sources
+/// can itself fault on an unreadable layer; that is recorded as a finding by the
+/// caller and does not stop the report, so what was resolvable is still shown.
 ///
 /// Only artifacts a layer actually supplies are reported. Bundles are scoped to
 /// the set being validated, so a run naming one bundle reports that bundle
 /// rather than every discoverable one.
 fn report_configuration_sources(
-    roots: &ConfigurationRoots,
+    supplied_sources: &[(&'static str, PathBuf)],
     bundle_definitions: &BTreeMap<String, PathBuf>,
     bundle_names: &[String],
     current_directory: &Path,
 ) {
-    for (name, path) in supplied_root_configuration_sources(roots) {
+    for (name, path) in supplied_sources {
         println!(
             "source {name}: {}",
-            physical_path(current_directory, &path).display()
+            physical_path(current_directory, path).display()
         );
     }
     for bundle_name in bundle_names {
@@ -254,6 +298,17 @@ fn configuration_error_to_runtime(error: ConfigurationError) -> RuntimeError {
             "validation_invalid_arguments",
             format!("invalid configuration {}: {}", path.display(), message),
         ),
+        // The structured code is the only axis carrying this condition: every
+        // failure exits `1`, so folding the layer fault into the generic
+        // argument code would make it indistinguishable from a malformed file
+        // at the one surface that reports on the distinction. Every other
+        // mapper across the runtime, relay, and MCP boundaries preserves it.
+        layer @ ConfigurationError::UnreadableConfigurationLayer { .. } => {
+            RuntimeError::validation(
+                "validation_unreadable_configuration_layer",
+                layer.to_string(),
+            )
+        }
         other => RuntimeError::validation("validation_invalid_arguments", other.to_string()),
     }
 }

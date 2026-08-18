@@ -595,6 +595,51 @@ fn check_configuration_quiet_still_reports_a_failure() {
 }
 
 #[test]
+fn check_configuration_keeps_the_layer_code_when_the_fault_arrives_through_a_root_artifact() {
+    // `ui.toml` is loaded through the configuration module rather than the relay
+    // pre-flight, so it crosses a different error mapper on its way out. Every
+    // failure exits `1`, which leaves the structured code as the only thing
+    // distinguishing "a layer could not be read" from "a file is malformed" —
+    // so a mapper that folds the first into the second erases the distinction
+    // at the one command that exists to report it.
+    //
+    // A directory occupying the artifact path, rather than a permission fixture:
+    // it faults for the same reason, and it runs everywhere the suite does. The
+    // relay artifacts resolve cleanly, so the run reaches the `ui.toml` mapper
+    // instead of failing earlier on a layer-wide fault.
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    let override_layer = temporary.path().join("override");
+    fs::create_dir_all(override_layer.join("ui.toml")).expect("occupy the ui.toml path");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "--configuration-directory",
+            override_layer.to_str().expect("override utf8"),
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    assert!(!output.status.success(), "the run must fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_unreadable_configuration_layer"),
+        "the layer fault must keep its code across the configuration mapper: {stderr}"
+    );
+    assert!(
+        stderr.contains(&override_layer.join("ui.toml").display().to_string()),
+        "the failure must name the occupied path: {stderr}"
+    );
+}
+
+#[test]
 fn check_configuration_rejects_unknown_subcommand() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args(["check", "everything"])

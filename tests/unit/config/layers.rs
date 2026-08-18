@@ -144,7 +144,8 @@ fn bundle_directories_union_by_identifier() {
 
     // Whole-directory replacement would force a layer redefining one bundle to
     // restate every other one.
-    let definitions = effective_bundle_definitions(&layered(&override_layer, &base));
+    let definitions =
+        effective_bundle_definitions(&layered(&override_layer, &base)).expect("enumeration");
     let identifiers: Vec<&str> = definitions.keys().map(String::as_str).collect();
     assert_eq!(identifiers, ["alpha", "beta"]);
     assert_eq!(definitions["alpha"], base.join("bundles/alpha.toml"));
@@ -247,7 +248,7 @@ fn a_missing_file_reports_against_the_base_layer() {
     // creation site a reader would infer; naming the override layer would
     // suggest the file must be created in the layer that exists to shadow one.
     assert_eq!(
-        effective_configuration_path(&layered(&override_layer, &base), "ui.toml"),
+        effective_configuration_path(&layered(&override_layer, &base), "ui.toml").expect("lookup"),
         base.join("ui.toml")
     );
 }

@@ -15,7 +15,7 @@ use crate::{
         BundleConfiguration, ConfigurationRoots, load_tui_configuration,
         policies_configuration_path, relay_configuration_path,
     },
-    relay::{POLICIES_FORMAT_VERSION, RelayError, relay_error},
+    relay::{POLICIES_FORMAT_VERSION, RelayError, errors::map_config, relay_error},
 };
 
 use super::context::{AuthorizationContext, PolicyControls, PolicyScope, UiSessionAuthorization};
@@ -267,7 +267,7 @@ fn default_updown_policy_scope() -> String {
 pub(super) fn load_policy_presets(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<(HashMap<String, PolicyControls>, Option<String>), RelayError> {
-    let policies_path = policies_configuration_path(configuration_roots);
+    let policies_path = policies_configuration_path(configuration_roots).map_err(map_config)?;
     let policies_raw = fs::read_to_string(&policies_path).map_err(|source| {
         relay_error(
             "validation_invalid_arguments",
@@ -348,7 +348,7 @@ pub(in crate::relay) fn load_authorization_context(
     configuration_roots: &ConfigurationRoots,
     bundle: Option<&BundleConfiguration>,
 ) -> Result<AuthorizationContext, RelayError> {
-    let policies_path = policies_configuration_path(configuration_roots);
+    let policies_path = policies_configuration_path(configuration_roots).map_err(map_config)?;
     let (presets, default_policy_id) = load_policy_presets(configuration_roots)?;
 
     let choices_pending_max =
@@ -684,7 +684,7 @@ fn relay_bool_env_override(variable: &str) -> Result<Option<bool>, RelayError> {
 fn load_relay_file_configuration(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<RelayFileConfiguration, RelayError> {
-    let path = relay_configuration_path(configuration_roots);
+    let path = relay_configuration_path(configuration_roots).map_err(map_config)?;
     if !path.exists() {
         return Ok(RelayFileConfiguration {
             watch_bundles: None,

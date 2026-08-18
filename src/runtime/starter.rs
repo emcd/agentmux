@@ -118,7 +118,17 @@ pub fn ensure_starter_configuration_layout(roots: &RuntimeRoots) -> Result<(), R
     // across layers, which makes a definition in any layer operator
     // configuration exactly as a base one is — seeding beside it would add a
     // live bundle to the effective set that the operator never wrote.
-    if effective_bundle_definitions(configuration_roots).is_empty() {
+    // Faults rather than seeding: a layer that cannot be enumerated is not a
+    // deployment with no bundles of its own, and treating it as one would write
+    // an example bundle into a live effective set the operator already
+    // populated.
+    let definitions = effective_bundle_definitions(configuration_roots).map_err(|source| {
+        RuntimeError::validation(
+            "validation_unreadable_configuration_layer",
+            format!("failed to enumerate bundle definitions: {source}"),
+        )
+    })?;
+    if definitions.is_empty() {
         ensure_template_file(
             &bundles_directory.join(EXAMPLE_BUNDLE_FILE),
             BUNDLE_TEMPLATE,

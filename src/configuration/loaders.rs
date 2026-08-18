@@ -36,7 +36,7 @@ use super::{
 pub fn load_bundle_group_memberships(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<Vec<BundleGroupMembership>, ConfigurationError> {
-    let definitions = effective_bundle_definitions(configuration_roots);
+    let definitions = effective_bundle_definitions(configuration_roots)?;
     let mut memberships = Vec::with_capacity(definitions.len());
     // Keyed by identifier and ordered by it, so a bundle only one layer defines
     // is enumerated, and a definition shadowing one of the same identifier in a
@@ -78,8 +78,8 @@ pub fn load_bundle_configuration(
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
 ) -> Result<BundleConfiguration, ConfigurationError> {
-    let coders_path = coders_configuration_path(configuration_roots);
-    let bundle_path = bundle_configuration_path(configuration_roots, bundle_name);
+    let coders_path = coders_configuration_path(configuration_roots)?;
+    let bundle_path = bundle_configuration_path(configuration_roots, bundle_name)?;
 
     if !bundle_path.exists() {
         return Err(ConfigurationError::UnknownBundle {
@@ -125,7 +125,7 @@ pub fn load_bundle_configuration(
 pub fn load_tui_configuration(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<Option<TuiConfiguration>, ConfigurationError> {
-    load_tui_configuration_file(&tui_configuration_path(configuration_roots))
+    load_tui_configuration_file(&tui_configuration_path(configuration_roots)?)
 }
 
 /// Loads global user configuration from an explicit file path.
@@ -176,7 +176,7 @@ pub fn load_tui_configuration_file(
 pub fn load_ui_configuration(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<Option<UiConfiguration>, ConfigurationError> {
-    let path = ui_configuration_path(configuration_roots);
+    let path = ui_configuration_path(configuration_roots)?;
     if !path.exists() {
         return Ok(None);
     }
@@ -207,7 +207,7 @@ pub fn load_ui_configuration(
 pub fn load_policy_ids(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<HashSet<String>, ConfigurationError> {
-    let path = policies_configuration_path(configuration_roots);
+    let path = policies_configuration_path(configuration_roots)?;
     let raw = fs::read_to_string(&path)
         .map_err(|source| ConfigurationError::io(format!("read {}", path.display()), source))?;
     let parsed = toml::from_str::<RawPoliciesFile>(&raw).map_err(|source| {

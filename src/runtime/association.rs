@@ -45,7 +45,13 @@ struct McpAssociationOverrideFile {
 pub fn load_local_mcp_overrides(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<Option<McpAssociationOverrides>, RuntimeError> {
-    let path = effective_configuration_path(configuration_roots, ASSOCIATION_FILE);
+    let path =
+        effective_configuration_path(configuration_roots, ASSOCIATION_FILE).map_err(|source| {
+            RuntimeError::validation(
+                "validation_unreadable_configuration_layer",
+                format!("failed to resolve local MCP override file: {source}"),
+            )
+        })?;
     if !path.exists() {
         return Ok(None);
     }

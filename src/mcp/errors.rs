@@ -68,6 +68,14 @@ pub(super) fn map_configuration_error(source: ConfigurationError) -> McpError {
                 "matches": matches,
             })),
         ),
+        ConfigurationError::UnreadableConfigurationLayer { path, source } => validation_tool_error(
+            "validation_unreadable_configuration_layer",
+            "configuration layer could not be read",
+            Some(json!({
+                "path": path.display().to_string(),
+                "cause": source.to_string(),
+            })),
+        ),
         ConfigurationError::Io { context, source } => internal_tool_error(
             "internal_unexpected_failure",
             "failed to load bundle configuration",
