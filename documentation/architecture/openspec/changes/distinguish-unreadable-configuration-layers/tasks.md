@@ -8,14 +8,17 @@
 ## 2. Fallible Lookup
 
 - [ ] 2.1 Replace `Path::is_file` in `supplied_configuration_path` with an
-  `fs::metadata` probe classifying `NotFound` and `NotADirectory` as absence and
-  every other error as the new fault; return
-  `Result<Option<PathBuf>, ConfigurationError>`
+  `fs::metadata` probe classifying `NotFound` alone as absence and every other
+  error — plus a path occupied by something other than a regular file — as the
+  new fault; return `Result<Option<PathBuf>, ConfigurationError>`
 - [ ] 2.2 Make `effective_configuration_path` fallible, retaining its
   base-layer fallback for genuine absence
-- [ ] 2.3 Make `effective_bundle_definitions` fallible, faulting on a `read_dir`
-  error other than `NotFound`/`NotADirectory` and continuing to contribute
-  nothing for a layer with no `bundles/` directory
+- [ ] 2.3 Make `effective_bundle_definitions` fallible at each of the three
+  points it reads the filesystem: `read_dir` faults on anything but `NotFound`,
+  iterator items are no longer discarded by `flatten`, and a `.toml` entry that
+  is not a regular file faults; a layer with no `bundles/` directory continues
+  to contribute nothing and a non-`.toml` entry is still ignored whatever its
+  type
 - [ ] 2.4 Thread the `Result` through the five per-artifact path helpers and
   `supplied_root_configuration_sources`
 
@@ -33,8 +36,8 @@
 
 ## 4. Coverage
 
-- [ ] 4.1 Unit coverage for the classification: absence for `NotFound` and
-  `NotADirectory`, fault for `PermissionDenied`, supplied for a readable file
+- [ ] 4.1 Unit coverage for the classification: absence for `NotFound`, fault
+  for `PermissionDenied` and for `NotADirectory`, supplied for a readable file
 - [ ] 4.2 Integration coverage for an unreadable earlier layer with a valid
   later layer, asserting the fault names the earlier layer and that the later
   layer's value is not used, for a required and an optional artifact
@@ -44,6 +47,13 @@
   faults, driven by making a layer unreadable rather than by injecting an error
 - [ ] 4.5 Gate the permission fixtures on `unix` and skip when running as root,
   reporting the skip rather than passing vacuously
+- [ ] 4.6 Coverage for a non-file occupying an artifact path and for a directory
+  named `<identifier>.toml` under `bundles/`, both faulting rather than
+  resolving from a later layer. These need no permission fixture, so they run
+  everywhere the suite does, including as root
+- [ ] 4.7 Integration coverage for `check configuration`'s full policy against
+  an unreadable layer: the finding is rendered, the checks after it still run,
+  and the command fails
 
 ## 5. Documentation
 

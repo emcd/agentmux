@@ -16,13 +16,20 @@ each supplied element is a directory.
 
 ## What Changes
 
-- Effective-file lookup becomes fallible and distinguishes `NotFound` (ordinary
-  absence) from permission or I/O failure (a fault carrying the physical path
-  and cause). Optional-artifact semantics are unchanged: absence of `mcp.toml`,
-  `users.toml`, or `ui.toml` from every layer remains absence.
-- Bundle-directory enumeration becomes fallible on the same distinction. A layer
-  with no `bundles/` directory continues to contribute nothing, which is the
-  common case; a `bundles/` directory that exists and cannot be read is a fault.
+- Effective-file lookup becomes fallible, with `NotFound` the only condition
+  that still means this layer does not supply the file. Permission and I/O
+  failure fault, carrying the physical path and cause, and so does an artifact
+  path occupied by something other than a regular file — a directory named
+  `coders.toml` shadows a lower layer's copy exactly as an unreadable one does.
+  Optional-artifact semantics are unchanged: absence of `mcp.toml`, `users.toml`,
+  or `ui.toml` from every layer remains absence.
+- Bundle-directory enumeration becomes fallible on the same distinction, at each
+  of the three points it touches the filesystem: opening the directory, reading
+  each iterator item, and typing each entry. A layer with no `bundles/`
+  directory continues to contribute nothing, which is the common case; a
+  `bundles/` directory that exists and cannot be read is a fault, as is a
+  per-entry failure that would otherwise truncate one layer's contribution while
+  enumeration still appeared to succeed.
 - Consumers select their own policy rather than inheriting a uniform fail-fast.
   Startup and configuration load fault; `check configuration` reports the
   unreadable layer as a finding; the relay watcher holds its last good

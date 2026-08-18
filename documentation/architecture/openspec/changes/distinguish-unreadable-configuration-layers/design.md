@@ -52,28 +52,62 @@ the same outage by a different route.
 
 ## Decisions
 
-### Probe with `fs::metadata` and classify by `io::ErrorKind`
+### Probe with `fs::metadata`, and treat only `NotFound` as absence
 
 `supplied_configuration_path` replaces `is_file()` with `fs::metadata(&candidate)`
 and classifies:
 
 - `Ok(metadata)` where `metadata.is_file()` — this layer supplies the file.
-- `Ok(metadata)` otherwise — this layer does not supply it. See the residual
-  below.
 - `Err(NotFound)` — this layer does not supply it. Also covers a dangling
   symlink, matching today's behavior, since `metadata` follows links exactly as
   `is_file` does.
-- `Err(NotADirectory)` — this layer does not supply it. A non-directory
-  component cannot contain the file, and layer-level type errors are already
-  caught by list validation. Stable since Rust 1.83; the crate requires 1.90.
-- `Err(_)` — fault, carrying the candidate path and the `io::Error`.
+- Everything else — fault, carrying the candidate path and the `io::Error`.
+
+Exactly one condition means "this layer does not supply the file": nothing is at
+that path. Every other answer is a statement about a path that *is* occupied, and
+under fallthrough all of them produce the same single symptom — a lower layer's
+value takes effect while the operator believes the higher one is in force. That
+symptom is the whole subject of this change, so the classification is drawn
+around what the lookup can actually prove rather than around which errors feel
+like configuration mistakes.
+
+Two cases this sweeps in are worth naming, because they are the ones an
+absence-leaning classification would keep:
+
+- **`Ok(metadata)` where the path is not a regular file** — a directory named
+  `coders.toml` in an earlier layer. Deterministic and visible to anyone who
+  looks, but nothing prompts an operator to look: the deployment resolves
+  configuration successfully from the layer beneath.
+- **`Err(NotADirectory)`** — a path component that must be a directory is a
+  regular file, such as a layer whose `bundles` is a file while
+  `bundles/<name>.toml` is looked up. Layer-list validation does not cover this:
+  it proves each supplied *layer root* is a directory, and says nothing about
+  intermediate components of a relative artifact path beneath it.
 
 Alternative considered: check `PermissionDenied` specifically and treat all other
 errors as absence. Rejected — it inverts the safe default. The failure mode this
 change exists to prevent is a lookup answering "absent" when it does not know,
-and an unenumerated error kind would silently rejoin that class. Faulting on the
-unknown case is the conservative direction, and every kind we can name as
-genuinely meaning "not here" is named above.
+and an unenumerated error kind would silently rejoin that class.
+
+### Enumeration classifies at three points, not one
+
+Bundle enumeration reaches the filesystem three times per layer, and each is its
+own opportunity to convert failure into an empty result:
+
+- **Opening the directory.** `read_dir` returning `NotFound` means the layer has
+  no `bundles/`, which is ordinary for a layer overriding only root-level
+  artifacts. Every other error faults, on the same terms as the lookup above.
+- **Each iterator item.** `ReadDir` yields `Result<DirEntry>`, and the current
+  `entries.flatten()` discards the `Err` arm — a per-entry failure mid-directory
+  silently truncates that layer's contribution rather than the whole of it, which
+  is the same defect in a form that is harder to see because enumeration still
+  appears to succeed. Item errors fault.
+- **Typing each entry.** The extension is tested first, so a non-`.toml` entry is
+  skipped whatever its type and an ordinary subdirectory under `bundles/` stays
+  ordinary. A `.toml` entry must then be a regular file; if it is not, or if its
+  metadata cannot be read, that faults. `NotFound` here alone is skipped: it means
+  the entry was removed between enumeration and the probe, and the watcher
+  reconciles from the filesystem event that removal raises.
 
 ### A distinct `ConfigurationError` variant rather than reusing `Io`
 
@@ -118,6 +152,19 @@ surface does with a reported failure is that surface's decision:
   *because* something is wrong; aborting on the first unreadable layer withholds
   every other finding in the same run. It collects the fault as a finding and
   continues, and its exit status reflects that a finding was recorded.
+
+  The process exit status carries no room to say more: `src/bin/agentmux.rs`
+  maps every failure to `1` and every success to `0`. What distinguishes an
+  unreadable layer from the command's other findings is therefore the structured
+  error code, which is the axis the command already reports on, rather than a
+  new numeric status that would have to be invented across every subcommand to
+  mean anything.
+
+  An unreadable layer also disarms one existing report: enumeration that faults
+  yields no bundle definitions, and the pre-existing "no bundle configurations
+  found" error would then name the wrong problem and abort ahead of the finding
+  that explains it. That error is suppressed when enumeration faulted — there is
+  no evidence for it, only an absence of evidence.
 - **The relay watcher** retains its last successful reconciliation. Per the
   Context above, both the current behavior and a naive fail-fast produce an
   outage. `reconcile_bundles` returns `()`; it gains an early return on a
@@ -144,20 +191,27 @@ artifacts beneath it, so the probe would license an assumption it cannot support
 - **Signature churn across 28 call sites in 8 files** → The change is mechanical
   where callers are already fallible, which is most of them. The three surfaces
   with genuine policy decisions are enumerated above and are the review focus.
+- **The iterator-item arm has no test that drives it** → A `ReadDir` item error
+  comes from a `readdir` call failing partway through a directory, which no
+  portable fixture can arrange. The arm is covered by construction — removing
+  `flatten` makes the `Err` unignorable at the type level — and deliberately
+  gets no test, since one written against a condition that never occurs would
+  pass whatever the arm did.
 - **Test fixtures require a mode-0 directory** → Coverage is Unix-only and
   cannot run as root, where the mode is not enforced. Gate the tests on
   `unix` and skip when `geteuid() == 0`, reporting the skip rather than passing
   vacuously. A test asserting a fault that silently never exercises the
   unreadable path is worse than no test.
-- **Residual: a non-file at a layer's artifact path still reads as absence** →
-  A directory named `coders.toml` in an earlier layer causes the same silent
-  fallthrough this change closes for permission errors. It is deterministic and
-  visible to an operator rather than invisible, so it is out of scope here, but
-  it is the same defect class. See Open Questions.
 - **A newly-surfaced fault may break a deployment that was silently tolerating
   an unreadable layer** → Acceptable and intended: such a deployment is already
   resolving configuration its operator did not author. Alpha defaults apply, so
   no compatibility shim.
+- **Faulting on a non-file artifact path widens what breaks** → A deployment
+  parking a directory at an artifact path, or shadowing a name with a
+  non-regular file, now faults where it previously fell through. This is the
+  intended reach of the change and not a separate risk: the fallthrough it
+  replaces is the same silent substitution, differing only in being reproducible
+  once someone thinks to look.
 
 ## Migration Plan
 
@@ -166,10 +220,4 @@ surface, file format, or wire contract moves. Rollback is a revert.
 
 ## Open Questions
 
-1. Should a non-file present at a layer's artifact path (a directory named
-   `coders.toml`) fault rather than read as absence? It is the same silent-
-   fallthrough class, but deterministic and operator-visible. Folding it in
-   costs one match arm and one scenario; leaving it out keeps this change to the
-   condition the issue names.
-2. Should `check configuration`'s exit status distinguish an unreadable layer
-   from other findings, or is "a finding was recorded" sufficient?
+None.
