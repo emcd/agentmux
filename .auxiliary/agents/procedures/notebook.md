@@ -19,7 +19,6 @@ Use consistent tags for discoverability:
 - **Task Type**: `#task-<type>` (e.g., `#task-design`, `#task-bug`)
 - **Status**: `#status-<state>` (e.g., `#status-in-progress`, `#status-review`)
 - **Coordination**: `#handoff`, `#coordination`
-- **Milestone**: `#milestone-<version>` (e.g., `#milestone-0-9-0`, hyphens not dots) marks an item's release allocation. This is the sole source of truth for milestone membership — milestone notes (`coordination/general/16`, `/18`, ...) hold narrative only and must not restate item-by-item lists. Query membership with `nb_list(tags: ["milestone-0-9-0"])`; see `procedures/general/1` in the notebook for the full convention and rationale. Exception: OpenSpec proposal ids (`add-*`) can't carry nb tags, so their milestone allocation stays in the relevant milestone note's prose. **"Narrative" is scoped narrowly**: theme, arc-level operator directives, and OpenSpec proposal allocations only. Dispatch status, investigation logs, triage tables, and checkpoint-by-checkpoint history do not belong here even in prose form — that content belongs on the individual item's own note (its detailed history/evidence), or in the relevant rolling handoff (see Handoff Hygiene below) if it's short-lived operating state. A milestone note that grows into an append-only chronicle of everything that happened is the same anti-pattern the Handoff Hygiene section warns against for handoff notes, just relocated — trim it back to narrative rather than letting it accumulate.
 - **Assignment**: Avoid owner tags (for example `#llm-*`) for task ownership. Use lane/folder ownership and explicit owner text in the note body when needed.
 
 ## Common Patterns
@@ -48,8 +47,9 @@ Use consistent tags for discoverability:
 - Use `decisions/` only when the project wants optional durable rationale notes outside OpenSpec or architecture README files.
 - When an idea promotes to a formal OpenSpec proposal, delete or archive the notebook draft so the OpenSpec file is the canonical record.
 - Example component names include `engine`, `mcp`, `tui`, `web`, `handbook`, and `data-models`.
-- This project should define and document its specific component-folder conventions in the **Project Notes** section.
-- For cross-component work, prefer `coordination/general` and use multiple `#component-*` tags. See Handoff Hygiene below for per-component rolling handoffs.
+- This project should define and document its specific component-folder conventions in @.auxiliary/agents/project.md.
+- For cross-component work, prefer `coordination/general` and use multiple `#component-*` tags.
+- For per-component rolling handoffs, prefer `coordination/<component>` (one stable note updated at checkpoints).
 - Keep notebook lifecycle hygiene:
     - prune completed todos quickly,
     - keep only active/near-term coordination checkpoints,
@@ -63,18 +63,10 @@ Use consistent tags for discoverability:
 - For each active OpenSpec proposal, keep **exactly one** linked `nb` todo as the tracking anchor (with proposal reference), rather than duplicating full task trees in both systems.
 
 ## Handoff Hygiene
-- Use `coordination/<component>` as the active handoff lane for each owner (for example `coordination/relay`, `coordination/mcp`, `coordination/tui`). Use `coordination/general` for coordinator-wide state and cross-component snapshots.
-- Keep one rolling handoff note per component and update it in place instead of creating a new note for each checkpoint, separate from OpenSpec proposal content. Do not repurpose or overwrite rolling handoff notes with proposal content.
+- Use `coordination/<component>` for per-component rolling handoffs (one stable note per component, updated in place). Use `coordination/general` for coordinator-wide state and cross-component snapshots.
+- Keep rolling handoff notes separate from OpenSpec proposal content. Do not repurpose or overwrite rolling handoff notes with proposal content.
 - Handoff content should be a brief summary of recent accomplishments and the current agenda. Replace the note body rather than appending so the handoff stays one screenful; a growing checkpoint log is an anti-pattern.
-- For cross-component notes, apply multiple `#component-*` tags. Prefer pruning stale/superseded coordination checkpoints while preserving the current per-component handoff context.
-- **Updates are conditional, not routine.** Update only when (a) another lane or the Coordinator needs visibility into a state change that isn't otherwise discoverable (git log, nb todo/issue status, OpenSpec `tasks.md`), or (b) the session is genuinely ending — not merely compacting — such that the next pickup may be a cold session rather than a continuation of this one. In-session compaction already produces an automatic continuity summary for that same session's own next turn; approaching compaction is not by itself a reason to update a handoff note.
-
-### Handoff notes vs. milestone notes vs. memory (2026-07-30)
-
-Three mechanisms can look like they overlap; they don't, and each has a job the others don't cover:
-
-- **Memory** (Claude Code's persistent, cross-session memory system) holds durable lessons, facts, and preferences — never in-flight task state.
-- **Milestone notes** (`coordination/general/16`, `/18`, ...) hold release-scoped narrative only: theme, arc-level directives, OpenSpec proposal allocations. See the Tagging Conventions section above.
-- **Rolling handoff notes** (this section) hold current *operating* state: what's in flight right now, active holds, dispatch/review status. This is the one mechanism that survives a cold start — a brand-new conversation with no prior context, as opposed to an in-session compaction, which already gets an automatic continuity summary. That's why a handoff note matters most for whoever is the durable point of cross-lane continuity (typically Coordinator) and matters less for a single self-contained lane, whose own context is usually sufficient without one.
-
-When something needs to be recorded, ask which of these three it actually is before writing it into whichever note happens to be open. A dispatch chronicle or investigation trail does not belong in a milestone note (write it on the item's own note instead, or the handoff if it's short-lived); a durable policy or lesson does not belong in a handoff note (it belongs in memory).
+- **Updates are conditional, not routine.** Do not refresh a handoff after every task, review round, or status ping.
+- **Primary update point: before compaction (or a genuine session end).** When the conversation is about to compact or the session is ending such that the next pickup may be a cold start, rewrite the handoff so the next agent has operating state without relying on chat history. That is the default reason to touch the note.
+- **Secondary update point:** when another lane or the coordinator needs visibility into a state change that is not otherwise discoverable from git log, `nb` todo/issue status, or OpenSpec `tasks.md`.
+- In-session continuity after compaction is not a substitute for a handoff when the next actor may be a different session or seat; still prefer one pre-compaction rewrite over many mid-flight tweaks.

@@ -51,8 +51,10 @@
       "Bash(openspec *)",
       "Bash(awk *)",
       "Bash(cat *)",
+      "Bash(comm *)",
       "Bash(cut *)",
       "Bash(df *)",
+      "Bash(diff *)",
       "Bash(du *)",
       "Bash(echo *)",
       "Bash(file *)",
@@ -84,6 +86,7 @@
       "Bash(git ls-files *)",
       "Bash(git ls-tree *)",
       "Bash(git merge-base *)",
+      "Bash(git merge-tree *)",
       "Bash(git range-diff *)",
       "Bash(git rebase *)",
       "Bash(git restore *)",
@@ -99,7 +102,10 @@
       "Bash(head *)",
       "Bash(ls *)",
       "Bash(mkdir *)",
+      "Bash(nbspec *)",
+      "Bash(nl *)",
       "Bash(npm run *)",
+      "Bash(od *)",
       "Bash(openspec *)",
       "Bash(ps *)",
       "Bash(pwd *)",
@@ -107,9 +113,12 @@
       "Bash(sed *)",
       "Bash(sort *)",
       "Bash(tail *)",
+      "Bash(true)",
+      "Bash(true *)",
       "Bash(uniq *)",
       "Bash(wc *)",
-      "Bash(which *)"
+      "Bash(which *)",
+      "Bash(xxd *)"
     ]
   },
   "sandbox": {

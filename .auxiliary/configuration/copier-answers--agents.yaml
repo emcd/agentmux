@@ -1,5 +1,5 @@
 # Changes here will be overwritten by Copier
-_commit: v1.0a12-25-ge0f3797
+_commit: v1.0a13
 _src_path: gh:emcd/agents-common
 coders:
 - claude
@@ -7,10 +7,40 @@ coders:
 - opencode
 instructions_sources:
 -   files:
-        '*.rst':
+        conduct.rst:
+            strip_header_lines: 20
+        environment.rst:
+            strip_header_lines: 20
+        maintenance.rst:
+            strip_header_lines: 20
+        nomenclature-germanic.rst:
+            strip_header_lines: 20
+        nomenclature-latin.rst:
+            strip_header_lines: 20
+        nomenclature.rst:
+            strip_header_lines: 20
+        practices-python.rst:
+            strip_header_lines: 20
+        practices-rust.rst:
+            strip_header_lines: 20
+        practices-toml.rst:
+            strip_header_lines: 20
+        practices.rst:
+            strip_header_lines: 20
+        python-autoformat.rst:
+            strip_header_lines: 20
+        releases.rst:
+            strip_header_lines: 20
+        requirements.rst:
+            strip_header_lines: 20
+        style.rst:
+            strip_header_lines: 20
+        tests.rst:
+            strip_header_lines: 20
+        validation.rst:
             strip_header_lines: 20
     source: github:emcd/python-project-common@docs-1#documentation/common
-instructions_target: .auxiliary/instructions
+instructions_target: .auxiliary/agents/standards
 languages:
 - rust
 project_bundle_name: agentmux
