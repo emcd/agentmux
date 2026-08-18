@@ -38,7 +38,10 @@ use super::lifecycle::{
     register_configured_bundle_principals, shutdown_bundle_runtime, startup_bundle,
 };
 use super::stream::evict_streams_for_bundle;
-use super::{RelayError, RelayResponse, StartupFailureRecord, fold_startup_failures};
+use super::{
+    NO_READY_SESSION_LEAD, PARTIAL_STARTUP_LEAD, RelayError, RelayResponse, StartupFailureRecord,
+    fold_startup_failures,
+};
 
 /// Debounce window for coalescing rapid filesystem events. Long enough to ride
 /// over an editor's write-temp-then-rename save sequence (so a single logical
@@ -362,6 +365,8 @@ fn load_new_bundle(
                 &json!({
                     "bundle_name": bundle_name,
                     "ready_session_count": report.ready_session_count,
+                    "failed_session_count": report.failed_startups.len(),
+                    "failed_sessions": partial_startup_detail(&report.failed_startups),
                 }),
             );
         }
@@ -434,6 +439,8 @@ fn reload_bundle(
                     "bundle_name": bundle_name,
                     "evicted_session_count": evicted_session_count,
                     "ready_session_count": report.ready_session_count,
+                    "failed_session_count": report.failed_startups.len(),
+                    "failed_sessions": partial_startup_detail(&report.failed_startups),
                 }),
             );
         }
@@ -489,13 +496,23 @@ fn unload_bundle(catalog: &BundleCatalog, bundle_name: &str, state: &mut Reconci
 /// each session failed rather than emitting the blanket "nothing became ready"
 /// placeholder. With no recorded failures (for example a bundle that configures
 /// no sessions) it keeps the plain placeholder.
+/// Returns the structured per-session failure detail for a load/reload that left
+/// something ready, or `None` when nothing failed.
+///
+/// A load that succeeds partially is still a success, so it is not recorded as a
+/// failed load — but the sessions that did fail have to appear somewhere, or the
+/// only trace of them is a `ready_session_count` lower than the operator expected.
+fn partial_startup_detail(failed_startups: &[StartupFailureRecord]) -> Option<serde_json::Value> {
+    fold_startup_failures(PARTIAL_STARTUP_LEAD, failed_startups).map(|folded| folded.details)
+}
+
 fn record_no_ready_session_failure(
     bundle_name: &str,
     failed_startups: &[StartupFailureRecord],
     state: &mut ReconcileState,
     fingerprint: [u8; 32],
 ) {
-    match fold_startup_failures(failed_startups) {
+    match fold_startup_failures(NO_READY_SESSION_LEAD, failed_startups) {
         Some(folded) => record_load_failure(
             bundle_name,
             &folded.reason,

@@ -16,6 +16,46 @@ use crate::{
 
 use super::{LOOK_LINES_MAXIMUM, LOOK_LINES_MINIMUM, RuntimeArguments};
 
+/// Prints one line per session that failed to come up, so a partially started
+/// bundle names its casualties in the command's own output rather than requiring
+/// the operator to follow up with `list`.
+///
+/// Shared by both bring-up surfaces — `up`'s transition summary and the relay
+/// host's startup summary — because a partial startup that reads one way on one
+/// of them and another way on the other is the problem this exists to close.
+/// `details` is the entry's structured detail; anything without a
+/// `failed_sessions` array renders nothing.
+pub(super) fn render_failed_sessions(bundle_name: &str, details: Option<&serde_json::Value>) {
+    let Some(failed_sessions) = details
+        .and_then(|details| details.get("failed_sessions"))
+        .and_then(serde_json::Value::as_array)
+    else {
+        return;
+    };
+    for failed_session in failed_sessions {
+        let session_id = failed_session
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("<unknown>");
+        let reason = failed_session
+            .get("reason")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("<unknown>");
+        let cause = failed_session
+            .get("details")
+            .and_then(|details| details.get("cause"))
+            .and_then(serde_json::Value::as_str);
+        match cause {
+            Some(cause) => {
+                println!(
+                    "  session={session_id} bundle={bundle_name} reason={reason} cause={cause}"
+                )
+            }
+            None => println!("  session={session_id} bundle={bundle_name} reason={reason}"),
+        }
+    }
+}
+
 pub(super) fn parse_runtime_flag(
     arguments: &[String],
     index: &mut usize,

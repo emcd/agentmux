@@ -1,6 +1,7 @@
 use std::{
     fs,
-    process::{Command, Stdio},
+    path::PathBuf,
+    process::{Child, Command, Stdio},
 };
 
 use serde_json::Value;
@@ -158,6 +159,217 @@ fn up_and_down_report_idempotent_transitions() {
         process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT)
             .expect("wait for relay host");
     assert!(host_output.status.success(), "host should succeed");
+}
+
+/// A relay host plus a bundle whose members the fake tmux can be told to leave
+/// without a pane, so a session that exists but is not ready is produced without
+/// depending on how fast anything exits.
+struct BundleCliHarness {
+    _temporary: TempDir,
+    config_root: PathBuf,
+    state_root: PathBuf,
+    inscriptions_root: PathBuf,
+    fake_tmux: PathBuf,
+    host: Option<Child>,
+}
+
+impl BundleCliHarness {
+    fn start(members: &[&str]) -> Self {
+        let temporary = TempDir::new().expect("temporary");
+        let config_root = temporary.path().join("config");
+        let state_root = temporary.path().join("state");
+        let inscriptions_root = temporary.path().join("inscriptions");
+        fs::create_dir_all(&config_root).expect("create config root");
+        fs::create_dir_all(&state_root).expect("create state root");
+        fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+        write_bundle_configuration_with_options(&config_root, "alpha", None, members, Some(false));
+        let fake_tmux = temporary.path().join("fake-tmux.sh");
+        write_fake_tmux_script(&fake_tmux);
+
+        let host = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .args([
+                "host",
+                "relay",
+                "--no-autostart",
+                "--configuration-directory",
+                &config_root.to_string_lossy(),
+                "--state-directory",
+                &state_root.to_string_lossy(),
+                "--inscriptions-directory",
+                &inscriptions_root.to_string_lossy(),
+            ])
+            .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn agentmux host relay --no-autostart");
+        wait_for_relay_ready(&state_root, "alpha");
+
+        Self {
+            _temporary: temporary,
+            config_root,
+            state_root,
+            inscriptions_root,
+            fake_tmux,
+            host: Some(host),
+        }
+    }
+
+    fn run(&self, arguments: &[&str]) -> std::process::Output {
+        Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .args(arguments)
+            .args([
+                "--configuration-directory",
+                &self.config_root.to_string_lossy(),
+                "--state-directory",
+                &self.state_root.to_string_lossy(),
+                "--inscriptions-directory",
+                &self.inscriptions_root.to_string_lossy(),
+            ])
+            .env("AGENTMUX_TMUX_COMMAND", &self.fake_tmux)
+            .output()
+            .unwrap_or_else(|source| panic!("run agentmux {arguments:?}: {source}"))
+    }
+}
+
+impl Drop for BundleCliHarness {
+    fn drop(&mut self) {
+        shutdown_relay_if_present(&self.state_root, "alpha");
+        if let Some(host) = self.host.take() {
+            let _ = process::wait_with_output_bounded(host, process::HARNESS_CHILD_WAIT_DEFAULT);
+        }
+    }
+}
+
+#[test]
+fn up_reports_a_partially_started_bundle_as_degraded_and_names_the_failed_session() {
+    let harness = BundleCliHarness::start(&["a", "u"]);
+    // `u` is created like any other member; it just never yields a pane, so it
+    // is the created-but-not-ready case rather than a creation failure.
+    mark_fake_tmux_session_unready(&harness.fake_tmux, "u");
+
+    let up = harness.run(&["up", "alpha"]);
+    assert!(up.status.success(), "up should not fail the transition");
+    let summary = parse_summary_json_line(&up.stdout);
+
+    assert_eq!(summary["bundles"][0]["outcome"], "degraded");
+    assert_eq!(summary["degraded_bundle_count"], 1);
+    assert_eq!(summary["changed_bundle_count"], 0);
+    assert_eq!(summary["failed_bundle_count"], 0);
+    assert_eq!(summary["changed_any"], true);
+    let failed_sessions = summary["bundles"][0]["details"]["failed_sessions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected failed_sessions detail: {summary}"));
+    assert_eq!(failed_sessions.len(), 1, "unexpected detail: {summary}");
+    assert_eq!(failed_sessions[0]["session_id"], "u");
+
+    let stdout = String::from_utf8_lossy(&up.stdout);
+    assert!(
+        stdout.contains("session=u") && stdout.contains("degraded=1"),
+        "up text output should name the failed session: {stdout}"
+    );
+
+    // The failure `up` reported has to be the one a following `list` reports, or
+    // the two surfaces tell the operator different stories about one bundle.
+    let listed = harness.run(&["list", "principals", "--namespace", "alpha", "--json"]);
+    assert!(listed.status.success(), "list should succeed");
+    let listed_json: Value = serde_json::from_slice(&listed.stdout).expect("decode list payload");
+    let failures = listed_json["bundle"]["recent_startup_failures"]
+        .as_array()
+        .expect("startup failures array");
+    assert!(
+        failures.iter().any(|failure| failure["session_id"] == "u"),
+        "up's recorded failure should reach list: {listed_json}"
+    );
+
+    // Nothing is created on the second pass, so an outcome derived from what
+    // changed would report `skipped` here. It stays degraded because the outcome
+    // comes from readiness, evaluated across members `up` did not create.
+    let second_up = harness.run(&["up", "alpha"]);
+    assert!(second_up.status.success(), "second up should succeed");
+    let second_summary = parse_summary_json_line(&second_up.stdout);
+    assert_eq!(second_summary["bundles"][0]["outcome"], "degraded");
+    assert_eq!(second_summary["degraded_bundle_count"], 1);
+}
+
+#[test]
+fn up_continues_reconciling_after_a_member_fails_to_be_created() {
+    let harness = BundleCliHarness::start(&["a", "u"]);
+    // `a` sorts first and is therefore the bootstrap member — the site that used
+    // to propagate the first creation error and abandon every remaining member,
+    // leaving the bundle partly up while reporting a total failure.
+    fail_fake_tmux_session_creation(&harness.fake_tmux, "a");
+
+    let up = harness.run(&["up", "alpha"]);
+    assert!(up.status.success(), "up should not fail the transition");
+    let summary = parse_summary_json_line(&up.stdout);
+
+    assert_eq!(summary["bundles"][0]["outcome"], "degraded");
+    let failed_sessions = summary["bundles"][0]["details"]["failed_sessions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected failed_sessions detail: {summary}"));
+    assert_eq!(failed_sessions.len(), 1, "unexpected detail: {summary}");
+    assert_eq!(failed_sessions[0]["session_id"], "a");
+    assert_eq!(
+        failed_sessions[0]["reason"],
+        "failed to create tmux session during reconciliation"
+    );
+
+    // The member after the failed bootstrap must still have been attempted.
+    let listed = harness.run(&["list", "principals", "--namespace", "alpha", "--json"]);
+    let listed_json: Value = serde_json::from_slice(&listed.stdout).expect("decode list payload");
+    let principals = listed_json["bundle"]["principals"]
+        .as_array()
+        .expect("principals array");
+    let surviving = principals
+        .iter()
+        .find(|principal| principal["id"] == "u@alpha")
+        .unwrap_or_else(|| panic!("expected surviving member in list: {listed_json}"));
+    assert_eq!(
+        surviving["ready"], true,
+        "the member after the failed bootstrap should still be up: {listed_json}"
+    );
+}
+
+#[test]
+fn up_reports_a_bundle_with_no_ready_session_as_failed() {
+    let harness = BundleCliHarness::start(&["a", "u"]);
+    mark_fake_tmux_session_unready(&harness.fake_tmux, "a");
+    mark_fake_tmux_session_unready(&harness.fake_tmux, "u");
+
+    let up = harness.run(&["up", "alpha"]);
+    let summary = parse_summary_json_line(&up.stdout);
+
+    // Both sessions were created; neither is ready. `degraded` would claim the
+    // bundle has something serving, so the outcome has to be `failed`.
+    assert_eq!(summary["bundles"][0]["outcome"], "failed");
+    assert_eq!(summary["failed_bundle_count"], 1);
+    assert_eq!(summary["degraded_bundle_count"], 0);
+    assert_eq!(summary["changed_any"], false);
+    let failed_sessions = summary["bundles"][0]["details"]["failed_sessions"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected failed_sessions detail: {summary}"));
+    assert_eq!(failed_sessions.len(), 2, "unexpected detail: {summary}");
+}
+
+#[test]
+fn up_still_fails_whole_operation_for_an_error_no_single_session_owns() {
+    let harness = BundleCliHarness::start(&["a", "u"]);
+    // A tmux state query that fails is not attributable to one session, so the
+    // per-session tolerance must not swallow it into a partial result.
+    fail_fake_tmux_state_queries(&harness.fake_tmux);
+
+    let up = harness.run(&["up", "alpha"]);
+    assert!(
+        !up.status.success(),
+        "up should fail outright: {}",
+        String::from_utf8_lossy(&up.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&up.stderr);
+    assert!(
+        stderr.contains("internal_unexpected_failure"),
+        "unexpected stderr: {stderr}"
+    );
 }
 
 #[test]

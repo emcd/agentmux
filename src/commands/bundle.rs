@@ -59,6 +59,7 @@ pub(super) fn run_bundle_command(
                     outcome: entry.outcome.clone(),
                     reason_code: entry.reason_code.clone(),
                     reason: entry.reason.clone(),
+                    details: entry.details.clone(),
                 });
             }
             RelayResponse::Error { error } => return Err(shared::map_relay_error(error)),
@@ -173,6 +174,10 @@ fn build_transition_summary(
         .iter()
         .filter(|bundle| matches!(bundle.outcome.as_str(), "hosted" | "unhosted"))
         .count();
+    let degraded_bundle_count = bundles
+        .iter()
+        .filter(|bundle| bundle.outcome == "degraded")
+        .count();
     let skipped_bundle_count = bundles
         .iter()
         .filter(|bundle| bundle.outcome == "skipped")
@@ -189,9 +194,13 @@ fn build_transition_summary(
         },
         bundles,
         changed_bundle_count,
+        degraded_bundle_count,
         skipped_bundle_count,
         failed_bundle_count,
-        changed_any: changed_bundle_count > 0,
+        // A degraded bundle came up; it just did not come up whole. Leaving it
+        // out would report `changed_any=false` for a transition that started
+        // sessions.
+        changed_any: changed_bundle_count + degraded_bundle_count > 0,
     }
 }
 
@@ -211,6 +220,7 @@ fn transition_summary_payload(summary: &BundleTransitionSummary) -> Value {
                         "outcome": bundle.outcome,
                         "reason_code": bundle.reason_code,
                         "reason": bundle.reason,
+                        "details": bundle.details,
                     })
                 })
                 .collect::<Vec<_>>(),
@@ -219,6 +229,10 @@ fn transition_summary_payload(summary: &BundleTransitionSummary) -> Value {
     payload.insert(
         "changed_bundle_count".to_string(),
         json!(summary.changed_bundle_count),
+    );
+    payload.insert(
+        "degraded_bundle_count".to_string(),
+        json!(summary.degraded_bundle_count),
     );
     payload.insert(
         "skipped_bundle_count".to_string(),
@@ -243,9 +257,10 @@ fn render_transition_summary(summary: &BundleTransitionSummary) {
         }
     }
     println!(
-        "agentmux {} summary changed={} skipped={} failed={} changed_any={}",
+        "agentmux {} summary changed={} degraded={} skipped={} failed={} changed_any={}",
         summary.action,
         summary.changed_bundle_count,
+        summary.degraded_bundle_count,
         summary.skipped_bundle_count,
         summary.failed_bundle_count,
         summary.changed_any,
@@ -266,5 +281,6 @@ fn render_transition_summary(summary: &BundleTransitionSummary) {
             }
             _ => println!("bundle={} outcome={}", bundle.bundle_name, bundle.outcome),
         }
+        shared::render_failed_sessions(bundle.bundle_name.as_str(), bundle.details.as_ref());
     }
 }

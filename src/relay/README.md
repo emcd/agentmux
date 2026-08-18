@@ -114,6 +114,32 @@ exported from `src/relay/mod.rs`.
     configuration through the same `load_bundle_configuration` +
     `load_authorization_context` path startup uses, with no tmux or runtime
     side effects (backs `agentmux check configuration`).
+  - **A per-session startup failure does not fail a bring-up.** Both
+    `startup_loaded_bundle` and `reconcile_loaded_bundle` record the failing
+    session's cause and carry on with the rest: a bundle is a set of sessions,
+    and one failing is not a reason to withhold the others. Errors no single
+    session owns — a tmux state query, a prune, principal registration, a
+    panicked reconcile worker, a failed history write — still fail the whole
+    operation, because a pass that cannot say what it did has nothing to report.
+  - Both passes bring up **every configured member** through the one
+    `startup_member` helper, and report `ready_session_count` from its results
+    rather than from what they created. Reconcile's tmux phase creates only tmux
+    sessions, so without this an ACP member — which has no session to create —
+    would be judged by observation alone and reported failed for the sole reason
+    that `up` never tried to start it. `startup_member` is idempotent per
+    transport, so a repeated pass over a healthy bundle changes nothing.
+  - `session_ready_for_list` (in `handlers/listing.rs`) is deliberately **not**
+    that helper — it answers "is this member serving right now", where
+    `startup_member` answers "bring it up and tell me whether it is serving" —
+    but it applies the same per-transport **condition**: `resolve_active_pane_target`
+    for tmux, `acp_readiness_is_ready` for ACP. One session must not be ready on
+    one surface and failed on the other, because `degraded` is defined as one
+    state across `up` and `list`.
+  - **`Busy` is ready.** An ACP worker serving a turn can serve, so it counts
+    ready on both surfaces. The startup poll always accepted `Available | Busy`
+    while the list projection accepted only `Available`, which reported a bundle
+    whose ACP member was mid-turn as `degraded` — or as `down` if it was the only
+    member — for the whole turn. Both now read `acp_readiness_is_ready`.
 - `stream.rs`
   - hello-frame parser, the unified session registry, identity collision
     handling, and event writer routing. The registry is one

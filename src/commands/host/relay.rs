@@ -20,8 +20,8 @@ use crate::{
     configuration::load_bundle_group_memberships,
     relay::{
         BundleCatalog, ConnectionDrainCoordinator, ConnectionServeContext, HostingIntent,
-        PeerConnectionManager, append_startup_failure, configure_delivery,
-        configured_undelivered_reporting, report_undelivered_queue, serve_connection,
+        PeerConnectionManager, configure_delivery, configured_undelivered_reporting,
+        persist_startup_failures, report_undelivered_queue, serve_connection,
         shutdown_bundle_runtime, spawn_bundle_watcher, startup_bundle,
         wait_for_async_delivery_shutdown,
     },
@@ -49,7 +49,7 @@ use crate::commands::{
 };
 
 use super::summary::{
-    build_startup_summary, failed_autostart_bundle, failed_startup_bundle,
+    build_startup_summary, degraded_startup_bundle, failed_autostart_bundle, failed_startup_bundle,
     failed_startup_bundle_from_relay_error, hosted_startup_bundle, render_startup_summary,
     skipped_startup_bundle, startup_summary_payload,
 };
@@ -925,48 +925,40 @@ fn host_selected_bundle(
                 );
             }
         };
-        for failure in &report.failed_startups {
-            let persisted = match append_startup_failure(&paths.runtime_directory, failure.clone())
-            {
-                Ok(value) => value,
-                Err(cause) => {
-                    return (
-                        RelayHostStartupBundle {
-                            bundle_name: bundle_name.to_string(),
-                            outcome: "failed".to_string(),
-                            reason_code: Some("runtime_startup_failed".to_string()),
-                            reason: Some(format!(
-                                "failed to persist startup failure history: {cause}"
-                            )),
-                            details: None,
-                        },
-                        None,
-                    );
-                }
-            };
-            emit_inscription(
-                "relay.session_start_failed",
-                &json!({
-                    "bundle_name": bundle_name,
-                    "session_id": persisted.session_id,
-                    "transport": persisted.transport,
-                    "code": persisted.code,
-                    "reason": persisted.reason,
-                    "timestamp": persisted.timestamp,
-                    "sequence": persisted.sequence,
-                    "details": persisted.details,
-                }),
-            );
+        let mut report = report;
+        match persist_startup_failures(
+            bundle_name,
+            &paths.runtime_directory,
+            &report.failed_startups,
+        ) {
+            Ok(persisted) => report.failed_startups = persisted,
+            Err(cause) => {
+                return (
+                    RelayHostStartupBundle {
+                        bundle_name: bundle_name.to_string(),
+                        outcome: "failed".to_string(),
+                        reason_code: Some("runtime_startup_failed".to_string()),
+                        reason: Some(format!(
+                            "failed to persist startup failure history: {cause}"
+                        )),
+                        details: None,
+                    },
+                    None,
+                );
+            }
         }
         startup_report = Some(report);
     }
     let startup_bundle = match startup_mode {
         RelayHostStartupMode::Autostart => {
             let report = startup_report.expect("autostart report must be present");
-            if report.ready_session_count > 0 {
-                hosted_startup_bundle(bundle_name)
-            } else {
-                failed_autostart_bundle(bundle_name, &report.failed_startups)
+            match (
+                report.ready_session_count > 0,
+                report.failed_startups.is_empty(),
+            ) {
+                (true, true) => hosted_startup_bundle(bundle_name),
+                (true, false) => degraded_startup_bundle(bundle_name, &report.failed_startups),
+                (false, _) => failed_autostart_bundle(bundle_name, &report.failed_startups),
             }
         }
         RelayHostStartupMode::ProcessOnly => skipped_startup_bundle(

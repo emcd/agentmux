@@ -256,6 +256,20 @@ pub fn append_startup_failure(
     startup_state::append_startup_failure(runtime_directory, record)
 }
 
+/// Persists and announces a bring-up pass's per-session startup failures,
+/// returning the persisted records.
+///
+/// # Errors
+///
+/// Returns the history-write failure cause when a record cannot be persisted.
+pub fn persist_startup_failures(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    failures: &[StartupFailureRecord],
+) -> Result<Vec<StartupFailureRecord>, String> {
+    startup_state::persist_and_announce_startup_failures(bundle_name, runtime_directory, failures)
+}
+
 /// Waits for async delivery workers to stop after shutdown is requested.
 ///
 /// Returns the number of workers still running when timeout is reached.

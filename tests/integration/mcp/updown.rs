@@ -22,6 +22,7 @@ async fn updown_up_returns_bundle_transition_from_relay() {
                         }
                     ],
                     "changed_bundle_count": 1,
+                    "degraded_bundle_count": 0,
                     "skipped_bundle_count": 0,
                     "failed_bundle_count": 0,
                     "changed_any": true,
@@ -46,6 +47,7 @@ async fn updown_up_returns_bundle_transition_from_relay() {
     assert_eq!(payload["schema_version"], "1");
     assert_eq!(payload["action"], "up");
     assert_eq!(payload["changed_bundle_count"], 1);
+    assert_eq!(payload["degraded_bundle_count"], 0);
     assert_eq!(payload["skipped_bundle_count"], 0);
     assert_eq!(payload["failed_bundle_count"], 0);
     assert_eq!(payload["changed_any"], true);
@@ -78,6 +80,7 @@ async fn updown_down_returns_bundle_transition_from_relay() {
                         }
                     ],
                     "changed_bundle_count": 1,
+                    "degraded_bundle_count": 0,
                     "skipped_bundle_count": 0,
                     "failed_bundle_count": 0,
                     "changed_any": true,
@@ -128,6 +131,7 @@ async fn updown_up_forwards_skipped_outcome_unchanged() {
                         }
                     ],
                     "changed_bundle_count": 0,
+                    "degraded_bundle_count": 0,
                     "skipped_bundle_count": 1,
                     "failed_bundle_count": 0,
                     "changed_any": false,

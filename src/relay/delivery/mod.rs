@@ -9,7 +9,7 @@ mod partition;
 mod quiescence;
 
 pub(in crate::relay) use self::async_worker::{
-    acp_session_ready_for_startup, get_output_view, get_worker_readiness,
+    acp_session_is_ready, get_output_view, get_worker_readiness,
 };
 pub use self::choice_state::install_pending_choice_request_for_testing;
 pub(in crate::relay) use self::choice_state::{

@@ -22,8 +22,8 @@ pub(in crate::relay::delivery) use self::registry::{
     wait_for_async_delivery_shutdown, worker_exists,
 };
 pub(in crate::relay) use self::registry::{
-    acp_session_ready_for_startup, get_output_view, get_worker_failure, get_worker_readiness,
-    install_acp_worker_output_view, set_worker_failure, set_worker_readiness,
+    acp_readiness_is_ready, acp_session_is_ready, get_output_view, get_worker_failure,
+    get_worker_readiness, install_acp_worker_output_view, set_worker_failure, set_worker_readiness,
 };
 
 /// Test-only registry seam: installs an entry directly, so a test can make a

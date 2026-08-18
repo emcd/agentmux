@@ -102,15 +102,22 @@ pub struct StartupFailureRecord {
     pub details: Option<Value>,
 }
 
+/// Lead phrase for a bundle in which nothing reached ready state.
+pub const NO_READY_SESSION_LEAD: &str = "no configured session reached ready state";
+
+/// Lead phrase for a bundle that came up with at least one session ready and at
+/// least one session failing to start.
+pub const PARTIAL_STARTUP_LEAD: &str = "bundle came up with failed sessions";
+
 /// A folded operator-facing reason plus structured detail for a set of
 /// per-session startup failures.
 ///
-/// Both the relay-host autostart summary and the bundle-watcher load/reload path
-/// give up on a bundle when no configured session reaches ready state. Rather than
-/// each surface independently re-deriving (and drifting on) the "why", they share
-/// this fold: [`reason`](Self::reason) names each failed session and its cause
-/// inline, and [`details`](Self::details) carries the structured per-session
-/// records under a `failed_sessions` key.
+/// Every surface that reports per-session startup failures — the relay-host
+/// autostart summary, the bundle-watcher load/reload path, and the `up`
+/// transition — shares this fold rather than independently re-deriving (and
+/// drifting on) the "why": [`reason`](Self::reason) names each failed session and
+/// its cause inline, and [`details`](Self::details) carries the structured
+/// per-session records under a `failed_sessions` key.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FoldedStartupFailures {
     /// Human-readable summary naming each failed session and its cause.
@@ -123,7 +130,13 @@ pub struct FoldedStartupFailures {
 /// structured detail, or `None` when there are no recorded failures (for example a
 /// bundle that configures no sessions) — the caller then keeps its plain "nothing
 /// became ready" placeholder rather than inventing a per-session breakdown.
+///
+/// `lead` names the condition the caller observed ([`NO_READY_SESSION_LEAD`] or
+/// [`PARTIAL_STARTUP_LEAD`]); a partial startup and a total one differ only in
+/// that phrase, so the failure count, the joining, and the `failed_sessions`
+/// detail shape stay owned here.
 pub fn fold_startup_failures(
+    lead: &str,
     failed_startups: &[StartupFailureRecord],
 ) -> Option<FoldedStartupFailures> {
     if failed_startups.is_empty() {
@@ -147,10 +160,7 @@ pub fn fold_startup_failures(
         })
         .collect::<Vec<_>>();
     Some(FoldedStartupFailures {
-        reason: format!(
-            "no configured session reached ready state ({} failed) -- {joined}",
-            failed_startups.len()
-        ),
+        reason: format!("{lead} ({} failed) -- {joined}", failed_startups.len()),
         details: json!({ "failed_sessions": failed_sessions }),
     })
 }
@@ -202,11 +212,23 @@ pub struct SendResult {
 }
 
 /// Reconciliation results for one bundle reconciliation pass.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+///
+/// `created_sessions` and `pruned_sessions` record what the pass *changed*;
+/// `ready_session_count` and `failed_startups` record what the bundle *is*
+/// afterward, evaluated across every configured session rather than only the ones
+/// this pass created. The two are independent: a bundle whose sessions were all
+/// already running and ready changes nothing yet is fully ready, and a session
+/// this pass created can still fail to become ready.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 pub struct ReconciliationReport {
     pub bootstrap_session: Option<String>,
     pub created_sessions: Vec<String>,
     pub pruned_sessions: Vec<String>,
+    /// Configured sessions that are not ready after the pass, each carrying the
+    /// cause — a creation failure, or a session that exists but is not ready.
+    pub failed_startups: Vec<StartupFailureRecord>,
+    /// Configured sessions that satisfy the readiness condition after the pass.
+    pub ready_session_count: usize,
 }
 
 /// Managed-session cleanup results for relay shutdown.
@@ -269,7 +291,7 @@ pub struct RelayStreamEvent {
 }
 
 /// Per-bundle transition result for `up`/`down`.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct BundleTransitionEntry {
     pub bundle_name: String,
     pub outcome: String,
@@ -277,6 +299,10 @@ pub struct BundleTransitionEntry {
     pub reason_code: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Structured detail for the outcome; carries `failed_sessions` when the
+    /// transition recorded per-session startup failures.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<Value>,
 }
 
 /// Where the relay delivers a minted or rotated PSK.
@@ -411,6 +437,7 @@ pub enum RelayResponse {
         action: String,
         bundles: Vec<BundleTransitionEntry>,
         changed_bundle_count: usize,
+        degraded_bundle_count: usize,
         skipped_bundle_count: usize,
         failed_bundle_count: usize,
         changed_any: bool,

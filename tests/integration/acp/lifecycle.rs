@@ -3,11 +3,114 @@ use std::{
     time::{Duration, Instant},
 };
 
-use agentmux::relay::SendOutcome;
+use agentmux::relay::{ListedBundleState, RelayResponse, SendOutcome};
 use serde_json::Value;
 use tempfile::TempDir;
 
 use super::helpers::*;
+
+/// `up` has to *start* an ACP member, not merely observe one.
+///
+/// Reconcile creates tmux sessions and nothing else, so an ACP target has no
+/// session for it to create. Judging such a member by observation alone reports
+/// it failed for the sole reason that `up` never tried to start it — which makes
+/// an ACP-only bundle impossible to bring up with `up` at all.
+#[test]
+fn reconcile_starts_acp_members_rather_than_reporting_them_failed() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions::default();
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let paths = flat_bundle_paths(temporary.path());
+
+    let report = agentmux::relay::reconcile_bundle(&config_root, &paths)
+        .expect("reconcile an ACP-only bundle");
+
+    assert!(
+        report.failed_startups.is_empty(),
+        "ACP members must not be recorded as failures: {:?}",
+        report.failed_startups
+    );
+    assert_eq!(
+        report.ready_session_count, 2,
+        "both configured ACP members should have been started"
+    );
+    assert_eq!(report.created_sessions, Vec::<String>::new());
+
+    // Repeating the pass must not re-register the workers or start a second
+    // agent process for the same target.
+    let second = agentmux::relay::reconcile_bundle(&config_root, &paths)
+        .expect("reconcile is idempotent for ACP members");
+    assert!(second.failed_startups.is_empty());
+    assert_eq!(second.ready_session_count, 2);
+}
+
+/// `up` and `list` must call the same ACP session ready.
+///
+/// A worker mid-turn reports `Busy`. The startup poll has always accepted
+/// `Available | Busy`, while the `list` projection accepted only `Available` — so
+/// a bundle whose sole ACP member was serving a turn could be `hosted` on one
+/// surface and `down` on the other, for the whole duration of the turn. That
+/// disagreement is what `degraded` was defined to rule out, so both now read one
+/// acceptance set.
+///
+/// Asserting only the reconcile side would prove nothing: it accepted `Busy`
+/// before this change too. The `list` side is what discriminates.
+#[test]
+fn a_busy_acp_session_reads_ready_on_both_up_and_list() {
+    let temporary = TempDir::new().expect("temporary");
+    let options = AcpStubOptions {
+        never_respond_to_prompt: true,
+        ..AcpStubOptions::default()
+    };
+    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let tmux_socket = temporary.path().join("tmux.sock");
+    let mut worker_state = subscribe_bravo_worker_state(temporary.path());
+
+    // Leaves a turn in flight, holding bravo's worker in `Busy`.
+    let _ = dispatch_send(&config_root, &tmux_socket);
+    await_acp_worker_state(
+        &mut worker_state,
+        WorkerReadinessState::Busy,
+        Duration::from_secs(5),
+    );
+
+    let listed = agentmux::relay::handle_request(
+        agentmux::relay::RelayRequest::List {
+            requester_session: Some("alpha".to_string()),
+        },
+        &config_root,
+        "party",
+        temporary.path(),
+    )
+    .expect("list the bundle while a turn is in flight");
+    let RelayResponse::List { bundle, .. } = listed else {
+        panic!("expected a list response");
+    };
+    let bravo = bundle
+        .principals
+        .iter()
+        .find(|principal| principal.id == "bravo@party")
+        .expect("bravo in list payload");
+    assert!(
+        bravo.ready,
+        "a session mid-turn is serving, not down: {:?}",
+        bundle.principals
+    );
+    assert_eq!(bundle.state, ListedBundleState::Up);
+
+    let report =
+        agentmux::relay::reconcile_bundle(&config_root, &flat_bundle_paths(temporary.path()))
+            .expect("reconcile while a turn is in flight");
+    assert!(
+        report.failed_startups.is_empty(),
+        "a busy member must not be recorded as a startup failure: {:?}",
+        report.failed_startups
+    );
+    assert_eq!(
+        report.ready_session_count, 2,
+        "up and list must agree about the same session"
+    );
+}
 
 #[test]
 fn acp_send_selects_session_new_without_coder_session_id() {

@@ -166,6 +166,7 @@ pub(super) struct RelayHostStartupSummary {
     pub(super) host_mode: String,
     pub(super) bundles: Vec<RelayHostStartupBundle>,
     pub(super) hosted_bundle_count: usize,
+    pub(super) degraded_bundle_count: usize,
     pub(super) skipped_bundle_count: usize,
     pub(super) failed_bundle_count: usize,
     pub(super) hosted_any: bool,
@@ -177,6 +178,7 @@ pub(super) struct BundleTransitionResult {
     pub(super) outcome: String,
     pub(super) reason_code: Option<String>,
     pub(super) reason: Option<String>,
+    pub(super) details: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -185,6 +187,7 @@ pub(super) struct BundleTransitionSummary {
     pub(super) action: String,
     pub(super) bundles: Vec<BundleTransitionResult>,
     pub(super) changed_bundle_count: usize,
+    pub(super) degraded_bundle_count: usize,
     pub(super) skipped_bundle_count: usize,
     pub(super) failed_bundle_count: usize,
     pub(super) changed_any: bool,
