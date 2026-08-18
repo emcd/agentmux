@@ -5,7 +5,7 @@
   is the one direction from which the non-coupling of health and history can be
   demonstrated rather than merely asserted: an implementation that read the
   history to decide health would report `degraded` here
-- [ ] 1.2 Coverage that a successful delivery to a session clears its persisted
+- [x] 1.2 Coverage that a successful delivery to a session clears its persisted
   startup-failure records, driven through the delivery path rather than by
   calling the clearing helper directly. The delta names two observations that
   clear a record, and the delivery-side one is the trigger no test exercises as
