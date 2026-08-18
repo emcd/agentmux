@@ -63,10 +63,14 @@ Task 4.1's claim above that the source-side half was "done and clean — no
 `SendOutcome::Timeout` and no `timeout` outcome spelling survives anywhere in
 `src/` or `tests/`" was false when written and is still false: a comment in
 `src/relay/delivery/async_worker/terminal.rs:199` reads "...rather than as
-`failed` or `timeout`", a bare-word hit the sweep missed. FE caught this
-2026-08-18 while reconciling a held correction commit that `establish-delivery-
-commit-contract`'s reconnect-wait removal had since obsoleted, and handed the
-one-word fix to BE to fold into their next commit on that file rather than
-carry it as a standalone branch. Recorded here rather than edited into the
-original sentence, since this document is a historical record of what task 4.1
-found at archive time, not a live claim.
+`failed` or `timeout`", a bare-word hit the sweep missed. BE found this
+2026-08-12, generalizing from a single non-gating AuxBE note on BE's own
+stack, and routed it to FE as site 4 of an inventory. FE fixed it inside a
+held correction commit; when that commit was dropped 2026-08-18 because
+unrelated work in `establish-delivery-commit-contract`'s reconnect-wait
+removal (`1f40608`, merged `c060eca`) had obsoleted most of its other fixes,
+this one went with it. FE noticed the loss while dropping the commit, not
+while sweeping for it, and handed the one-word fix back to BE to fold into
+their next commit on that file. Recorded here rather than edited into the
+original sentence, since this document is a historical record of what task
+4.1 found at archive time, not a live claim.
