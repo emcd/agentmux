@@ -9,6 +9,8 @@ use std::{
     process::{Command, Stdio},
 };
 
+use agentmux::relay::{ListedSessionTransport, StartupFailureRecord, append_startup_failure};
+use agentmux::runtime::paths::BundleRuntimePaths;
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -626,6 +628,111 @@ fn host_relay_clears_startup_failures_for_sessions_that_start_successfully() {
 // a policy validation rejection) and the host exits. The journal (stderr) and
 // the inscription log must each carry a per-bundle reason with the structured
 // error details, not just the aggregate bundle count.
+#[test]
+fn host_relay_list_reports_healthy_while_a_startup_failure_record_stands() {
+    // Health and the failure history answer different questions, and this is the
+    // one direction from which their independence can be demonstrated rather
+    // than asserted: every configured session is ready, a record is still on
+    // file, and the verdict is `healthy`. An implementation that consulted the
+    // history to decide health would report `degraded` here.
+    //
+    // The record is written *after* bring-up on purpose. Seeding it beforehand
+    // would have the session's own successful startup clear it, which is a
+    // different behaviour (covered above) and would leave this test asserting
+    // `healthy` against an empty history — true for the wrong reason, and true
+    // even of an implementation that reads the log.
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_options(&config_root, "alpha", None, &["primary"], Some(true));
+    write_tui_configuration(
+        &config_root,
+        Some("alpha"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "host",
+            "relay",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn agentmux host relay");
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let runtime_directory = BundleRuntimePaths::resolve(&state_root, "alpha")
+        .expect("resolve bundle runtime paths")
+        .runtime_directory;
+    append_startup_failure(
+        &runtime_directory,
+        StartupFailureRecord {
+            session_id: "primary".to_string(),
+            transport: ListedSessionTransport::Tmux,
+            code: "runtime_startup_failed".to_string(),
+            reason: "a failure this session has since recovered from".to_string(),
+            timestamp: "2026-05-01T00:00:00Z".to_string(),
+            sequence: 0,
+            details: None,
+        },
+    )
+    .expect("append startup failure record");
+
+    let listed = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "list",
+            "principals",
+            "--namespace",
+            "alpha",
+            "--json",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run list principals");
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+
+    assert!(listed.status.success(), "list principals should succeed");
+    let listed_json: Value = serde_json::from_slice(&listed.stdout).expect("decode list payload");
+    // The record has to still be there, or `healthy` proves nothing.
+    assert!(
+        listed_json["bundle"]["startup_failure_count"]
+            .as_u64()
+            .expect("startup failure count")
+            >= 1,
+        "the seeded record must survive to the payload: {listed_json}"
+    );
+    assert_eq!(listed_json["bundle"]["state"], "up");
+    assert_eq!(
+        listed_json["bundle"]["startup_health"], "healthy",
+        "a ready session's recorded failure must not lower the health verdict: {listed_json}"
+    );
+}
+
 #[test]
 fn host_relay_startup_failure_emits_per_bundle_reason_with_details() {
     let temporary = TempDir::new().expect("temporary");

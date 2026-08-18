@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use agentmux::{
     configuration::ConfigurationRoots,
-    relay::{RelayRequest, RelayResponse, SendOutcome, handle_request},
+    relay::{
+        ListedSessionTransport, RelayRequest, RelayResponse, SendOutcome, StartupFailureRecord,
+        append_startup_failure, handle_request, load_startup_failures,
+    },
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
 use tempfile::TempDir;
@@ -133,6 +136,122 @@ fn relay_send_async_emits_no_receipt_for_a_delivered_outcome() {
     assert!(
         !flattened.contains(&delivered_message_id),
         "the delivered send's id must not appear in a receipt, snapshot={snapshot:?}"
+    );
+
+    let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
+}
+
+/// A delivered send clears the target's startup-failure records.
+///
+/// Two observations clear a record — a successful startup and a successful
+/// delivery — and only the startup one had coverage. The distinction matters
+/// because the two reach the same helper from opposite ends of the runtime: the
+/// startup path calls it while bringing a session up, this one calls it from the
+/// delivery worker after a terminal outcome resolves, and a refactor can remove
+/// the second without any startup test noticing.
+///
+/// The unrelated `ghost` record is the control. Clearing is keyed per session,
+/// so a test that only watched the target's records would pass equally well
+/// against an implementation that wiped the whole bundle's history on delivery.
+#[test]
+fn relay_send_async_clears_the_targets_startup_failure_records_on_delivery() {
+    if !tmux_available() {
+        eprintln!("skipping delivery-clears-startup-failures test because tmux is unavailable");
+        return;
+    }
+
+    let temporary = TempDir::new().expect("temporary");
+    let bundle_name = "party";
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "charlie"]);
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
+    let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
+
+    spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
+    spawn_session(&paths.tmux_socket, "charlie", "exec sleep 45");
+
+    for (session_id, reason) in [
+        ("charlie", "a failure charlie is about to disprove"),
+        ("ghost", "an unrelated failure that must survive"),
+    ] {
+        append_startup_failure(
+            &paths.runtime_directory,
+            StartupFailureRecord {
+                session_id: session_id.to_string(),
+                transport: ListedSessionTransport::Tmux,
+                code: "runtime_startup_failed".to_string(),
+                reason: reason.to_string(),
+                timestamp: "2026-05-01T00:00:00Z".to_string(),
+                sequence: 0,
+                details: None,
+            },
+        )
+        .expect("append startup failure record");
+    }
+
+    let response = dispatch_request(
+        RelayRequest::Send {
+            request_id: Some("req-clears-history".to_string()),
+            requester_session: "alpha".to_string(),
+            message: "CLEARS-HISTORY-PAYLOAD".to_string(),
+            targets: vec!["charlie@party".to_string()],
+            broadcast: false,
+            quiet_window_ms: Some(70),
+            on_behalf_of: None,
+        },
+        &config_root,
+        bundle_name,
+        &paths.runtime_directory,
+    )
+    .expect("send to charlie should be accepted");
+    let RelayResponse::Send { results, .. } = response else {
+        panic!("expected send response");
+    };
+    assert_eq!(results[0].outcome, SendOutcome::Queued);
+    wait_for_pane_contains(
+        &paths.tmux_socket,
+        "charlie",
+        "CLEARS-HISTORY-PAYLOAD",
+        Duration::from_secs(5),
+    );
+
+    // The pane content proves the write landed, which happens before the
+    // terminal outcome resolves and therefore before the clearing runs. Polling
+    // rather than asserting immediately is the difference between testing the
+    // behaviour and testing the scheduler.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let remaining = loop {
+        let records = load_startup_failures(&paths.runtime_directory).expect("load history");
+        let remaining: Vec<String> = records
+            .iter()
+            .filter(|record| record.session_id == "charlie")
+            .map(|record| record.reason.clone())
+            .collect();
+        if remaining.is_empty() || std::time::Instant::now() >= deadline {
+            break records;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+
+    let charlie_records: Vec<&str> = remaining
+        .iter()
+        .filter(|record| record.session_id == "charlie")
+        .map(|record| record.reason.as_str())
+        .collect();
+    assert!(
+        charlie_records.is_empty(),
+        "a delivered send must clear the target's records, still holding {charlie_records:?}"
+    );
+    let ghost_records: Vec<&str> = remaining
+        .iter()
+        .filter(|record| record.session_id == "ghost")
+        .map(|record| record.reason.as_str())
+        .collect();
+    assert_eq!(
+        ghost_records,
+        ["an unrelated failure that must survive"],
+        "clearing is per session; an untouched session keeps its record"
     );
 
     let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
