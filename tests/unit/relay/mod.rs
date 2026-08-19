@@ -21,6 +21,7 @@ use agentmux::relay::{RelayRequest, RelayResponse, handle_request};
 use tempfile::TempDir;
 
 mod bundle_teardown;
+mod bundle_watch_loop;
 mod contract;
 mod error;
 mod list;

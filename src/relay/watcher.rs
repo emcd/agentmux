@@ -15,7 +15,7 @@ use std::{
     path::Path,
     sync::mpsc,
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use notify_debouncer_full::{
@@ -47,6 +47,23 @@ use super::{
 /// over an editor's write-temp-then-rename save sequence (so a single logical
 /// edit reconciles once), short enough to feel responsive interactively.
 const BUNDLE_WATCH_DEBOUNCE: Duration = Duration::from_millis(200);
+
+/// Interval at which reconciliation runs even though no filesystem event has
+/// arrived.
+///
+/// Filesystem notification is best-effort on every platform: a backend can drop
+/// events under load, and a debouncer can cancel a pair of them before they are
+/// ever delivered — a file created and later removed reads as a file that never
+/// existed, so neither change is reported. Because reconciliation re-scans every
+/// layer from disk and diffs by fingerprint, an event is only ever a trigger to
+/// look; nothing about the outcome depends on which event arrived. A periodic
+/// sweep therefore turns a dropped trigger into a bounded delay rather than a
+/// configuration change the relay never notices.
+///
+/// Short enough that a missed change resolves well inside an operator's patience,
+/// long enough that the sweep's own cost — enumerating the layers and hashing
+/// each definition — stays negligible against an idle relay.
+const BUNDLE_WATCH_SWEEP_INTERVAL: Duration = Duration::from_secs(5);
 
 type BundleDebouncer = Debouncer<RecommendedWatcher, RecommendedCache>;
 
@@ -132,37 +149,20 @@ pub fn spawn_bundle_watcher(
     let consumer = thread::Builder::new()
         .name("agentmux-bundle-watcher".to_string())
         .spawn(move || {
-            for result in receiver {
-                match result {
-                    Ok(events) => {
-                        // Access (open/close/read) events cannot change bundle
-                        // content, and the watcher generates them itself: seeding
-                        // and every reconcile read the watched `.toml` files, so
-                        // acting on access-only batches would re-trigger
-                        // reconciliation from its own reads in a perpetual
-                        // ~debounce-interval rescan loop.
-                        if events
-                            .iter()
-                            .all(|event| matches!(event.kind, EventKind::Access(_)))
-                        {
-                            continue;
-                        }
-                        reconcile_bundles(
-                            &configuration_roots,
-                            &state_root,
-                            &catalog,
-                            &mut state,
-                            no_autostart,
-                        );
-                    }
-                    Err(errors) => {
-                        emit_inscription(
-                            "relay.bundle.watch.error",
-                            &json!({ "cause": format!("{errors:?}") }),
-                        );
-                    }
+            run_bundle_watch_loop(&receiver, BUNDLE_WATCH_SWEEP_INTERVAL, |wake| match wake {
+                WatchWake::Reconcile => {
+                    reconcile_bundles(
+                        &configuration_roots,
+                        &state_root,
+                        &catalog,
+                        &mut state,
+                        no_autostart,
+                    );
                 }
-            }
+                WatchWake::Failed(cause) => {
+                    emit_inscription("relay.bundle.watch.error", &json!({ "cause": cause }));
+                }
+            });
         })
         .map_err(|source| RuntimeError::io("spawn bundle watcher thread", source))?;
 
@@ -175,6 +175,70 @@ pub fn spawn_bundle_watcher(
         debouncer: Some(debouncer),
         consumer: Some(consumer),
     })
+}
+
+/// Why the watch loop woke.
+#[doc(hidden)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WatchWake {
+    /// Something may have changed on disk: re-scan the layers and reconcile.
+    ///
+    /// Carries no detail about the originating event, because reconciliation
+    /// derives everything it needs from the filesystem. A sweep and a debounced
+    /// event are the same wake for that reason.
+    Reconcile,
+    /// The watcher backend reported an error, rendered for inscription.
+    Failed(String),
+}
+
+/// Runs the watch loop until the debouncer's channel closes, waking the caller
+/// on every debounced change and at least once per `sweep_interval`.
+///
+/// Separated from [`spawn_bundle_watcher`] so the wake policy — which batches are
+/// inert, and that a silent channel still reconciles — is exercisable without a
+/// filesystem, a relay, or a real debouncer.
+#[doc(hidden)]
+pub fn run_bundle_watch_loop(
+    receiver: &mpsc::Receiver<DebounceEventResult>,
+    sweep_interval: Duration,
+    mut on_wake: impl FnMut(WatchWake),
+) {
+    let mut sweep_deadline = Instant::now() + sweep_interval;
+    loop {
+        // Saturating: a wake whose handler outran the interval leaves the
+        // deadline in the past, which asks for the next reconcile immediately
+        // rather than for a negative wait.
+        let wait = sweep_deadline.saturating_duration_since(Instant::now());
+        match receiver.recv_timeout(wait) {
+            Ok(Ok(events)) => {
+                // Access (open/close/read) events cannot change bundle content,
+                // and the watcher generates them itself: seeding and every
+                // reconcile read the watched `.toml` files, so acting on
+                // access-only batches would re-trigger reconciliation from its
+                // own reads in a perpetual ~debounce-interval rescan loop. The
+                // sweep deadline is deliberately left alone here — an inert batch
+                // is not a reconcile, and must not postpone one.
+                if events
+                    .iter()
+                    .all(|event| matches!(event.kind, EventKind::Access(_)))
+                {
+                    continue;
+                }
+                on_wake(WatchWake::Reconcile);
+                sweep_deadline = Instant::now() + sweep_interval;
+            }
+            // An error is reported but does not reconcile, so it leaves the
+            // deadline alone: whatever the backend failed to tell us is exactly
+            // what the next sweep is for.
+            Ok(Err(errors)) => on_wake(WatchWake::Failed(format!("{errors:?}"))),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                on_wake(WatchWake::Reconcile);
+                sweep_deadline = Instant::now() + sweep_interval;
+            }
+            // The debouncer was dropped: watching has stopped for good.
+            Err(mpsc::RecvTimeoutError::Disconnected) => return,
+        }
+    }
 }
 
 /// Reconciliation bookkeeping carried across debounced notifications. Content

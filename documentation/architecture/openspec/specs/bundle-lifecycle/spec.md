@@ -480,6 +480,16 @@ reconciles the loaded bundle set against it. Debounce window SHALL be short
 enough for interactive use (~200ms) and long enough to avoid acting on partial
 writes.
 
+Notification SHALL NOT be the only trigger. Filesystem notification is
+best-effort on every supported platform: a backend may drop events under load,
+and a debouncer may cancel events against each other before delivering them, so
+a change can produce no notification at all. The relay SHALL therefore also
+reconcile on a recurring interval, short enough that a change whose notification
+was lost is picked up without operator intervention. A reconciliation the
+interval triggers SHALL be indistinguishable in effect from one a notification
+triggers, both re-scanning every layer and reconciling against the effective
+union.
+
 Reconciliation SHALL be driven by change in the **effective** bundle set, not by
 the physical file event:
 
@@ -550,6 +560,14 @@ events in any layer until relay restart.
   to the definition it shadows
 - **THEN** relay reloads that bundle from the earlier layer
 - **AND** deleting it again reloads from the revealed definition
+
+#### Scenario: A change whose notification never arrives is still reconciled
+
+- **WHEN** the effective bundle set changes
+- **AND** no filesystem notification for that change is delivered to the relay
+- **THEN** relay reconciles the change on the next recurring pass
+- **AND** the resulting load, unload, or reload is the same as it would have been
+  had the notification arrived
 
 #### Scenario: Bundle removed from the effective union with active sessions
 

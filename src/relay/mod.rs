@@ -52,6 +52,8 @@ use self::identity::*;
 pub use self::peer_connection::PeerConnectionManager;
 pub use self::stream::second_claim_is_live_conflict_for_testing;
 pub use self::watcher::{BundleWatcher, spawn_bundle_watcher};
+#[doc(hidden)]
+pub use self::watcher::{WatchWake, run_bundle_watch_loop};
 
 /// Executes one relay request for a configured bundle.
 pub fn handle_request(
