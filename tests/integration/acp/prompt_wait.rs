@@ -9,12 +9,11 @@
 use std::time::{Duration, Instant};
 
 use agentmux::acp::{AcpStdioClient, PromptDispatchOutcome};
-use tempfile::TempDir;
 
-use super::helpers::write_acp_stub;
+use super::helpers::{GuardedTempDir, write_acp_stub};
 
-fn spawn_stub_client(stub_environment: &[(String, String)]) -> (TempDir, AcpStdioClient) {
-    let temporary = TempDir::new().expect("temporary");
+fn spawn_stub_client(stub_environment: &[(String, String)]) -> (GuardedTempDir, AcpStdioClient) {
+    let temporary = GuardedTempDir::new();
     let stub_path = temporary.path().join("acp_stub.sh");
     write_acp_stub(&stub_path);
     let log_path = temporary.path().join("acp_requests.log");

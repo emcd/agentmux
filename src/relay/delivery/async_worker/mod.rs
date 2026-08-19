@@ -11,7 +11,7 @@
 //! and hands it to `reporting` to publish, and `reporting` reaches back into
 //! `registry` only to route a receipt to a live worker.
 
-mod registry;
+pub(crate) mod registry;
 mod reporting;
 mod terminal;
 

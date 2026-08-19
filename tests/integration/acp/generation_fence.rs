@@ -11,7 +11,6 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use agentmux::relay::{DeliveryConfiguration, SendOutcome, configure_delivery};
-use tempfile::TempDir;
 
 use super::helpers::*;
 
@@ -67,7 +66,7 @@ use super::helpers::*;
 /// than the relay's own execution, and fenced healthy targets mid-turn.
 #[test]
 fn a_fenced_acp_generation_leaves_no_surviving_child() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
 
@@ -239,7 +238,7 @@ fn await_inscription(path: &Path, event: &str, scope: &str) -> String {
 ///
 #[test]
 fn a_fence_ends_a_respawn_bootstrap() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
 
@@ -342,7 +341,7 @@ fn a_fence_ends_a_respawn_bootstrap() {
 /// about is gone.
 #[test]
 fn a_fence_ends_a_hung_initial_bootstrap() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
 
@@ -508,7 +507,7 @@ fn release_hung_initialize(root: &Path) {
 /// and by there being one call site; what is pinned here is everything else.
 #[test]
 fn an_executor_blocked_past_the_bound_is_fenced_and_its_member_resolved() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
 
@@ -606,7 +605,7 @@ fn an_executor_blocked_past_the_bound_is_fenced_and_its_member_resolved() {
 /// inside half a second, and a healthy agent gets fenced mid-inference.
 #[test]
 fn a_long_agent_turn_never_arms_the_execution_watchdog() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
 
@@ -738,7 +737,7 @@ fn await_outcome(path: &Path, message_id: &str) -> String {
 /// contests the write-once transition.
 #[test]
 fn graceful_shutdown_resolves_a_parked_member_and_a_held_one_exactly_once() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
 
@@ -846,7 +845,7 @@ fn graceful_shutdown_resolves_a_parked_member_and_a_held_one_exactly_once() {
 /// member, which no fixture in this arc currently constructs.
 #[test]
 fn a_generation_replaced_under_an_in_flight_member_resolves_it_once_and_frees_the_target() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
 
@@ -959,7 +958,7 @@ fn a_generation_replaced_under_an_in_flight_member_resolves_it_once_and_frees_th
 /// refusal, which is the opposite fixture.
 #[test]
 fn a_pending_member_survives_a_generation_replacement_and_the_new_one_delivers_it() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
 
