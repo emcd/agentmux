@@ -335,6 +335,13 @@ fn up_continues_reconciling_after_a_member_fails_to_be_created() {
         failed_sessions[0]["reason"],
         "failed to create tmux session during reconciliation"
     );
+    let cause = failed_sessions[0]["details"]["cause"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        cause.contains("permission denied"),
+        "cause should carry the tmux stderr, got: {cause}"
+    );
 
     // The member after the failed bootstrap must still have been attempted.
     let listed = harness.run(&["list", "principals", "--namespace", "alpha", "--json"]);

@@ -58,3 +58,54 @@ fn operator_message_ignores_unrelated_detail_shapes() {
         "target transport does not support this operation",
     );
 }
+
+#[test]
+fn operator_message_folds_session_and_cause() {
+    let error = RelayError {
+        code: "internal_unexpected_failure".to_string(),
+        message: "failed to create tmux session during reconciliation".to_string(),
+        details: Some(json!({
+            "session_name": "a",
+            "cause": "permission denied",
+        })),
+    };
+
+    assert_eq!(
+        error.operator_message(),
+        "failed to create tmux session during reconciliation (session a: permission denied)",
+    );
+}
+
+#[test]
+fn operator_message_folds_a_bare_cause() {
+    let error = RelayError {
+        code: "validation_invalid_arguments".to_string(),
+        message: "failed to load tui configuration".to_string(),
+        details: Some(json!({ "cause": "missing field `bundles`" })),
+    };
+
+    assert_eq!(
+        error.operator_message(),
+        "failed to load tui configuration: missing field `bundles`",
+    );
+}
+
+#[test]
+fn operator_message_folds_io_context_and_cause() {
+    // `context` + `cause` is the shape a configuration load io failure carries
+    // when there is no single offending path to name.
+    let error = RelayError {
+        code: "internal_unexpected_failure".to_string(),
+        message: "bundle configuration could not be loaded".to_string(),
+        details: Some(json!({
+            "context": "reading configuration layer",
+            "cause": "No such file or directory (os error 2)",
+        })),
+    };
+
+    assert_eq!(
+        error.operator_message(),
+        "bundle configuration could not be loaded \
+         (reading configuration layer: No such file or directory (os error 2))",
+    );
+}
