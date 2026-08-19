@@ -307,9 +307,15 @@ fn assert_rendezvous_survives_declaration(declared: &str) {
         ])
         .output()
         .expect("run agentmux up");
+    // Both streams, because the cause is not on the one that carries the
+    // failure: `up` reports the top-level error on stderr, but the per-bundle
+    // `reason_code` and the per-session `cause` are printed to stdout. Reporting
+    // stderr alone leaves a CI failure saying that the transition failed and
+    // nothing about why.
     assert!(
         up.status.success(),
-        "up should start the member; stderr:\n{}",
+        "up should start the member; stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&up.stdout),
         String::from_utf8_lossy(&up.stderr)
     );
 
