@@ -70,12 +70,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Install tmux (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tmux
+
       - name: Verify tmux Presence
-        # Nothing in this workflow installs tmux explicitly on any platform;
-        # the test suite assumes it is already present and on PATH. This
-        # reports what each runner actually has without gating the build on
-        # that assumption, since tmux availability may not be uniform across
-        # runner images.
+        # Reports tmux availability on each runner after the macOS install
+        # step above. macOS previously had no tmux on PATH; the install step
+        # above restores it. Ubuntu runners already ship tmux 3.4.
         run: |
           which tmux || echo "tmux: not found on PATH"
           tmux -V || echo "tmux: found on PATH but -V failed"
