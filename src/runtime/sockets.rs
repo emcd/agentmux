@@ -28,6 +28,15 @@
 //! descriptor form is available; `bindat`/`connectat` would serve but Darwin
 //! does not provide them.
 //!
+//! Darwin's `/dev/fd/<n>` is not a substitute for `/proc/self/fd/<n>` either.
+//! Those entries are devfs nodes whose open duplicates the descriptor,
+//! allocated `VNON` rather than `VDIR`, so no name resolves through one; the
+//! FreeBSD filesystem they derive from needs its `nodup` mount option to
+//! behave otherwise, precisely because changing the default would break the
+//! `dup`-like open that shells rely on. Darwin also has no `O_PATH`, so a
+//! parent opened to address through would demand the read permission
+//! `open_directory_reference` is shaped to avoid requiring.
+//!
 //! Because the fallback is a real path on a real platform, the limit is
 //! per-target rather than Linux's number everywhere: a Darwin path between the
 //! two limits would otherwise pass the check and then fail with the bare
