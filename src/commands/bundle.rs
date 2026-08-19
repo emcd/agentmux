@@ -74,6 +74,30 @@ pub(super) fn run_bundle_command(
 
     let summary = build_transition_summary(parsed.action, bundles);
     render_transition_summary(&summary);
+    // Answered for after the summary is rendered, so a failing run emits the
+    // same payload a succeeding one does. A caller parsing stdout to find out
+    // which bundle failed must not lose that report as the price of learning
+    // the run failed at all.
+    //
+    // Any failed bundle, not only an all-failed selector. `host relay` fails
+    // solely when nothing came up, because a host with something hosted has to
+    // keep running and cannot exit at all; that threshold is a consequence of
+    // its process shape rather than a judgment about how much failure matters.
+    // A transition command has no such constraint, and a `--group` run that
+    // brought up three bundles and failed one did not do what it was asked.
+    //
+    // `degraded` and an all-skipped run stay successful: the first is a bundle
+    // that came up without coming up whole, and the second is the idempotent
+    // result `up`/`down` promise.
+    if summary.failed_bundle_count > 0 {
+        return Err(RuntimeError::validation(
+            "runtime_transition_failed",
+            format!(
+                "agentmux {} failed for {} bundle(s)",
+                summary.action, summary.failed_bundle_count
+            ),
+        ));
+    }
     Ok(())
 }
 

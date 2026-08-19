@@ -563,6 +563,32 @@ the `bundle-lifecycle` capability's `Relay Bundle Lifecycle Result Contract`.
 CLI text output SHALL be a rendering layer over the same payload, and SHALL
 render the failed session ids and causes for a `degraded` or `failed` bundle.
 
+Process exit status SHALL reflect the requested transition: the command SHALL
+exit non-zero when `failed_bundle_count > 0`, and SHALL NOT exit non-zero
+solely because a bundle is `degraded`, nor solely because
+`changed_bundle_count == 0`. A failing transition SHALL emit the same summary
+payload a succeeding one does, so the per-bundle detail naming what failed
+reaches the caller that has to act on the exit status.
+
+#### Scenario: Exit non-zero when a bundle transition fails
+
+- **WHEN** operator runs `agentmux up relay`
+- **AND** the transition reports `outcome=failed` for at least one bundle
+- **THEN** the summary payload names the failed bundle and its cause
+- **AND** the command exits non-zero
+
+#### Scenario: Exit zero for a partially started transition
+
+- **WHEN** operator runs `agentmux up relay`
+- **AND** the transition reports `outcome=degraded` with no `failed` bundle
+- **THEN** the command exits zero
+
+#### Scenario: Exit zero when a transition changes nothing
+
+- **WHEN** operator runs `agentmux up relay`
+- **AND** every selected bundle reports `outcome=skipped`
+- **THEN** the command exits zero
+
 #### Scenario: Report idempotent already-hosted result for up
 
 - **WHEN** operator runs `agentmux up relay`
