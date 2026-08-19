@@ -298,7 +298,17 @@ async fn run_async_delivery_worker(
     let mut last_activity: Option<u64> = None;
 
     loop {
-        if shutdown_requested() {
+        // Shutdown is checked first: when the relay is exiting, that is the true
+        // cause even if this worker's bundle was also being torn down, and the
+        // shutdown spelling is the one its members' senders are owed.
+        let stop_cause = if shutdown_requested() {
+            Some(StopCause::Shutdown)
+        } else if super::super::async_worker::worker_stop_requested(&key) {
+            Some(StopCause::BundleStop)
+        } else {
+            None
+        };
+        if let Some(cause) = stop_cause {
             // Close this worker to new sends BEFORE draining. Another worker
             // resolving a non-delivered outcome during its own shutdown routes a
             // terminal-outcome receipt here via `try_existing_worker`; once the
@@ -310,20 +320,36 @@ async fn run_async_delivery_worker(
             // worker; the final unregister below drops it. Anything already queued
             // before this point is still drained.
             super::super::async_worker::close_worker(&key, owner);
-            // A held member was never authorized, so shutdown can say so
+            // A held member was never authorized, so the ending can say so
             // positively rather than leaving it to the guard's weaker inference.
+            // Shutdown has its own spelling; a bundle stop goes through the guard,
+            // whose evidence order reaches `not_submitted` for an unbound member
+            // without needing a second wire outcome to mean the same thing.
             if let Some(task) = held.take() {
-                super::super::async_worker::complete_task_on_shutdown(&task);
+                match cause {
+                    StopCause::Shutdown => {
+                        super::super::async_worker::complete_task_on_shutdown(&task);
+                    }
+                    StopCause::BundleStop => {
+                        super::super::async_worker::complete_task_outcome_from_trigger(
+                            &task,
+                            cause.guard_trigger(),
+                        );
+                    }
+                }
                 super::super::async_worker::release_pending_slot(pending.as_ref());
             }
-            shutdown_drain(
+            stop_drain(
                 &key,
                 &mut transport,
-                &mut inflight,
-                &mut inflight_members,
-                &mut receiver,
-                pending.as_ref(),
+                WorkerHoldings {
+                    inflight: &mut inflight,
+                    inflight_members: &mut inflight_members,
+                    receiver: &mut receiver,
+                    pending: pending.as_ref(),
+                },
                 fence_observation,
+                cause,
             )
             .await;
             break;
@@ -566,7 +592,13 @@ fn shutdown_before_generation(
     pending: &std::sync::atomic::AtomicUsize,
 ) {
     super::super::async_worker::close_worker(key, owner);
-    super::super::async_worker::drop_pending_async_tasks_on_shutdown(receiver, pending);
+    // Reached only under `shutdown_requested()`, so the shutdown spelling is the
+    // true one here rather than a default.
+    super::super::async_worker::drop_pending_async_tasks_on_stop(
+        receiver,
+        pending,
+        GuardTrigger::GracefulShutdown,
+    );
     super::super::async_worker::unregister_worker(key, owner);
 }
 
@@ -1219,16 +1251,67 @@ fn declare_singleton_unit(task: &AsyncDeliveryTask) -> Result<(), PartitionError
     super::super::admission::declare_packing_unit(&[task.message_id.as_str()]).map(|_| ())
 }
 
-/// Drains the worker on relay shutdown, bounded by the same fence the watchdog
-/// uses.
+/// What a worker is still holding when it is told to end.
 ///
-/// Graceful shutdown ends a generation, so it establishes cessation the way
-/// every other generation ending does — and it carries a bound for the same
-/// reason. Waiting on collectors until they happened to finish made the relay's
-/// exit hostage to an executor blocked in a syscall, which is exactly the class
-/// of wait the fence exists to replace: no runtime primitive can force such a
-/// thread to return, so *observing* it is the only sound move and observing has
-/// to be budgeted.
+/// Grouped because they are one thing — the work this worker owns — and are only
+/// ever passed together. The drain has to reach all four: the writes still in
+/// flight, the members they belong to, the queue nothing will poll again, and the
+/// counter those members reserved against.
+struct WorkerHoldings<'a> {
+    inflight: &'a mut JoinSet<InflightOutcome>,
+    inflight_members: &'a mut HashMap<tokio::task::Id, InflightMember>,
+    receiver: &'a mut UnboundedReceiver<AsyncDeliveryTask>,
+    pending: &'a std::sync::atomic::AtomicUsize,
+}
+
+/// Why a worker is ending: the relay is exiting, or this worker's bundle is being
+/// torn down while the relay keeps serving others.
+///
+/// Both end a generation and therefore establish cessation the same way; what
+/// differs is only what the relay tells the operator and the member's sender. A
+/// bundle stop is not a relay shutdown, and reporting it as one would name the
+/// wrong event on a relay that is still serving every other bundle.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StopCause {
+    Shutdown,
+    BundleStop,
+}
+
+impl StopCause {
+    /// The label recorded on this ending's generation-fence verdict.
+    fn fence_trigger(self) -> &'static str {
+        match self {
+            Self::Shutdown => "graceful_shutdown",
+            Self::BundleStop => "bundle_stop",
+        }
+    }
+
+    /// The trigger through which a member still unresolved at the verdict is
+    /// terminalized.
+    fn guard_trigger(self) -> GuardTrigger {
+        match self {
+            Self::Shutdown => GuardTrigger::GracefulShutdown,
+            Self::BundleStop => GuardTrigger::BundleStop,
+        }
+    }
+}
+
+/// Drains the worker when it is told to end, bounded by the same fence the
+/// watchdog uses.
+///
+/// An ending — relay shutdown or a stop of this worker's bundle — ends a
+/// generation, so it establishes cessation the way every other generation ending
+/// does, and it carries a bound for the same reason. Waiting on collectors until
+/// they happened to finish made the relay's exit hostage to an executor blocked
+/// in a syscall, which is exactly the class of wait the fence exists to replace:
+/// no runtime primitive can force such a thread to return, so *observing* it is
+/// the only sound move and observing has to be budgeted.
+///
+/// The budget is computed identically for both causes. On a bundle stop no
+/// process deadline exists, so `budget_within_shutdown` yields the configured
+/// observation; the halving still applies, because the fence spends two windows
+/// either way and a uniform bound is worth more here than the wider window a
+/// bundle stop could afford.
 ///
 /// Collection runs alongside both observation windows rather than after the
 /// verdict, so a member whose transport resolves in time still reports its own
@@ -1248,15 +1331,19 @@ fn declare_singleton_unit(task: &AsyncDeliveryTask) -> Result<(), PartitionError
 /// fence straight into the unbounded wait it exists to replace. Cessation has
 /// already been initiated by the fence's forced step; what is abandoned is the
 /// waiting, and the process is exiting anyway.
-async fn shutdown_drain(
+async fn stop_drain(
     key: &AsyncWorkerKey,
     transport: &mut TransportImpl,
-    inflight: &mut JoinSet<InflightOutcome>,
-    inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
-    receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
-    pending: &std::sync::atomic::AtomicUsize,
+    holdings: WorkerHoldings<'_>,
     fence_observation: Duration,
+    cause: StopCause,
 ) {
+    let WorkerHoldings {
+        inflight,
+        inflight_members,
+        receiver,
+        pending,
+    } = holdings;
     let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
     // Members still in the receiver were never authorized and never handed to a
     // transport, so nothing about resolving them depends on whether the old
@@ -1269,7 +1356,11 @@ async fn shutdown_drain(
     // and `try_existing_worker` holds the registry lock across its send, so a
     // sender either enqueued before the close (and is drained here) or observed
     // the entry closing and never enqueued at all.
-    super::super::async_worker::drop_pending_async_tasks_on_shutdown(receiver, pending);
+    super::super::async_worker::drop_pending_async_tasks_on_stop(
+        receiver,
+        pending,
+        cause.guard_trigger(),
+    );
     // One window, not the whole remaining grace: the fence spends *two* of these
     // back to back, so a window sized at everything left would overrun the
     // deadline by almost that much again. The reserve covers what still has to
@@ -1293,24 +1384,28 @@ async fn shutdown_drain(
             _ = tokio::time::sleep(poll_interval) => {}
         }
     };
-    emit_fence_verdict(key, "graceful_shutdown", outcome, inflight_members.len());
+    emit_fence_verdict(key, cause.fence_trigger(), outcome, inflight_members.len());
     if outcome.verdict == FenceVerdict::Positive {
         transport.shutdown();
     }
     // Any member still in the table was never joined — its collector neither
     // resolved nor panicked, so the drain left it unresolved. Terminalize it
-    // through the guard rather than dropping it: shutdown is a trigger like any
+    // through the guard rather than dropping it: an ending is a trigger like any
     // other, and the evidence order still knows whether it reached a transport.
     for (_, member) in inflight_members.drain() {
         super::super::async_worker::complete_task_outcome_from_trigger(
             &member.task,
-            GuardTrigger::GracefulShutdown,
+            cause.guard_trigger(),
         );
     }
     // Defensive only. Nothing can have arrived since the pre-fence drain above,
     // for the reason given there; this costs one `try_recv` and means a future
     // change that reopens a producer during shutdown loses nothing silently.
-    super::super::async_worker::drop_pending_async_tasks_on_shutdown(receiver, pending);
+    super::super::async_worker::drop_pending_async_tasks_on_stop(
+        receiver,
+        pending,
+        cause.guard_trigger(),
+    );
 }
 
 /// The activity comparison, which is the whole of what the relay contributes to

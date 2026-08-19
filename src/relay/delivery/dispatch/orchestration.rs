@@ -54,6 +54,25 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
         runtime_directory,
         target_member.id.as_str(),
     );
+    // A worker on its way out must never be adopted as this target's live one.
+    // The election below is by key presence, so a draining entry would be found,
+    // the spawn skipped, and the readiness poll answered from the *previous*
+    // generation's last reported state — a member counted ready on a worker that
+    // is about to unregister, under the configuration this pass was meant to
+    // replace. Reported as a failure rather than waited out: the member genuinely
+    // did not start, saying so is honest, and the next pass starts it once the
+    // key is free. Reached whenever a bring-up follows a teardown closely enough
+    // that a drain outlives the teardown's bounded wait — a watcher reload, or an
+    // operator's `down` followed by `up`.
+    if super::super::async_worker::worker_stop_requested(&key) {
+        return Err((
+            "runtime_startup_failed".to_string(),
+            "ACP worker from the previous definition is still stopping".to_string(),
+            Some(json!({
+                "target_session": target_member.id,
+            })),
+        ));
+    }
     if !super::super::async_worker::worker_exists(&key).map_err(|error| {
         (
             "internal_unexpected_failure".to_string(),

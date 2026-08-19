@@ -550,6 +550,29 @@ Worker shutdown sequence SHALL be:
 3. `join` background reader thread
 4. release per-session state (replay buffer, pending-request registry)
 
+Tearing a bundle's runtime down SHALL initiate teardown of every worker that
+bundle owns, and SHALL do so wherever the runtime is torn down rather than only
+when the relay process exits. A worker is owned by the bundle whose namespace
+and runtime directory it was created under, and no other: a teardown SHALL NOT
+initiate teardown of a worker belonging to a bundle it was not asked to stop.
+
+Relay shutdown is therefore not the only teardown trigger. The relay SHALL apply
+this on the operator's `down`, and on the watcher's unload and reload of a bundle
+definition — a reload being specified elsewhere as a disappear followed by a new
+file, which a surviving worker would contradict by carrying the previous
+configuration into the reloaded bundle.
+
+A worker held under a negative generation-fence verdict SHALL NOT be torn down by
+a bundle teardown, and SHALL remain registered. A bundle stopping is not evidence
+that a generation which could not be observed to cease has ceased, and releasing
+the entry would permit the replacement generation the fail-stop exists to refuse.
+
+Teardown SHALL be bounded, and the relay SHALL report how many of a bundle's
+workers were still present when that bound elapsed. Reporting it is what
+distinguishes a teardown that finished from one that was initiated and not
+observed to complete; the operation SHALL NOT wait unboundedly for a worker to
+leave.
+
 Backpressure contract:
 
 - enqueue beyond bound SHALL fail with `runtime_acp_queue_full`
@@ -597,6 +620,35 @@ Failure taxonomy SHALL include:
 - **THEN** relay closes child stdin, drops child process handle, and joins the
   reader thread before releasing per-session state
 - **AND** no per-session state is accessed after join completes
+
+#### Scenario: Stopping a bundle tears down the workers it owns
+
+- **WHEN** a bundle's runtime is torn down by `down`, by a watcher unload, or by
+  a watcher reload
+- **THEN** every worker created under that bundle's namespace and runtime
+  directory is torn down
+- **AND** workers belonging to other bundles remain registered
+
+#### Scenario: A reloaded bundle does not inherit the previous generation's worker
+
+- **WHEN** a bundle definition is edited and the watcher reloads it
+- **THEN** the worker serving an ACP member under the previous definition is torn
+  down before the bundle is started again
+- **AND** the member is served by a worker created from the new definition
+
+#### Scenario: Bundle teardown leaves a fail-stopped worker registered
+
+- **WHEN** a bundle is torn down while one of its targets is held under a negative
+  generation-fence verdict
+- **THEN** that target's worker is not torn down and its entry remains registered
+- **BECAUSE** a bundle stopping is not evidence that an unobserved generation
+  ceased, and the entry is what refuses a replacement
+
+#### Scenario: Bundle teardown reports workers that outlived its bound
+
+- **WHEN** a bundle teardown's bounded wait elapses with a worker still registered
+- **THEN** the teardown reports that worker as still present rather than waiting
+  further
 
 ### Requirement: ACP Permission Request Readiness Signal
 

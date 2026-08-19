@@ -869,8 +869,8 @@ impl TransportImpl {
             Self::Ui(transport) => transport.shutdown(),
             // The `Pubsub` stub owns no runtime, so teardown is a no-op — and it
             // MUST NOT panic: the delivery worker latches this stub for a
-            // configured Pubsub target and calls `shutdown()` on it during relay
-            // shutdown (`shutdown_drain`). `Pty` is not yet constructible when
+            // configured Pubsub target and calls `shutdown()` on it whenever the
+            // worker ends (`stop_drain`). `Pty` is not yet constructible when
             // the `pty` feature is off, so it can never be a latched shutdown
             // target; when the feature is on, the inner `PtyTransport`
             // receives the shutdown call.

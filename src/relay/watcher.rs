@@ -436,9 +436,44 @@ fn reload_bundle(
             return;
         }
     };
-    // Tear the existing runtime down (best effort) before reloading; a teardown
-    // failure should not block the reload attempt.
-    let _ = shutdown_bundle_runtime(&paths.tmux_socket);
+    // Tear the existing runtime down before reloading. A teardown *error* should
+    // not block the attempt — it reports what tmux could not be asked, which the
+    // restart may well fix.
+    let teardown =
+        shutdown_bundle_runtime(bundle_name, &paths.runtime_directory, &paths.tmux_socket);
+
+    // A worker still registered here is different in kind, and must block the
+    // restart. The startup pass is idempotent for a registered worker: it would
+    // find the survivor's key, skip the spawn, and report the member ready on the
+    // previous generation — which is exactly the inheritance this change exists
+    // to end, reappearing in the window where a drain outlives the bounded wait.
+    // The spec's "disappear followed by a new file" has not happened if the
+    // disappear has not, so this is not a reload and must not be reported as one.
+    //
+    // Left unloaded with a recorded failure, matching the invalid-configuration
+    // arm below: new connections fail fast rather than being served by a runtime
+    // that is half torn down. The next watcher pass reloads it, by which time the
+    // drain has almost certainly finished.
+    if let Ok(report) = teardown.as_ref()
+        && report.unstopped_worker_count > 0
+    {
+        catalog.remove(bundle_name);
+        state.fingerprints.remove(bundle_name);
+        record_load_failure(
+            bundle_name,
+            "bundle teardown did not complete before reload; delivery workers from \
+             the previous definition are still draining",
+            Some("runtime_startup_failed"),
+            Some(&json!({
+                "unstopped_worker_count": report.unstopped_worker_count,
+                "signalled_worker_count": report.signalled_worker_count,
+                "evicted_session_count": evicted_session_count,
+            })),
+            state,
+            fingerprint,
+        );
+        return;
+    }
 
     match startup_bundle(configuration_roots, &paths) {
         Ok(report) if report.ready_session_count > 0 => {
@@ -492,7 +527,7 @@ fn unload_bundle(catalog: &BundleCatalog, bundle_name: &str, state: &mut Reconci
     let evicted_session_count =
         evict_streams_for_bundle(bundle_name, &bundle_unloaded_response(bundle_name));
     if let Some(paths) = removed {
-        let _ = shutdown_bundle_runtime(&paths.tmux_socket);
+        let _ = shutdown_bundle_runtime(bundle_name, &paths.runtime_directory, &paths.tmux_socket);
     }
     state.fingerprints.remove(bundle_name);
     state.failed.remove(bundle_name);

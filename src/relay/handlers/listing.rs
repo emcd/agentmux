@@ -136,8 +136,24 @@ pub(super) fn handle_bundle_down(
     // the operator's request to keep it down is the authoritative signal.
     catalog.set_intent(bundle.bundle_name.as_str(), HostingIntent::Hold);
     let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
-    let report = shutdown_bundle_runtime(tmux_socket.as_path())?;
-    let changed = !report.pruned_sessions.is_empty() || report.killed_tmux_server;
+    let report = shutdown_bundle_runtime(
+        bundle.bundle_name.as_str(),
+        runtime_directory,
+        tmux_socket.as_path(),
+    )?;
+    // Derived from every transport the teardown ended, not from tmux alone. A
+    // bundle whose members are all ACP prunes no tmux session and reaps no
+    // server, and reporting that as `already_unhosted` told the operator nothing
+    // had been running while its agents were still alive.
+    //
+    // Read from what the teardown *asked* rather than from what it watched leave.
+    // A worker whose drain outlives the bounded wait was still stopped, and a
+    // bundle whose workers are draining is not one that was already unhosted —
+    // deriving this from completions would reinstate the same misreport in the
+    // narrower window where the fence times out.
+    let changed = !report.pruned_sessions.is_empty()
+        || report.killed_tmux_server
+        || report.signalled_worker_count > 0;
     let bundle_result = if changed {
         BundleTransitionEntry {
             bundle_name: bundle.bundle_name.clone(),

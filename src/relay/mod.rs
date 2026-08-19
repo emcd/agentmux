@@ -232,13 +232,22 @@ pub fn registered_principal_ids(namespace: &str) -> Vec<String> {
         .collect()
 }
 
-/// Prunes managed sessions and reaps tmux server when safe during shutdown.
+/// Tears one bundle's runtime down: stops its delivery workers, prunes its
+/// managed tmux sessions, and reaps the tmux server when safe.
+///
+/// Takes the bundle name and runtime directory alongside the socket because a
+/// bundle's runtime is more than its tmux sessions — those two identify the
+/// delivery workers it owns, which are what a tmux-only teardown left running.
 ///
 /// # Errors
 ///
 /// Returns internal failures when tmux session operations fail.
-pub fn shutdown_bundle_runtime(tmux_socket: &Path) -> Result<ShutdownReport, RelayError> {
-    lifecycle::shutdown_bundle_runtime(tmux_socket)
+pub fn shutdown_bundle_runtime(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    tmux_socket: &Path,
+) -> Result<ShutdownReport, RelayError> {
+    lifecycle::shutdown_bundle_runtime(bundle_name, runtime_directory, tmux_socket)
 }
 
 /// Loads persisted startup-failure history for one bundle runtime directory.

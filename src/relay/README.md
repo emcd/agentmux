@@ -114,6 +114,19 @@ exported from `src/relay/mod.rs`.
     configuration through the same `load_bundle_configuration` +
     `load_authorization_context` path startup uses, with no tmux or runtime
     side effects (backs `agentmux check configuration`).
+  - **A bundle's runtime is more than its tmux sessions.**
+    `shutdown_bundle_runtime` is the single teardown every path reaches — `down`,
+    a watcher unload, a watcher reload, and process exit — and it stops the
+    delivery workers the bundle owns before touching tmux. It was tmux-only, so a
+    worker (and, for an ACP member, its child agent) survived all four, and a
+    reload handed the survivor straight back to the restarted bundle: the startup
+    pass is idempotent for a registered worker, so an edited configuration
+    reported success while the previous generation kept serving. Workers are
+    identified the way their registry key identifies them, by namespace *and*
+    runtime directory, so a stop cannot reach a same-named bundle hosted by
+    another relay in the same process. A fail-stopped worker is skipped and stays
+    registered — a bundle stopping is not evidence that an unobserved generation
+    ceased, and the entry is what refuses a replacement.
   - **A per-session startup failure does not fail a bring-up.** Both
     `startup_loaded_bundle` and `reconcile_loaded_bundle` record the failing
     session's cause and carry on with the rest: a bundle is a set of sessions,
@@ -278,8 +291,14 @@ exported from `src/relay/mod.rs`.
     fence as one future would stop collecting the very outcomes the fence exists
     to let it keep collecting. `acknowledge_fence` is a thin awaiting driver over
     the same state machine, so there is one implementation.
-    Two things fence a generation: graceful shutdown, in `shutdown_drain`, and
-    the execution watchdog, in the worker loop. The verdict is the resolution cut
+    Three things fence a generation, and two of them share a path: graceful
+    shutdown and a stop of the worker's own bundle both end it through
+    `stop_drain`, differing only in the `StopCause` they carry, while the
+    execution watchdog fences from inside the worker loop. The cause is what the
+    verdict is labelled with (`graceful_shutdown` or `bundle_stop`) and what an
+    unresolved member's trigger reports, because a bundle stopping on a relay that
+    keeps serving every other bundle is not a relay shutdown and must not be
+    reported as one. The verdict is the resolution cut
     for both: still-unresolved members terminalize there through the guard's
     evidence order from *either* verdict, and only a positive one proceeds to the
     transport's own teardown — a negative verdict is the finding that those
