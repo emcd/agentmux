@@ -516,8 +516,10 @@ fn reload_bundle(
     //
     // Left unloaded with a recorded failure, matching the invalid-configuration
     // arm below: new connections fail fast rather than being served by a runtime
-    // that is half torn down. The next watcher pass reloads it, by which time the
-    // drain has almost certainly finished.
+    // that is half torn down. The recorded failure is keyed by the supplying
+    // file's fingerprint, which cannot tell this transient block from a permanent
+    // validation error, so the bundle stays unloaded until that file changes
+    // rather than being retried once the drain finishes.
     if let Ok(report) = teardown.as_ref()
         && report.unstopped_worker_count > 0
     {
