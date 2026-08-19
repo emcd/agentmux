@@ -88,15 +88,6 @@ agentmux host relay "${BUNDLE_NAME}" \
   --state-directory "${STATE_ROOT}"
 ```
 
-Optional diagnostics for prompt-readiness triage:
-
-```bash
-AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS=1 \
-agentmux host relay "${BUNDLE_NAME}" \
-  --configuration-directory "${CONFIG_ROOT}" \
-  --state-directory "${STATE_ROOT}"
-```
-
 Expected startup line includes:
 
 - `agentmux host relay listening`
