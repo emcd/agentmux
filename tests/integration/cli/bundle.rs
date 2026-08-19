@@ -1,7 +1,7 @@
 use std::{
     fs,
     path::PathBuf,
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
 };
 
 use serde_json::Value;
@@ -51,23 +51,25 @@ fn up_and_down_report_idempotent_transitions() {
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
-    let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "host",
-            "relay",
-            "--no-autostart",
-            "--configuration-directory",
-            &config_root.to_string_lossy(),
-            "--state-directory",
-            &state_root.to_string_lossy(),
-            "--inscriptions-directory",
-            &inscriptions_root.to_string_lossy(),
-        ])
-        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn agentmux host relay --no-autostart");
+    let host_child = process::RelayChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .args([
+                "host",
+                "relay",
+                "--no-autostart",
+                "--configuration-directory",
+                &config_root.to_string_lossy(),
+                "--state-directory",
+                &state_root.to_string_lossy(),
+                "--inscriptions-directory",
+                &inscriptions_root.to_string_lossy(),
+            ])
+            .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn agentmux host relay --no-autostart"),
+    );
     wait_for_relay_ready(&state_root, "alpha");
 
     let first_up = Command::new(env!("CARGO_BIN_EXE_agentmux"))
@@ -155,9 +157,9 @@ fn up_and_down_report_idempotent_transitions() {
     );
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let host_output =
-        process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT)
-            .expect("wait for relay host");
+    let host_output = host_child
+        .wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for relay host");
     assert!(host_output.status.success(), "host should succeed");
 }
 
@@ -170,7 +172,7 @@ struct BundleCliHarness {
     state_root: PathBuf,
     inscriptions_root: PathBuf,
     fake_tmux: PathBuf,
-    host: Option<Child>,
+    host: Option<process::RelayChildGuard>,
 }
 
 impl BundleCliHarness {
@@ -186,23 +188,25 @@ impl BundleCliHarness {
         let fake_tmux = temporary.path().join("fake-tmux.sh");
         write_fake_tmux_script(&fake_tmux);
 
-        let host = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-            .args([
-                "host",
-                "relay",
-                "--no-autostart",
-                "--configuration-directory",
-                &config_root.to_string_lossy(),
-                "--state-directory",
-                &state_root.to_string_lossy(),
-                "--inscriptions-directory",
-                &inscriptions_root.to_string_lossy(),
-            ])
-            .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("spawn agentmux host relay --no-autostart");
+        let host = process::RelayChildGuard::new(
+            Command::new(env!("CARGO_BIN_EXE_agentmux"))
+                .args([
+                    "host",
+                    "relay",
+                    "--no-autostart",
+                    "--configuration-directory",
+                    &config_root.to_string_lossy(),
+                    "--state-directory",
+                    &state_root.to_string_lossy(),
+                    "--inscriptions-directory",
+                    &inscriptions_root.to_string_lossy(),
+                ])
+                .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn agentmux host relay --no-autostart"),
+        );
         wait_for_relay_ready(&state_root, "alpha");
 
         Self {
@@ -236,7 +240,7 @@ impl Drop for BundleCliHarness {
     fn drop(&mut self) {
         shutdown_relay_if_present(&self.state_root, "alpha");
         if let Some(host) = self.host.take() {
-            let _ = process::wait_with_output_bounded(host, process::HARNESS_CHILD_WAIT_DEFAULT);
+            let _ = host.wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT);
         }
     }
 }
@@ -423,23 +427,25 @@ fn up_rejects_caller_whose_policy_lacks_updown() {
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
-    let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "host",
-            "relay",
-            "--no-autostart",
-            "--configuration-directory",
-            &config_root.to_string_lossy(),
-            "--state-directory",
-            &state_root.to_string_lossy(),
-            "--inscriptions-directory",
-            &inscriptions_root.to_string_lossy(),
-        ])
-        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn agentmux host relay --no-autostart");
+    let host_child = process::RelayChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .args([
+                "host",
+                "relay",
+                "--no-autostart",
+                "--configuration-directory",
+                &config_root.to_string_lossy(),
+                "--state-directory",
+                &state_root.to_string_lossy(),
+                "--inscriptions-directory",
+                &inscriptions_root.to_string_lossy(),
+            ])
+            .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn agentmux host relay --no-autostart"),
+    );
     wait_for_relay_ready(&state_root, "alpha");
 
     let attempt = Command::new(env!("CARGO_BIN_EXE_agentmux"))
@@ -469,9 +475,9 @@ fn up_rejects_caller_whose_policy_lacks_updown() {
     );
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let host_output =
-        process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT)
-            .expect("wait for relay host");
+    let host_output = host_child
+        .wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for relay host");
     assert!(host_output.status.success(), "host should succeed");
 }
 
@@ -488,23 +494,25 @@ fn up_succeeds_for_operator_policy_with_updown_capability() {
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
-    let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "host",
-            "relay",
-            "--no-autostart",
-            "--configuration-directory",
-            &config_root.to_string_lossy(),
-            "--state-directory",
-            &state_root.to_string_lossy(),
-            "--inscriptions-directory",
-            &inscriptions_root.to_string_lossy(),
-        ])
-        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn agentmux host relay --no-autostart");
+    let host_child = process::RelayChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .args([
+                "host",
+                "relay",
+                "--no-autostart",
+                "--configuration-directory",
+                &config_root.to_string_lossy(),
+                "--state-directory",
+                &state_root.to_string_lossy(),
+                "--inscriptions-directory",
+                &inscriptions_root.to_string_lossy(),
+            ])
+            .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn agentmux host relay --no-autostart"),
+    );
     wait_for_relay_ready(&state_root, "alpha");
 
     let attempt = Command::new(env!("CARGO_BIN_EXE_agentmux"))
@@ -532,9 +540,9 @@ fn up_succeeds_for_operator_policy_with_updown_capability() {
     assert_eq!(summary["bundles"][0]["outcome"], "hosted");
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let host_output =
-        process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT)
-            .expect("wait for relay host");
+    let host_output = host_child
+        .wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for relay host");
     assert!(host_output.status.success(), "host should succeed");
 }
 
@@ -589,25 +597,27 @@ updown = "none"
 
     // Two occurrences: the override layer first, so its policies.toml shadows
     // the base layer's while the bundle definition still resolves from the base.
-    let host_child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "host",
-            "relay",
-            "--no-autostart",
-            "--configuration-directory",
-            &override_layer.to_string_lossy(),
-            "--configuration-directory",
-            &config_root.to_string_lossy(),
-            "--state-directory",
-            &state_root.to_string_lossy(),
-            "--inscriptions-directory",
-            &inscriptions_root.to_string_lossy(),
-        ])
-        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn agentmux host relay --no-autostart");
+    let host_child = process::RelayChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .args([
+                "host",
+                "relay",
+                "--no-autostart",
+                "--configuration-directory",
+                &override_layer.to_string_lossy(),
+                "--configuration-directory",
+                &config_root.to_string_lossy(),
+                "--state-directory",
+                &state_root.to_string_lossy(),
+                "--inscriptions-directory",
+                &inscriptions_root.to_string_lossy(),
+            ])
+            .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn agentmux host relay --no-autostart"),
+    );
     wait_for_relay_ready(&state_root, "alpha");
 
     let attempt = Command::new(env!("CARGO_BIN_EXE_agentmux"))
@@ -639,9 +649,9 @@ updown = "none"
     );
 
     shutdown_relay_if_present(&state_root, "alpha");
-    let host_output =
-        process::wait_with_output_bounded(host_child, process::HARNESS_CHILD_WAIT_DEFAULT)
-            .expect("wait for relay host");
+    let host_output = host_child
+        .wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for relay host");
     assert!(host_output.status.success(), "host should succeed");
 }
 
@@ -665,25 +675,28 @@ fn host_relay_summary_json_omits_group_name() {
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
-    let child = Command::new(env!("CARGO_BIN_EXE_agentmux"))
-        .args([
-            "host",
-            "relay",
-            "--configuration-directory",
-            &config_root.to_string_lossy(),
-            "--state-directory",
-            &state_root.to_string_lossy(),
-            "--inscriptions-directory",
-            &inscriptions_root.to_string_lossy(),
-        ])
-        .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn agentmux host relay");
+    let child = process::RelayChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .args([
+                "host",
+                "relay",
+                "--configuration-directory",
+                &config_root.to_string_lossy(),
+                "--state-directory",
+                &state_root.to_string_lossy(),
+                "--inscriptions-directory",
+                &inscriptions_root.to_string_lossy(),
+            ])
+            .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn agentmux host relay"),
+    );
     wait_for_relay_ready(&state_root, "alpha");
     shutdown_relay_if_present(&state_root, "alpha");
-    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
+    let output = child
+        .wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT)
         .expect("wait for agentmux host relay");
     assert!(output.status.success(), "command should succeed");
     let stdout = String::from_utf8_lossy(&output.stdout);

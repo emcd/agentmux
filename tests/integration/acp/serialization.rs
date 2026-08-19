@@ -1,12 +1,11 @@
 use agentmux::relay::RelayResponse;
 use serde_json::Value;
-use tempfile::TempDir;
 
 use super::helpers::*;
 
 #[test]
 fn acp_result_serialization_reflects_queued_async_outcome() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         stop_reason: "cancelled".to_string(),
         ..AcpStubOptions::default()

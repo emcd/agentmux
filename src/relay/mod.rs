@@ -250,6 +250,21 @@ pub fn shutdown_bundle_runtime(
     lifecycle::shutdown_bundle_runtime(bundle_name, runtime_directory, tmux_socket)
 }
 
+/// Test-only cleanup for `acp::*` integration tests.
+///
+/// Removes all `AsyncDeliveryRegistry` workers keyed by `runtime_directory == root`.
+///
+/// Each `acp::*` test uses `flat_bundle_paths` where `runtime_directory ==
+/// `TempDir.path()`. This removes the registry entry so the sender cannot be
+/// reused, but it does not reap the `acp_stub` children — the `AcpTransport`
+/// worker holds the `AcpStdioClient` and is never cancelled, so the child
+/// teardown in `AcpStdioClient::shutdown` never runs. The harness kills them
+/// explicitly in `GuardedTempDir::drop`.
+#[doc(hidden)]
+pub fn test_cleanup_acp_workers(root: &Path) {
+    crate::relay::delivery::async_worker::registry::remove_workers_for_runtime_directory(root);
+}
+
 /// Loads persisted startup-failure history for one bundle runtime directory.
 pub fn load_startup_failures(
     runtime_directory: &Path,

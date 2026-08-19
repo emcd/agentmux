@@ -4,13 +4,12 @@ use std::{
 };
 
 use agentmux::relay::{ListedSessionTransport, RelayResponse};
-use tempfile::TempDir;
 
 use super::helpers::*;
 
 #[test]
 fn acp_raww_returns_queued_and_dispatches_prompt() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, log_path) = write_configuration(temporary.path(), &options);
 

@@ -635,6 +635,20 @@ pub(in crate::relay::delivery) fn unregister_worker(key: &AsyncWorkerKey, owner:
     }
 }
 
+/// Removes all workers for `runtime_directory`, regardless of owner.
+///
+/// Used by `test_cleanup_acp_workers` to drop the `AsyncDeliveryRegistry` entry
+/// so the sender cannot be reused. This does not reap the `acp_stub` children —
+/// the `AcpTransport` worker holds the `AcpStdioClient` and is never cancelled,
+/// so `AcpStdioClient::shutdown` never runs. The harness kills the `acp_stub`
+/// children explicitly in `GuardedTempDir::drop` (verified: registry removal
+/// alone still leaked 3 per run; with the harness kill loop the leak is 0).
+pub(crate) fn remove_workers_for_runtime_directory(runtime_directory: &Path) {
+    if let Ok(mut workers) = async_delivery_registry().workers.lock() {
+        workers.retain(|key, _| key.runtime_directory != runtime_directory);
+    }
+}
+
 pub(in crate::relay::delivery) fn task_uses_acp_transport(task: &AsyncDeliveryTask) -> bool {
     task.bundle
         .members

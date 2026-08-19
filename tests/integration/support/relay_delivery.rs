@@ -13,6 +13,8 @@ use tokio::{
     time::sleep,
 };
 
+use crate::support::process::{RELAY_GRACE_PERIOD, WAIT_POLL_INTERVAL};
+
 pub(crate) fn tmux_available() -> bool {
     StdCommand::new("tmux")
         .arg("-V")
@@ -598,13 +600,116 @@ esac
         .expect("set fake tmux script executable");
 }
 
+/// RAII guard for a tokio-spawned `agentmux host relay` child.
+///
+/// Mirrors `crate::support::process::RelayChildGuard` for the `tokio::process::Child`
+/// path used by `spawn_relay_with_fake_tmux`. A bare tokio `Child` with
+/// `kill_on_drop(true)` would send SIGKILL on drop, bypassing the relay's
+/// generation fence that reaps its ACP-worker grandchildren and orphaning them a
+/// second time. This guard sends SIGTERM first and gives the relay a bounded
+/// window to exit gracefully before escalating to SIGKILL.
+pub(crate) struct RelayChildGuard {
+    child: Option<Child>,
+}
+
+impl RelayChildGuard {
+    pub(crate) fn new(child: Child) -> Self {
+        Self { child: Some(child) }
+    }
+
+    pub(crate) fn start_kill(&mut self) -> std::io::Result<()> {
+        match self.child.as_mut() {
+            Some(child) => child.start_kill(),
+            None => Ok(()),
+        }
+    }
+
+    pub(crate) async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        // Safety: `self.child` is Some while this method is called; it is never
+        // taken concurrently because `&mut self` is exclusive.
+        let child = self
+            .child
+            .as_mut()
+            .expect("RelayChildGuard::wait on empty guard");
+        child.wait().await
+    }
+}
+
+impl std::ops::Deref for RelayChildGuard {
+    type Target = Child;
+
+    fn deref(&self) -> &Self::Target {
+        self.child
+            .as_ref()
+            .expect("RelayChildGuard deref on empty guard")
+    }
+}
+
+impl std::ops::DerefMut for RelayChildGuard {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.child
+            .as_mut()
+            .expect("RelayChildGuard deref_mut on empty guard")
+    }
+}
+
+impl Drop for RelayChildGuard {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        match child.try_wait() {
+            Ok(Some(_)) => return,
+            Ok(None) => {}
+            Err(_) => return,
+        }
+        #[cfg(unix)]
+        if let Some(pid) = child.id() {
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGTERM);
+            }
+        }
+        // Bounded graceful window — uses the same fence as the std guard.
+        let deadline = Instant::now() + RELAY_GRACE_PERIOD;
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return,
+                Ok(None) => {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    std::thread::sleep(WAIT_POLL_INTERVAL);
+                }
+                Err(_) => return,
+            }
+        }
+        let _ = child.start_kill();
+        // `start_kill` is SIGKILL but does not reap; poll until reaped so the
+        // pid cannot be recycled. Bounding this wait prevents Drop from hanging
+        // indefinitely if the child ignores SIGKILL (should not happen).
+        let reap_deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) => {
+                    if Instant::now() >= reap_deadline {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Err(_) => break,
+            }
+        }
+    }
+}
+
 pub(crate) fn spawn_relay_with_fake_tmux(
     bundle_name: &str,
     config_root: &ConfigurationRoots,
     state_root: &Path,
     inscriptions_root: &Path,
     fake_tmux_script: &Path,
-) -> Child {
+) -> RelayChildGuard {
     spawn_relay_with_fake_tmux_and_env(
         bundle_name,
         config_root,
@@ -622,7 +727,7 @@ pub(crate) fn spawn_relay_with_fake_tmux_and_env(
     inscriptions_root: &Path,
     fake_tmux_script: &Path,
     environment: &[(&str, &str)],
-) -> Child {
+) -> RelayChildGuard {
     let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux"));
     command.arg("host").arg("relay");
     // One occurrence per layer, matching how the flag is declared.
@@ -637,17 +742,11 @@ pub(crate) fn spawn_relay_with_fake_tmux_and_env(
         .env("AGENTMUX_TMUX_COMMAND", fake_tmux_script)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        // A tokio `Child` does not kill on drop by default, so a test that
-        // panicked before reaching its explicit shutdown left its relay running
-        // against a temp directory nothing would ever clean up. The panic path is
-        // exactly when cleanup matters most, and it is the one path that cannot
-        // be written out longhand at each call site.
-        .kill_on_drop(true);
+        .stderr(std::process::Stdio::piped());
     for (name, value) in environment {
         command.env(name, value);
     }
-    command.spawn().expect("spawn relay")
+    RelayChildGuard::new(command.spawn().expect("spawn relay"))
 }
 
 // Waits on the relay's published readiness sentinel (relay.ready), which the
@@ -690,4 +789,65 @@ pub(crate) async fn drain_child_stdout(child: &mut Child) -> String {
         let _ = reader.read_line(&mut output).await;
     }
     output
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Stdio;
+    use std::time::{Duration, Instant};
+
+    /// Tokio guard must also send SIGTERM first. Mirrors the std guard test
+    /// but exercises the `tokio::process::Child` path whose `Drop` is the one
+    /// that previously did `kill_on_drop(true)` (SIGKILL).
+    #[tokio::test]
+    async fn tokio_relay_child_guard_sends_sigterm_before_sigkill_and_reaps() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let marker = dir.path().join("sigterm-marker-tokio");
+        assert!(!marker.exists());
+
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg(r#"trap 'touch "$1"; kill $! 2>/dev/null; exit 0' TERM; sleep 30 & wait"#)
+            .arg("sh")
+            .arg(&marker)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn trap child");
+        // Allow handler installation before Drop sends TERM.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let pid = child.id().expect("tokio child has pid");
+
+        let start = Instant::now();
+        {
+            let guard = RelayChildGuard::new(child);
+            drop(guard);
+        }
+        let elapsed = start.elapsed();
+
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while !marker.exists() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            marker.exists(),
+            "SIGTERM trap did not create marker at {}; tokio guard may have sent SIGKILL directly",
+            marker.display()
+        );
+        assert!(
+            elapsed < Duration::from_secs(1),
+            "Drop should be quick on SIGTERM; elapsed={elapsed:?}"
+        );
+        let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        assert_ne!(
+            rc, 0,
+            "pid {pid} should be reaped after tokio guard Drop; kill -0 succeeded"
+        );
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH),
+            "expected ESRCH after reap"
+        );
+    }
 }

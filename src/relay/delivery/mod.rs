@@ -1,5 +1,5 @@
 pub(crate) mod admission;
-mod async_worker;
+pub(crate) mod async_worker;
 mod choice_state;
 mod dispatch;
 pub(in crate::relay) mod fence;

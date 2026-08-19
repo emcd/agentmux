@@ -2,13 +2,12 @@ use agentmux::relay::SendOutcome;
 use agentmux::transports::WorkerReadinessState;
 use std::thread;
 use std::time::{Duration, Instant};
-use tempfile::TempDir;
 
 use super::helpers::*;
 
 #[test]
 fn acp_cancelled_stop_reason_is_accepted_for_async_dispatch() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         stop_reason: "cancelled".to_string(),
         ..AcpStubOptions::default()
@@ -21,7 +20,7 @@ fn acp_cancelled_stop_reason_is_accepted_for_async_dispatch() {
 
 #[test]
 fn acp_turn_timeout_is_accepted_for_async_dispatch() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
         ..AcpStubOptions::default()
@@ -47,7 +46,7 @@ fn acp_turn_timeout_is_accepted_for_async_dispatch() {
 /// transitions rather than on a sampled end-state.
 #[test]
 fn acp_does_not_terminalize_a_delayed_but_completing_turn() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
         ..AcpStubOptions::default()
@@ -118,7 +117,7 @@ fn acp_does_not_terminalize_a_delayed_but_completing_turn() {
 
 #[test]
 fn acp_successful_terminal_stop_reason_is_accepted_for_async_dispatch() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
@@ -130,7 +129,7 @@ fn acp_successful_terminal_stop_reason_is_accepted_for_async_dispatch() {
 
 #[test]
 fn acp_first_activity_acceptance_prevents_late_turn_timeout_failure() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
         update_count: 1,
@@ -145,7 +144,7 @@ fn acp_first_activity_acceptance_prevents_late_turn_timeout_failure() {
 
 #[test]
 fn acp_async_send_returns_on_dispatch_without_waiting_for_terminal_stop_reason() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         prompt_delay_sec: 2,
         ..AcpStubOptions::default()

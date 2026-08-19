@@ -1,13 +1,12 @@
 use std::time::Duration;
 
 use agentmux::relay::{RelayResponse, SendOutcome};
-use tempfile::TempDir;
 
 use super::helpers::*;
 
 #[test]
 fn acp_worker_state_transitions_busy_then_available() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
         update_count: 1,
@@ -40,7 +39,7 @@ fn acp_worker_state_transitions_busy_then_available() {
 
 #[test]
 fn acp_request_permission_keeps_worker_busy_while_pending_decision() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
         request_permission_on_prompt: true,
@@ -79,7 +78,7 @@ fn acp_worker_state_stays_available_after_protocol_error() {
     // persistent worker stays alive (Available) for subsequent prompts.
     // Only transport-level failures (broken pipe write, reader EOF) mark
     // the worker Unavailable.
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         fail_prompt: true,
         ..AcpStubOptions::default()
@@ -110,7 +109,7 @@ fn acp_worker_state_stays_available_after_protocol_error() {
 
 #[test]
 fn acp_async_queue_overflow_returns_runtime_queue_full() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
         ..AcpStubOptions::default()

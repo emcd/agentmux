@@ -5,7 +5,6 @@ use std::{
 
 use agentmux::relay::{ListedBundleState, RelayResponse, SendOutcome};
 use serde_json::Value;
-use tempfile::TempDir;
 
 use super::helpers::*;
 
@@ -17,7 +16,7 @@ use super::helpers::*;
 /// an ACP-only bundle impossible to bring up with `up` at all.
 #[test]
 fn reconcile_starts_acp_members_rather_than_reporting_them_failed() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let paths = flat_bundle_paths(temporary.path());
@@ -57,7 +56,7 @@ fn reconcile_starts_acp_members_rather_than_reporting_them_failed() {
 /// before this change too. The `list` side is what discriminates.
 #[test]
 fn a_busy_acp_session_reads_ready_on_both_up_and_list() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         never_respond_to_prompt: true,
         ..AcpStubOptions::default()
@@ -114,7 +113,7 @@ fn a_busy_acp_session_reads_ready_on_both_up_and_list() {
 
 #[test]
 fn acp_send_selects_session_new_without_coder_session_id() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, log_path) = write_configuration(temporary.path(), &options);
     let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
@@ -143,7 +142,7 @@ fn acp_send_selects_session_new_without_coder_session_id() {
 
 #[test]
 fn acp_send_reuses_persistent_worker_across_requests() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -165,7 +164,7 @@ fn acp_send_reuses_persistent_worker_across_requests() {
 
 #[test]
 fn acp_initialize_request_uses_protocol_version_integer_and_client_version() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, log_path) = write_configuration(temporary.path(), &options);
     let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
@@ -191,7 +190,7 @@ fn acp_initialize_request_uses_protocol_version_integer_and_client_version() {
 
 #[test]
 fn acp_session_setup_requests_include_mcp_servers_array() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, log_path) = write_configuration(temporary.path(), &options);
     let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
@@ -205,7 +204,7 @@ fn acp_session_setup_requests_include_mcp_servers_array() {
         Value::Array(Vec::new())
     );
 
-    let second_temporary = TempDir::new().expect("temporary");
+    let second_temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         configured_session_id: Some("sess-configured".to_string()),
         ..AcpStubOptions::default()
@@ -225,7 +224,7 @@ fn acp_session_setup_requests_include_mcp_servers_array() {
 
 #[test]
 fn acp_send_uses_persisted_session_id_when_config_id_is_absent() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         disconnect_on_prompt: Some("after_activity".to_string()),
         update_count: 1,
@@ -258,7 +257,7 @@ fn acp_send_uses_persisted_session_id_when_config_id_is_absent() {
 
 #[test]
 fn acp_send_selects_session_load_with_configured_coder_session_id() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         configured_session_id: Some("sess-abc".to_string()),
         ..AcpStubOptions::default()
@@ -274,7 +273,7 @@ fn acp_send_selects_session_load_with_configured_coder_session_id() {
 
 #[test]
 fn acp_load_failure_does_not_fallback_to_session_new() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         fail_load: true,
         configured_session_id: Some("sess-abc".to_string()),
@@ -288,7 +287,7 @@ fn acp_load_failure_does_not_fallback_to_session_new() {
 
 #[test]
 fn acp_new_failure_returns_runtime_stage_code() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         fail_new: true,
         ..AcpStubOptions::default()
@@ -314,7 +313,7 @@ fn acp_new_failure_returns_runtime_stage_code() {
 // bootstrap publishes a real Unavailable, so state-based waits race it).
 #[test]
 fn acp_repeated_new_failure_gives_up_instead_of_respawning_forever() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         fail_new: true,
         ..AcpStubOptions::default()
@@ -350,7 +349,7 @@ fn acp_repeated_new_failure_gives_up_instead_of_respawning_forever() {
 
 #[test]
 fn acp_missing_load_capability_returns_canonical_failure_code_and_details() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         load_capability: false,
         configured_session_id: Some("sess-abc".to_string()),
@@ -364,7 +363,7 @@ fn acp_missing_load_capability_returns_canonical_failure_code_and_details() {
 
 #[test]
 fn acp_missing_prompt_capability_returns_canonical_failure_code_and_details() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         prompt_capability: false,
         ..AcpStubOptions::default()
@@ -377,7 +376,7 @@ fn acp_missing_prompt_capability_returns_canonical_failure_code_and_details() {
 
 #[test]
 fn acp_initialize_failure_returns_canonical_runtime_code() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         fail_initialize: true,
         ..AcpStubOptions::default()
@@ -388,7 +387,7 @@ fn acp_initialize_failure_returns_canonical_runtime_code() {
 
 #[test]
 fn acp_prompt_failure_keeps_persistent_worker_available() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         fail_prompt: true,
         ..AcpStubOptions::default()
@@ -412,7 +411,7 @@ fn acp_prompt_failure_keeps_persistent_worker_available() {
 
 #[test]
 fn acp_disconnect_before_first_activity_engages_auto_respawn() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         disconnect_on_prompt: Some("before_activity".to_string()),
         ..AcpStubOptions::default()
@@ -438,7 +437,7 @@ fn acp_disconnect_before_first_activity_engages_auto_respawn() {
 
 #[test]
 fn acp_disconnect_after_first_activity_preserves_accepted_response() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         disconnect_on_prompt: Some("after_activity".to_string()),
         update_count: 1,

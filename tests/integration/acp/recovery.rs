@@ -3,13 +3,12 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tempfile::TempDir;
 
 use super::helpers::*;
 
 #[test]
 fn acp_next_send_recovers_after_connection_closed_failure() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let failing = AcpStubOptions {
         disconnect_on_prompt: Some("before_activity".to_string()),
         ..AcpStubOptions::default()
@@ -39,7 +38,7 @@ fn acp_next_send_recovers_after_connection_closed_failure() {
 
 #[test]
 fn acp_next_send_recovers_after_post_accept_disconnect() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let failing = AcpStubOptions {
         disconnect_on_prompt: Some("after_activity".to_string()),
         update_count: 1,
@@ -97,7 +96,7 @@ fn wait_for_worker_state(
 // channel-backed waits are deterministic; the budget reverts to 5 s.
 #[test]
 fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let exiting = AcpStubOptions {
         request_permission_on_prompt: true,
         disconnect_on_prompt: Some("after_activity".to_string()),
@@ -162,7 +161,7 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
 
 #[test]
 fn acp_respawn_with_missing_load_capability_is_permanent_failure() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     // load_capability is irrelevant on the initial bootstrap because no
     // session id is persisted yet; the worker uses session/new. After the
     // disconnect, the respawn finds the persisted id and must use

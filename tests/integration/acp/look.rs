@@ -7,13 +7,12 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-use tempfile::TempDir;
 
 use super::helpers::*;
 
 #[test]
 fn acp_send_without_startup_fails_when_worker_is_unavailable() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         update_count: 1,
         ..AcpStubOptions::default()
@@ -28,7 +27,7 @@ fn acp_send_without_startup_fails_when_worker_is_unavailable() {
 
 #[test]
 fn acp_look_without_startup_returns_unavailable_stale_metadata() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -46,7 +45,7 @@ fn acp_look_without_startup_returns_unavailable_stale_metadata() {
 
 #[test]
 fn acp_look_returns_oldest_to_newest_session_update_lines() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         update_count: 3,
         ..AcpStubOptions::default()
@@ -108,7 +107,7 @@ fn acp_look_coalesces_long_streaming_response_into_single_entry() {
     // into a single Agent entry whose `lines` carry all 1105 lines; the
     // entry-count cap is never reached (the cap-with-coalescence invariant
     // is exercised at the unit-test layer in tests/unit/acp/replay_coalescence.rs).
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         update_count: 1_105,
         ..AcpStubOptions::default()
@@ -165,7 +164,7 @@ fn acp_look_emits_one_coalesced_invocation_entry_for_tool_call_lifecycle() {
     // `StructuredEntry::Invocation` in `look` (status=Completed, with the
     // result payload), not the two separate entries (Pending + Completed)
     // that the pre-`/21` implementation would have produced.
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         tool_call_on_prompt: true,
         tool_call_id: "tc-look-1".to_string(),
@@ -238,7 +237,7 @@ fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
     // the User prompt entry, so `entries_total == 2`. The offset-walking
     // math still holds on this smaller buffer; the semantics of
     // `entries[total - N - offset .. total - offset]` are unchanged.
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         update_count: 10,
         ..AcpStubOptions::default()
@@ -308,7 +307,7 @@ fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
 
 #[test]
 fn acp_look_returns_empty_snapshot_when_no_updates_exist() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, _log_path) = write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -328,7 +327,7 @@ fn acp_look_reflects_outgoing_user_prompt_before_session_updates_arrive() {
     // the prompt SHALL be appended to the shared replay buffer as a
     // ReplayEntry::User immediately, so look reflects the submitted message
     // before any session/update response arrives.
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         update_count: 0,
         ..AcpStubOptions::default()
@@ -366,7 +365,7 @@ fn acp_look_captures_updates_emitted_after_prompt_response() {
     // reader-thread same-kind adjacency coalescence rule. The buffer ends with a User
     // prompt entry and a single Agent entry whose `lines` carry all 6
     // streamed chunks.
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         update_count: 3,
         update_after_response: true,
@@ -413,7 +412,7 @@ fn acp_look_captures_updates_emitted_after_prompt_response() {
 
 #[test]
 fn acp_look_reuses_persistent_worker_without_one_shot_replay_refresh() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         update_count: 1,
         update_line_prefix: "STALE".to_string(),
@@ -447,7 +446,7 @@ fn acp_look_reuses_persistent_worker_without_one_shot_replay_refresh() {
 /// well-formed, bounded, target-scoped ACP snapshot.
 #[test]
 fn acp_look_across_respawn_window_returns_clean_snapshots() {
-    let temporary = TempDir::new().expect("temporary");
+    let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         disconnect_on_prompt: Some("before_activity".to_string()),
         ..AcpStubOptions::default()
