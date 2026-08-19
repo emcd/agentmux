@@ -155,7 +155,8 @@ fn list_reports_hosted_round_trip_for_tmux_bundle() {
         "every tmux session should report ready=true after reconcile"
     );
 
-    shutdown_bundle_runtime(&paths.tmux_socket).expect("shutdown bundle runtime");
+    shutdown_bundle_runtime(bundle_name, &paths.runtime_directory, &paths.tmux_socket)
+        .expect("shutdown bundle runtime");
 
     let post_response = list_bundle(&config_root, bundle_name, &paths.runtime_directory);
     let RelayResponse::List {

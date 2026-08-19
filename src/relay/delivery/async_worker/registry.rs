@@ -29,7 +29,8 @@ use crate::transports::{OutputView, WorkerFailureReason, WorkerReadinessState};
 use crate::relay::delivery::observability;
 use crate::relay::{AsyncDeliveryTask, RelayError, relay_error};
 
-use super::terminal::complete_task_on_shutdown;
+use super::terminal::{complete_task_on_shutdown, complete_task_outcome_from_trigger};
+use crate::relay::delivery::guard::GuardTrigger;
 
 use std::path::{Path, PathBuf};
 
@@ -72,6 +73,15 @@ pub(in crate::relay::delivery) struct AsyncWorkerEntry {
     /// registered (so the shutdown-barrier count still reflects a worker that is
     /// still draining) until the worker unregisters at the end of its run.
     pub closing: bool,
+    /// Set when this worker's bundle is being torn down, asking it to end the way
+    /// process shutdown ends it.
+    ///
+    /// Distinct from `closing`, which the worker sets on *itself* once it has
+    /// begun draining. This is the inbound request, written by a lifecycle path
+    /// that is not the worker, and the worker observes it on its own poll rather
+    /// than being interrupted — the drain has to run on the worker's runtime, so
+    /// the only sound signal is one it reads.
+    pub stopping: bool,
     /// Set when this target's generation fence returned a negative verdict:
     /// cessation was not observed, so an old generation may still be able to write
     /// to the target.
@@ -280,6 +290,7 @@ pub(in crate::relay::delivery) fn register_worker(
                 last_failure: None,
                 acp_output_view: None,
                 closing: false,
+                stopping: false,
                 fail_stopped: false,
             },
         );
@@ -315,6 +326,7 @@ pub(in crate::relay::delivery) fn register_worker_if_absent(
             last_failure: None,
             acp_output_view: None,
             closing: false,
+            stopping: false,
             fail_stopped: false,
         },
     );
@@ -340,6 +352,95 @@ pub(in crate::relay::delivery) fn mark_worker_fail_stopped(
     {
         entry.fail_stopped = true;
     }
+}
+
+/// Whether this worker has been asked to stop because its bundle is being torn
+/// down. Read by the worker's own loop, which is the only thing that may act on
+/// it: the drain runs on the worker's runtime.
+pub(in crate::relay::delivery) fn worker_stop_requested(key: &AsyncWorkerKey) -> bool {
+    async_delivery_registry()
+        .workers
+        .lock()
+        .map(|workers| workers.get(key).is_some_and(|entry| entry.stopping))
+        .unwrap_or(false)
+}
+
+/// Asks every worker belonging to one bundle to stop, and reports how many were
+/// signalled.
+///
+/// A bundle is identified here exactly as the worker key identifies it — by
+/// namespace *and* runtime directory. Namespace alone would reach a same-named
+/// bundle hosted by a different relay out of the same process.
+///
+/// Fail-stopped workers are deliberately skipped. Their entry is the whole of the
+/// no-replacement guarantee: a negative fence verdict means an old generation may
+/// still be able to write to that target, and a bundle stop is not evidence that
+/// it stopped. Removing the entry so a reload could elect a replacement is exactly
+/// the ordering hazard the fail-stop exists to refuse, so such a target stays
+/// held until an operator resolves it.
+///
+/// Signalling only asks. The worker ends on its own next poll, which is what
+/// [`wait_for_bundle_workers_stopped`] waits for.
+pub(in crate::relay) fn stop_workers_for_bundle(
+    namespace: &str,
+    runtime_directory: &Path,
+) -> usize {
+    let Ok(mut workers) = async_delivery_registry().workers.lock() else {
+        return 0;
+    };
+    let mut signalled = 0usize;
+    for (key, entry) in workers.iter_mut() {
+        if key.namespace != namespace || key.runtime_directory != runtime_directory {
+            continue;
+        }
+        if entry.fail_stopped {
+            continue;
+        }
+        entry.stopping = true;
+        signalled += 1;
+    }
+    signalled
+}
+
+/// Waits for the workers of one bundle to finish draining and leave the registry,
+/// returning how many were still present when the wait ended.
+///
+/// A non-zero return is the honest report that teardown was not observed to
+/// complete, not a failure to act: the stop has been requested and the drain is
+/// bounded by the same fence every other generation ending uses. Fail-stopped
+/// entries are excluded for the reason [`stop_workers_for_bundle`] gives — they
+/// never leave, so counting them would turn every wait into a full timeout.
+pub(in crate::relay) fn wait_for_bundle_workers_stopped(
+    namespace: &str,
+    runtime_directory: &Path,
+    timeout: Duration,
+) -> usize {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let remaining = bundle_worker_count(namespace, runtime_directory);
+        if remaining == 0 || Instant::now() >= deadline {
+            return remaining;
+        }
+        thread::sleep(Duration::from_millis(ASYNC_SHUTDOWN_WAIT_POLL_MS));
+    }
+}
+
+/// Registered, non-fail-stopped workers belonging to one bundle.
+fn bundle_worker_count(namespace: &str, runtime_directory: &Path) -> usize {
+    async_delivery_registry()
+        .workers
+        .lock()
+        .map(|workers| {
+            workers
+                .iter()
+                .filter(|(key, entry)| {
+                    key.namespace == namespace
+                        && key.runtime_directory == runtime_directory
+                        && !entry.fail_stopped
+                })
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 /// Marks a worker as closing so it bounces new sends while its entry stays
@@ -576,12 +677,23 @@ pub(in crate::relay::delivery) fn release_pending_slot(pending: &AtomicUsize) {
     }
 }
 
-pub(in crate::relay::delivery) fn drop_pending_async_tasks_on_shutdown(
+pub(in crate::relay::delivery) fn drop_pending_async_tasks_on_stop(
     receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
     pending: &AtomicUsize,
+    trigger: GuardTrigger,
 ) {
     while let Ok(task) = receiver.try_recv() {
-        complete_task_on_shutdown(&task);
+        // Graceful shutdown keeps its own spelling, which the delivery spec
+        // requires of a `Pending` member the relay still held. Every other ending
+        // goes through the guard's evidence order, which reaches `not_submitted`
+        // for a member that was never authorized — true, and without claiming a
+        // relay shutdown that is not happening. A bundle stop reported as a
+        // shutdown would tell this sender the relay is going away while it
+        // carries on serving every other bundle.
+        match trigger {
+            GuardTrigger::GracefulShutdown => complete_task_on_shutdown(&task),
+            _ => complete_task_outcome_from_trigger(&task, trigger),
+        }
         release_pending_slot(pending);
     }
 }

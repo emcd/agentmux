@@ -90,6 +90,10 @@ pub(in crate::relay) enum GuardTrigger {
     ChannelClosed,
     /// The relay is shutting down gracefully.
     GracefulShutdown,
+    /// This member's bundle is being torn down while the relay keeps serving
+    /// others. States that the owning worker ended, not that the target failed:
+    /// the bundle stopped, which says nothing about whether the target was well.
+    BundleStop,
     /// The relay's own supervised execution ran past
     /// `[delivery].submission-timeout-ms` and its generation fence reached a
     /// verdict with this member still unresolved.
@@ -108,6 +112,7 @@ impl GuardTrigger {
             Self::CollectorPanic => "delivery collector task panicked before resolving",
             Self::ChannelClosed => "transport outcome channel closed before resolving",
             Self::GracefulShutdown => "relay shut down before this member resolved",
+            Self::BundleStop => "bundle stopped before this member resolved",
             Self::ExecutionBound => {
                 "relay execution exceeded the submission bound before this member resolved"
             }

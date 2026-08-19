@@ -20,6 +20,7 @@ use agentmux::configuration::ConfigurationRoots;
 use agentmux::relay::{RelayRequest, RelayResponse, handle_request};
 use tempfile::TempDir;
 
+mod bundle_teardown;
 mod contract;
 mod error;
 mod list;

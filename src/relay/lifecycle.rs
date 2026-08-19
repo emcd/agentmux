@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::Path, thread};
+use std::{collections::HashSet, path::Path, thread, time::Duration};
 
 use serde_json::json;
 use time::OffsetDateTime;
@@ -18,11 +18,17 @@ use super::{
     map_config, map_tui_config, relay_error,
 };
 use crate::relay::authorization::{choices_pending_max, load_authorization_context};
-use crate::relay::delivery::initialize_acp_target_for_startup;
+use crate::relay::delivery::{
+    initialize_acp_target_for_startup, stop_workers_for_bundle, wait_for_bundle_workers_stopped,
+};
 use crate::tmux::lifecycle::{
     TmuxLifecycleError, cleanup_tmux_server_when_unowned, create_member_with_retry,
     list_owned_sessions, prune_owned_session, session_exists, startup_tmux_member,
 };
+
+/// Room beyond the generation fence's own budget for a stopping worker to finish
+/// its bookkeeping and leave the registry.
+const BUNDLE_WORKER_STOP_MARGIN_MS: u64 = 1_000;
 
 impl From<TmuxLifecycleError> for RelayError {
     fn from(error: TmuxLifecycleError) -> Self {
@@ -65,13 +71,45 @@ pub(super) fn preflight_bundle_configuration(
     Ok(())
 }
 
-/// Prunes managed sessions and reaps tmux server when safe during shutdown.
+/// Tears one bundle's runtime down: stops its delivery workers, prunes its
+/// managed tmux sessions, and reaps the tmux server when safe.
+///
+/// Every teardown path reaches a bundle's runtime through here — `down`, a
+/// watcher reload, and a watcher unload — so the transports it owns end wherever
+/// it is stopped rather than only when the process exits. A tmux-only teardown
+/// left an ACP member's worker running with its child process, and on a reload
+/// that surviving worker was handed straight back to the restarted bundle,
+/// which is how an edited configuration could report success while the old agent
+/// kept serving.
+///
+/// Workers are asked to stop and then waited for, because the drain runs on the
+/// worker's own runtime: it closes itself to new sends, resolves what it holds,
+/// and ends its generation through the same bounded fence a relay shutdown uses.
+/// The wait is bounded and a worker still present when it elapses is reported
+/// rather than waited on further — teardown that cannot say it finished is worth
+/// more than a teardown that blocks the operator's request indefinitely.
 ///
 /// # Errors
 ///
 /// Returns internal failures when tmux session operations fail.
-pub(super) fn shutdown_bundle_runtime(tmux_socket: &Path) -> Result<ShutdownReport, RelayError> {
+pub(super) fn shutdown_bundle_runtime(
+    bundle_name: &str,
+    runtime_directory: &Path,
+    tmux_socket: &Path,
+) -> Result<ShutdownReport, RelayError> {
     let mut report = ShutdownReport::default();
+    let signalled = stop_workers_for_bundle(bundle_name, runtime_directory);
+    // Bounded by what the operator configured the fence to spend, plus room for
+    // the worker's own bookkeeping afterwards. Deriving it rather than fixing a
+    // constant keeps a relay configured for slow targets from reporting a
+    // teardown incomplete that its own settings said to wait for.
+    let stop_timeout = Duration::from_millis(
+        crate::relay::delivery::admission::delivery_configuration().fence_observation_timeout_ms
+            + BUNDLE_WORKER_STOP_MARGIN_MS,
+    );
+    report.signalled_worker_count = signalled;
+    report.unstopped_worker_count =
+        wait_for_bundle_workers_stopped(bundle_name, runtime_directory, stop_timeout);
     let mut owned_sessions = list_owned_sessions(tmux_socket)?;
     owned_sessions.sort();
     for session_name in owned_sessions {

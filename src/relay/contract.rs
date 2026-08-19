@@ -231,11 +231,25 @@ pub struct ReconciliationReport {
     pub ready_session_count: usize,
 }
 
-/// Managed-session cleanup results for relay shutdown.
+/// Managed-session cleanup results for a bundle runtime teardown.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ShutdownReport {
     pub pruned_sessions: Vec<String>,
     pub killed_tmux_server: bool,
+    /// Delivery workers this teardown asked to stop.
+    ///
+    /// What the teardown *did*, which is what says whether it changed anything.
+    /// Deliberately not "workers observed to leave": a stop whose drain outlives
+    /// the bounded wait still ended the bundle's hosting, and reporting nothing
+    /// happened would be the same misreport as counting tmux effects alone.
+    #[serde(default)]
+    pub signalled_worker_count: usize,
+    /// Delivery workers still registered when the bounded wait elapsed. Non-zero
+    /// is a report that teardown was not observed to finish, not that it was not
+    /// attempted: the stop was requested and each worker's drain is bounded by
+    /// the generation fence.
+    #[serde(default)]
+    pub unstopped_worker_count: usize,
 }
 
 /// Per-bundle startup pass outcome for relay host autostart.

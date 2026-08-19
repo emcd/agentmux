@@ -576,12 +576,14 @@ mod unbound_resolution_tests {
             GuardTrigger::ChannelClosed,
             GuardTrigger::GracefulShutdown,
             GuardTrigger::ExecutionBound,
+            GuardTrigger::BundleStop,
         ] {
             let message_id = match trigger {
                 GuardTrigger::CollectorPanic => "unbound-collector-panic",
                 GuardTrigger::ChannelClosed => "unbound-channel-closed",
                 GuardTrigger::GracefulShutdown => "unbound-graceful-shutdown",
                 GuardTrigger::ExecutionBound => "unbound-execution-bound",
+                GuardTrigger::BundleStop => "unbound-bundle-stop",
             };
             let target = AdmissionTargetKey::new(
                 "unbound-test",

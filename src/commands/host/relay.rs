@@ -665,8 +665,12 @@ fn cleanup_relay_host(
     remove_relay_ready_sentinel(&relay_paths);
     shared::remove_relay_socket_file(&relay_paths.relay_socket)?;
     for paths in bundle_paths {
-        let shutdown =
-            shutdown_bundle_runtime(&paths.tmux_socket).map_err(shared::map_reconcile_error)?;
+        let shutdown = shutdown_bundle_runtime(
+            paths.bundle_name.as_str(),
+            &paths.runtime_directory,
+            &paths.tmux_socket,
+        )
+        .map_err(shared::map_reconcile_error)?;
         emit_inscription(
             "relay.shutdown.complete",
             &json!({
