@@ -400,6 +400,13 @@ fn creation_failure_record(
     member: &BundleMember,
     error: &TmuxLifecycleError,
 ) -> StartupFailureRecord {
+    let cause = error
+        .details
+        .as_ref()
+        .and_then(|details| details.get("cause"))
+        .and_then(|value| value.as_str())
+        .unwrap_or(error.message.as_str())
+        .to_string();
     StartupFailureRecord {
         session_id: member.id.clone(),
         transport: member.target.session_type().into(),
@@ -409,7 +416,7 @@ fn creation_failure_record(
         sequence: 0,
         details: Some(json!({
             "session_id": member.id,
-            "cause": error.message,
+            "cause": cause,
             "error_code": error.code,
         })),
     }

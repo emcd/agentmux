@@ -52,12 +52,19 @@ pub(crate) fn startup_tmux_member(
         Ok(true) => {}
         Ok(false) => {
             if let Err(error) = create_member_with_retry(tmux_socket, member) {
+                let cause = error
+                    .details
+                    .as_ref()
+                    .and_then(|details| details.get("cause"))
+                    .and_then(|value| value.as_str())
+                    .unwrap_or(error.message.as_str())
+                    .to_string();
                 return Err((
                     "runtime_startup_failed".to_string(),
                     "failed to create tmux session during startup".to_string(),
                     Some(json!({
                         "session_id": member.id,
-                        "cause": error.message,
+                        "cause": cause,
                         "error_code": error.code,
                     })),
                 ));

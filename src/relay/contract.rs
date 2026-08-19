@@ -284,13 +284,32 @@ impl RelayError {
         let Some(details) = self.details.as_ref() else {
             return self.message.clone();
         };
-        match (
+        if let (Some(path), Some(cause)) = (
             details.get("path").and_then(Value::as_str),
             details.get("cause").and_then(Value::as_str),
         ) {
-            (Some(path), Some(cause)) => format!("{} ({path}: {cause})", self.message),
-            _ => self.message.clone(),
+            return format!("{} ({path}: {cause})", self.message);
         }
+        if let (Some(context), Some(cause)) = (
+            details.get("context").and_then(Value::as_str),
+            details.get("cause").and_then(Value::as_str),
+        ) {
+            return format!("{} ({context}: {cause})", self.message);
+        }
+        if let Some(cause) = details.get("cause").and_then(Value::as_str) {
+            if let Some(session) = details
+                .get("session_name")
+                .or_else(|| details.get("session_id"))
+                .and_then(Value::as_str)
+            {
+                return format!("{} (session {session}: {cause})", self.message);
+            }
+            if let Some(bundle) = details.get("bundle_name").and_then(Value::as_str) {
+                return format!("{} (bundle {bundle}: {cause})", self.message);
+            }
+            return format!("{}: {cause}", self.message);
+        }
+        self.message.clone()
     }
 }
 
