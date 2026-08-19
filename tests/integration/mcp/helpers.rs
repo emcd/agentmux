@@ -9,10 +9,11 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant},
 };
 
 use serde_json::{Map, Value, json};
+use tempfile::TempDir;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt},
     process::Command,
@@ -28,19 +29,63 @@ pub(crate) const SENDER_SESSION: &str = "alpha";
 
 pub(crate) type RelayResponder = Arc<dyn Fn(&Value) -> Value + Send + Sync>;
 
+/// Usable `sockaddr_un.sun_path` bytes on Darwin, the tightest target this
+/// suite builds for and the one where the runtime hands the full path to
+/// `bind`. Mirrors the non-Linux arm of
+/// [`agentmux::runtime::sockets::UNIX_SOCKET_PATH_MAXIMUM`], which resolves per
+/// target and so reports the roomier Linux figure when compiled here.
+const DARWIN_SOCKET_PATH_MAXIMUM: usize = 103;
+
+/// Bytes of that limit reserved for the host's temporary directory, trailing
+/// separator included. `/tmp/` spends 5; the `/var/folders/<..>/<..>/T/` path
+/// macOS hands each user runs to roughly 49, which is the figure worth
+/// budgeting against.
+const HOST_TEMPORARY_ROOT_RESERVE: usize = 49;
+
 pub(crate) struct TestRuntime {
     pub root: PathBuf,
     pub config_root: PathBuf,
     pub state_root: PathBuf,
     pub relay_socket: PathBuf,
+    // Declared last so it is dropped last: dropping it removes `root`, and the
+    // paths above must stay valid for the whole fixture lifetime.
+    _temporary: TempDir,
 }
 
 impl TestRuntime {
     pub(crate) fn create() -> Self {
-        let root = temporary_root("mcp-tool-surface");
+        // Beneath the system temporary directory rather than
+        // `.auxiliary/temporary`: the relay socket under this root must fit
+        // `sun_path`, and a repository-rooted fixture spends that budget on the
+        // checkout path before the fixture spends any of it. The name is kept
+        // short for the same reason — a `<prefix>-<pid>-<nanos>` name overflows
+        // Darwin's limit even from a short root.
+        //
+        // The root is absolute either way, which matters independently: the
+        // runtime normalizes the state root it is given and reports resolved
+        // paths back, so a relative fixture root would leave assertions naming
+        // a path the runtime never produces.
+        let temporary = TempDir::with_prefix("mcp-").expect("create temporary root");
+        let root = temporary.path().to_path_buf();
         let config_root = root.join("config");
         let state_root = root.join("state");
         let relay_socket = state_root.join("relay.sock");
+        // What the fixture itself spends, rather than the assembled path: a
+        // Linux run assembles that path under `/tmp` and it fits whatever the
+        // fixture is named, so measuring it here would pass for a name that
+        // strands macOS CI. The fixture's own share is the same on every host.
+        let fixture_share = root
+            .file_name()
+            .expect("temporary root directory name")
+            .len()
+            + "/state/relay.sock".len();
+        let budget = DARWIN_SOCKET_PATH_MAXIMUM - HOST_TEMPORARY_ROOT_RESERVE;
+        assert!(
+            fixture_share <= budget,
+            "fixture spends {fixture_share} bytes of the socket path, over its \
+             {budget}-byte share of Darwin's {DARWIN_SOCKET_PATH_MAXIMUM}-byte sun_path limit: {}",
+            relay_socket.display()
+        );
 
         fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
         fs::create_dir_all(&state_root).expect("create state root");
@@ -55,13 +100,8 @@ impl TestRuntime {
             config_root,
             state_root,
             relay_socket,
+            _temporary: temporary,
         }
-    }
-}
-
-impl Drop for TestRuntime {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.root);
     }
 }
 
@@ -91,11 +131,10 @@ impl FakeRelay {
         if let Some(parent) = socket_path.parent() {
             fs::create_dir_all(parent).expect("create relay socket parent");
         }
-        // Through the crate's own helper rather than `UnixListener::bind`: the
-        // fixture root is an absolute path inside the checkout, which on a
-        // normal working copy already exceeds `sun_path`. Binding it the way
-        // the relay does is both what makes this work and what keeps the
-        // harness honest about the production path.
+        // Through the crate's own helper rather than `UnixListener::bind`, so
+        // the fixture addresses its socket exactly as the relay addresses its
+        // own — including the parent-directory form Linux uses to stay
+        // independent of how deep the state root sits.
         let listener = bind_unix_listener(&socket_path).expect("bind fake relay");
         listener
             .set_nonblocking(true)
@@ -591,20 +630,6 @@ pub(crate) fn default_empty_global_responder() -> RelayResponder {
             }),
         },
     )
-}
-
-pub(crate) fn temporary_root(prefix: &str) -> PathBuf {
-    let pid = std::process::id();
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos();
-    let root = PathBuf::from(".auxiliary/temporary").join(format!("{prefix}-{pid}-{nanos}"));
-    fs::create_dir_all(&root).expect("create temporary root");
-    // Absolute, because the runtime normalizes the state root it is given and
-    // then reports resolved paths back. A relative fixture root would leave the
-    // harness asserting a path the runtime never produces.
-    std::path::absolute(&root).expect("absolute temporary root")
 }
 
 pub(crate) fn decode_tool_payload(response: &Value) -> Value {
