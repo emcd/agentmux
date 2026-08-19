@@ -7,6 +7,7 @@ use crate::runtime::paths::{BundleRuntimePaths, tmux_socket_path_for_runtime_dir
 use crate::transports::WorkerReadinessState;
 
 mod authorization;
+mod catalog;
 mod client;
 mod connection;
 mod constants;
@@ -30,10 +31,9 @@ pub use self::authorization::{
     load_relay_runtime_configuration, parse_relay_bool_env_value, resolve_relay_bool_setting,
 };
 
+pub use self::catalog::{BundleCatalog, HostingIntent};
 pub use self::client::{RelayStreamSession, request_relay};
-pub use self::connection::{
-    BundleCatalog, ConnectionServeContext, HostingIntent, serve_connection,
-};
+pub use self::connection::{ConnectionServeContext, serve_connection};
 use self::constants::*;
 use self::context::*;
 pub use self::contract::*;

@@ -13,7 +13,7 @@ use crate::{
 };
 
 use super::super::authorization::RouteAuthorization;
-use super::super::connection::BundleCatalog;
+use super::super::catalog::BundleCatalog;
 use super::super::delivery::get_output_view;
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, reject_cross_relay_unsupported,
