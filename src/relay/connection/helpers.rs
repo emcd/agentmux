@@ -1,26 +1,27 @@
-//! Resolve_* / `*_error` helper cluster used by `serve_connection_frames`.
+//! Resolve_* / `*_error` helper cluster shared by the two frame handlers.
 //!
 //! Free-fn helpers for namespace routing, principal resolution, and error
-//! shaping. Extracted from `connection.rs` (now `connection/mod.rs`) so the
-//! state-machine file can stay focused on stream registration and frame
-//! dispatch, with these pure helpers easy to read side-by-side. Every helper
-//! is thread-safe and takes its inputs as arguments; the cluster holds no
-//! internal state.
+//! shaping, kept apart from [`super::hello`] and [`super::requests`] so those
+//! read as frame handling rather than as routing arithmetic. Every helper is
+//! thread-safe and takes its inputs as arguments; the cluster holds no internal
+//! state.
 
 use std::path::Path;
 
 use serde_json::{Value, json};
 use time::OffsetDateTime;
 
+use super::super::catalog::BundleCatalog;
 use super::super::handlers::emit_choices_snapshot_for_ui_registration;
 use super::super::identity::{
     PrincipalStore, PrincipalType, VerifiedIdentity, split_principal_id, verify_hello_credential,
 };
+use super::super::stream::HelloFrame;
 use super::super::stream::StreamRegistration;
-use super::{
-    BundleCatalog, BundleRuntimePaths, HelloBinding, HelloFrame, RelayError, SCHEMA_VERSION,
-};
+use super::super::{RelayError, SCHEMA_VERSION};
+use super::hello::HelloBinding;
 use crate::relay::errors::{map_config, map_tui_config};
+use crate::runtime::paths::BundleRuntimePaths;
 use crate::{
     configuration::{
         ConfigurationRoots, SessionType, load_bundle_configuration, load_policy_ids,

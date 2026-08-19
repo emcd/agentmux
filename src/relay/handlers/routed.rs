@@ -16,7 +16,7 @@ use crate::configuration::{BundleConfiguration, ConfigurationRoots, load_bundle_
 use super::super::authorization::{
     AuthorizationContext, RouteAuthorization, load_authorization_context,
 };
-use super::super::connection::BundleCatalog;
+use super::super::catalog::BundleCatalog;
 use super::super::lifecycle::{load_hosted_bundle, stamp_hosted_bundle};
 use super::super::routing::{OperationProfile, ResolvedRoute};
 use super::super::{

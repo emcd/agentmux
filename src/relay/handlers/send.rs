@@ -13,7 +13,7 @@ use super::super::authorization::{
     AuthorizationContext, RouteAuthorization, choose_authorized_ui_sessions, has_ui_session,
     load_authorization_context, reject_cross_relay_ingress,
 };
-use super::super::connection::BundleCatalog;
+use super::super::catalog::BundleCatalog;
 use super::super::delivery::admission::{
     AdmissionTargetKey, admit, canonical_payload_bytes, resolve_target_session_type,
     rollback_admission,

@@ -44,23 +44,37 @@ exported from `src/relay/mod.rs`.
 - `client.rs`
   - relay socket client helpers and persistent stream session request/event
     polling.
-- `connection.rs`
-  - relay socket serving, stream hello/request frame dispatch, Hello credential
-    verification, and connection write-timeout handling. The Hello frame carries
-    `principal_id` + `identity_token`; the token is verified against the
-    principal store and the namespace decides binding. Session principals
-    (`<session>@<bundle>`) look up their bundle in the `BundleCatalog` and bind
-    the connection to it; non-session principals (`@GLOBAL`/`@EXTERNAL`/`@RELAY`)
-    skip the catalog and are not bundle-bound. A request frame's optional
-    `namespace` selects the routing bundle (overriding any binding); absent
-    that, the bound bundle is used, and a relay-wide principal with neither is
-    rejected. The catalog holds `CatalogEntry { paths, hosting_intent }` per
-    loaded bundle: `HostingIntent::Run` is the default for an autostart bundle
-    and is set by `up` regardless of current runtime state (the operator's
-    request to host is the authoritative signal); `HostingIntent::Hold` is the
-    initial intent for bundles without autostart and is what `down` sets when
-    unhosting. `is_held()` is the single check the watcher uses to decide
-    whether a configuration edit reloads or is suppressed.
+- `catalog.rs`
+  - the relay's live map of loaded bundles. Relay-wide rather than
+    connection-scoped: the watcher writes it as bundles load, unload, and
+    reload; the handlers and the host read it. Holds
+    `CatalogEntry { paths, hosting_intent }` per loaded bundle:
+    `HostingIntent::Run` is the default for an autostart bundle and is set by
+    `up` regardless of current runtime state (the operator's request to host is
+    the authoritative signal); `HostingIntent::Hold` is the initial intent for
+    bundles without autostart and is what `down` sets when unhosting.
+    `is_held()` is the single check the watcher uses to decide whether a
+    configuration edit reloads or is suppressed.
+- `connection/`
+  - relay socket serving, split along the frame boundary; `mod.rs` is an
+    import-only hub. `context.rs` holds the connection-independent handles a
+    connection is served against. `serve.rs` owns one connection's lifetime —
+    the registration drop-guard, the frame loop, and `ConnectionBinding`, the
+    identity a Hello establishes for every frame after it. `framing.rs` sits
+    below frame semantics: line reads off the socket half, and the
+    blocking-pool hand-off that keeps synchronous handlers off the runtime's
+    worker threads. `hello.rs` and `requests.rs` handle the two frame kinds,
+    and `helpers.rs` holds the routing and error-shaping functions they share.
+  - a handler lifted out of the frame loop cannot `break` or `continue` it, so
+    both return a `FrameOutcome` and the loop performs the choice.
+  - the Hello frame carries `principal_id` + `identity_token`; the token is
+    verified against the principal store and the namespace decides binding.
+    Session principals (`<session>@<bundle>`) look up their bundle in the
+    `BundleCatalog` and bind the connection to it; non-session principals
+    (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) skip the catalog and are not bundle-bound.
+    A request frame's optional `namespace` selects the routing bundle
+    (overriding any binding); absent that, the bound bundle is used, and a
+    relay-wide principal with neither is rejected.
 - `drain.rs`
   - cooperative connection-worker shutdown. `ConnectionDrainCoordinator` is
     shared between the relay host and its connection workers: the host fires
@@ -100,12 +114,12 @@ exported from `src/relay/mod.rs`.
   - relay-wide identity administration: `new peer` credential registration and
     `change psk` rotation. Operates on the relay-level principal store with no
     bundle context; dispatched via `dispatch_identity_admin` before the
-    per-bundle routing path in `connection.rs`.
+    per-bundle routing path in `connection/requests.rs`.
 - `handlers/discovery.rs`
   - relay-wide cross-relay discovery: configured relay-alias enumeration
     (`ListRelays`), and namespace/principal discovery (`DiscoverNamespaces` /
     `DiscoverPrincipals`) served locally or forwarded one hop to a configured
-    peer. Dispatched via `dispatch_discovery` from `connection.rs` alongside
+    peer. Dispatched via `dispatch_discovery` from `connection/requests.rs` alongside
     identity administration, with no bundle context. See Cross-Relay
     Discovery under Runtime Behavior Notes for the trust boundaries.
 - `lifecycle.rs`

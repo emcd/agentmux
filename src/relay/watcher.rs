@@ -33,7 +33,7 @@ use crate::runtime::error::RuntimeError;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
 
-use super::connection::{BundleCatalog, HostingIntent};
+use super::catalog::{BundleCatalog, HostingIntent};
 use super::lifecycle::{
     register_configured_bundle_principals, shutdown_bundle_runtime, startup_bundle,
 };
