@@ -74,6 +74,9 @@ path = "src/bin/agentmux_pty.rs"
 required-features = ["pty"]
 
 [dev-dependencies]
+# Also a runtime dependency; declared here so the external test crates can name
+# the debouncer's event types when driving the watch loop directly.
+notify-debouncer-full = "0.7.0"
 tempfile = "3.18.0"
 
 [lints.clippy]

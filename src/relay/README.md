@@ -228,6 +228,26 @@ exported from `src/relay/mod.rs`.
     (or with `--no-autostart`) is seeded with `Hold` and emits
     `relay.bundle.loaded_held` instead of starting sessions, so the operator
     brings it up on demand.
+  - an event is only ever a trigger to look. Reconciliation re-scans every layer
+    from disk and diffs by fingerprint, so nothing about the outcome depends on
+    which event arrived — which is what makes it safe to reconcile on a timer as
+    well. `run_bundle_watch_loop` therefore wakes on each debounced batch *and*
+    at least once per `BUNDLE_WATCH_SWEEP_INTERVAL`, because notification is
+    best-effort on every platform and one of its failure modes is silent:
+    `notify`'s FSEvents backend renders a coalesced record as `[Create, Remove]`
+    for one path, and `notify-debouncer-full` cancels that pair as a file that
+    never existed, emitting nothing at all. Without the sweep a bundle file
+    created and later removed on macOS can leave the relay serving a definition
+    that is gone. The sweep makes a dropped trigger a bounded delay rather than a
+    permanent miss.
+  - access-only batches are dropped rather than reconciled, and deliberately do
+    **not** restart the sweep timer. Reconciliation reads every watched `.toml`,
+    so acting on its own reads would rescan once per debounce interval forever;
+    letting those reads postpone the sweep would starve the backstop on exactly
+    the busiest relay. This is why `notify-debouncer-mini` is not a candidate
+    here despite the relay using none of `notify-debouncer-full`'s other
+    intelligence: mini collapses every event to `Any`, leaving no way to tell a
+    read from a write.
 - `tmux.rs`
   - tmux/process adapters used by delivery and look paths.
 - `delivery/`
