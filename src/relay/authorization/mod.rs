@@ -4,8 +4,10 @@
 //! ([`AuthorizationContext`] and the policy primitives), and the three seams act
 //! on them:
 //!
-//! - [`loading`]: parse `policies.toml` / `relay.toml` into validated presets and
-//!   build an [`AuthorizationContext`].
+//! - [`loading`]: parse `policies.toml` into validated presets and build an
+//!   [`AuthorizationContext`]. The relay's own runtime configuration lives in
+//!   [`super::configuration`]; this seam reads one value from it (the choices
+//!   queue bound carried on the context) and owns none of it.
 //! - [`resolution`]: map a requester (a bundle-member session or a relay-wide
 //!   principal) to its resolved policy controls, plus the UI-session accessors.
 //! - [`checks`]: the uniform `authorize_*` decisions over a resolved route or a
@@ -26,10 +28,6 @@ pub(in crate::relay) use checks::{
 };
 pub(in crate::relay) use context::AuthorizationContext;
 pub(in crate::relay) use loading::load_authorization_context;
-pub use loading::{
-    DeliveryConfiguration, PeerConfiguration, RelayRuntimeConfiguration,
-    load_relay_runtime_configuration, parse_relay_bool_env_value, resolve_relay_bool_setting,
-};
 pub(in crate::relay) use resolution::{
     choices_pending_max, choose_authorized_ui_sessions, has_ui_session, ui_session_display_name,
 };

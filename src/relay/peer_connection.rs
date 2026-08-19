@@ -27,8 +27,8 @@ use serde_json::json;
 
 use crate::runtime::paths::peer_relay_psk_path;
 
-use super::authorization::PeerConfiguration;
 use super::client::RelayStreamSession;
+use super::configuration::PeerConfiguration;
 use super::{RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse, relay_error};
 
 /// One configured outbound peer endpoint.

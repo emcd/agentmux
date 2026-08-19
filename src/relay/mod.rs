@@ -9,6 +9,7 @@ use crate::transports::WorkerReadinessState;
 mod authorization;
 mod catalog;
 mod client;
+mod configuration;
 mod connection;
 mod constants;
 mod context;
@@ -26,7 +27,7 @@ mod stream;
 mod watcher;
 
 use self::authorization::load_authorization_context;
-pub use self::authorization::{
+pub use self::configuration::{
     DeliveryConfiguration, PeerConfiguration, RelayRuntimeConfiguration,
     load_relay_runtime_configuration, parse_relay_bool_env_value, resolve_relay_bool_setting,
 };
