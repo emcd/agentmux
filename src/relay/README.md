@@ -89,6 +89,23 @@ exported from `src/relay/mod.rs`.
     (`ResolvedRoute` / `ResolvedTarget`), and maps each target's relationship to
     the requester (self / same-bundle / peer bundle) onto a uniform scope tier
     (`self` / `home` / `all`). Consumed by the authorization stage.
+- `configuration/`
+  - the relay's own runtime configuration, distinct from `crate::configuration`,
+    which resolves the configuration *roots* and the bundle/coder/policy
+    artifacts within them. This module owns only what governs the relay process:
+    whether it watches bundle files, whether it requires session credentials,
+    its delivery quotas and timeouts, and the peers it dials. `mod.rs` is an
+    import-only hub over `delivery.rs` (the `[delivery]` table, its ranges, and
+    the cross-key quota relations), `relay_file.rs` (parsing `relay.toml`),
+    `environment.rs` (the override layers and the precedence rule), and
+    `runtime.rs` (the normalized `RelayRuntimeConfiguration` everything else
+    reads).
+  - `authorization` depends on this module, not the reverse:
+    `load_authorization_context` reads one value from it, the choices queue
+    bound it carries on `AuthorizationContext`. That bound is a relay setting
+    rather than an authorization decision — no consumer of it authorizes
+    anything — so it rides the context only because the context is what is
+    already threaded from load down to the handlers.
 - `authorization.rs`
   - policy loading plus the uniform, data-driven authorization stage
     (`authorize_route`): the requester's controls are always resolved in the
