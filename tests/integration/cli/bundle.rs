@@ -177,6 +177,15 @@ struct BundleCliHarness {
 
 impl BundleCliHarness {
     fn start(members: &[&str]) -> Self {
+        Self::start_bundles(&[("alpha", members)], None)
+    }
+
+    /// Multi-bundle variant: each entry is a bundle name and its member session
+    /// ids, and every bundle joins `groups` when one is given so a selector can
+    /// reach them together. Member ids are keyed to the one shared fake tmux, so
+    /// they must be distinct across bundles for the per-session failure controls
+    /// to name one bundle's member.
+    fn start_bundles(bundles: &[(&str, &[&str])], groups: Option<&[&str]>) -> Self {
         let temporary = TempDir::new().expect("temporary");
         let config_root = temporary.path().join("config");
         let state_root = temporary.path().join("state");
@@ -184,7 +193,15 @@ impl BundleCliHarness {
         fs::create_dir_all(&config_root).expect("create config root");
         fs::create_dir_all(&state_root).expect("create state root");
         fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-        write_bundle_configuration_with_options(&config_root, "alpha", None, members, Some(false));
+        for (bundle_name, members) in bundles {
+            write_bundle_configuration_with_options(
+                &config_root,
+                bundle_name,
+                groups,
+                members,
+                Some(false),
+            );
+        }
         let fake_tmux = temporary.path().join("fake-tmux.sh");
         write_fake_tmux_script(&fake_tmux);
 
@@ -342,6 +359,9 @@ fn up_reports_a_bundle_with_no_ready_session_as_failed() {
     mark_fake_tmux_session_unready(&harness.fake_tmux, "u");
 
     let up = harness.run(&["up", "alpha"]);
+    // Parsed before the status is asserted, and deliberately: the payload has to
+    // survive the failure. Answering for the failed count ahead of rendering
+    // would leave the caller an exit code and nothing naming what failed.
     let summary = parse_summary_json_line(&up.stdout);
 
     // Both sessions were created; neither is ready. `degraded` would claim the
@@ -354,6 +374,53 @@ fn up_reports_a_bundle_with_no_ready_session_as_failed() {
         .as_array()
         .unwrap_or_else(|| panic!("expected failed_sessions detail: {summary}"));
     assert_eq!(failed_sessions.len(), 2, "unexpected detail: {summary}");
+
+    assert!(
+        !up.status.success(),
+        "up should exit non-zero when a bundle failed: {summary}"
+    );
+    let stderr = String::from_utf8_lossy(&up.stderr);
+    assert!(
+        stderr.contains("runtime_transition_failed"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn up_exits_non_zero_when_one_bundle_of_a_group_fails() {
+    let harness =
+        BundleCliHarness::start_bundles(&[("alpha", &["a"]), ("beta", &["b"])], Some(&["dev"]));
+    // Only `beta`'s member is held unready, so the run genuinely mixes: `alpha`
+    // comes up whole and `beta` has nothing serving.
+    mark_fake_tmux_session_unready(&harness.fake_tmux, "b");
+
+    let up = harness.run(&["up", "--group", "dev"]);
+    let summary = parse_summary_json_line(&up.stdout);
+
+    assert_eq!(summary["changed_bundle_count"], 1, "unexpected: {summary}");
+    assert_eq!(summary["failed_bundle_count"], 1, "unexpected: {summary}");
+    assert_eq!(summary["changed_any"], true, "unexpected: {summary}");
+
+    // The bundle that came up must still be reported as hosted: a partial run
+    // does not get rewritten into a total failure by the exit status.
+    let outcomes: Vec<&str> = summary["bundles"]
+        .as_array()
+        .unwrap_or_else(|| panic!("expected bundles array: {summary}"))
+        .iter()
+        .map(|bundle| bundle["outcome"].as_str().unwrap_or("<absent>"))
+        .collect();
+    assert!(
+        outcomes.contains(&"hosted") && outcomes.contains(&"failed"),
+        "expected a mixed run: {summary}"
+    );
+
+    // The threshold `host relay` uses -- fail only when nothing came up -- would
+    // exit zero here. A transition command has no reason to keep running, so any
+    // failed bundle fails the run.
+    assert!(
+        !up.status.success(),
+        "up should exit non-zero when one bundle of the group failed: {summary}"
+    );
 }
 
 #[test]
