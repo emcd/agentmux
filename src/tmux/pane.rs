@@ -377,7 +377,23 @@ fn load_tmux_buffer(tmux_socket: &Path, buffer_name: &str, text: &str) -> Result
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = command.spawn().map_err(|source| source.to_string())?;
+    let program = command.get_program().to_string_lossy().into_owned();
+    let working_directory = command
+        .get_current_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<no working directory>".to_string());
+    let working_directory_path = command.get_current_dir().map(|path| path.to_path_buf());
+    let mut child = command.spawn().map_err(|source| {
+        let working_dir_status = match &working_directory_path {
+            Some(path) if path.is_dir() => "present",
+            Some(_) => "missing",
+            None => "no working directory",
+        };
+        format!(
+            "failed to launch {} from {}: {} (working_directory {} at failure time)",
+            program, working_directory, source, working_dir_status
+        )
+    })?;
     // Detach stdin and publish the child *before* writing a byte. The write can
     // park: a client that stops reading lets the pipe fill, and the executor
     // blocks in `write_all` with nothing left to interrupt it. Publishing after
@@ -445,7 +461,23 @@ pub(crate) fn run_tmux_command_capture(
     // behind a handle nothing else can reach. The invocation has to be reachable
     // before the wait begins, because the whole point is to signal one the caller
     // is already blocked on.
-    let child = command.spawn().map_err(|source| source.to_string())?;
+    let program = command.get_program().to_string_lossy().into_owned();
+    let working_directory = command
+        .get_current_dir()
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| "<no working directory>".to_string());
+    let working_directory_path = command.get_current_dir().map(|path| path.to_path_buf());
+    let child = command.spawn().map_err(|source| {
+        let working_dir_status = match &working_directory_path {
+            Some(path) if path.is_dir() => "present",
+            Some(_) => "missing",
+            None => "no working directory",
+        };
+        format!(
+            "failed to launch {} from {}: {} (working_directory {} at failure time)",
+            program, working_directory, source, working_dir_status
+        )
+    })?;
     let (owned, stdout, stderr) = PublishedInvocation::record(child);
     let drained = drain_invocation_pipes(stdout, stderr);
     let status = owned.reap().map_err(|source| source.to_string())?;

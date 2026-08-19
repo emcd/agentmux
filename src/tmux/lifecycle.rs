@@ -195,7 +195,6 @@ fn is_tmux_server_unavailable_error(reason: &str) -> bool {
         || lowered.contains("server exited unexpectedly")
         || lowered.contains("connection refused")
         || lowered.contains("error connecting")
-        || lowered.contains("no such file or directory")
 }
 
 pub(crate) fn session_exists(tmux_socket: &Path, session_name: &str) -> Result<bool, String> {
@@ -223,7 +222,6 @@ pub(crate) fn session_exists(tmux_socket: &Path, session_name: &str) -> Result<b
 fn is_missing_session_error(reason: &str) -> bool {
     let lowered = reason.to_ascii_lowercase();
     lowered.contains("can't find session")
-        || lowered.contains("no such file or directory")
         || lowered.contains("error connecting")
         || is_tmux_server_unavailable_error(reason)
 }
@@ -350,4 +348,48 @@ fn list_all_sessions(tmux_socket: &Path) -> Result<Vec<String>, TmuxLifecycleErr
         .map(ToString::to_string)
         .collect::<Vec<_>>();
     Ok(sessions)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tmux_error_classification_splits_launch_from_connect() {
+        // Launch wrapper renders spawn ENOENT as
+        // "failed to launch <program> from <dir>: No such file or directory (os error 2) (working_directory …)"
+        // which must never be treated as a transient server-not-yet-up condition
+        // nor as a missing session — otherwise a broken install is retried or
+        // mistaken for "no sessions exist". This is the teeth for the
+        // "no such file or directory" removal; the tmux connect part is a
+        // regression guard that must remain transient/missing.
+        let launch_error = "failed to launch tmux from /tmp/bundle-runtime: No such file or directory (os error 2) (working_directory present at failure time)";
+        assert!(
+            !is_tmux_server_unavailable_error(launch_error),
+            "launch ENOENT must not be transient"
+        );
+        assert!(
+            !is_missing_session_error(launch_error),
+            "launch ENOENT must not be missing-session"
+        );
+
+        let missing_dir_error = "failed to launch /usr/bin/tmux from /no/such/dir: No such file or directory (os error 2) (working_directory missing at failure time)";
+        assert!(!is_tmux_server_unavailable_error(missing_dir_error));
+        assert!(!is_missing_session_error(missing_dir_error));
+
+        // Real tmux against a missing socket prints this (verified on Linux):
+        // "error connecting to /tmp/no-such.sock (No such file or directory)"
+        // That must remain both transient (so creation retries) and missing-session
+        // (so has-session returns Ok(false)).
+        let tmux_error = "error connecting to /tmp/no-such.sock (No such file or directory)";
+        assert!(
+            is_tmux_server_unavailable_error(tmux_error),
+            "tmux connect error must be transient"
+        );
+        assert!(
+            is_missing_session_error(tmux_error),
+            "tmux connect error must be missing-session"
+        );
+        assert!(is_missing_session_error("can't find session: foo"));
+    }
 }
