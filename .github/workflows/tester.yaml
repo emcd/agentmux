@@ -70,6 +70,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Verify tmux Presence
+        # Nothing in this workflow installs tmux explicitly on any platform;
+        # the test suite assumes it is already present and on PATH. This
+        # reports what each runner actually has without gating the build on
+        # that assumption, since tmux availability may not be uniform across
+        # runner images.
+        run: |
+          which tmux || echo "tmux: not found on PATH"
+          tmux -V || echo "tmux: found on PATH but -V failed"
+
       - name: Install Zig
         if: matrix.id == 'pty-feature'
         uses: mlugg/setup-zig@v2
