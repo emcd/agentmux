@@ -1,5 +1,5 @@
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, ErrorKind, Write},
     os::unix::net::{UnixListener, UnixStream},
     path::PathBuf,
     sync::{
@@ -43,11 +43,19 @@ fn temporary_socket_path(prefix: &str) -> (SocketPathGuard, PathBuf) {
 /// mode so a regression that stops a frame being sent fails rather than parks.
 const FRAME_WAIT_BUDGET: Duration = Duration::from_secs(5);
 
+/// See the note on `arm_frame_wait` in `relay_stream.rs`: arming the bound may
+/// fail on macOS once the peer has shut the socket down, and the bound is
+/// already guaranteed when it does.
+fn arm_frame_wait(stream: &UnixStream) {
+    match stream.set_read_timeout(Some(FRAME_WAIT_BUDGET)) {
+        Ok(()) => {}
+        Err(source) if source.kind() == ErrorKind::InvalidInput => {}
+        Err(source) => panic!("set frame read timeout: {source}"),
+    }
+}
+
 fn read_json_line(reader: &mut BufReader<std::os::unix::net::UnixStream>) -> Value {
-    reader
-        .get_ref()
-        .set_read_timeout(Some(FRAME_WAIT_BUDGET))
-        .expect("set frame read timeout");
+    arm_frame_wait(reader.get_ref());
     let mut line = String::new();
     reader.read_line(&mut line).unwrap_or_else(|source| {
         panic!("no frame within {FRAME_WAIT_BUDGET:?}: {source}");
@@ -297,6 +305,71 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
             assert_eq!(bundle.id, "party");
             assert!(bundle.principals.is_empty());
         }
+        other => panic!("unexpected response: {other:?}"),
+    }
+    server.join().expect("join server");
+}
+
+/// A relay that accepts a connection and then closes it without answering the
+/// hello has not rejected the client — a rejection arrives as a typed frame — so
+/// the attempt must be retried inside the bounded hello window rather than
+/// failing the request. Drains, saturated worker pools, and restarts caught
+/// mid-handshake all present this way.
+#[test]
+fn stream_client_retries_hello_after_the_relay_closes_without_answering() {
+    let (_temporary, socket_path) = temporary_socket_path("relay-stream-client-hello-closed-retry");
+    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let server = thread::spawn(move || {
+        // First attempt: consume the hello, then close with nothing written.
+        let (closed_stream, _) = listener.accept().expect("accept closed client");
+        let mut closed_reader = BufReader::new(closed_stream.try_clone().expect("clone"));
+        let hello_payload = read_json_line(&mut closed_reader);
+        assert_eq!(hello_payload["frame"], "hello");
+        shutdown_stream(&closed_stream, "shutdown unanswered stream");
+        drop(closed_stream);
+
+        // Second attempt: behave normally, proving the client came back.
+        let (mut stream, _) = listener.accept().expect("accept retry client");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+        assert_and_ack_hello(&mut reader, &mut stream, "party", "alpha");
+
+        let request = read_json_line(&mut reader);
+        assert_eq!(request["frame"], "request");
+        let request_id = request["request_id"]
+            .as_str()
+            .map(ToOwned::to_owned)
+            .expect("request id");
+        write_json_line(
+            &mut stream,
+            &json!({
+                "frame": "response",
+                "request_id": request_id,
+                "response": {
+                    "kind": "list",
+                    "schema_version": "1",
+                    "bundle": {
+                        "id": "party",
+                        "hosted": true,
+                        "state": "up",
+                        "startup_health": "healthy",
+                        "startup_failure_count": 0,
+                        "recent_startup_failures": [],
+                        "principals": [],
+                    },
+                }
+            }),
+        );
+    });
+
+    let mut session =
+        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
+    let (response, _events) = session
+        .request_with_events(&agentmux::relay::RelayRequest::List {
+            requester_session: Some("alpha".to_string()),
+        })
+        .expect("a relay that closed before acknowledging hello should be retried");
+    match response {
+        agentmux::relay::RelayResponse::List { bundle, .. } => assert_eq!(bundle.id, "party"),
         other => panic!("unexpected response: {other:?}"),
     }
     server.join().expect("join server");

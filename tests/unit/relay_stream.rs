@@ -1,6 +1,6 @@
 use agentmux::configuration::ConfigurationRoots;
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, ErrorKind, Write},
     os::unix::{io::AsRawFd, net::UnixStream},
     path::{Path, PathBuf},
     sync::OnceLock,
@@ -535,11 +535,25 @@ fn send_json(stream: &mut UnixStream, payload: Value) {
 /// single `write_all`, so it is not a case that arises today.
 const FRAME_WAIT_BUDGET: Duration = Duration::from_secs(5);
 
+/// Arms the frame-wait bound, tolerating the one failure that means the bound is
+/// already guaranteed.
+///
+/// POSIX allows `setsockopt` to fail with `EINVAL` once the socket has been shut
+/// down. Darwin implements that clause and Linux does not, so a test whose relay
+/// writes a frame and then closes — a revocation, an eviction, a drain — fails
+/// this call on macOS alone, having already delivered the frame. A shut-down
+/// socket cannot make the read that follows wait, and buffered bytes stay
+/// readable, so proceeding reads the frame instead of losing it.
+fn arm_frame_wait(stream: &UnixStream) {
+    match stream.set_read_timeout(Some(FRAME_WAIT_BUDGET)) {
+        Ok(()) => {}
+        Err(source) if source.kind() == ErrorKind::InvalidInput => {}
+        Err(source) => panic!("set frame read timeout: {source}"),
+    }
+}
+
 fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
-    reader
-        .get_ref()
-        .set_read_timeout(Some(FRAME_WAIT_BUDGET))
-        .expect("set frame read timeout");
+    arm_frame_wait(reader.get_ref());
     let mut line = String::new();
     let read = reader.read_line(&mut line).unwrap_or_else(|source| {
         panic!("no frame within {FRAME_WAIT_BUDGET:?}: {source}");

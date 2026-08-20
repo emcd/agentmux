@@ -857,8 +857,8 @@ operational details that do not fit a diagram.
 ### Connection lifecycle and shutdown
 
 The connection-write and shutdown paths are bounded by mechanisms that
-each came from a specific root-cause fix; both fixes are now canonical
-behavior rather than incidents.
+each came from a specific root-cause fix; each fix is now canonical
+behavior rather than an incident.
 
 - **Half-open zombie socket.** Each connection's writer task
   (`spawn_stream_writer`, `src/relay/stream/mod.rs:289-315`) wraps every
@@ -871,7 +871,7 @@ behavior rather than incidents.
   post-hello read timeout, so the relay keeps reading from a
   half-closed peer and the peer's MSG_PEEK liveness check sees EOF
   (`0` = "stale"). The fix is the read-vs-writer race in
-  `serve_connection` (`src/relay/connection/mod.rs:332-354`, a
+  `serve_connection` (`src/relay/connection/serve.rs:137-148`, a
   `tokio::select!` over the frame loop, the writer handle, and the
   per-connection revoke signal): a writer exit cancels the parked
   read loop, the `RegistrationGuard` drop below unregisters the
@@ -904,9 +904,25 @@ behavior rather than incidents.
   transport-abstraction + prime-timeout slices and locked in by the
   `fdec8a9` regression test (RG-approved), merged as `103b644`
   (`--no-ff`).
+- **`EINVAL` from a socket option on a shut-down socket (macOS only).**
+  POSIX allows `setsockopt` to fail with `EINVAL` once the socket has
+  been shut down; Darwin implements that clause and Linux does not. So
+  whenever the relay writes a frame and then closes — a revocation, a
+  bundle eviction, a drain — the peer's *next* socket-option call fails
+  on macOS while the frame it wanted sits readable in the receive
+  buffer. Every such option here exists to bound a wait, and a shut-down
+  socket cannot make a read wait, so the client treats the failure as
+  ignorable and reads on (`is_ignorable_socket_option_error`,
+  `src/relay/client.rs`), which is what recovers the frame. This
+  presented three times before it was named — twice papered over at the
+  classifiers (`add0ff4` for connect setup, `8e20927` for option resets)
+  and once as a macOS-only unit-test failure — because the symptom
+  appears at whichever call happens to follow the close, never at the
+  close. The test helpers that arm a per-read timeout tolerate it for
+  the same reason (`arm_frame_wait`, `tests/unit/relay_stream.rs`).
 
-The cross-cutting theme is blocking/relayed work whose failure or
-shutdown handling was incomplete: the connection write-timeout's
+The first two share a theme: blocking/relayed work whose failure or
+shutdown handling was incomplete — the connection write-timeout's
 failure path was a half-open zombie (one half closed, the other
 pinned), and the delivery runtime's failure path was a pinned
 blocking thread on `Runtime::drop`. Both layers now collapse to

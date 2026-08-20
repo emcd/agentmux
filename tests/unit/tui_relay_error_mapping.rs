@@ -13,7 +13,7 @@
 //! `map_relay_error`, so pinning the classification through one path is
 //! sufficient; there is no per-path mapping to diverge.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, ErrorKind, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -51,11 +51,19 @@ fn temporary_socket_path() -> (SocketGuard, PathBuf) {
 /// mode so a regression that stops a frame being sent fails rather than parks.
 const FRAME_WAIT_BUDGET: Duration = Duration::from_secs(5);
 
+/// See the note on `arm_frame_wait` in `relay_stream.rs`: arming the bound may
+/// fail on macOS once the peer has shut the socket down, and the bound is
+/// already guaranteed when it does.
+fn arm_frame_wait(stream: &UnixStream) {
+    match stream.set_read_timeout(Some(FRAME_WAIT_BUDGET)) {
+        Ok(()) => {}
+        Err(source) if source.kind() == ErrorKind::InvalidInput => {}
+        Err(source) => panic!("set frame read timeout: {source}"),
+    }
+}
+
 fn read_json_line(reader: &mut BufReader<UnixStream>) -> Value {
-    reader
-        .get_ref()
-        .set_read_timeout(Some(FRAME_WAIT_BUDGET))
-        .expect("set frame read timeout");
+    arm_frame_wait(reader.get_ref());
     let mut line = String::new();
     reader.read_line(&mut line).unwrap_or_else(|source| {
         panic!("no frame within {FRAME_WAIT_BUDGET:?}: {source}");

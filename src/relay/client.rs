@@ -391,9 +391,11 @@ impl RelayStreamSession {
         )
         .map_err(ConnectAttemptError::Io)?;
         let mut reader = BufReader::new(stream.try_clone().map_err(ConnectAttemptError::Io)?);
-        stream
-            .set_read_timeout(Some(RELAY_STREAM_HELLO_ACK_TIMEOUT))
-            .map_err(ConnectAttemptError::Io)?;
+        if let Err(source) = stream.set_read_timeout(Some(RELAY_STREAM_HELLO_ACK_TIMEOUT))
+            && !is_ignorable_socket_option_error(&source)
+        {
+            return Err(ConnectAttemptError::Io(source));
+        }
         loop {
             let mut line = String::new();
             let read = match reader.read_line(&mut line) {
@@ -492,9 +494,13 @@ fn read_stream_response_frame(
     connection: &mut RelayStreamConnection,
     request_id: &str,
 ) -> Result<(RelayResponse, Vec<RelayStreamEvent>), io::Error> {
-    connection
+    if let Err(source) = connection
         .stream
-        .set_read_timeout(Some(RELAY_STREAM_READ_POLL_INTERVAL))?;
+        .set_read_timeout(Some(RELAY_STREAM_READ_POLL_INTERVAL))
+        && !is_ignorable_socket_option_error(&source)
+    {
+        return Err(source);
+    }
     let deadline = Instant::now() + RELAY_STREAM_RESPONSE_TIMEOUT;
     let mut events = Vec::new();
     let result = loop {
@@ -596,6 +602,14 @@ fn is_retriable_stream_error(error: Option<&io::Error>) -> bool {
     )
 }
 
+/// Whether a failed connect attempt is worth another try inside the bounded
+/// hello window.
+///
+/// `UnexpectedEof` belongs here for the same reason as the reset-shaped kinds: a
+/// relay that accepts a connection and then closes it without answering the
+/// hello has not rejected anything — a rejection arrives as a typed frame — so
+/// the condition is transient, whether it came from a drain, a saturated worker
+/// pool, or a restart mid-handshake.
 fn is_retriable_connect_error(error: &io::Error) -> bool {
     matches!(
         error.kind(),
@@ -607,9 +621,24 @@ fn is_retriable_connect_error(error: &io::Error) -> bool {
             | io::ErrorKind::WouldBlock
             | io::ErrorKind::Interrupted
             | io::ErrorKind::InvalidInput
+            | io::ErrorKind::UnexpectedEof
     )
 }
 
+/// Whether a failed socket-option call can be ignored because the socket it
+/// addresses is already gone.
+///
+/// Beyond the disconnect-shaped kinds, this admits `EINVAL`. POSIX specifies
+/// that error for `setsockopt` when the socket has been shut down — a clause
+/// Darwin implements and Linux does not — so a relay that writes a frame and
+/// then closes fails the caller's next option call on macOS alone.
+///
+/// Ignoring it is sound rather than expedient: every option set here exists to
+/// bound a wait, and a shut-down socket cannot make a read wait. Bytes already
+/// buffered stay readable, so proceeding delivers the frame the failed call
+/// would otherwise have cost. Each caller passes a non-zero constant, which is
+/// what confines `EINVAL` to the shutdown clause; a zero duration would be
+/// rejected under the same kind by the standard library and wrongly ignored.
 fn is_ignorable_socket_option_error(error: &io::Error) -> bool {
     matches!(
         error.kind(),
