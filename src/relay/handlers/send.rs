@@ -893,6 +893,18 @@ fn ensure_bundle_group(
     let Some(paths) = bundle_catalog.lookup(namespace) else {
         return Err(BundleGroupError::UnknownBundle);
     };
+    // Held-bundle guard (issues/runtime/9): a bundle whose HostingIntent is Hold
+    // stays in the catalog (so lookup succeeds) but the relay is deliberately
+    // not running it. Delivering to it would spuriously spawn a worker (Pty
+    // included) for a bundle the operator held. Check once at group construction,
+    // before any build_worker_transport, so every future transport inherits it.
+    if bundle_catalog.is_held(namespace) {
+        return Err(BundleGroupError::Relay(relay_error(
+            "runtime_bundle_held",
+            "target bundle is held and not running",
+            Some(json!({ "bundle_name": namespace })),
+        )));
+    }
     // Delivery loads its own copy of the bundle, so it needs the same
     // authoritative stamp bring-up applies: a Pty member started lazily by this
     // delivery is spawned from exactly these members. Loading through

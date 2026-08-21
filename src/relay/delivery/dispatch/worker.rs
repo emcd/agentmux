@@ -527,7 +527,8 @@ async fn run_async_delivery_worker(
                 &mut transport,
                 &mut inflight,
                 &mut inflight_members,
-            );
+            )
+            .await;
         }
         tokio::select! {
             maybe_task = receiver.recv(), if !senders_dropped && bootstrap_settled_now && held.is_none() && watchdog.is_none() && window.has_room() => {
@@ -820,7 +821,7 @@ fn activity_advanced(current: u64, last: &mut Option<u64>) -> bool {
     advanced
 }
 
-fn gate_target(
+async fn gate_target(
     transport: &TransportImpl,
     unreachable_dwell: Duration,
     last_activity: &mut Option<u64>,
@@ -830,12 +831,8 @@ fn gate_target(
     // as absence rather than as a value, so the series survives an unreachable
     // stretch instead of being reset by it.
     let advanced = activity_advanced(transport.activity_generation(), last_activity);
-    decide_gate(
-        transport.health(),
-        unreachable_dwell,
-        advanced,
-        transport.is_ready_for_handover(),
-    )
+    let ready = transport.is_ready_for_handover().await;
+    decide_gate(transport.health(), unreachable_dwell, advanced, ready)
 }
 
 /// The gate decision itself, over levels rather than over a transport.
@@ -897,7 +894,7 @@ fn decide_gate(
 /// Returns whichever member the batch could not take, for the caller to hold. It
 /// is the head of the next batch, so the target's FIFO order survives: this is
 /// the only way a member leaves here without a terminal outcome.
-fn submit_batch(
+async fn submit_batch(
     head: AsyncDeliveryTask,
     context: SubmitContext<'_>,
     transport: &mut TransportImpl,
@@ -924,7 +921,7 @@ fn submit_batch(
     // this check and the writes below, and when it does the invocation fails and
     // resolves through the guard's evidence order rather than being retried
     // behind the sender's back.
-    match gate_target(transport, context.unreachable_dwell, context.last_activity) {
+    match gate_target(transport, context.unreachable_dwell, context.last_activity).await {
         TargetGate::Open => {}
         TargetGate::Hold => return Some(head),
         TargetGate::Unreachable => {

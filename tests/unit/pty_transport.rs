@@ -11,8 +11,7 @@ use agentmux::pty::{
     PtyConfigSnapshot, PtyOutputView, PtyPromptProbe, PtyShared, SnapshotResponse,
 };
 use agentmux::transports::{
-    LookMode, LookSnapshotPayload, OutputView, PackingUnitId, PartitionError, PartitionSink,
-    SubmissionEvidence,
+    LookMode, LookSnapshotPayload, PackingUnitId, PartitionError, PartitionSink, SubmissionEvidence,
 };
 use regex::Regex;
 use tokio::sync::mpsc;
@@ -90,7 +89,7 @@ fn pty_prompt_probe_reports_ready_from_snapshot_and_cursor() {
     }]);
     let mut probe = PtyPromptProbe::new(shared);
 
-    assert!(probe.observe().expect("snapshot observation"));
+    assert!(probe.observe_blocking().expect("snapshot observation"));
     drop(probe);
     handle.join().expect("snapshot worker");
 }
@@ -105,13 +104,13 @@ fn pty_prompt_probe_rejects_cursor_mismatch() {
     }]);
     let mut probe = PtyPromptProbe::new(shared);
 
-    assert!(!probe.observe().expect("snapshot observation"));
+    assert!(!probe.observe_blocking().expect("snapshot observation"));
     drop(probe);
     handle.join().expect("snapshot worker");
 }
 
-#[test]
-fn pty_look_returns_requested_tail() {
+#[tokio::test]
+async fn pty_look_returns_requested_tail() {
     let (shared, handle) = shared_with(vec![SnapshotResponse {
         tail: "one\ntwo\nthree".to_string(),
         cursor_x: 0,
@@ -121,11 +120,12 @@ fn pty_look_returns_requested_tail() {
     let view = PtyOutputView::new(shared);
 
     let result = view
-        .look(LookMode {
+        .look_async(LookMode {
             lines: Some(2),
             offset: None,
             prime_timeout: Duration::ZERO,
         })
+        .await
         .expect("look snapshot");
     assert!(matches!(
         result,

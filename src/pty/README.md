@@ -1,12 +1,15 @@
 # src/pty/
 
 > **Work-in-progress — not production-ready.** The Pty transport landed early in
-> the 0.9.0 cycle, but it is marked explicitly WIP and further hardening is
-> deferred to the next release cycle. Known deferred gaps:
-> `agentmux:issues/runtime/8` (lazy Pty spawn panics in a tokio worker) and
-> `agentmux:issues/runtime/9` (a delivery can spawn a member of a held bundle),
-> both milestone 0.10.0. This module is compiled only when the `pty` Cargo
-> feature is enabled.
+> the 0.9.0 cycle, but it is marked explicitly WIP. This change
+> (`fix-pty-eager-startup-and-probe-blocking`) fixes `agentmux:issues/runtime/8`
+> (Pty prompt probe `blocking_recv` panic in a tokio worker) and
+> `agentmux:issues/runtime/9` (held-bundle guard — `is_held` at group
+> construction), both previously milestone 0.10.0. Remaining deferred gap:
+> eager Pty startup parity (`Pty Persistent Worker Lifecycle` — requires a
+> `WorkerTransportSource::Pty` handoff analogous to `AcpWorkerBootstrap`,
+> `worker.rs:81-86` vs `Direct` at `184-190`; see `lifecycle.rs:475` stopgap).
+> This module is compiled only when the `pty` Cargo feature is enabled.
 
 Pty transport: libghostty-vt-backed delivery with portable-pty child process
 management. Compiled only when the `pty` Cargo feature is enabled; the default

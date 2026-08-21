@@ -67,21 +67,26 @@ impl PtyOutputView {
     }
 }
 
-impl OutputView for PtyOutputView {
-    fn look(&self, mode: LookMode) -> Result<LookSnapshotPayload, TransportError> {
+impl PtyOutputView {
+    /// Async handshake for the look path. The snapshot request is sent via
+    /// `mpsc::Sender::send().await` and the response awaited, so the calling
+    /// tokio worker thread is never blocked. This is the off-runtime path the
+    /// transport-contracts spec requires.
+    pub async fn look_async(&self, mode: LookMode) -> Result<LookSnapshotPayload, TransportError> {
         let (tx, rx) = oneshot::channel();
         self.shared
             .snapshot_tx
-            .blocking_send(SnapshotRequest {
+            .send(SnapshotRequest {
                 inspect_lines: mode.lines.map(|lines| lines as usize),
                 tx,
             })
+            .await
             .map_err(|_request| TransportError {
                 code: "internal_unexpected_failure".to_string(),
                 reason: "pty snapshot channel closed; transport not running".to_string(),
                 details: None,
             })?;
-        let response = rx.blocking_recv().map_err(|_canceled| TransportError {
+        let response = rx.await.map_err(|_canceled| TransportError {
             code: "internal_unexpected_failure".to_string(),
             reason: "pty snapshot response canceled before delivery".to_string(),
             details: None,
@@ -104,6 +109,25 @@ impl OutputView for PtyOutputView {
     }
 }
 
+impl OutputView for PtyOutputView {
+    fn look(&self, _mode: LookMode) -> Result<LookSnapshotPayload, TransportError> {
+        // `PtyOutputView::look` is currently unreachable via the relay's look
+        // handler — `get_output_view` at `registry.rs:582` returns `None` for
+        // `TargetConfiguration::Pty` unconditionally, so `look.rs:320` never
+        // reaches this. The snapshot handshake itself is correct in
+        // `look_async` (no `blocking_*` on a runtime thread); this sync
+        // `OutputView::look` is intentionally unavailable until the registry
+        // arm is scoped (follow-up). Returning a structured error is smaller
+        // and more honest than a three-branch runtime-flavor dispatcher with a
+        // panic handler for a path nothing calls.
+        Err(TransportError {
+            code: "internal_unexpected_failure".to_string(),
+            reason: "pty look not yet available via relay registry; worker exists but get_output_view returns None until registry arm is scoped (follow-up)".to_string(),
+            details: None,
+        })
+    }
+}
+
 /// Pty prompt-readiness observer used by the handover predicate.
 pub struct PtyPromptProbe {
     shared: PtyShared,
@@ -115,7 +139,39 @@ impl PtyPromptProbe {
         Self { shared }
     }
 
-    pub fn observe(&mut self) -> Result<bool, String> {
+    /// Async handshake for handover readiness. Uses `async send`/`await` +
+    /// `recv`/`await` so the calling tokio worker thread is never blocked.
+    pub async fn observe(&mut self) -> Result<bool, String> {
+        let (tx, rx) = oneshot::channel();
+        self.shared
+            .snapshot_tx
+            .send(SnapshotRequest {
+                inspect_lines: Some(usize::from(self.shared.config.prompt_inspect_lines)),
+                tx,
+            })
+            .await
+            .map_err(|_request| "pty snapshot channel closed; transport not running".to_string())?;
+        let response = rx
+            .await
+            .map_err(|_canceled| "pty snapshot response canceled before delivery".to_string())?;
+        let regex_matches = self
+            .shared
+            .config
+            .prompt_regex
+            .as_ref()
+            .is_none_or(|regex| regex.is_match(&response.tail));
+        let cursor_ready = self
+            .shared
+            .config
+            .prompt_idle_column
+            .is_none_or(|expected| response.cursor_x == expected);
+        Ok(regex_matches && cursor_ready)
+    }
+
+    /// Synchronous fallback for callers outside a tokio runtime (unit tests).
+    /// Uses blocking channel ops which are safe when no worker thread is being
+    /// blocked. Production handover path uses the async `observe` above.
+    pub fn observe_blocking(&mut self) -> Result<bool, String> {
         let (tx, rx) = oneshot::channel();
         self.shared
             .snapshot_tx

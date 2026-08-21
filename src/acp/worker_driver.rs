@@ -334,8 +334,11 @@ impl Transport for AcpWorkerDriver {
         self.lock_transport().raww(content, append_enter)
     }
 
-    fn is_ready_for_handover(&self) -> bool {
-        self.lock_transport().is_ready_for_handover()
+    async fn is_ready_for_handover(&self) -> bool {
+        // Read readiness without holding the lock across an await. Delegates
+        // to the transport's sync predicate so the four ACP readiness call
+        // sites stay consistent.
+        self.lock_transport().is_available()
     }
 
     fn health(&self) -> TransportHealth {

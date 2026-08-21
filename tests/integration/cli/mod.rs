@@ -1,5 +1,6 @@
 mod bundle;
 mod check;
+mod held_bundle_guard;
 mod help;
 pub(crate) mod helpers;
 mod host;
