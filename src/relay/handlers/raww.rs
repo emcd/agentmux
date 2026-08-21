@@ -328,6 +328,16 @@ fn prepare_raww(
         configuration_roots,
         bundle_catalog,
     )?;
+    // Held-bundle delivery guard: a bundle held at load must not be
+    // delivered to. Check here (delivery path) rather than in the shared
+    // `resolve_target_bundle` so `look` on a held bundle remains readable.
+    if bundle_catalog.is_held(target_namespace) {
+        return Err(relay_error(
+            "runtime_bundle_held",
+            "target bundle is held and not running",
+            Some(json!({ "bundle_name": target_namespace })),
+        ));
+    }
     let Some(member) = bundle
         .members
         .iter()

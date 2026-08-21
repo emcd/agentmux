@@ -208,7 +208,6 @@ fn assert_lazy_pty_spawn_carries_the_relays_state_root(declared: &str) {
     );
 }
 
-#[ignore = "lazy Pty spawn panics in a tokio worker; agentmux:issues/runtime/8"]
 #[test]
 fn a_lazily_spawned_pty_member_receives_the_relays_state_root() {
     assert_lazy_pty_spawn_carries_the_relays_state_root(MEMBER_DECLARED_STATE_ROOT);
@@ -216,8 +215,89 @@ fn a_lazily_spawned_pty_member_receives_the_relays_state_root() {
 
 // The blank declaration, which reads as absent everywhere else and so is the case
 // an upsert-if-absent implementation would leave to the child.
-#[ignore = "lazy Pty spawn panics in a tokio worker; agentmux:issues/runtime/8"]
 #[test]
 fn a_lazily_spawned_pty_member_survives_a_blank_declaration() {
     assert_lazy_pty_spawn_carries_the_relays_state_root(MEMBER_BLANK_STATE_ROOT);
+}
+
+#[test]
+fn a_send_to_a_held_pty_bundle_does_not_spawn_and_resolves_held() {
+    // Held-bundle guard (issues/runtime/9):
+    // a delivery to a member of a bundle whose HostingIntent is Hold must not
+    // spawn a worker, even though the lazy Pty path would otherwise do so.
+    // Today a held Pty bundle spawns then panics (group 3 unmasked by group 1);
+    // after the guard it must reject as held/unavailable.
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("named-state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    let report = temporary.path().join("child-state-directory");
+    fs::create_dir_all(config_root.join("bundles")).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_pty_bundle(&config_root, &report, MEMBER_DECLARED_STATE_ROOT);
+
+    let host_child = process::RelayChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .args([
+                "host",
+                "relay",
+                "--no-autostart",
+                "--configuration-directory",
+                &config_root.to_string_lossy(),
+                "--state-directory",
+                &state_root.to_string_lossy(),
+                "--inscriptions-directory",
+                &inscriptions_root.to_string_lossy(),
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn agentmux host relay --no-autostart"),
+    );
+    wait_for_relay_ready(&state_root, "alpha");
+
+    // Do NOT run `up alpha` — the bundle stays held (autostart = false, catalog
+    // entry is Hold). A delivery must not spawn for it.
+    let send = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "send",
+            "--target",
+            "a@alpha",
+            "--message",
+            "wake",
+            "--as-session",
+            "user@GLOBAL",
+            "--bundle",
+            "alpha",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run agentmux send to held bundle");
+    // Held should be a structured relay error, not a successful queued send.
+    // The exact surface is a relay error (runtime_bundle_held) rather than a
+    // SendResult; assert it is not a stranded queued delivery.
+    let stderr = String::from_utf8_lossy(&send.stderr);
+    let stdout = String::from_utf8_lossy(&send.stdout);
+    assert!(
+        stderr.contains("runtime_bundle_held") || stdout.contains("runtime_bundle_held"),
+        "send to a held bundle must resolve as held/unavailable, not queued; stderr: {stderr} stdout: {stdout}"
+    );
+    // Must not have spawned the Pty child — the lazy path is blocked by the
+    // is_held check at group construction, before any build_worker_transport.
+    assert!(
+        !report.exists(),
+        "a held Pty bundle must not spawn a child via delivery; report at {} should not exist",
+        report.display()
+    );
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    host_child
+        .wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT)
+        .ok();
 }

@@ -83,6 +83,15 @@ const WORKER_IDLE_POLL: Duration = Duration::from_millis(10);
 /// Poll interval for the reader thread when the master returns
 /// `WouldBlock`.
 const READER_IDLE_POLL: Duration = Duration::from_millis(5);
+/// Bound on the prompt-probe handshake in the handover gate.
+///
+/// The probe does `snapshot_tx.send().await + rx.await` through the worker
+/// thread. If that worker never answers, the gate must not park the delivery
+/// worker forever — the gate's own doc says the reading is advisory and may be
+/// stale, so a timeout answer as not-ready (Hold) is consistent. The poll arm
+/// retries and the health dwell carries to Unreachable if the target is truly gone.
+const PTY_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
+
 /// Bound on how long a partial-startup cleanup may wait for a thread to finish
 /// before giving up on joining it.
 ///
@@ -969,7 +978,7 @@ impl Transport for PtyTransport {
         self.unreachable_since.fold(reachable)
     }
 
-    fn is_ready_for_handover(&self) -> bool {
+    async fn is_ready_for_handover(&self) -> bool {
         if self.write_tx.is_none()
             || self.shared.child_exited.load(Ordering::Acquire)
             || !matches!(self.readiness(), WorkerReadinessState::Available)
@@ -977,7 +986,11 @@ impl Transport for PtyTransport {
             return false;
         }
         let mut probe = PtyPromptProbe::new(self.shared.clone());
-        probe.observe().is_ok_and(|ready| ready)
+        match tokio::time::timeout(PTY_PROBE_TIMEOUT, probe.observe()).await {
+            Ok(Ok(ready)) => ready,
+            Ok(Err(_)) => false,
+            Err(_) => false,
+        }
     }
 
     fn shutdown(&mut self) {

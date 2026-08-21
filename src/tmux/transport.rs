@@ -542,7 +542,7 @@ impl Transport for TmuxTransport {
         receiver
     }
 
-    fn is_ready_for_handover(&self) -> bool {
+    async fn is_ready_for_handover(&self) -> bool {
         matches!(
             self.observed(),
             PaneObservation::Observed { ready: true, .. }

@@ -263,6 +263,14 @@ pub trait PartitionSink: Send + Sync {
     fn record(&self, unit: PackingUnitId, evidence: SubmissionEvidence);
 }
 
+// `async_fn_in_trait` returns a future whose `Send` is not implied by the trait.
+// Every current impl's `is_ready_for_handover` future is `Send` (Pty's `!Send`
+// `Terminal` never crosses its `probe.observe().await`; the await is on the
+// snapshot channel only), and `run_async_delivery_worker` which awaits it is
+// spawned, so a `!Send` future would fail at the spawn site. The `allow` is
+// justified and documented; adding an explicit `Send` bound would require
+// `return impl Future + Send` once that stabilizes.
+#[allow(async_fn_in_trait)]
 pub trait Transport: GenerationFence {
     /// Establishes (or re-establishes, on respawn) the transport runtime for a
     /// target. On respawn the transport may publish a fresh [`OutputView`]; the
@@ -321,7 +329,13 @@ pub trait Transport: GenerationFence {
     /// of `true` authorizes a busy target straight into the watchdog, and a
     /// default of `false` strands it permanently, since `Pending` is unbounded. A
     /// transport answers for itself or does not participate in delivery.
-    fn is_ready_for_handover(&self) -> bool;
+    ///
+    /// Async because the Pty prompt probe performs its snapshot handshake via
+    /// the worker thread's `mpsc`/`oneshot` channel, which must not block a
+    /// tokio worker thread (`PtyPromptProbe::observe` at `src/pty/state.rs`).
+    /// The gate in `worker.rs` awaits this, so `submit_batch` holds no
+    /// `&mut` borrows across a `spawn_blocking` restructuring.
+    async fn is_ready_for_handover(&self) -> bool;
 
     /// A monotonic marker that advances when bytes reach the target's terminal.
     ///
@@ -795,18 +809,18 @@ impl TransportImpl {
     /// Reports whether the selected transport can accept a handover now; see
     /// [`Transport::is_ready_for_handover`].
     #[must_use]
-    pub fn is_ready_for_handover(&self) -> bool {
+    pub async fn is_ready_for_handover(&self) -> bool {
         match self {
-            Self::Acp(transport) => transport.is_ready_for_handover(),
-            Self::Tmux(transport) => transport.is_ready_for_handover(),
-            Self::Ui(transport) => transport.is_ready_for_handover(),
+            Self::Acp(transport) => transport.is_ready_for_handover().await,
+            Self::Tmux(transport) => transport.is_ready_for_handover().await,
+            Self::Ui(transport) => transport.is_ready_for_handover().await,
             // The delivery worker latches a `Pubsub` stub for a configured Pubsub
             // target (delivery is guarded and answered with a not-implemented
             // outcome), so its query/lifecycle delegates must not panic. It is
             // never ready to deliver.
             Self::Pubsub => false,
             #[cfg(feature = "pty")]
-            Self::Pty(transport) => transport.is_ready_for_handover(),
+            Self::Pty(transport) => transport.is_ready_for_handover().await,
             #[cfg(not(feature = "pty"))]
             Self::Pty => false,
         }

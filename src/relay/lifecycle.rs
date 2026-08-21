@@ -465,13 +465,13 @@ fn startup_member(
             choices_pending_max,
         ),
         // Pty startup is recorded as ready when the per-coder config
-        // resolves cleanly. The bootstrap path constructs the Pty
-        // transport lazily when the dispatcher first references it;
-        // for the v1 startup-count accounting we record Pty members
-        // as ready alongside Tmux / ACP. The full Pty bootstrap
-        // path lands alongside the bootstrap-side refactor
-        // (referenced from the add-pty-transport OpenSpec §8
-        // worker readiness; not implemented in this commit).
+        // resolves cleanly. The transport is constructed lazily when the
+        // dispatcher first references it; for the v1 startup-count
+        // accounting, Pty members are recorded as ready alongside Tmux /
+        // ACP. Eager construction without a handoff would double-spawn
+        // (one child from bring-up, a second from the first delivery) so
+        // the persistent lifecycle is deferred until a handoff exists that
+        // lets the delivery worker adopt the eagerly built handle.
         TargetConfiguration::Pty(_) => Ok(()),
         // `ui`/`pubsub` members have no implemented startup path; record a
         // structured startup failure and exclude them from active routing.

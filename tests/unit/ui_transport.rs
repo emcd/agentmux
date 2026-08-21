@@ -274,14 +274,14 @@ fn ui_raww_is_unsupported() {
     );
 }
 
-#[test]
-fn ui_transport_is_ready_for_handover_and_not_lookable() {
+#[tokio::test]
+async fn ui_transport_is_ready_for_handover_and_not_lookable() {
     let services = UiTransportServices {
         broadcast_incoming: Arc::new(|_| UiBroadcastStatus::Delivered),
         emit_phase: Arc::new(|_| UiBroadcastStatus::Delivered),
     };
     let transport = UiTransport::new(services);
-    assert!(transport.is_ready_for_handover());
+    assert!(transport.is_ready_for_handover().await);
     assert!(transport.give_output().is_none());
 }
 

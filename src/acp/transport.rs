@@ -483,6 +483,15 @@ impl AcpTransport {
         *self.shared.replay.lock().expect("replay slot mutex") = replay;
     }
 
+    /// Sync readiness predicate answering for itself. The async trait method
+    /// delegates here so `mailw`/`raww` keep their sync call without inlining
+    /// the rule. Extracted to keep the four ACP readiness call sites from
+    /// diverging when the rule gains a condition.
+    #[must_use]
+    pub fn is_available(&self) -> bool {
+        matches!(self.readiness(), WorkerReadinessState::Available)
+    }
+
     /// Releases the live runtime (joining its child) and marks the transport
     /// recovering, clearing the published replay pointer. Closes the write
     /// channel so the internal delivery task drains pending items and exits
@@ -783,7 +792,9 @@ impl Transport for AcpTransport {
         // authorizes when this transport reports Available, so a not-ready
         // reading here is the stale-readiness case: refuse before partition with
         // `not_submitted` (positive evidence nothing was written).
-        if !self.is_ready_for_handover() {
+        // Direct readiness check rather than `is_ready_for_handover().await`
+        // because `mailw` is synchronous and must not block or await.
+        if !self.is_available() {
             let _ = outcome_tx.send(not_submitted_outcome(
                 self.target_session.clone(),
                 envelope.message_id.clone(),
@@ -843,7 +854,7 @@ impl Transport for AcpTransport {
 
     fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
         let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
-        if !self.is_ready_for_handover() {
+        if !self.is_available() {
             let _ = outcome_tx.send(not_submitted_outcome(
                 self.target_session.clone(),
                 String::new(),
@@ -893,8 +904,8 @@ impl Transport for AcpTransport {
         outcome_rx
     }
 
-    fn is_ready_for_handover(&self) -> bool {
-        matches!(self.readiness(), WorkerReadinessState::Available)
+    async fn is_ready_for_handover(&self) -> bool {
+        self.is_available()
     }
 
     fn health(&self) -> TransportHealth {
@@ -2294,8 +2305,8 @@ mod delivery_plan_tests {
 mod handover_readiness_tests {
     use super::*;
 
-    #[test]
-    fn handover_readiness_matrix_and_delivery_task_handle_retention() {
+    #[tokio::test]
+    async fn handover_readiness_matrix_and_delivery_task_handle_retention() {
         // Nothing is ever declared here: the test drives readiness predicates
         // and never submits a turn, which is the only situation in which a sink
         // that binds nothing is the right stand-in.
@@ -2327,12 +2338,12 @@ mod handover_readiness_tests {
             transport.readiness(),
             crate::transports::WorkerReadinessState::Initializing
         );
-        assert!(!transport.is_ready_for_handover());
+        assert!(!transport.is_ready_for_handover().await);
 
         // The single state that returns true: only when the transport is
         // actually idle and able to take a batch right now.
         transport.set_readiness(crate::transports::WorkerReadinessState::Available);
-        assert!(transport.is_ready_for_handover());
+        assert!(transport.is_ready_for_handover().await);
 
         // `Busy` is intentionally NOT a handover-ready state — accepting
         // another batch while a turn is in flight would dispatch the wrong
@@ -2340,13 +2351,13 @@ mod handover_readiness_tests {
         // through the injected mirror closure, which is where observers
         // wanting the wider "runtime exists" reading read it.
         transport.set_readiness(crate::transports::WorkerReadinessState::Busy);
-        assert!(!transport.is_ready_for_handover());
+        assert!(!transport.is_ready_for_handover().await);
 
         // `Recovering` and `Unavailable` are also not ready.
         transport.set_readiness(crate::transports::WorkerReadinessState::Recovering);
-        assert!(!transport.is_ready_for_handover());
+        assert!(!transport.is_ready_for_handover().await);
         transport.set_readiness(crate::transports::WorkerReadinessState::Unavailable);
-        assert!(!transport.is_ready_for_handover());
+        assert!(!transport.is_ready_for_handover().await);
 
         // No delivery task has been spawned yet, so there is no handle
         // for a generation supervisor to take — the field starts empty

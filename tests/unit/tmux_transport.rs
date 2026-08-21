@@ -56,15 +56,15 @@ fn envelope(is_receipt: bool) -> DeliveryEnvelope {
     }
 }
 
-#[test]
-fn tmux_handover_is_not_accepted_before_startup() {
+#[tokio::test]
+async fn tmux_handover_is_not_accepted_before_startup() {
     let transport = TmuxTransport::new(
         PromptBatchSettings::default(),
         None,
         Arc::new(RecordingSink::default()),
     );
 
-    assert!(!transport.is_ready_for_handover());
+    assert!(!transport.is_ready_for_handover().await);
     assert!(matches!(
         transport.health(),
         agentmux::transports::TransportHealth::Unreachable { .. }

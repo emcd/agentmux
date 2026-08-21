@@ -252,7 +252,7 @@ impl Transport for UiTransport {
         receiver
     }
 
-    fn is_ready_for_handover(&self) -> bool {
+    async fn is_ready_for_handover(&self) -> bool {
         true
     }
 
