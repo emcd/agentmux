@@ -13,11 +13,14 @@ use agentmux::relay::{
 use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
 
-use crate::support::relay_delivery::{
-    drain_child_stdout, spawn_relay_with_fake_tmux, spawn_relay_with_fake_tmux_and_env,
-    wait_for_relay_ready, write_acp_hang_bundle_configuration, write_bundle_configuration,
-    write_bundle_configuration_with_environment, write_bundle_with_pubsub_member,
-    write_fake_tmux_script,
+use crate::support::{
+    process::HARNESS_CHILD_WAIT_DEFAULT,
+    relay_delivery::{
+        drain_child_stdout, spawn_relay_with_fake_tmux, spawn_relay_with_fake_tmux_and_env,
+        wait_for_relay_ready, write_acp_hang_bundle_configuration, write_bundle_configuration,
+        write_bundle_configuration_with_environment, write_bundle_with_pubsub_member,
+        write_fake_tmux_script,
+    },
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -46,8 +49,7 @@ async fn relay_startup_retries_transient_tmux_create_failures() {
     let elapsed = started.elapsed();
 
     let stdout = drain_child_stdout(&mut child).await;
-    child.start_kill().expect("kill relay");
-    let _ = child.wait().await;
+    shutdown_relay_gracefully(&mut child).await;
 
     assert!(
         stdout.contains("\"host_mode\":\"autostart\""),
@@ -233,6 +235,8 @@ async fn relay_sigterm_reaps_in_flight_acp_turn_without_sigkill() {
     let status = match wait_result {
         Ok(result) => result.expect("wait relay"),
         Err(_) => {
+            // SIGKILL is escalation only after the graceful SIGTERM window
+            // (the generation fence's bounded reap) failed — not a bypass.
             child.start_kill().expect("kill relay after timeout");
             panic!("relay did not exit within 15s of SIGTERM with an in-flight ACP turn");
         }
@@ -342,6 +346,8 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
     let status = match wait_result {
         Ok(result) => result.expect("wait relay"),
         Err(_) => {
+            // SIGKILL is escalation only after the graceful SIGINT window
+            // (the generation fence's bounded reap) failed — not a bypass.
             child.start_kill().expect("kill relay after timeout");
             panic!("timed out waiting for relay to exit after SIGINT");
         }
@@ -439,8 +445,7 @@ async fn relay_send_to_configured_pubsub_member_is_refused_at_admission_and_skip
         sleep(Duration::from_millis(50)).await;
     };
 
-    child.start_kill().expect("kill relay");
-    let _ = child.wait().await;
+    shutdown_relay_gracefully(&mut child).await;
 
     // Nothing was accepted for pub1, so it has no queue entry and no terminal
     // outcome: no work is authorized merely to discover the stub.
@@ -490,6 +495,8 @@ async fn relay_sigint_ignores_server_exited_unexpectedly_during_shutdown_cleanup
     let status = match wait_result {
         Ok(result) => result.expect("wait relay"),
         Err(_) => {
+            // SIGKILL is escalation only after the graceful SIGINT window
+            // (the generation fence's bounded reap) failed — not a bypass.
             child.start_kill().expect("kill relay after timeout");
             panic!("timed out waiting for relay to exit after SIGINT");
         }
@@ -559,6 +566,8 @@ async fn relay_sigint_exits_with_active_stream_connection() {
     let status = match wait_result {
         Ok(result) => result.expect("wait relay"),
         Err(_) => {
+            // SIGKILL is escalation only after the graceful SIGINT window
+            // (the generation fence's bounded reap) failed — not a bypass.
             child.start_kill().expect("kill relay after timeout");
             panic!("timed out waiting for relay to exit after SIGINT");
         }
@@ -635,8 +644,7 @@ async fn relay_accepts_new_connections_while_registered_stream_stays_open() {
     };
 
     drop(stream_session);
-    child.start_kill().expect("kill relay");
-    let _ = child.wait().await;
+    shutdown_relay_gracefully(&mut child).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -715,8 +723,7 @@ async fn relay_rejects_connections_when_worker_queue_is_full() {
 
     drop(queued_stream);
     drop(stream_session);
-    child.start_kill().expect("kill relay");
-    let _ = child.wait().await;
+    shutdown_relay_gracefully(&mut child).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -773,8 +780,7 @@ async fn relay_reaps_pre_hello_idle_connections_and_recovers_worker_capacity() {
 
     drop(idle_active);
     drop(idle_queued);
-    child.start_kill().expect("kill relay");
-    let _ = child.wait().await;
+    shutdown_relay_gracefully(&mut child).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -839,8 +845,7 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
         sleep(Duration::from_millis(20)).await;
     }
 
-    child.start_kill().expect("kill relay");
-    let _ = child.wait().await;
+    shutdown_relay_gracefully(&mut child).await;
 
     let log = fs::read_to_string(&log_file).expect("read fake tmux log");
     let log_lines: Vec<&str> = log.lines().collect();
@@ -1056,8 +1061,7 @@ async fn relay_async_delivery_injects_even_while_pane_in_mode() {
         sleep(Duration::from_millis(20)).await;
     }
 
-    child.start_kill().expect("kill relay");
-    let _ = child.wait().await;
+    shutdown_relay_gracefully(&mut child).await;
 
     let log = fs::read_to_string(&log_file).expect("read fake tmux log");
     assert!(
@@ -1142,8 +1146,7 @@ async fn relay_raww_tmux_default_queues_and_appends_enter() {
         sleep(Duration::from_millis(20)).await;
     }
 
-    child.start_kill().expect("kill relay");
-    let _ = child.wait().await;
+    shutdown_relay_gracefully(&mut child).await;
 
     let log = fs::read_to_string(&log_file).expect("read fake tmux log");
     let body_line = log
@@ -1243,8 +1246,7 @@ async fn relay_raww_tmux_no_enter_omits_enter_command() {
     // its absence.
     sleep(Duration::from_millis(200)).await;
 
-    child.start_kill().expect("kill relay");
-    let _ = child.wait().await;
+    shutdown_relay_gracefully(&mut child).await;
 
     let log = fs::read_to_string(&log_file).expect("read fake tmux log");
     let body_line = log
@@ -1392,8 +1394,7 @@ send = "all"
         sleep(Duration::from_millis(20)).await;
     };
 
-    child.start_kill().expect("kill relay");
-    let _ = child.wait().await;
+    shutdown_relay_gracefully(&mut child).await;
 
     assert!(
         bravo_envelope.contains("From: alpha <session:alpha@party>"),
@@ -1431,4 +1432,39 @@ fn read_all_paste_buffers(directory: &Path) -> Vec<String> {
         }
     }
     contents
+}
+
+/// Graceful shutdown helper used by normal-path cleanup — SIGTERM + bounded
+/// wait so the relay's generation fence in `src/relay/README.md` (fence.rs
+/// five-step protocol) can reap its ACP-worker grandchildren, rather than
+/// bypassing it with SIGKILL (which would orphan those grandchildren until
+/// the Drop/escalation reap). The graceful path reduces that risk; a hard
+/// timeout still escalates to SIGKILL (see Err arm below).
+///
+/// Uses `HARNESS_CHILD_WAIT_DEFAULT` (10s) rather than a tighter bound so
+/// the helper is not tighter than the relay's own 5000ms shutdown-work
+/// deadline plus nested drain/fence budgets (src/relay/README.md).
+async fn shutdown_relay_gracefully(child: &mut crate::support::relay_delivery::RelayChildGuard) {
+    let pid = child.id().expect("relay pid");
+    let pid = i32::try_from(pid).expect("relay pid fits i32");
+    // SAFETY: `child` is the relay process this test spawned; `kill` with
+    // SIGTERM is the same graceful signal systemd delivers and the relay's
+    // SIGTERM/SIGINT handlers initiate the fenced shutdown.
+    let kill_result = unsafe { libc::kill(pid, libc::SIGTERM) };
+    assert_eq!(kill_result, 0, "failed to send SIGTERM");
+    let wait_result = timeout(HARNESS_CHILD_WAIT_DEFAULT, child.wait()).await;
+    match wait_result {
+        Ok(result) => {
+            let status = result.expect("wait relay");
+            assert!(
+                status.success(),
+                "relay should exit cleanly after SIGTERM, status={status}"
+            );
+        }
+        Err(_) => {
+            // Escalation only after graceful window — see fallback comments above.
+            child.start_kill().expect("kill relay after timeout");
+            panic!("timed out waiting for relay to exit after SIGTERM");
+        }
+    }
 }
