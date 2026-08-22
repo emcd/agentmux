@@ -623,8 +623,9 @@ fn stamp_context_environment(
                 bundle_path,
                 format!(
                     "configuration layer '{}' contains '{}', so the layer list cannot be \
-                     expressed in {}; use the repeatable --configuration-directory flag for a \
-                     relay which does not spawn a coder-backed member",
+                     expressed in {} for a member which does not declare its own; the \
+                     repeatable --configuration-directory flag expresses such a layer for \
+                     any deployment which does not need the value stamped",
                     unrepresentable.layer.display(),
                     LAYER_SEPARATOR,
                     CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE

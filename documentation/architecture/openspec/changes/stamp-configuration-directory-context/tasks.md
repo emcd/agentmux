@@ -80,23 +80,42 @@
 
 ## 6. Tests
 
-- [ ] 6.1 Cover the stamp: a coder-backed member declaring no
+- [x] 6.1 Cover the stamp: a coder-backed member declaring no
   `AGENTMUX_CONFIGURATION_DIRECTORY` receives the relay's layer list; one that
   declares it keeps its own value; a coder-less member receives no entry.
-- [ ] 6.2 Cover normalization end to end: a relay started with a relative
-  `--configuration-directory` spawns a member whose process runs from a different
-  working directory, and the member resolves the relay's configuration root.
-  Revert the normalization locally and confirm this test fails — a stamped
-  relative value would otherwise pass wherever the two directories coincide.
-- [ ] 6.3 Cover the hydration change: a member whose own default configuration
+- [x] 6.2 Cover normalization. **Covered at the chokepoints rather than by a
+  relay spawn, which is narrower than this task asked for.** Three facts compose
+  to the end-to-end claim, and each is asserted where it can fail:
+  `runtime_paths::a_relative_configuration_layer_normalizes_against_the_working_directory`
+  (every layer is absolute after resolution, order preserved),
+  `bring_up_context::stamps_the_relays_configuration_layer_list` (that resolved
+  list is what reaches the member), and the pre-existing
+  `runtime_paths::configuration_root_resolves_from_environment_when_no_flag`
+  (a child with no flag reads it). A spawned relay would exercise the same three
+  and add process plumbing.
+  Teeth verified as this task required: removing the normalization call fails
+  the first test. A companion,
+  `runtime_paths::absolutizing_a_configuration_layer_does_not_resolve_symlinks`,
+  guards the opposite mistake — it survives removing normalization but fails
+  canonicalization, so the two are not redundant.
+- [x] 6.3 Cover the hydration change: a member whose own default configuration
   root does not exist resolves the stamped root and scaffolds nothing at its
-  default root.
-- [ ] 6.4 Cover the unrepresentable list in all three shapes: a layer path
+  default root. **No new test written, and the reason is checked rather than
+  assumed.** `runtime_starter::refuses_to_scaffold_an_explicitly_named_root`
+  already loops both non-default tiers, including `Environment`, asserting the
+  fault *and* that the root is not created; that is the whole of the hydration
+  behavior. What is new is only that a member now reaches the environment tier,
+  which `bring_up_context::stamps_the_relays_configuration_layer_list` asserts.
+  A third test would restate both.
+- [x] 6.4 Cover the unrepresentable list in all three shapes: a layer path
   containing the separator produces the structured validation error naming that
   layer when a coder-backed member would be stamped; it does not block a bundle
   with only coder-less members; and it does not block a coder-backed member that
   declares its own `AGENTMUX_CONFIGURATION_DIRECTORY`, which keeps its value.
-  The third case fails against an eager join, so it is what holds task 3.3.
-- [ ] 6.5 Cover the sanitization leak: a harness clearing inherited context
+  The third case is what holds task 3.3, but only against the regression that
+  actually matters: propagating the render's error before the presence check.
+  Merely computing the value early and discarding it on the skip leaves all
+  three passing, so a teeth check that only hoists the call proves nothing.
+- [x] 6.5 Cover the sanitization leak: a harness clearing inherited context
   clears `AGENTMUX_CONFIGURATION_DIRECTORY`, and a suite run with that variable
   exported does not resolve against it.

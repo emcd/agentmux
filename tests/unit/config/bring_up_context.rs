@@ -10,8 +10,9 @@ use agentmux::configuration::ConfigurationRoots;
 use tempfile::TempDir;
 
 use agentmux::configuration::{
-    BUNDLE_ENVIRONMENT_VARIABLE, BringUpContext, BundleMember, SESSION_ENVIRONMENT_VARIABLE,
-    load_bundle_configuration,
+    BUNDLE_ENVIRONMENT_VARIABLE, BringUpContext, BundleMember,
+    CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, INHERITED_CONTEXT_VARIABLE_NAMES,
+    SESSION_ENVIRONMENT_VARIABLE, load_bundle_configuration,
 };
 
 use super::helpers::*;
@@ -63,6 +64,181 @@ coder = "acp"
 "#
         ),
     )
+}
+
+/// Writes a bundle under a configuration root whose own path contains the
+/// layer separator, so the resolved list cannot be expressed in the
+/// environment form. The bundle body is supplied so a caller can vary whether
+/// any member would be stamped.
+fn write_bundle_under_separator_root(
+    temporary: &TempDir,
+    bundle_name: &str,
+    bundle_toml: &str,
+) -> ConfigurationRoots {
+    let root = temporary.path().join("holds:separator");
+    let bundles = root.join("bundles");
+    std::fs::create_dir_all(&bundles).expect("create directories");
+    std::fs::write(root.join("coders.toml"), ACP_CODER).expect("write coders");
+    std::fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml).expect("write bundle");
+    ConfigurationRoots::single(root)
+}
+
+#[test]
+fn stamps_the_relays_configuration_layer_list() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_plain_bundle(&temporary, "alpha", "reviewer");
+
+    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let member = &loaded.members[0];
+    assert_eq!(
+        value_of(member, CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE),
+        Some(root.layers()[0].display().to_string().as_str()),
+        "a coder-backed member reads the declarations of the relay that spawned it"
+    );
+}
+
+#[test]
+fn preserves_an_operator_declared_configuration_layer_list() {
+    // Unlike the state root, this is upsert-if-absent: an operator-declared
+    // value is a preference rather than a broken rendezvous, because the socket
+    // and credentials resolve beneath the state root regardless.
+    let temporary = TempDir::new().expect("temporary");
+    let dir = temporary.path().display().to_string();
+    let root = write_config(
+        &temporary,
+        "alpha",
+        ACP_CODER,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "reviewer"
+directory = "{dir}"
+coder = "acp"
+
+[[sessions.environment]]
+name = "AGENTMUX_CONFIGURATION_DIRECTORY"
+value = "/operator/choice"
+"#
+        ),
+    );
+
+    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    assert_eq!(
+        value_of(
+            &loaded.members[0],
+            CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE
+        ),
+        Some("/operator/choice")
+    );
+}
+
+#[test]
+fn every_stamped_name_is_also_sanitized_from_an_inherited_environment() {
+    // The omission this change exists to fix, stated as the invariant rather
+    // than as the one variable that broke it. A name that load stamps but a
+    // sanitizing consumer does not clear leaks the developer's own value into
+    // whatever the harness spawns, and nothing else fails to say so.
+    for name in BringUpContext::VARIABLE_NAMES {
+        assert!(
+            INHERITED_CONTEXT_VARIABLE_NAMES.contains(name),
+            "'{name}' is stamped at load but absent from the inherited-context \
+             sanitization set, so a harness clearing inherited context leaves it in place"
+        );
+    }
+}
+
+#[test]
+fn a_layer_holding_the_separator_is_rejected_where_a_member_would_be_stamped() {
+    let temporary = TempDir::new().expect("temporary");
+    let dir = temporary.path().display().to_string();
+    let root = write_bundle_under_separator_root(
+        &temporary,
+        "alpha",
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "reviewer"
+directory = "{dir}"
+coder = "acp"
+"#
+        ),
+    );
+
+    let error = load_bundle_configuration(&root, "alpha")
+        .expect_err("a stamped list containing the separator cannot be represented");
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains("holds:separator"),
+        "the error names the offending layer, got {rendered:?}"
+    );
+}
+
+#[test]
+fn a_layer_holding_the_separator_loads_when_no_member_would_be_stamped() {
+    // A coder-less member spawns no agent and is never stamped, so nothing
+    // needs the environment representation and the configuration is not faulty.
+    let temporary = TempDir::new().expect("temporary");
+    let dir = temporary.path().display().to_string();
+    let root = write_bundle_under_separator_root(
+        &temporary,
+        "alpha",
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "feed"
+directory = "{dir}"
+
+[sessions.pubsub]
+"#
+        ),
+    );
+
+    let loaded = load_bundle_configuration(&root, "alpha")
+        .expect("a bundle stamping nothing does not need the representation");
+    assert_eq!(loaded.members.len(), 1);
+}
+
+#[test]
+fn a_layer_holding_the_separator_loads_when_the_member_declares_its_own() {
+    // This is the case an eager join fails: the value is never rendered for a
+    // member that already declares the name, so the unrepresentable list is
+    // never reached. Rendering during entry enumeration would reject this.
+    let temporary = TempDir::new().expect("temporary");
+    let dir = temporary.path().display().to_string();
+    let root = write_bundle_under_separator_root(
+        &temporary,
+        "alpha",
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "reviewer"
+directory = "{dir}"
+coder = "acp"
+
+[[sessions.environment]]
+name = "AGENTMUX_CONFIGURATION_DIRECTORY"
+value = "/operator/choice"
+"#
+        ),
+    );
+
+    let loaded = load_bundle_configuration(&root, "alpha")
+        .expect("a declared value needs no rendering of the relay's list");
+    assert_eq!(
+        value_of(
+            &loaded.members[0],
+            CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE
+        ),
+        Some("/operator/choice")
+    );
 }
 
 #[test]
