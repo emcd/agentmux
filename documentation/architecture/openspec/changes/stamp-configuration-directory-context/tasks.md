@@ -61,19 +61,19 @@
 
 ## 5. Documentation
 
-- [ ] 5.1 Correct `src/runtime/README.md`, the subsystem architecture
+- [x] 5.1 Correct `src/runtime/README.md`, the subsystem architecture
   documentation for these tiers. Its Root Resolution section states that the
   repeatable flag is the escape hatch for a path containing the separator, which
   this change makes incomplete: the relay must serialize the list wherever a
   coder-backed member requires the stamp. The section also documents
   normalization for the state root only, and now needs the configuration-layer
   guarantee alongside it.
-- [ ] 5.2 Correct `documentation/usage/maintainer-configuration-guide.md`, which
+- [x] 5.2 Correct `documentation/usage/maintainer-configuration-guide.md`, which
   documents the normalization asymmetry as intended — the passage stating that
   the configuration layer list is not normalized and that a relative layer
   resolves against the process working directory at lookup time. Check the other
   relative-path passages in that guide for the same claim.
-- [ ] 5.3 Record the operator-facing consequences in
+- [x] 5.3 Record the operator-facing consequences in
   `documentation/usage/operations.md`: a relative configuration directory is now
   absolutized at startup, and a member whose default configuration root does not
   exist reports missing configuration instead of being scaffolded.

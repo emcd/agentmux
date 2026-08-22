@@ -80,9 +80,20 @@ list the **first** layer wins, matching every other Unix search path. Tier 3
 resolves as a single-layer list, so one lookup path serves every tier.
 Resolution does not vary by build profile.
 
-A path containing `:` cannot be expressed through the environment form; the
-repeatable flag is the escape hatch. An empty element is rejected in either
-form rather than read as the working directory.
+A path containing `:` cannot be expressed through the environment form. The
+repeatable flag is the escape hatch for the operator's own invocation, but it
+is not a complete one: the relay serializes the list into that same form to
+stamp it onto each coder-backed member, so a layer holding `:` is a load-time
+fault for any bundle with a member to stamp. It remains usable where nothing
+needs the representation — a bundle whose members are all coder-less, or a
+member declaring its own `AGENTMUX_CONFIGURATION_DIRECTORY`. An empty element is
+rejected in either form rather than read as the working directory.
+
+The list is normalized to absolute paths after resolution, as the state root is
+and for the same reason: it is stamped into every coder-backed member's
+environment, and a relative layer re-resolves against each child's working
+directory. Normalization is lexical, so a symlinked layer stays the path the
+operator named rather than becoming its target.
 
 Starter hydration applies only to a list from tier 3, which is a single layer. A
 list supplied by flag or environment is never scaffolded; when one of its layers
@@ -124,9 +135,17 @@ Both bring-up paths — first startup and `up`/reconcile — run through
 `members_for_spawn`, so the path an operator happens to take cannot decide
 whether a child can find its relay.
 
-`BringUpContext::VARIABLE_NAMES` therefore stays the *load-time stamped* set.
-`INHERITED_CONTEXT_VARIABLE_NAMES` is the wider one, naming everything a child
-may inherit, and is what a consumer sanitizing inherited context wants.
+`BringUpContext::VARIABLE_NAMES` therefore stays the *load-time stamped* set —
+bundle, session, and the configuration layer list.
+`INHERITED_CONTEXT_VARIABLE_NAMES` is the wider one, adding the state root
+because it is injected at spawn rather than stamped at load, and is what a
+consumer sanitizing inherited context wants.
+
+Every one of these names is defined together in `configuration::types`, and both
+sets are derived from those definitions. That is not tidiness: a name held
+anywhere else is a name both sets omit, with no consumer failing to say so —
+which is how the configuration layer list went unstamped and unsanitized while
+each list looked complete.
 
 ### Socket addressing
 
