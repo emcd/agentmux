@@ -66,21 +66,83 @@ coder = "acp"
     )
 }
 
-/// Writes a bundle under a configuration root whose own path contains the
-/// layer separator, so the resolved list cannot be expressed in the
-/// environment form. The bundle body is supplied so a caller can vary whether
-/// any member would be stamped.
-fn write_bundle_under_separator_root(
+/// Writes a bundle under a configuration root named by `root_name`, so a caller
+/// can choose which representation fault the resolved list carries. The bundle
+/// body is supplied so a caller can also vary whether any member would be
+/// stamped; the two axes are independent and the rule reads on both.
+fn write_bundle_under_root_named(
     temporary: &TempDir,
+    root_name: &std::ffi::OsStr,
     bundle_name: &str,
     bundle_toml: &str,
 ) -> ConfigurationRoots {
-    let root = temporary.path().join("holds:separator");
+    let root = temporary.path().join(root_name);
     let bundles = root.join("bundles");
     std::fs::create_dir_all(&bundles).expect("create directories");
     std::fs::write(root.join("coders.toml"), ACP_CODER).expect("write coders");
     std::fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml).expect("write bundle");
     ConfigurationRoots::single(root)
+}
+
+/// A root whose path holds the layer separator.
+fn separator_root_name() -> &'static std::ffi::OsStr {
+    std::ffi::OsStr::new("holds:separator")
+}
+
+/// A root whose path is not valid Unicode.
+fn not_unicode_root_name() -> &'static std::ffi::OsStr {
+    use std::os::unix::ffi::OsStrExt;
+
+    std::ffi::OsStr::from_bytes(b"not\xffunicode")
+}
+
+/// A bundle with one coder-backed member declaring no environment of its own,
+/// so the relay's layer list is what it would receive.
+fn stamped_member_bundle(directory: &str) -> String {
+    format!(
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "reviewer"
+directory = "{directory}"
+coder = "acp"
+"#
+    )
+}
+
+/// A bundle with one coder-backed member declaring its own layer list, so the
+/// relay's is never rendered for it.
+fn declaring_member_bundle(directory: &str) -> String {
+    format!(
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "reviewer"
+directory = "{directory}"
+coder = "acp"
+
+[[sessions.environment]]
+name = "AGENTMUX_CONFIGURATION_DIRECTORY"
+value = "/operator/choice"
+"#
+    )
+}
+
+/// A bundle whose only member spawns no agent, so nothing is stamped.
+fn coder_less_bundle(directory: &str) -> String {
+    format!(
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "feed"
+directory = "{directory}"
+
+[sessions.pubsub]
+"#
+    )
 }
 
 #[test]
@@ -150,95 +212,91 @@ fn every_stamped_name_is_also_sanitized_from_an_inherited_environment() {
 }
 
 #[test]
-fn a_layer_holding_the_separator_is_rejected_where_a_member_would_be_stamped() {
+fn an_unrepresentable_layer_is_rejected_where_a_member_would_be_stamped() {
+    // Neither fault has a faithful rendering. Forcing one would stamp a path
+    // naming a directory the relay never read -- by substituting replacement
+    // characters for undecodable bytes, or by splitting on an embedded
+    // separator -- and the member would resolve it with nothing reporting the
+    // difference. That is the silent divergence this stamp exists to close,
+    // reintroduced by the stamp itself.
     let temporary = TempDir::new().expect("temporary");
     let dir = temporary.path().display().to_string();
-    let root = write_bundle_under_separator_root(
-        &temporary,
-        "alpha",
-        &format!(
-            r#"
-format-version = 1
 
-[[sessions]]
-id = "reviewer"
-directory = "{dir}"
-coder = "acp"
-"#
-        ),
-    );
+    for (root_name, expected_fault) in [
+        (separator_root_name(), "contains ':'"),
+        (not_unicode_root_name(), "not valid Unicode"),
+    ] {
+        let root = write_bundle_under_root_named(
+            &temporary,
+            root_name,
+            "alpha",
+            &stamped_member_bundle(&dir),
+        );
 
-    let error = load_bundle_configuration(&root, "alpha")
-        .expect_err("a stamped list containing the separator cannot be represented");
-    let rendered = error.to_string();
-    assert!(
-        rendered.contains("holds:separator"),
-        "the error names the offending layer, got {rendered:?}"
-    );
+        let Err(error) = load_bundle_configuration(&root, "alpha") else {
+            panic!("{root_name:?}: an unrepresentable layer must not be stamped");
+        };
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains(expected_fault),
+            "{root_name:?}: the error names which fault the layer carries, got {rendered:?}"
+        );
+    }
 }
 
 #[test]
-fn a_layer_holding_the_separator_loads_when_no_member_would_be_stamped() {
+fn an_unrepresentable_layer_loads_when_no_member_would_be_stamped() {
     // A coder-less member spawns no agent and is never stamped, so nothing
     // needs the environment representation and the configuration is not faulty.
     let temporary = TempDir::new().expect("temporary");
     let dir = temporary.path().display().to_string();
-    let root = write_bundle_under_separator_root(
-        &temporary,
-        "alpha",
-        &format!(
-            r#"
-format-version = 1
 
-[[sessions]]
-id = "feed"
-directory = "{dir}"
+    for root_name in [separator_root_name(), not_unicode_root_name()] {
+        let root =
+            write_bundle_under_root_named(&temporary, root_name, "alpha", &coder_less_bundle(&dir));
 
-[sessions.pubsub]
-"#
-        ),
-    );
-
-    let loaded = load_bundle_configuration(&root, "alpha")
-        .expect("a bundle stamping nothing does not need the representation");
-    assert_eq!(loaded.members.len(), 1);
+        let loaded = load_bundle_configuration(&root, "alpha")
+            .unwrap_or_else(|error| panic!("{root_name:?}: {error}"));
+        assert_eq!(loaded.members.len(), 1);
+        assert_eq!(
+            value_of(
+                &loaded.members[0],
+                CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE
+            ),
+            None,
+            "{root_name:?}: a coder-less member carries no stamped context"
+        );
+    }
 }
 
 #[test]
-fn a_layer_holding_the_separator_loads_when_the_member_declares_its_own() {
-    // This is the case an eager join fails: the value is never rendered for a
-    // member that already declares the name, so the unrepresentable list is
-    // never reached. Rendering during entry enumeration would reject this.
+fn an_unrepresentable_layer_loads_when_the_member_declares_its_own() {
+    // This is the case an eager render fails, for either fault: the relay's
+    // list is never rendered for a member that already declares the name, so
+    // the unrepresentable layer is never reached. Rendering during entry
+    // enumeration -- or anywhere ahead of the presence check -- rejects this.
     let temporary = TempDir::new().expect("temporary");
     let dir = temporary.path().display().to_string();
-    let root = write_bundle_under_separator_root(
-        &temporary,
-        "alpha",
-        &format!(
-            r#"
-format-version = 1
 
-[[sessions]]
-id = "reviewer"
-directory = "{dir}"
-coder = "acp"
+    for root_name in [separator_root_name(), not_unicode_root_name()] {
+        let root = write_bundle_under_root_named(
+            &temporary,
+            root_name,
+            "alpha",
+            &declaring_member_bundle(&dir),
+        );
 
-[[sessions.environment]]
-name = "AGENTMUX_CONFIGURATION_DIRECTORY"
-value = "/operator/choice"
-"#
-        ),
-    );
-
-    let loaded = load_bundle_configuration(&root, "alpha")
-        .expect("a declared value needs no rendering of the relay's list");
-    assert_eq!(
-        value_of(
-            &loaded.members[0],
-            CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE
-        ),
-        Some("/operator/choice")
-    );
+        let loaded = load_bundle_configuration(&root, "alpha")
+            .unwrap_or_else(|error| panic!("{root_name:?}: {error}"));
+        assert_eq!(
+            value_of(
+                &loaded.members[0],
+                CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE
+            ),
+            Some("/operator/choice"),
+            "{root_name:?}: a declared value survives regardless of the fault"
+        );
+    }
 }
 
 #[test]

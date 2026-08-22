@@ -84,9 +84,12 @@ A path containing `:` cannot be expressed through the environment form. The
 repeatable flag is the escape hatch for the operator's own invocation, but it
 is not a complete one: the relay serializes the list into that same form to
 stamp it onto each coder-backed member, so a layer holding `:` is a load-time
-fault for any bundle with a member to stamp. It remains usable where nothing
-needs the representation — a bundle whose members are all coder-less, or a
-member declaring its own `AGENTMUX_CONFIGURATION_DIRECTORY`. An empty element is
+fault for any bundle with a member to stamp. A layer that is not valid Unicode
+faults the same way and for the same reason — the environment carries text, and
+substituting characters for undecodable bytes would stamp a path naming a
+different directory than the relay read. Both remain usable where nothing needs
+the representation: a bundle whose members are all coder-less, or a member
+declaring its own `AGENTMUX_CONFIGURATION_DIRECTORY`. An empty element is
 rejected in either form rather than read as the working directory.
 
 The list is normalized to absolute paths after resolution, as the state root is

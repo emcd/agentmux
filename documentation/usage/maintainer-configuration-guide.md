@@ -636,12 +636,16 @@ export AGENTMUX_CONFIGURATION_DIRECTORY=~/config/agentmux-rnd:~/config/agentmux
 agentmux host relay
 ```
 
-A path containing `:` cannot be expressed here. The repeatable flag
-expresses it for your own invocation, but the relay serializes the list
-into this same form to stamp it onto each coder-backed member, so such
-a layer is a load-time fault for any bundle with a member to stamp. It
-stays usable where nothing needs the representation: a bundle whose
-members are all coder-less, or a member declaring its own
+A path containing `:` cannot be expressed here, and neither can one
+that is not valid Unicode — the environment carries text. The
+repeatable flag expresses either for your own invocation, but the relay
+serializes the list into this same form to stamp it onto each
+coder-backed member, so such a layer is a load-time fault for any
+bundle with a member to stamp. The error names the layer and which of
+the two faults it carries; nothing is substituted or split, because
+either would hand the member a path naming a directory the relay never
+read. Both stay usable where nothing needs the representation: a bundle
+whose members are all coder-less, or a member declaring its own
 `AGENTMUX_CONFIGURATION_DIRECTORY`.
 Empty elements (leading, trailing, or doubled `:`)
 are rejected rather than read as the working directory — reading a

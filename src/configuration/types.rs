@@ -77,7 +77,7 @@ pub struct BringUpContext<'a> {
 ///
 /// Values that are already strings are carried as such. The layer list is not:
 /// rendering it means joining the layers into the delimited environment form,
-/// which allocates and can fail when a layer path contains the separator.
+/// which allocates and can fail when a layer cannot be represented faithfully.
 ///
 /// The distinction exists so the render happens where the entry is written
 /// rather than where the entries are enumerated. Enumeration produces every
@@ -93,6 +93,22 @@ pub enum ContextValue<'a> {
     Layers(&'a ConfigurationRoots),
 }
 
+/// Why a layer cannot survive the round trip through the environment form.
+///
+/// Both faults are silent if forced. Replacing undecodable bytes would stamp a
+/// path that resolves to a different directory than the one the relay read;
+/// splitting on an embedded separator would stamp layers the operator never
+/// declared. Either way the member reads configuration the relay did not
+/// select, which is the divergence the stamp exists to close.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayerRepresentationFault {
+    /// The path is not UTF-8, and the environment carries `String`.
+    NotUnicode,
+    /// The path contains [`LAYER_SEPARATOR`], indistinguishable from the
+    /// boundary between two layers once joined.
+    HoldsSeparator,
+}
+
 /// A layer list that cannot be expressed in the delimited environment form.
 ///
 /// Carries the offending layer so the caller can name it. The repeatable
@@ -101,6 +117,7 @@ pub enum ContextValue<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UnrepresentableLayer {
     pub layer: PathBuf,
+    pub fault: LayerRepresentationFault,
 }
 
 impl<'a> ContextValue<'a> {
@@ -108,26 +125,32 @@ impl<'a> ContextValue<'a> {
     ///
     /// # Errors
     ///
-    /// Returns [`UnrepresentableLayer`] when a layer path contains
-    /// [`LAYER_SEPARATOR`], which would otherwise be indistinguishable from the
-    /// boundary between two layers.
+    /// Returns [`UnrepresentableLayer`] when a layer cannot survive the round
+    /// trip: see [`LayerRepresentationFault`]. The conversion is exact, never
+    /// lossy — a layer this cannot represent faithfully is reported rather
+    /// than approximated, because an approximation names a directory the relay
+    /// did not read.
     pub fn render(self) -> Result<String, UnrepresentableLayer> {
         match self {
             Self::Text(value) => Ok(value.to_string()),
             Self::Layers(roots) => {
+                let mut rendered = Vec::with_capacity(roots.layers().len());
                 for layer in roots.layers() {
-                    if layer.to_string_lossy().contains(LAYER_SEPARATOR) {
+                    let Some(text) = layer.to_str() else {
                         return Err(UnrepresentableLayer {
                             layer: layer.clone(),
+                            fault: LayerRepresentationFault::NotUnicode,
+                        });
+                    };
+                    if text.contains(LAYER_SEPARATOR) {
+                        return Err(UnrepresentableLayer {
+                            layer: layer.clone(),
+                            fault: LayerRepresentationFault::HoldsSeparator,
                         });
                     }
+                    rendered.push(text);
                 }
-                Ok(roots
-                    .layers()
-                    .iter()
-                    .map(|layer| layer.to_string_lossy().into_owned())
-                    .collect::<Vec<_>>()
-                    .join(&LAYER_SEPARATOR.to_string()))
+                Ok(rendered.join(&LAYER_SEPARATOR.to_string()))
             }
         }
     }

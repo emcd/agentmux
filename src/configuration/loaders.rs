@@ -25,7 +25,7 @@ use super::{
     },
     types::{
         BringUpContext, BundleConfiguration, BundleGroupMembership, BundleMember,
-        CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, NameValueEntry,
+        CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, LayerRepresentationFault, NameValueEntry,
         STATE_DIRECTORY_ENVIRONMENT_VARIABLE, TuiConfiguration, TuiSession, UiConfiguration,
     },
 };
@@ -619,15 +619,22 @@ fn stamp_context_environment(
             continue;
         }
         let value = value.render().map_err(|unrepresentable| {
+            let cause = match unrepresentable.fault {
+                LayerRepresentationFault::NotUnicode => {
+                    "is not valid Unicode, and the environment carries text".to_string()
+                }
+                LayerRepresentationFault::HoldsSeparator => {
+                    format!("contains '{LAYER_SEPARATOR}', which separates two layers once joined")
+                }
+            };
             ConfigurationError::invalid(
                 bundle_path,
                 format!(
-                    "configuration layer '{}' contains '{}', so the layer list cannot be \
-                     expressed in {} for a member which does not declare its own; the \
-                     repeatable --configuration-directory flag expresses such a layer for \
-                     any deployment which does not need the value stamped",
+                    "configuration layer '{}' {cause}, so the layer list cannot be expressed \
+                     faithfully in {} for a member which does not declare its own; it is \
+                     reported rather than approximated, because an approximation would send \
+                     the member to a directory this relay did not read",
                     unrepresentable.layer.display(),
-                    LAYER_SEPARATOR,
                     CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE
                 ),
             )

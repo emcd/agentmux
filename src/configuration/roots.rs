@@ -11,7 +11,9 @@ use std::{
 /// repeatable flag expresses such a path for an operator's own invocation, but
 /// it is not a complete escape hatch: the relay renders the list into this form
 /// to stamp it onto each coder-backed member, so a layer holding the separator
-/// is a load-time fault wherever a member would receive the stamp.
+/// is a load-time fault wherever a member would receive the stamp. A layer that
+/// is not valid Unicode is unrepresentable for the same reason and faults the
+/// same way, the environment carrying text rather than bytes.
 pub const LAYER_SEPARATOR: char = ':';
 
 /// An ordered, non-empty list of configuration roots, searched front to back.

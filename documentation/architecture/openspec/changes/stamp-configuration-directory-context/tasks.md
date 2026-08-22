@@ -107,15 +107,33 @@
   behavior. What is new is only that a member now reaches the environment tier,
   which `bring_up_context::stamps_the_relays_configuration_layer_list` asserts.
   A third test would restate both.
-- [x] 6.4 Cover the unrepresentable list in all three shapes: a layer path
-  containing the separator produces the structured validation error naming that
-  layer when a coder-backed member would be stamped; it does not block a bundle
-  with only coder-less members; and it does not block a coder-backed member that
-  declares its own `AGENTMUX_CONFIGURATION_DIRECTORY`, which keeps its value.
+- [x] 6.4 Cover the unrepresentable list across both axes: the two faults — a
+  layer containing the separator, and a layer that is not valid Unicode — each
+  crossed with the three stamping shapes. Rejection with the error naming which
+  fault the layer carries where a coder-backed member would be stamped; loading
+  where the only member is coder-less; loading where the coder-backed member
+  declares its own `AGENTMUX_CONFIGURATION_DIRECTORY` and keeps its value. Each
+  test iterates both faults, and every assertion names the root it is on, so a
+  failure says which fault produced it rather than only which shape.
+  The non-Unicode fault is reachable only through the library API, which takes
+  `PathBuf`; the command line parses arguments as `String` and would panic
+  first.
+  Teeth, verified per fault rather than per test: under an eager render the
+  declaring-member case fails for the separator fault *and*, checked separately
+  by running that iteration first, for the non-Unicode fault — a loop that
+  panics on its first iteration proves nothing about its second. Restoring the
+  lossy conversion fails the rejection case with the member carrying a
+  substituted path.
   The third case is what holds task 3.3, but only against the regression that
   actually matters: propagating the render's error before the presence check.
   Merely computing the value early and discarding it on the skip leaves all
   three passing, so a teeth check that only hoists the call proves nothing.
-- [x] 6.5 Cover the sanitization leak: a harness clearing inherited context
-  clears `AGENTMUX_CONFIGURATION_DIRECTORY`, and a suite run with that variable
-  exported does not resolve against it.
+- [x] 6.5 Cover the sanitization leak. **Covered as the invariant, not by
+  spawning a sanitized command with the value exported.**
+  `bring_up_context::every_stamped_name_is_also_sanitized_from_an_inherited_environment`
+  asserts that every name in `BringUpContext::VARIABLE_NAMES` appears in
+  `INHERITED_CONTEXT_VARIABLE_NAMES`, and `support/process.rs` clears exactly
+  that imported list, so the clearing follows. Stated this way it also catches
+  the next stamped variable rather than only this one — which is the failure
+  that occurred. A spawn-based test would assert the same link through more
+  machinery.
