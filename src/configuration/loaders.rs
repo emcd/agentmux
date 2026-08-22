@@ -18,12 +18,14 @@ use super::{
         Coder, CoderTarget, RawBundleFile, RawCoder, RawCodersFile, RawPoliciesFile, RawUiFile,
         RawUsersFile, RawUsersSession,
     },
+    roots::LAYER_SEPARATOR,
     targets::{
         build_session_target, select_marker_session_type, validate_acp_target,
         validate_environment_entries, validate_pty_target, validate_tmux_target,
     },
     types::{
-        BringUpContext, BundleConfiguration, BundleGroupMembership, BundleMember, NameValueEntry,
+        BringUpContext, BundleConfiguration, BundleGroupMembership, BundleMember,
+        CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, NameValueEntry,
         STATE_DIRECTORY_ENVIRONMENT_VARIABLE, TuiConfiguration, TuiSession, UiConfiguration,
     },
 };
@@ -114,6 +116,7 @@ pub fn load_bundle_configuration(
         &coders_path,
         bundle_file,
         &bundle_path,
+        configuration_roots,
     )
 }
 
@@ -275,6 +278,7 @@ fn validate_loaded_configuration(
     coders_path: &Path,
     bundle_file: RawBundleFile,
     bundle_path: &Path,
+    configuration_roots: &ConfigurationRoots,
 ) -> Result<BundleConfiguration, ConfigurationError> {
     validate_format_version(
         coders_file.format_version,
@@ -385,8 +389,10 @@ fn validate_loaded_configuration(
                 &BringUpContext {
                     bundle_name: expected_bundle_name,
                     session_id,
+                    configuration_roots,
                 },
-            );
+                bundle_path,
+            )?;
         }
 
         members.push(BundleMember {
@@ -593,14 +599,42 @@ pub fn inject_spawn_state_directory(environment: &mut Vec<NameValueEntry>, state
 /// spawn `environment`. An operator-declared entry of the same name is left
 /// untouched, so declaring one of these names in configuration overrides what
 /// bring-up would otherwise supply.
-fn stamp_context_environment(environment: &mut Vec<NameValueEntry>, context: &BringUpContext<'_>) {
+///
+/// A value is rendered only once its name is known to be absent. The order is
+/// load-bearing for the layer list, whose render can fail: a member that
+/// declares the variable keeps its own value and must not be rejected for a
+/// list it never receives.
+///
+/// # Errors
+///
+/// Returns [`ConfigurationError::InvalidConfiguration`] when a value this
+/// member would receive cannot be represented in its environment form.
+fn stamp_context_environment(
+    environment: &mut Vec<NameValueEntry>,
+    context: &BringUpContext<'_>,
+    bundle_path: &Path,
+) -> Result<(), ConfigurationError> {
     for (name, value) in context.environment_entries() {
         if environment.iter().any(|entry| entry.name == name) {
             continue;
         }
+        let value = value.render().map_err(|unrepresentable| {
+            ConfigurationError::invalid(
+                bundle_path,
+                format!(
+                    "configuration layer '{}' contains '{}', so the layer list cannot be \
+                     expressed in {}; use the repeatable --configuration-directory flag for a \
+                     relay which does not spawn a coder-backed member",
+                    unrepresentable.layer.display(),
+                    LAYER_SEPARATOR,
+                    CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE
+                ),
+            )
+        })?;
         environment.push(NameValueEntry {
             name: name.to_string(),
-            value: value.to_string(),
+            value,
         });
     }
+    Ok(())
 }

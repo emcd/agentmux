@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::roots::{ConfigurationRoots, LAYER_SEPARATOR};
+
 pub const RESERVED_GROUP_ALL: &str = "ALL";
 
 /// Environment variable carrying the bundle identity of the bundle hosting a
@@ -22,6 +24,18 @@ pub const SESSION_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_SESSION";
 /// held elsewhere is a name that list silently omits.
 pub const STATE_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_STATE_DIRECTORY";
 
+/// Environment variable carrying the configuration layer list of the relay
+/// which spawned a member, and the environment tier of configuration-layer
+/// resolution. Carries a [`LAYER_SEPARATOR`]-delimited list.
+///
+/// Part of the bring-up context stamped by [`BringUpContext`], upsert-if-absent
+/// like the bundle and session names rather than authoritatively like the state
+/// root. A member holding a divergent configuration root still addresses and
+/// authenticates to the relay that spawned it, because the socket, the session
+/// and peer pre-shared keys, and the principal store all resolve beneath the
+/// state root; what diverges is the set of declarations it reads.
+pub const CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_CONFIGURATION_DIRECTORY";
+
 /// Names of every agentmux context variable a spawned child may inherit.
 ///
 /// Distinct from [`BringUpContext::VARIABLE_NAMES`], which enumerates only what
@@ -34,6 +48,7 @@ pub const INHERITED_CONTEXT_VARIABLE_NAMES: &[&str] = &[
     BUNDLE_ENVIRONMENT_VARIABLE,
     SESSION_ENVIRONMENT_VARIABLE,
     STATE_DIRECTORY_ENVIRONMENT_VARIABLE,
+    CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE,
 ];
 
 /// Authoritative context which bring-up holds about a member it is starting.
@@ -54,6 +69,68 @@ pub struct BringUpContext<'a> {
     pub bundle_name: &'a str,
     /// Member id, which is the sender-session identity.
     pub session_id: &'a str,
+    /// Configuration layers the relay resolved, in list order.
+    pub configuration_roots: &'a ConfigurationRoots,
+}
+
+/// A context value in the form it is carried, before it is written.
+///
+/// Values that are already strings are carried as such. The layer list is not:
+/// rendering it means joining the layers into the delimited environment form,
+/// which allocates and can fail when a layer path contains the separator.
+///
+/// The distinction exists so the render happens where the entry is written
+/// rather than where the entries are enumerated. Enumeration produces every
+/// pair, and the stamping loop then discards the ones whose name is already
+/// declared; rendering during enumeration would evaluate a representation for
+/// members that never receive it, and reject a configuration that an operator
+/// declaration would have satisfied.
+#[derive(Clone, Copy, Debug)]
+pub enum ContextValue<'a> {
+    /// Already in its stamped form.
+    Text(&'a str),
+    /// Rendered by joining the layers with [`LAYER_SEPARATOR`].
+    Layers(&'a ConfigurationRoots),
+}
+
+/// A layer list that cannot be expressed in the delimited environment form.
+///
+/// Carries the offending layer so the caller can name it. The repeatable
+/// command-line flag expresses such a path for any deployment that does not
+/// need the value stamped.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnrepresentableLayer {
+    pub layer: PathBuf,
+}
+
+impl<'a> ContextValue<'a> {
+    /// Renders the value into the form written to a member's environment.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`UnrepresentableLayer`] when a layer path contains
+    /// [`LAYER_SEPARATOR`], which would otherwise be indistinguishable from the
+    /// boundary between two layers.
+    pub fn render(self) -> Result<String, UnrepresentableLayer> {
+        match self {
+            Self::Text(value) => Ok(value.to_string()),
+            Self::Layers(roots) => {
+                for layer in roots.layers() {
+                    if layer.to_string_lossy().contains(LAYER_SEPARATOR) {
+                        return Err(UnrepresentableLayer {
+                            layer: layer.clone(),
+                        });
+                    }
+                }
+                Ok(roots
+                    .layers()
+                    .iter()
+                    .map(|layer| layer.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join(&LAYER_SEPARATOR.to_string()))
+            }
+        }
+    }
 }
 
 impl<'a> BringUpContext<'a> {
@@ -67,15 +144,30 @@ impl<'a> BringUpContext<'a> {
     ///
     /// This is the load-time set, not everything a child inherits. A consumer
     /// sanitizing inherited context wants [`INHERITED_CONTEXT_VARIABLE_NAMES`].
-    pub const VARIABLE_NAMES: &'static [&'static str] =
-        &[BUNDLE_ENVIRONMENT_VARIABLE, SESSION_ENVIRONMENT_VARIABLE];
+    pub const VARIABLE_NAMES: &'static [&'static str] = &[
+        BUNDLE_ENVIRONMENT_VARIABLE,
+        SESSION_ENVIRONMENT_VARIABLE,
+        CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE,
+    ];
 
-    /// Environment name/value pairs representing this context.
+    /// Environment name/value pairs representing this context, each value in
+    /// the form it is carried rather than the form it is written. See
+    /// [`ContextValue`] for why the two differ.
     #[must_use]
-    pub fn environment_entries(&self) -> Vec<(&'static str, &'a str)> {
+    pub fn environment_entries(&self) -> Vec<(&'static str, ContextValue<'a>)> {
         vec![
-            (BUNDLE_ENVIRONMENT_VARIABLE, self.bundle_name),
-            (SESSION_ENVIRONMENT_VARIABLE, self.session_id),
+            (
+                BUNDLE_ENVIRONMENT_VARIABLE,
+                ContextValue::Text(self.bundle_name),
+            ),
+            (
+                SESSION_ENVIRONMENT_VARIABLE,
+                ContextValue::Text(self.session_id),
+            ),
+            (
+                CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE,
+                ContextValue::Layers(self.configuration_roots),
+            ),
         ]
     }
 }

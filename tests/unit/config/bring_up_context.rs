@@ -201,9 +201,11 @@ fn enumerated_names_match_stamped_entries() {
     // `VARIABLE_NAMES`, while the loader stamps `environment_entries`. Holding
     // the two in agreement here is what lets the context be extended without
     // silently leaving a variable unhandled by one of them.
+    let roots = ConfigurationRoots::single("/configuration");
     let context = BringUpContext {
         bundle_name: "alpha",
         session_id: "reviewer",
+        configuration_roots: &roots,
     };
     let stamped: Vec<&str> = context
         .environment_entries()

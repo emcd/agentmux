@@ -1,39 +1,39 @@
 ## 1. Remove the structural cause
 
-- [ ] 1.1 Move the `AGENTMUX_CONFIGURATION_DIRECTORY` name constant from its
+- [x] 1.1 Move the `AGENTMUX_CONFIGURATION_DIRECTORY` name constant from its
   private definition in `src/runtime/paths.rs` into `src/configuration/types.rs`
   beside the other context variable names, and have the resolver in `paths.rs`
   read it from there. The comment in `types.rs` already states the invariant this
   restores; keep it accurate.
-- [ ] 1.2 Add the name to `INHERITED_CONTEXT_VARIABLE_NAMES`, so consumers that
+- [x] 1.2 Add the name to `INHERITED_CONTEXT_VARIABLE_NAMES`, so consumers that
   sanitize an inherited environment clear it with the other context variables.
-- [ ] 1.3 Add the configuration layer list to `BringUpContext` and to
+- [x] 1.3 Add the configuration layer list to `BringUpContext` and to
   `BringUpContext::environment_entries`, and extend `VARIABLE_NAMES` to match.
   The existing test holding the two in agreement should fail if only one is
   extended — confirm it does before relying on it.
 
 ## 2. Normalize the layer list at root resolution
 
-- [ ] 2.1 Absolutize every layer of the effective configuration list in
+- [x] 2.1 Absolutize every layer of the effective configuration list in
   `resolve_configuration_roots`, for the command-line and environment tiers
   (the default tier is already absolute by construction). Use lexical
   absolutization against the process working directory, matching how the state
   root is normalized — not canonicalization, which would resolve symlinks and
   rewrite a declared layer into a path the operator never named.
-- [ ] 2.2 Confirm the relay-spawn path in `src/commands/tui.rs` still passes one
+- [x] 2.2 Confirm the relay-spawn path in `src/commands/tui.rs` still passes one
   `--configuration-directory` occurrence per layer and that the TUI and the relay
   it spawns resolve the same list when the TUI is launched from a relative path.
 
 ## 3. Stamp at configuration load
 
-- [ ] 3.1 Thread the resolved configuration layer list into bundle configuration
+- [x] 3.1 Thread the resolved configuration layer list into bundle configuration
   load so it reaches the `BringUpContext` construction in
   `src/configuration/loaders.rs`. Carry the layer list itself, not a pre-joined
   string — see 3.3.
-- [ ] 3.2 Stamp it through the existing `stamp_context_environment` path, inside
+- [x] 3.2 Stamp it through the existing `stamp_context_environment` path, inside
   the `spawns_agent()` branch, so it is upsert-if-absent and coder-less members
   carry no entry. Do not add a spawn-time injector.
-- [ ] 3.3 Serialize the layer list only where the stamp is actually written.
+- [x] 3.3 Serialize the layer list only where the stamp is actually written.
   `environment_entries` currently returns every pair eagerly and
   `stamp_context_environment` then discards those whose name is already present,
   so joining there would evaluate the representation for members that never
@@ -41,7 +41,7 @@
   eagerness — test the name for absence before joining, or let the entry be
   produced fallibly — rather than accepting it. This is the one place the
   existing mechanism does not carry the new variable unchanged.
-- [ ] 3.4 Return a structured validation error, naming the offending layer, when
+- [x] 3.4 Return a structured validation error, naming the offending layer, when
   serializing a list whose layer path contains the environment separator. Do not
   split the value and do not skip the stamp. A coder-less member is never
   stamped, and a coder-backed member declaring its own

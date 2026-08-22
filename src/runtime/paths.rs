@@ -7,17 +7,13 @@ use std::{
 };
 
 use crate::configuration::{
-    ConfigurationRoots, ConfigurationRootsError, STATE_DIRECTORY_ENVIRONMENT_VARIABLE,
+    CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, ConfigurationRoots, ConfigurationRootsError,
+    STATE_DIRECTORY_ENVIRONMENT_VARIABLE,
 };
 
 use super::error::RuntimeError;
 
 const APPLICATION_DIRECTORY: &str = "agentmux";
-/// Environment tier of configuration-layer resolution. Ranked below the CLI
-/// flag, and like the flag it replaces the layer list outright. Carries a
-/// separator-delimited list, so a path containing the separator is
-/// unrepresentable here and needs the repeatable flag.
-const CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_CONFIGURATION_DIRECTORY";
 const CONFIGURATION_DIRECTORY_DEFAULT: &str = ".config";
 const STATE_DIRECTORY_DEFAULT: &str = ".local/state";
 const INSCRIPTIONS_DIRECTORY_DEFAULT: &str = "inscriptions";
@@ -262,13 +258,19 @@ fn resolve_configuration_roots(
     if !overrides.configuration_layers.is_empty() {
         let roots = ConfigurationRoots::from_elements(overrides.configuration_layers.clone())
             .map_err(invalid_configuration_layers)?;
-        return Ok((roots, ConfigurationRootSource::CommandLine));
+        return Ok((
+            normalize_configuration_roots(&roots)?,
+            ConfigurationRootSource::CommandLine,
+        ));
     }
     if let Some(value) = env::var(CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE).ok()
         && let Some(roots) = ConfigurationRoots::from_environment_value(&value)
             .map_err(invalid_configuration_layers)?
     {
-        return Ok((roots, ConfigurationRootSource::Environment));
+        return Ok((
+            normalize_configuration_roots(&roots)?,
+            ConfigurationRootSource::Environment,
+        ));
     }
     if let Some(path) = env_directory("XDG_CONFIG_HOME") {
         return Ok((
@@ -309,6 +311,33 @@ fn resolve_state_root(overrides: &RuntimeRootOverrides) -> Result<PathBuf, Runti
     }
     let home_directory = resolve_home_directory()?;
     normalize_state_root(&state_root_from_sources(None, &home_directory))
+}
+
+/// Normalizes every layer of a resolved configuration list to an absolute path.
+///
+/// Same precondition as [`normalize_state_root`], for the same reason: the list
+/// is stamped into every coder-backed member's environment, and a relative layer
+/// re-resolves against each child's working directory, so a member would read a
+/// different root than the relay that stamped it while both appear to name the
+/// same layer.
+///
+/// Absolutization is lexical. Canonicalizing would resolve symlinks and rewrite
+/// an operator's declared layer into a path they never named; the tiers below
+/// already produce absolute paths, so only the flag and environment tiers reach
+/// here. Emptiness is rejected by the list constructors before this runs.
+fn normalize_configuration_roots(
+    roots: &ConfigurationRoots,
+) -> Result<ConfigurationRoots, RuntimeError> {
+    let mut absolute = Vec::with_capacity(roots.layers().len());
+    for layer in roots.layers() {
+        absolute.push(std::path::absolute(layer).map_err(|source| {
+            RuntimeError::io(
+                format!("resolve configuration directory {}", layer.display()),
+                source,
+            )
+        })?);
+    }
+    ConfigurationRoots::from_elements(absolute).map_err(invalid_configuration_layers)
 }
 
 /// Normalizes a resolved state root to a non-empty absolute path.
