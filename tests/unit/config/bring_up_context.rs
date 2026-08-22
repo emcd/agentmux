@@ -6,13 +6,15 @@
 //! `agentmux host mcp` subprocess, so association is carried rather than
 //! inferred from the filesystem.
 
+use std::path::PathBuf;
+
 use agentmux::configuration::ConfigurationRoots;
 use tempfile::TempDir;
 
 use agentmux::configuration::{
     BUNDLE_ENVIRONMENT_VARIABLE, BringUpContext, BundleMember,
-    CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, INHERITED_CONTEXT_VARIABLE_NAMES,
-    SESSION_ENVIRONMENT_VARIABLE, load_bundle_configuration,
+    CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, ContextValue, INHERITED_CONTEXT_VARIABLE_NAMES,
+    LayerRepresentationFault, SESSION_ENVIRONMENT_VARIABLE, load_bundle_configuration,
 };
 
 use super::helpers::*;
@@ -89,11 +91,34 @@ fn separator_root_name() -> &'static std::ffi::OsStr {
     std::ffi::OsStr::new("holds:separator")
 }
 
-/// A root whose path is not valid Unicode.
-fn not_unicode_root_name() -> &'static std::ffi::OsStr {
+/// A root whose path is not valid Unicode, where one can exist on disk.
+///
+/// `None` on macOS. APFS enforces valid UTF-8 in path components, so creating
+/// this root fails with `EILSEQ` before the loader is reached; the scenario is
+/// not awkward to set up there, it cannot exist on that filesystem at all.
+/// Linux treats a path as opaque bytes and accepts it.
+fn not_unicode_root_name() -> Option<&'static std::ffi::OsStr> {
     use std::os::unix::ffi::OsStrExt;
 
-    std::ffi::OsStr::from_bytes(b"not\xffunicode")
+    if cfg!(target_os = "macos") {
+        return None;
+    }
+    Some(std::ffi::OsStr::from_bytes(b"not\xffunicode"))
+}
+
+/// Every representation fault a root name can carry on this platform, paired
+/// with the fragment a rejection names it by.
+///
+/// Crossing these with the bundle shapes below covers each combination the
+/// filesystem can hold. Where the non-Unicode name is unavailable, the fault
+/// itself stays covered by the rendering tests, which need no directory, and
+/// what the loader does with a fault stays covered by the separator name.
+fn unrepresentable_root_names() -> Vec<(&'static std::ffi::OsStr, &'static str)> {
+    let mut names = vec![(separator_root_name(), "contains ':'")];
+    if let Some(not_unicode) = not_unicode_root_name() {
+        names.push((not_unicode, "not valid Unicode"));
+    }
+    names
 }
 
 /// A bundle with one coder-backed member declaring no environment of its own,
@@ -212,6 +237,53 @@ fn every_stamped_name_is_also_sanitized_from_an_inherited_environment() {
 }
 
 #[test]
+fn rendering_joins_every_layer_in_declared_order() {
+    // The stamped value is a search path, so a member reading it has to find
+    // the layers in the precedence the relay resolved -- an override ahead of
+    // the base it overrides.
+    let roots = ConfigurationRoots::from_elements(["/override", "/base"].map(PathBuf::from))
+        .expect("layer list");
+    assert_eq!(
+        ContextValue::Layers(&roots).render().expect("render"),
+        "/override:/base"
+    );
+}
+
+#[test]
+fn rendering_reports_an_unrepresentable_layer_rather_than_approximating_it() {
+    // Both faults are properties of the rendering, not of any filesystem, so
+    // they are stated here without a directory having to exist. That is what
+    // keeps the non-Unicode fault covered on a filesystem which cannot hold
+    // such a path; the loader tests below reach only the faults their platform
+    // can construct.
+    use std::os::unix::ffi::OsStrExt;
+
+    for (layer, expected) in [
+        (
+            PathBuf::from(std::ffi::OsStr::from_bytes(b"/not\xffunicode")),
+            LayerRepresentationFault::NotUnicode,
+        ),
+        (
+            PathBuf::from("/holds:separator"),
+            LayerRepresentationFault::HoldsSeparator,
+        ),
+    ] {
+        let roots = ConfigurationRoots::single(layer.clone());
+        let Err(unrepresentable) = ContextValue::Layers(&roots).render() else {
+            panic!("{layer:?}: an unrepresentable layer must not render");
+        };
+        assert_eq!(
+            unrepresentable.fault, expected,
+            "{layer:?}: the fault names why the layer cannot be represented"
+        );
+        assert_eq!(
+            unrepresentable.layer, layer,
+            "{layer:?}: the offending layer is carried so a caller can name it"
+        );
+    }
+}
+
+#[test]
 fn an_unrepresentable_layer_is_rejected_where_a_member_would_be_stamped() {
     // Neither fault has a faithful rendering. Forcing one would stamp a path
     // naming a directory the relay never read -- by substituting replacement
@@ -222,10 +294,7 @@ fn an_unrepresentable_layer_is_rejected_where_a_member_would_be_stamped() {
     let temporary = TempDir::new().expect("temporary");
     let dir = temporary.path().display().to_string();
 
-    for (root_name, expected_fault) in [
-        (separator_root_name(), "contains ':'"),
-        (not_unicode_root_name(), "not valid Unicode"),
-    ] {
+    for (root_name, expected_fault) in unrepresentable_root_names() {
         let root = write_bundle_under_root_named(
             &temporary,
             root_name,
@@ -251,7 +320,7 @@ fn an_unrepresentable_layer_loads_when_no_member_would_be_stamped() {
     let temporary = TempDir::new().expect("temporary");
     let dir = temporary.path().display().to_string();
 
-    for root_name in [separator_root_name(), not_unicode_root_name()] {
+    for (root_name, _) in unrepresentable_root_names() {
         let root =
             write_bundle_under_root_named(&temporary, root_name, "alpha", &coder_less_bundle(&dir));
 
@@ -278,7 +347,7 @@ fn an_unrepresentable_layer_loads_when_the_member_declares_its_own() {
     let temporary = TempDir::new().expect("temporary");
     let dir = temporary.path().display().to_string();
 
-    for root_name in [separator_root_name(), not_unicode_root_name()] {
+    for (root_name, _) in unrepresentable_root_names() {
         let root = write_bundle_under_root_named(
             &temporary,
             root_name,
