@@ -50,10 +50,10 @@
 
 ## 4. Committed client configuration
 
-- [ ] 4.1 Remove `--configuration-directory` from the in-repo artifacts carrying
+- [x] 4.1 Remove `--configuration-directory` from the in-repo artifacts carrying
   an `agentmux host mcp` command line. Two of the three currently emit it;
   `codex/config.toml` does not.
-- [ ] 4.2 Extend `scripts/lint-client-configuration.sh` to reject
+- [x] 4.2 Extend `scripts/lint-client-configuration.sh` to reject
   `--configuration-directory` alongside `--state-directory`, with a message
   naming the consequence for the configuration root rather than reusing the
   rendezvous wording, which does not apply. Confirm the extended lint fails

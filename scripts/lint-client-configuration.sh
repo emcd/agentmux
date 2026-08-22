@@ -3,15 +3,21 @@
 # Lints the committed coder client configuration that carries an
 # `agentmux host mcp` command line.
 #
-# Rationale: a coder template emits that command line into a committed file, so
-# a `--state-directory` placed there is committed content wearing CLI intent. It
-# would outrank the `AGENTMUX_STATE_DIRECTORY` the relay injects at spawn and
-# silently put a child on a different relay than the one that spawned it -- the
-# rendezvous failure the injection exists to prevent, reintroduced by a file
-# nobody edits by hand. These artifacts are generated from a Copier template
-# upstream, so this cannot stop the constraint being violated at the source; this
-# repository is where it can be checked mechanically, and a regeneration that
-# reintroduces the flag fails here.
+# Rationale: a coder template emits that command line into a committed file, so a
+# root-selecting flag placed there is committed content wearing CLI intent. Both
+# flags this guards outrank the environment value the relay supplies, and neither
+# failure is visible where it happens. `--state-directory` would silently put a
+# child on a different relay than the one that spawned it -- the rendezvous
+# failure the injection exists to prevent, reintroduced by a file nobody edits by
+# hand. `--configuration-directory` does not break the rendezvous, because the
+# socket and credentials resolve beneath the state root; it makes the child read
+# a different set of declarations than the relay that spawned it, and a committed
+# absolute path does that in every checkout that is not the one it names.
+#
+# These artifacts are generated from a Copier template upstream, so this cannot
+# stop the constraint being violated at the source; this repository is where it
+# can be checked mechanically, and a regeneration that reintroduces either flag
+# fails here.
 #
 # This is a lint rather than a test because what it asserts is a property of the
 # repository, not behavior of the crate. As a pre-commit hook it inherits
@@ -35,7 +41,7 @@ fail=0
 
 for relative in "${ARTIFACTS[@]}"; do
     if [[ ! -f "$relative" ]]; then
-        echo "lint-client-configuration: $relative is missing; the --state-directory guard covers nothing" >&2
+        echo "lint-client-configuration: $relative is missing; the root-flag guards cover nothing" >&2
         fail=1
         continue
     fi
@@ -45,12 +51,17 @@ for relative in "${ARTIFACTS[@]}"; do
         fail=1
     fi
 
-    # Without this the check above passes vacuously once a template stops
+    if grep -q -- '--configuration-directory' "$relative"; then
+        echo "lint-client-configuration: $relative must not emit --configuration-directory: a committed flag outranks the AGENTMUX_CONFIGURATION_DIRECTORY the relay stamps at configuration load, so the child reads declarations the relay did not select -- and a committed absolute path does that in every checkout but the one it names" >&2
+        fail=1
+    fi
+
+    # Without this the checks above pass vacuously once a template stops
     # emitting the command line, or renames the file out from under the list.
     # Quoting, commas and whitespace vary by artifact format, so they are
     # stripped before matching rather than matched around.
     if ! tr -d '",[:space:]' < "$relative" | grep -q 'hostmcp'; then
-        echo "lint-client-configuration: $relative no longer carries an agentmux host mcp command line, so the --state-directory guard covers nothing" >&2
+        echo "lint-client-configuration: $relative no longer carries an agentmux host mcp command line, so the root-flag guards cover nothing" >&2
         fail=1
     fi
 done

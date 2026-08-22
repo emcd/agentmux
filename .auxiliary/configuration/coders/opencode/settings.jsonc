@@ -70,9 +70,7 @@
         "agentmux",
         "--",
         "host",
-        "mcp",
-        "--configuration-directory",
-        "/home/me/src/agentmux/.auxiliary/configuration/agentmux"
+        "mcp"
       ],
       "enabled": true,
       "timeout": 900000
