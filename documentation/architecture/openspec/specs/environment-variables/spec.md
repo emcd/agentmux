@@ -92,6 +92,11 @@ preserved (operator-declared wins). The stamped context, its extensibility, and
 its consumption during MCP association resolution are specified by the
 runtime-bootstrap spec's Bring-Up Association Environment Injection requirement.
 
+The relay's effective configuration layer list SHALL be stamped as
+`AGENTMUX_CONFIGURATION_DIRECTORY` under these ordinary upsert-if-absent rules,
+so a member reads the declarations of the relay that spawned it rather than
+resolving its own configuration root independently.
+
 `AGENTMUX_STATE_DIRECTORY` is the one exception, and it SHALL be injected at
 spawn time by the relay, authoritatively, overwriting any operator-declared
 value at any level.
@@ -108,6 +113,17 @@ child.
 
 The value is also unavailable at configuration load: it belongs to the relay
 performing the spawn, not to the configuration being loaded.
+
+`AGENTMUX_CONFIGURATION_DIRECTORY` SHALL NOT be admitted to that exception, and
+the distinction SHALL NOT be described as a rendezvous concern. The socket,
+session and peer pre-shared keys, and the principal store all resolve beneath the
+state root, so a member holding a divergent configuration root still addresses
+and authenticates to the relay that spawned it; what diverges is the set of
+declarations it reads. Bundle and session context already outrank configuration
+in association resolution, so the divergence does not misidentify the member
+either. An authoritative injection would additionally be unenforceable, because
+the environment tier of configuration resolution ranks below the command-line
+flag: a declared `--configuration-directory` outranks any stamped value.
 
 #### Scenario: Session value overrides bundle and coder
 
@@ -138,4 +154,16 @@ performing the spawn, not to the configuration being loaded.
 - **WHEN** a coder, bundle, or member declares `AGENTMUX_STATE_DIRECTORY`
 - **THEN** the relay's normalized state root is injected in its place at spawn
 - **AND** the child addresses the relay that spawned it
+
+#### Scenario: Configuration directory is stamped when undeclared
+
+- **WHEN** a coder-backed member declares no `AGENTMUX_CONFIGURATION_DIRECTORY`
+- **THEN** configuration load stamps the relay's effective configuration layer
+  list into the member's spawn environment
+
+#### Scenario: Operator-declared configuration directory is preserved
+
+- **WHEN** a coder, bundle, or member declares `AGENTMUX_CONFIGURATION_DIRECTORY`
+- **THEN** configuration load leaves that entry's value untouched
+- **AND** the stamp does not overwrite it, unlike the state-directory exception
 
