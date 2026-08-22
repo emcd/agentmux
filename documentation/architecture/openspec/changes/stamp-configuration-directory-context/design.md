@@ -131,10 +131,19 @@ environment limit rather than by `sun_path`, and a joined layer list is orders o
 magnitude below it.
 
 **Reject an unrepresentable layer list only where a stamp is actually
-required.** A layer path containing the separator cannot be encoded in the single
-delimited value. Splitting it would fabricate layers the operator never declared;
-omitting the stamp would silently return the member to the default tier, which is
-the defect.
+required.** Two kinds of layer cannot survive the round trip through the single
+delimited value: one containing the separator, which marks the boundary between
+layers, and one that is not valid Unicode, since the environment carries text.
+Forcing either is silent where it matters. Splitting fabricates layers the
+operator never declared and substituting characters for undecodable bytes names
+a directory the relay did not read, so the member resolves configuration that
+nothing reports as different. Omitting the stamp instead returns the member to
+the default tier, which is the defect.
+
+The rendering is therefore exact rather than lossy, and reports which of the two
+faults a layer carries. The second case is not reachable from the command line —
+arguments are parsed as `String` — but the overrides that feed root resolution
+take `PathBuf`, so a library consumer can supply one.
 
 Failing at root resolution was rejected because it would refuse a configuration
 that never needs the representation. Two cases never need it: a coder-less member
@@ -180,11 +189,12 @@ worth tracking explicitly, because the operator-facing motivation for the change
 is precisely that committed configuration should work without per-worktree
 overrides, and that outcome is not reached inside this repository alone.
 
-**A layer path containing the separator becomes a hard failure where it
-previously worked** → Only for relays spawning coder-backed members, and only
-where such a path is in the effective list. The error names the layer and the
+**An unrepresentable layer — one holding the separator, or not valid Unicode —
+becomes a hard failure where it previously worked** → Only for relays spawning
+coder-backed members that do not declare their own value, and only where such a
+layer is in the effective list. The error names the layer and the fault, and the
 repeatable flag remains available. The alternative is a member silently reading
-fabricated or default roots.
+fabricated, substituted, or default roots.
 
 ## Migration Plan
 

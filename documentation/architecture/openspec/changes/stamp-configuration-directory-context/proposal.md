@@ -45,11 +45,12 @@ sanitization set are both built from the list that cannot see it.
   directory would resolve a stamped relative layer against its own directory
   rather than the relay's. The state root is already normalized for exactly this
   reason.
-- Emit a structured validation error when an effective layer list cannot be
-  represented in the separator-delimited environment value — that is, when a
-  layer path contains the separator. Silently splitting the value would fabricate
-  layers; silently omitting the stamp would return the member to the default tier,
-  which is the defect being fixed.
+- Emit a structured validation error when an effective layer cannot be
+  represented faithfully in the environment value — when it contains the
+  separator, or is not valid Unicode. Splitting the value would fabricate
+  layers and substituting characters for undecodable bytes would name a
+  directory the relay did not read; omitting the stamp would return the member
+  to the default tier, which is the defect being fixed.
 - Forbid generated coder client configuration from emitting
   `--configuration-directory`, mirroring the existing prohibition on
   `--state-directory`. A committed flag outranks the environment tier and would
