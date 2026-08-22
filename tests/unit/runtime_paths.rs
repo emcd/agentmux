@@ -118,6 +118,56 @@ fn a_relative_state_root_normalizes_against_the_working_directory() {
 }
 
 #[test]
+fn a_relative_configuration_layer_normalizes_against_the_working_directory() {
+    // Same precondition as the state root, and for the same reason: the layer
+    // list is stamped into every coder-backed member's environment, so a
+    // relative layer would name a different directory for each member that
+    // declares its own working directory, while both appear to name the layer
+    // the relay resolved.
+    clear_configuration_environment();
+    let mut overrides = unnamed_configuration_overrides();
+    overrides.configuration_layers = vec!["relative-config".into(), "also-relative".into()];
+
+    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+
+    let working_directory = std::env::current_dir().expect("working directory");
+    let layers = roots.configuration_roots.layers();
+    assert_eq!(
+        layers,
+        [
+            working_directory.join("relative-config"),
+            working_directory.join("also-relative")
+        ],
+        "every layer is absolutized, and list order is preserved"
+    );
+}
+
+#[test]
+fn absolutizing_a_configuration_layer_does_not_resolve_symlinks() {
+    // Lexical absolutization, not canonicalization. Symlinked configuration
+    // paths are ordinary here, and rewriting an operator's declared layer into
+    // its target names a path they did not choose -- which then reaches every
+    // member through the stamp.
+    clear_configuration_environment();
+    let temporary = TempDir::new().expect("temporary");
+    let target = temporary.path().join("actual-config");
+    std::fs::create_dir_all(&target).expect("create target");
+    let link = temporary.path().join("linked-config");
+    std::os::unix::fs::symlink(&target, &link).expect("create symlink");
+
+    let mut overrides = unnamed_configuration_overrides();
+    overrides.configuration_layers = vec![link.clone()];
+
+    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+
+    assert_eq!(
+        roots.configuration_roots.layers(),
+        [link],
+        "the declared path survives; only relativity is removed"
+    );
+}
+
+#[test]
 fn build_profile_does_not_change_the_resolved_roots() {
     // The assertion the deleted `cfg!(debug_assertions)` branches made
     // impossible. Written profile-invariantly on purpose: the same arguments

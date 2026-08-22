@@ -10,8 +10,9 @@ use agentmux::configuration::ConfigurationRoots;
 use tempfile::TempDir;
 
 use agentmux::configuration::{
-    BUNDLE_ENVIRONMENT_VARIABLE, BringUpContext, BundleMember, SESSION_ENVIRONMENT_VARIABLE,
-    load_bundle_configuration,
+    BUNDLE_ENVIRONMENT_VARIABLE, BringUpContext, BundleMember,
+    CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, INHERITED_CONTEXT_VARIABLE_NAMES,
+    SESSION_ENVIRONMENT_VARIABLE, load_bundle_configuration,
 };
 
 use super::helpers::*;
@@ -63,6 +64,239 @@ coder = "acp"
 "#
         ),
     )
+}
+
+/// Writes a bundle under a configuration root named by `root_name`, so a caller
+/// can choose which representation fault the resolved list carries. The bundle
+/// body is supplied so a caller can also vary whether any member would be
+/// stamped; the two axes are independent and the rule reads on both.
+fn write_bundle_under_root_named(
+    temporary: &TempDir,
+    root_name: &std::ffi::OsStr,
+    bundle_name: &str,
+    bundle_toml: &str,
+) -> ConfigurationRoots {
+    let root = temporary.path().join(root_name);
+    let bundles = root.join("bundles");
+    std::fs::create_dir_all(&bundles).expect("create directories");
+    std::fs::write(root.join("coders.toml"), ACP_CODER).expect("write coders");
+    std::fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml).expect("write bundle");
+    ConfigurationRoots::single(root)
+}
+
+/// A root whose path holds the layer separator.
+fn separator_root_name() -> &'static std::ffi::OsStr {
+    std::ffi::OsStr::new("holds:separator")
+}
+
+/// A root whose path is not valid Unicode.
+fn not_unicode_root_name() -> &'static std::ffi::OsStr {
+    use std::os::unix::ffi::OsStrExt;
+
+    std::ffi::OsStr::from_bytes(b"not\xffunicode")
+}
+
+/// A bundle with one coder-backed member declaring no environment of its own,
+/// so the relay's layer list is what it would receive.
+fn stamped_member_bundle(directory: &str) -> String {
+    format!(
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "reviewer"
+directory = "{directory}"
+coder = "acp"
+"#
+    )
+}
+
+/// A bundle with one coder-backed member declaring its own layer list, so the
+/// relay's is never rendered for it.
+fn declaring_member_bundle(directory: &str) -> String {
+    format!(
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "reviewer"
+directory = "{directory}"
+coder = "acp"
+
+[[sessions.environment]]
+name = "AGENTMUX_CONFIGURATION_DIRECTORY"
+value = "/operator/choice"
+"#
+    )
+}
+
+/// A bundle whose only member spawns no agent, so nothing is stamped.
+fn coder_less_bundle(directory: &str) -> String {
+    format!(
+        r#"
+format-version = 1
+
+[[sessions]]
+id = "feed"
+directory = "{directory}"
+
+[sessions.pubsub]
+"#
+    )
+}
+
+#[test]
+fn stamps_the_relays_configuration_layer_list() {
+    let temporary = TempDir::new().expect("temporary");
+    let root = write_plain_bundle(&temporary, "alpha", "reviewer");
+
+    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let member = &loaded.members[0];
+    assert_eq!(
+        value_of(member, CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE),
+        Some(root.layers()[0].display().to_string().as_str()),
+        "a coder-backed member reads the declarations of the relay that spawned it"
+    );
+}
+
+#[test]
+fn preserves_an_operator_declared_configuration_layer_list() {
+    // Unlike the state root, this is upsert-if-absent: an operator-declared
+    // value is a preference rather than a broken rendezvous, because the socket
+    // and credentials resolve beneath the state root regardless.
+    let temporary = TempDir::new().expect("temporary");
+    let dir = temporary.path().display().to_string();
+    let root = write_config(
+        &temporary,
+        "alpha",
+        ACP_CODER,
+        &format!(
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "reviewer"
+directory = "{dir}"
+coder = "acp"
+
+[[sessions.environment]]
+name = "AGENTMUX_CONFIGURATION_DIRECTORY"
+value = "/operator/choice"
+"#
+        ),
+    );
+
+    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    assert_eq!(
+        value_of(
+            &loaded.members[0],
+            CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE
+        ),
+        Some("/operator/choice")
+    );
+}
+
+#[test]
+fn every_stamped_name_is_also_sanitized_from_an_inherited_environment() {
+    // The omission this change exists to fix, stated as the invariant rather
+    // than as the one variable that broke it. A name that load stamps but a
+    // sanitizing consumer does not clear leaks the developer's own value into
+    // whatever the harness spawns, and nothing else fails to say so.
+    for name in BringUpContext::VARIABLE_NAMES {
+        assert!(
+            INHERITED_CONTEXT_VARIABLE_NAMES.contains(name),
+            "'{name}' is stamped at load but absent from the inherited-context \
+             sanitization set, so a harness clearing inherited context leaves it in place"
+        );
+    }
+}
+
+#[test]
+fn an_unrepresentable_layer_is_rejected_where_a_member_would_be_stamped() {
+    // Neither fault has a faithful rendering. Forcing one would stamp a path
+    // naming a directory the relay never read -- by substituting replacement
+    // characters for undecodable bytes, or by splitting on an embedded
+    // separator -- and the member would resolve it with nothing reporting the
+    // difference. That is the silent divergence this stamp exists to close,
+    // reintroduced by the stamp itself.
+    let temporary = TempDir::new().expect("temporary");
+    let dir = temporary.path().display().to_string();
+
+    for (root_name, expected_fault) in [
+        (separator_root_name(), "contains ':'"),
+        (not_unicode_root_name(), "not valid Unicode"),
+    ] {
+        let root = write_bundle_under_root_named(
+            &temporary,
+            root_name,
+            "alpha",
+            &stamped_member_bundle(&dir),
+        );
+
+        let Err(error) = load_bundle_configuration(&root, "alpha") else {
+            panic!("{root_name:?}: an unrepresentable layer must not be stamped");
+        };
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains(expected_fault),
+            "{root_name:?}: the error names which fault the layer carries, got {rendered:?}"
+        );
+    }
+}
+
+#[test]
+fn an_unrepresentable_layer_loads_when_no_member_would_be_stamped() {
+    // A coder-less member spawns no agent and is never stamped, so nothing
+    // needs the environment representation and the configuration is not faulty.
+    let temporary = TempDir::new().expect("temporary");
+    let dir = temporary.path().display().to_string();
+
+    for root_name in [separator_root_name(), not_unicode_root_name()] {
+        let root =
+            write_bundle_under_root_named(&temporary, root_name, "alpha", &coder_less_bundle(&dir));
+
+        let loaded = load_bundle_configuration(&root, "alpha")
+            .unwrap_or_else(|error| panic!("{root_name:?}: {error}"));
+        assert_eq!(loaded.members.len(), 1);
+        assert_eq!(
+            value_of(
+                &loaded.members[0],
+                CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE
+            ),
+            None,
+            "{root_name:?}: a coder-less member carries no stamped context"
+        );
+    }
+}
+
+#[test]
+fn an_unrepresentable_layer_loads_when_the_member_declares_its_own() {
+    // This is the case an eager render fails, for either fault: the relay's
+    // list is never rendered for a member that already declares the name, so
+    // the unrepresentable layer is never reached. Rendering during entry
+    // enumeration -- or anywhere ahead of the presence check -- rejects this.
+    let temporary = TempDir::new().expect("temporary");
+    let dir = temporary.path().display().to_string();
+
+    for root_name in [separator_root_name(), not_unicode_root_name()] {
+        let root = write_bundle_under_root_named(
+            &temporary,
+            root_name,
+            "alpha",
+            &declaring_member_bundle(&dir),
+        );
+
+        let loaded = load_bundle_configuration(&root, "alpha")
+            .unwrap_or_else(|error| panic!("{root_name:?}: {error}"));
+        assert_eq!(
+            value_of(
+                &loaded.members[0],
+                CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE
+            ),
+            Some("/operator/choice"),
+            "{root_name:?}: a declared value survives regardless of the fault"
+        );
+    }
 }
 
 #[test]
@@ -201,9 +435,11 @@ fn enumerated_names_match_stamped_entries() {
     // `VARIABLE_NAMES`, while the loader stamps `environment_entries`. Holding
     // the two in agreement here is what lets the context be extended without
     // silently leaving a variable unhandled by one of them.
+    let roots = ConfigurationRoots::single("/configuration");
     let context = BringUpContext {
         bundle_name: "alpha",
         session_id: "reviewer",
+        configuration_roots: &roots,
     };
     let stamped: Vec<&str> = context
         .environment_entries()

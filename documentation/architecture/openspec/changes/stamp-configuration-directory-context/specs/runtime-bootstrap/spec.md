@@ -31,13 +31,19 @@ against each child's working directory — members routinely declare their own �
 a member would read a different root than the relay that stamped it while both
 appear to name the same layer.
 
-Where a layer path contains the separator used by the environment
-representation, the list is not faithfully representable in a single environment
-value. Configuration load SHALL fail with a structured validation error
-identifying the unrepresentable layer when it must serialize the list to stamp
-it, and SHALL NOT split the value into fabricated layers or omit the stamp.
-Omitting it would return the member to the default tier, which is the condition
-the stamp exists to prevent.
+A layer is faithfully representable when the environment value rendered from it
+reads back as the same path. A layer containing the separator used by the
+environment representation is not, because the separator marks the boundary
+between layers; neither is a layer that is not valid Unicode, because the
+environment carries text.
+
+Configuration load SHALL fail with a structured validation error identifying the
+unrepresentable layer when it must serialize the list to stamp it. It SHALL NOT
+split the value into fabricated layers, substitute characters for undecodable
+bytes, or omit the stamp. Each of those is silent where it matters: a split or
+substituted value names a directory the relay did not read, and omitting the
+stamp returns the member to the default tier, which is the condition the stamp
+exists to prevent.
 
 The failure SHALL be conditioned on a stamp actually being required, not on a
 layer path's contents alone. A coder-less member is never stamped, and a
@@ -159,18 +165,18 @@ did not choose.
 
 #### Scenario: An unrepresentable layer list is rejected where a stamp is required
 
-- **WHEN** an effective configuration layer path contains the separator used by
-  the environment representation
+- **WHEN** an effective configuration layer is not faithfully representable —
+  it contains the separator, or is not valid Unicode
 - **AND** a coder-backed member declaring no `AGENTMUX_CONFIGURATION_DIRECTORY`
   would be stamped
 - **THEN** configuration load fails with a structured validation error naming
-  that layer
-- **AND** no member is spawned carrying a split or omitted layer list
+  that layer and which of the two faults it carries
+- **AND** no member is spawned carrying a split, substituted, or omitted layer
+  list
 
 #### Scenario: An unrepresentable layer list loads where no stamp is required
 
-- **WHEN** an effective configuration layer path contains the separator used by
-  the environment representation
+- **WHEN** an effective configuration layer is not faithfully representable
 - **AND** every member is either coder-less or declares its own
   `AGENTMUX_CONFIGURATION_DIRECTORY`
 - **THEN** configuration load succeeds

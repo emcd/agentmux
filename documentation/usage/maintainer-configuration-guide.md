@@ -344,12 +344,14 @@ the per-bundle runtime directories. Its resolution tiers are:
 3. `$XDG_STATE_HOME/agentmux`
 4. `~/.local/state/agentmux`
 
-The **state** root is normalized to an absolute path after resolution
-([`src/runtime/paths.rs:326-339`](../../src/runtime/paths.rs)); the
-**configuration** layer list is not — explicit and environment tiers
-pass through their declared `PathBuf`s, so a relative configuration
-layer resolves against the process working directory at lookup time
-([`src/runtime/paths.rs:259-284`](../../src/runtime/paths.rs)).
+Both roots are normalized to absolute paths after resolution — the
+**state** root, and every layer of the **configuration** list. A
+relative layer supplied by flag or environment is absolutized against
+the working directory of the process that resolved it, so it names one
+directory rather than re-resolving under each child that inherits it
+([`src/runtime/paths.rs`](../../src/runtime/paths.rs)).
+Normalization is lexical, not canonicalizing: a symlinked layer stays
+the path you named rather than becoming its target.
 A blank `AGENTMUX_*` environment value is treated as absent and
 resolution falls to the next tier
 ([`src/runtime/paths.rs:357-365`](../../src/runtime/paths.rs));
@@ -634,8 +636,18 @@ export AGENTMUX_CONFIGURATION_DIRECTORY=~/config/agentmux-rnd:~/config/agentmux
 agentmux host relay
 ```
 
-A path containing `:` cannot be expressed here; the repeatable flag is
-the escape hatch. Empty elements (leading, trailing, or doubled `:`)
+A path containing `:` cannot be expressed here, and neither can one
+that is not valid Unicode — the environment carries text. The
+repeatable flag expresses either for your own invocation, but the relay
+serializes the list into this same form to stamp it onto each
+coder-backed member, so such a layer is a load-time fault for any
+bundle with a member to stamp. The error names the layer and which of
+the two faults it carries; nothing is substituted or split, because
+either would hand the member a path naming a directory the relay never
+read. Both stay usable where nothing needs the representation: a bundle
+whose members are all coder-less, or a member declaring its own
+`AGENTMUX_CONFIGURATION_DIRECTORY`.
+Empty elements (leading, trailing, or doubled `:`)
 are rejected rather than read as the working directory — reading a
 layer from wherever a process was started is a privilege question, not
 a convenience (`src/configuration/roots.rs:101-129`).

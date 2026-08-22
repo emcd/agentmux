@@ -242,6 +242,30 @@ configured peers, not by re-pointing a child.
 For the same reason, generated coder client configuration must not pass
 `--state-directory`: a flag on a committed command line outranks the stamp.
 
+A relay also stamps its configuration layer list, as
+`AGENTMUX_CONFIGURATION_DIRECTORY`, so a member reads the declarations the relay
+selected instead of resolving a root of its own. Generated client configuration
+must not pass `--configuration-directory` either, for the same reason and with
+an added one: a committed absolute path names one checkout, so every other
+worktree reads that checkout's configuration.
+
+This stamp is **not** authoritative. A value declared at the coder, bundle, or
+session level is kept — unlike the state root, a divergent configuration root
+does not break the rendezvous, because the socket and credentials resolve
+beneath the state root regardless. It changes which declarations the member
+reads.
+
+Two consequences are worth knowing before you upgrade:
+
+- A relative `--configuration-directory` or `AGENTMUX_CONFIGURATION_DIRECTORY`
+  is made absolute against the relay's working directory when it starts, rather
+  than re-resolving wherever a later lookup happens. If you relied on
+  lookup-time re-resolution, name the intended path instead. Symlinked paths are
+  left as you wrote them.
+- A member whose configuration root does not exist now reports missing
+  configuration rather than being given starter files. Previously such a member
+  could be scaffolded into an empty deployment that appeared to work.
+
 ### Running two relays
 
 Inter-relay work needs each relay to name its own state root:
