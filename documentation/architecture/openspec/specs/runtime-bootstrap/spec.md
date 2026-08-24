@@ -1381,6 +1381,12 @@ endpoint is unreachable at startup SHALL NOT block or fail relay startup.
   offending field
 - **AND** `agentmux check configuration` reports the same invalid artifact
 
+#### Scenario: Reject malformed peer entry
+
+- **WHEN** a `[[peers]]` entry omits `address` or carries an unknown field
+- **THEN** relay startup fails with a structured validation error
+- **AND** `agentmux check configuration` reports the same invalid artifact
+
 ### Requirement: Relay Cross-Relay Presented Identity
 
 The identity this relay presents to a peer SHALL be configured **per peer**, not
