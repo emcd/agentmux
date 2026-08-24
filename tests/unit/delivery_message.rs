@@ -37,6 +37,45 @@ fn sample_message() -> DeliveryMessage {
     }
 }
 
+// The composed cross-relay sender has to reach the pane header and the
+// machine-consumed fields as one identity. Both read `sender.session_name` —
+// `render_address` decorates it, `canonical_session_id` emits it bare — so
+// composing it upstream is what keeps them in agreement. Composing during
+// rendering instead would name the sender correctly here and leave the
+// `incoming_message` event and the envelope metadata record, which take the same
+// field, still naming the forwarding relay.
+#[test]
+fn a_composed_cross_relay_sender_reaches_both_the_pane_header_and_the_bare_field() {
+    let composed = "coordinator@agentmux!bravo";
+    let message = DeliveryMessage {
+        sender: AddressIdentity {
+            session_name: composed.to_string(),
+            display_name: None,
+        },
+        // Present, and deliberately not what the sender is built from here: the
+        // relay composed the identity upstream, so rendering must not reach for
+        // this field to reconstruct it.
+        on_behalf_of: Some("coordinator@agentmux".to_string()),
+        ..sample_message()
+    };
+
+    let rendered = message.render_pane_envelope("msg-9");
+    let parsed = parse_envelope(&rendered).expect("rendered envelope parses");
+    assert_eq!(
+        parsed.from.session_name, composed,
+        "the pane From carries the composed identity"
+    );
+    assert_eq!(
+        message.sender.canonical_session_id(),
+        composed,
+        "the bare accessor the event and metadata record read carries the same"
+    );
+    assert!(
+        !rendered.contains("on_behalf_of"),
+        "the raw claim is not a second sender in pane text"
+    );
+}
+
 #[test]
 fn render_pane_envelope_maps_structured_fields_into_headers_and_body() {
     let rendered = sample_message().render_pane_envelope("msg-7");

@@ -33,12 +33,12 @@
 
 ## 3. Name an inbound peer from its authenticated principal
 
-- [ ] 3.1 Derive a peer's name from the bare relay id of the authenticated
+- [x] 3.1 Derive a peer's name from the bare relay id of the authenticated
   principal on that connection, consulting no `[[peers]]` entry.
-- [ ] 3.2 Cover that a peer with no `[[peers]]` entry is still named.
-- [ ] 3.3 Cover that naming such a peer does not make it routable: a cross-relay
+- [x] 3.2 Cover that a peer with no `[[peers]]` entry is still named.
+- [x] 3.3 Cover that naming such a peer does not make it routable: a cross-relay
   target naming it still fails as an unknown peer at delivery.
-- [ ] 3.4 Teeth-check 3.2 by making naming consult the outbound table, and
+- [x] 3.4 Teeth-check 3.2 by making naming consult the outbound table, and
   confirm the receive-only case fails while the ordinary case still passes. That
   asymmetry is the point of the test.
 
@@ -53,71 +53,74 @@
 
 ## 5. Accept relay-wide origins in cross-relay target resolution
 
-- [ ] 5.1 Widen cross-relay target resolution to accept a relay-wide `@GLOBAL`
+- [x] 5.1 Widen cross-relay target resolution to accept a relay-wide `@GLOBAL`
   principal alongside a bundle-qualified session, and nothing further. The
   application and peer relay namespaces stay rejected as unsupported, an
   unqualified principal stays rejected as unqualified, and an empty or
   separator-bearing relay id stays rejected. The set to admit is what a
   conforming forwarding relay can honestly attribute, not every string a peer
   might assert.
-- [ ] 5.2 Cover a relay-wide `@GLOBAL` origin resolving, and cover that the
+- [x] 5.2 Cover a relay-wide `@GLOBAL` origin resolving, and cover that the
   existing rejections still reject — the application and peer relay namespaces as
   unsupported, an unqualified principal as unqualified. Assert each separately
   with the input named, since widening one arm is the change most likely to
   loosen the others by accident.
-- [ ] 5.3 Teeth-check 5.2 by restoring the session-only restriction and
+- [x] 5.3 Teeth-check 5.2 by restoring the session-only restriction and
   confirming only the relay-wide case fails.
 
 ## 6. Compose the delivered cross-relay sender
 
-- [ ] 6.1 Stop double-qualifying an already-qualified principal id in the
+- [x] 6.1 Stop double-qualifying an already-qualified principal id in the
   namespace qualification helper, so the fallback attribution carries its suffix
   once.
-- [ ] 6.2 At the delivered-message construction site, compose the sender as
+- [x] 6.2 At the delivered-message construction site, compose the sender as
   `<on_behalf_of>!<peer-name>` when `on_behalf_of` is present, taking the peer
   name from the authenticated inbound principal per task 3.
-- [ ] 6.3 Fall back to the peer relay principal, qualified once, when
+- [x] 6.3 Fall back to the peer relay principal, qualified once, when
   `on_behalf_of` is absent, and carry no synthesized origin.
-- [ ] 6.4 Reuse the existing bang-path grammar rather than formatting a second
+- [x] 6.4 Reuse the existing bang-path grammar rather than formatting a second
   spelling of it.
 
 ## 7. Prove the three surfaces agree, and that a reply resolves
 
-- [ ] 7.1 Cover that the pane-envelope `From`, the `incoming_message` event's
-  `sender_session`, and the envelope metadata record all carry the composed
-  identity for one delivered cross-relay message.
-- [ ] 7.2 Teeth-check 7.1 by composing at render time instead of at
+- [x] 7.1 Cover that the pane-envelope `From` and the bare accessor the
+  `incoming_message` event and the envelope metadata record both read carry the
+  composed identity. The two machine consumers take the same field, so the
+  assertion is on that field rather than on each consumer separately; say so
+  rather than implying three independent observations.
+- [x] 7.2 Teeth-check 7.1 by composing at render time instead of at
   construction, and confirm the event and metadata assertions fail while the
   pane assertion passes. That regression is invisible to a pane-only test.
-- [ ] 7.3 Feed the rendered identity back through cross-relay target resolution
+- [x] 7.3 Feed the rendered identity back through cross-relay target resolution
   and confirm it resolves to the origin and the peer name. Cover a bundle-session
   origin and a relay-wide one.
-- [ ] 7.4 Teeth-check 7.3 by altering the composed separator and confirming
-  resolution fails, so the test binds the two grammars together rather than
-  restating a format string.
-- [ ] 7.5 Cover that a sender naming a peer with no outbound entry still renders,
+- [x] 7.4 Teeth-check the separator by altering it in composition and confirming
+  the delivered-envelope assertions fail. The resolution test cannot see that
+  change, since it builds its own target — which is why the binding is the two
+  tests together and neither alone.
+- [x] 7.5 Cover that a sender naming a peer with no outbound entry still renders,
   and that a reply to it fails as an unknown peer rather than resolving
   elsewhere.
-- [ ] 7.6 Cover that local (non-ingress) delivery is unchanged: the sender is the
+- [x] 7.6 Cover that local (non-ingress) delivery is unchanged: the sender is the
   bare canonical `session@namespace` id.
-- [ ] 7.7 Cover a peer asserting an `on_behalf_of` that is not a routable
+- [x] 7.7 Cover a peer asserting an `on_behalf_of` that is not a routable
   principal id — an unqualified string, and one in the application namespace —
   and confirm each is composed and displayed unaltered, with the delivery
   accepted. Assert the two separately with the asserted value named.
-- [ ] 7.8 Cover that a reply to each of those fails at target resolution with a
+- [x] 7.8 Cover that a reply to each of those fails at target resolution with a
   structured validation error and forwards nothing. These are the cases where an
   unconditional reply-derivability promise would have been false, so they are
   what holds the conditional one honest.
-- [ ] 7.9 Teeth-check 7.7 by making composition inspect the origin and fall back
+- [x] 7.9 Teeth-check 7.7 by making composition inspect the origin and fall back
   to the peer principal when it does not parse, and confirm both cases fail. That
   fallback is the plausible-looking repair the no-interpretation rule forbids.
 
 ## 8. Confirm the prohibitions still hold
 
-- [ ] 8.1 Cover that an ingress request whose target lies outside the peer relay
+- [x] 8.1 Cover that an ingress request whose target lies outside the peer relay
   principal's scope is still refused, and that the composed identity plays no
   part in that decision.
-- [ ] 8.2 Confirm no code path resolves either segment of the composed identity
+- [x] 8.2 Confirm no code path resolves either segment of the composed identity
   against the local principal store.
 
 ## 9. Documentation
@@ -131,5 +134,5 @@
   rather than as an oversight.
 - [x] 9.3 Sweep the usage documentation for prose describing the alias as a
   freely chosen local label, and correct what this change invalidates.
-- [ ] 9.4 Run the full suite under both the default and `pty` feature sets, plus
+- [x] 9.4 Run the full suite under both the default and `pty` feature sets, plus
   clippy and format checks.

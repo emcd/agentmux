@@ -215,6 +215,138 @@ fn cross_relay_ingress_surfaces_on_behalf_of_in_delivered_envelope() {
     assert_eq!(payload["on_behalf_of"], "origin-subject@remote");
 }
 
+/// The peer name this relay uses for a peer authenticating as `principal_id`:
+/// the bare relay id, which under the alias invariant is the identity this relay
+/// issued it.
+fn peer_name_of(principal_id: &str) -> String {
+    principal_id
+        .strip_suffix("@RELAY")
+        .expect("a peer principal is relay-qualified")
+        .to_string()
+}
+
+// The defect this closes: the delivered sender named the forwarding relay rather
+// than whoever wrote the message, so a recipient could not tell who it was from.
+// Note that the sibling test above asserts `authenticated_identity` and
+// `on_behalf_of` but never `sender_session` — which is why the misattribution
+// survived. Assert the sender itself.
+#[test]
+fn cross_relay_ingress_names_the_origin_and_the_asserting_peer() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    let relay_principal_id = unique_relay_principal_id();
+    write_ingress_peer_store(
+        &bundle_paths.state_root,
+        relay_principal_id.as_str(),
+        Some(bundle_name.as_str()),
+    );
+
+    let (_response, payload) = ingress_send_to_ui_display(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name.as_str(),
+        relay_principal_id.as_str(),
+        Some("origin-subject@remote"),
+    );
+
+    assert_eq!(
+        payload["sender_session"],
+        format!(
+            "origin-subject@remote!{}",
+            peer_name_of(&relay_principal_id)
+        ),
+        "the sender names who wrote the message and which peer vouched for them"
+    );
+    // Both halves stay separately available: the composed identity is a display
+    // and reply form, not a replacement for the verified peer identity.
+    assert_eq!(payload["authenticated_identity"], relay_principal_id);
+    assert_eq!(payload["on_behalf_of"], "origin-subject@remote");
+}
+
+// Without an asserted origin there is nothing to attribute, so the sender is the
+// peer principal itself — qualified once. It arrives already `@RELAY`-suffixed
+// and is then qualified against the relay namespace, which is what produced the
+// doubled `@RELAY@RELAY` this asserts against.
+#[test]
+fn cross_relay_ingress_without_an_origin_names_the_peer_qualified_once() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    let relay_principal_id = unique_relay_principal_id();
+    write_ingress_peer_store(
+        &bundle_paths.state_root,
+        relay_principal_id.as_str(),
+        Some(bundle_name.as_str()),
+    );
+
+    let (_response, payload) = ingress_send_to_ui_display(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name.as_str(),
+        relay_principal_id.as_str(),
+        None,
+    );
+
+    assert_eq!(
+        payload["sender_session"], relay_principal_id,
+        "the peer principal carries its namespace suffix exactly once"
+    );
+    assert!(
+        payload.get("on_behalf_of").is_none(),
+        "no origin is synthesized when the peer asserted none"
+    );
+}
+
+// A peer is authenticated but not trusted to be well formed, and ingress carries
+// its claim uninterpreted. So an origin naming no routable recipient reaches
+// composition, and is emitted unaltered: the provenance is accurate whatever the
+// shape, and suppressing it would discard the only record of what was claimed.
+// A reply to one of these fails at target resolution, which is asserted
+// separately in the routing tests.
+#[test]
+fn cross_relay_ingress_composes_a_non_routable_origin_unaltered() {
+    for origin in ["app@EXTERNAL", "not-a-principal"] {
+        let temporary = TempDir::new().expect("temporary directory");
+        let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+        let configuration_roots =
+            write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+        let state_root = temporary.path().join("state");
+        let bundle_paths =
+            BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        let relay_principal_id = unique_relay_principal_id();
+        write_ingress_peer_store(
+            &bundle_paths.state_root,
+            relay_principal_id.as_str(),
+            Some(bundle_name.as_str()),
+        );
+
+        let (response, payload) = ingress_send_to_ui_display(
+            &configuration_roots,
+            &bundle_paths,
+            bundle_name.as_str(),
+            relay_principal_id.as_str(),
+            Some(origin),
+        );
+
+        assert_eq!(
+            response["response"]["kind"], "send",
+            "origin {origin}: delivery is accepted, not rejected for the claim's shape"
+        );
+        assert_eq!(
+            payload["sender_session"],
+            format!("{origin}!{}", peer_name_of(&relay_principal_id)),
+            "origin {origin}: emitted unaltered rather than repaired or dropped"
+        );
+    }
+}
+
 #[test]
 fn cross_relay_ingress_ignores_on_behalf_of_for_authorization() {
     let temporary = TempDir::new().expect("temporary directory");

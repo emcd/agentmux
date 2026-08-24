@@ -734,6 +734,27 @@ exported from `src/relay/mod.rs`.
   and read only relative to `authenticated_identity`. Raw input (`Raww`) has no
   delivered attribution envelope, so `on_behalf_of` rides the wire for symmetry
   but is not surfaced on delivery.
+- **The delivered sender names both parties.** With an `on_behalf_of` present the
+  delivered identity is `<origin>!<peer>` — the origin the peer asserted, and
+  this relay's name for the peer that asserted it (its issued identity, per the
+  alias invariant above). Both are needed: the relay authenticates the peer and
+  never the foreign origin, so an identity carrying only the origin would give an
+  advisory claim the authority of a verified sender. It is composed where the
+  delivered message is built, not at pane rendering, because the pane header, the
+  `incoming_message` event and the envelope metadata record all read one field —
+  composing later would fix the pane and leave the event and the audit record
+  naming the forwarding relay. Without an `on_behalf_of` the sender is the peer
+  principal itself, qualified once.
+- **The origin segment is copied, never inspected.** A peer may assert something
+  that names no routable recipient; it is emitted unaltered, because the
+  provenance is accurate whatever the shape and suppressing it would discard the
+  only record of what was claimed. Such an identity displays but does not
+  resolve: a reply fails at the replying relay's own target resolution. That is
+  the reply guarantee's shape — it holds for the routable principal ids a
+  conforming forwarding relay stamps, and it is conditioned on the peer rather
+  than on a check here, since inspecting the claim to decide would be the
+  interpretation the receiver is forbidden to perform. A reply can never reach
+  the *wrong* peer, because the peer segment is derived locally.
 
 ### Cross-Relay Discovery
 
