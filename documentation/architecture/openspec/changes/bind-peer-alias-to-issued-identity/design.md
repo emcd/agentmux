@@ -119,6 +119,67 @@ configuration no longer claims, which is the same class of silent coincidence
 this change removes, reintroduced as a compatibility measure. The failure is
 instead explicit and names the path that is missing.
 
+### Compose the sender where the delivered message is built
+
+`AddressIdentity` holds one string read two ways: a non-decorating accessor feeds
+machine consumers (the `incoming_message` event, the envelope metadata record)
+while the decorating renderer produces the pane header. Two accessors over one
+value, not two values.
+
+The identity is therefore composed at the construction site rather than inside
+pane rendering. Composing at render time would correct the pane header and leave
+the stream event and the audit record still attributing the message to the
+forwarding relay — three surfaces disagreeing about who sent one message, with
+the audit trail the least likely to be noticed and the most consequential when
+wrong.
+
+### Both segments, not the origin alone
+
+The receiving relay authenticates the peer, never the foreign origin, so
+`on_behalf_of` is an advisory claim a peer could set to anything. Rendering the
+origin alone would present it with the authority of a locally verified sender.
+
+Today's behavior, malformed as it is, does not have that defect: it names the
+principal this relay actually authenticated. The composed form keeps that
+property while fixing the attribution, because it names the origin *and* the
+peer that vouched for it. A reader sees the provenance; a reply parses back
+through the grammar the router already implements.
+
+This is also what reconciles the change with the standing prohibition on
+interpreting `on_behalf_of`. Composing a display string is not resolution: no
+segment is validated against the local principal store, and nothing about the
+composed identity reaches an authorization decision.
+
+### Reply-derivability is real here, and was not before
+
+An earlier attempt at this rendering derived the peer segment from the
+authenticated principal itself. That is invalid — the principal a peer presents
+and this relay's name for that peer are separate naming systems — so the
+resulting address would not have resolved, and a target-shaped string that does
+not resolve is worse than none: it invites replies that fail, or that resolve to
+a different peer.
+
+Binding the alias to the issued identity is what makes the derivation sound, and
+is why that half is a prerequisite rather than an accompaniment. The property is
+verified by feeding the rendered identity back through cross-relay target
+resolution rather than by asserting the format, so the two grammars cannot drift
+apart silently.
+
+Where the named peer has no outbound entry, the address is still correct and
+still does not resolve — and fails as an unknown peer, which is the honest
+outcome for a relay with no route back.
+
+### Resolution accepts any origin namespace
+
+Cross-relay forwarding attributes any verified requester, including a relay-wide
+`@GLOBAL` user, while target resolution accepts only bundle-qualified sessions.
+That gap makes a correctly rendered sender unparseable as a target for exactly
+the senders least likely to be noticed in testing.
+
+Widening resolution is therefore part of this change rather than a follow-on: the
+envelope form promises a reply address, and a promise that holds for some origins
+and not others is not the property being claimed.
+
 ## Risks / Trade-offs
 
 **Existing deployments break on restart.** Deliberate, and consistent with the

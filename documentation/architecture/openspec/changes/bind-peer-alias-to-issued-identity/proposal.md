@@ -1,5 +1,18 @@
 ## Why
 
+Every cross-relay message is delivered misattributed. A `Send` from
+`coordinator@agentmux` arrives on the peer rendered as
+`From: rnd-main@RELAY@RELAY` — the forwarding relay's own identity, doubled —
+so a recipient cannot tell who wrote to them and a reply derived from the
+envelope targets the wrong principal. Working inter-relay communication is the
+release bar, and delivery that succeeds while naming the wrong sender does not
+meet it.
+
+The origin identity is not lost: the forwarding relay stamps it as
+`on_behalf_of` and it survives intact to the delivered message. What is missing
+is the other half of the name. Naming the *relay* a message came from requires
+this relay's own name for that peer, and it cannot derive one.
+
 A relay holds two records describing one peer, with no key between them.
 
 Inbound, it holds a principal record for the identity **it issued** that peer,
@@ -28,6 +41,23 @@ the data model, not merely unread.
 - **BREAKING**: any deployment whose `alias` differs from the identity it issued
   must update `[[peers]].alias` and relocate or re-provision the outbound
   credential, whose path is stemmed by the alias.
+- The delivered sender for a cross-relay message becomes
+  `<origin>!<peer-alias>`, composed from the forwarded `on_behalf_of` and this
+  relay's now-derivable name for the peer that asserted it. The origin may carry
+  any namespace, including a relay-wide `@GLOBAL` one.
+- The identity is composed where the delivered message is built, so the pane
+  envelope, the `incoming_message` event and the envelope metadata record all
+  name the same sender. Composing at render time would correct the envelope and
+  leave the event and the audit record still attributing the message to the
+  forwarding relay.
+- Cross-relay target resolution accepts an origin of any principal type, not
+  only a bundle session, so a rendered sender parses back as a target.
+- Namespace qualification stops double-qualifying an already-qualified id, which
+  is what produces `@RELAY@RELAY` today.
+
+Absent `on_behalf_of` — an unauthenticated origin, which the forwarding relay is
+already required not to attribute — the sender remains the peer relay principal,
+qualified once. That fallback is existing specified behavior and is preserved.
 
 The alias and `connect-as` stay independent, and the change makes that asymmetry
 explicit rather than incidental: `alias` is this relay's local return selector and
@@ -63,7 +93,23 @@ already exists.
   to check it against the principal store.
 - `cross-relay-routing`: gains a requirement establishing where a relay's name
   for a peer comes from — the identity it issued — and that an inbound peer is
-  named by the local part of its authenticated principal.
+  named by the local part of its authenticated principal. Its sender-attribution
+  requirement gains the receiving relay's obligation to compose the delivered
+  sender from that name.
+- `relay-identity`: *Sender Attribution Schema* reconciles its prohibition on
+  interpreting `on_behalf_of` with composing a display identity from it, without
+  weakening the authorization or non-resolution prohibitions.
+- `pane-envelope`: *Address Identity Format* admits the bang-path in the
+  `session:` identity token for a cross-relay sender. The requirement's own
+  stated purpose — that a recipient "derive a reply address from the envelope
+  alone" — is what a bare `session@namespace` cannot satisfy across relays,
+  having no way to name the originating relay.
+- `look-and-stream-events`: `sender_session` admits the bang-path for a
+  cross-relay sender. That requirement is already violated today, since
+  `rnd-main@RELAY@RELAY` is not a valid `session@namespace` either, so this
+  chooses which direction restores compliance.
+- `relay-routing-layer`: *Cross-Relay Target Classification* accepts an origin
+  of any principal type, so a rendered cross-relay sender parses back.
 
 ## Impact
 
@@ -80,7 +126,18 @@ missing. No dual-stem fallback, and no guessing — a relay that silently found 
 credential under an old name would reintroduce exactly the ambiguity being
 removed.
 
-Out of scope: the cross-relay envelope rendering this unblocks, which is a
-follow-on change and becomes nearly mechanical once a peer's name is derivable.
-Also out of scope: replacing mutual peer registration with one-sided
-registration, which would supersede this arrangement rather than extend it.
+Delivered-message construction, the namespace qualification helper, the
+cross-relay sender identity stamp, and cross-relay target resolution.
+
+Consumers of an incoming `sender_session` were surveyed: the sites that parse a
+session id read the local session's own identity rather than an incoming
+envelope's sender, and the one consumer of an incoming sender stores it for
+display without parsing. To be re-confirmed during implementation rather than
+assumed.
+
+Out of scope: replacing mutual peer registration with one-sided registration,
+which would supersede this arrangement rather than extend it — there a relay
+issues only to peers it receives from and holds no outbound table, so the
+registration requirement above disappears. Also out of scope: per-origin-principal
+ingress filtering consuming `on_behalf_of`, and multi-hop attribution chains,
+both already deferred by the live requirements.

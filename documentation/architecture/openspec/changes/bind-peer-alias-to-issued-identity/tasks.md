@@ -51,16 +51,68 @@
   under a name the configuration no longer claims reintroduces exactly the
   ambiguity this change removes.
 
-## 5. Documentation
+## 5. Accept any origin namespace in cross-relay target resolution
 
-- [x] 5.1 Update the relay subsystem README where it describes peer aliasing and
+- [ ] 5.1 Widen cross-relay target resolution to accept a foreign principal in
+  any namespace a verified requester can hold, not only a bundle-qualified
+  session, while still rejecting an unqualified principal and an empty or
+  separator-bearing relay id.
+- [ ] 5.2 Cover a relay-wide `@GLOBAL` origin resolving, and cover that the
+  existing rejections still reject. Assert each separately with the input named.
+- [ ] 5.3 Teeth-check 5.2 by restoring the session-only restriction and
+  confirming only the relay-wide case fails.
+
+## 6. Compose the delivered cross-relay sender
+
+- [ ] 6.1 Stop double-qualifying an already-qualified principal id in the
+  namespace qualification helper, so the fallback attribution carries its suffix
+  once.
+- [ ] 6.2 At the delivered-message construction site, compose the sender as
+  `<on_behalf_of>!<peer-name>` when `on_behalf_of` is present, taking the peer
+  name from the authenticated inbound principal per task 3.
+- [ ] 6.3 Fall back to the peer relay principal, qualified once, when
+  `on_behalf_of` is absent, and carry no synthesized origin.
+- [ ] 6.4 Reuse the existing bang-path grammar rather than formatting a second
+  spelling of it.
+
+## 7. Prove the three surfaces agree, and that a reply resolves
+
+- [ ] 7.1 Cover that the pane-envelope `From`, the `incoming_message` event's
+  `sender_session`, and the envelope metadata record all carry the composed
+  identity for one delivered cross-relay message.
+- [ ] 7.2 Teeth-check 7.1 by composing at render time instead of at
+  construction, and confirm the event and metadata assertions fail while the
+  pane assertion passes. That regression is invisible to a pane-only test.
+- [ ] 7.3 Feed the rendered identity back through cross-relay target resolution
+  and confirm it resolves to the origin and the peer name. Cover a bundle-session
+  origin and a relay-wide one.
+- [ ] 7.4 Teeth-check 7.3 by altering the composed separator and confirming
+  resolution fails, so the test binds the two grammars together rather than
+  restating a format string.
+- [ ] 7.5 Cover that a sender naming a peer with no outbound entry still renders,
+  and that a reply to it fails as an unknown peer rather than resolving
+  elsewhere.
+- [ ] 7.6 Cover that local (non-ingress) delivery is unchanged: the sender is the
+  bare canonical `session@namespace` id.
+
+## 8. Confirm the prohibitions still hold
+
+- [ ] 8.1 Cover that an ingress request whose target lies outside the peer relay
+  principal's scope is still refused, and that the composed identity plays no
+  part in that decision.
+- [ ] 8.2 Confirm no code path resolves either segment of the composed identity
+  against the local principal store.
+
+## 9. Documentation
+
+- [x] 9.1 Update the relay subsystem README where it describes peer aliasing and
   the peer credential layout, in the same change as the behavior.
-- [x] 5.2 Update the operator-facing peer setup documentation: `[[peers]].alias`
+- [x] 9.2 Update the operator-facing peer setup documentation: `[[peers]].alias`
   is now the identity this relay issued the peer, and an existing deployment must
   update the alias and relocate or re-provision the credential. State that no
   automatic migration is possible and why, so the breakage reads as designed
   rather than as an oversight.
-- [x] 5.3 Sweep the usage documentation for prose describing the alias as a
+- [x] 9.3 Sweep the usage documentation for prose describing the alias as a
   freely chosen local label, and correct what this change invalidates.
-- [ ] 5.4 Run the full suite under both the default and `pty` feature sets, plus
+- [ ] 9.4 Run the full suite under both the default and `pty` feature sets, plus
   clippy and format checks.
