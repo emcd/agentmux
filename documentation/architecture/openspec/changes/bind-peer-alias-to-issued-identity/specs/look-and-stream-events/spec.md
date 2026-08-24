@@ -28,8 +28,10 @@ Event types SHALL include:
 `session@namespace` form obtained via the non-decorating identity accessor,
 except that a `sender_session` attributed to a cross-relay origin SHALL carry
 the `<origin>!<peer-name>` form specified by the `cross-relay-routing`
-capability, whose origin segment may itself carry any namespace including a
-relay-wide one. Either form SHALL be emitted without
+capability. That origin segment is copied from the asserting peer rather than
+validated, so it carries whatever was stamped and SHALL be emitted unaltered
+whether or not it names a routable recipient. Either form SHALL be emitted
+without
 decoration: these fields SHALL NOT carry the decorating pane-header form
 (`Display Name <session:session_name>`) produced by `render_address`. The
 pane-envelope From/To/Cc header is the only surface that uses the decorating

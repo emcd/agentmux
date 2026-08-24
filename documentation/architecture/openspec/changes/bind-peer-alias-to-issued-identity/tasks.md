@@ -51,12 +51,15 @@
   under a name the configuration no longer claims reintroduces exactly the
   ambiguity this change removes.
 
-## 5. Accept any origin namespace in cross-relay target resolution
+## 5. Accept relay-wide origins in cross-relay target resolution
 
-- [ ] 5.1 Widen cross-relay target resolution to accept a foreign principal in
-  any namespace a verified requester can hold, not only a bundle-qualified
-  session, while still rejecting an unqualified principal and an empty or
-  separator-bearing relay id.
+- [ ] 5.1 Widen cross-relay target resolution to accept a relay-wide `@GLOBAL`
+  principal alongside a bundle-qualified session, and nothing further. The
+  application and peer relay namespaces stay rejected as unsupported, an
+  unqualified principal stays rejected as unqualified, and an empty or
+  separator-bearing relay id stays rejected. The set to admit is what a
+  conforming forwarding relay can honestly attribute, not every string a peer
+  might assert.
 - [ ] 5.2 Cover a relay-wide `@GLOBAL` origin resolving, and cover that the
   existing rejections still reject — the application and peer relay namespaces as
   unsupported, an unqualified principal as unqualified. Assert each separately

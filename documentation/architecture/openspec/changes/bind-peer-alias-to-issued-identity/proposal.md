@@ -43,15 +43,21 @@ the data model, not merely unread.
   credential, whose path is stemmed by the alias.
 - The delivered sender for a cross-relay message becomes
   `<origin>!<peer-alias>`, composed from the forwarded `on_behalf_of` and this
-  relay's now-derivable name for the peer that asserted it. The origin may carry
-  any namespace, including a relay-wide `@GLOBAL` one.
+  relay's now-derivable name for the peer that asserted it. The origin is copied
+  rather than inspected, so it carries whatever the peer stamped — a bundle
+  session, a relay-wide `@GLOBAL` user, or something that names no routable
+  recipient at all. It is a reply address for the first two, which are what a
+  conforming forwarding relay stamps; for the rest it records provenance and a
+  reply to it fails at resolution rather than being routed.
 - The identity is composed where the delivered message is built, so the pane
   envelope, the `incoming_message` event and the envelope metadata record all
   name the same sender. Composing at render time would correct the envelope and
   leave the event and the audit record still attributing the message to the
   forwarding relay.
-- Cross-relay target resolution accepts an origin of any principal type, not
-  only a bundle session, so a rendered sender parses back as a target.
+- Cross-relay target resolution accepts a relay-wide `@GLOBAL` origin alongside
+  a bundle session, so a sender attributed to a relay-wide user parses back as a
+  target. It widens no further: the application and peer relay namespaces stay
+  unsupported, and an unqualified principal stays rejected.
 - Namespace qualification stops double-qualifying an already-qualified id, which
   is what produces `@RELAY@RELAY` today.
 
@@ -108,8 +114,9 @@ already exists.
   cross-relay sender. That requirement is already violated today, since
   `rnd-main@RELAY@RELAY` is not a valid `session@namespace` either, so this
   chooses which direction restores compliance.
-- `relay-routing-layer`: *Cross-Relay Target Classification* accepts an origin
-  of any principal type, so a rendered cross-relay sender parses back.
+- `relay-routing-layer`: *Cross-Relay Target Classification* accepts a
+  relay-wide `@GLOBAL` origin alongside a bundle session, so a rendered
+  cross-relay sender parses back, while keeping every existing rejection.
 
 ## Impact
 
