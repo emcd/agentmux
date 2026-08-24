@@ -235,6 +235,48 @@ fn check_configuration_reports_no_bundles() {
     );
 }
 
+// The peer-alias invariant spans two roots — peers come from the configuration
+// root, the principal store from the state root — so it runs as its own step
+// after relay.toml resolution rather than inside it. Pre-flight is where an
+// operator can still fix the alias, which is why the finding has to surface here
+// and not only at startup.
+#[test]
+fn check_configuration_rejects_a_peer_alias_naming_no_issued_identity() {
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    // A well-formed entry in every other respect, so nothing earlier in
+    // validation can claim this failure. `alias` and `connect-as` differ as they
+    // normally do; the alias is what must name a registered peer.
+    fs::write(
+        config_root.join("relay.toml"),
+        "[[peers]]\nalias = \"west\"\naddress = \"/run/agentmux/west.sock\"\nconnect-as = \"east\"\n",
+    )
+    .expect("write relay.toml");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "check",
+            "configuration",
+            "--configuration-directory",
+            config_root.to_str().expect("config root utf8"),
+            "--state-directory",
+            state_root.to_str().expect("state root utf8"),
+        ])
+        .output()
+        .expect("run agentmux check configuration");
+
+    assert!(!output.status.success(), "command should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("west"),
+        "stderr should name the offending alias: {stderr}"
+    );
+    assert!(
+        stderr.contains("new peer"),
+        "stderr should say how to register the peer: {stderr}"
+    );
+}
+
 // A malformed relay.toml is reported even when the config root has no bundles:
 // relay-level validation runs before bundle discovery, matching relay startup
 // (which rejects the same artifact up front) rather than short-circuiting on the

@@ -524,7 +524,18 @@ exported from `src/relay/mod.rs`.
   Unix-socket `address` (TCP host:port is future work), and the `connect-as`
   identity, and is validated at startup. A `Send`/`Raww` addressed with the
   bang-path `<session>@<bundle>!<alias>` is forwarded to the peer this relay
-  locally calls `<alias>`. The presented identity is **per-peer**: `connect-as`
+  locally calls `<alias>`. The `alias` is **not free-form**: it MUST be the
+  identity *this* relay issued that peer via its own
+  `new peer <alias>@RELAY`, checked at startup and by
+  `agentmux check configuration` against the principal store. That binding is
+  what lets a peer authenticating inbound be named by the principal just
+  verified, with no lookup and no second name to keep in agreement. The check is
+  unconditional, so a peer this relay only dials must be registered too: an
+  absent record is indistinguishable from a mistyped or stale alias, and excusing
+  absence would accept both. Only the record's existence and type are checked —
+  the outbound PSK is *not* compared against the record's hash, because the two
+  are credentials issued in opposite directions. The presented identity is
+  **per-peer**: `connect-as`
   is the identity that peer issued this relay (via its own `new peer`), presented
   as `<connect-as>@RELAY` when dialing it — there is no single relay-wide
   identity, because the *receiver* determines it (two peers can issue different or

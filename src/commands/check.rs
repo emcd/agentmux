@@ -20,7 +20,10 @@ use crate::{
         BUNDLE_EXTENSION, BUNDLES_DIRECTORY, ConfigurationError, bundle_directory_layers,
         effective_bundle_definitions, load_ui_configuration, supplied_root_configuration_sources,
     },
-    relay::{RelayError, load_relay_runtime_configuration, preflight_bundle_configuration},
+    relay::{
+        RelayError, load_relay_runtime_configuration, preflight_bundle_configuration,
+        validate_peer_aliases,
+    },
     runtime::{error::RuntimeError, starter::validate_supplied_configuration_layers},
 };
 
@@ -133,7 +136,16 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
     // reported even when the config root has no bundles — matching relay startup,
     // which rejects the same artifact up front. The shared loader keeps check and
     // startup in step.
-    load_relay_runtime_configuration(&roots.configuration_roots, None, None)
+    let relay_configuration =
+        load_relay_runtime_configuration(&roots.configuration_roots, None, None)
+            .map_err(preflight_error_to_runtime)?;
+
+    // Peer aliases resolve against the principal store, which lives under the
+    // state root rather than the configuration roots, so this is a separate step
+    // from the load above. Reported here so a deployment can be judged without
+    // starting a relay — the operator running pre-flight is exactly who can still
+    // fix an alias naming no registered peer.
+    validate_peer_aliases(&relay_configuration.peers, &roots.state_root)
         .map_err(preflight_error_to_runtime)?;
 
     // Validate ui.toml alongside relay.toml at the config-root level: a

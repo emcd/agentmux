@@ -212,6 +212,30 @@ What lives in the file when present:
   `<state-root>/peers/<alias>.psk` while the principal store keeps only
   hashes.
 
+  `alias` is not a free-form label. It must be the identity **this** relay
+  issued that peer, registered here with
+  `agentmux new peer <alias>@RELAY --scope ...`. Startup and
+  `agentmux check configuration` reject an alias that names no such
+  registration. This is what lets a peer connecting inbound be named by the
+  identity you gave it, rather than by a second name nothing relates back to it.
+
+  `alias` and `connect-as` name opposite directions and are expected to differ:
+  `alias` is what you call the peer, `connect-as` is what that peer calls you,
+  and each side chooses its own. Do not try to make them match.
+
+  Register every peer you list, including one you only ever send to. A peer you
+  never hear from does not strictly need a name, but a missing registration
+  cannot be told apart from a typo or an alias left stale by a re-registration,
+  so it is refused rather than guessed at.
+
+  **Upgrading an existing deployment**: if an `alias` does not already match the
+  identity you issued that peer, change it and move
+  `<state-root>/peers/<old>.psk` to `<state-root>/peers/<new>.psk` (or re-issue
+  the credential). There is no automatic migration and cannot be one — the old
+  alias and the issued identity have no recorded relationship, so nothing local
+  can work out the new value. The relay fails with the missing path named rather
+  than searching for the credential under its former name.
+
 ### `users.toml` — operator identities and policies
 
 `users.toml` is the identity file: it names the people and embedded

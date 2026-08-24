@@ -27,4 +27,6 @@ pub use delivery::DeliveryConfiguration;
 pub use environment::{parse_relay_bool_env_value, resolve_relay_bool_setting};
 pub use relay_file::PeerConfiguration;
 pub(in crate::relay) use relay_file::load_relay_file_configuration;
-pub use runtime::{RelayRuntimeConfiguration, load_relay_runtime_configuration};
+pub use runtime::{
+    RelayRuntimeConfiguration, load_relay_runtime_configuration, validate_peer_aliases,
+};
