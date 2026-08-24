@@ -8,11 +8,46 @@ use crate::{
 };
 
 use super::super::super::{
-    AsyncDeliveryTask, RelayError, SCHEMA_VERSION, bare_session_id, canonical_session_id,
+    AsyncDeliveryTask, RELAY_NAMESPACE, RelayError, SCHEMA_VERSION, bare_session_id,
+    canonical_session_id,
 };
 
 const PROMPT_TOKENS_MAX_ENVVAR: &str = "AGENTMUX_PROMPT_TOKENS_MAX";
 const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
+
+/// The sender identity carried by every surface of one delivered message.
+///
+/// Composed here rather than at pane rendering because one string feeds all
+/// three consumers: the pane header decorates it, while the `incoming_message`
+/// event and the envelope metadata record emit it bare. Composing at render time
+/// would name the sender correctly in the pane and leave the event and the audit
+/// record attributing the message to the forwarding relay.
+///
+/// For a peer-forwarded message the identity is `<origin>!<peer>`: the origin the
+/// peer asserted, and this relay's name for the peer that asserted it. Both are
+/// needed. The relay authenticates the peer and never the foreign origin, so an
+/// identity carrying only the origin would present an advisory claim with the
+/// authority of a verified sender; naming the asserting peer keeps the
+/// provenance visible in the identity itself.
+///
+/// The origin is copied, never inspected. A peer may assert something that names
+/// no routable recipient, and that is emitted unaltered — the provenance it
+/// records is accurate whatever its shape, and a reply to it fails at the
+/// replying relay's own target resolution rather than being routed. Inspecting
+/// it here to substitute or suppress would be the interpretation the receiving
+/// relay is forbidden to perform.
+///
+/// Without an asserted origin the sender is the peer principal itself, qualified
+/// once.
+fn sender_session_name(task: &AsyncDeliveryTask) -> String {
+    match task.on_behalf_of.as_deref() {
+        Some(origin) => {
+            let peer = bare_session_id(task.sender.id.as_str(), RELAY_NAMESPACE);
+            format!("{origin}!{peer}")
+        }
+        None => canonical_session_id(task.sender.id.as_str(), task.sender_namespace.as_str()),
+    }
+}
 
 pub(super) fn resolve_target_member(
     task: &AsyncDeliveryTask,
@@ -63,10 +98,7 @@ pub(super) fn build_delivery_message(
         created_at: created_at.to_string(),
         namespace: task.bundle.bundle_name.clone(),
         sender: AddressIdentity {
-            session_name: canonical_session_id(
-                task.sender.id.as_str(),
-                task.sender_namespace.as_str(),
-            ),
+            session_name: sender_session_name(task),
             display_name: task.sender.name.clone(),
         },
         target: AddressIdentity {

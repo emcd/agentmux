@@ -524,7 +524,18 @@ exported from `src/relay/mod.rs`.
   Unix-socket `address` (TCP host:port is future work), and the `connect-as`
   identity, and is validated at startup. A `Send`/`Raww` addressed with the
   bang-path `<session>@<bundle>!<alias>` is forwarded to the peer this relay
-  locally calls `<alias>`. The presented identity is **per-peer**: `connect-as`
+  locally calls `<alias>`. The `alias` is **not free-form**: it MUST be the
+  identity *this* relay issued that peer via its own
+  `new peer <alias>@RELAY`, checked at startup and by
+  `agentmux check configuration` against the principal store. That binding is
+  what lets a peer authenticating inbound be named by the principal just
+  verified, with no lookup and no second name to keep in agreement. The check is
+  unconditional, so a peer this relay only dials must be registered too: an
+  absent record is indistinguishable from a mistyped or stale alias, and excusing
+  absence would accept both. Only the record's existence and type are checked —
+  the outbound PSK is *not* compared against the record's hash, because the two
+  are credentials issued in opposite directions. The presented identity is
+  **per-peer**: `connect-as`
   is the identity that peer issued this relay (via its own `new peer`), presented
   as `<connect-as>@RELAY` when dialing it — there is no single relay-wide
   identity, because the *receiver* determines it (two peers can issue different or
@@ -723,6 +734,27 @@ exported from `src/relay/mod.rs`.
   and read only relative to `authenticated_identity`. Raw input (`Raww`) has no
   delivered attribution envelope, so `on_behalf_of` rides the wire for symmetry
   but is not surfaced on delivery.
+- **The delivered sender names both parties.** With an `on_behalf_of` present the
+  delivered identity is `<origin>!<peer>` — the origin the peer asserted, and
+  this relay's name for the peer that asserted it (its issued identity, per the
+  alias invariant above). Both are needed: the relay authenticates the peer and
+  never the foreign origin, so an identity carrying only the origin would give an
+  advisory claim the authority of a verified sender. It is composed where the
+  delivered message is built, not at pane rendering, because the pane header, the
+  `incoming_message` event and the envelope metadata record all read one field —
+  composing later would fix the pane and leave the event and the audit record
+  naming the forwarding relay. Without an `on_behalf_of` the sender is the peer
+  principal itself, qualified once.
+- **The origin segment is copied, never inspected.** A peer may assert something
+  that names no routable recipient; it is emitted unaltered, because the
+  provenance is accurate whatever the shape and suppressing it would discard the
+  only record of what was claimed. Such an identity displays but does not
+  resolve: a reply fails at the replying relay's own target resolution. That is
+  the reply guarantee's shape — it holds for the routable principal ids a
+  conforming forwarding relay stamps, and it is conditioned on the peer rather
+  than on a check here, since inspecting the claim to decide would be the
+  interpretation the receiver is forbidden to perform. A reply can never reach
+  the *wrong* peer, because the peer segment is derived locally.
 
 ### Cross-Relay Discovery
 

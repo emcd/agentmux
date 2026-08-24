@@ -30,6 +30,7 @@ use self::authorization::load_authorization_context;
 pub use self::configuration::{
     DeliveryConfiguration, PeerConfiguration, RelayRuntimeConfiguration,
     load_relay_runtime_configuration, parse_relay_bool_env_value, resolve_relay_bool_setting,
+    validate_peer_aliases,
 };
 
 pub use self::catalog::{BundleCatalog, HostingIntent};

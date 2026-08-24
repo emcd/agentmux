@@ -45,10 +45,18 @@ fn unique_temp_path(final_path: &Path, tag: &str) -> PathBuf {
 
 /// Returns the canonical `session@namespace` identity for a session id.
 ///
-/// Global-user identities already carry the `@GLOBAL` suffix and are their own
-/// canonical form; bundle-local identities are qualified with the namespace.
+/// Qualification is idempotent: an id already carrying the namespace it would be
+/// qualified with is its own canonical form and is returned unchanged. Global-user
+/// identities are the familiar case, but not the only one — a peer relay
+/// principal arrives at ingress already suffixed `@RELAY` and is then qualified
+/// against the relay namespace, which without this yields `<id>@RELAY@RELAY`.
+/// Bundle-local identities carry no suffix and are qualified.
 pub(super) fn canonical_session_id(session_id: &str, namespace: &str) -> String {
-    if session_id.ends_with(GLOBAL_SESSION_SUFFIX) {
+    let already_qualified = session_id.ends_with(GLOBAL_SESSION_SUFFIX)
+        || session_id
+            .strip_suffix(namespace)
+            .is_some_and(|stem| stem.len() > 1 && stem.ends_with('@'));
+    if already_qualified {
         session_id.to_string()
     } else {
         format!("{session_id}@{namespace}")

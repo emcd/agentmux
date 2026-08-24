@@ -47,7 +47,11 @@ struct RawRelayChoicesSection {
 ///
 /// `alias` is this relay's *local* name for the peer — the bang-path `!<alias>`
 /// routing selector and the peer credential filename stem, internal to us and
-/// never seen by the peer. `connect-as` is the identity the peer issued us via its
+/// never seen by the peer. It is not free-form: it MUST be the identity *we*
+/// issued that peer via our own `new peer <alias>@RELAY`, so that a peer
+/// authenticating inbound is named by the principal we just verified rather than
+/// by a second name nothing relates to it. Checked at load against the principal
+/// store. `connect-as` is the identity the peer issued us via its
 /// `new peer <connect-as>@RELAY` — presented in Hello when we dial it, since each
 /// peer determines the identity it expects from us (two peers can issue different
 /// or even colliding identities to this relay). `address` is the peer's listening
@@ -66,8 +70,9 @@ struct RawPeerEntry {
 
 /// A validated `[[peers]]` entry naming an outbound peer relay.
 ///
-/// `alias` is this relay's local name for the peer: the bang-path `!<alias>`
-/// routing selector and the `<peer_alias>` credential filename stem. `connect_as`
+/// `alias` is this relay's local name for the peer, and is the identity this
+/// relay issued that peer: the bang-path `!<alias>` routing selector and the
+/// `<peer_alias>` credential filename stem. `connect_as`
 /// is the identity the peer issued us, presented as `<connect_as>@RELAY` in Hello
 /// when we dial it. `address` is an absolute Unix domain socket path. The
 /// presented identity is per-peer because the *receiver* determines it (via its

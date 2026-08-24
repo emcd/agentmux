@@ -272,16 +272,28 @@ fn resolve_target(dispatch_namespace: &str, target: &str) -> Result<ResolvedTarg
     }
 }
 
-/// Classifies a bang-path `<session>@<bundle>!<relay_id>` target as a cross-relay
-/// target carrying the peer `relay_id` and the foreign `session@bundle`.
+/// Classifies a bang-path `<principal>!<relay_id>` target as a cross-relay target
+/// carrying the peer `relay_id` and the foreign principal.
 ///
 /// Config-free by design: the named peer's *existence* is a delivery-time concern
 /// (validated by the operation body against `[[peers]]`), never a resolution one,
 /// mirroring how an unknown local bundle surfaces at delivery rather than here.
 /// Only structural validity is checked — a non-empty `relay_id` free of further
-/// separators, and a bundle-qualified foreign session (`session@bundle`). A
-/// missing `@<bundle>` segment or an empty/garbled `relay_id` is a resolution-time
-/// validation error.
+/// separators, and a qualified foreign principal. A missing `@<namespace>`
+/// segment or an empty/garbled `relay_id` is a resolution-time validation error.
+///
+/// The foreign principal may be a bundle session or a relay-wide (`@GLOBAL`)
+/// user, because cross-relay forwarding attributes any verified requester and a
+/// relay-wide user is one; refusing those here would leave a correctly delivered
+/// sender unparseable as a reply target. The application and peer relay
+/// namespaces name no routable recipient and are refused as unsupported, the
+/// same way they are on a local target.
+///
+/// That admits the principal kinds a conforming forwarding relay can attribute,
+/// not every string a peer might assert. A delivered sender composes its origin
+/// segment from a peer-supplied `on_behalf_of` without inspecting it, so an
+/// origin outside this set can reach an envelope; a reply to one is expected to
+/// fail here rather than to resolve.
 fn resolve_cross_relay_target(
     principal: &str,
     relay_id: &str,
@@ -290,7 +302,7 @@ fn resolve_cross_relay_target(
     let malformed = || {
         relay_error(
             "validation_malformed_cross_relay_target",
-            "cross-relay target must be <session>@<bundle>!<relay_id> with a non-empty relay id and a bundle-qualified session",
+            "cross-relay target must be <principal>!<relay_id> with a non-empty relay id and a qualified principal",
             Some(json!({ "target": requested })),
         )
     };
@@ -298,16 +310,26 @@ fn resolve_cross_relay_target(
         return Err(malformed());
     }
     match classify_principal_id(principal) {
-        Some(PrincipalType::Session) => {
-            let (session_id, namespace) = split_principal_id(principal)
-                .expect("session classification implies a parseable suffix");
+        Some(PrincipalType::Session | PrincipalType::User) => {
+            let (session_id, namespace) =
+                split_principal_id(principal).expect("classification implies a parseable suffix");
             Ok(ResolvedTarget {
                 namespace: namespace.to_string(),
                 session_id: Some(session_id.to_string()),
                 relay_id: Some(relay_id.to_string()),
             })
         }
-        _ => Err(malformed()),
+        Some(PrincipalType::Application | PrincipalType::Relay) => {
+            let namespace = split_principal_id(principal)
+                .map(|(_, namespace)| namespace)
+                .unwrap_or_default();
+            Err(relay_error(
+                "validation_unsupported_namespace",
+                "target namespace names no routable recipient for this operation",
+                Some(json!({ "target": requested, "namespace": namespace })),
+            ))
+        }
+        None => Err(malformed()),
     }
 }
 

@@ -269,6 +269,13 @@ fn prepare_relay_host(
         cli_require_session_credentials,
     )
     .map_err(shared::map_relay_error)?;
+    // Spans both roots, so it cannot live inside the file loader: peers come
+    // from the configuration roots, the principal store from the state root. A
+    // peer whose alias names no identity this relay issued would authenticate
+    // inbound under a name no route selects, so the reply path is broken before
+    // the first delivery — reject at startup rather than at that delivery.
+    crate::relay::validate_peer_aliases(&relay_configuration.peers, &roots.state_root)
+        .map_err(shared::map_relay_error)?;
     // Published before anything can be admitted: the listener is not bound yet,
     // so no request boundary has run and no entry can have reserved quota against
     // the defaults.

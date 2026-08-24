@@ -26,6 +26,7 @@ mod contract;
 mod error;
 mod list;
 mod look;
+mod peer_alias_invariant;
 mod peer_connection;
 mod preflight;
 mod principal_store;
