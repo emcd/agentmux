@@ -169,16 +169,57 @@ Where the named peer has no outbound entry, the address is still correct and
 still does not resolve — and fails as an unknown peer, which is the honest
 outcome for a relay with no route back.
 
-### Resolution accepts any origin namespace
+### The reply guarantee is conditional on the peer, not on a check
+
+An unconditional promise that the composed identity resolves as a target cannot
+coexist with carrying `on_behalf_of` uninterpreted. A peer is authenticated but
+not trusted to be well-formed: it can assert an unqualified string, or one
+qualified with a namespace that names no routable recipient, and ingress
+deliberately passes that through untouched.
+
+The obvious repairs both fail on the same rule. Inspecting the claim to decide
+between a target form and a display-only form is interpretation. So is
+normalizing it, rejecting it, or substituting a placeholder. Any conditional
+behavior at the receiver requires reading the value, which is the thing the
+receiver is forbidden to do.
+
+So the condition moves off the receiver and onto the peer. Composition is
+uniform and unconditional — the receiver never looks at the origin segment — and
+the reply-derivability guarantee is stated as holding when the origin is a
+routable canonical principal id, which the forwarding requirement already obliges
+a conforming relay to stamp. A relay that stamps something else gets an identity
+that displays correctly and does not resolve, and that is its own doing.
+
+**A non-conforming origin is still displayed.** The provenance it records is
+accurate whatever the origin's shape: this peer claimed to be acting for that
+string. Suppressing it would discard the only evidence of what was claimed,
+which matters most in exactly the case where the claim is malformed.
+
+**The safety property is non-misdirection, not loudness.** The peer segment is
+derived locally and always names the peer that actually connected, so a reply
+cannot reach a different peer. An unqualified or unsupported origin fails at the
+replying relay's own resolution stage before anything is sent; a well-formed
+origin that does not exist on the peer fails at the peer as an unknown target.
+There is no path where a reply silently goes somewhere wrong, which is what would
+have made a target-shaped non-target genuinely dangerous rather than merely
+disappointing.
+
+### Resolution accepts the origin kinds a peer can honestly attribute
 
 Cross-relay forwarding attributes any verified requester, including a relay-wide
 `@GLOBAL` user, while target resolution accepts only bundle-qualified sessions.
-That gap makes a correctly rendered sender unparseable as a target for exactly
+That gap makes a *correctly* rendered sender unparseable as a target for exactly
 the senders least likely to be noticed in testing.
 
 Widening resolution is therefore part of this change rather than a follow-on: the
-envelope form promises a reply address, and a promise that holds for some origins
-and not others is not the property being claimed.
+envelope form promises a reply address for conforming origins, and a promise that
+excludes relay-wide users is not that promise.
+
+Widening stops there. The application and peer relay namespaces stay unsupported
+targets, and an unqualified principal stays rejected. The set to admit is the
+principal kinds a conforming forwarding relay can honestly attribute — not every
+string a peer might assert, which is unbounded and would turn target resolution
+into the validator the receiver is not allowed to be.
 
 ## Risks / Trade-offs
 

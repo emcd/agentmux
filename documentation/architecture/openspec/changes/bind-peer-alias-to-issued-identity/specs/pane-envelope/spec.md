@@ -39,10 +39,19 @@ cross-relay form where the sender is attributed to a peer.
 
 #### Scenario: Render a cross-relay sender as a reply-derivable address
 
-- **WHEN** the sender is attributed to a cross-relay origin
+- **WHEN** the sender is attributed to a cross-relay origin whose origin segment
+  is a routable canonical principal id
 - **THEN** the `From` header's `session:` token carries the
   `<origin>!<peer-name>` form
 - **AND** that token is accepted as a target by cross-relay target resolution
+
+#### Scenario: Render a cross-relay sender whose origin is not routable
+
+- **WHEN** the sender is attributed to a cross-relay origin whose origin segment
+  names no routable recipient
+- **THEN** the `From` header's `session:` token still carries the
+  `<origin>!<peer-name>` form, unaltered
+- **AND** the header is not suppressed or rewritten to hide the origin
 
 #### Scenario: Pane header is exempt from bare-canonical emission
 

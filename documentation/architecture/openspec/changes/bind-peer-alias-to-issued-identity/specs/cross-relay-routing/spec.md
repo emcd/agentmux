@@ -23,8 +23,32 @@ this relay's name for the asserting peer per the Peer Naming Authority
 requirement. The composed identity SHALL be the sender carried by the
 pane-envelope header, the `incoming_message` event's `sender_session`, and the
 relay's envelope metadata record, so that all three name the same sender.
-Composing this identity is not resolution: the receiving relay SHALL still not
-validate the origin segment against its own principal store.
+Composition SHALL be uniform: the receiving relay SHALL NOT inspect, classify,
+normalize, or reject the origin segment on the way in, and SHALL emit the same
+form whatever the peer supplied. Composing this identity is not resolution — the
+origin segment is copied, never validated against this relay's principal store.
+
+The composed identity is a resolvable reply address **when the origin segment is
+a routable canonical principal id**, which is what the stamping obligation above
+requires of a conforming forwarding relay. That guarantee is conditional on the
+peer's conformance, not on any check by the receiver, which is what keeps it
+compatible with carrying the value uninterpreted.
+
+A peer MAY nonetheless supply an origin that is unqualified, or qualified with a
+namespace that names no routable recipient. Such a value SHALL still be composed
+and displayed, because the provenance it records is accurate regardless of
+whether the origin can be addressed. A reply to it SHALL fail at the replying
+relay's own target resolution with that stage's structured validation error, and
+SHALL NOT be routed. The receiving relay SHALL NOT substitute, repair, or omit a
+non-conforming origin: the failure belongs to the peer that asserted it, and
+suppressing the identity would discard the only record of who the peer claimed
+to be acting for.
+
+This is safe against misdirection rather than merely loud. The peer segment is
+derived locally and always names the peer that actually connected, so a reply is
+never routed to a different peer; a non-conforming origin fails before routing,
+and a well-formed origin that does not exist on the peer fails at the peer as an
+unknown target.
 
 Naming both segments is required rather than rendering the origin alone. The
 receiving relay authenticates the peer relay, not the foreign origin, so an
@@ -75,6 +99,22 @@ combined case if it is needed.
 - **WHEN** a forwarded `Send` carries `on_behalf_of` set to `operator@GLOBAL`
 - **THEN** the delivered sender identity carries that origin unchanged ahead of
   the peer name
+
+#### Scenario: Compose an origin that names no routable recipient
+
+- **WHEN** a forwarded `Send` carries `on_behalf_of` set to a value that is
+  unqualified, or qualified with a namespace naming no routable recipient
+- **THEN** the delivered sender identity still carries that origin unchanged
+  ahead of the peer name
+- **AND** the receiving relay neither rejects the delivery nor alters the origin
+
+#### Scenario: A reply to a non-routable origin fails before routing
+
+- **WHEN** a recipient replies to a composed sender whose origin segment names no
+  routable recipient
+- **THEN** the replying relay's target resolution rejects it with a structured
+  validation error
+- **AND** no request is forwarded to any peer
 
 #### Scenario: Unauthenticated origin omits on_behalf_of
 

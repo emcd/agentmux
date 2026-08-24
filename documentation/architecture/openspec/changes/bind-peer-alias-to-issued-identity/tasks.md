@@ -58,7 +58,10 @@
   session, while still rejecting an unqualified principal and an empty or
   separator-bearing relay id.
 - [ ] 5.2 Cover a relay-wide `@GLOBAL` origin resolving, and cover that the
-  existing rejections still reject. Assert each separately with the input named.
+  existing rejections still reject — the application and peer relay namespaces as
+  unsupported, an unqualified principal as unqualified. Assert each separately
+  with the input named, since widening one arm is the change most likely to
+  loosen the others by accident.
 - [ ] 5.3 Teeth-check 5.2 by restoring the session-only restriction and
   confirming only the relay-wide case fails.
 
@@ -94,6 +97,17 @@
   elsewhere.
 - [ ] 7.6 Cover that local (non-ingress) delivery is unchanged: the sender is the
   bare canonical `session@namespace` id.
+- [ ] 7.7 Cover a peer asserting an `on_behalf_of` that is not a routable
+  principal id — an unqualified string, and one in the application namespace —
+  and confirm each is composed and displayed unaltered, with the delivery
+  accepted. Assert the two separately with the asserted value named.
+- [ ] 7.8 Cover that a reply to each of those fails at target resolution with a
+  structured validation error and forwards nothing. These are the cases where an
+  unconditional reply-derivability promise would have been false, so they are
+  what holds the conditional one honest.
+- [ ] 7.9 Teeth-check 7.7 by making composition inspect the origin and fall back
+  to the peer principal when it does not parse, and confirm both cases fail. That
+  fallback is the plausible-looking repair the no-interpretation rule forbids.
 
 ## 8. Confirm the prohibitions still hold
 
