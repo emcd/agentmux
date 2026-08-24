@@ -268,11 +268,20 @@ If the sender's session carries an `on_behalf_of` claim supplied by an
 authenticated intermediary — a trusted host, or a peer relay forwarding on behalf
 of an origin principal (see the `cross-relay-routing` capability's Cross-Relay
 Sender Attribution Forwarding requirement) — the relay SHALL stamp and carry that
-claim in the response. The relay SHALL NOT interpret the `on_behalf_of` value; it
-is an opaque intermediary-supplied string and SHALL NOT be used as an
+claim in the response. The relay SHALL NOT resolve the `on_behalf_of` value
+against its own principal store, SHALL NOT treat it as evidence that the named
+principal exists or authored the request, and SHALL NOT use it as an
 authorization input. Consumers SHALL read `on_behalf_of` in the context of the
 accompanying `authenticated_identity` (the intermediary that asserted it), not as
 a globally resolvable principal id.
+
+The relay MAY compose a delivered sender identity from `on_behalf_of` for
+display and reply-derivation, provided the composed form also names the
+intermediary that asserted it, so a reader cannot mistake the claim for a
+locally verified identity. The `cross-relay-routing` capability specifies that
+composition for peer-relay forwarding. Composition is not resolution: the
+prohibitions above continue to apply to the composed value and to every segment
+within it.
 
 Sessions without a verified principal SHALL omit the `authenticated_identity`
 field rather than populate it with a self-asserted value.
@@ -318,4 +327,13 @@ setter).
   to the peer relay principal
 - **AND** includes `on_behalf_of` set to the origin principal's canonical id
   supplied by the peer, carried without interpretation
+
+#### Scenario: A composed sender identity names its asserting intermediary
+
+- **WHEN** the relay composes a delivered sender identity from an `on_behalf_of`
+  claim
+- **THEN** the composed identity also names the intermediary that asserted the
+  claim
+- **AND** the origin segment is not resolved against the local principal store
+- **AND** the composed identity is not consulted for any authorization decision
 

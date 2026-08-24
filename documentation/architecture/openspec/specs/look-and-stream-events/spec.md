@@ -552,8 +552,14 @@ Event types SHALL include:
 - optional `cc_sessions`
 
 `sender_session` and `cc_sessions` SHALL carry the bare canonical
-`session@namespace` form obtained via the non-decorating identity accessor.
-They SHALL NOT carry the decorating pane-header form
+`session@namespace` form obtained via the non-decorating identity accessor,
+except that a `sender_session` attributed to a cross-relay origin SHALL carry
+the `<origin>!<peer-name>` form specified by the `cross-relay-routing`
+capability. That origin segment is copied from the asserting peer rather than
+validated, so it carries whatever was stamped and SHALL be emitted unaltered
+whether or not it names a routable recipient. Either form SHALL be emitted
+without
+decoration: these fields SHALL NOT carry the decorating pane-header form
 (`Display Name <session:session_name>`) produced by `render_address`. The
 pane-envelope From/To/Cc header is the only surface that uses the decorating
 form; the `incoming_message` machine event fields are exempt from it.
@@ -607,6 +613,22 @@ Relay terminal state `dropped_on_shutdown` SHALL map to:
   id
 - **AND** neither field carries the decorating
   `Display Name <session:session_name>` form
+
+#### Scenario: Emit a cross-relay sender undecorated
+
+- **WHEN** the delivered sender is attributed to a cross-relay origin
+  `coordinator@agentmux` asserted by a peer this relay names `bravo`
+- **THEN** the `incoming_message` event `sender_session` equals
+  `"coordinator@agentmux!bravo"`
+- **AND** the field does not carry the decorating
+  `Display Name <session:session_name>` form
+
+#### Scenario: Emit a relay-wide cross-relay origin
+
+- **WHEN** the delivered sender is attributed to a cross-relay origin
+  `operator@GLOBAL` asserted by a peer this relay names `bravo`
+- **THEN** the `incoming_message` event `sender_session` equals
+  `"operator@GLOBAL!bravo"`
 
 #### Scenario: Push routed diagnostic update
 
