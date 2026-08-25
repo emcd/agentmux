@@ -1,63 +1,87 @@
 ## Why
 
-Discovered live during a cross-relay smoke test: a `Send` from an ordinary
-local session (`coordinator@agentmux`, socket-trust — the default for every
-bundle member on both R&D relays, since `require-session-credentials` is
-`false`) to a peer relay carries no `on_behalf_of`. The receiving relay falls
-back to attributing the message to the bare peer-relay principal
-(`rnd-main@RELAY`). That fallback string parses as a valid `id@namespace`
-target and even resolves to a real principal, so a recipient reasonably tries
-to reply to it — and fails, having no way to know the reply is unroutable
-before sending it. In the actual incident this produced, the recipient
-improvised a guessed fallback target that reached an unrelated third session.
+Under the configuration this project actually runs, no ordinary local session's
+cross-relay message can be replied to.
 
-This is not a code defect against `cross-relay-routing`'s Sender Attribution
-Forwarding requirement (`openspec/specs/cross-relay-routing/spec.md:94`),
-landed by `bind-peer-alias-to-issued-identity` (archived 2026-08-24) — the
-requirement explicitly withholds `on_behalf_of` for an unverified origin, and
-socket-trust is unverified by definition (`src/relay/identity.rs`
-`verify_socket_trust`: the claimed `principal_id` is accepted with no
-credential check at all). But it means that, under the configuration this
-project actually runs — Unix-socket-only, `require-session-credentials =
-false` on every deployed relay — **no ordinary local session's cross-relay
-message is currently repliable**. That is not an edge case; it is the default
-and, today, the only path any agent session takes.
+A `Send` from a socket-trust session to a peer relay carries no `on_behalf_of`.
+The forwarding relay stamps that field from the origin's *verified* principal id
+(`src/relay/handlers/send.rs`), and a socket-trust connection has none:
+`verify_socket_trust` accepts the claimed `principal_id` without any credential
+check and records `store_backed = false`, from which the connection's
+`authenticated_identity` is derived as `None`. The receiving relay, seeing no
+`on_behalf_of`, attributes the message to the bare peer-relay principal
+(`rnd-main@RELAY`) — which is exactly what the `cross-relay-routing` capability
+requires of it.
 
-The security rationale behind gating on verification is sound in general —
-socket-trust performs no verification of the asserted identity — but its
-value depends on the trust boundary the socket actually sits behind. On this
-project's actual deployment (single operator, Unix-domain sockets only, no
-network exposure), anyone who can reach the relay's local socket is
-ordinarily already running as the same OS user as the relay itself, with
-access to the credential store and PSK files directly. Withholding
-`on_behalf_of` from that principal buys little: the capability it protects
-against (impersonating a session to a peer) is already available to anyone
-positioned to exploit it, by more direct means. A deployment where the socket
-and the credential store sit behind different local trust boundaries (a
-sandboxed or containerized session bind-mounted onto the relay socket but not
-the state directory, say) is the case where the current default earns its
-keep — so the fix should be a deliberate opt-in per outbound peer, not a
-blanket relaxation.
+None of that is a defect. Each step is specified. The problem is that
+`require-session-credentials` defaults to `false`, no deployed relay sets it, and
+no agent session is provisioned with a credential — so the unattributed path is
+not a fallback for an unusual case. It is the only path any agent session takes,
+and the guarantee that a delivered sender is a reply address is therefore vacuous
+in practice.
+
+The observable failure is a recipient who cannot reply and cannot tell why. The
+delivered sender is shaped like an address (`id@namespace`), so a reader forms
+the reasonable belief that replying will work. It does not: both `rnd-main@RELAY`
+and `rnd-main@RELAY!rnd-main` are refused at target resolution with
+`validation_unsupported_namespace`, "target namespace names no routable recipient
+for this operation". That refusal is correct, and it is specific rather than
+generic. In the live incident behind this proposal the recipient absorbed two
+such refusals and then *guessed* a target, reaching an uninvolved third session.
+The relay misrouted nothing; the recipient, left with an unusable sender and an
+accurate error, improvised.
+
+The rule producing this withholds attribution from an origin the relay did not
+verify. That is the right instinct in general and the wrong place to apply it,
+because it re-decides a question the relay has already answered. A relay running
+with `require-session-credentials = false` has admitted that session under the
+identity it claimed, and delivers under that identity: locally, a socket-trust
+session already *is* what it says it is — it sends, receives, and appears to
+every recipient as its claimed `principal_id`. Withholding the same claim from a
+peer does not withhold a capability. It only makes the relay's cross-relay
+attribution disagree with its own local delivery.
 
 ## What Changes
 
-Draft direction — not yet decided; see Open Questions and `design.md`.
+- The forwarding relay stamps `on_behalf_of` with the `principal_id` the origin
+  was **admitted** under, whether that identity was verified against the
+  principal store or accepted as a socket-trust claim. The special case for
+  unverified origins is removed rather than made configurable.
+- `require-session-credentials` remains the single place the admission decision
+  is made. A relay that requires credentials admits no unverified principal and
+  so forwards only store-backed attributions; a relay that accepts socket-trust
+  attributes what it accepted. No new configuration key is introduced, and none
+  should be: a second setting could only express "admit this identity but do not
+  stand behind it", which is a distinction the relay does not act on anywhere
+  else.
 
-- A new `[[peers]]` field (proposed name: `allow-nonauthenticated-access`,
-  default `false`) lets an operator declare, per outbound peer, that this
-  relay's socket-trust boundary is trusted enough to vouch for a session's
-  self-asserted `principal_id` when forwarding to that specific peer. When
-  set, the forwarding relay stamps `on_behalf_of` from the session's claimed
-  `principal_id` even when `store_backed` is `false`, instead of forcing it to
-  `None`.
-- Independent of the above: when `on_behalf_of` is genuinely absent (an
-  unauthenticated origin, or a peer that does not opt in), the delivered
-  sender identity stops falling back to a bare, target-shaped principal id.
-  It should be rendered in a way that visibly cannot be replied to, so
-  neither a human nor an agent is invited to construct a reply from it — and
-  an attempted reply to it should fail with a message naming the actual
-  problem ("sender could not be identified for reply"), not a generic
-  unknown-target validation error.
+Deliberately unchanged, each for a stated reason:
+
+- **`authenticated_identity` stays absent for an unverified requester.** It is
+  the field that records whether a credential backed the identity, it is what
+  live-stream revocation matches on, and `relay-identity` requires a session
+  without a verified principal to omit it rather than self-assert. The two fields
+  stay separately sourced: one carries who the origin was admitted as, the other
+  whether a credential backed it.
+- **The absent-`on_behalf_of` fallback keeps its rendering and its refusal.** A
+  peer may still omit the field — an older implementation, or one that declines
+  to attribute — and attributing such a message to the peer relay, qualified
+  once, remains correct. A reply to it already fails with a specific error naming
+  the real problem.
+- **The receiving relay's treatment of `on_behalf_of` is untouched.** It stays
+  advisory, uninterpreted, never an authorization input, and never resolved
+  against the local store. What a forwarding relay is willing to assert is a
+  separate question from what a receiver may conclude, and only the former moves.
+- **A requester still cannot supply its own `on_behalf_of`.** A non-ingress
+  requester's value is discarded, not refused — existing behavior, kept. Turning
+  it into an error is a change to the request contract rather than to where
+  attribution comes from, and belongs to whoever wants to argue for it.
+  Attribution comes from the identity established once at Hello; admission is
+  per-connection and attribution does not become per-request.
+- **Attribution on locally delivered messages.** The guard that drops a
+  self-asserted value governs the local path; this change governs the value
+  stamped on an outbound forwarded request. They are separate sites, and only
+  the second moves.
 
 ## Capabilities
 
@@ -67,44 +91,39 @@ None.
 
 ### Modified Capabilities
 
-- `runtime-bootstrap`: *Outbound Peer Relay Configuration* gains the new
-  `allow-nonauthenticated-access` field and its validation.
-- `cross-relay-routing`: *Cross-Relay Sender Attribution Forwarding* gains the
-  opt-in condition under which a socket-trust origin is stamped as
-  `on_behalf_of`, and a requirement covering the non-repliable fallback's
-  rendering and reply-failure behavior.
-- `relay-identity`: *Sender Attribution Schema* documents the widened source
-  of `on_behalf_of` and reconciles it with the existing non-resolution /
-  non-authorization prohibitions (this does not change — `on_behalf_of`
-  remains advisory and untrusted by the receiver regardless of how the
-  forwarding relay populated it).
-- `pane-envelope` / `look-and-stream-events`: whatever rendering change
-  replaces the bare-peer-principal fallback.
+- `cross-relay-routing`: *Cross-Relay Sender Attribution Forwarding* replaces the
+  obligation to omit `on_behalf_of` for an unverified origin with the obligation
+  to stamp the identity the origin was admitted under, and records that admission
+  is decided in one place.
 
-## Open Questions (for BE / AuxBE)
+`runtime-bootstrap` needs no delta. `require-session-credentials` keeps its
+meaning exactly — which identities the relay admits at Hello. What changes is a
+downstream consequence of an admission the setting already governs, and that
+consequence belongs to the capability that specifies forwarding.
 
-1. Is per-peer opt-in the right scope, or should this be relay-wide (a single
-   `require-session-credentials`-adjacent toggle rather than a `[[peers]]`
-   field)? Per-peer keeps the default conservative for peers whose trust
-   boundary is unknown; relay-wide is simpler and matches how
-   `require-session-credentials` itself is scoped.
-2. Field name and shape — `allow-nonauthenticated-access` was the operator's
-   working suggestion, not a commitment.
-3. What should the non-repliable fallback identity actually look like? It
-   needs to (a) not parse as a valid reply target, (b) still carry whatever
-   provenance is available (which relay, at minimum), and (c) render sanely
-   in the pane header, the `incoming_message` event, and the envelope
-   metadata record — the same three-surface consistency requirement
-   `bind-peer-alias-to-issued-identity` established for the repliable case.
-4. Does opting a peer in change anything about `IdentityIntrospect` or the
-   trusted-host `identity.snapshot`/`identity.revoked` surfaces, or is this
-   scoped purely to `on_behalf_of` on Send/Look/Raww forwarding?
-5. Threat-model sign-off: does the "local socket access implies credential-store
-   access in this project's actual deployment" argument hold, or is there a
-   deployment shape (sandboxing, container bind-mounts) worth designing
-   against now rather than deferring?
+`relay-identity` needs no delta either. Its *Sender Attribution Schema* describes
+`on_behalf_of` as supplied by an authenticated intermediary and delegates the
+cross-relay setting mechanism to `cross-relay-routing`; from the receiver's
+position the forwarding relay remains that intermediary whatever it admitted. Its
+prohibition on a session without a verified principal populating
+`authenticated_identity` is preserved by this change rather than modified by it.
 
 ## Impact
 
-Not yet assessed pending the open questions above — deferred to `design.md`
-and the eventual spec deltas once the shape is settled.
+No configuration surface changes, so there is nothing for an operator to set,
+migrate, or get wrong. Behavior changes on upgrade for any relay running with
+`require-session-credentials = false`: its cross-relay messages begin carrying
+attribution. That is the intended fix, and it is the only deployment shape that
+currently exists here.
+
+A relay that has upgraded and one that has not interoperate in both directions.
+The receiving side's handling of a present or absent `on_behalf_of` is unchanged,
+so an un-upgraded peer's messages still arrive attributed to the peer principal,
+and an upgraded peer's messages arrive attributed to the origin.
+
+The code change is narrow — the stamping condition at the cross-relay forwarding
+sites in `send.rs` and `raww.rs`, reading the identity the connection was
+admitted under rather than only a store-backed one. The test surface is wider
+than the code: the existing relay harness connects as socket-trust throughout,
+which is precisely the case this change gives meaning to and which no current
+test distinguishes from a credentialed one.
