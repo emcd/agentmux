@@ -535,6 +535,165 @@ fn ingress_namespace_discovery_omits_empty_namespace() {
     );
 }
 
+const SCOPE_UNMATCHED_EVENT: &str = "relay.discovery.namespaces.scope_unmatched";
+
+// Collects the lines recording `event` that also contain `containing`, which is
+// how a test picks its own records out of a sink it may be sharing. An empty
+// `containing` matches every record for the event.
+fn inscription_lines(path: &Path, event: &str, containing: &str) -> Vec<String> {
+    let needle = format!("\"event\":\"{event}\"");
+    std::fs::read_to_string(path)
+        .unwrap_or_default()
+        .lines()
+        .filter(|line| line.contains(needle.as_str()) && line.contains(containing))
+        .map(str::to_string)
+        .collect()
+}
+
+// Offers `state_root` as the process inscription sink and returns wherever the
+// sink actually is.
+//
+// The sink is a process-wide `OnceLock`, so the first test to configure one in a
+// given process wins and every later offer is declined. Under the canonical runner
+// that never arises, because each test is its own process; under a shared-process
+// harness it decides which file the emissions reach. Returning the configured path
+// rather than the offered one keeps a test reading the file its own emissions went
+// to either way, and the append recreates the directory if the winner's temporary
+// directory has already been removed.
+fn configure_inscriptions(state_root: &Path) -> std::path::PathBuf {
+    let offered = state_root.join("inscriptions").join("relay.log");
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&offered);
+    agentmux::runtime::inscriptions::process_inscriptions_path()
+        .expect("inscription sink configured")
+        .to_path_buf()
+}
+
+/// An ingress scope covering nothing is recorded with the scope and the peer that
+/// presented it.
+///
+/// The wire result stays an ordinary empty success — asserted here alongside the
+/// record, because the whole point is that the diagnosis reaches the receiving
+/// operator without reaching the peer. `namespace_count: 0` on its own says a peer
+/// saw nothing but not which peer or under what grant, which is what left the
+/// original smoke-test failure undiagnosable.
+#[test]
+fn ingress_namespace_discovery_records_a_scope_that_matched_nothing() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    let inscriptions = configure_inscriptions(&bundle_paths.state_root);
+    let relay_principal_id = unique_relay_principal_id();
+    write_ingress_peer_store(
+        &bundle_paths.state_root,
+        relay_principal_id.as_str(),
+        Some("phantom"),
+    );
+
+    let response = ingress_request_response(
+        &configuration_roots,
+        &bundle_paths,
+        relay_principal_id.as_str(),
+        json!({"operation": "discover_namespaces"}),
+    );
+
+    assert_eq!(response["response"]["kind"], "discover_namespaces");
+    assert!(
+        response["response"]["namespaces"]
+            .as_array()
+            .expect("namespaces array")
+            .is_empty()
+    );
+    let records = inscription_lines(
+        inscriptions.as_path(),
+        SCOPE_UNMATCHED_EVENT,
+        relay_principal_id.as_str(),
+    );
+    assert_eq!(records.len(), 1, "expected one record, got {records:?}");
+    assert!(
+        records[0].contains("\"scope\":\"phantom\""),
+        "record omits the scope that matched nothing: {}",
+        records[0]
+    );
+    assert!(
+        records[0].contains(relay_principal_id.as_str()),
+        "record omits the asking peer: {}",
+        records[0]
+    );
+}
+
+/// A scope that covers a namespace is not recorded as having matched nothing.
+///
+/// Both assertions are keyed to principals unique to this test, because the sink
+/// may be shared with tests running concurrently. The absence assertion is stated
+/// second and carries its own control: an unmatched scope is driven through the
+/// same relay first, so a sink nobody wired up, or a recorder that stopped
+/// emitting, fails on the control instead of satisfying the absence.
+#[test]
+fn ingress_namespace_discovery_records_nothing_when_the_scope_matches() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    let inscriptions = configure_inscriptions(&bundle_paths.state_root);
+
+    let unmatched_principal = unique_relay_principal_id();
+    write_ingress_peer_store(
+        &bundle_paths.state_root,
+        unmatched_principal.as_str(),
+        Some("phantom"),
+    );
+    ingress_request_response(
+        &configuration_roots,
+        &bundle_paths,
+        unmatched_principal.as_str(),
+        json!({"operation": "discover_namespaces"}),
+    );
+    assert_eq!(
+        inscription_lines(
+            inscriptions.as_path(),
+            SCOPE_UNMATCHED_EVENT,
+            unmatched_principal.as_str(),
+        )
+        .len(),
+        1,
+        "control: an unmatched scope must reach the sink for the absence below to mean anything"
+    );
+
+    let matched_principal = unique_relay_principal_id();
+    write_ingress_peer_store(
+        &bundle_paths.state_root,
+        matched_principal.as_str(),
+        Some(bundle_name.as_str()),
+    );
+    let response = ingress_request_response(
+        &configuration_roots,
+        &bundle_paths,
+        matched_principal.as_str(),
+        json!({"operation": "discover_namespaces"}),
+    );
+
+    assert_eq!(
+        response["response"]["namespaces"]
+            .as_array()
+            .expect("namespaces array"),
+        &vec![Value::from(bundle_name.as_str())]
+    );
+    assert!(
+        inscription_lines(
+            inscriptions.as_path(),
+            SCOPE_UNMATCHED_EVENT,
+            matched_principal.as_str(),
+        )
+        .is_empty(),
+        "a scope that covered a namespace must not be recorded as unmatched"
+    );
+}
+
 #[test]
 fn ingress_principal_discovery_returns_complete_namespace_under_namespace_scope() {
     let temporary = TempDir::new().expect("temporary directory");
