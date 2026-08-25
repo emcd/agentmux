@@ -74,6 +74,16 @@ pub fn configure_process_inscriptions(path: &Path) -> Result<(), RuntimeError> {
         })
 }
 
+/// Reports the configured process inscription sink, or `None` before one is set.
+///
+/// The counterpart to [`configure_process_inscriptions`]: the path is process-wide
+/// and set once, so where inscriptions land is a property of the process rather
+/// than of any caller, and nothing else can answer where a given emission went.
+#[must_use]
+pub fn process_inscriptions_path() -> Option<&'static Path> {
+    PROCESS_INSCRIPTIONS_PATH.get().map(PathBuf::as_path)
+}
+
 /// Emits one structured inscription line to the configured sink.
 pub fn emit_inscription(event: &str, details: &Value) {
     let Some(path) = PROCESS_INSCRIPTIONS_PATH.get() else {

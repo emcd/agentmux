@@ -97,9 +97,11 @@ pub(in crate::relay) fn handle_discover_namespaces(
                 &RelayRequest::DiscoverNamespaces { relay: None },
             )
         }
-        None if ingress => {
-            receiving_namespace_discovery(context, principal.ingress_scope.as_deref())
-        }
+        None if ingress => receiving_namespace_discovery(
+            context,
+            principal.ingress_scope.as_deref(),
+            principal.session_id.as_str(),
+        ),
         None => local_namespace_discovery(context, principal),
     }
 }
@@ -167,17 +169,18 @@ fn local_namespace_discovery(
 fn receiving_namespace_discovery(
     context: &DiscoveryContext<'_>,
     scope: Option<&str>,
+    requester: &str,
 ) -> Result<RelayResponse, RelayError> {
-    if scope.is_none() {
+    let Some(scope) = scope else {
         return Err(ingress_forbidden());
-    }
+    };
     let mut namespaces = BTreeSet::new();
     for paths in context.bundle_catalog.snapshot() {
         let bundle = load_bundle_configuration(context.configuration_roots, &paths.bundle_name)
             .map_err(map_config)?;
         let covered = bundle.members.iter().any(|member| {
             scope_permits(
-                scope,
+                Some(scope),
                 canonical_session_id(member.id.as_str(), paths.bundle_name.as_str()).as_str(),
             )
         });
@@ -187,11 +190,34 @@ fn receiving_namespace_discovery(
     }
     let global_covered = list_namespace_sessions(GLOBAL_NAMESPACE)
         .iter()
-        .any(|(principal_id, _, _)| scope_permits(scope, principal_id.as_str()));
+        .any(|(principal_id, _, _)| scope_permits(Some(scope), principal_id.as_str()));
     if global_covered {
         namespaces.insert(GLOBAL_NAMESPACE.to_string());
     }
+    if namespaces.is_empty() {
+        emit_scope_unmatched(requester, scope);
+    }
     Ok(namespaces_response(namespaces, "ingress"))
+}
+
+/// Records an ingress scope that covered no namespace on this relay.
+///
+/// The wire result for this case is an ordinary empty success and must stay one:
+/// a namespace-scoped grant covering no principals is required to be omitted from
+/// discovery, producing the same result as a namespace that does not exist, so the
+/// peer cannot learn which of the two it hit. That rule binds what this relay
+/// tells the peer, not what it records for itself.
+///
+/// Without the scope and the asking principal the surviving record is
+/// `namespace_count: 0` alone, which says a peer saw nothing but not which peer or
+/// under what grant — enough to notice a misconfiguration, never enough to fix it.
+/// Both fields name things the receiving operator issued, so writing them locally
+/// discloses nothing the peer did not already present.
+fn emit_scope_unmatched(requester: &str, scope: &str) {
+    emit_inscription(
+        "relay.discovery.namespaces.scope_unmatched",
+        &json!({ "requester_session": requester, "scope": scope }),
+    );
 }
 
 /// Receiving-side principal discovery for one concrete namespace. A namespace the
