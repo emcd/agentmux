@@ -23,6 +23,24 @@ use crate::support::{
     },
 };
 
+/// How long a relay host gets to exit after a termination signal.
+///
+/// Derived from the host's own shutdown watchdog grace
+/// (`RELAY_SHUTDOWN_WATCHDOG_GRACE_MS`, 5s): the watchdog forces the process out
+/// at that point, so a relay that is going to exit at all has exited by then.
+/// A bound below it does not test anything the relay promises — the graceful
+/// path is permitted to spend the whole grace (worker drain, the async-delivery
+/// drain, and per-bundle tmux teardown all bound themselves against it), so a
+/// tighter wait fails a relay that is shutting down exactly as specified.
+///
+/// Deliberately *above* the watchdog rather than at it. A forced exit is
+/// `process::exit(0)`, which satisfies a status check while skipping cleanup, so
+/// letting the process arrive here lets the assertions that follow — socket
+/// removal, session pruning, the terminal delivery outcome — be what fails.
+/// Those name which part of shutdown broke; a timeout reports only that time
+/// passed.
+const RELAY_SIGNAL_EXIT_BUDGET: Duration = Duration::from_secs(8);
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn relay_startup_retries_transient_tmux_create_failures() {
     let temporary = TempDir::new().expect("temporary");
@@ -342,14 +360,18 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
     let kill_result = unsafe { libc::kill(pid, libc::SIGINT) };
     assert_eq!(kill_result, 0, "failed to send SIGINT");
 
-    let wait_result = timeout(Duration::from_secs(3), child.wait()).await;
+    let wait_result = timeout(RELAY_SIGNAL_EXIT_BUDGET, child.wait()).await;
     let status = match wait_result {
         Ok(result) => result.expect("wait relay"),
         Err(_) => {
-            // SIGKILL is escalation only after the graceful SIGINT window
-            // (the generation fence's bounded reap) failed — not a bypass.
+            // SIGKILL is escalation only after the watchdog's own forced
+            // exit failed to arrive — not a bypass.
             child.start_kill().expect("kill relay after timeout");
-            panic!("timed out waiting for relay to exit after SIGINT");
+            panic!(
+                "relay did not exit within {RELAY_SIGNAL_EXIT_BUDGET:?} of SIGINT, \
+                 which is past its own shutdown watchdog: the watchdog thread \
+                 failed to force the exit"
+            );
         }
     };
     assert!(
@@ -491,14 +513,18 @@ async fn relay_sigint_ignores_server_exited_unexpectedly_during_shutdown_cleanup
     let kill_result = unsafe { libc::kill(pid, libc::SIGINT) };
     assert_eq!(kill_result, 0, "failed to send SIGINT");
 
-    let wait_result = timeout(Duration::from_secs(3), child.wait()).await;
+    let wait_result = timeout(RELAY_SIGNAL_EXIT_BUDGET, child.wait()).await;
     let status = match wait_result {
         Ok(result) => result.expect("wait relay"),
         Err(_) => {
-            // SIGKILL is escalation only after the graceful SIGINT window
-            // (the generation fence's bounded reap) failed — not a bypass.
+            // SIGKILL is escalation only after the watchdog's own forced
+            // exit failed to arrive — not a bypass.
             child.start_kill().expect("kill relay after timeout");
-            panic!("timed out waiting for relay to exit after SIGINT");
+            panic!(
+                "relay did not exit within {RELAY_SIGNAL_EXIT_BUDGET:?} of SIGINT, \
+                 which is past its own shutdown watchdog: the watchdog thread \
+                 failed to force the exit"
+            );
         }
     };
     assert!(
@@ -562,14 +588,18 @@ async fn relay_sigint_exits_with_active_stream_connection() {
     let kill_result = unsafe { libc::kill(pid, libc::SIGINT) };
     assert_eq!(kill_result, 0, "failed to send SIGINT");
 
-    let wait_result = timeout(Duration::from_secs(3), child.wait()).await;
+    let wait_result = timeout(RELAY_SIGNAL_EXIT_BUDGET, child.wait()).await;
     let status = match wait_result {
         Ok(result) => result.expect("wait relay"),
         Err(_) => {
-            // SIGKILL is escalation only after the graceful SIGINT window
-            // (the generation fence's bounded reap) failed — not a bypass.
+            // SIGKILL is escalation only after the watchdog's own forced
+            // exit failed to arrive — not a bypass.
             child.start_kill().expect("kill relay after timeout");
-            panic!("timed out waiting for relay to exit after SIGINT");
+            panic!(
+                "relay did not exit within {RELAY_SIGNAL_EXIT_BUDGET:?} of SIGINT, \
+                 which is past its own shutdown watchdog: the watchdog thread \
+                 failed to force the exit"
+            );
         }
     };
     assert!(
