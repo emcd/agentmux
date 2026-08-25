@@ -47,6 +47,32 @@ repos:
       stages: [ 'pre-commit' ]
       fail_fast: true
 
+    - id: lint-openspec-deltas
+      name: 'Lint: OpenSpec Delta Retention'
+      # Asserts agreement between the delta specs being committed and the live
+      # specs they modify -- a property of committed artifacts, so a lint and not
+      # a test. Grouped with the other cheap repository check, ahead of the
+      # expensive Rust hooks.
+      #
+      # Scoped by `files` to the changes a commit actually touches rather than
+      # every active change. The retention report is idempotent -- it reports the
+      # same drops on every commit until the change archives -- so auditing all
+      # of them would print one lane's report on every commit in the repository
+      # and train everyone to skim past it.
+      #
+      # `verbose` is load-bearing, not decoration. The check this hook exists for
+      # -- a MODIFIED delta silently deleting scenarios it failed to carry
+      # forward -- is a report and not an error, because dropping a scenario is
+      # often exactly right. A report that pre-commit swallows on success would
+      # reproduce the original failure, so the output must print on a pass.
+      language: system
+      entry: 'scripts/verify-openspec-deltas.py'
+      files: '^(documentation/architecture/)?openspec/changes/[^/]+/specs/.*\.md$'
+      require_serial: true
+      stages: [ 'pre-commit' ]
+      verbose: true
+      fail_fast: true
+
     - id: cargo-fmt
       name: 'Check Style (Rust)'
       language: system
