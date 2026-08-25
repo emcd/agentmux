@@ -158,10 +158,15 @@ fn scope_vocabulary_diagnostics(scope: Option<&str>) -> Vec<RelayDiagnostic> {
 }
 
 /// Rotates the PSK for an existing principal, preserving its type, scope, and
-/// metadata. After the store update, any active connection that authenticated
+/// metadata. After the store update, an active connection that authenticated
 /// with the old credential is force-disconnected: it receives a
 /// `runtime_identity_revoked` error frame and its connection is closed, so a
 /// rotated credential cannot keep a live session.
+///
+/// A principal rotating its *own* credential is the exception: its connection is
+/// left alive so the response carrying the new PSK can reach it. Trusted hosts
+/// are notified either way, since a cached view of the credential is stale
+/// regardless of who initiated the rotation.
 pub(in crate::relay) fn handle_change_psk(
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
@@ -236,6 +241,14 @@ pub(in crate::relay) fn handle_change_psk(
     // Revoke any live connection still holding the rotated credential. The
     // store update alone keeps an already-authenticated session alive until it
     // reconnects; this force-disconnects it so rotation takes effect at once.
+    //
+    // The requester's own connection is exempt. Its teardown signal is observed
+    // by the connection's frame loop while this handler is still running on the
+    // blocking pool, so the loop exits and discards the response this call is
+    // about to return -- taking the only copy of the new PSK with it when the
+    // destination is Response. Excluding it cannot leave some other session
+    // alive on the prior credential: the stream registry keys one entry per
+    // `principal_id`, so a self-rotation's only possible match is the requester.
     let revoked_frame = RelayResponse::Error {
         error: relay_error(
             "runtime_identity_revoked",
@@ -243,7 +256,11 @@ pub(in crate::relay) fn handle_change_psk(
             Some(serde_json::json!({ "principal_id": principal_id })),
         ),
     };
-    let revoked_connections = revoke_streams_for_identity(principal_id.as_str(), &revoked_frame);
+    let revoked_connections = if requester_principal_id == principal_id {
+        0
+    } else {
+        revoke_streams_for_identity(principal_id.as_str(), &revoked_frame)
+    };
 
     // Notify every connected trusted host whose scope covers the revoked
     // principal so they can drop any cached view of it. This is distinct from

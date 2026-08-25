@@ -444,6 +444,173 @@ fn change_psk_revokes_live_session_holding_old_credential() {
     alpha_join.join().expect("join alpha relay thread");
 }
 
+// A principal rotating its *own* credential must receive the rotated PSK. The
+// revocation sweep matches on `authenticated_identity`, which for a self-rotation
+// is the requesting connection: tearing it down discards the response carrying
+// the only copy of the new secret, leaving the principal with no credential
+// matching the hash the relay has already committed.
+//
+// The requester must be provisioned with a real PSK. A socket-trust Hello records
+// no `authenticated_identity` and is never matched by the sweep, so a test
+// written against the harness default cannot reach this path at all and would
+// pass against unfixed code.
+#[test]
+fn change_psk_on_the_requesters_own_identity_returns_the_rotated_credential() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_self_rotate";
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let operator = global_user_id(bundle_name);
+
+    let operator_psk = register_peer(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        &operator,
+        None,
+    );
+
+    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": operator,
+            "identity_token": operator_psk,
+        }),
+    );
+    let ack = read_json(&mut reader);
+    assert_eq!(
+        ack["frame"], "hello_ack",
+        "operator hello not acked: {ack:?}"
+    );
+
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "self-rotate-1",
+            "request": {"operation": "change_psk", "principal_id": operator},
+        }),
+    );
+
+    // The first frame decides it. Unfixed, the requester is swept and the only
+    // frame it ever sees is the `runtime_identity_revoked` error ahead of EOF.
+    let rotation = read_json_skipping_hello_ack(&mut reader);
+    assert_eq!(
+        rotation["response"]["kind"], "change_psk",
+        "self-rotation must answer the requester rather than revoke it: {rotation:?}"
+    );
+    let rotated_psk = rotation["response"]["psk"]
+        .as_str()
+        .expect("psk in self-rotation response");
+    assert_ne!(
+        rotated_psk, operator_psk,
+        "self-rotation must mint a new psk"
+    );
+
+    shutdown_stream(&client, "shutdown operator stream");
+    join.join().expect("join operator relay thread");
+}
+
+// Excluding the requester from the teardown must not also exclude it from the
+// trusted-host fan-out. The two mechanisms are distinct: a watching host holds a
+// cached view of a credential that changed, and that view is stale no matter who
+// initiated the rotation. This guards the regression where the fan-out is moved
+// inside the self-rotation exclusion.
+#[test]
+fn self_rotation_still_fans_out_identity_revoked_to_trusted_hosts() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_self_rotate_fanout";
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let operator = global_user_id(bundle_name);
+    let app_principal_id = format!("engine_{bundle_name}@EXTERNAL");
+
+    let operator_psk = register_peer(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        &operator,
+        None,
+    );
+    // Scoped to the reserved namespace the operator lives in, so the fan-out's
+    // scope check covers the rotated principal.
+    let app_psk = register_peer(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        &app_principal_id,
+        Some("GLOBAL"),
+    );
+
+    let (mut app_client, app_join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let mut app_reader = BufReader::new(app_client.try_clone().expect("clone app stream"));
+    send_json(
+        &mut app_client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": app_principal_id.as_str(),
+            "identity_token": app_psk,
+        }),
+    );
+    assert_eq!(
+        read_json(&mut app_reader)["frame"],
+        "hello_ack",
+        "app hello not acked"
+    );
+
+    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": operator,
+            "identity_token": operator_psk,
+        }),
+    );
+    assert_eq!(
+        read_json(&mut reader)["frame"],
+        "hello_ack",
+        "operator hello not acked"
+    );
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "self-rotate-fanout-1",
+            "request": {"operation": "change_psk", "principal_id": operator},
+        }),
+    );
+    let rotation = read_json_skipping_hello_ack(&mut reader);
+    assert_eq!(
+        rotation["response"]["kind"], "change_psk",
+        "self-rotation rejected: {rotation:?}"
+    );
+
+    let event = read_until_event_type(&mut app_reader, "identity.revoked");
+    assert_eq!(
+        event["event"]["payload"]["principal_id"], operator,
+        "revoked event must name the self-rotated principal: {event:?}"
+    );
+    assert!(
+        event["event"]["payload"]["revoked_at"].is_string(),
+        "revoked event must carry a revoked_at timestamp: {event:?}"
+    );
+
+    shutdown_stream(&client, "shutdown operator stream");
+    join.join().expect("join operator relay thread");
+    shutdown_stream(&app_client, "shutdown app stream");
+    app_join.join().expect("join app relay thread");
+}
+
 // 2.7 change psk on an in-scope principal fans out an identity.revoked event to
 // every connected trusted host whose scope covers the revoked principal.
 #[test]
