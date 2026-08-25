@@ -344,6 +344,13 @@ A namespace-scoped grant for a namespace containing no configured or registered
 principals SHALL NOT make that namespace discoverable. Namespace discovery SHALL
 omit it, producing the same result as an absent namespace.
 
+Where an ingress scope covers no namespace on the receiving relay, namespace
+discovery SHALL record that scope and the requesting principal in the receiving
+relay's own inscriptions. That record SHALL NOT alter the response, which remains
+the empty result required above. Non-disclosure governs what the receiving relay
+reports to the peer; it does not govern what the relay retains for the operator who
+issued the grant.
+
 #### Scenario: Namespace scope exposes complete namespace
 
 - **WHEN** peer scope is namespace `myapp`
@@ -365,6 +372,15 @@ omit it, producing the same result as an absent namespace.
 - **AND** `myapp` contains no configured or registered principals
 - **THEN** namespace discovery omits `myapp`
 - **AND** does not reveal whether `myapp` exists
+
+#### Scenario: Scope covering nothing is recorded rather than refused
+
+- **WHEN** an authenticated peer's ingress scope covers no namespace on the
+  receiving relay
+- **THEN** namespace discovery returns an empty result rather than
+  `authorization_forbidden`
+- **AND** the response does not reveal whether any namespace exists
+- **AND** the receiving relay records the scope and the requesting principal
 
 #### Scenario: Absent scope denies discovery
 
