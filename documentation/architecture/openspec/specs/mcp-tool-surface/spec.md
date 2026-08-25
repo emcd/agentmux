@@ -1,7 +1,7 @@
 # mcp-tool-surface Specification
 
 ## Purpose
-The MCP tool inventory and per-tool request/response contracts surfaced to MCP clients — `list`, `help`, `look`, `send`, `raww`, `choose`. The spec governs tool set stability (no temporary aliases; `grant` is not exposed after the rename-to-choose archive), canonical error taxonomy passthrough (validation precedes authorization denials with canonical denial details), list namespace selectors (`omitted`/`home-bundle`/`GLOBAL`/`*`), and sender identity inference from MCP association (caller-supplied identity fields are rejected). `relay_unavailable` fallback semantics apply to all tools when the bundle relay is unreachable.
+The MCP tool inventory and per-tool request/response contracts surfaced to MCP clients — `list`, `help`, `look`, `send`, `raww`, `choose`, `updown`, and the credential-administration meta-tools `new`, `change`, and `drop`, whose CLI counterparts (`agentmux new peer` / `change psk` / `drop peer`) are specified here rather than in `cli-surface`. The spec governs tool set stability (no temporary aliases; `grant` is not exposed after the rename-to-choose archive), canonical error taxonomy passthrough (a validation decidable without privileged state precedes authorization denials, while one requiring a protected lookup follows them so a denial discloses nothing, with canonical denial details), list namespace selectors (`omitted`/`home-bundle`/`GLOBAL`/`*`), and sender identity inference from MCP association (caller-supplied identity fields are rejected). `relay_unavailable` fallback semantics apply to all tools when the bundle relay is unreachable.
 ## Requirements
 ### Requirement: MCP Tool Set
 

@@ -1,29 +1,32 @@
 # cli-surface Specification
 
 ## Purpose
-The operator-facing `agentmux` command surface plus the legacy `agentmux-relay`/`agentmux-mcp` binary entrypoints. The spec governs the `host relay/mcp`, `up`/`down`, `list principals`, `send`, `look`, `raww`, and `tui` subcommands — their argument validation, target-mode selection, response payload contracts, and authorization passthrough to relay. The CLI is a thin adapter throughout: it surfaces relay decisions unchanged and resolves `--as-session`/`--bundle` selectors against `tui.toml` defaults.
+The operator-facing `agentmux` command surface plus the legacy `agentmux-relay`/`agentmux-mcp` binary entrypoints. The spec governs each subcommand's argument validation, target-mode selection, response payload contracts, and authorization passthrough to relay, one requirement per command surface. The credential-administration commands (`new peer`, `change psk`, `drop peer`) are the exception: their contracts live in `mcp-tool-surface` alongside the meta-tools they mirror, and `cli-surface` covers only their presence in the help topology. The CLI is a thin adapter throughout: it surfaces relay decisions unchanged and resolves `--as-session`/`--bundle` selectors against `tui.toml` defaults.
 ## Requirements
 ### Requirement: Unified Agentmux Command Topology
 
-The system SHALL provide a primary `agentmux` CLI command with these
-subcommands:
+The system SHALL provide a primary `agentmux` CLI command that dispatches the
+operator subcommands, and SHALL retain `agentmux-relay` and `agentmux-mcp` as
+compatibility entrypoints.
 
-- `host relay`
-- `host mcp`
-- `up`
-- `down`
-- `list`
-- `send`
-- `look`
-- `check configuration`
+`agentmux --help` SHALL list every subcommand the CLI dispatches, and SHALL list
+no subcommand it does not dispatch. The help topology is the discovery surface:
+a command reachable only by knowing its name already is unusable to the operator
+who needed to discover it.
 
-The system SHALL retain `agentmux-relay` and `agentmux-mcp` as compatibility
-entrypoints.
+This requirement does not enumerate the subcommands. Each command's surface —
+its arguments, validation, and output contracts — is specified by its own
+requirement, so a roster here would restate them, and the restatement is what
+drifts: it is the enumeration, not the commands, that fell five behind the
+shipped CLI. Leaving it out also means adding a command no longer requires
+modifying this requirement, which is what previously put concurrent proposals
+into conflict over it.
 
-#### Scenario: Expose bundle lifecycle commands in topology
+#### Scenario: Help topology matches the dispatched subcommands
 
 - **WHEN** an operator views `agentmux --help`
-- **THEN** the CLI includes `up` and `down` subcommands
+- **THEN** the listed subcommands are exactly those the CLI dispatches
+- **AND** every listed subcommand is reachable by dispatch
 
 #### Scenario: Host relay from unified command
 
