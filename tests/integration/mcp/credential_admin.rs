@@ -170,6 +170,196 @@ async fn change_psk_rejects_output_path_and_write_to_config_together() {
     assert!(relay.requests_for_operation("change_psk").is_empty());
 }
 
+fn drop_peer_arguments(principal_id: &str) -> Map<String, Value> {
+    let mut arguments = Map::new();
+    arguments.insert("command".to_string(), Value::String("peer".to_string()));
+    arguments.insert("args".to_string(), json!({"principal_id": principal_id}));
+    arguments
+}
+
+/// Responder answering `drop_peer` for a session principal, which is the one
+/// principal type the relay owns a canonical credential location for.
+fn drop_session_responder() -> RelayResponder {
+    Arc::new(
+        |request| match request.get("operation").and_then(Value::as_str) {
+            Some("drop_peer") => json!({
+                "kind": "drop_peer",
+                "schema_version": "1",
+                "principal_id": "worker@party",
+                "principal_type": "session",
+                "credential_path": "/state/sessions/worker/identity.psk",
+            }),
+            _ => json!({
+                "kind": "error",
+                "error": {"code": "internal_unexpected_failure", "message": "unexpected operation"},
+            }),
+        },
+    )
+}
+
+/// Responder answering `drop_peer` for a peer relay, whose credential lives
+/// under the connecting relay's state root and so carries no path.
+fn drop_relay_responder() -> RelayResponder {
+    Arc::new(
+        |request| match request.get("operation").and_then(Value::as_str) {
+            Some("drop_peer") => json!({
+                "kind": "drop_peer",
+                "schema_version": "1",
+                "principal_id": "rnd-main@RELAY",
+                "principal_type": "relay",
+                "credential_path": null,
+            }),
+            _ => json!({
+                "kind": "error",
+                "error": {"code": "internal_unexpected_failure", "message": "unexpected operation"},
+            }),
+        },
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn drop_peer_forwards_the_principal_id_to_the_relay() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(runtime.relay_socket.clone(), drop_session_responder());
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    harness
+        .call_tool(2, "drop", drop_peer_arguments("worker@party"))
+        .await;
+
+    let requests = relay.requests_for_operation("drop_peer");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["principal_id"], "worker@party");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn drop_peer_reports_the_credential_path_for_a_session_principal() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(runtime.relay_socket.clone(), drop_session_responder());
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let response = harness
+        .call_tool(2, "drop", drop_peer_arguments("worker@party"))
+        .await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["principal_id"], "worker@party");
+    assert_eq!(payload["principal_type"], "session");
+    assert_eq!(
+        payload["credential_path"], "/state/sessions/worker/identity.psk",
+        "a session principal's relay-owned credential path must be reported: {payload}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn drop_peer_omits_the_credential_path_for_a_peer_relay() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(runtime.relay_socket.clone(), drop_relay_responder());
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let response = harness
+        .call_tool(2, "drop", drop_peer_arguments("rnd-main@RELAY"))
+        .await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["principal_type"], "relay");
+    assert!(
+        payload.get("credential_path").is_none(),
+        "a peer relay's credential lives on the connecting relay, so no path may \
+         be reported: {payload}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn drop_rejects_a_command_other_than_peer() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(|_| panic!("relay must not receive a drop with an unknown command")),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("command".to_string(), Value::String("psk".to_string()));
+    arguments.insert("args".to_string(), json!({"principal_id": "worker@party"}));
+    let response = harness.call_tool(2, "drop", arguments).await;
+
+    assert_eq!(
+        response["error"]["data"]["code"], "validation_invalid_params",
+        "unexpected response: {response}"
+    );
+}
+
+/// Responder answering `new_peer` with the policy-tier scope advisory attached,
+/// matching how the relay serializes a diagnostic-bearing success.
+fn scope_advisory_responder() -> RelayResponder {
+    Arc::new(
+        |request| match request.get("operation").and_then(Value::as_str) {
+            Some("new_peer") => json!({
+                "kind": "new_peer",
+                "schema_version": "1",
+                "principal_id": "rnd-main@RELAY",
+                "principal_type": "relay",
+                "psk": "SECRET-PSK",
+                "written_path": null,
+                "config_snippet": "# snippet",
+                "diagnostics": [{
+                    "code": "advisory_scope_resembles_policy_tier",
+                    "message": "ingress scope 'all' is a policy-tier value",
+                }],
+            }),
+            _ => json!({
+                "kind": "error",
+                "error": {"code": "internal_unexpected_failure", "message": "unexpected operation"},
+            }),
+        },
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_peer_preserves_a_scope_diagnostic_in_the_structured_result() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(runtime.relay_socket.clone(), scope_advisory_responder());
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let response = harness
+        .call_tool(2, "new", peer_args(json!({"scope": "all"})))
+        .await;
+    let payload = decode_tool_payload(&response);
+
+    // The advisory has to reach an MCP caller through the payload: relay stderr
+    // is a different process's stream, and MCP has no stderr channel at all.
+    assert_eq!(
+        payload["diagnostics"][0]["code"], "advisory_scope_resembles_policy_tier",
+        "the scope advisory must survive into the structured result: {payload}"
+    );
+    assert!(
+        payload["diagnostics"][0]["message"].is_string(),
+        "each diagnostic carries a human-readable message: {payload}"
+    );
+    assert_eq!(
+        payload["psk"], "SECRET-PSK",
+        "the advisory must not disturb the credential payload: {payload}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_peer_omits_diagnostics_when_none_were_raised() {
+    let runtime = TestRuntime::create();
+    let _relay = FakeRelay::start(runtime.relay_socket.clone(), response_mode_responder());
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let response = harness
+        .call_tool(2, "new", peer_args(json!({"scope": "myapp"})))
+        .await;
+    let payload = decode_tool_payload(&response);
+
+    assert!(
+        payload.get("diagnostics").is_none(),
+        "diagnostics must be omitted rather than rendered as an empty array: {payload}"
+    );
+}
+
 /// Responder answering `new_peer` in Response mode (psk present, no written
 /// path), matching how the relay serializes a Response-destination result.
 fn response_mode_responder() -> RelayResponder {

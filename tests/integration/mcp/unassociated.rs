@@ -134,6 +134,18 @@ async fn unassociated_server_rejects_every_relay_backed_tool() {
         .await;
     assert_unassociated(&change);
 
+    let drop = harness
+        .call_tool(
+            13,
+            "drop",
+            arguments([
+                ("command", Value::String("peer".to_string())),
+                ("args", json!({"principal_id": "scout@myns"})),
+            ]),
+        )
+        .await;
+    assert_unassociated(&drop);
+
     // Relay-wide `list` discovery commands share the same precondition.
     let relays = harness
         .call_tool(

@@ -38,7 +38,8 @@ exported from `src/relay/mod.rs`.
   - canonical/bare session identity helpers; principal store schema and
     load/persist primitives; PSK generation (`generate_psk`), SHA-256 hashing
     (`hash_token_sha256`), and `principal_id` namespace classification used
-    by Hello verification and the `new peer` / `change psk` tooling.
+    by Hello verification and the `new peer` / `change psk` / `drop peer`
+    tooling.
 - `errors.rs`
   - relay error constructors and configuration error mapping.
 - `client.rs`
@@ -128,10 +129,16 @@ exported from `src/relay/mod.rs`.
 - `handlers/choices.rs`
   - choices snapshot, list, and pick request handlers.
 - `handlers/identity.rs`
-  - relay-wide identity administration: `new peer` credential registration and
-    `change psk` rotation. Operates on the relay-level principal store with no
-    bundle context; dispatched via `dispatch_identity_admin` before the
-    per-bundle routing path in `connection/requests.rs`.
+  - relay-wide identity administration: `new peer` credential registration,
+    `change psk` rotation, and `drop peer` deletion. Operates on the relay-level
+    principal store with no bundle context; dispatched via
+    `dispatch_identity_admin` before the per-bundle routing path in
+    `connection/requests.rs`, which names each relay-wide admin request
+    explicitly — a new one must be added there or it is routed as
+    bundle-subject and fails with `validation_missing_routing_namespace`.
+    Dropping deletes the store record and then invokes the same revocation
+    helpers rotation uses; it refuses to drop the requester's own principal,
+    since that would revoke the connection carrying the response.
 - `handlers/discovery.rs`
   - relay-wide cross-relay discovery: configured relay-alias enumeration
     (`ListRelays`), and namespace/principal discovery (`DiscoverNamespaces` /
@@ -236,8 +243,9 @@ exported from `src/relay/mod.rs`.
     selector matches entries, each connected one is torn down (dynamic state
     detached, typed error frame written, teardown signal fired), then removed or
     kept as a static shell per the eviction scope. `revoke_streams_for_identity`
-    (matched by verified `authenticated_identity`, used by `change psk`; keeps
-    static shells) and `evict_streams_for_bundle` (matched by namespace, used by
+    (matched by verified `authenticated_identity`, used by `change psk` and
+    `drop peer`; keeps static shells) and `evict_streams_for_bundle` (matched by
+    namespace, used by
     the bundle watcher; removes entries) are thin wrappers over it — there is no
     independent per-feature eviction path.
 - `watcher.rs`
@@ -547,8 +555,8 @@ exported from `src/relay/mod.rs`.
 - **Expiry pruning**: records with an RFC 3339 `expires_at` in the past (and,
   fail-closed, any with an unparseable `expires_at`) are pruned. The store is
   pruned-and-persisted once at relay startup and pruned before each
-  `new peer` / `change psk` mutation so the persisted file stays clean. A record
-  with no `expires_at` never expires.
+  `new peer` / `change psk` / `drop peer` mutation so the persisted file stays
+  clean. A record with no `expires_at` never expires.
 - **Expiry teardown at Hello**: the Hello path does not pre-prune the store;
   instead `verify_hello_credential` checks the matched record against the
   current time, and a recognized-but-expired credential is rejected with the
@@ -567,11 +575,28 @@ exported from `src/relay/mod.rs`.
   verified identity and are never revoked. The registry entry is evicted before
   the teardown signal fires, so a reconnect presenting the rotated credential is
   not wedged into an identity-claim conflict against the dying connection.
+- A `drop peer` deletion removes the record outright and then runs the same
+  revocation path: the store record is the only copy of the credential hash, so
+  a record that no longer exists must not keep authenticating a live connection.
+  It is the first caller of that revocation contract for which the principal
+  ceases to exist — rotation reaches the same teardown, but leaves a principal
+  behind that reconnects with the new credential. Dropping the principal the
+  requester authenticated as is refused with `validation_self_drop_forbidden`
+  ahead of the authorization gate, since revoking the connection that carries
+  the response would leave the operator unable to distinguish a committed drop
+  from a failed one; the store-backed `validation_unknown_principal` check stays
+  *behind* the gate, where answering it for an unauthorized caller would
+  disclose whether an arbitrary principal exists. Credential files are never
+  deleted — once the record is gone the file authenticates nothing, and the
+  relay cannot know where the operator distributed it — so the response reports
+  the relay-owned canonical path for session principals only.
 - Credential administration is relay-wide, not bundle-scoped. `new peer`
   (`RelayRequest::NewPeer`) generates a PSK and stores its SHA-256 hash;
   `change psk` (`RelayRequest::ChangePsk`) rotates an existing principal's hash
-  in place. Both carry a `CredentialDestination` selector that routes the raw
-  value to exactly one sink:
+  in place; `drop peer` (`RelayRequest::DropPeer`) deletes the record and takes
+  no destination, having no credential to route. `new peer` and `change psk`
+  carry a `CredentialDestination` selector that routes the raw value to exactly
+  one sink:
   - **Response** (default): return the raw PSK once in the response.
   - **Path** (`output_path` / `--output`): write to the caller-named absolute
     path — refusing symlinks via `O_NOFOLLOW`, requiring an existing parent,
@@ -600,12 +625,15 @@ exported from `src/relay/mod.rs`.
   fallible step after it; a post-commit rename failure rolls the store change
   back (and surfaces `internal_credential_rollback_failed` if the rollback write
   also fails). Identity-admin store transactions are serialized at relay scope,
-  so concurrent `new peer` / `change psk` calls cannot interleave store persists
-  and credential renames. Both authorize the requester
+  so concurrent `new peer` / `change psk` / `drop peer` calls cannot interleave
+  store persists and credential renames. All three authorize the requester
   relay-wide: the caller's policy preset (resolved from a session member's
   `policy_id` or a `@GLOBAL` operator's TUI-config policy) must grant
-  `new.peer` / `change.psk` at the `all` tier — bundle-relative `home` scope is
-  insufficient, and application/relay principals are denied fail-closed.
+  `new.peer` / `change.psk` / `drop.peer` at the `all` tier — bundle-relative
+  `home` scope is insufficient, and application/relay principals are denied
+  fail-closed. The three controls are distinct: neither `new.peer` nor
+  `change.psk` confers deletion, so a policy file predating the `drop` control
+  permits none until an operator adds it.
 
 ### Cross-bundle routing and the uniform authorization model
 

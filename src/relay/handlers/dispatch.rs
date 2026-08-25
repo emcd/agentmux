@@ -77,6 +77,7 @@ pub(in crate::relay) fn handle_request(
         }
         RelayRequest::NewPeer { .. }
         | RelayRequest::ChangePsk { .. }
+        | RelayRequest::DropPeer { .. }
         | RelayRequest::IdentityIntrospect { .. }
         | RelayRequest::ListRelays
         | RelayRequest::DiscoverNamespaces { .. }
@@ -168,6 +169,12 @@ pub(in crate::relay) fn handle_identity_admin_request(
             requester_principal_id,
             principal_id,
             destination,
+        ),
+        RelayRequest::DropPeer { principal_id } => identity::handle_drop_peer(
+            configuration_roots,
+            state_root,
+            requester_principal_id,
+            principal_id,
         ),
         _ => Err(relay_error(
             "internal_unexpected_request",
@@ -273,6 +280,7 @@ fn normalize_request_identities(request: RelayRequest, namespace: &str) -> Relay
         | RelayRequest::ChoicesList
         | RelayRequest::NewPeer { .. }
         | RelayRequest::ChangePsk { .. }
+        | RelayRequest::DropPeer { .. }
         | RelayRequest::IdentityIntrospect { .. }
         | RelayRequest::ListRelays
         | RelayRequest::DiscoverNamespaces { .. }

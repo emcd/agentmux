@@ -20,6 +20,7 @@ This module implements the MCP stdio server for `agentmux`.
   - `updown` (requires `command="up"` or `command="down"`)
   - `new` (requires `command="peer"`)
   - `change` (requires `command="psk"`)
+  - `drop` (requires `command="peer"`)
   - `raww`
   - `send`
 - Preserve canonical relay `list` and `look` success payloads without adapter
@@ -179,6 +180,8 @@ when the relay is down, and reachability surfaces per request as
      (`RelayRequest::NewPeer`)
    - `change` (`command="psk"`) -> `RelayStreamSession`
      (`RelayRequest::ChangePsk`)
+   - `drop` (`command="peer"`) -> `RelayStreamSession`
+     (`RelayRequest::DropPeer`)
    - `raww` -> `RelayStreamSession` (`RelayRequest::Raww`)
    - `send` -> `RelayStreamSession` (`RelayRequest::Send`)
 7. Relay response is mapped back to MCP JSON payload. The handler
@@ -252,11 +255,29 @@ when the relay is down, and reachability surfaces per request as
   PSK, returning it or writing it via the same `output_path` /
   `write_to_config` destination selector, and revokes live connections
   holding the prior credential once the destination commits.
-- Both are relay-wide operations: they ride the MCP server's relay
+- The `drop` tool (`command="peer"`) deletes a principal from the
+  store, completing the lifecycle the other two begin. The record is
+  the only copy of the credential hash, so the credential stops
+  authenticating permanently, and every session bound to the principal
+  is disconnected with a `runtime_identity_revoked` frame — the same
+  revocation the `change` tool triggers. Dropping the principal the
+  caller authenticated as is refused with
+  `validation_self_drop_forbidden`, since that revocation would tear
+  down the connection carrying the response and leave the caller unable
+  to tell a committed drop from a failed one; that check runs ahead of
+  authorization, because it reads nothing privileged. Credential files
+  are never deleted: the response reports the relay-owned canonical
+  path for **session** principals only, since a peer relay's credential
+  lives under the connecting relay's state root, which this relay
+  cannot observe.
+- All three are relay-wide operations: they ride the MCP server's relay
   stream, and the relay authorizes the connection's principal
   against its policy preset relay-wide, requiring an `all`
-  `new.peer` / `change.psk` grant. A bundle-relative `home` grant is
-  insufficient. The MCP server's own identity must therefore carry
+  `new.peer` / `change.psk` / `drop.peer` grant. A bundle-relative
+  `home` grant is insufficient. The three controls are distinct — a
+  `new.peer` or `change.psk` grant confers no ability to drop — so a
+  policy file predating the `drop` control permits no deletion until an
+  operator adds it. The MCP server's own identity must therefore carry
   an operator policy for these tools to succeed.
 
 ## Cross-Relay Discovery

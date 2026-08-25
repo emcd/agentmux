@@ -72,7 +72,9 @@ pub(super) async fn handle_request(
     // operator against their policy preset relay-wide.
     if matches!(
         request,
-        RelayRequest::NewPeer { .. } | RelayRequest::ChangePsk { .. }
+        RelayRequest::NewPeer { .. }
+            | RelayRequest::ChangePsk { .. }
+            | RelayRequest::DropPeer { .. }
     ) {
         let requester_principal_id = full_requester_principal_id(active_registration);
         let response = {

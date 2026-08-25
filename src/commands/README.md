@@ -51,6 +51,10 @@ This directory owns the unified CLI surface for `agentmux`.
 - `change.rs`
   - `agentmux change psk <principal_id>` credential rotation; relays a
     `ChangePsk` request and renders the new PSK.
+- `drop.rs`
+  - `agentmux drop peer <principal_id>` principal deletion; relays a `DropPeer`
+    request and reports the deleted principal plus, for session principals only,
+    the relay-owned credential file left behind for the operator to remove.
 - `check.rs`
   - `agentmux check configuration [<bundle-id>]` read-only configuration
     pre-flight; validates one or all bundles through the relay's startup loading

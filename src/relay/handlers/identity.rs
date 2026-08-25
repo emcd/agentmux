@@ -23,7 +23,9 @@ use crate::relay::identity::{
 use crate::relay::stream::{
     RelayStreamEvent, notify_trusted_hosts_of_revocation, revoke_streams_for_identity,
 };
-use crate::relay::{CredentialDestination, RelayError, RelayResponse, SCHEMA_VERSION, relay_error};
+use crate::relay::{
+    CredentialDestination, RelayDiagnostic, RelayError, RelayResponse, SCHEMA_VERSION, relay_error,
+};
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{peer_relay_psk_path, principal_store_path, session_identity_psk_path};
 
@@ -119,7 +121,40 @@ pub(in crate::relay) fn handle_new_peer(
         psk: returned_psk,
         written_path,
         config_snippet,
+        diagnostics: scope_vocabulary_diagnostics(context.scope.as_deref()),
     })
+}
+
+/// Policy-tier values, which an ingress `scope` is not.
+///
+/// Session-policy controls take one of these tiers; an ingress scope is matched
+/// literally against a `session@bundle` id or a bare namespace. They share no
+/// values, so a scope spelled as a tier is almost certainly a confusion between
+/// the two surfaces.
+const POLICY_TIER_VALUES: [&str; 4] = ["none", "self", "home", "all"];
+
+/// Flags an ingress `scope` spelled as a policy tier.
+///
+/// Advisory rather than a rejection: every one of these is a syntactically legal
+/// namespace name, so a deployment could own a bundle called `all` for which the
+/// scope is exactly right. A scope that merely resolves to nothing stays silent,
+/// because peer credentials are routinely minted before the namespace they scope
+/// exists, and a cross-relay scope may name a namespace this relay cannot see.
+fn scope_vocabulary_diagnostics(scope: Option<&str>) -> Vec<RelayDiagnostic> {
+    let Some(scope) = scope else {
+        return Vec::new();
+    };
+    if !POLICY_TIER_VALUES.contains(&scope) {
+        return Vec::new();
+    }
+    vec![RelayDiagnostic {
+        code: "advisory_scope_resembles_policy_tier".to_string(),
+        message: format!(
+            "ingress scope '{scope}' is a policy-tier value, not an ingress scope; \
+             an ingress scope names a session@bundle principal or a bare namespace, \
+             so this matches a namespace literally named '{scope}' and nothing else"
+        ),
+    }]
 }
 
 /// Rotates the PSK for an existing principal, preserving its type, scope, and
@@ -249,6 +284,124 @@ pub(in crate::relay) fn handle_change_psk(
         psk: returned_psk,
         written_path,
     })
+}
+
+/// Deletes a principal from the relay-wide store and revokes it.
+///
+/// The store record is the only copy of the credential hash, so dropping a
+/// principal permanently invalidates its credential. Every session bound to the
+/// principal is then torn down, because a record that no longer exists must not
+/// keep authenticating a live connection.
+///
+/// Credential files are left in place. Once the record is gone the file
+/// authenticates nothing, and the relay cannot know where an operator
+/// distributed it — for a peer relay it lives under the *connecting* relay's
+/// state root, which this relay cannot see.
+pub(in crate::relay) fn handle_drop_peer(
+    configuration_roots: &ConfigurationRoots,
+    state_root: &Path,
+    requester_principal_id: &str,
+    principal_id: String,
+) -> Result<RelayResponse, RelayError> {
+    // Ahead of the authorization gate, unlike the unknown-principal check below.
+    // This compares the request against the requester's own identity and reads
+    // nothing privileged, so it cannot disclose anything the caller does not
+    // already know, and a caller dropping their own id gets this answer even
+    // when they hold no grant at all.
+    if principal_id == requester_principal_id {
+        return Err(relay_error(
+            "validation_self_drop_forbidden",
+            "a principal cannot drop itself; drop it from another authenticated principal",
+            Some(serde_json::json!({ "principal_id": principal_id })),
+        ));
+    }
+    authorize_relay_action(
+        configuration_roots,
+        requester_principal_id,
+        RelayActionFamily::Drop,
+        "peer",
+    )?;
+    let mut store = PrincipalStore::load(principal_store_path(state_root))?;
+    store.prune_expired(OffsetDateTime::now_utc());
+    // Behind the gate: answering this for an unauthorized caller would disclose
+    // whether an arbitrary principal exists.
+    let Some(existing) = store.find_by_principal_id(principal_id.as_str()).cloned() else {
+        return Err(relay_error(
+            "validation_unknown_principal",
+            "principal_id is not registered",
+            Some(serde_json::json!({ "principal_id": principal_id })),
+        ));
+    };
+    store.remove_by_principal_id(principal_id.as_str());
+    // Persist before revoking: the on-disk store is written atomically, so a
+    // failed persist leaves the principal authenticating and nothing should be
+    // torn down.
+    store.persist()?;
+
+    let revoked_frame = RelayResponse::Error {
+        error: relay_error(
+            "runtime_identity_revoked",
+            "identity was dropped; the credential no longer authenticates",
+            Some(serde_json::json!({ "principal_id": principal_id })),
+        ),
+    };
+    let revoked_connections = revoke_streams_for_identity(principal_id.as_str(), &revoked_frame);
+    let revoked_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_default();
+    let revoked_event = RelayStreamEvent {
+        event_type: "identity.revoked".to_string(),
+        target_session: String::new(),
+        created_at: revoked_at.clone(),
+        payload: serde_json::json!({
+            "principal_id": principal_id,
+            "revoked_at": revoked_at,
+        }),
+    };
+    let notified_hosts = notify_trusted_hosts_of_revocation(principal_id.as_str(), &revoked_event);
+    emit_inscription(
+        "relay.identity.principal_dropped",
+        &serde_json::json!({
+            "principal_id": principal_id,
+            "principal_type": existing.principal_type.as_str(),
+            "revoked_connections": revoked_connections,
+            "notified_hosts": notified_hosts,
+        }),
+    );
+
+    Ok(RelayResponse::DropPeer {
+        schema_version: SCHEMA_VERSION.to_string(),
+        credential_path: relay_owned_credential_path(
+            existing.principal_type,
+            principal_id.as_str(),
+            state_root,
+        ),
+        principal_id,
+        principal_type: existing.principal_type.as_str().to_string(),
+    })
+}
+
+/// Renders the relay-owned canonical credential path for a dropped principal,
+/// or `None` where the relay owns no such location.
+///
+/// Session principals only. A peer relay's credential lives under the
+/// *connecting* relay's state root, and user/application principals store theirs
+/// at an operator-chosen path, so in both cases a path derived from this relay's
+/// state root would name a file that is not the operator's credential.
+fn relay_owned_credential_path(
+    principal_type: PrincipalType,
+    principal_id: &str,
+    state_root: &Path,
+) -> Option<String> {
+    if principal_type != PrincipalType::Session {
+        return None;
+    }
+    let (session_id, namespace) = split_principal_id(principal_id)?;
+    Some(
+        session_identity_psk_path(state_root, namespace, session_id)
+            .display()
+            .to_string(),
+    )
 }
 
 /// Resolves an `IdentityIntrospect` request against the relay-wide principal

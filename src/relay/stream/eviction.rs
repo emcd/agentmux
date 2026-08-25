@@ -92,12 +92,19 @@ where
 }
 
 /// Tears down every live stream whose verified `authenticated_identity` matches
-/// `principal_id`. Used by `change psk` to revoke a rotated credential: a
-/// connection that authenticated with the old credential is force-disconnected.
+/// `principal_id`. Used by `change psk` to revoke a rotated credential and by
+/// `drop peer` to revoke a deleted one: a connection holding a credential the
+/// store no longer honors is force-disconnected.
 /// Socket-trust connections carry no `authenticated_identity` and are never
 /// matched: they hold no credential to revoke. A bundle-runtime entry keeps its
-/// static shell for a reconnect with the new credential; a relay-wide entry is
-/// removed. Returns the number torn down.
+/// static shell and a relay-wide entry is removed, in both cases.
+///
+/// The retained shell is configuration, not permission to return. After a
+/// rotation the principal still exists, so it reconnects by presenting the new
+/// credential. After a drop the record is gone, so nothing authenticates into
+/// that shell: the removed credential fails Hello as unrecognized, and the shell
+/// stays only because the bundle still declares the member. Returns the number
+/// torn down.
 pub(crate) fn revoke_streams_for_identity(principal_id: &str, response: &RelayResponse) -> usize {
     evict_streams(
         |entry| entry.authenticated_identity.as_deref() == Some(principal_id),

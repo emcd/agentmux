@@ -36,6 +36,7 @@ use tempfile::TempDir;
 use super::*;
 
 mod concurrency;
+mod drop_peer;
 mod expires;
 mod hello;
 mod introspect;
@@ -44,9 +45,10 @@ mod psk_lifecycle;
 mod second_claim;
 mod send_attribution;
 
-/// Writes a configuration whose operator preset grants `new.peer`/`change.psk`
-/// at `all`, with a `@GLOBAL` operator declared in the TUI configuration so
-/// relay-wide credential administration authorizes.
+/// Writes a configuration whose operator preset grants
+/// `new.peer`/`change.psk`/`drop.peer` at `all`, with a `@GLOBAL` operator
+/// declared in the TUI configuration so relay-wide credential administration
+/// authorizes.
 fn write_identity_configuration(temporary: &TempDir, bundle_name: &str) -> ConfigurationRoots {
     let configuration_roots = write_bundle_configuration(temporary, bundle_name);
     std::fs::write(
@@ -78,6 +80,9 @@ peer = "all"
 
 [policies.controls.change]
 psk = "all"
+
+[policies.controls.drop]
+peer = "all"
 "#,
     )
     .expect("write operator policies configuration");

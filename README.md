@@ -152,7 +152,8 @@ for the full development workflow.
 - MCP host:
   - Command: `agentmux host mcp`
   - Responsibility: expose MCP tools (`list`, `help`, `look`, `choose`,
-    `updown`, `new`, `change`, `raww`, `send`) and forward requests to relay.
+    `updown`, `new`, `change`, `drop`, `raww`, `send`) and forward requests to
+    relay.
 - Operator CLI:
   - Commands: `agentmux list principals`, `agentmux look`, `agentmux raww`,
     `agentmux send`, `agentmux tui`
@@ -167,11 +168,12 @@ and association resolution, configuration root contents, and authorization
 model, see the [usage guides](documentation/usage/README.md):
 
 - [CLI Surface](documentation/usage/cli-surface.md) — `host`, `up`/`down`,
-  `list`, `look`, `raww`, `send`, `tui`, `new`, `change`, `check`, and
+  `list`, `look`, `raww`, `send`, `tui`, `new`, `change`, `drop`, `check`, and
   shared runtime flags.
 - [MCP Surface](documentation/usage/mcp-surface.md) — `list` (with
   `principals`/`namespaces`/`relays`/`decisions`), `look`, `choose`,
-  `updown`, `new`, `change`, `raww`, `send`, and per-coder delivery bounds.
+  `updown`, `new`, `change`, `drop`, `raww`, `send`, and per-coder delivery
+  bounds.
 - [Multi-Worktree Workflow](documentation/usage/multi-worktree-workflow.md)
   — typical topology, the MCP four-tier association precedence for
   `host mcp`, and the one-shot UI/user selector family used by
@@ -192,12 +194,13 @@ This is alpha software under active development. The following gaps are
 known and deliberately deferred past the 0.9.0 release rather than fixed
 now:
 
-- **Credential expiry/revocation does not terminate already-connected
-  sessions.** Expiry and revocation are enforced only at connection time --
-  the Hello handshake rejects an expired or revoked credential up front. A
-  session that is already connected when its credential expires or is
-  explicitly revoked keeps running until it happens to reconnect; there is no
-  active teardown trigger for a live session.
+- **Credential expiry does not terminate already-connected sessions.** Expiry
+  is enforced only at connection time -- the Hello handshake rejects an expired
+  credential up front. A session already connected when its credential expires
+  keeps running until it happens to reconnect; there is no timer or sweeper that
+  tears one down. Operator-driven revocation is not subject to this: both
+  `change psk` and `drop peer` actively disconnect every session bound to the
+  affected principal, sending a `runtime_identity_revoked` frame before closing.
 - **No forced-takeover path for identity claims.** There is no
   operator-controlled mechanism to force a stale or compromised session off a
   claimed identity ahead of its own reconnect.
