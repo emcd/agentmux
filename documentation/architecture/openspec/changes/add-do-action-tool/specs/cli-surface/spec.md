@@ -1,24 +1,3 @@
-## MODIFIED Requirements
-### Requirement: Unified Agentmux Command Topology
-
-The system SHALL provide a primary `agentmux` CLI command with these
-subcommands:
-
-- `host relay <bundle-id>`
-- `host mcp`
-- `list`
-- `look <target-session>`
-- `send`
-- `do`
-
-The system SHALL retain `agentmux-relay` and `agentmux-mcp` as compatibility
-entrypoints.
-
-#### Scenario: Expose do command in unified topology
-
-- **WHEN** an operator runs `agentmux --help`
-- **THEN** the command list includes `do`
-
 ## ADDED Requirements
 ### Requirement: Do Action Command Surface
 
@@ -34,6 +13,11 @@ context.
 Execute mode SHALL run only configured actions and SHALL reject unknown action
 ids. Execute mode SHALL target the caller's own session in alpha scope and SHALL NOT
 accept target selector arguments.
+
+#### Scenario: Expose do command in the help topology
+
+- **WHEN** an operator runs `agentmux --help`
+- **THEN** the command list includes `do`
 
 #### Scenario: List available actions in list mode
 
