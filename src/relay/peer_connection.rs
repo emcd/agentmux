@@ -178,18 +178,30 @@ impl PeerConnectionManager {
     }
 
     /// Returns the peer's session, initializing it lazily on first use. The dial
-    /// presents this relay's per-peer `<connect_as>@RELAY` identity.
+    /// presents this relay's per-peer `<connect_as>@RELAY` identity under the
+    /// credential [`prepare`] read for this call.
+    ///
+    /// The session outlives any one connection: a transport failure evicts the
+    /// socket but keeps the session, so the initializing closure runs once and
+    /// never again. Refreshing the credential on the way out is what keeps a
+    /// rotated PSK from being read on every call and then discarded on all but
+    /// the first — which left every redial presenting a credential the peer had
+    /// already revoked, recoverable only by restarting the process.
+    ///
+    /// [`prepare`]: PeerConnectionManager::prepare
     fn session_mut<'slot>(
         slot: &'slot mut Option<RelayStreamSession>,
         prepared: &PreparedDial<'_>,
     ) -> &'slot mut RelayStreamSession {
-        slot.get_or_insert_with(|| {
+        let session = slot.get_or_insert_with(|| {
             RelayStreamSession::for_peer_relay(
                 prepared.endpoint.address.clone(),
                 prepared.endpoint.connect_as.clone(),
                 prepared.token.clone(),
             )
-        })
+        });
+        session.set_peer_identity_token(prepared.token.clone());
+        session
     }
 
     /// Reads the outbound PSK for a peer from `<state-root>/peers/<alias>.psk`.
