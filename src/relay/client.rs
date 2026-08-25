@@ -142,6 +142,24 @@ impl RelayStreamSession {
         }
     }
 
+    /// Replaces the peer credential the next dial will present.
+    ///
+    /// An outbound peer session is the one kind that carries its credential by
+    /// value: [`read_identity_token`] re-reads the credential path on every dial
+    /// for an ordinary session, and returns this override verbatim for a peer. A
+    /// rotated peer PSK therefore has to be pushed in, because the session has
+    /// nothing to re-read. The manager reads the credential fresh before every
+    /// use, so this keeps the session's copy from outliving what is on disk.
+    ///
+    /// Only the next dial observes the change. A connection already established
+    /// under the previous credential is left alone, and stays up until the peer
+    /// closes it or a write fails.
+    ///
+    /// [`read_identity_token`]: RelayStreamSession::read_identity_token
+    pub(crate) fn set_peer_identity_token(&mut self, token: String) {
+        self.identity_token_override = Some(token);
+    }
+
     /// Forces connection establishment (dial + Hello handshake) without sending
     /// a request, so a caller can validate reachability and authentication up
     /// front. Used by the outbound peer connection manager for lazy

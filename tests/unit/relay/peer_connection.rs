@@ -96,6 +96,50 @@ fn spawn_answering_stub_peer(
     receiver
 }
 
+/// Binds a stub peer that serves `connection_total` Hello handshakes, reporting
+/// each Hello frame, and half-closes every connection once its ack is written.
+///
+/// The half-close is what makes a redial deterministic. Shutting down the write
+/// half delivers the ack and then EOF, which the client observes on its next
+/// liveness peek and treats as a dead connection. Provoking the redial by writing
+/// into a closed socket instead would depend on when the peer's close is noticed,
+/// which is exactly the kind of timing this test must not rely on.
+fn spawn_reconnecting_stub_peer(
+    socket_path: &std::path::Path,
+    connection_total: usize,
+) -> mpsc::Receiver<serde_json::Value> {
+    let listener = UnixListener::bind(socket_path).expect("bind stub peer socket");
+    let (sender, receiver) = mpsc::channel();
+    thread::spawn(move || {
+        for _ in 0..connection_total {
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut reader = BufReader::new(stream.try_clone().expect("clone stub stream"));
+            let mut line = String::new();
+            if reader.read_line(&mut line).is_err() {
+                return;
+            }
+            let Ok(hello) = serde_json::from_str::<serde_json::Value>(line.trim_end()) else {
+                return;
+            };
+            let mut stream = stream;
+            let ack = json!({
+                "frame": "hello_ack",
+                "schema_version": hello.get("schema_version").cloned().unwrap_or(json!("")),
+                "principal_id": hello.get("principal_id").cloned().unwrap_or(json!("")),
+            });
+            let _ = writeln!(stream, "{ack}");
+            let _ = stream.flush();
+            // Ordering matters: the peer is already gone by the time the test
+            // observes the frame, so the test never races the close.
+            let _ = stream.shutdown(std::net::Shutdown::Write);
+            let _ = sender.send(hello);
+        }
+    });
+    receiver
+}
+
 fn write_peer_credential(state_root: &std::path::Path, alias: &str, psk: &str) {
     let peers_dir = state_root.join("peers");
     std::fs::create_dir_all(&peers_dir).expect("create peers dir");
@@ -264,6 +308,52 @@ fn forward_returns_the_peer_response() {
         .recv_timeout(Duration::from_secs(2))
         .expect("stub observed the forwarded request");
     assert_eq!(forwarded["request"]["operation"], "raww");
+}
+
+/// A credential rotated after the session was established is presented on the
+/// next dial.
+///
+/// The manager holds one session per peer for the life of the process and reads
+/// the credential fresh before every use. What made rotation unrecoverable was
+/// that the fresh read only reached the session on the call that created it, so
+/// every later dial re-presented the credential captured at construction — a
+/// credential the peer had revoked. The operator-visible symptom was a peer stuck
+/// on `Broken pipe` until the relay process was restarted.
+#[test]
+fn a_redial_presents_the_rotated_peer_credential() {
+    let temporary = TempDir::new().expect("temporary");
+    let state_root = temporary.path().join("state");
+    write_peer_credential(&state_root, "peer", "psk-original");
+    let socket_path: PathBuf = temporary.path().join("peer.sock");
+    let observed = spawn_reconnecting_stub_peer(&socket_path, 2);
+
+    let manager = PeerConnectionManager::from_configuration(
+        &state_root,
+        &[peer("peer", "this-relay", &socket_path)],
+    );
+    manager.connect("peer").expect("establish the peer session");
+    let first = observed
+        .recv_timeout(Duration::from_secs(5))
+        .expect("stub observed the first hello");
+    assert_eq!(first["identity_token"], "psk-original");
+
+    // Rotation, as `change psk` performs it: the file on disk changes while the
+    // session that already authenticated under the old value stays cached.
+    write_peer_credential(&state_root, "peer", "psk-rotated");
+
+    // The peer half-closed above, so this redials rather than reusing the socket.
+    manager
+        .connect("peer")
+        .expect("redial after the peer closed the connection");
+    let second = observed
+        .recv_timeout(Duration::from_secs(5))
+        .expect("stub observed the redial hello");
+    assert_eq!(
+        second["identity_token"], "psk-rotated",
+        "the redial must present the rotated credential, not the one captured when \
+         the session was constructed"
+    );
+    assert_eq!(second["principal_id"], "this-relay@RELAY");
 }
 
 #[test]
