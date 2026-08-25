@@ -1,16 +1,13 @@
-# agentmux
+# Agentmux
 
-`agentmux` is a product-agnostic runtime for inter-agent communication that
+Agentmux is a product-agnostic runtime for inter-agent communication that
 lets agent sessions exchange structured messages and coordinate work without
 being tied to one specific coding product or harness. It supports agent
 harnesses running in tmux panes and ACP-backed sessions.
 
 > **The Pty transport is work-in-progress and not production-ready.** It is not
-> yet a supported way to run coder sessions in 0.9.0: known deferred gaps are
-> `agentmux:issues/runtime/8` (lazy Pty spawn panics in a tokio worker) and
-> `agentmux:issues/runtime/9` (a delivery can spawn a member of a held bundle),
-> both targeted for the 0.10.0 cycle. Until they land, treat Pty-backed members
-> as experimental.
+> yet a supported way to run coder sessions: known gaps are targeted for a
+> future release. Until they land, treat Pty-backed members as experimental.
 
 ## Disclaimer
 
@@ -20,7 +17,7 @@ in any way.
 ## Documentation
 
 - Usage guides: [documentation/usage/README.md](documentation/usage/README.md)
-  - [Maintainer Configuration Guide](
+  - [Configuration Guide](
     documentation/usage/maintainer-configuration-guide.md) —
     file-by-file configuration root contents, layering, starter hydration
   - [Operations Guide](documentation/usage/operations.md) — runtime flags,
@@ -42,18 +39,10 @@ in any way.
 
 ## Requirements
 
-- `tmux` on `PATH`
-- `Zig 0.15.x` on `PATH` (only required for the `pty` Cargo feature;
-  default `cargo build` does not invoke Zig)
-- For libghostty-vt's vendored ghostty clone (only when building
-  with `--features pty` without a local override): outbound network
-  access to `github.com/ghostty-org/ghostty.git`. To bypass the network
-  clone, set `GHOSTTY_SOURCE_DIR` to a pre-checked-out ghostty source
-  tree that contains `build.zig`; to bypass Zig's package fetch, set
-  `GHOSTTY_ZIG_SYSTEM_DIR` to a directory containing the Zig package
-  cache. The `libghostty-vt-sys/pkg-config` feature (skip Zig entirely
-  via an installed `libghostty-vt`) is not currently reachable
-  through agentmux's consumer dep — see
+- `tmux` on `PATH` (required; this requirement will be dropped once the
+  Pty transport graduates to replace the tmux dependency)
+- Direct pseudo-tty support is currently being developed. For more
+  information on how to build `agentmux` with it, see
   `documentation/development/README.md` Zig-free Pty Builds.
 
 ## Install
@@ -159,9 +148,29 @@ for the full development workflow.
     `agentmux send`, `agentmux tui`
   - Responsibility: direct local inspection, message delivery, and interactive
     coordination flows with relay auto-start fallback for `agentmux tui`.
+- Inter-relay communication:
+  - Peers via `relay.toml` `[[peers]]` (`alias`/`address`/`connect-as`),
+    PSK credential admin (`agentmux new peer` / `agentmux change psk`),
+    cross-relay `send` via bang-path `session@bundle!peer`, relay-wide
+    discovery (`list relays` / `discover`), and sender attribution
+    (`on_behalf_of` carried on delivered envelopes). See
+    `documentation/usage/maintainer-configuration-guide.md` (`relay.toml`
+    `[[peers]]`) and `src/relay/README.md` Cross-Relay / Cross-bundle
+    sections.
+- Pty transport (stubbed, not graduated):
+  - `libghostty-vt`-backed, `Cargo.toml` feature `pty` (default `cargo build`
+    does not pull it), wired throughout `src/pty/` with `portable-pty` child
+    management. Full tmux-parity graduation deferred past 0.9.0 — see the
+    WIP notice at the top and `src/pty/README.md`.
 
-Both host modes use shared runtime roots for configuration, sockets, locks, and
-logs.
+Both host modes use shared, layered runtime roots for configuration
+(`--configuration-directory` / `AGENTMUX_CONFIGURATION_DIRECTORY`,
+`ConfigurationRoots`; `overlay/` removed), sockets, locks, and logs, with
+`AGENTMUX_STATE_DIRECTORY` / `AGENTMUX_CONFIGURATION_DIRECTORY` stamped at
+spawn time (see `documentation/usage/operations.md` State Root and
+`documentation/development/README.md` Configuration Layers). Delivery is a
+relay-owned queue (no per-coder prime/readiness/wedge timers) — see
+`src/relay/README.md` and `documentation/architecture/openspec/specs/`.
 
 For the full command reference, MCP tool inventory, multi-worktree topology
 and association resolution, configuration root contents, and authorization
@@ -172,13 +181,13 @@ model, see the [usage guides](documentation/usage/README.md):
   shared runtime flags.
 - [MCP Surface](documentation/usage/mcp-surface.md) — `list` (with
   `principals`/`namespaces`/`relays`/`decisions`), `look`, `choose`,
-  `updown`, `new`, `change`, `drop`, `raww`, `send`, and per-coder delivery
-  bounds.
+  `updown`, `new`, `change`, `drop`, `raww`, `send`, and relay-owned
+  per-target admission bounds.
 - [Multi-Worktree Workflow](documentation/usage/multi-worktree-workflow.md)
   — typical topology, the MCP four-tier association precedence for
   `host mcp`, and the one-shot UI/user selector family used by
   `list principals` / `send` / `tui`.
-- [Maintainer Configuration Guide](
+- [Configuration Guide](
   documentation/usage/maintainer-configuration-guide.md) —
   file-by-file configuration root contents, layering, starter hydration,
   and worked examples (minimal deployment, layered base + R&D variant,
