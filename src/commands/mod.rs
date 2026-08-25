@@ -8,6 +8,7 @@ mod bundle;
 mod change;
 mod check;
 mod down;
+mod drop;
 mod host;
 mod list;
 mod look;
@@ -130,6 +131,15 @@ pub(super) struct ChangePskArguments {
     pub(super) runtime: RuntimeArguments,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct DropPeerArguments {
+    pub(super) principal_id: String,
+    pub(super) bundle_name: Option<String>,
+    pub(super) session_selector: Option<String>,
+    pub(super) output_json: bool,
+    pub(super) runtime: RuntimeArguments,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct CheckArguments {
     /// Optional single bundle to validate; `None` validates every discoverable
@@ -226,6 +236,7 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
         "raww" => raww::run_agentmux_raww(&arguments[1..]),
         "new" => new::run_agentmux_new(&arguments[1..]),
         "change" => change::run_agentmux_change(&arguments[1..]),
+        "drop" => drop::run_agentmux_drop(&arguments[1..]),
         "check" => check::run_agentmux_check(&arguments[1..]),
         "tui" => tui::run_agentmux_tui(&arguments[1..]),
         "send" => send::run_agentmux_send(&arguments[1..]),
@@ -276,6 +287,9 @@ fn print_agentmux_help() {
         "[--state-directory PATH] [--inscriptions-directory PATH|",
         "--logs-directory PATH]\n",
         "  change psk <principal_id> [--bundle NAME] [--as-session NAME] [--json] ",
+        "[--configuration-directory PATH] [--state-directory PATH] ",
+        "[--inscriptions-directory PATH|--logs-directory PATH]\n",
+        "  drop peer <principal_id> [--bundle NAME] [--as-session NAME] [--json] ",
         "[--configuration-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH]\n",
         "  check configuration [<bundle-id>] [-q|--quiet] [--configuration-directory PATH] ",

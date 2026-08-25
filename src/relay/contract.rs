@@ -259,6 +259,19 @@ pub struct BundleStartupReport {
     pub failed_startups: Vec<StartupFailureRecord>,
 }
 
+/// Non-fatal advisory attached to a successful response.
+///
+/// Distinct from [`RelayError`]: a diagnostic reports a suspicion about a
+/// request the relay carried out anyway, so it never changes the outcome or the
+/// exit status. It rides the response because the relay is a separate process
+/// from both the CLI client and an MCP caller, neither of which observes relay
+/// stderr.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct RelayDiagnostic {
+    pub code: String,
+    pub message: String,
+}
+
 /// Structured relay error object.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct RelayError {
@@ -430,6 +443,9 @@ pub enum RelayRequest {
         #[serde(default)]
         destination: CredentialDestination,
     },
+    DropPeer {
+        principal_id: String,
+    },
     IdentityIntrospect {
         target_session: String,
     },
@@ -558,6 +574,11 @@ pub enum RelayResponse {
         #[serde(skip_serializing_if = "Option::is_none")]
         written_path: Option<String>,
         config_snippet: String,
+        /// Advisories raised while registering. Carried in the payload because
+        /// the relay is a separate process: its stderr reaches neither the CLI
+        /// client nor an MCP caller. Omitted when the request raised none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        diagnostics: Vec<RelayDiagnostic>,
     },
     ChangePsk {
         schema_version: String,
@@ -569,6 +590,18 @@ pub enum RelayResponse {
         /// and `config` credential destinations.
         #[serde(skip_serializing_if = "Option::is_none")]
         written_path: Option<String>,
+    },
+    DropPeer {
+        schema_version: String,
+        principal_id: String,
+        principal_type: String,
+        /// Relay-owned canonical credential file the operator may want to
+        /// delete. Session principals only: a peer relay's credential lives
+        /// under the *connecting* relay's state root, which this relay cannot
+        /// observe, so reporting a locally-derived path would name a file that
+        /// is not the operator's credential.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        credential_path: Option<String>,
     },
     IdentityIntrospect {
         schema_version: String,

@@ -94,15 +94,21 @@ their `session@GLOBAL` identity to a policy with `updown = "home"`.
 
 ## Relay-wide credential administration
 
-The `new` and `change` tools are relay-wide operations: they mutate
-the relay-level principal store, so a namespace-relative `home` grant
-is insufficient. A bundle-relative operator who tries to mint a peer
-PSK from within their bundle receives `authorization_forbidden`.
+The `new`, `change`, and `drop` tools are relay-wide operations: they
+mutate the relay-level principal store, so a namespace-relative `home`
+grant is insufficient. A bundle-relative operator who tries to mint a
+peer PSK from within their bundle receives `authorization_forbidden`.
 
 The relay-wide grants are:
 
 - `new.peer = "all"` — register a peer principal and mint its PSK.
 - `change.psk = "all"` — rotate an existing principal's PSK.
+- `drop.peer = "all"` — delete a principal from the store, revoking any
+  session still bound to it.
+
+These are three separate controls. Granting `new.peer` and `change.psk`
+confers no ability to drop, so an existing policy file that predates the
+`drop` control permits no deletion until an operator adds it.
 
 These grants must be carried by the calling session's policy preset,
 not by the bundle's `default` preset. The MCP server's own identity

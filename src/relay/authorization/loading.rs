@@ -56,6 +56,8 @@ struct RawPolicyControls {
     new_controls: HashMap<String, String>,
     #[serde(default, rename = "change")]
     change_controls: HashMap<String, String>,
+    #[serde(default, rename = "drop")]
+    drop_controls: HashMap<String, String>,
 }
 
 fn default_raww_policy_scope() -> String {
@@ -308,6 +310,8 @@ fn parse_policy_controls(
         parse_action_scope_map(controls.new_controls, "new", policies_path, policy_id)?;
     let change_controls =
         parse_action_scope_map(controls.change_controls, "change", policies_path, policy_id)?;
+    let drop_controls =
+        parse_action_scope_map(controls.drop_controls, "drop", policies_path, policy_id)?;
     Ok(PolicyControls {
         find,
         list,
@@ -319,6 +323,7 @@ fn parse_policy_controls(
         do_controls,
         new_controls,
         change_controls,
+        drop_controls,
     })
 }
 

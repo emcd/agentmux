@@ -4,12 +4,12 @@ use serde_json::json;
 
 use super::errors::validation_tool_error;
 use super::params::{
-    CHANGE_COMMAND_PSK, CHOOSE_OUTCOME_SELECTED, ChangePskArgs, ChooseParams, HelpParams,
-    LIST_COMMAND_DECISIONS, LIST_COMMAND_NAMESPACES, LIST_COMMAND_PRINCIPALS, LIST_COMMAND_RELAYS,
-    ListArgs, ListDecisionsArgs, ListNamespacesArgs, ListRelaysArgs, LookParams,
-    NAMESPACE_AGENTMUX, NEW_COMMAND_PEER, NewPeerArgs, RawwParams, SendParams, TOOL_CHANGE,
-    TOOL_CHOOSE, TOOL_HELP, TOOL_LIST, TOOL_LOOK, TOOL_NEW, TOOL_RAWW, TOOL_SEND, TOOL_UPDOWN,
-    UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
+    CHANGE_COMMAND_PSK, CHOOSE_OUTCOME_SELECTED, ChangePskArgs, ChooseParams, DROP_COMMAND_PEER,
+    DropPeerArgs, HelpParams, LIST_COMMAND_DECISIONS, LIST_COMMAND_NAMESPACES,
+    LIST_COMMAND_PRINCIPALS, LIST_COMMAND_RELAYS, ListArgs, ListDecisionsArgs, ListNamespacesArgs,
+    ListRelaysArgs, LookParams, NAMESPACE_AGENTMUX, NEW_COMMAND_PEER, NewPeerArgs, RawwParams,
+    SendParams, TOOL_CHANGE, TOOL_CHOOSE, TOOL_DROP, TOOL_HELP, TOOL_LIST, TOOL_LOOK, TOOL_NEW,
+    TOOL_RAWW, TOOL_SEND, TOOL_UPDOWN, UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
 };
 
 pub(super) fn help_tool(
@@ -22,8 +22,8 @@ pub(super) fn help_tool(
             "namespace": NAMESPACE_AGENTMUX,
             "association": association,
             "shape_hints": [
-                "Call help with query='list', 'updown', 'new', or 'change' for meta-tool command lists.",
-                "Call help with query='list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'updown.up', 'updown.down', 'new.peer', or 'change.psk' for command args schemas.",
+                "Call help with query='list', 'updown', 'new', 'change', or 'drop' for meta-tool command lists.",
+                "Call help with query='list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'updown.up', 'updown.down', 'new.peer', 'change.psk', or 'drop.peer' for command args schemas.",
                 "Call help with query='send', 'look', 'raww', or 'choose' for exact tool args schemas."
             ],
             "tools": [
@@ -35,6 +35,7 @@ pub(super) fn help_tool(
                 {"tool": TOOL_UPDOWN, "kind": "meta_tool", "description": "Administer the associated bundle's runtime state (up=host, down=unhost)."},
                 {"tool": TOOL_NEW, "kind": "meta_tool", "description": "Register a principal credential and mint its PSK."},
                 {"tool": TOOL_CHANGE, "kind": "meta_tool", "description": "Rotate the PSK for an existing principal."},
+                {"tool": TOOL_DROP, "kind": "meta_tool", "description": "Delete a principal credential from the relay principal store."},
                 {"tool": TOOL_HELP, "kind": "tool", "description": "Return tool/command help and JSON schemas."}
             ],
             "invoke": {
@@ -275,9 +276,39 @@ pub(super) fn help_tool(
                 }
             }),
         )),
+        TOOL_DROP => Ok(json!({
+            "tool": TOOL_DROP,
+            "kind": "meta_tool",
+            "description": "Delete a principal credential from the relay principal store.",
+            "commands": [
+                {
+                    "command": "drop.peer",
+                    "description": "Delete a principal_id from the relay principal store; its credential stops authenticating and any session bound to it is disconnected. Credential files on disk are left in place."
+                }
+            ],
+            "invoke": {
+                "tool": TOOL_DROP,
+                "params": {
+                    "command": DROP_COMMAND_PEER,
+                    "args": {"principal_id": "<id>@<namespace>"}
+                }
+            }
+        })),
+        "drop.peer" => Ok(command_help(
+            "drop.peer",
+            "Delete a principal_id from the relay principal store; its credential stops authenticating and any session bound to it is disconnected. Credential files on disk are left in place.",
+            json_schema_for::<DropPeerArgs>(),
+            json!({
+                "tool": TOOL_DROP,
+                "params": {
+                    "command": DROP_COMMAND_PEER,
+                    "args": {"principal_id": "<id>@<namespace>"}
+                }
+            }),
+        )),
         _ => Err(validation_tool_error(
             "validation_invalid_params",
-            "unknown help query; try empty query, 'agentmux', 'list', 'list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'send', 'look', 'raww', 'choose', 'updown', 'updown.up', 'updown.down', 'new', 'new.peer', 'change', or 'change.psk'",
+            "unknown help query; try empty query, 'agentmux', 'list', 'list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'send', 'look', 'raww', 'choose', 'updown', 'updown.up', 'updown.down', 'new', 'new.peer', 'change', 'change.psk', 'drop', or 'drop.peer'",
             Some(json!({"query": query})),
         )),
     }

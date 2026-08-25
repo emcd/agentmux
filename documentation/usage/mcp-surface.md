@@ -21,6 +21,10 @@ The MCP server advertises:
 - `new`: register a peer principal and mint its PSK
   (`command="peer"`).
 - `change`: rotate a principal's PSK (`command="psk"`).
+- `drop`: delete a principal from the relay principal store
+  (`command="peer"`); its credential stops authenticating and any
+  session bound to it is disconnected. Credential files on disk are
+  left in place.
 - `raww`: write raw text directly to one target session.
 - `send`: deliver to explicit targets or broadcast.
 

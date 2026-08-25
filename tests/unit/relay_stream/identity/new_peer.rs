@@ -420,3 +420,108 @@ fn new_peer_config_rejected_for_traversal_principal_id() {
         "validation_invalid_principal_id"
     );
 }
+
+// An ingress scope spelled as a policy tier is almost certainly a confusion
+// between two vocabularies: session-policy controls take `none`/`self`/`home`/
+// `all`, while an ingress scope is matched literally against a `session@bundle`
+// id or a bare namespace. Every one of those words is a legal namespace name, so
+// the relay advises and registers rather than refusing.
+#[test]
+fn new_peer_advises_on_a_scope_spelled_as_a_policy_tier() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_scope_tier_advice";
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    for (index, tier) in ["none", "self", "home", "all"].into_iter().enumerate() {
+        let principal_id = format!("tier{index}@RELAY");
+        let response = operator_request(
+            &configuration_roots,
+            &bundle_paths,
+            bundle_name,
+            json!({
+                "operation": "new_peer",
+                "principal_id": principal_id,
+                "scope": tier,
+            }),
+        );
+        assert_eq!(
+            response["response"]["kind"], "new_peer",
+            "a tier-spelled scope must still register: {response:?}"
+        );
+        assert_eq!(
+            response["response"]["diagnostics"][0]["code"], "advisory_scope_resembles_policy_tier",
+            "scope '{tier}' must raise the vocabulary advisory: {response:?}"
+        );
+        assert!(
+            response["response"]["diagnostics"][0]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(tier)),
+            "the advisory must name the offending scope: {response:?}"
+        );
+    }
+}
+
+// A scope that merely resolves to nothing stays silent. Peer credentials are
+// routinely minted before the namespace they scope exists, and a cross-relay
+// scope may name a namespace this relay cannot see, so unresolvability is not
+// evidence of a mistake the way a tier word is.
+#[test]
+fn new_peer_stays_silent_for_a_scope_that_merely_resolves_to_nothing() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_scope_silent";
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let response = operator_request(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        json!({
+            "operation": "new_peer",
+            "principal_id": "quiet@RELAY",
+            "scope": "no-such-namespace-anywhere",
+        }),
+    );
+    assert_eq!(
+        response["response"]["kind"], "new_peer",
+        "new peer rejected: {response:?}"
+    );
+    assert!(
+        response["response"]["diagnostics"].is_null()
+            || response["response"]["diagnostics"]
+                .as_array()
+                .is_some_and(|entries| entries.is_empty()),
+        "an unresolvable scope must not raise the vocabulary advisory: {response:?}"
+    );
+}
+
+// A registration with no scope at all raises nothing.
+#[test]
+fn new_peer_without_a_scope_raises_no_diagnostics() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_scope_absent";
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let response = operator_request(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        json!({"operation": "new_peer", "principal_id": format!("alpha@{bundle_name}")}),
+    );
+    assert_eq!(
+        response["response"]["kind"], "new_peer",
+        "new peer rejected: {response:?}"
+    );
+    assert!(
+        response["response"]["diagnostics"].is_null()
+            || response["response"]["diagnostics"]
+                .as_array()
+                .is_some_and(|entries| entries.is_empty()),
+        "an absent scope must raise nothing: {response:?}"
+    );
+}

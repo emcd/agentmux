@@ -1,4 +1,4 @@
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 use crate::{
     relay::{RelayRequest, RelayResponse, request_relay},
@@ -8,18 +8,18 @@ use crate::{
     },
 };
 
-use super::{NewPeerArguments, shared};
+use super::{DropPeerArguments, shared};
 
-pub(super) fn run_agentmux_new(arguments: &[String]) -> Result<(), RuntimeError> {
+pub(super) fn run_agentmux_drop(arguments: &[String]) -> Result<(), RuntimeError> {
     if arguments
         .iter()
         .any(|value| value == "--help" || value == "-h")
     {
-        print_new_help();
+        print_drop_help();
         return Ok(());
     }
 
-    let parsed = parse_new_arguments(arguments)?;
+    let parsed = parse_drop_arguments(arguments)?;
     let roots = shared::resolve_roots(&parsed.runtime)?;
     ensure_starter_configuration_layout(&roots)?;
     let resolved_session = resolve_tui_session_identity(
@@ -28,69 +28,53 @@ pub(super) fn run_agentmux_new(arguments: &[String]) -> Result<(), RuntimeError>
         parsed.session_selector.as_deref(),
     )?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
-    let destination = shared::resolve_credential_destination(
-        parsed.output_path.as_deref(),
-        parsed.write_to_config,
-    )?;
 
     let response = request_relay(
         &relay_paths.relay_socket,
         resolved_session.namespace.as_str(),
         resolved_session.session_id.as_str(),
-        &RelayRequest::NewPeer {
+        &RelayRequest::DropPeer {
             principal_id: parsed.principal_id.clone(),
-            scope: parsed.scope.clone(),
-            destination,
         },
     )
     .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;
 
     match response {
-        RelayResponse::NewPeer {
+        RelayResponse::DropPeer {
             schema_version,
             principal_id,
             principal_type,
-            psk,
-            written_path,
-            config_snippet,
-            diagnostics,
+            credential_path,
         } => {
-            // Advisories go to stderr in both modes, so a caller parsing stdout
-            // as JSON still sees them and a caller reading the human output is
-            // not left to notice a warning buried among the credential lines.
-            // They never change the exit status: the principal was registered.
-            for diagnostic in &diagnostics {
-                eprintln!(
-                    "agentmux new peer: {}: {}",
-                    diagnostic.code, diagnostic.message
-                );
-            }
             if parsed.output_json {
-                let payload = json!({
-                    "schema_version": schema_version,
-                    "principal_id": principal_id,
-                    "principal_type": principal_type,
-                    "psk": psk,
-                    "written_path": written_path,
-                    "config_snippet": config_snippet,
-                });
+                // Built conditionally so `credential_path` is absent rather than
+                // null for a principal the relay owns no credential location
+                // for, matching what the relay and the MCP tool emit.
+                let mut payload = Map::new();
+                payload.insert("schema_version".to_string(), json!(schema_version));
+                payload.insert("principal_id".to_string(), json!(principal_id));
+                payload.insert("principal_type".to_string(), json!(principal_type));
+                if let Some(path) = credential_path.as_deref() {
+                    payload.insert("credential_path".to_string(), json!(path));
+                }
+                let payload = Value::Object(payload);
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&payload).map_err(|source| {
                         RuntimeError::io(
-                            "encode new peer response json",
+                            "encode drop peer response json",
                             std::io::Error::other(source),
                         )
                     })?
                 );
             } else {
                 println!("principal_id={principal_id} principal_type={principal_type}");
-                match (psk.as_deref(), written_path.as_deref()) {
-                    (Some(value), _) => println!("psk={value}"),
-                    (None, Some(path)) => println!("psk written to {path}"),
-                    (None, None) => {}
+                // Reported rather than deleted: once the record is gone the file
+                // authenticates nothing, and the relay cannot know where the
+                // operator distributed it.
+                if let Some(path) = credential_path.as_deref() {
+                    println!("credential file left in place at {path}");
                 }
-                println!("{config_snippet}");
             }
             Ok(())
         }
@@ -102,24 +86,21 @@ pub(super) fn run_agentmux_new(arguments: &[String]) -> Result<(), RuntimeError>
     }
 }
 
-fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, RuntimeError> {
+fn parse_drop_arguments(arguments: &[String]) -> Result<DropPeerArguments, RuntimeError> {
     let Some(subcommand) = arguments.first().map(String::as_str) else {
         return Err(RuntimeError::validation(
             "validation_invalid_params",
-            "missing new subcommand; expected 'peer'".to_string(),
+            "missing drop subcommand; expected 'peer'".to_string(),
         ));
     };
     if subcommand != "peer" {
         return Err(RuntimeError::InvalidArgument {
             argument: subcommand.to_string(),
-            message: "unknown new subcommand".to_string(),
+            message: "unknown drop subcommand".to_string(),
         });
     }
 
     let mut principal_id: Option<String> = None;
-    let mut scope: Option<String> = None;
-    let mut output_path: Option<String> = None;
-    let mut write_to_config = false;
     let mut bundle_name: Option<String> = None;
     let mut session_selector: Option<String> = None;
     let mut output_json = false;
@@ -131,11 +112,6 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
             continue;
         }
         match arguments[index].as_str() {
-            "--scope" => scope = Some(shared::take_value(arguments, &mut index, "--scope")?),
-            "--output" => {
-                output_path = Some(shared::take_value(arguments, &mut index, "--output")?)
-            }
-            "--write-config" => write_to_config = true,
             "--bundle" | "--bundle-name" => {
                 bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?)
             }
@@ -165,14 +141,11 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
     let Some(principal_id) = principal_id else {
         return Err(RuntimeError::validation(
             "validation_invalid_params",
-            "new peer requires a <principal_id> argument".to_string(),
+            "drop peer requires a <principal_id> argument".to_string(),
         ));
     };
-    Ok(NewPeerArguments {
+    Ok(DropPeerArguments {
         principal_id,
-        scope,
-        output_path,
-        write_to_config,
         bundle_name,
         session_selector,
         output_json,
@@ -180,8 +153,8 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
     })
 }
 
-pub(super) fn print_new_help() {
+pub(super) fn print_drop_help() {
     println!(
-        "Usage: agentmux new peer <principal_id> [--scope SCOPE] [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]"
+        "Usage: agentmux drop peer <principal_id> [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]"
     );
 }

@@ -102,6 +102,7 @@ impl McpServer {
                 psk,
                 written_path,
                 config_snippet,
+                diagnostics,
             }) => {
                 // Build the payload conditionally so each optional field appears
                 // only for its destination: `psk` only in Response mode,
@@ -117,6 +118,22 @@ impl McpServer {
                 }
                 if let Some(written_path) = &written_path {
                     response.insert("written_path".to_string(), json!(written_path));
+                }
+                // Omitted when empty rather than rendered as `[]`, matching how
+                // every other optional field on this payload behaves.
+                if !diagnostics.is_empty() {
+                    response.insert(
+                        "diagnostics".to_string(),
+                        json!(
+                            diagnostics
+                                .iter()
+                                .map(|diagnostic| json!({
+                                    "code": diagnostic.code,
+                                    "message": diagnostic.message,
+                                }))
+                                .collect::<Vec<_>>()
+                        ),
+                    );
                 }
                 emit_inscription(
                     "mcp.tool.new.peer.success",

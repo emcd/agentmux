@@ -24,6 +24,8 @@ pub(super) const TOOL_NEW: &str = "new";
 pub(super) const NEW_COMMAND_PEER: &str = "peer";
 pub(super) const TOOL_CHANGE: &str = "change";
 pub(super) const CHANGE_COMMAND_PSK: &str = "psk";
+pub(super) const TOOL_DROP: &str = "drop";
+pub(super) const DROP_COMMAND_PEER: &str = "peer";
 pub(super) const LIST_COMMAND_NAMESPACES: &str = "namespaces";
 pub(super) const LIST_COMMAND_RELAYS: &str = "relays";
 pub(super) const NAMESPACE_AGENTMUX: &str = "agentmux";
@@ -56,6 +58,10 @@ fn new_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
 
 fn change_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     command_enum_schema(&["psk"])
+}
+
+fn drop_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    command_enum_schema(&["peer"])
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -317,6 +323,35 @@ pub(super) struct ChangePskArgs {
     #[serde(default)]
     #[schemars(with = "bool")]
     pub(super) write_to_config: Option<bool>,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct DropParams {
+    /// Drop subcommand selector. Required; allowed value: `peer`.
+    #[schemars(schema_with = "drop_command_schema")]
+    pub(super) command: String,
+    /// Command-scoped arguments.
+    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
+    #[serde(default)]
+    pub(super) args: Value,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct DropPeerArgs {
+    /// Principal identifier to delete from the relay-wide principal store.
+    #[serde(default)]
+    #[schemars(with = "String")]
+    pub(super) principal_id: Option<String>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]

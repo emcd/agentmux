@@ -48,6 +48,7 @@ pub(super) struct PolicyControls {
     pub(super) do_controls: HashMap<String, PolicyScope>,
     pub(super) new_controls: HashMap<String, PolicyScope>,
     pub(super) change_controls: HashMap<String, PolicyScope>,
+    pub(super) drop_controls: HashMap<String, PolicyScope>,
 }
 
 #[derive(Clone, Debug)]
@@ -71,6 +72,7 @@ impl PolicyControls {
             do_controls: HashMap::new(),
             new_controls: HashMap::new(),
             change_controls: HashMap::new(),
+            drop_controls: HashMap::new(),
         }
     }
 }

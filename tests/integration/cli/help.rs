@@ -129,3 +129,65 @@ fn bare_agentmux_without_tty_prints_help_and_fails() {
         "unexpected stderr: {stderr}"
     );
 }
+
+#[test]
+fn drop_help_output_includes_usage_line() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args(["drop", "--help"])
+        .output()
+        .expect("run agentmux drop --help");
+    assert!(output.status.success(), "drop help should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Usage: agentmux drop peer <principal_id>"),
+        "unexpected drop help output: {stdout}"
+    );
+}
+
+#[test]
+fn drop_appears_in_the_top_level_command_topology() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args(["--help"])
+        .output()
+        .expect("run agentmux --help");
+    assert!(output.status.success(), "help should succeed");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("drop peer <principal_id>"),
+        "drop must be listed alongside its sibling admin commands: {stdout}"
+    );
+}
+
+#[test]
+fn drop_without_a_subcommand_is_rejected() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args(["drop"])
+        .output()
+        .expect("run agentmux drop");
+    assert!(
+        !output.status.success(),
+        "drop with no subcommand must not succeed"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("missing drop subcommand"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
+fn drop_peer_without_a_principal_id_is_rejected() {
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args(["drop", "peer"])
+        .output()
+        .expect("run agentmux drop peer");
+    assert!(
+        !output.status.success(),
+        "drop peer with no principal_id must not succeed"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("drop peer requires a <principal_id> argument"),
+        "unexpected stderr: {stderr}"
+    );
+}

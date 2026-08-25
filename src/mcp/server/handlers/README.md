@@ -55,6 +55,7 @@ The `McpServer` import path is `crate::mcp::server::McpServer`
 | `updown.rs` | `updown` | `up`, `down` | `RelayRequest::Up`, `RelayRequest::Down` |
 | `new.rs` | `new` | `peer` | `RelayRequest::NewPeer` |
 | `change.rs` | `change` | `psk` | `RelayRequest::ChangePsk` |
+| `drop.rs` | `drop` | `peer` | `RelayRequest::DropPeer` |
 
 The full parameter shapes for each tool are documented in
 `src/mcp/params.rs` and surfaced via the `help` tool at runtime
@@ -90,9 +91,12 @@ tool-specific quirks:
   supply the `@<namespace>` suffix. Maps `LookSnapshotPayload` to
   the JSON shape described in `src/mcp/README.md` (Responsibilities
   section).
-- `updown.rs`, `new.rs`, `change.rs` — own the meta-tool
-  `command` dispatch (`up` / `down`, `peer`, `psk` respectively)
-  and the typed request builders.
+- `updown.rs`, `new.rs`, `change.rs`, `drop.rs` — own the meta-tool
+  `command` dispatch (`up` / `down`, `peer`, `psk`, `peer`
+  respectively) and the typed request builders. `new.rs` also
+  preserves the relay's optional `diagnostics` advisories in its
+  structured result, and `drop.rs` omits `credential_path` for any
+  principal the relay owns no canonical credential location for.
 - `choose.rs` — the `decisions` companion to `list.decisions`. The
   decision actor is association-derived by the relay, so
   caller-supplied sender-like identity fields are rejected as

@@ -65,6 +65,7 @@ struct AuthorizationDecisionContext<'a> {
 pub(in crate::relay) enum RelayActionFamily {
     New,
     Change,
+    Drop,
 }
 
 impl RelayActionFamily {
@@ -72,11 +73,13 @@ impl RelayActionFamily {
         match self {
             Self::New => "new",
             Self::Change => "change",
+            Self::Drop => "drop",
         }
     }
 }
 
-/// Authorizes a relay-level operator action (`new.peer`, `change.psk`).
+/// Authorizes a relay-level operator action (`new.peer`, `change.psk`,
+/// `drop.peer`).
 ///
 /// These operations mutate the relay-wide principal store and therefore require
 /// relay-wide reach: the requester's policy must hold the control at
@@ -92,6 +95,7 @@ pub(in crate::relay) fn authorize_relay_action(
     let scope_map = match family {
         RelayActionFamily::New => &controls.new_controls,
         RelayActionFamily::Change => &controls.change_controls,
+        RelayActionFamily::Drop => &controls.drop_controls,
     };
     let granted = scope_map
         .get(action)

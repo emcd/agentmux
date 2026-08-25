@@ -20,10 +20,51 @@ async fn help_without_query_returns_tool_inventory() {
     assert_eq!(payload["namespace"], "agentmux");
     assert_eq!(
         payload["tools"].as_array().map_or(0, |value| value.len()),
-        9
+        10
     );
     assert_eq!(payload["tools"][0]["tool"], "list");
     assert_eq!(payload["tools"][0]["kind"], "meta_tool");
+    let tools = payload["tools"].as_array().expect("tools array");
+    assert!(
+        tools.iter().any(|entry| entry["tool"] == "drop"),
+        "the inventory must advertise drop: {tools:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn help_drop_query_returns_meta_tool_command_catalog() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness.call_tool(2, "help", help_call(Some("drop"))).await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["tool"], "drop");
+    assert_eq!(payload["kind"], "meta_tool");
+    assert_eq!(payload["commands"][0]["command"], "drop.peer");
+    assert_eq!(payload["invoke"]["tool"], "drop");
+    assert_eq!(payload["invoke"]["params"]["command"], "peer");
+}
+
+// The drop tool's own invalid-args error tells the caller to run
+// `help query 'drop.peer'`, so that query has to resolve or the hint sends them
+// into a second error.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn help_drop_peer_query_returns_args_schema() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness
+        .call_tool(2, "help", help_call(Some("drop.peer")))
+        .await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["command"], "drop.peer");
+    assert_eq!(payload["invoke"]["tool"], "drop");
+    assert!(
+        payload["args_schema"]["properties"]
+            .get("principal_id")
+            .is_some(),
+        "drop.peer schema must document principal_id: {payload}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
