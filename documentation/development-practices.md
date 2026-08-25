@@ -342,3 +342,30 @@ cargo nextest run --locked --config-file .auxiliary/configuration/nextest.toml
 
 Hooks run these automatically, but running them manually first saves
 turnaround time.
+
+### OpenSpec Delta Retention
+
+`openspec validate --strict` checks that a delta is well formed. It never
+compares a delta against the spec it modifies, so it cannot see the mistake
+that actually costs content: a `## MODIFIED Requirements` delta replaces the
+**entire** named requirement at sync time, and every scenario not carried
+forward is deleted from the live spec.
+
+`scripts/verify-openspec-deltas.py` audits that, and the
+`lint-openspec-deltas` hook runs it for every change whose delta specs appear
+in a commit. Its output prints even when the hook passes: dropping a scenario
+is often exactly right, so retention is a report rather than a failure, and a
+report nobody sees is the failure it exists to prevent. Read each `DROPPED`
+line and confirm it names behavior the change retires.
+
+Run the script by hand in the one case no commit can reach -- when the live
+spec moves beneath an already-committed delta because another change archived
+into the same requirement. The drop set changes there without any delta file
+being touched, so the hook never fires:
+
+```shell
+scripts/verify-openspec-deltas.py <change-id>
+```
+
+There is no window after archiving: the script resolves `changes/<change-id>`
+and an archived change no longer lives there.
