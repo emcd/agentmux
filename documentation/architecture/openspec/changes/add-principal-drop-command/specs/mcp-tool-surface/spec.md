@@ -1,5 +1,43 @@
 ## MODIFIED Requirements
 
+### Requirement: MCP Tool Set
+
+The system SHALL expose the following MCP tools:
+
+- `list`
+- `help`
+- `look`
+- `send`
+- `raww`
+- `choose`
+- `updown`
+- `new`
+- `change`
+- `drop`
+
+The relocked pre-stable MCP surface uses `list.principals` with no
+compatibility alias for the prior `list.sessions` shape.
+
+#### Scenario: Advertise relocked list meta-tool
+
+- **WHEN** an MCP client enumerates available tools
+- **THEN** tool inventory includes `list`
+- **AND** includes `help`
+- **AND** includes `look`
+- **AND** includes `send`
+- **AND** includes `raww`
+- **AND** includes `choose`
+- **AND** does not include `list.sessions`
+- **AND** does not include `grant`
+
+#### Scenario: Advertise admin meta-tools
+
+- **WHEN** an MCP client enumerates available tools
+- **THEN** tool inventory includes `updown`
+- **AND** includes `new`
+- **AND** includes `change`
+- **AND** includes `drop`
+
 ### Requirement: Error Object Contract
 
 Tool failures SHALL return a structured error object with:

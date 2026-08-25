@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 ### Requirement: MCP Tool Set
 
-The system SHALL expose the following MCP tools for the relay alpha scope:
+The system SHALL expose the following MCP tools:
 
 - `list`
 - `help`
@@ -9,17 +9,42 @@ The system SHALL expose the following MCP tools for the relay alpha scope:
 - `send`
 - `raww`
 - `choose`
+- `updown`
+- `new`
+- `change`
+- `drop`
 - `do`
 
+The relocked pre-stable MCP surface uses `list.principals` with no
+compatibility alias for the prior `list.sessions` shape.
+
 The system SHALL NOT expose a temporary `chat` compatibility alias by default.
+
+#### Scenario: Advertise relocked list meta-tool
+
+- **WHEN** an MCP client enumerates available tools
+- **THEN** tool inventory includes `list`
+- **AND** includes `help`
+- **AND** includes `look`
+- **AND** includes `send`
+- **AND** includes `raww`
+- **AND** includes `choose`
+- **AND** does not include `list.sessions`
+- **AND** does not include `grant`
+- **AND** does not include `chat`
+
+#### Scenario: Advertise admin meta-tools
+
+- **WHEN** an MCP client enumerates available tools
+- **THEN** tool inventory includes `updown`
+- **AND** includes `new`
+- **AND** includes `change`
+- **AND** includes `drop`
 
 #### Scenario: Advertise full tool set including do
 
 - **WHEN** an MCP client enumerates available tools
-- **THEN** the system includes `list`, `help`, `look`, `send`, `raww`,
-  `choose`, and `do`
-- **AND** does not include `grant`
-- **AND** does not include `chat`
+- **THEN** tool inventory includes `do`
 
 ## ADDED Requirements
 ### Requirement: MCP Do Tool Modes
