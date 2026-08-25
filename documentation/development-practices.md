@@ -194,6 +194,17 @@ Run the suite locally with:
 cargo nextest run --locked --config-file .auxiliary/configuration/nextest.toml
 ```
 
+**Do not use plain `cargo test`.** This project's process-spawning and
+global-state tests assume nextest's per-test process isolation. `cargo
+test` shares one process per test binary, so tests that would pass in
+isolation collide with each other's process-global state under it —
+producing failures (and even hangs) that look exactly like a real
+regression in whatever change is under review, but aren't. A red `cargo
+test` on this repo is not evidence about the code; only a red `nextest`
+run is. (Some of this collision is itself tracked as a defect —
+`todos/backend/2` — but the underlying architectural reason does not
+change the operational rule: always run tests through nextest.)
+
 Per-repository configuration lives at
 `.auxiliary/configuration/nextest.toml` (currently a slow-test warning
 tripwire at 10s; do not raise the global threshold without a per-test
