@@ -88,6 +88,46 @@ operations: `load_`, `get_`, `make_`, `build_`, `find_`.
 Avoid suffixes for implementation details (`_cached`, `_optimized`),
 development status (`_experimental`), or debugging aids (`_verbose`).
 
+### User-Facing Command Verbs
+
+CLI subcommands and MCP tool names are a separate vocabulary from internal
+function naming above, and follow the Germanic convention throughout:
+`new`, `send`, `look`, `up`, `down`, `change`, `drop`. This holds regardless
+of the Latin-preference default for internal domain-operation functions —
+see the next section for how a command's verb and its backing
+implementation's verb relate.
+
+### A Command's Backing Implementation Echoes the Command's Verb
+
+A function whose entire purpose is to directly implement one named
+user-facing command (CLI subcommand or MCP tool) takes that command's verb,
+unconditionally — not as an exception to some other default, but because a
+command and its sole backing implementation are the same operation viewed
+from two layers, and tracing from one to the other should never require a
+vocabulary translation.
+
+This is distinct from internal plumbing that no single command names —
+cleanup helpers shared across multiple call paths, or invoked from more than
+one place, with no one command whose verb they should echo. That plumbing
+follows the ordinary naming conventions above (Latin-preferred for domain
+operations, Germanic for common data operations, or an established local
+convention such as `remove_<resource>` for resource cleanup where one
+already exists) — it is a different case, not a default this rule carves an
+exception out of.
+
+Where a resource concept spans both a TOML configuration shape and its Rust
+representation (a field name, a struct, the functions that act on it), the
+same principle applies: keep the verb and noun identical across that
+boundary. Divergent naming between what a TOML key says and what the Rust
+interface calls the same concept is a recurring source of confusion when
+tracing a value from configuration through to the code that consumes it.
+
+An OpenSpec proposal introducing a new user-facing verb SHALL state it
+explicitly and cite this convention, e.g. "the command verb is `drop`, per
+the Germanic convention for operator-facing verbs." This puts the naming
+decision in the document under review, rather than leaving it to surface
+for the first time in implementation.
+
 
 ## Code Comments
 
@@ -329,6 +369,37 @@ than reasoning about why it might be fine. A green result you cannot explain is
 never evidence for the explanation you happen to prefer. See also
 [Absence Assertions Need a Positive Control](#absence-assertions-need-a-positive-control),
 which is the same error wearing a test's clothes.
+
+## Delegated Review Workflow
+
+This project follows `.auxiliary/agents/procedures/reviews.md` (Copier-owned,
+`agents-common`). The following tightens one path within it rather than
+overriding it; capture local deviations here rather than editing the
+Copier-owned file directly.
+
+### No Merge Handoff After a Post-Approval Rebase
+
+`reviews.md` already requires that a rebase onto an advanced
+`<local-integration-base>` after reviewer approval triggers a new technical
+review, not a merge handoff — even when the author can prove the cumulative
+patch is byte-identical to what was reviewed. Do not send, or accept, a
+merge handoff for a post-approval rebase under any circumstance, including a
+proven-identical patch. Always route it back through the reviewer as an
+updated technical review packet.
+
+This closes an observed failure mode: an author under time pressure,
+motivated to conclude "the base advance is harmless," sent a merge handoff
+asserting the prior approval stood by default unless the reviewer objected
+within a window the author set. The reviewer correctly refused and required
+the re-review, which resolved in minutes by reusing the author's own
+evidence as the review packet — the extra round was cheap, but the wrong
+turn taken to get there was not. There is a structural asymmetry an author
+should not be asked to self-referee: they are the party motivated to
+conclude no re-review is needed, and a base advance that looks cosmetic
+(e.g. "README and CHANGELOG only") can in fact touch the same specification
+capability the pending delta modifies. Removing the option removes the
+judgment call rather than relying on discipline to make it correctly under
+pressure.
 
 ## Pre-Commit Validation
 
