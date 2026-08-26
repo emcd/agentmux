@@ -168,6 +168,12 @@ fn handle_send(
     // and into each recipient's delivered envelope; `None` for socket-trust.
     let authenticated_identity =
         principal.and_then(|principal| principal.authenticated_identity.clone());
+    // The identity this connection was admitted under, credential-backed or not.
+    // Cross-relay forwarding attributes the origin from this rather than from
+    // the verified identity, so a relay accepting socket-trust still names the
+    // sender to a peer. Kept separate from `authenticated_identity` above, which
+    // continues to answer whether a credential backed the claim.
+    let admitted_identity = principal.and_then(|principal| principal.admitted_identity.clone());
 
     // Return route for a terminal-outcome receipt: the sender's *real* home-bundle
     // member (its true transport) plus the sender bundle's runtime directory. Built
@@ -248,6 +254,7 @@ fn handle_send(
                 SendExecutionContext {
                     sender: &sender,
                     authenticated_identity,
+                    admitted_identity,
                     on_behalf_of,
                     sender_return_route,
                     message: message.as_str(),
@@ -363,6 +370,10 @@ fn prepare_send(
 struct SendExecutionContext<'a> {
     sender: &'a SenderIdentity,
     authenticated_identity: Option<String>,
+    /// Identity the sender's connection was admitted under, credential-backed or
+    /// not. Stamped as `on_behalf_of` on a cross-relay forward; never read for
+    /// local delivery, which attributes from the sender's own member record.
+    admitted_identity: Option<String>,
     /// Origin attribution for a peer-forwarded (ingress) send; carried into each
     /// delivered envelope and the response. `None` for a locally-originated send.
     on_behalf_of: Option<String>,
@@ -389,6 +400,7 @@ fn execute_send(
     let SendExecutionContext {
         sender,
         authenticated_identity,
+        admitted_identity,
         on_behalf_of,
         sender_return_route,
         message,
@@ -501,9 +513,9 @@ fn execute_send(
             target,
             message,
             request_id.clone(),
-            // The origin's verified principal_id (None for socket-trust): stamped
-            // as on_behalf_of so the peer knows who this relay forwards for.
-            authenticated_identity.as_deref(),
+            // The identity the origin was admitted under, stamped as
+            // on_behalf_of so the peer knows who this relay forwards for.
+            admitted_identity.as_deref(),
         ));
     }
     let response = RelayResponse::Send {

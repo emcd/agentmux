@@ -747,12 +747,25 @@ exported from `src/relay/mod.rs`.
   deliberately deferred; see `ideas/relay` (inter-relay target filtering) for that
   open design thread.
 - **Cross-relay sender attribution (`on_behalf_of`)**: a forwarded `Send`/`Raww`
-  carries the *originating* relay's verified requester as an advisory
+  carries the requester the *originating* relay admitted, as an advisory
   `on_behalf_of` origin subject, distinct from `authenticated_identity` (which at
   the receiver names the *forwarding* relay's own peer principal). The origin
-  relay stamps `on_behalf_of` with the requester's verified `principal_id` when
-  the requester is store-backed, and omits it for socket-trust (unauthenticated)
-  requesters — it never forges one. The receiving relay honors an inbound
+  relay stamps `on_behalf_of` with the `principal_id` the requester was
+  **admitted** under — verified against the principal store, or accepted as a
+  socket-trust claim. **Attribution follows admission rather than re-deciding
+  it.** `require-session-credentials` is where that decision is made and the only
+  place it is made: a relay requiring credentials admits no unverified principal
+  and so forwards only store-backed attributions, while a relay accepting
+  socket-trust has already accepted that claim everywhere else — local delivery
+  attributes from it, the stream registry is keyed on it, every local recipient
+  sees it — so withholding it from a peer would withhold no capability and only
+  make cross-relay attribution disagree with the relay's own delivery. What the
+  setting does *not* decide is whether attribution happens at all; both modes
+  carry it, and they differ in whether a credential backed the identity carried.
+  `authenticated_identity` stays absent for an unverified requester regardless,
+  which is what keeps the two fields separately sourced: one says who the sender
+  was admitted as, the other whether a credential backed it. The receiving relay
+  honors an inbound
   `on_behalf_of` **only from a peer-relay (ingress) requester** (a non-relay
   requester cannot self-assert it; the value is dropped), then carries it
   uninterpreted into the delivered `incoming_message` envelope alongside

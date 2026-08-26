@@ -2,8 +2,10 @@
 //! origin subject that is advisory, single-hop, and never an authorization
 //! input. The three guarantees exercised end to end are:
 //!
-//! - The origin relay stamps `on_behalf_of` from its verified requester
-//!   identity (no self-assertion by a non-relay requester at the origin).
+//! - The origin relay stamps `on_behalf_of` from the identity its requester was
+//!   admitted under — verified against the principal store, or accepted as a
+//!   socket-trust claim (no self-assertion by a non-relay requester at the
+//!   origin, whose supplied value is discarded rather than honored).
 //! - The receiving relay honors `on_behalf_of` only from a peer-relay
 //!   (ingress) requester and surfaces it in the delivered envelope.
 //! - Setting `on_behalf_of` does not widen a peer's authority: a peer's
@@ -159,7 +161,11 @@ fn cross_relay_send_stamps_on_behalf_of_from_authenticated_origin() {
     });
     let observed = spawn_answering_peer(&peer_socket, peer_response);
 
-    let (results, forwarded) = forward_cross_relay_send_with_hello(
+    let ForwardedCrossRelaySend {
+        response,
+        results,
+        forwarded,
+    } = forward_cross_relay_send_with_hello(
         &configuration_roots,
         &bundle_paths,
         &peer_socket,
@@ -177,6 +183,151 @@ fn cross_relay_send_stamps_on_behalf_of_from_authenticated_origin() {
     // The forwarded Send carries the origin's verified principal as the origin
     // subject the peer is being asked to attribute the message to.
     assert_eq!(forwarded["request"]["on_behalf_of"], requester_principal);
+    // A credential backed this identity, so the origin's own response names it.
+    // Paired with the socket-trust case below, this is what shows the two fields
+    // are separately sourced rather than one deriving from the other.
+    assert_eq!(
+        response["response"]["authenticated_identity"],
+        requester_principal
+    );
+}
+
+#[test]
+fn cross_relay_send_stamps_on_behalf_of_from_socket_trust_origin() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
+    // No principal store entry for the requester: it Hellos as socket-trust and
+    // is admitted on its own claim, which is the ordinary case on a relay
+    // running with `require-session-credentials` at its default.
+
+    let peer_socket = temporary.path().join("peer.sock");
+    let peer_response = json!({
+        "kind": "send",
+        "schema_version": "test",
+        "requester_session": "origin-relay@RELAY",
+        "results": [{
+            "target_session": "bravo@other",
+            "message_id": "peer-m1",
+            "outcome": "queued",
+        }],
+    });
+    let observed = spawn_answering_peer(&peer_socket, peer_response);
+
+    let ForwardedCrossRelaySend {
+        response,
+        forwarded,
+        ..
+    } = forward_cross_relay_send(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name.as_str(),
+        &peer_socket,
+        observed,
+    );
+
+    // Attribution follows admission: the relay accepted this claim at Hello, so
+    // it forwards it, and the peer can name the sender rather than seeing only
+    // the forwarding relay.
+    assert_eq!(
+        forwarded["request"]["on_behalf_of"],
+        format!("alpha@{bundle_name}")
+    );
+    // The same send, at the other surface: no credential backed the claim, so
+    // `authenticated_identity` stays absent. Asserting both together is the
+    // point of this test — either alone would still pass if a later change
+    // derived one field from the other.
+    assert!(
+        response["response"].get("authenticated_identity").is_none(),
+        "a socket-trust sender must not acquire a verified identity by being attributed"
+    );
+}
+
+#[test]
+fn cross_relay_raww_stamps_on_behalf_of_from_socket_trust_origin() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
+
+    let peer_socket = temporary.path().join("peer.sock");
+    let peer_response = json!({
+        "kind": "raww",
+        "schema_version": "test",
+        "status": "queued",
+        "target_session": "bravo@other",
+        "transport": "tmux",
+    });
+    let observed = spawn_answering_peer(&peer_socket, peer_response);
+
+    let forwarded = forward_cross_relay_raww(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name.as_str(),
+        &peer_socket,
+        observed,
+    );
+
+    // Raww forwards on its own branch, ahead of the local delivery spine, so it
+    // stamps attribution independently of Send. Without this the branch could be
+    // reverted or miswired and every other attribution test would stay green.
+    assert_eq!(
+        forwarded["request"]["operation"], "raww",
+        "the peer received the forwarded raww"
+    );
+    assert_eq!(
+        forwarded["request"]["on_behalf_of"],
+        format!("alpha@{bundle_name}")
+    );
+}
+
+#[test]
+fn cross_relay_send_discards_a_requester_supplied_on_behalf_of() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
+
+    let peer_socket = temporary.path().join("peer.sock");
+    let peer_response = json!({
+        "kind": "send",
+        "schema_version": "test",
+        "requester_session": "origin-relay@RELAY",
+        "results": [{
+            "target_session": "bravo@other",
+            "message_id": "peer-m1",
+            "outcome": "queued",
+        }],
+    });
+    let observed = spawn_answering_peer(&peer_socket, peer_response);
+
+    // The requester names someone else. The relay discards the value rather than
+    // refusing the request, and attributes the identity established at Hello.
+    let forwarded = forward_cross_relay_send_supplying_on_behalf_of(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name.as_str(),
+        &peer_socket,
+        observed,
+        "victim@elsewhere",
+    );
+
+    assert_eq!(
+        forwarded["request"]["on_behalf_of"],
+        format!("alpha@{bundle_name}"),
+        "attribution comes from admission, not from the request"
+    );
+    assert_ne!(forwarded["request"]["on_behalf_of"], "victim@elsewhere");
 }
 
 #[test]

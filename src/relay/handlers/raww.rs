@@ -144,11 +144,9 @@ pub(in crate::relay) fn handle_raww_routed(
                 text,
                 no_enter,
                 request_id,
-                // The origin's verified principal_id (None for socket-trust):
-                // stamped as on_behalf_of so the peer knows who this relay
-                // forwards for.
-                on_behalf_of: principal
-                    .and_then(|principal| principal.authenticated_identity.clone()),
+                // The identity the origin was admitted under, stamped as
+                // on_behalf_of so the peer knows who this relay forwards for.
+                on_behalf_of: principal.and_then(|principal| principal.admitted_identity.clone()),
             },
             peer_connection_manager,
         );

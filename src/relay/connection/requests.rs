@@ -109,6 +109,7 @@ pub(super) async fn handle_request(
         let principal = RequestPrincipal {
             session_id: active_registration.requester_session_id().to_string(),
             authenticated_identity: binding.authenticated_identity.clone(),
+            admitted_identity: binding.admitted_identity.clone(),
             introspect_rights: binding.introspect_rights.clone(),
             ingress_scope: binding.ingress_scope.clone(),
         };
@@ -205,6 +206,7 @@ pub(super) async fn handle_request(
         let principal = RequestPrincipal {
             session_id: active_registration.requester_session_id().to_string(),
             authenticated_identity: binding.authenticated_identity.clone(),
+            admitted_identity: binding.admitted_identity.clone(),
             introspect_rights: binding.introspect_rights.clone(),
             ingress_scope: binding.ingress_scope.clone(),
         };
@@ -238,6 +240,7 @@ pub(super) async fn handle_request(
         let principal = RequestPrincipal {
             session_id: active_registration.requester_session_id().to_string(),
             authenticated_identity: binding.authenticated_identity.clone(),
+            admitted_identity: binding.admitted_identity.clone(),
             introspect_rights: binding.introspect_rights.clone(),
             ingress_scope: binding.ingress_scope.clone(),
         };
@@ -269,6 +272,7 @@ pub(super) async fn handle_request(
         let principal = RequestPrincipal {
             session_id: active_registration.requester_session_id().to_string(),
             authenticated_identity: binding.authenticated_identity.clone(),
+            admitted_identity: binding.admitted_identity.clone(),
             introspect_rights: binding.introspect_rights.clone(),
             ingress_scope: binding.ingress_scope.clone(),
         };
@@ -316,6 +320,7 @@ pub(super) async fn handle_request(
         let principal = RequestPrincipal {
             session_id: full_requester_principal_id(active_registration),
             authenticated_identity: binding.authenticated_identity.clone(),
+            admitted_identity: binding.admitted_identity.clone(),
             introspect_rights: binding.introspect_rights.clone(),
             ingress_scope: binding.ingress_scope.clone(),
         };
@@ -369,6 +374,7 @@ pub(super) async fn handle_request(
     let principal = RequestPrincipal {
         session_id: active_registration.requester_session_id().to_string(),
         authenticated_identity: binding.authenticated_identity.clone(),
+        admitted_identity: binding.admitted_identity.clone(),
         introspect_rights: binding.introspect_rights.clone(),
         ingress_scope: binding.ingress_scope.clone(),
     };

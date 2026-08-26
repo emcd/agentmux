@@ -204,6 +204,16 @@ What lives in the file when present:
   session credentials on Hello. Default `false`. Precedence:
   `--require-credentials` > `AGENTMUX_RELAY_REQUIRE_SESSION_CREDENTIALS`
   env > this key.
+
+  It also decides what a peer relay learns about who sent a cross-relay
+  message. Attribution follows admission: a forwarded `Send`/`Raww` carries
+  the `principal_id` the sender was admitted under, so with this at its
+  default the peer is told the identity the session claimed, and with it
+  `true` the peer is told an identity a credential verified. Note which way
+  round that runs — cross-relay messages carry origin attribution in **both**
+  modes, and the setting governs whether that identity was verified, not
+  whether attribution happens. Leaving it at the default does not suppress
+  attribution.
 - `[choices].pending-max` — bounded depth of the per-bundle choices
   queue. Default `256`, range `1..=4096`. No CLI or env override.
 - `[[peers]]` — outbound peer relay endpoints, each with `alias`,
