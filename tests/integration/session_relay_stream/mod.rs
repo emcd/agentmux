@@ -568,6 +568,105 @@ fn spawn_answering_peer(socket_path: &Path, response: Value) -> mpsc::Receiver<V
     receiver
 }
 
+// Completes a stub peer's PSK Hello handshake, echoing the dialer's
+// schema_version and principal_id. Returns whether the ack was written.
+fn ack_peer_hello(reader: &mut BufReader<UnixStream>, stream: &mut UnixStream) -> bool {
+    let mut hello_line = String::new();
+    if reader.read_line(&mut hello_line).is_err() {
+        return false;
+    }
+    let Ok(hello) = serde_json::from_str::<Value>(hello_line.trim_end()) else {
+        return false;
+    };
+    let ack = json!({
+        "frame": "hello_ack",
+        "schema_version": hello.get("schema_version").cloned().unwrap_or(json!("")),
+        "principal_id": hello.get("principal_id").cloned().unwrap_or(json!("")),
+    });
+    let _ = writeln!(stream, "{ack}");
+    stream.flush().is_ok()
+}
+
+// Answers one forwarded request with `response`, echoing the wire request id
+// for correlation. Returns the request frame observed.
+fn answer_one_peer_request(
+    reader: &mut BufReader<UnixStream>,
+    stream: &mut UnixStream,
+    response: &Value,
+) -> Option<Value> {
+    let mut request_line = String::new();
+    reader.read_line(&mut request_line).ok()?;
+    let request = serde_json::from_str::<Value>(request_line.trim_end()).ok()?;
+    let response_frame = json!({
+        "frame": "response",
+        "request_id": request.get("request_id").cloned().unwrap_or(json!(null)),
+        "response": response,
+    });
+    let _ = writeln!(stream, "{response_frame}");
+    let _ = stream.flush();
+    Some(request)
+}
+
+// A stub peer relay that revokes the dialer mid-life: it answers one forwarded
+// request, then writes a typed error frame and closes -- the teardown order a
+// `drop peer` produces -- and afterwards accepts a fresh dial and answers one
+// more request.
+//
+// Returns a channel signalling that the first connection is fully closed, so a
+// test sequences on the close rather than on a sleep, and a channel carrying
+// the request frame observed on the second connection.
+fn spawn_revoking_peer(
+    socket_path: &Path,
+    response: Value,
+) -> (mpsc::Receiver<()>, mpsc::Receiver<Value>) {
+    let listener = UnixListener::bind(socket_path).expect("bind stub peer socket");
+    let (closed_sender, closed_receiver) = mpsc::channel();
+    let (request_sender, request_receiver) = mpsc::channel();
+    thread::spawn(move || {
+        let Ok((mut first, _)) = listener.accept() else {
+            return;
+        };
+        let mut first_reader = BufReader::new(first.try_clone().expect("clone stub stream"));
+        if !ack_peer_hello(&mut first_reader, &mut first) {
+            return;
+        }
+        if answer_one_peer_request(&mut first_reader, &mut first, &response).is_none() {
+            return;
+        }
+        let revoked = json!({
+            "frame": "response",
+            "response": {
+                "kind": "error",
+                "error": {
+                    "code": "runtime_identity_revoked",
+                    "message": "identity was dropped; the credential no longer authenticates",
+                },
+            },
+        });
+        let _ = writeln!(first, "{revoked}");
+        let _ = first.flush();
+        // Close every handle. A surviving clone would keep this end of the
+        // socket open, and the frame above would then be an ordinary unread
+        // event rather than the dialer's last word before a hangup.
+        drop(first_reader);
+        drop(first);
+        let _ = closed_sender.send(());
+
+        let Ok((mut second, _)) = listener.accept() else {
+            return;
+        };
+        let mut second_reader = BufReader::new(second.try_clone().expect("clone stub stream"));
+        if !ack_peer_hello(&mut second_reader, &mut second) {
+            return;
+        }
+        if let Some(request) = answer_one_peer_request(&mut second_reader, &mut second, &response) {
+            let _ = request_sender.send(request);
+            thread::sleep(Duration::from_millis(50));
+        }
+    });
+    (closed_receiver, request_receiver)
+}
+
 // What one forwarded cross-relay Send produced, at both points a test may need
 // to observe. The origin's own response and the request the peer received are
 // separate surfaces carrying separately sourced attribution — the response says

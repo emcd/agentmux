@@ -590,6 +590,18 @@ exported from `src/relay/mod.rs`.
   deleted — once the record is gone the file authenticates nothing, and the
   relay cannot know where the operator distributed it — so the response reports
   the relay-owned canonical path for session principals only.
+- Delivering a typed frame ahead of the close puts an obligation on the client
+  that a plain disconnect does not. The revoked connection is left readable —
+  the farewell frame is still buffered in it — so a liveness check that only
+  peeks for bytes reports a dead socket as healthy, and does so permanently,
+  because nothing ever consumes them. `RelayStreamSession` therefore classifies
+  a held connection with `POLLHUP` as well as the peek, and evicts it when the
+  request *write* fails and not only when the response read does. Without both,
+  a revoked client re-uses the dead socket forever and never dials again:
+  every call fails instantly, the relay sees no reconnect attempt, and only
+  restarting the process recovers it. This is the client half of the same
+  contract, and it applies to any persistent stream client — an outbound peer
+  relay connection and an ordinary session alike.
 - Credential administration is relay-wide, not bundle-scoped. `new peer`
   (`RelayRequest::NewPeer`) generates a PSK and stores its SHA-256 hash;
   `change psk` (`RelayRequest::ChangePsk`) rotates an existing principal's hash
