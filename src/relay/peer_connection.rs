@@ -92,9 +92,9 @@ impl PeerConnectionManager {
     /// The identity this relay presents to the peer named by `alias`, as its
     /// full `<connect_as>@RELAY` principal. The forwarding handler uses it to set
     /// the forwarded request's `requester_session` to the identity that peer
-    /// issued this relay (the peer sees this relay as the sender; the original
-    /// verified origin, when present, rides the forwarded request's `on_behalf_of`
-    /// field). `None` when `alias` names no configured peer.
+    /// issued this relay (the peer sees this relay as the sender; the identity
+    /// the origin was admitted under rides the forwarded request's
+    /// `on_behalf_of` field). `None` when `alias` names no configured peer.
     #[must_use]
     pub fn presented_principal_id(&self, alias: &str) -> Option<String> {
         self.endpoints

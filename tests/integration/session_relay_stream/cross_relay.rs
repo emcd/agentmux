@@ -44,7 +44,9 @@ fn cross_relay_send_propagates_peer_delivery_outcome() {
     });
     let observed = spawn_answering_peer(&peer_socket, peer_response);
 
-    let (results, forwarded) = forward_cross_relay_send(
+    let ForwardedCrossRelaySend {
+        results, forwarded, ..
+    } = forward_cross_relay_send(
         &configuration_roots,
         &bundle_paths,
         bundle_name.as_str(),
@@ -64,10 +66,13 @@ fn cross_relay_send_propagates_peer_delivery_outcome() {
         "origin-relay@RELAY"
     );
     assert_eq!(forwarded["request"]["targets"][0], "bravo@other");
-    // The origin is socket-trust (no verified identity), so it stamps no
-    // `on_behalf_of` origin attribution onto the forwarded Send. The field is
-    // omitted from the wire request entirely, not serialized as an explicit null.
-    assert!(forwarded["request"].get("on_behalf_of").is_none());
+    // The origin is socket-trust, and attribution follows admission: the relay
+    // accepted that claim at Hello, so it forwards it rather than leaving the
+    // peer unable to name the sender.
+    assert_eq!(
+        forwarded["request"]["on_behalf_of"],
+        format!("alpha@{bundle_name}")
+    );
 }
 
 #[test]
@@ -92,7 +97,7 @@ fn cross_relay_send_reports_ingress_denied_as_failed() {
     });
     let observed = spawn_answering_peer(&peer_socket, peer_response);
 
-    let (results, _forwarded) = forward_cross_relay_send(
+    let ForwardedCrossRelaySend { results, .. } = forward_cross_relay_send(
         &configuration_roots,
         &bundle_paths,
         bundle_name.as_str(),

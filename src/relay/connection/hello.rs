@@ -130,6 +130,10 @@ pub(super) async fn handle_hello(
         return Ok(FrameOutcome::Stop);
     }
     binding_state.authenticated_identity = connection_identity;
+    // The identity the connection was admitted under, credential-backed or not.
+    // Cross-relay forwarding attributes the origin from this, so a relay
+    // accepting socket-trust still tells a peer who a message is from.
+    binding_state.admitted_identity = Some(hello.principal_id.clone());
     binding_state.introspect_rights = binding.introspect_rights;
     binding_state.ingress_scope = binding.ingress_scope;
     binding_state.bound_bundle = binding.bound_bundle;

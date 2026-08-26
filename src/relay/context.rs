@@ -31,6 +31,11 @@ pub(super) struct RequestPrincipal {
     /// Verified `principal_id` of the requester, set only when the connection
     /// presented a store-backed credential; `None` for socket-trust sessions.
     pub(super) authenticated_identity: Option<String>,
+    /// `principal_id` the requester's connection was admitted under, set for
+    /// every accepted Hello whether or not a credential backed it. Cross-relay
+    /// forwarding stamps `on_behalf_of` from this; local attribution does not
+    /// read it.
+    pub(super) admitted_identity: Option<String>,
     /// Introspection rights for an application principal, recorded at Hello;
     /// `None` for every other connection. Request dispatch gates
     /// `IdentityIntrospect` on this.

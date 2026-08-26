@@ -430,6 +430,7 @@ find = "self"
 list = "home"
 look = "self"
 send = "all"
+raww = "all"
 "#,
     )
     .expect("write policies configuration");
@@ -567,6 +568,17 @@ fn spawn_answering_peer(socket_path: &Path, response: Value) -> mpsc::Receiver<V
     receiver
 }
 
+// What one forwarded cross-relay Send produced, at both points a test may need
+// to observe. The origin's own response and the request the peer received are
+// separate surfaces carrying separately sourced attribution — the response says
+// whether a credential backed the sender, the forwarded request says who the
+// sender was admitted as — so a test pinning that distinction needs both.
+struct ForwardedCrossRelaySend {
+    response: Value,
+    results: Vec<Value>,
+    forwarded: Value,
+}
+
 // Hellos as socket-trust `alpha`, sends one cross-relay Send over the stream, and
 // returns the decoded `send` response's `results` array plus the request frame
 // the stub peer observed. Shared by the delivered/ingress-denied cases.
@@ -576,7 +588,7 @@ fn forward_cross_relay_send(
     bundle_name: &str,
     peer_socket: &Path,
     observed: mpsc::Receiver<Value>,
-) -> (Vec<Value>, Value) {
+) -> ForwardedCrossRelaySend {
     forward_cross_relay_send_with_hello(
         configuration_roots,
         bundle_paths,
@@ -586,17 +598,111 @@ fn forward_cross_relay_send(
     )
 }
 
+// Hellos as socket-trust `alpha` and forwards one cross-relay Raww, returning
+// the request frame the stub peer observed. Raww's cross-relay branch runs
+// before the local delivery spine and stamps its own attribution, so it needs
+// coverage of its own rather than riding on the Send path's.
+fn forward_cross_relay_raww(
+    configuration_roots: &ConfigurationRoots,
+    bundle_paths: &BundleRuntimePaths,
+    bundle_name: &str,
+    peer_socket: &Path,
+    observed: mpsc::Receiver<Value>,
+) -> Value {
+    let (mut client, handle) = spawn_relay_stream_with_peer(
+        configuration_roots,
+        bundle_paths,
+        "peer",
+        "origin-relay",
+        peer_socket,
+    );
+    let reader_stream = client.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(reader_stream);
+    send_json(&mut client, hello_payload(bundle_name, "alpha"));
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+
+    let request_id = format!("req-{}", Uuid::new_v4().simple());
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": request_id,
+            "request": {
+                "operation": "raww",
+                "requester_session": "alpha",
+                "target_session": "bravo@other!peer",
+                "text": "cross-relay keystrokes",
+                "no_enter": false,
+            },
+        }),
+    );
+    let response = read_json(&mut reader);
+    assert_eq!(
+        response["response"]["kind"], "raww",
+        "cross-relay raww should forward, not error: {response}"
+    );
+    let forwarded = observed
+        .recv_timeout(Duration::from_secs(2))
+        .expect("stub peer observed the forwarded raww");
+
+    client.shutdown(std::net::Shutdown::Both).ok();
+    handle.join().expect("join relay stream");
+    forwarded
+}
+
+// As `forward_cross_relay_send`, but the request carries a self-asserted
+// `on_behalf_of`. Returns only the observed peer request, which is where the
+// relay's substituted attribution is visible.
+fn forward_cross_relay_send_supplying_on_behalf_of(
+    configuration_roots: &ConfigurationRoots,
+    bundle_paths: &BundleRuntimePaths,
+    bundle_name: &str,
+    peer_socket: &Path,
+    observed: mpsc::Receiver<Value>,
+    supplied_on_behalf_of: &str,
+) -> Value {
+    forward_cross_relay_send_inner(
+        configuration_roots,
+        bundle_paths,
+        peer_socket,
+        observed,
+        hello_payload(bundle_name, "alpha"),
+        Some(supplied_on_behalf_of),
+    )
+    .forwarded
+}
+
 // As `forward_cross_relay_send`, but the requester authenticates with the given
-// hello frame. Lets a test drive an authenticated (store-backed) origin so the
-// forwarded Send carries an `on_behalf_of` attribution, alongside the default
-// socket-trust origin (which omits it).
+// hello frame. Lets a test drive a store-backed origin alongside the default
+// socket-trust one; both carry an `on_behalf_of` attribution, and the two differ
+// in whether `authenticated_identity` accompanies it.
 fn forward_cross_relay_send_with_hello(
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     peer_socket: &Path,
     observed: mpsc::Receiver<Value>,
     requester_hello: Value,
-) -> (Vec<Value>, Value) {
+) -> ForwardedCrossRelaySend {
+    forward_cross_relay_send_inner(
+        configuration_roots,
+        bundle_paths,
+        peer_socket,
+        observed,
+        requester_hello,
+        None,
+    )
+}
+
+// The shared body. `supplied_on_behalf_of` puts a self-asserted origin on the
+// request, which the relay is expected to discard rather than honor.
+fn forward_cross_relay_send_inner(
+    configuration_roots: &ConfigurationRoots,
+    bundle_paths: &BundleRuntimePaths,
+    peer_socket: &Path,
+    observed: mpsc::Receiver<Value>,
+    requester_hello: Value,
+    supplied_on_behalf_of: Option<&str>,
+) -> ForwardedCrossRelaySend {
     let (mut client, handle) = spawn_relay_stream_with_peer(
         configuration_roots,
         bundle_paths,
@@ -610,18 +716,22 @@ fn forward_cross_relay_send_with_hello(
     assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
 
     let request_id = format!("req-{}", Uuid::new_v4().simple());
+    let mut request = json!({
+        "operation": "send",
+        "requester_session": "alpha",
+        "message": "cross-relay hello",
+        "targets": ["bravo@other!peer"],
+        "broadcast": false,
+    });
+    if let Some(origin) = supplied_on_behalf_of {
+        request["on_behalf_of"] = Value::String(origin.to_string());
+    }
     send_json(
         &mut client,
         json!({
             "frame": "request",
             "request_id": request_id,
-            "request": {
-                "operation": "send",
-                "requester_session": "alpha",
-                "message": "cross-relay hello",
-                "targets": ["bravo@other!peer"],
-                "broadcast": false,
-            },
+            "request": request,
         }),
     );
     let response = read_json(&mut reader);
@@ -636,7 +746,11 @@ fn forward_cross_relay_send_with_hello(
 
     client.shutdown(std::net::Shutdown::Both).ok();
     handle.join().expect("join relay stream");
-    (results, forwarded)
+    ForwardedCrossRelaySend {
+        response,
+        results,
+        forwarded,
+    }
 }
 
 // SHA-256 (lowercase hex) of the fixed ingress PSK below, embedded in the

@@ -48,6 +48,17 @@ pub(super) struct ConnectionBinding {
     /// and attached to each dispatched request for sender attribution; stays
     /// `None` for socket-trust connections.
     pub(super) authenticated_identity: Option<String>,
+    /// `principal_id` the connection was admitted under, set on every accepted
+    /// Hello whether or not a store credential backed it. Cross-relay forwarding
+    /// attributes the origin from this, so a peer learns who a message is from
+    /// on a relay that accepts socket-trust.
+    ///
+    /// Deliberately not a widening of `authenticated_identity`. That field
+    /// records whether a credential backed the identity — live-stream revocation
+    /// matches on it, and the sender-attribution schema requires it absent for an
+    /// unverified session — so the two answer different questions and must stay
+    /// separately sourced.
+    pub(super) admitted_identity: Option<String>,
     /// Introspection rights for an application principal, recorded at Hello and
     /// attached to each dispatched request so dispatch can gate
     /// `IdentityIntrospect`; stays `None` for every other connection.
