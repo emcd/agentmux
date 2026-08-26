@@ -7,17 +7,28 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-08-26
+
 ### Added
 
 - **Inter-relay communication (headline 0.9.0 feature):** peers via
   `relay.toml` `[[peers]]` (`alias` / `address` / `connect-as`), PSK
-  credential administration (`agentmux new peer` / `agentmux change psk`
-  with `--output` / `--write-config` and `--scope`), cross-relay `send`
-  via `session@bundle!peer` bang-path, relay-wide discovery
-  (`list relays` / `discover`), and sender attribution
-  (`on_behalf_of` on delivered envelopes and responses). The current peer
-  credential is presented on every redial; unmatched ingress scopes are
-  recorded rather than silently ignored.
+  credential administration (`agentmux new peer` / `change psk` /
+  `drop peer` with `--output` / `--write-config` and `--scope`),
+  cross-relay `send` via `session@bundle!peer` bang-path, relay-wide
+  discovery (`list relays` / `discover`), and sender attribution
+  (`on_behalf_of` on delivered envelopes and responses). Attribution
+  follows connection admission — present whether the origin's
+  connection was credential-verified or accepted as a socket-trust
+  claim — with `require-session-credentials` the single setting that
+  decides which. The current peer credential is presented on every
+  redial; unmatched ingress scopes are recorded rather than silently
+  ignored.
+
+- **`agentmux drop peer` / `drop` (CLI and MCP):** deletes a principal
+  from the relay-wide credential store; self-drop is rejected ahead of
+  authorization, and dropping a principal revokes every session bound
+  to it.
 
 - **Layered configuration roots:** repeatable `--configuration-directory`
   (first wins, per-file; `bundles/` unions by identifier) and
@@ -71,6 +82,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   worker — workers are stopped before tmux teardown.
 - `relay.toml` peer and configuration-layer validation now reports the
   offending file and reason instead of `internal_unexpected_failure`.
+- Cross-relay envelope `From` no longer misattributes the sender to the
+  connecting relay's own identity, previously doubled `@RELAY@RELAY`.
+- A relay stream client — an outbound peer connection or an ordinary
+  session — revoked while otherwise idle no longer wedges permanently.
+  The revoking side writes its typed error frame before closing, which
+  left a socket that was simultaneously dead and readable; only a read
+  failure evicted the cached connection, so the request write that
+  followed a revocation failed forever and never redialed. Both the
+  write and the read now share one eviction decision, and a held
+  connection is also classified dead on `POLLHUP` even with buffered
+  bytes still unread.
+- A principal rotating its own PSK no longer loses the rotated
+  credential to its own revocation sweep.
+- The starter `operator` policy preset grants `drop.peer`, matching the
+  `new.peer` / `change.psk` grants already present.
 
 ## [0.8.0] - 2026-06-27
 
@@ -186,7 +212,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   `raww` / `send` / `tui`), MCP bridge, tmux / ACP transports, and
   multi-worktree association.
 
-[Unreleased]: https://github.com/emcd/agentmux/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/emcd/agentmux/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/emcd/agentmux/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/emcd/agentmux/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/emcd/agentmux/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/emcd/agentmux/compare/v0.5.0...v0.6.0
