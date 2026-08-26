@@ -32,6 +32,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Install tmux (macOS)
+        if: runner.os == 'macOS'
+        run: brew install tmux
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -40,6 +44,14 @@ jobs:
       - name: Check Formatting
         if: matrix.platform == 'ubuntu-latest'
         run: cargo fmt --all -- --check
+
+      - name: Install Zig
+        # Required for --all-features below, which enables pty. Pinned to
+        # match the qa workflow's version.
+        if: matrix.platform == 'ubuntu-latest'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
 
       - name: Run Clippy
         if: matrix.platform == 'ubuntu-latest'
