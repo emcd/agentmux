@@ -424,3 +424,90 @@ fn cross_relay_ingress_rejects_bang_path_raww_before_forwarding() {
         "ingress"
     );
 }
+
+#[test]
+fn cross_relay_send_redials_a_peer_that_revoked_the_outbound_connection() {
+    // The outbound peer connection is cached for the life of the manager, so a
+    // peer that revokes this relay's principal -- `drop peer`, or a rotation --
+    // leaves that cache holding a socket the peer has already hung up on, with
+    // the typed revocation frame still unread in it. The next forward must dial
+    // again rather than report the peer unavailable against the dead socket
+    // forever.
+    //
+    // Both requests ride one origin connection, because the peer connection
+    // manager lives for that connection: a second connection would build a
+    // fresh manager and could not observe a stale cache at all.
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
+
+    let peer_socket = temporary.path().join("peer.sock");
+    let peer_response = json!({
+        "kind": "send",
+        "schema_version": "test",
+        "requester_session": "origin-relay@RELAY",
+        "results": [{
+            "target_session": "bravo@other",
+            "message_id": "peer-m1",
+            "outcome": "queued",
+        }],
+    });
+    let (peer_closed, observed_after_redial) = spawn_revoking_peer(&peer_socket, peer_response);
+
+    let (mut client, handle) = spawn_relay_stream_with_peer(
+        &configuration_roots,
+        &bundle_paths,
+        "peer",
+        "origin-relay",
+        &peer_socket,
+    );
+    let reader_stream = client.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(reader_stream);
+    send_json(&mut client, hello_payload(bundle_name.as_str(), "alpha"));
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+
+    let mut forward = |request_id: String| {
+        send_json(
+            &mut client,
+            json!({
+                "frame": "request",
+                "request_id": request_id,
+                "request": {
+                    "operation": "send",
+                    "requester_session": "alpha",
+                    "message": "cross-relay hello",
+                    "targets": ["bravo@other!peer"],
+                    "broadcast": false,
+                },
+            }),
+        );
+        read_json(&mut reader)
+    };
+
+    let established = forward(format!("req-{}", Uuid::new_v4().simple()));
+    assert_eq!(
+        established["response"]["results"][0]["outcome"], "queued",
+        "first forward should reach the peer: {established:?}"
+    );
+
+    peer_closed
+        .recv_timeout(Duration::from_secs(5))
+        .expect("peer should revoke and close the outbound connection");
+
+    let after_revocation = forward(format!("req-{}", Uuid::new_v4().simple()));
+    assert_eq!(
+        after_revocation["response"]["results"][0]["outcome"], "queued",
+        "a revoked outbound peer connection must be redialled, not reported unavailable: \
+         {after_revocation:?}"
+    );
+    observed_after_redial
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the peer should observe a forward on a freshly dialled connection");
+
+    client.shutdown(std::net::Shutdown::Both).ok();
+    handle.join().expect("join relay stream");
+}

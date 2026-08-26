@@ -79,6 +79,59 @@ fn shutdown_stream(stream: &std::os::unix::net::UnixStream, context: &str) {
     }
 }
 
+/// Reads one request frame and answers it with a minimal `List` response.
+fn serve_one_list_request(
+    reader: &mut BufReader<std::os::unix::net::UnixStream>,
+    stream: &mut std::os::unix::net::UnixStream,
+) {
+    let request = read_json_line(reader);
+    let request_id = request["request_id"]
+        .as_str()
+        .map(ToOwned::to_owned)
+        .expect("request id");
+    write_json_line(
+        stream,
+        &json!({
+            "frame": "response",
+            "request_id": request_id,
+            "response": {
+                "kind": "list",
+                "schema_version": "1",
+                "bundle": {
+                    "id": "party",
+                    "hosted": true,
+                    "state": "up",
+                    "startup_health": "healthy",
+                    "startup_failure_count": 0,
+                    "recent_startup_failures": [],
+                    "principals": [],
+                },
+            }
+        }),
+    );
+}
+
+/// Blocks until the server thread reports it has reached a state the client
+/// must observe, bounded so a regression that never reaches it fails rather
+/// than parks. Sequencing on the signal rather than on a sleep keeps the
+/// socket's observable state fixed at the moment the client probes it.
+fn await_server_signal(signal: &AtomicBool, context: &str) {
+    let deadline = Instant::now() + FRAME_WAIT_BUDGET;
+    while !signal.load(Ordering::Acquire) {
+        assert!(
+            Instant::now() < deadline,
+            "{context} within {FRAME_WAIT_BUDGET:?}"
+        );
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn list_request() -> agentmux::relay::RelayRequest {
+    agentmux::relay::RelayRequest::List {
+        requester_session: Some("alpha".to_string()),
+    }
+}
+
 fn assert_and_ack_hello(
     reader: &mut BufReader<std::os::unix::net::UnixStream>,
     stream: &mut std::os::unix::net::UnixStream,
@@ -618,6 +671,134 @@ fn stream_client_detects_idle_disconnect_and_reconnects_on_next_request() {
     match second_response {
         agentmux::relay::RelayResponse::List { bundle, .. } => assert_eq!(bundle.id, "party"),
         other => panic!("unexpected second response: {other:?}"),
+    }
+    server.join().expect("join server");
+}
+
+/// A relay that revokes an identity writes a typed error frame and only *then*
+/// closes, so the client is left holding a dead socket with readable bytes
+/// still in it. Those bytes must not be mistaken for liveness.
+///
+/// The neighbouring idle-disconnect test closes with nothing buffered, which
+/// the peek answers on its own by observing EOF. Here the peek observes a byte
+/// and reports health, so only the hangup probe can classify the socket. When
+/// it does not, the request write fails, and — because the connection is never
+/// replaced — every later call repeats the same failure against the same dead
+/// socket without ever dialling.
+#[test]
+fn stream_client_reconnects_on_the_same_call_after_a_revocation_frame_and_close() {
+    let (_temporary, socket_path) = temporary_socket_path("relay-stream-client-revoked");
+    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let closed = Arc::new(AtomicBool::new(false));
+    let server_closed = Arc::clone(&closed);
+    let server = thread::spawn(move || {
+        let (mut first_stream, _) = listener.accept().expect("accept first client");
+        let mut first_reader = BufReader::new(first_stream.try_clone().expect("clone first"));
+        assert_and_ack_hello(&mut first_reader, &mut first_stream, "party", "alpha");
+        serve_one_list_request(&mut first_reader, &mut first_stream);
+
+        // The teardown order that produces the defect: speak, then hang up.
+        write_json_line(
+            &mut first_stream,
+            &json!({
+                "frame": "response",
+                "response": {
+                    "kind": "error",
+                    "error": {
+                        "code": "runtime_identity_revoked",
+                        "message": "identity was dropped; the credential no longer authenticates",
+                    },
+                },
+            }),
+        );
+        // Close every handle. The relay's connection task drops the stream, and
+        // a surviving clone would keep this end of the socket open and mask the
+        // hangup the client has to detect.
+        drop(first_reader);
+        drop(first_stream);
+        server_closed.store(true, Ordering::Release);
+
+        let (mut second_stream, _) = listener.accept().expect("accept second client");
+        let mut second_reader = BufReader::new(second_stream.try_clone().expect("clone second"));
+        assert_and_ack_hello(&mut second_reader, &mut second_stream, "party", "alpha");
+        serve_one_list_request(&mut second_reader, &mut second_stream);
+    });
+
+    let mut session =
+        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
+    session
+        .request_with_events(&list_request())
+        .expect("first request should succeed");
+
+    await_server_signal(
+        &closed,
+        "server should close after writing the revocation frame",
+    );
+
+    let (second_response, _) = session
+        .request_with_events(&list_request())
+        .expect("a revoked-then-closed socket must be replaced on the SAME call, not reported");
+    match second_response {
+        agentmux::relay::RelayResponse::List { bundle, .. } => assert_eq!(bundle.id, "party"),
+        other => panic!("unexpected second response: {other:?}"),
+    }
+    server.join().expect("join server");
+}
+
+/// A peer can reject writes without ever hanging up: shutting down only its
+/// read half leaves the socket open, so no hangup is reported and the peek sees
+/// an empty, healthy-looking socket, yet the request write fails.
+///
+/// The failure is therefore only observable on the write, which is what the
+/// hangup probe cannot cover. The connection must still be evicted, so a later
+/// call dials — this call reports the failure rather than replaying a
+/// potentially side-effecting request against a fresh connection.
+#[test]
+fn stream_client_reconnects_after_the_request_write_is_rejected() {
+    let (_temporary, socket_path) = temporary_socket_path("relay-stream-client-wr-shut");
+    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let refusing = Arc::new(AtomicBool::new(false));
+    let server_refusing = Arc::clone(&refusing);
+    let server = thread::spawn(move || {
+        let (mut first_stream, _) = listener.accept().expect("accept first client");
+        let mut first_reader = BufReader::new(first_stream.try_clone().expect("clone first"));
+        assert_and_ack_hello(&mut first_reader, &mut first_stream, "party", "alpha");
+        serve_one_list_request(&mut first_reader, &mut first_stream);
+
+        first_stream
+            .shutdown(std::net::Shutdown::Read)
+            .expect("shut down only the read half");
+        server_refusing.store(true, Ordering::Release);
+
+        // `first_stream` and its clone stay in scope for the rest of this
+        // closure: closing either would hang the socket up and let the liveness
+        // probe classify it, which is the path this test exists to exclude.
+        let (mut second_stream, _) = listener.accept().expect("accept second client");
+        let mut second_reader = BufReader::new(second_stream.try_clone().expect("clone second"));
+        assert_and_ack_hello(&mut second_reader, &mut second_stream, "party", "alpha");
+        serve_one_list_request(&mut second_reader, &mut second_stream);
+    });
+
+    let mut session =
+        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
+    session
+        .request_with_events(&list_request())
+        .expect("first request should succeed");
+
+    await_server_signal(&refusing, "server should shut down its read half");
+
+    let rejected = session.request_with_events(&list_request());
+    assert!(
+        rejected.is_err(),
+        "a request whose write the peer refuses must report the failure, not a response",
+    );
+
+    let (recovered, _) = session
+        .request_with_events(&list_request())
+        .expect("a refused write must evict the connection so the next call dials");
+    match recovered {
+        agentmux::relay::RelayResponse::List { bundle, .. } => assert_eq!(bundle.id, "party"),
+        other => panic!("unexpected recovered response: {other:?}"),
     }
     server.join().expect("join server");
 }

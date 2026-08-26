@@ -16,6 +16,8 @@ mod session_relay_list;
 mod session_relay_look;
 #[path = "integration/session_relay_reconciliation.rs"]
 mod session_relay_reconciliation;
+#[path = "integration/session_relay_revocation_recovery.rs"]
+mod session_relay_revocation_recovery;
 #[path = "integration/session_relay_stream/mod.rs"]
 mod session_relay_stream;
 #[path = "integration/support/mod.rs"]

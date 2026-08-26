@@ -1,7 +1,10 @@
 use std::{
     fs,
     io::{self, BufRead, BufReader, Write},
-    os::unix::{io::AsRawFd, net::UnixStream},
+    os::unix::{
+        io::{AsRawFd, RawFd},
+        net::UnixStream,
+    },
     path::{Path, PathBuf},
     thread,
     time::{Duration, Instant},
@@ -230,22 +233,29 @@ impl RelayStreamSession {
                 .connection
                 .as_mut()
                 .ok_or_else(|| io::Error::other("relay stream connection is missing"))?;
-            send_stream_client_frame(
+            // The write and the read share one result so they share one eviction
+            // decision below. A `?` on the write instead would return from this
+            // function, past that decision, leaving a dead socket cached with
+            // nothing able to replace it: the next call's liveness probe reads
+            // any bytes the peer left behind as health, writes again, fails
+            // again, and never dials.
+            let written = send_stream_client_frame(
                 &mut connection.stream,
                 StreamClientFrame::Request {
                     request_id: request_id.as_str(),
                     namespace: wire_namespace,
                     request,
                 },
-            )?;
-            read_stream_response_frame(connection, request_id.as_str())
+            );
+            written.and_then(|()| read_stream_response_frame(connection, request_id.as_str()))
         };
         if let Err(source) = &result
             && is_retriable_stream_error(Some(source))
         {
-            // Preserve deterministic request semantics: if transport fails after a
-            // request is written, do not auto-replay side-effecting operations.
-            // Drop the connection so the next call performs a fresh hello/connect.
+            // Preserve deterministic request semantics: whether transport failed
+            // writing the request or reading its response, do not auto-replay
+            // side-effecting operations. Drop the connection so the *next* call
+            // performs a fresh hello/connect; this call still reports the failure.
             self.connection = None;
         }
         result
@@ -275,13 +285,17 @@ impl RelayStreamSession {
         result
     }
 
-    /// Probes the held connection with a non-blocking 1-byte peek so a dropped
-    /// relay socket is observed before a request write. Without this, the next
-    /// `request_*` call writes into a half-closed socket, then blocks on the
-    /// response read until the 5-second response timeout fires.
+    /// Classifies the held connection without blocking or consuming, so a
+    /// dropped relay socket is observed before a request write. Without this,
+    /// the next `request_*` call writes into a half-closed socket, then blocks
+    /// on the response read until the 5-second response timeout fires.
     ///
-    /// Uses `libc::recv` with `MSG_PEEK | MSG_DONTWAIT` because the standard
-    /// `UnixStream::peek` is still unstable.
+    /// Two probes, because neither alone is sufficient. `poll` answers whether
+    /// the peer is still there, which a peek cannot when the peer left bytes
+    /// behind; the peek answers whether the socket is readable or errored, which
+    /// a hangup-free poll does not distinguish. Uses `libc::recv` with
+    /// `MSG_PEEK | MSG_DONTWAIT` because the standard `UnixStream::peek` is
+    /// still unstable.
     fn peek_connection_liveness(&mut self) -> Liveness {
         let Some(connection) = self.connection.as_ref() else {
             return Liveness::Dead {
@@ -289,6 +303,16 @@ impl RelayStreamSession {
             };
         };
         let fd = connection.stream.as_raw_fd();
+        // A peek cannot classify a socket the relay tore down after speaking.
+        // Revocation writes a typed error frame and only then closes, so those
+        // bytes sit unread and `MSG_PEEK` reports them as liveness forever --
+        // "the peer is talking" and "the peer said goodbye and hung up" look
+        // identical to it. `POLLHUP` separates the two without consuming the
+        // frame, and is reported for a fully closed peer even when data remains
+        // readable.
+        if poll_socket_revents(fd).is_some_and(|revents| revents & libc::POLLHUP != 0) {
+            return Liveness::Dead { reason: "peer_hup" };
+        }
         let mut buf = [0u8; 1];
         // SAFETY: `fd` is owned by the live `UnixStream` for the duration of
         // this call; `buf` is a valid writable byte slice.
@@ -492,6 +516,25 @@ enum Liveness {
     Alive,
     Dead { reason: &'static str },
     Error(io::Error),
+}
+
+/// Reports `poll(2)`'s view of a socket without blocking, or `None` when the
+/// call itself failed.
+///
+/// `POLLHUP` is output-only -- the kernel reports it regardless of the requested
+/// event mask -- so requesting `POLLIN` alone is enough to observe a hangup. A
+/// failed poll yields `None` so the caller falls back to its peek rather than
+/// treating an inconclusive probe as a verdict.
+fn poll_socket_revents(fd: RawFd) -> Option<libc::c_short> {
+    let mut descriptor = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    // SAFETY: `descriptor` is a valid, writable `pollfd` for the duration of the
+    // call, and `fd` is owned by the live `UnixStream` that supplied it.
+    let observed = unsafe { libc::poll(&raw mut descriptor, 1, 0) };
+    (observed >= 0).then_some(descriptor.revents)
 }
 
 fn send_stream_client_frame(
