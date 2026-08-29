@@ -1,8 +1,8 @@
 //! Per-operation integration tests for the `relay` operation surface:
 //! - [`list`]: list operation tests (configured sessions, transport
 //!   reporting, policy gates).
-//! - [`send`]: send operation tests (target resolution, broadcast,
-//!   async dispatch).
+//! - [`send`]: send operation tests, themselves split by concern into
+//!   per-cluster modules under `send/` — see that hub's own overview.
 //! - [`look`]: look operation tests (capability gates, snapshot
 //!   construction, rejection matrix).
 //!
