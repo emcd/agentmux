@@ -7,7 +7,7 @@ TBD - created by archiving change decouple-transport-layer. Update Purpose after
 
 The relay delivery subsystem SHALL dispatch all agent delivery operations
 through two non-blocking write methods defined on the `Transport` trait in
-`src/transports/contract.rs`:
+`src/transports/contract/transport.rs`:
 
 - `mailw` — structured relay message write. The relay SHALL populate routing,
   attribution, message body, timestamp, choice-decider, and quiescence fields
@@ -510,7 +510,7 @@ type.
 Each transport whose target can be observed SHALL expose an internal probe trait
 that lets tests inject deterministic readiness observations. The probe trait
 SHALL be transport-internal (not part of the `Transport` contract) and SHALL NOT
-appear in `src/transports/contract.rs`.
+appear anywhere in `src/transports/contract/`.
 
 The probe trait SHALL return the next observation on demand so tests can drive
 the relay's readiness scheduling through specific sequences. Because no transport
@@ -521,8 +521,8 @@ SHALL assert a terminal failure derived from observation.
 
 - **WHEN** a developer reads a transport's probe module
 - **THEN** the trait is not re-exported from `src/transports/`
-- **AND** the `Transport` trait in `src/transports/contract.rs` has no knowledge
-  of probes
+- **AND** the `Transport` trait in `src/transports/contract/transport.rs` has no
+  knowledge of probes
 
 #### Scenario: No probe sequence asserts an observation-derived failure
 
