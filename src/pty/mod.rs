@@ -14,10 +14,8 @@
 //!   [`PtyConfigSnapshot`], [`SnapshotRequest`] / [`SnapshotResponse`])
 //!   plus the per-thread look / prompt consumer ([`PtyOutputView`],
 //!   [`PtyPromptProbe`]).
-//! - [`transport`] holds [`PtyTransport`] (the per-target
-//!   [`Transport`](crate::transports::Transport) implementation with its
-//!   worker thread, delivery task, and reader thread) plus
-//!   [`PtyTargetConfiguration`] (the per-coder config bundle).
+//! - [`transport`] — `PtyTransport` facade (struct, `Transport`/`GenerationFence` impls, config types); `transport::lifecycle` owns bring-up (`startup_inner`, `StartupGuard`, bounded `observe_thread_finished`); `transport::runtime` owns the `!Send` terminal worker/reader threads (`run_worker`, `run_reader`, handlers, snapshot render).
+//! - [`delivery`] holds the `Delivery` state machine.
 
 pub mod command;
 pub mod delivery;
