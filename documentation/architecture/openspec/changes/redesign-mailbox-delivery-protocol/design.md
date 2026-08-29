@@ -151,6 +151,37 @@ double-write race or is simply re-serving something truly untouched.
   guard's evidence order and is never re-served or given
   `dropped_on_shutdown` — see `In-Process Delivery Recovery Scope`.
 
+**At most one declared-and-unacked unit per target, found necessary during
+RG's second review of `declare` itself.** The first version of `declare`
+validated only generation, cursor-position, contiguity, and bounds — it did
+not check whether the named entries were *already* declared. Because the
+cursor advances only at `ack`, two `declare` calls for the identical
+unacked range both pass that validation unchanged (neither has been acked,
+so cursor-plus-one is the same for both), minting two distinct
+`PackingUnitId`s bound to the same entries: two guards for one member,
+which breaks the uniqueness `Delivery Guard and Acknowledgment
+Terminalization` requires (a member resolving through two independent
+guards has no single terminal transition).
+
+- Decision: `declare` is rejected outright whenever the target already has
+  an outstanding declared-and-unacked unit, regardless of what range the
+  new call names — not narrowed to an overlap check. A transport must fully
+  resolve (ack) one declared unit before declaring another.
+- Why the stricter, simpler rule over a narrower same-range or overlap
+  check: the single-serial-executor invariant already means a
+  well-behaved transport never has two units in flight at once, so nothing
+  is lost operationally. An overlap-only check would still permit two
+  *non-overlapping* declarations to be outstanding simultaneously, which
+  adds a state space (multiple concurrent guards per target) that buys
+  nothing, since the executor could not act on both at once anyway. The
+  total-order rule collapses that state space to one, which is easier to
+  reason about and easier to validate.
+- Consequence: the earlier framing of partial acknowledgment as
+  "declare several smaller units from one peek and ack each
+  independently" is retired. Partial acknowledgment remains ordinary, but
+  as a *sequence* of fully-resolved units (declare, write, ack; declare,
+  write, ack; ...) rather than several outstanding at once.
+
 ### Gap 1 (with P0 #2 folded in) — Revocation serialized against in-flight declaration and acknowledgment
 
 The requirement was already locked by `ideas/21`: an ack must be processed

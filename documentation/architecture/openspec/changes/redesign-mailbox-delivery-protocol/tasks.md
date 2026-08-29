@@ -28,10 +28,14 @@
       `generation_id` against `active_generation_id` first (reject on
       mismatch without effect); validate the named range starts exactly at
       cursor + 1, is contiguous, and does not exceed the mailbox's actual
-      contents (reject on any violation without effect); on success, mint a
-      `PackingUnitId`, create the guard, and bind it to the named entries.
-      This is the guard's creation point (relocated from `authorize_batch`),
-      not `ack`.
+      contents (reject on any violation without effect); **reject if the
+      target already has an outstanding declared-and-unacked unit,
+      regardless of the requested range** (RG round-2 finding: without
+      this, two `declare` calls for the same unacked range both pass the
+      other checks unchanged, minting two `PackingUnitId`s for one entry);
+      on success, mint a `PackingUnitId`, create the guard, and bind it to
+      the named entries. This is the guard's creation point (relocated
+      from `authorize_batch`), not `ack`.
 - [ ] 2.4 Add `ack(target, generation_id, packing_unit_id, evidence)` to
       `AdmissionLedger`. Under the same lock: check `generation_id` first
       (reject on mismatch); look up `packing_unit_id`'s bound range from the
@@ -139,6 +143,14 @@
       starting at cursor + 1, or a range past the mailbox's actual contents
       is rejected without binding anything — closing the "arbitrary
       `through_seq`" hole a free-form `ack` would otherwise leave.
+- [ ] 5.4a Pin the at-most-one-outstanding-declaration invariant (RG
+      round-2 finding): `declare(1..5)` followed by a second
+      `declare(1..5)` before the first is acked — same generation, same
+      target — MUST reject the second call without minting a second
+      `PackingUnitId`. Repeat for a non-overlapping second range (e.g.
+      `declare(6..8)` while `1..5` is still outstanding) to confirm the
+      rule is a total order, not a narrower overlap check. Confirm
+      `declare(6..10)` succeeds once `1..5` has been acked.
 - [ ] 5.5 Add a test proving `ack` cannot reference an undeclared or
       already-terminalized-elsewhere `packing_unit_id`: a caller with a
       valid generation binding but no matching `declare` record cannot

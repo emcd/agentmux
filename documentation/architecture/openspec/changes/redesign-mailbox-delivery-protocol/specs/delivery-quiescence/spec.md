@@ -1044,9 +1044,30 @@ Replacement`'s single-active-generation rule already provides.
 `declare` SHALL be rejected, without effect, when: `generation_id` does not
 match the target's `active_generation_id`; the named range does not begin
 exactly at the current cursor plus one; the named range is not contiguous;
-or the named range extends past the highest sequence number the mailbox
-actually holds. A rejected `declare` leaves every named entry `queued` and
-undeclared.
+the named range extends past the highest sequence number the mailbox
+actually holds; **or the target already has an outstanding declared unit**
+(one declared and not yet acked). A rejected `declare` leaves every named
+entry `queued` and undeclared, unaffected by whatever declaration, if any,
+is already outstanding.
+
+**At most one declared-and-unacked unit per target, at any time.** This is
+not a weaker version of an overlap check; it is a total ordering on
+declaration itself: a transport MUST fully resolve one declared unit —
+by acking it — before declaring another for the same target, even a
+non-overlapping one. Two `declare` calls naming the *same* unacked range
+would otherwise both pass the cursor-position and contiguity checks above
+unchanged (neither call has been acked yet, so the cursor has not moved),
+minting two distinct `PackingUnitId`s bound to the same entries — two
+guards for one member, breaking the uniqueness `Delivery Guard and
+Acknowledgment Terminalization` requires. Limiting declaration to one
+outstanding unit at a time closes this by construction rather than by a
+narrower same-range check, and costs nothing operationally: one transport
+instance runs exactly one serial delivery-loop executor
+(`Consumer Generation Ownership and Replacement`), so it was never
+declaring, writing, or acking more than one unit at a time in practice —
+this requirement now states that as an invariant the relay enforces,
+rather than leaving it as behavior a well-formed executor merely happens
+to exhibit.
 
 On acceptance, the relay SHALL mint a `PackingUnitId`, return it to the
 calling transport, bind it to exactly the named entries, and record the
@@ -1101,6 +1122,27 @@ undeclared, exactly as if never peeked.
 - **AND** graceful shutdown resolves them `dropped_on_shutdown` exactly as
   it would for an entry no transport ever peeked
 
+#### Scenario: A second declaration is rejected while one is outstanding
+
+- **GIVEN** a transport has declared entries 1 through 5 as one packing
+  unit and has not yet acked it
+- **WHEN** the same generation calls `declare` again for the target —
+  whether for the identical range 1 through 5, an overlapping range, or
+  any other range — before acking the outstanding unit
+- **THEN** the relay rejects the second call without minting a
+  `PackingUnitId` or binding anything
+- **AND** the first declaration's binding is unaffected
+- **BECAUSE** permitting a second declaration to succeed would let two
+  guards bind the same or adjacent entries, which the single-outstanding-
+  declaration invariant exists specifically to prevent
+
+#### Scenario: Declaring again is possible only after acking the outstanding unit
+
+- **GIVEN** a transport has declared and acked entries 1 through 5
+- **WHEN** it then calls `declare` for entries 6 through 10
+- **THEN** the relay accepts it, since no unit is outstanding at the time
+  of the call
+
 ### Requirement: Mailbox Acknowledgment and Partial Acknowledgment
 
 The relay SHALL expose `ack(target, generation_id, packing_unit_id,
@@ -1129,13 +1171,14 @@ rejection references one that never legitimately existed for this caller.
 
 **Partial acknowledgment is the ordinary case, not an exception**, at the
 granularity of one declared unit. A transport that peeked ten entries MAY
-`declare` and write only the first five as one unit, `ack` that unit, and
-leave the remaining five `queued` and undeclared for the next `peek`. A
-transport MAY also declare several smaller units from one peeked prefix and
-`ack` each independently as its own write completes, provided each
-declaration itself was contiguous from the cursor at the time it was made —
-which, because one transport instance runs exactly one serial delivery
-executor, is the order such units are naturally declared and written in.
+`declare` and write only the first five as one unit and `ack` that unit,
+leaving the remaining five `queued` and undeclared for a **later**
+`declare` — which, per `Mailbox Submission Declaration`'s at-most-one-
+outstanding-unit rule, it MUST make only after this unit is acked, never
+concurrently with it. A single peeked prefix spanning more than the
+transport chooses to write in one unit is therefore declared, written, and
+acked as a *sequence* of units, one fully resolved before the next is
+declared — never as several units outstanding at once.
 
 #### Scenario: Acknowledging a declared unit terminalizes exactly its entries
 
