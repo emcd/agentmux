@@ -212,16 +212,45 @@ def audit(change_id, quiet):
                     section.setdefault(name, []).extend(scenarios)
         header_shown = False
 
+        # Validate RENAMED pairs first, and only exempt a MODIFIED name from
+        # the live-counterpart check below when it is the TO half of a
+        # well-formed, individually-valid pair. A malformed or partially
+        # invalid pair must not silently smuggle an unaudited MODIFIED
+        # requirement past the existence check.
         pairs = delta.get("RENAMED", {}).get("__pairs__", [])
-        renamed_to = {name for kind, name in pairs if kind == "TO"}
+        validated_renamed_to = set()
+        if len(pairs) % 2 != 0:
+            errors.append(
+                f"{capability}: RENAMED has an odd number of FROM/TO lines"
+            )
+        for i in range(0, len(pairs) - 1, 2):
+            (from_kind, from_name), (to_kind, to_name) = pairs[i], pairs[i + 1]
+            if from_kind != "FROM" or to_kind != "TO":
+                errors.append(
+                    f"{capability}: RENAMED pair at position {i // 2 + 1} is "
+                    f"not an alternating FROM/TO ({from_kind}, {to_kind})"
+                )
+                continue
+            pair_valid = True
+            if from_name not in live:
+                errors.append(f"{capability}: RENAMED FROM '{from_name}' is not live")
+                pair_valid = False
+            if to_name in live:
+                errors.append(f"{capability}: RENAMED TO '{to_name}' already exists live")
+                pair_valid = False
+            if pair_valid:
+                validated_renamed_to.add(to_name)
 
         for operation in ("MODIFIED", "REMOVED"):
             for name in delta.get(operation, {}):
                 # A MODIFIED requirement keyed by a RENAMED TO name has no
                 # live counterpart under that name until sync rewrites the
-                # live spec — its continuity is established by the RENAMED
-                # pair check below verifying the FROM name is live instead.
-                if operation == "MODIFIED" and name in renamed_to:
+                # live spec — its continuity is established by the validated
+                # RENAMED pair above verifying the FROM name is live instead.
+                # Only a name from a *validated* pair is exempt; an
+                # unvalidated or malformed TO still falls through to the
+                # existence check.
+                if operation == "MODIFIED" and name in validated_renamed_to:
                     continue
                 if name not in live:
                     errors.append(
@@ -234,12 +263,6 @@ def audit(change_id, quiet):
                     f"{capability}: ADDED '{name}' already exists live "
                     "(should this be MODIFIED?)"
                 )
-
-        for kind, name in pairs:
-            if kind == "FROM" and name not in live:
-                errors.append(f"{capability}: RENAMED FROM '{name}' is not live")
-            if kind == "TO" and name in live:
-                errors.append(f"{capability}: RENAMED TO '{name}' already exists live")
 
         for name, scenarios in delta.get("MODIFIED", {}).items():
             before = live.get(name)
