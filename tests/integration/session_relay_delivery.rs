@@ -2,5 +2,5 @@
 mod relay_delivery_async;
 #[path = "relay_delivery_prompt.rs"]
 mod relay_delivery_prompt;
-#[path = "relay_delivery_runtime.rs"]
+#[path = "relay_delivery_runtime/mod.rs"]
 mod relay_delivery_runtime;
