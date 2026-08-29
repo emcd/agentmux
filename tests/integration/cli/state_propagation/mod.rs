@@ -9,7 +9,7 @@
 //! somewhere the relay never bound. Only a live child arriving at the right
 //! socket rules that out.
 //!
-//! The cluster files partition the 11 tests by concern:
+//! The cluster files partition the 10 tests by concern:
 //! - [`rendezvous`]: rendezvous end-to-end through a real spawned member and
 //!   the partial-line wait helper (`a_partially_written_response_line_is_not_counted_as_complete`,
 //!   `a_relay_spawned_member_client_reaches_the_spawning_relay`,

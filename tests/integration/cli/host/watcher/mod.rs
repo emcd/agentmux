@@ -4,7 +4,7 @@
 //! bundle on edit, `--no-watch` reconcile-disable, and `watch-bundles = false`
 //! reconcile-disable.
 //!
-//! The cluster files partition the 8 tests by concern:
+//! The cluster files partition the 10 tests by concern:
 //! - [`load_unload`]: bundle-file add at runtime, non-autostart add held, and
 //!   remove at runtime (3 tests).
 //! - [`retain_reload`]: catalog retention when a layer becomes unreadable,
