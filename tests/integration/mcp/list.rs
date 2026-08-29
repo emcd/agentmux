@@ -96,8 +96,11 @@ async fn a_traversal_namespace_is_rejected_as_malformed() {
     );
 }
 
+// The spec states advertisement per tool, in each tool's own requirement,
+// rather than as one roster. The exact-set property -- that the catalog
+// holds these ten and nothing else -- is asserted only here.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_catalog_contains_list_sessions_send_look_and_raww() {
+async fn tool_catalog_matches_exact_advertised_tool_set() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
