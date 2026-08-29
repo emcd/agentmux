@@ -22,13 +22,6 @@ use super::{
     DeliveryEnvelope, LookMode, OutcomeFuture, StartupContext, TransportError, TransportStatus,
 };
 
-/// Delivery contract implemented by each concrete transport.
-///
-/// The non-blocking write methods ([`mailw`](Transport::mailw),
-/// [`raww`](Transport::raww)) return an [`OutcomeFuture`]; each transport owns
-/// its own internal delivery task and `spawn_blocking`. They are the relay's
-/// only delivery seam — the legacy synchronous `deliver`/`prepare_delivery`/
-/// `raw_write` methods have been removed.
 /// The three actions a generation supervisor needs to fence a transport
 /// generation, split out of [`Transport`] so the fence protocol can be driven
 /// against anything that can be stopped and observed.
@@ -195,6 +188,13 @@ pub trait PartitionSink: Send + Sync {
     fn record(&self, unit: PackingUnitId, evidence: SubmissionEvidence);
 }
 
+/// Delivery contract implemented by each concrete transport.
+///
+/// The non-blocking write methods ([`mailw`](Transport::mailw),
+/// [`raww`](Transport::raww)) return an [`OutcomeFuture`]; each transport owns
+/// its own internal delivery task and `spawn_blocking`. They are the relay's
+/// only delivery seam — the legacy synchronous `deliver`/`prepare_delivery`/
+/// `raw_write` methods have been removed.
 // `async_fn_in_trait` returns a future whose `Send` is not implied by the trait.
 // Every current impl's `is_ready_for_handover` future is `Send` (Pty's `!Send`
 // `Terminal` never crosses its `probe.observe().await`; the await is on the
