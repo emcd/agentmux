@@ -1,23 +1,4 @@
-//! The ACP worker lifecycle driver.
-//!
-//! [`AcpWorkerDriver`] owns the per-target [`AcpTransport`] and its
-//! bootstrap/respawn lifecycle. It is held by `TransportImpl::Acp`, so the relay
-//! delivery worker drives ACP startup and recovery through the generic transport
-//! handle without naming any ACP type. The driver depends only downward on
-//! `crate::transports`, `crate::configuration`, and `crate::runtime` — never on
-//! `crate::relay`.
-//!
-//! ## Relay touchpoints as injected closures
-//!
-//! The lifecycle reaches relay-owned registries (worker-state mirror, look
-//! OutputView publish, choice-queue invalidation, UI stream broadcast) and the
-//! relay choice queue (the [`Chooser`]). Each is injected as an opaque
-//! `Arc<dyn Fn>` (or value) in [`AcpDriverServices`], constructed relay-side
-//! closing over relay services; the driver invokes them without a back-edge,
-//! mirroring the `Chooser` pattern from Slice 2b.
-
 use std::{
-    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -25,342 +6,27 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde_json::{Value, json};
+use serde_json::json;
 
+use std::path::{Path, PathBuf};
+
+use crate::acp::AcpTransport;
+use crate::acp::persistent_runtime::{AcpBootstrapError, bootstrap_acp_worker_runtime};
 use crate::configuration::BundleMember;
-use crate::envelope::PromptBatchSettings;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::signals::shutdown_requested;
-use crate::transports::contract::OutcomeFuture;
-use crate::transports::{
-    Chooser, DeliveryEnvelope, GenerationFence, OutputView, PartitionSink, StartupContext,
-    Transport, TransportError, TransportHealth, TransportStatus, UnreachableSince,
-    WorkerFailureReason, WorkerReadinessState,
-};
+use crate::transports::{UnreachableSince, WorkerFailureReason, WorkerReadinessState};
 
-use super::{AcpBootstrapError, AcpTransport, bootstrap_acp_worker_runtime};
+use super::services::{AcpDriverServices, MirrorStateFn};
 
 const RESPAWN_BACKOFF_MAX_MS_ENVVAR: &str = "AGENTMUX_RELAY_ACP_RESPAWN_BACKOFF_MAX_MS";
 const RESPAWN_SLEEP_POLL_MS: u64 = 50;
 const RESPAWN_BACKOFF_INITIAL_MS: u64 = 1_000;
 const RESPAWN_BACKOFF_CAP_DEFAULT_MS: u64 = 30_000;
-/// Attempts one worker may consume before respawn gives up, counted across every
-/// trigger rather than per burst and cleared only by a successful re-establish.
-///
-/// Deliberately blind to *which* failure occurred. The predecessor counted
-/// consecutive **identical** failure signatures, which stopped fast on a
-/// deterministic fault and never stopped at all on an alternating one — a worker
-/// failing A, B, A, B reset the counter every time and retried forever. Stopping
-/// sooner on the deterministic case was a latency optimisation; failing to stop
-/// on the alternating case was the bug.
-///
-/// This bound matters more than it used to. Recovery used to be driven by
-/// delivery attempts, so a hopeless target stopped being retried once senders
-/// gave up on it — traffic was an accidental circuit breaker. The respawn signal
-/// now persists while the runtime stays `Unavailable`, so the monitor retries on
-/// its own clock and nothing else bounds the loop.
 const RESPAWN_ATTEMPT_LIMIT: u32 = 6;
-/// Idle poll interval for the respawn monitor's shutdown gate.
 const RESPAWN_MONITOR_POLL_MS: u64 = 100;
-/// Generic respawn trigger label. The internal delivery task signals a boolean
-/// respawn-needed edge (no reason code), so the monitor reports this for the
-/// respawn stream events and inscriptions.
 const RESPAWN_TRIGGER_REASON: &str = "worker_unavailable";
 
-/// Mirrors the worker readiness state into the relay's global registry.
-pub type MirrorStateFn = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
-/// Records the worker's most recent unrecoverable failure into the relay
-/// registry, so the startup path can surface its true cause behind an
-/// `Unavailable` readiness state.
-pub type RecordFailureFn = Arc<dyn Fn(WorkerFailureReason) + Send + Sync>;
-/// Publishes the transport's `look` [`OutputView`] handle into the relay registry.
-pub type PublishOutputFn = Arc<dyn Fn(Option<Arc<dyn OutputView>>) + Send + Sync>;
-/// Broadcasts an ACP respawn stream event (`event_type`, `payload`) to the bundle UI.
-pub type BroadcastUiFn = Arc<dyn Fn(&str, Value) + Send + Sync>;
-/// Invalidates the target's pending operator choices before a respawn attempt.
-pub type InvalidateChoicesFn = Arc<dyn Fn() + Send + Sync>;
-
-/// Relay-provided lifecycle touchpoints, injected once when the driver is built.
-///
-/// Each closure closes over the relay's own registries/services for one target;
-/// the driver holds opaque `Arc<dyn Fn>`s typed only in `transports`, so
-/// `src/acp` never imports `crate::relay`.
-#[derive(Clone)]
-pub struct AcpDriverServices {
-    /// Mirrors the worker readiness state into the relay's global registry (the
-    /// TUI worker-state stream and the relay's own respawn gate observe it).
-    pub mirror_state: MirrorStateFn,
-    /// Records the worker's structured failure into the relay registry just
-    /// before the `Unavailable` transition, so the startup poller reads the true
-    /// cause (e.g. the ACP `initialize` failure reason) rather than a generic
-    /// placeholder. Called only on unrecoverable failures.
-    pub record_failure: RecordFailureFn,
-    /// Publishes the transport's `look` [`OutputView`] handle into the relay
-    /// look registry. Called before each `startup` so a `look` racing init finds
-    /// the handle and runs its bounded prime-wait.
-    pub publish_output: PublishOutputFn,
-    /// Broadcasts an ACP respawn stream event (`event_type`, `payload`) to the
-    /// bundle's registered UI sessions. The relay closure wraps it in its own
-    /// `RelayStreamEvent`.
-    pub broadcast_ui: BroadcastUiFn,
-    /// Invalidates the target's pending operator choices before a respawn
-    /// attempt, logging its own failure. Encapsulates the relay choice-queue
-    /// context construction.
-    pub invalidate_choices: InvalidateChoicesFn,
-    /// Re-entrant operator-choice resolver threaded into every [`StartupContext`].
-    pub chooser: Chooser,
-    /// The relay's guard, for reporting which members share one `session/prompt`.
-    /// Handed to the transport at construction; see
-    /// [`PartitionSink`](crate::transports::PartitionSink).
-    pub partition_sink: Arc<dyn PartitionSink>,
-}
-
-impl std::fmt::Debug for AcpDriverServices {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AcpDriverServices").finish_non_exhaustive()
-    }
-}
-
-/// Owns the per-target ACP transport and its bootstrap lifecycle.
-///
-/// Held by `TransportImpl::Acp`. Delivery trait methods delegate to the inner
-/// [`AcpTransport`] under a brief lock. The transport is shared with the
-/// driver-owned async respawn monitor (spawned in
-/// [`start_bootstrap`](Self::start_bootstrap))
-/// via `Arc<Mutex<…>>`, so respawn runs off the relay worker loop: the monitor
-/// drives recovery while the worker keeps submitting writes. The monitor never
-/// holds the lock across `.await` or the blocking child spawn, so a concurrent
-/// `mailw` is never stalled.
-pub struct AcpWorkerDriver {
-    transport: Arc<Mutex<AcpTransport>>,
-    namespace: String,
-    runtime_directory: PathBuf,
-    target_member: BundleMember,
-    services: AcpDriverServices,
-    /// The driver-owned respawn monitor.
-    ///
-    /// Retained rather than detached: the monitor can install a replacement
-    /// runtime, so it is a generation-owned executor like any other, and one
-    /// whose handle is discarded can be neither terminated nor observed. Absent
-    /// until bootstrap spawns it.
-    respawn_monitor: Option<tokio::task::JoinHandle<()>>,
-    /// The driver-owned initial-bootstrap task.
-    ///
-    /// The initial bootstrap runs as a supervised task rather than inline in the
-    /// relay worker's startup, because a worker awaiting it cannot reach its own
-    /// shutdown gate: an agent parked in `initialize` meant the worker never
-    /// entered its loop, never began a fence, and never emitted a verdict at all
-    /// — not even the honest negative one. Retained for the same reason the
-    /// respawn monitor is: it spawns and owns an agent child, so it is a
-    /// generation-owned executor, and one whose handle is discarded can be
-    /// neither terminated nor observed.
-    bootstrap_task: Option<tokio::task::JoinHandle<()>>,
-    /// Set once respawn has given up on this target, either because the failure
-    /// was permanent or because the retry budget ran out.
-    ///
-    /// This, and not `WorkerReadinessState::Unavailable`, is what the health
-    /// axis reads. `Unavailable` is published for a respawn gap as readily as
-    /// for a give-up, so reading it would report a worker whose replacement is
-    /// seconds away as unreachable and bounce the members that replacement was
-    /// about to serve.
-    ///
-    /// Shared with the respawn monitor, which is the task that discovers the
-    /// give-up and outlives no driver.
-    respawn_abandoned: Arc<AtomicBool>,
-    /// Latch for the health axis; see [`Transport::health`].
-    ///
-    /// Shared with the respawn monitor so the instant is recorded at the
-    /// give-up transition rather than at the first later `health()` call. The
-    /// dwell measures how long the target has been unreachable, not how long
-    /// since someone happened to ask: a member arriving well after a permanent
-    /// failure would otherwise wait a fresh full dwell for a target that was
-    /// already known to be gone.
-    unreachable_since: Arc<UnreachableSince>,
-}
-
-impl AcpWorkerDriver {
-    /// Builds a driver for one ACP target with a fresh transport.
-    #[must_use]
-    pub fn new(
-        target_member: BundleMember,
-        runtime_directory: PathBuf,
-        namespace: String,
-        services: AcpDriverServices,
-        batch_settings: PromptBatchSettings,
-    ) -> Self {
-        Self {
-            transport: Arc::new(Mutex::new(AcpTransport::new(
-                batch_settings,
-                Some(Arc::clone(&services.mirror_state)),
-                Arc::clone(&services.partition_sink),
-            ))),
-            namespace,
-            runtime_directory,
-            target_member,
-            services,
-            respawn_monitor: None,
-            bootstrap_task: None,
-            respawn_abandoned: Arc::new(AtomicBool::new(false)),
-            unreachable_since: Arc::new(UnreachableSince::default()),
-        }
-    }
-
-    /// Locks the shared transport. Locks are brief by construction (the respawn
-    /// monitor never holds the lock across `.await` or the blocking child spawn).
-    fn lock_transport(&self) -> std::sync::MutexGuard<'_, AcpTransport> {
-        self.transport.lock().expect("acp transport mutex poisoned")
-    }
-
-    /// Starts establishing the ACP runtime and returns the flag the relay worker
-    /// gates task admission on.
-    ///
-    /// Everything that must be true before the worker's loop runs happens here,
-    /// synchronously: readiness reads Initializing, the look handle is published
-    /// (so a `look` in the initial-startup window finds it), and the
-    /// chooser/target identity is set. Only the part that can block for an
-    /// unbounded time — spawning the agent and completing the ACP handshake —
-    /// is handed to a supervised task.
-    ///
-    /// The returned flag reads `true` once that task has settled, whichever way
-    /// it settled. The worker holds its queue until then, which preserves the
-    /// delivery semantics of the awaited bootstrap this replaces: no submission
-    /// reaches a transport that has no runtime yet. What changes is that the
-    /// waiting now happens inside a loop whose shutdown gate stays reachable, so
-    /// a bootstrap that never returns still reaches the fence.
-    pub fn start_bootstrap(&mut self) -> Arc<AtomicBool> {
-        (self.services.mirror_state)(WorkerReadinessState::Initializing);
-        let handle = self.lock_transport().give_output();
-        (self.services.publish_output)(handle);
-
-        // Set chooser/target identity ahead of the establish; the freshly-built
-        // transport already reads Initializing from construction.
-        self.lock_transport()
-            .prepare_for_startup(self.services.chooser.clone(), self.target_member.id.clone());
-
-        // Spawned before the bootstrap it supervises, rather than after it
-        // returns: the monitor is idle until the transport signals
-        // respawn-needed, and a bootstrap that never returns must not be the
-        // reason the target has no supervisor.
-        self.spawn_respawn_monitor();
-
-        let settled = Arc::new(AtomicBool::new(false));
-        self.bootstrap_task = Some(tokio::spawn(initial_acp_bootstrap(
-            Arc::clone(&self.transport),
-            self.services.clone(),
-            self.namespace.clone(),
-            self.runtime_directory.clone(),
-            self.target_member.clone(),
-            AbandonmentSignal {
-                abandoned: Arc::clone(&self.respawn_abandoned),
-                unreachable_since: Arc::clone(&self.unreachable_since),
-            },
-            Arc::clone(&settled),
-        )));
-        settled
-    }
-
-    /// Spawns the driver-owned async respawn monitor. It subscribes to the
-    /// transport's stable respawn-needed signal and drives respawn off the relay
-    /// worker loop, sharing the transport via `Arc<Mutex<…>>`.
-    fn spawn_respawn_monitor(&mut self) {
-        let transport = Arc::clone(&self.transport);
-        let respawn_needed = self.lock_transport().respawn_needed_subscribe();
-        let services = self.services.clone();
-        let namespace = self.namespace.clone();
-        let runtime_directory = self.runtime_directory.clone();
-        let target_member = self.target_member.clone();
-        self.respawn_monitor = Some(tokio::spawn(acp_respawn_monitor(
-            transport,
-            respawn_needed,
-            services,
-            AcpRespawnState::new(),
-            AcpRespawnTarget {
-                namespace,
-                runtime_directory,
-                member: target_member,
-            },
-            Arc::clone(&self.respawn_abandoned),
-            Arc::clone(&self.unreachable_since),
-        )));
-    }
-}
-
-impl GenerationFence for AcpWorkerDriver {
-    fn fence_generation(&mut self) {
-        // Marking the transport fenced is also the monitor's cooperative stop
-        // request: it reads the same flag between polls and returns.
-        self.lock_transport().fence_generation();
-    }
-
-    fn terminate_generation(&mut self) {
-        self.lock_transport().terminate_generation();
-        // Either task can be parked in a bootstrap that will not return inside
-        // any window the fence allows. Aborting is the destructive step for a
-        // task that observes nothing; the runtime such a bootstrap would have
-        // produced is refused at the install anyway, under the fenced check, and
-        // is torn down by the closure that owns it rather than left to whichever
-        // task was awaiting the result.
-        if let Some(monitor) = self.respawn_monitor.as_ref() {
-            monitor.abort();
-        }
-        if let Some(bootstrap) = self.bootstrap_task.as_ref() {
-            bootstrap.abort();
-        }
-    }
-
-    fn generation_ceased(&self) -> bool {
-        let monitor_ceased = self
-            .respawn_monitor
-            .as_ref()
-            .is_none_or(tokio::task::JoinHandle::is_finished);
-        let bootstrap_ceased = self
-            .bootstrap_task
-            .as_ref()
-            .is_none_or(tokio::task::JoinHandle::is_finished);
-        monitor_ceased && bootstrap_ceased && self.lock_transport().generation_ceased()
-    }
-}
-
-impl Transport for AcpWorkerDriver {
-    fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
-        self.lock_transport().startup(context)
-    }
-
-    fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
-        self.lock_transport().mailw(envelope)
-    }
-
-    fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
-        self.lock_transport().raww(content, append_enter)
-    }
-
-    async fn is_ready_for_handover(&self) -> bool {
-        // Read readiness without holding the lock across an await. Delegates
-        // to the transport's sync predicate so the four ACP readiness call
-        // sites stay consistent.
-        self.lock_transport().is_available()
-    }
-
-    fn health(&self) -> TransportHealth {
-        // Reachability for an ACP target means a replacement is still possible,
-        // not that one exists right now. A respawn gap reports `Unavailable` and
-        // is healthy: the monitor is mid-flight and the member it would bounce is
-        // the member the replacement is about to serve. Only an abandoned respawn
-        // — permanent failure or an exhausted retry budget — is unreachable.
-        self.unreachable_since
-            .fold(!self.respawn_abandoned.load(Ordering::Acquire))
-    }
-
-    fn shutdown(&mut self) {
-        self.lock_transport().shutdown();
-    }
-
-    fn give_output(&self) -> Option<Arc<dyn OutputView>> {
-        self.lock_transport().give_output()
-    }
-}
-
-/// What one bootstrap attempt did with the runtime it produced.
 enum BootstrapDisposition {
     /// The runtime is live and installed on the transport.
     Installed,
@@ -448,7 +114,7 @@ async fn run_one_bootstrap(
 /// returns, so the worker knows when its queue may start flowing; a bootstrap
 /// aborted by a fence never raises it, which is correct, because that worker is
 /// draining rather than delivering.
-async fn initial_acp_bootstrap(
+pub(super) async fn initial_acp_bootstrap(
     transport: Arc<Mutex<AcpTransport>>,
     services: AcpDriverServices,
     namespace: String,
@@ -567,18 +233,18 @@ fn respawn_is_owed(signalled: bool, abandoned: bool, readiness: WorkerReadinessS
 /// and separating them is exactly how the instant came to be stamped at first
 /// enquiry instead of at the transition. Owned so the pair can be handed to the
 /// spawned bootstrap task alongside the respawn monitor.
-struct AbandonmentSignal {
-    abandoned: Arc<AtomicBool>,
-    unreachable_since: Arc<UnreachableSince>,
+pub(super) struct AbandonmentSignal {
+    pub(super) abandoned: Arc<AtomicBool>,
+    pub(super) unreachable_since: Arc<UnreachableSince>,
 }
 
-struct AcpRespawnTarget {
-    namespace: String,
-    runtime_directory: PathBuf,
-    member: BundleMember,
+pub(super) struct AcpRespawnTarget {
+    pub(super) namespace: String,
+    pub(super) runtime_directory: PathBuf,
+    pub(super) member: BundleMember,
 }
 
-async fn acp_respawn_monitor(
+pub(super) async fn acp_respawn_monitor(
     transport: Arc<Mutex<AcpTransport>>,
     mut respawn_needed: tokio::sync::watch::Receiver<u64>,
     services: AcpDriverServices,
@@ -908,13 +574,13 @@ fn respawn_backoff_cap_ms() -> u64 {
         .unwrap_or(RESPAWN_BACKOFF_CAP_DEFAULT_MS)
 }
 
-struct AcpRespawnState {
+pub(super) struct AcpRespawnState {
     attempt: u32,
     next_backoff_ms: u64,
 }
 
 impl AcpRespawnState {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Self {
             attempt: 0,
             next_backoff_ms: 0,
