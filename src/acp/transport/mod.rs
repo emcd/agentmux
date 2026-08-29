@@ -39,7 +39,7 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use tokio::sync::mpsc;
 
@@ -62,6 +62,13 @@ use crate::transports::{
 };
 use crate::transports::{PartitionSink, SendOutcome, SubmissionEvidence, WorkerReadinessState};
 
+pub mod state;
+use self::state::{
+    ACP_LOOK_ENTRIES_DEFAULT, ACP_LOOK_PRIME_POLL_INTERVAL, ACP_PROMPT_WAIT_POLL_INTERVAL,
+    ACP_WRITE_CHANNEL_CAPACITY, AcpSharedState, BootstrapInFlight, BootstrapRecord,
+    BootstrapRegistry, NEXT_BOOTSTRAP_ID, ReadinessMirror, raise_respawn_signal,
+};
+
 // ACP delivery failure taxonomy (see the relay delivery README for the full
 // catalogue). The delivery outcomes the ACP transport now produces are typed:
 // `Delivered` (framed write succeeded), `NotSubmitted` (positive non-delivery:
@@ -70,81 +77,6 @@ use crate::transports::{PartitionSink, SendOutcome, SubmissionEvidence, WorkerRe
 // after a successful write is target-health observability, not a delivery
 // outcome. A write this generation was still holding when it was stopped is
 // `NotSubmitted` too — see `stopped_generation_outcome`.
-
-/// Slice length for the single-flight ACP prompt-completion wait. Bounds how
-/// long the blocking thread parks before re-checking the shutdown gate.
-const ACP_PROMPT_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
-/// Poll cadence for the look prime-wait.
-const ACP_LOOK_PRIME_POLL_INTERVAL: Duration = Duration::from_millis(25);
-/// Default ACP look window applied when the caller omits a window size. ACP
-/// replay entries are far larger than tmux lines (each can be a full message or
-/// tool invocation), so a small default keeps the response under the MCP payload
-/// limit while still showing recent context.
-const ACP_LOOK_ENTRIES_DEFAULT: usize = 50;
-
-/// State shared between an [`AcpTransport`] and the [`OutputView`] handle it
-/// publishes. Held behind an `Arc` so the handle stays valid across the
-/// transport's whole life — including the initial-startup and respawn windows
-/// when there is no live runtime yet. The transport repoints `replay` at the
-/// current runtime's buffer on every successful startup; the handle reads
-/// whichever buffer is current (or `None`) plus the readiness that drives its
-/// bounded prime-wait. This is what lets `look` actually wait through startup.
-struct AcpSharedState {
-    readiness: Mutex<WorkerReadinessState>,
-    replay: Mutex<Option<SharedReplay>>,
-    /// Mirrors per-turn readiness transitions into the relay global registry.
-    /// Travels with the readiness it mirrors so both the internal delivery task
-    /// and the `on_dispatched` closure reach it through the shared `Arc`. `None`
-    /// in tests constructed without a relay registry.
-    mirror_state: Option<ReadinessMirror>,
-    /// The relay's guard, for reporting which members share one `session/prompt`.
-    ///
-    /// Travels on the shared state for the same reason `mirror_state` does: the
-    /// partition is decided inside the delivery task, which reaches everything
-    /// through this `Arc`. Required rather than optional — a turn whose group it
-    /// could not declare would have to resolve its members from evidence about a
-    /// write that was never theirs alone.
-    partition_sink: Arc<dyn PartitionSink>,
-    /// Handles for the permission resolver threads this generation has spawned.
-    ///
-    /// Retained rather than detached: a permission resolver blocks on an
-    /// operator decision and can outlive the turn that raised it, so an executor
-    /// whose handle was dropped would be invisible to cessation observation —
-    /// and a generation cannot be fenced on executors it cannot see.
-    permission_executors: Mutex<Vec<JoinHandle<()>>>,
-}
-
-impl AcpSharedState {
-    /// Records a permission resolver's handle, dropping any that have already
-    /// finished so a long-lived generation does not accumulate one per decision
-    /// it ever made. Only live executors need observing.
-    fn note_permission_executor(&self, handle: JoinHandle<()>) {
-        let mut executors = self
-            .permission_executors
-            .lock()
-            .expect("permission executors mutex");
-        executors.retain(|handle| !handle.is_finished());
-        executors.push(handle);
-    }
-
-    fn permission_executors_ceased(&self) -> bool {
-        self.permission_executors
-            .lock()
-            .map(|executors| executors.iter().all(JoinHandle::is_finished))
-            .unwrap_or(false)
-    }
-}
-
-/// Channel capacity for the internal ACP delivery task's write queue.
-const ACP_WRITE_CHANNEL_CAPACITY: usize = 256;
-
-/// Mirrors a per-turn readiness transition into the relay's global worker-state
-/// registry. Injected by the `AcpWorkerDriver` (structurally identical to its
-/// `MirrorStateFn`), so the internal delivery task mirrors its own Busy/settled
-/// transitions and the relay worker no longer drives `mark_busy` /
-/// `mirror_settled_readiness`. `None` in tests that construct the transport
-/// without a relay registry.
-type ReadinessMirror = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
 
 /// Items enqueued onto the ACP transport's internal ordered write channel.
 ///
@@ -251,133 +183,6 @@ pub struct AcpTransport {
     /// before it carried handles: an initial bootstrap and a respawn can overlap,
     /// and neither may clear or terminate the other's state.
     bootstraps: Arc<BootstrapRegistry>,
-}
-
-/// The in-flight bootstraps of one generation, and whether that generation has
-/// been told to end.
-///
-/// The latch belongs here rather than beside the traversal because a bootstrap's
-/// child is published from inside the closure that spawned it, at a moment
-/// nothing coordinates with the fence. Reading the list once and signalling what
-/// it happened to hold made termination a *moment*: a child published a
-/// microsecond later was never signalled at all, and the closure went on to park
-/// in a handshake with a live agent behind it. As a latched state, the ordering
-/// stops mattering — publication either finds it already set, or is found by the
-/// traversal.
-#[derive(Debug, Default)]
-struct BootstrapRegistry {
-    records: Mutex<Vec<BootstrapRecord>>,
-    /// Set once and never cleared: a generation told to end does not resume.
-    terminating: AtomicBool,
-}
-
-impl BootstrapRegistry {
-    fn records(&self) -> std::sync::MutexGuard<'_, Vec<BootstrapRecord>> {
-        self.records.lock().expect("bootstrap registry mutex")
-    }
-
-    fn is_terminating(&self) -> bool {
-        self.terminating.load(Ordering::Acquire)
-    }
-
-    /// Latches termination and makes one non-blocking pass over *every* record.
-    ///
-    /// Idempotent, and registry-wide on purpose. A per-record handoff is not
-    /// enough here: this registry exists because an initial bootstrap and a
-    /// respawn can overlap, so the holder that defeats a traversal attempt is
-    /// generally not the owner of the records that attempt would have reached.
-    /// A publisher that served only itself left every other live bootstrap
-    /// unsignalled with nothing scheduled to look again.
-    fn initiate_termination(&self) {
-        self.terminating.store(true, Ordering::Release);
-        // Attempted, never taken: step 3 is contracted to block nowhere. What
-        // this cannot reach is reached by whoever is holding the lock, when they
-        // release it.
-        if let Ok(records) = self.records.try_lock() {
-            for record in records.iter() {
-                if let Some(generation) = record.generation.as_ref() {
-                    generation.initiate_termination();
-                }
-            }
-        }
-    }
-
-    /// Called by every mutating holder of the records lock, after releasing it.
-    ///
-    /// This is the other half of the handoff. Reading the latch only while
-    /// holding the lock leaves the window where a requester latches, loses its
-    /// attempt to this holder, and the holder then releases without looking
-    /// again — so the read happens here, after release, and it re-runs the whole
-    /// traversal rather than serving one record.
-    fn serve_pending_termination(&self) {
-        if self.is_terminating() {
-            self.initiate_termination();
-        }
-    }
-}
-
-/// One in-flight bootstrap: its guard's identity, and the agent child it owns
-/// once the spawn has happened.
-#[derive(Debug)]
-struct BootstrapRecord {
-    id: u64,
-    generation: Option<AcpGenerationHandle>,
-}
-
-static NEXT_BOOTSTRAP_ID: AtomicU64 = AtomicU64::new(1);
-
-/// Publishes a fresh respawn cause on the shared signal.
-///
-/// The delivery paths hold a cloned sender rather than the transport, so raising
-/// cannot go through `&self`. Incrementing under `send_modify` keeps epochs
-/// unique per cause even when two delivery threads conclude at once: the watch's
-/// own lock serializes the read-modify-write, so neither can observe the other's
-/// value and reuse it.
-pub(crate) fn raise_respawn_signal(sender: &tokio::sync::watch::Sender<u64>) {
-    sender.send_modify(|epoch| *epoch += 1);
-}
-
-/// Marks a bootstrap as running for as long as it is held, and is how that
-/// bootstrap hands its agent child to the fence.
-///
-/// Moved into the blocking closure itself, not held beside it: the closure
-/// outlives any abort of the task awaiting it, so only something dropped by the
-/// closure can say when that executor actually stopped.
-#[derive(Debug)]
-pub(crate) struct BootstrapInFlight {
-    id: u64,
-    bootstraps: Arc<BootstrapRegistry>,
-}
-
-impl BootstrapInFlight {
-    /// Publishes the agent child this bootstrap owns, making it reachable by the
-    /// fence's forced step for as long as this guard lives — and ends it here if
-    /// the forced step has already gone past.
-    ///
-    /// The handoff after the release is registry-wide, not this record alone: a
-    /// traversal that lost its attempt to this holder was trying to reach every
-    /// live bootstrap, and serving only the one published here would leave the
-    /// rest of them alive with nothing scheduled to look again.
-    pub(crate) fn publish_generation(&self, generation: AcpGenerationHandle) {
-        {
-            let mut records = self.bootstraps.records();
-            if let Some(record) = records.iter_mut().find(|record| record.id == self.id) {
-                record.generation = Some(generation);
-            }
-        }
-        self.bootstraps.serve_pending_termination();
-    }
-}
-
-impl Drop for BootstrapInFlight {
-    fn drop(&mut self) {
-        self.bootstraps
-            .records()
-            .retain(|record| record.id != self.id);
-        // A dropping guard holds the same lock a traversal attempt can lose to,
-        // so it owes the same handoff a publisher does.
-        self.bootstraps.serve_pending_termination();
-    }
 }
 
 impl std::fmt::Debug for AcpTransport {
