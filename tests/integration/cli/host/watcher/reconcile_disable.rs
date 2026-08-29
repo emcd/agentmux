@@ -7,7 +7,6 @@ use std::{
 
 use tempfile::TempDir;
 
-use super::super::super::helpers::*;
 use super::super::*;
 
 /// Negative-assertion budget for `--no-watch` and `watch-bundles = false`
