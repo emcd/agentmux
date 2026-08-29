@@ -234,9 +234,13 @@ unreachability is evidence that no wait will end it.
 A raw-kind mailbox entry SHALL be discovered by a transport's delivery-loop
 executor through `peek`, exactly as specified by `delivery-quiescence`'s
 `Mailbox Peek Operation` requirement: `peek` returns a raw entry only as a
-singleton, never combined with mail.
+singleton, never combined with mail. Before writing it, the executor SHALL
+`declare` it — as its own singleton packing unit, per `Mailbox Submission
+Declaration` — exactly as it would declare a mail packing unit; a raw entry
+carries no exemption from the declare-before-write discipline.
 
-Once peeked, a transport's write of raw content SHALL map as follows:
+Once peeked and declared, a transport's write of raw content SHALL map as
+follows:
 
 - tmux target: inject literal `text` into target pane; if `no_enter=false`,
   inject Enter after text
@@ -306,3 +310,104 @@ own beyond the one `peek`/`ack` and generation replacement already provide.
   soon as it is at the head
 - **BECAUSE** the positive fence verdict required to admit the replacement
   already establishes that the outgoing generation's writes have ceased
+
+### Requirement: ACP Transport Error Code
+
+Relay SHALL use dedicated error code `transport_unavailable` (in ACP context:
+`acp_child_unavailable`) for failures caused by ACP child process write
+failures or reader thread exit. This code SHALL be distinguishable from
+`internal_unexpected_failure` which covers relay-internal logic errors.
+
+Error code taxonomy addendum:
+
+- `transport_unavailable` — ACP stdin write failure (child process dead or
+  pipe broken); caller can retry by requesting a worker reconnect
+- `internal_unexpected_failure` — relay-internal logic or lock failure;
+  not a transport concern
+
+**The synchronous error code names no delivery outcome, and none is spelled
+`transport_unavailable`.** `SendOutcome` has no such variant: a declared
+member whose submission fails because the transport cannot be reached — an
+ACP stdin write erroring without proof that zero bytes left — cannot
+exclude a target-side effect and SHALL resolve `submission_unknown` via
+`ack`, exactly as any other undifferentiated submission failure does. A
+`queued`-and-undeclared member is governed by a separate policy boundary,
+per `delivery-quiescence`'s `Mailbox Ordering and Cursor Lifecycle`:
+
+- it SHALL resolve only on a **positively observed terminal lifecycle state** —
+  the transport was shut down, or its generation was torn down without
+  replacement — or on a sustained unreachability its transport reports as
+  `Unreachable` past `[delivery].unreachable-dwell-ms`;
+- because such a member was never declared, it resolves `not_submitted`
+  **directly, as a relay-side transition** — not through the guard, which
+  has nothing to terminalize for an entry it was never bound to;
+- a **transient absence** — a respawn in progress, a generation being replaced, a
+  UI subscriber that has disconnected but whose session is still registered —
+  SHALL leave members `queued` and undeclared, until the absence resolves into
+  the transport's own readiness, into a positively observed teardown, or into
+  that sustained unreachability. Nothing converts the waiting itself into an
+  outcome; what resolves the unreachable case is the repeated observation, not
+  its duration alone.
+
+Direct resolution of an undeclared member on definite teardown SHALL be
+serialized against `declare` and generation replacement under the same lock,
+per `delivery-quiescence`'s `Revocation Serialized Against In-Flight
+Submission Bookkeeping` requirement, so a member cannot be resolved by one
+path while a live generation is concurrently declaring it.
+
+#### Scenario: ACP stdin write failure returns transport_unavailable
+
+- **WHEN** relay attempts to write a prompt to ACP stdin
+- **AND** the write fails with an I/O error
+- **THEN** relay returns error code `transport_unavailable`
+- **AND** does not return `internal_unexpected_failure`
+
+#### Scenario: transport_unavailable is distinguishable by MCP consumers
+
+- **WHEN** MCP consumer receives an error response for an ACP send
+- **AND** error code is `transport_unavailable`
+- **THEN** consumer can infer the ACP process is gone and may retry/reattach
+- **AND** can distinguish this from a non-retryable relay-internal failure
+
+#### Scenario: An in-flight submission failure resolves submission_unknown, not an error code
+
+- **WHEN** a declared ACP member's stdin write fails without proof that zero
+  bytes left
+- **THEN** the member resolves `submission_unknown` via `ack`
+- **AND** no `transport_unavailable`-spelled outcome is produced, because
+  `SendOutcome` has no such variant
+
+#### Scenario: A respawn in progress leaves undeclared members queued
+
+- **WHEN** a target's transport generation is being replaced
+- **AND** queued members for that target were never declared
+- **THEN** those members remain `queued` and undeclared
+- **AND** they resolve only once the replacement's delivery-loop executor
+  peeks, declares, and acks them, or if the generation is instead torn down
+  with no replacement
+
+#### Scenario: A torn-down transport without replacement resolves its undeclared members as not_submitted
+
+- **WHEN** a transport is shut down, or its generation is torn down with no
+  replacement
+- **THEN** its `queued`-and-undeclared members resolve `not_submitted`
+  directly
+- **AND** the outcome is issued from the positively observed lifecycle state, not
+  from elapsed time
+- **BECAUSE** such a member was never declared and never bound to a packing
+  unit, so there is no guard entry to route it through and no concurrent
+  evidence that could still arrive for it
+
+### Requirement: Pty Prompt Probe and Look Shall Not Block a Tokio Worker Thread
+
+`PtyPromptProbe::observe` and `PtyOutputView::look` SHALL NOT call `blocking_send`/`blocking_recv` on a tokio worker thread. The snapshot handshake through the worker thread's `mpsc`/`oneshot` channel SHALL be performed off the async runtime.
+
+A Pty target's own delivery-loop executor, deciding whether to declare and write via `PtyPromptProbe::observe`, SHALL NOT panic with "Cannot block the current thread from within a runtime". This is now an entirely transport-internal check — there is no relay-facing handover-readiness read to trigger it — but the blocking-thread hazard is identical regardless of who calls it.
+
+#### Scenario: Pty's own readiness check does not panic the tokio worker
+
+- **WHEN** a Pty target's delivery-loop executor checks its own readiness via `PtyPromptProbe::observe` before deciding whether to declare and write
+- **THEN** the probe completes without panicking the `tokio-runtime-worker` thread
+- **AND** the relay logs `relay.send.async.queued` followed by `relay.send.async.completed` (or a structured `runtime_transport_startup_failed` on failure), never a stranded `queued` with no `completed`
+
+> **Note:** `Pty look` uses the same snapshot channel and is fixed by the same `state.rs` change, but is currently unreachable from the relay's look handler; end-to-end verification is a follow-up.

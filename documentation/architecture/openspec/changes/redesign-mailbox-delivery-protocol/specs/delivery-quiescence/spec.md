@@ -184,10 +184,15 @@ Relay SHALL maintain an in-memory per-target mailbox. The mailbox SHALL be
 non-durable.
 
 Each mailbox entry SHALL carry exactly two states — `queued` or `terminal` —
-and an entry's own sequence number is its stable identity; there is no
-separate attempt ID, because acknowledgment is idempotent per entry rather
-than keyed to a submission attempt. There is no `Authorized` state and no
-event that transitions an entry independent of acknowledgment.
+and an entry's own sequence number is its stable identity. **Declaration
+does not add a third state.** A declared-but-unacknowledged entry is still
+`queued`; declaration is metadata carried by a `queued` entry (which
+`PackingUnitId`, if any, it is bound to), per `Mailbox Submission
+Declaration`, not a distinct lifecycle state. There is no separate attempt
+identifier beyond that binding, because acknowledgment of an
+already-terminal entry is idempotent rather than keyed to a submission
+attempt. There is no `Authorized` state and no event that transitions an
+entry independent of acknowledgment.
 
 Relay SHALL preserve FIFO ordering per target session and SHALL NOT
 deduplicate or coalesce queued entries. Mail and raw are variants of one
@@ -207,6 +212,19 @@ target's mailbox is independent, and the relay does not arbitrate between
 targets by any credit, quantum, or rotation. A transport chooses when to
 peek its own target's mailbox; the relay does not schedule that choice.
 
+**Targets do contend, and that is not an argument for restoring
+arbitration.** Tmux targets in one bundle share a single tmux server and
+socket; ACP bootstrap enters a shared blocking pool; and a transport whose
+write seam blocks can occupy a delivery-runtime worker thread. None of
+these is measured by a global byte quantum, which represents neither
+runtime occupancy nor channel slots nor tmux-server capacity. A
+resource-grounded policy would be denominated per shared resource and would
+state a throughput or fairness objective; no such objective is required
+today. A transport that blocks its write seam is a contract violation to be
+repaired at its source rather than a load to be scheduled around — see the
+`transport-abstraction` capability's non-blocking delivery-loop-executor
+contract.
+
 **No elapsed duration SHALL resolve a `queued` entry whose target is
 reachable.** A `queued` entry leaves that state only by being acknowledged,
 by its target's transport being positively observed torn down without
@@ -215,6 +233,23 @@ longer than `[delivery].unreachable-dwell-ms`, or by graceful relay
 shutdown. The unreachability case is specified in full by the
 `transport-abstraction` capability, which owns the health axis; it is named
 here so this enumeration is exhaustive.
+
+**A definite teardown resolves an undeclared entry directly; a declared one
+still needs the guard.** When a target's transport is positively observed
+torn down without replacement, or continuously observed `Unreachable` past
+the dwell, every `queued`-and-undeclared entry for it SHALL resolve
+`not_submitted` immediately, as a plain relay-side terminal transition —
+not through the guard, since an undeclared entry was never bound to one and
+there is no concurrent evidence that could still arrive for it to race
+against. A **declared** entry under the same trigger is different: it
+already has a guard, so it resolves through `Delivery Guard and
+Acknowledgment Terminalization`'s evidence order exactly as it would on any
+other trigger, per that requirement's existing scope. Resolving an
+undeclared entry this way SHALL be serialized under the same lock
+`Revocation Serialized Against In-Flight Submission Bookkeeping` already
+uses, so a `declare` cannot bind an entry the teardown path is
+concurrently resolving, and the teardown path cannot resolve an entry a
+`declare` has concurrently bound.
 
 Consequently the relay guarantees that every accepted message resolves **at
 most once relative to acknowledgment bookkeeping** — an entry is terminalized
@@ -257,6 +292,26 @@ than of any coder.
 - **AND** no terminal outcome is issued and no admission quota is released
   for it
 
+#### Scenario: A definite teardown resolves an undeclared entry directly
+
+- **WHEN** an undeclared, `queued` entry's target's transport is positively
+  observed torn down without replacement, or continuously observed
+  `Unreachable` past `[delivery].unreachable-dwell-ms`
+- **THEN** the entry resolves `not_submitted` immediately as a direct
+  relay-side transition
+- **AND** it does not pass through the guard, because it was never bound to
+  one
+
+#### Scenario: A declared entry under the same trigger still needs the guard
+
+- **WHEN** a **declared** entry's target's transport is positively observed
+  torn down without replacement, or continuously observed `Unreachable`
+  past the dwell
+- **THEN** it resolves through the guard's evidence order, not by direct
+  transition
+- **BECAUSE** a declared entry may have outstanding evidence still able to
+  arrive, which only the guard's atomic transition can adjudicate safely
+
 #### Scenario: A raw entry is peeked only as a singleton
 
 - **WHEN** a target's mailbox head is a raw-kind entry
@@ -265,10 +320,10 @@ than of any coder.
 
 #### Scenario: A duplicate acknowledgment is a no-op
 
-- **WHEN** an `ack` names a sequence number at or behind the target's current
-  cursor
-- **THEN** the relay applies no further state change for that entry
-- **AND** does not release its admission quota a second time
+- **WHEN** an `ack` names a `packing_unit_id` that has already been
+  terminalized
+- **THEN** the relay applies no further state change for its entries
+- **AND** does not release their admission quota a second time
 
 ### Requirement: Asynchronous Terminal-Outcome Receipt
 
@@ -549,26 +604,34 @@ entries.
 
 ### Requirement: Delivery Guard and Acknowledgment Terminalization
 
-Delivery SHALL be modelled as three distinct events, not four:
+Delivery SHALL be modelled as four distinct events:
 
-| Event | Owner | Atomic | Reversible |
-|---|---|---|---|
-| **Admission** — accept into the mailbox, reserve quota, return `queued` | relay | yes | yes |
-| **Submission** — one packing unit produces a target-side effect | transport | per unit | no |
-| **Acknowledgment** — advance the cursor and terminalize the covered members from supplied evidence | transport → relay | per `ack` call, per member within it | no |
+| Event | Owner | Atomic | Reversible | Gates anything? |
+|---|---|---|---|---|
+| **Admission** — accept into the mailbox, reserve quota, return `queued` | relay | yes | yes | yes — quota |
+| **Declaration** — bind a `PackingUnitId` to an exact contiguous range, before any write | transport → relay | yes | no | no — records only |
+| **Submission** — one packing unit produces a target-side effect | transport | per unit | no | n/a |
+| **Acknowledgment** — advance the cursor and terminalize the covered members from supplied evidence | transport → relay | per `ack` call, per member within it | no | no — records only |
 
-There is no separate Authorization event. An admitted entry is visible to
-`peek` unconditionally; committing to it happens only when a transport calls
-`ack`, and that call is itself the linearization point — the relay treats an
-`ack` for a still-active generation as final for the members it covers.
+**There is no separate Authorization event, and Declaration is not one
+either.** The distinction that matters is not the event count but what an
+event *does*: Admission is the only relay-side gate in this table — it can
+refuse. Declaration and Acknowledgment are both irrevocable relay-local
+state transitions, exactly as the old Authorization event was, but neither
+one *decides* anything the way Authorization did; a well-formed Declaration
+or Acknowledgment from the active generation always succeeds. Declaration
+exists purely so the relay has a record between an admitted-and-unwritten
+entry and an acknowledged one — the same role pre-effect partition
+declaration played under the push model, at the same point in the
+sequence, just no longer bundled with a permission decision.
 
 **Acknowledgment is a relay-local state transition on the relay's own
 mailbox entries.** It is not permission-seeking; the transport has already
 written by the time it calls `ack`. Cancellation (a generation being
-revoked) competes only with this transition, and it competes relay-locally
-under the same single lock, per the `Consumer Generation Ownership and
-Replacement` and `Revocation Serialized Against In-Flight Acknowledgment`
-requirements.
+revoked) competes with both the Declaration and the Acknowledgment
+transitions, and it competes relay-locally under the same single lock, per
+the `Consumer Generation Ownership and Replacement` and `Revocation
+Serialized Against In-Flight Submission Bookkeeping` requirements.
 
 **Acknowledgment covers acknowledged members and nothing else.**
 Relay-originated work (a terminal-outcome receipt) holds no mailbox
@@ -610,52 +673,62 @@ sufficient on its own, because it cannot observe a detached executor, a
 delivery-loop panic, an evidence-collector panic, or a generation
 replacement.
 
-Guard identity SHALL be a mailbox entry's own sequence number; because
-acknowledgment is idempotent per entry (see `Mailbox Ordering and Cursor
-Lifecycle`), no separate attempt identifier is required. When a transport's
-`ack` names a packing unit's evidence, each covered entry's guard is bound to
-that `PackingUnit ID` in the same atomic step that records the evidence.
+Guard identity SHALL be established at **Declaration**, bound to the minted
+`PackingUnitId`, exactly as `Mailbox Submission Declaration` specifies —
+this is the guard's creation point, not `ack`. Because acknowledgment of an
+already-terminalized unit is idempotent (see `Mailbox Ordering and Cursor
+Lifecycle`), no separate attempt identifier beyond the `PackingUnitId` is
+required. `ack` supplies the evidence a declared-and-bound guard resolves
+from; it does not itself perform the binding.
 
 The guard SHALL:
 
 - consume normal evidence through **one atomic non-terminal → terminal
   transition**, so duplicate acknowledgments converge rather than racing;
-- terminalize any still-unresolved member on unwind, channel closure,
-  delivery-loop executor exit, generation replacement, and graceful
-  shutdown;
-- leave `queued` entries untouched, so they remain peekable by whatever
-  generation is current.
+- terminalize any still-unresolved **declared** member on unwind, channel
+  closure, delivery-loop executor exit, generation replacement, and
+  graceful shutdown;
+- leave `queued`-and-**undeclared** entries untouched, so they remain
+  peekable by whatever generation is current, and are resolved instead by
+  `In-Process Delivery Recovery Scope`'s never-declared path.
 
 #### Guard resolution order
 
-Whenever the guard terminalizes a member that has not already reached a
-terminal outcome, it SHALL select that outcome by the following order, first
-match winning:
+Whenever the guard terminalizes a **declared** member that has not already
+reached a terminal outcome, it SHALL select that outcome by the following
+order, first match winning:
 
 1. the member's packing unit has an **immutable evidence record** → derive
    the outcome from that record (`Submitted` → `delivered`, `NotSubmitted` →
    `not_submitted`, `SubmissionUnknown` → `submission_unknown`);
-2. the member was **never bound to a packing unit** → `not_submitted`,
-   because binding happens before the first target-side effect, so nothing
-   could have been submitted;
-3. otherwise → `submission_unknown`.
+2. the member's packing unit was declared but never received evidence
+   before the trigger → `submission_unknown`, because declaration alone
+   does not prove a write was attempted, only that one was about to be.
 
-**Lifecycle context determines *when* the guard resolves a member, never
-*which* outcome it receives.** Unwind, channel closure, executor exit,
-generation replacement, and graceful shutdown are all triggers for the same
-evidence order.
+An **undeclared** member is never routed through this order at all: it was
+never bound to a guard, so it resolves through `In-Process Delivery
+Recovery Scope`'s separate never-declared path (`dropped_on_shutdown` on
+shutdown; re-peekable by a replacement generation otherwise), which is a
+sound `not_submitted`-equivalent because nothing could have been submitted
+without a declaration.
 
-#### Mandatory post-submission execution bound
+**Lifecycle context determines *when* the guard resolves a declared member,
+never *which* outcome it receives.** Unwind, channel closure, executor
+exit, generation replacement, and graceful shutdown are all triggers for
+the same evidence order.
 
-Once a packing unit has begun producing a target-side effect, an executor
-that remains alive and blocked forever never acks it. **The relay SHALL
-therefore bound post-submission execution.** `[delivery].submission-timeout-
-ms`, anchored at the point a packing unit's write begins, bounds it. When
-that bound elapses without the covering `ack` having arrived, the relay
-SHALL **initiate the generation fence**, and SHALL NOT terminalize the
-member at that moment. Evidence continues to be accepted throughout the
-bounded fence windows, and every still-unresolved member is terminalized
-through the guard's evidence order at the verdict.
+#### Mandatory post-declaration execution bound
+
+Once a packing unit has been declared, an executor that remains alive and
+blocked forever never acks it. **The relay SHALL therefore bound
+post-declaration execution.** `[delivery].submission-timeout-ms`, anchored
+at the point `declare` is accepted — a relay-observed event, not an
+inferred one — bounds it. When that bound elapses without the covering
+`ack` having arrived, the relay SHALL **initiate the generation fence**,
+and SHALL NOT terminalize the member at that moment. Evidence continues to
+be accepted throughout the bounded fence windows, and every still-unresolved
+declared member is terminalized through the guard's evidence order at the
+verdict.
 
 This is not a reintroduction of the timers this capability otherwise
 forbids: a retired timer inferred *target failure* from absence; this bound
@@ -667,20 +740,21 @@ does not know. It is an execution watchdog and SHALL be described as one.
 by nothing else.** Releasing it anywhere else permits a double release on any
 path that attempts termination twice.
 
-#### Scenario: An unacknowledged write is bounded rather than waiting forever
+#### Scenario: An undeclared-evidence declaration is bounded rather than waiting forever
 
-- **WHEN** a packing unit's write has begun and no covering `ack` has arrived
-  past `[delivery].submission-timeout-ms`
+- **WHEN** a packing unit has been declared and no covering `ack` has
+  arrived past `[delivery].submission-timeout-ms`
 - **THEN** the generation fence is initiated
 - **AND** no member is terminalized at that moment
-- **AND** every still-unresolved member is terminalized through the guard's
-  evidence order at the fence verdict
+- **AND** every still-unresolved declared member is terminalized through
+  the guard's evidence order at the fence verdict
 
 #### Scenario: Fence evidence still wins after the bound elapses
 
 - **WHEN** the execution bound elapses and the fence's cooperative stop
-  halts a bound member's unit before it produces any effect
-- **AND** that unit records `NotSubmitted`
+  halts a declared unit's write before it produces any effect
+- **AND** that unit's transport reports `NotSubmitted` evidence before the
+  verdict
 - **THEN** the member resolves `not_submitted` at the verdict
 - **AND** it does not resolve `submission_unknown`
 - **BECAUSE** the single resolution cut is the verdict, so evidence the
@@ -688,18 +762,18 @@ path that attempts termination twice.
 
 #### Scenario: The execution bound does not override stronger evidence
 
-- **WHEN** the execution bound elapses while one packing unit has already
-  recorded `Submitted`
+- **WHEN** the execution bound elapses while one declared packing unit has
+  already recorded `Submitted`
 - **THEN** that unit's members resolve `delivered`
-- **AND** only bound members lacking stronger evidence at the cut resolve
-  `submission_unknown`
+- **AND** only declared members lacking stronger evidence at the cut
+  resolve `submission_unknown`
 
 #### Scenario: The execution bound asserts nothing about the target
 
 - **WHEN** the execution bound elapses
 - **THEN** no member resolves to a failure spelling, and no target-health
   state is inferred
-- **AND** a bound member lacking stronger evidence at the cut resolves
+- **AND** a declared member lacking stronger evidence at the cut resolves
   `submission_unknown`
 - **BECAUSE** the bound reports that the relay's own execution overran, not
   that the target is unhealthy
@@ -729,13 +803,26 @@ path that attempts termination twice.
 - **AND** the admission quota is released exactly once
 - **AND** the losing attempt does not alter the recorded outcome
 
-#### Scenario: An unbound member resolves not_submitted whatever the trigger
+#### Scenario: A declared-but-no-evidence member resolves submission_unknown
 
-- **WHEN** the guard terminalizes a member that was never bound to a packing
-  unit
+- **WHEN** the guard terminalizes a declared member whose packing unit
+  never recorded any evidence before the trigger fired
 - **AND** the trigger is a panic, a channel closure, a generation
   replacement, or graceful shutdown
-- **THEN** the member resolves `not_submitted` in every case
+- **THEN** the member resolves `submission_unknown` in every case
+- **BECAUSE** declaration alone does not prove a write was never attempted,
+  only that one was about to be, so `not_submitted`'s stronger claim is not
+  available here
+
+#### Scenario: An undeclared member never reaches the guard
+
+- **WHEN** a member's entry was peeked but never declared, and the
+  delivery-loop executor that peeked it exits (by panic, generation
+  replacement, or graceful shutdown) without declaring it
+- **THEN** the member is never terminalized by the guard
+- **AND** it resolves instead through `In-Process Delivery Recovery
+  Scope`'s never-declared path: `dropped_on_shutdown` on shutdown, or
+  re-peekable by a replacement generation otherwise
 
 #### Scenario: A recorded unit outcome outranks the lifecycle trigger
 
@@ -788,21 +875,28 @@ An abrupt relay crash loses mailbox contents, submission evidence, outcomes,
 and sender notification alike. No abstraction reconciles them after the
 fact, and this capability does not claim to.
 
-**Recovery behavior SHALL be specified only where it exists.** In-process
-recovery is real and is specified: mailbox entries and cursors live in the
-relay's own admission ledger, independent of any transport generation's
-lifetime, so when a per-target transport is torn down and replaced within a
-surviving relay process, the replacement generation's first `peek` sees
-every entry the old generation had not yet acknowledged, in the same order.
-An entry a prior generation wrote but had not yet acknowledged before
-teardown MAY be re-served and re-written by the replacement generation — a
-duplicate under at-least-once, not a lost message. Process-startup recovery
-is **not** specified, because nothing persists across a process boundary.
+**Recovery behavior SHALL be specified only where it exists, and it
+diverges by declaration state.** In-process recovery is real and is
+specified: mailbox entries and cursors live in the relay's own admission
+ledger, independent of any transport generation's lifetime. When a
+per-target transport is torn down and replaced within a surviving relay
+process, the replacement generation's first `peek` sees every **undeclared**
+entry the old generation had not yet declared, in the same order — an
+undeclared entry was never bound to a guard, so it is freely re-servable.
+A **declared** entry is different: it is bound to the old generation's
+guard and is resolved through the guard's evidence order once that
+generation's fence reaches a verdict; it is never re-served to the
+replacement generation, declared or not, because doing so would let the
+same entry be written by two generations with no evidence linking them.
+This is what closes the "silent duplicate or silent loss" ambiguity a
+purely cursor-based re-serve would otherwise leave open for anything the
+old generation had already started writing. Process-startup recovery is
+**not** specified, because nothing persists across a process boundary.
 
-On graceful shutdown, still-`queued` relay-owned members SHALL resolve
-`dropped_on_shutdown`. A member whose packing unit has already begun
-producing a target-side effect SHALL NOT resolve `dropped_on_shutdown`; it
-resolves through the guard's evidence order.
+On graceful shutdown, still-`queued`-and-**undeclared** relay-owned members
+SHALL resolve `dropped_on_shutdown`. A **declared** member SHALL NOT
+resolve `dropped_on_shutdown`; it resolves through the guard's evidence
+order, per `Mandatory post-declaration execution bound`.
 
 **Shutdown budgets SHALL nest.** Graceful shutdown runs under one
 process-wide **shutdown-work deadline**, and every bounded step on the
@@ -823,9 +917,9 @@ terminalize through the guard's evidence order exactly as they would on any
 other trigger.
 
 **Resolving a member SHALL NOT depend on a step it does not require.**
-Members that were never submitted to a transport SHALL resolve before the
-shutdown fence runs, because nothing about their outcome depends on whether
-a generation ceased.
+Members that were never declared SHALL resolve before the shutdown fence
+runs, because nothing about their outcome depends on whether a generation
+ceased.
 
 #### Scenario: A shutdown fence cut short by the deadline still resolves every member
 
@@ -833,44 +927,46 @@ a generation ceased.
   observation requires
 - **THEN** the fence observes for the remaining budget rather than the
   configured duration
-- **AND** a negative verdict resolves unresolved members through the
-  evidence order
+- **AND** a negative verdict resolves unresolved declared members through
+  the evidence order
 - **AND** no replacement generation is admitted, because the process is
   exiting
 
-#### Scenario: Never-submitted members resolve before the fence
+#### Scenario: Never-declared members resolve before the fence
 
-- **WHEN** relay shuts down gracefully with members still queued and never
-  submitted to a transport
-- **THEN** those members resolve `dropped_on_shutdown` before the generation
-  fence begins
+- **WHEN** relay shuts down gracefully with members still queued and
+  undeclared
+- **THEN** those members resolve `dropped_on_shutdown` before the
+  generation fence begins
 - **AND** their resolution does not depend on the fence's verdict or
   duration
 
-#### Scenario: Re-serve an unacknowledged entry to a replacement generation
+#### Scenario: Re-serve an unacknowledged, undeclared entry to a replacement generation
 
 - **WHEN** a transport generation is torn down and replaced within a
   surviving relay process
-- **THEN** every entry the old generation had not yet acknowledged is
+- **THEN** every entry the old generation had peeked but never declared is
   peekable by the replacement generation
 - **AND** entries retain their position in the per-target mailbox order
 
-#### Scenario: Never resubmit a member whose write had already begun
+#### Scenario: Never resubmit a declared member
 
 - **WHEN** a transport generation is replaced while one of its packing
-  units has already begun producing a target-side effect
+  units is declared and outstanding
 - **THEN** that unit's members resolve through the guard's evidence order
-- **AND** they are not re-peeked or re-written by the replacement generation
+  once the outgoing generation's fence reaches a verdict
+- **AND** they are not re-peeked or re-declared by the replacement
+  generation
 
-#### Scenario: Separate queued and in-flight members at shutdown
+#### Scenario: Separate undeclared and declared members at shutdown
 
-- **WHEN** relay shuts down gracefully with a mix of `queued` members and
-  members whose write has already begun
-- **THEN** the `queued` members resolve `dropped_on_shutdown`
-- **AND** the in-flight members resolve through the guard's evidence order,
+- **WHEN** relay shuts down gracefully with a mix of undeclared `queued`
+  members and declared members
+- **THEN** the undeclared members resolve `dropped_on_shutdown`
+- **AND** the declared members resolve through the guard's evidence order,
   never `dropped_on_shutdown`
-- **AND** an in-flight member never bound to a packing unit resolves
-  `not_submitted` rather than `submission_unknown`
+- **AND** a declared member that never received evidence resolves
+  `submission_unknown`, per `Guard resolution order`
 
 #### Scenario: State the crash-recovery limitation
 
@@ -934,43 +1030,163 @@ SHALL be refused without returning any entries.
 - **THEN** the relay refuses the call
 - **AND** returns no entries
 
+### Requirement: Mailbox Submission Declaration
+
+Before writing any peeked entry, a transport's delivery-loop executor SHALL
+call `declare(target, generation_id, through_seq)`, naming the exact
+contiguous range of entries — starting at the target's current cursor
+position plus one — that it is about to submit as one packing unit. This is
+a relay-visible **start record**, not a permission grant: `declare` never
+refuses a well-formed request from the active generation, gates nothing, and
+grants no exclusivity beyond what `Consumer Generation Ownership and
+Replacement`'s single-active-generation rule already provides.
+
+`declare` SHALL be rejected, without effect, when: `generation_id` does not
+match the target's `active_generation_id`; the named range does not begin
+exactly at the current cursor plus one; the named range is not contiguous;
+or the named range extends past the highest sequence number the mailbox
+actually holds. A rejected `declare` leaves every named entry `queued` and
+undeclared.
+
+On acceptance, the relay SHALL mint a `PackingUnitId`, return it to the
+calling transport, bind it to exactly the named entries, and record the
+binding as the entries' **guard identity** — the same role authorization played under the push model,
+relocated to this earlier, pre-effect point rather than removed. This
+binding is what `Mailbox Acknowledgment and Partial Acknowledgment`'s `ack`
+call later supplies evidence against, and what
+`[delivery].submission-timeout-ms` in `Delivery Guard and Acknowledgment
+Terminalization` is anchored from.
+
+**Why this exists, restated precisely for review:** moving all
+packing-unit binding to `ack` alone would make a write that begins and then
+never acks — because its executor panics or hangs — indistinguishable at
+the relay from an entry that was never touched. Declaration is what lets
+shutdown, replacement, and the execution watchdog tell those two cases
+apart, exactly as pre-effect partition declaration already did under the
+push model. It reinstates that bookkeeping only; it does not reinstate
+authorization or a lease. No second consumer is ever stalled by a
+`declare` call — the single-active-generation and single-serial-executor
+rules already exclude a second writer, so `declare` adds no new exclusion,
+only a record.
+
+A transport that decides, after peeking, not to write anything SHALL
+simply not call `declare` for those entries; they remain `queued` and
+undeclared, exactly as if never peeked.
+
+#### Scenario: A well-formed declaration is accepted and bound
+
+- **WHEN** a transport calls `declare` for the exact contiguous range
+  beginning at the target's cursor plus one
+- **AND** its generation matches `active_generation_id`
+- **THEN** the relay mints a `PackingUnitId` and binds it to those entries
+- **AND** the entries remain `queued` but are now declared
+
+#### Scenario: A non-contiguous or out-of-position declaration is rejected
+
+- **WHEN** a transport calls `declare` for a range that does not begin
+  exactly at the current cursor plus one, or that skips entries
+- **THEN** the relay rejects the call without binding anything
+- **AND** the named entries remain undeclared
+
+#### Scenario: A declaration past the mailbox's actual contents is rejected
+
+- **WHEN** a transport calls `declare` for a range extending past the
+  highest sequence number the target's mailbox holds
+- **THEN** the relay rejects the call without binding anything
+
+#### Scenario: An undeclared entry is indistinguishable from never-peeked
+
+- **WHEN** a transport peeks entries but writes and declares none of them
+- **THEN** those entries remain `queued` and undeclared
+- **AND** graceful shutdown resolves them `dropped_on_shutdown` exactly as
+  it would for an entry no transport ever peeked
+
 ### Requirement: Mailbox Acknowledgment and Partial Acknowledgment
 
-The relay SHALL expose `ack(target, generation_id, through_seq, evidence)`,
-advancing the target's cursor and terminalizing every entry up to and
-including `through_seq` from the supplied per-member `SubmissionEvidence`,
-bound to `generation_id` as specified by `Consumer Generation Ownership and
-Replacement`.
+The relay SHALL expose `ack(target, generation_id, packing_unit_id,
+evidence)`, terminalizing exactly the entries bound to `packing_unit_id` by
+a prior, still-outstanding `declare` call, from the supplied per-member
+`SubmissionEvidence`, bound to `generation_id` as specified by `Consumer
+Generation Ownership and Replacement`.
 
-**Partial acknowledgment is the ordinary case, not an exception.** A
-transport that peeked ten entries and wrote five MAY `ack` through the
-fifth; the remaining five stay `queued`, in order, for the next `peek`.
-No requirement SHALL treat a partial `ack` as needing a distinct code path
-from a full one.
+**`ack` SHALL NOT accept a free-form cursor position.** It names a
+previously declared unit, not an arbitrary `through_seq`; the relay looks
+up that unit's bound range from its own ledger rather than trusting a
+caller-supplied endpoint. This is what makes the acknowledged range exactly
+the range that was declared before any write was attempted, closing the
+gap a free-form cursor would otherwise leave: a caller with a valid
+generation binding but no corresponding `declare` record cannot advance the
+cursor or release quota for anything.
 
-`ack` for an entry at or behind the current cursor SHALL be a no-op, per
-`Mailbox Ordering and Cursor Lifecycle`'s duplicate-acknowledgment scenario.
+`ack` for a `packing_unit_id` that was **never declared, or declared under
+a superseded generation,** SHALL be rejected without effect: nothing was
+ever bound under that identity for the caller's generation to terminalize.
+`ack` for a `packing_unit_id` that **was validly declared and has already
+been terminalized** SHALL instead be a no-op, per `Mailbox Ordering and
+Cursor Lifecycle`'s duplicate-acknowledgment scenario — the distinction
+being that a no-op references a real, already-resolved binding, while a
+rejection references one that never legitimately existed for this caller.
 
-#### Scenario: A partial acknowledgment leaves the remainder queued
+**Partial acknowledgment is the ordinary case, not an exception**, at the
+granularity of one declared unit. A transport that peeked ten entries MAY
+`declare` and write only the first five as one unit, `ack` that unit, and
+leave the remaining five `queued` and undeclared for the next `peek`. A
+transport MAY also declare several smaller units from one peeked prefix and
+`ack` each independently as its own write completes, provided each
+declaration itself was contiguous from the cursor at the time it was made —
+which, because one transport instance runs exactly one serial delivery
+executor, is the order such units are naturally declared and written in.
 
-- **WHEN** a transport peeks entries 1 through 10 for a target and writes
-  only 1 through 5
-- **AND** it calls `ack` with `through_seq = 5`
+#### Scenario: Acknowledging a declared unit terminalizes exactly its entries
+
+- **WHEN** a transport declares entries 1 through 5 as one packing unit,
+  writes them, and calls `ack` naming that unit with `Submitted` evidence
+- **THEN** entries 1 through 5 terminalize `delivered`
+- **AND** the cursor advances to 5
+
+#### Scenario: A partial acknowledgment leaves the remainder queued and undeclared
+
+- **WHEN** a transport peeks entries 1 through 10 but declares and writes
+  only entries 1 through 5
+- **AND** it acks that unit
 - **THEN** entries 1 through 5 terminalize per the guard's evidence order
-- **AND** entries 6 through 10 remain `queued` and are included in the next
-  `peek`
+- **AND** entries 6 through 10 remain `queued` and undeclared, included in
+  the next `peek`
 
-#### Scenario: A full acknowledgment terminalizes everything peeked
+#### Scenario: An ack without a matching declaration is rejected
 
-- **WHEN** a transport peeks and writes every entry it peeked
-- **AND** it calls `ack` with `through_seq` covering all of them
-- **THEN** every covered entry terminalizes per the guard's evidence order
+- **WHEN** an `ack` names a `packing_unit_id` that was never declared, or
+  was declared under a different, superseded generation
+- **THEN** the relay rejects the call without advancing the cursor or
+  releasing quota
+- **AND** no entry is terminalized
 
 ### Requirement: Consumer Generation Ownership and Replacement
 
 Exactly **one** consumer generation SHALL be active per target at a time.
 `active_generation_id` is the only durable ownership datum the relay keeps
-about mailbox consumption; it SHALL be checked on every `peek` and `ack`.
+about mailbox consumption; it SHALL be checked on every `peek`, `declare`,
+and `ack`.
+
+**Scope.** This requirement governs consumer-generation identity for one
+transport instance running in-process, which is this proposal's entire
+scope. It deliberately says nothing about a relay-to-transport-host network
+connection, its drop, or its reconnect — those are `ideas/transports/5`'s
+subject once transports move out-of-process, and are not specified here.
+The in-process implementation of this requirement has no connection to
+drop in the first place: a transport instance's delivery-loop executor
+calls the relay's `peek`/`declare`/`ack` entry points directly.
+
+`active_generation_id` values SHALL be drawn from a **monotonically
+increasing, never-reused sequence per target identity**. A target whose
+worker-registry entry is fully reaped and later recreated under the same
+session name SHALL receive a fresh `active_generation_id` continuing that
+sequence, never a recycled or default value. This SHALL hold whether the
+recreation is an ordinary replacement (below) or a full teardown and
+re-creation after the target's mailbox and cursor state were cleaned up per
+`Mailbox Retention and Quota Bounds`. A stale `generation_id` presented
+after either kind of recreation is thereby guaranteed non-matching, rather
+than possibly colliding with a coincidentally-reused value.
 
 A **replacement** generation SHALL require a positive "old execution ceased"
 guarantee before admission — never a heartbeat timeout, never elapsed time.
@@ -979,24 +1195,18 @@ five-step mechanism (`transport-abstraction`) to a **positive** verdict for
 the outgoing generation.
 
 **A transport instance maintains exactly one serial delivery executor for
-its lifetime, independent of any connection to it.** Same-generation
-reconnect (the relay reattaching to a still-live transport instance) SHALL
-NOT itself start a second delivery executor and SHALL NOT require revoking
-the generation; it swaps the connection underneath the one executor already
-running. A transport that spawns a delivery executor per inbound connection
-does not satisfy this requirement.
-
-**Socket or connection closure alone is not sufficient evidence of
-cessation.** A closed connection observes cessation of that connection, not
-of work the still-running executor already accepted from it. Only a
-positive `GenerationFence` verdict, per the requirement above, establishes
-that a generation has actually ceased.
+its lifetime.** A transport that spawns a second delivery executor for a
+target it already holds an active generation for does not satisfy this
+requirement; nothing else within this proposal's in-process scope could
+produce a second executor for one target's active generation, since there
+is exactly one transport instance and no network boundary for a second one
+to arrive over.
 
 #### Scenario: Exactly one generation is admitted per target
 
 - **WHEN** a target has an active consumer generation
-- **AND** a second connection attempts to bind as a consumer for the same
-  target without going through replacement
+- **AND** a second delivery-loop executor attempts to bind as a consumer for
+  the same target without going through replacement
 - **THEN** the relay refuses the second binding
 
 #### Scenario: Replacement requires a positive fence verdict
@@ -1008,44 +1218,48 @@ that a generation has actually ceased.
 - **AND** on a negative verdict leaves the target held, admitting no
   replacement
 
-#### Scenario: Same-generation reconnect does not require a fence
+#### Scenario: A recreated target never reuses a prior generation id
 
-- **WHEN** a transport instance's connection to the relay drops and it
-  reconnects as the same generation
-- **THEN** the relay attaches the existing connection state to the one
-  still-running delivery executor
-- **AND** does not invoke `GenerationFence` and does not admit a replacement
+- **WHEN** a target's mailbox and cursor state have been cleaned up after
+  its worker-registry entry was reaped
+- **AND** a session by the same name is later created for that target
+- **THEN** the new consumer generation's `active_generation_id` is drawn
+  fresh from the monotonic sequence
+- **AND** it does not equal any `active_generation_id` previously issued
+  for that target identity
 
-#### Scenario: A closed connection alone does not license replacement
+### Requirement: Revocation Serialized Against In-Flight Submission Bookkeeping
 
-- **WHEN** a target's consumer connection closes
-- **AND** no positive `GenerationFence` verdict has been observed for that
-  generation
-- **THEN** the relay does not admit a replacement generation for that target
+Applying a `declare` or an `ack` SHALL be mutually exclusive with admitting
+a replacement generation, and with directly resolving an undeclared entry
+on definite teardown per `Mailbox Ordering and Cursor Lifecycle`'s
+teardown scenarios, all under the same lock the admission guard already
+uses for terminalization (`Delivery Guard and Acknowledgment
+Terminalization`). `declare`, `ack`, and direct teardown-resolution
+together cover every way an entry's declaration state can change, and none
+of the three may race another: declaration is itself a state mutation (it
+binds a `PackingUnitId` to entries) and needs the identical serialization
+`ack` and direct resolution do, not only a generation check.
 
-### Requirement: Revocation Serialized Against In-Flight Acknowledgment
-
-Applying an `ack` and admitting a replacement generation SHALL be mutually
-exclusive under the same lock the admission guard already uses for
-terminalization (`Delivery Guard and Acknowledgment Terminalization`).
-
-Processing an `ack` SHALL, as the first action inside that lock, compare the
-`ack`'s supplied `generation_id` to the target's current
-`active_generation_id`. A match SHALL allow the rest of `ack` processing to
-proceed within the same critical section. A mismatch SHALL reject the `ack`
-without applying any effect, leaving its named entries `queued` for
-re-service to whichever generation is current.
+Processing a `declare` or an `ack` SHALL, as the first action inside that
+lock, compare the call's supplied `generation_id` to the target's current
+`active_generation_id`. A match SHALL allow the rest of that call's
+processing to proceed within the same critical section. A mismatch SHALL
+reject the call without applying any effect: a rejected `declare` leaves
+its named entries `queued` and undeclared; a rejected `ack` leaves its
+named unit's entries `queued` for re-service to whichever generation is
+current.
 
 Admitting a replacement generation SHALL, under the same lock, occur only
 **after** a positive `GenerationFence` verdict for the outgoing generation
 has been observed, per `Consumer Generation Ownership and Replacement`.
 
-**These two rules together close the gap.** An `ack` that reaches the lock
-while its generation is still active is either fully applied before any
-replacement can be admitted (the lock excludes the replacement), or its
-generation is already stale, in which case it is rejected rather than
-applied. Neither path allows an `ack` bound to a superseded generation to
-commit after the replacement is admitted.
+**These two rules together close the gap.** A `declare` or `ack` that
+reaches the lock while its generation is still active is either fully
+applied before any replacement can be admitted (the lock excludes the
+replacement), or its generation is already stale, in which case it is
+rejected rather than applied. Neither path allows a call bound to a
+superseded generation to commit after the replacement is admitted.
 
 #### Scenario: An in-flight ack commits before replacement is admitted
 
@@ -1063,6 +1277,14 @@ commit after the replacement is admitted.
 - **THEN** the relay rejects it without advancing the cursor or releasing
   quota
 - **AND** the entries it named remain `queued` for the current generation
+
+#### Scenario: A stale declare is rejected rather than bound
+
+- **GIVEN** a replacement generation has already been admitted for a target
+- **WHEN** a `declare` bound to the superseded generation reaches the relay
+- **THEN** the relay rejects it without binding a `PackingUnitId`
+- **AND** the entries it named remain `queued` and undeclared for the
+  current generation
 
 ### Requirement: Delivery Doorbell Notification
 

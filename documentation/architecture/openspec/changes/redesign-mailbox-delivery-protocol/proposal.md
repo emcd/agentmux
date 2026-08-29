@@ -49,10 +49,21 @@ proposal's approval.
   operation returning the head contiguous run of mailbox entries within the
   given bounds, advancing nothing. A raw-kind entry at the head is always
   returned alone.
-- Add `ack(target, generation_id, through_seq, evidence)`: advances the
-  target's cursor and terminalizes exactly the members through `through_seq`,
-  from per-member `SubmissionEvidence` the transport supplies. Partial
-  acknowledgment — writing and acking fewer entries than were peeked — is
+- Add `declare(target, generation_id, through_seq)`: a relay-visible,
+  pre-write **start record** that binds a `PackingUnitId` to an exact
+  contiguous range beginning at the cursor, before any write is attempted.
+  This is not authorization and grants no exclusivity — it never refuses a
+  well-formed call from the active generation — it is the pull model's
+  relocation of the push model's pre-effect partition declaration, and is
+  what lets the relay distinguish "never touched" from "write attempted,
+  outcome pending" for shutdown, replacement, and watchdog purposes.
+- Add `ack(target, generation_id, packing_unit_id, evidence)`: terminalizes
+  exactly the entries a prior `declare` bound to `packing_unit_id`, from
+  per-member `SubmissionEvidence` the transport supplies, and advances the
+  cursor by exactly that declared range. `ack` does not accept a free-form
+  cursor position; it can only ever affect a range a validated `declare`
+  already constrained. Partial acknowledgment — declaring, writing, and
+  acking fewer entries than were peeked, as one or more smaller units — is
   ordinary, not an exception requiring its own rule.
 - Delete `HandoverWindow`, the held-member slot, `authorize_batch`, and
   `is_ready_for_handover` as a relay-side authorization precondition. Delete
@@ -63,20 +74,23 @@ proposal's approval.
 - Fold `raww` into the mailbox as its own entry kind rather than a separate
   push call or a second channel. `peek` returns a raw entry only as a
   singleton, which is what keeps it a batch barrier without a rule anyone has
-  to remember to enforce elsewhere.
+  to remember to enforce elsewhere; a raw entry is declared and acked exactly
+  like a mail packing unit.
 - Introduce **consumer generation** as a durable per-target datum: exactly one
-  `active_generation_id` is admitted at a time, checked on every `peek` and
-  `ack`; replacement requires the existing `GenerationFence` five-step
-  mechanism to reach a **positive** verdict first (reused, not reinvented,
-  from `transport-abstraction`'s transport-lifecycle fencing); and one serial
-  delivery executor per transport instance persists across reconnect, so
-  same-generation reconnect is never itself grounds for a second concurrent
-  writer.
-- Serialize revocation against in-flight `ack` handling under the same
-  single-lock ledger discipline the admission guard already uses, so an
-  already-in-flight `ack` cannot commit after a replacement generation is
-  admitted, and a replacement is never admitted while an `ack` for the old
-  generation could still be mid-flight.
+  `active_generation_id` is admitted at a time, drawn from a monotonic,
+  never-reused sequence per target identity so a torn-down-and-recreated
+  target can never collide with a stale reference; checked on every `peek`,
+  `declare`, and `ack`; replacement requires the existing `GenerationFence`
+  five-step mechanism to reach a **positive** verdict first (reused, not
+  reinvented, from `transport-abstraction`'s transport-lifecycle fencing).
+  One serial delivery executor per transport instance is specified for this
+  proposal's in-process scope only; reconnect-across-a-network-connection
+  semantics are left to `ideas/transports/5`.
+- Serialize revocation against in-flight `declare`/`ack` handling under the
+  same single-lock ledger discipline the admission guard already uses, so an
+  already-in-flight call cannot commit after a replacement generation is
+  admitted, and a replacement is never admitted while a `declare` or `ack`
+  for the old generation could still be mid-flight.
 - Introduce the delivery doorbell as a notify-only signal — no data, no
   custody — reusing the existing injected-closure pattern
   (`transport-abstraction`'s upward-signal scenario) rather than new
@@ -120,32 +134,41 @@ proposal's approval.
 - Affected specs:
   - `delivery-quiescence` (primary — queue model, guard, observability,
     receipts, recovery scope all restated in mailbox/cursor/generation
-    vocabulary; new peek/write/ack/generation/doorbell/policy/retention
-    requirements added)
-  - `transport-abstraction` (`Transport Interface Contract` and `Transport
-    Handover Capacity and Readiness` replaced; neutral-crate module-boundary
-    requirement added; `Transport Generation Fencing and Termination
-    Authority` is reused unchanged and is not deltaed)
-  - `transport-contracts` (`Prompt-Readiness Template Gating` and `Relay raww
-    transport behavior` restated for the pull model; per-transport injection
-    substance unchanged)
+    vocabulary; new peek/declare/ack/generation/revocation-serialization/
+    doorbell/policy/retention requirements added)
+  - `transport-abstraction` (`Transport Interface Contract`, `Transport
+    Handover Capacity and Readiness`, `Transport Module Boundaries`,
+    `Synchronous Delivery Completion`, `Worker Readiness Interface`,
+    `Positive Activity Signal`, `Pty Transport Implementation`, and
+    `Transport Health as a Separate Axis` all restated for the pull model;
+    `Transport Generation Fencing and Termination Authority` gets a
+    single-word terminology fix (`Authorized` → `declared`) with its
+    mechanism otherwise reused verbatim; neutral-crate module-boundary
+    requirement added)
+  - `transport-contracts` (`Prompt-Readiness Template Gating`, `Relay raww
+    transport behavior`, `ACP Transport Error Code`, and `Pty Prompt Probe
+    and Look Shall Not Block a Tokio Worker Thread` restated for the pull
+    model; per-transport injection substance unchanged)
 - Affected code:
   - `src/relay/delivery/dispatch/worker.rs` (`HandoverWindow` use, held-member
     slot, `TargetGate`/`gate_target`/`decide_gate`, `authorize_batch` call
     site)
   - `src/relay/delivery/dispatch/batch.rs` (`HandoverWindow` itself)
   - `src/relay/delivery/admission.rs` (`ADMISSION_LEDGER`, `authorize_batch`,
-    packing-unit binding — retained and re-scoped to bind at `ack` rather
-    than at authorization)
+    packing-unit binding — retained and re-scoped to bind at `declare` rather
+    than at authorization; adds the monotonic per-target generation-id
+    sequence)
   - `src/relay/delivery/guard.rs` (`QueueEntryState`, `GuardKey` — collapse to
-    two states, generation-checked ack path)
+    two states; guard creation moves to `declare`, evidence recording stays
+    at `ack`)
   - `src/transports/contract.rs` (`Transport` trait: `mailw`/`raww`/
     `is_ready_for_handover` removed; consumer-generation binding and a
-    peek/ack client surface added)
+    peek/declare/ack client surface added)
   - `src/transports/vocabulary.rs` (promoted to the neutral protocol crate)
   - `src/acp/transport.rs`, `src/tmux/transport.rs`, `src/pty/transport.rs`
     (`WriteItem` FIFO becomes each transport's own serial delivery-loop
-    executor, calling `peek`/`ack` instead of receiving `mailw`/`raww`)
+    executor, calling `peek`/`declare`/`ack` instead of receiving
+    `mailw`/`raww`)
 - Sequencing:
   - `agentmux:todos/backend/2` (process-global singleton removal) and the
     refactor phase (`linecheck`, TUI/relay test splits, ACP transport
