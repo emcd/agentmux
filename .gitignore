@@ -4,3 +4,5 @@
 /.auxiliary/state
 /.auxiliary/inscriptions
 /.auxiliary/configuration/agentmux/
+/.auxiliary/configuration/agentmux-qa/
+/.auxiliary/configuration/coders/claude/scheduled_tasks.lock
