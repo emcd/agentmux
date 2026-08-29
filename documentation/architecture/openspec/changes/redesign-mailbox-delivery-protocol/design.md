@@ -8,7 +8,7 @@ defect in doing so: the relay cannot correctly size or time a handover for a
 consumer whose internal state it does not observe. ACP's `Busy`-after-one-
 envelope refusal and Tmux's timing-decided packing-unit membership are two
 independent symptoms of the same root cause, confirmed against
-`src/acp/transport.rs` and `src/tmux/transport.rs`.
+`src/acp/transport/` and `src/tmux/transport/`.
 
 `agentmux:ideas/21` redesigned delivery around a pull model over six AuxBE
 review passes, with the design substantially simplified by operator pushback
@@ -79,7 +79,7 @@ several existing mechanisms are reused rather than rebuilt.
 ### `peek`/`declare`/`ack` reuse the admission guard's ledger, not a new lock
 
 - Decision: `peek`, `declare`, and `ack` are new entry points into the
-  existing `AdmissionLedger` (`src/relay/delivery/admission.rs`), not a
+  existing `AdmissionLedger` (`src/relay/delivery/admission/`), not a
   parallel data structure. `declare` performs the packing-unit-binding half
   of what `authorize_batch` did (create the guard, bind it to a
   `PackingUnitId`, for an exact contiguous range); `ack` performs the
@@ -242,7 +242,7 @@ closes both at once, because they share the same root fix.
 - Decision: the doorbell is deliberately non-durable. It is rebuilt fresh per
   transport generation at construction time, exactly like the existing
   `readiness_changed: Arc<Notify>` it replaces
-  (`src/relay/delivery/dispatch/worker.rs:210,716-718`), and correctness
+  (`src/relay/delivery/dispatch/worker/`), and correctness
   never depends on any doorbell notification arriving.
 - Why: the doorbell's own contract already states this — "losing a doorbell
   loses nothing; it only delays, and a periodic poll is the backstop." A

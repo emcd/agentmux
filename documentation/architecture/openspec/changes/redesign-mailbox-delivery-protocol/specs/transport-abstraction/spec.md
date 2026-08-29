@@ -4,7 +4,7 @@
 
 The relay delivery subsystem SHALL NOT dispatch delivery by invoking a
 transport method per envelope. Instead, each transport implementation of the
-`Transport` trait in `src/transports/contract/transport.rs` SHALL own one
+`Transport` trait SHALL own one
 **serial delivery-loop executor**, spawned during `startup` and living for the
 transport instance's lifetime, which calls the relay's `peek`, `declare`,
 and `ack` entry points (`delivery-quiescence`'s `Mailbox Peek Operation`,
@@ -491,8 +491,8 @@ advance, and both are conformant.
 
 ### Requirement: Pty Transport Implementation
 
-The system SHALL provide a `PtyTransport` in `src/pty/transport.rs` that
-implements the `Transport` trait and is wired into `TransportImpl::Pty`. The
+The system SHALL provide a `PtyTransport` that implements the
+`Transport` trait and is wired into `TransportImpl::Pty`. The
 transport SHALL own one `libghostty_vt::Terminal<'static, 'static>`, one
 `portable_pty` master, one reader thread, and one delivery-loop executor.
 Because all `libghostty_vt` types are `!Send + !Sync`, the terminal SHALL live
@@ -897,7 +897,8 @@ the diagnostic difference this requirement exists to preserve.
 The system SHALL hold the vocabulary shared by both delivery call
 directions — relay-to-transport for `look`, transport-to-relay for
 `peek`/`declare`/`ack` — in a crate (or crate-internal module boundary) that both
-sides depend on, promoted from `src/transports/vocabulary.rs` rather than
+sides depend on, promoted from the `src/transports/vocabulary` module
+rather than
 newly constructed.
 
 This crate SHALL hold: mailbox entry and entry-kind representations, target

@@ -62,6 +62,6 @@ between an agent and unrelated worktrees, notebooks, caches, or credentials.
   - `src/relay/lifecycle.rs`
   - `src/runtime/paths.rs`
   - `src/tmux/lifecycle.rs`
-  - `src/acp/worker_driver.rs`
-  - `src/pty/transport.rs`
+  - `src/acp/worker_driver/`
+  - `src/pty/transport/`
   - new container runtime/engine module under `src/`

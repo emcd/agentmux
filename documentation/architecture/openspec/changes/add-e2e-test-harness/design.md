@@ -51,7 +51,7 @@ being an LLM.
   opt-in (TOML key; Rust field `test_isolated: bool`).
 - Pty transport coverage. Out of scope until Pty bootstrap lands
   (`todos/pty/3`, `todos/pty/4`).
-- ACP code paths. v1 does not touch `src/acp/transport.rs` or any
+- ACP code paths. v1 does not touch `src/acp/transport/` or any
   ACP code. v1 scripted tests are pure relay flows; v2 may add
   ACP-touching flows.
 
@@ -284,7 +284,7 @@ The v1 implementation should fit in roughly:
 - One new module (`src/test_harness/` -- relay peer + script parser
   + script interpreter + protocol constants).
 - A handful of edits to `src/runtime/bootstrap.rs` and
-  `src/relay/host.rs` to wire the `test-isolated` flag and the
+  `src/relay/watcher.rs` to wire the `test-isolated` flag and the
   autostart filter.
 - A handful of unit and integration tests.
 

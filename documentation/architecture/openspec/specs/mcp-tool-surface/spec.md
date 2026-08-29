@@ -3,43 +3,27 @@
 ## Purpose
 The MCP tool inventory and per-tool request/response contracts surfaced to MCP clients — `list`, `help`, `look`, `send`, `raww`, `choose`, `updown`, and the credential-administration meta-tools `new`, `change`, and `drop`, whose CLI counterparts (`agentmux new peer` / `change psk` / `drop peer`) are specified here rather than in `cli-surface`. The spec governs tool set stability (no temporary aliases; `grant` is not exposed after the rename-to-choose archive), canonical error taxonomy passthrough (a validation decidable without privileged state precedes authorization denials, while one requiring a protected lookup follows them so a denial discloses nothing, with canonical denial details), list namespace selectors (`omitted`/`home-bundle`/`GLOBAL`/`*`), and sender identity inference from MCP association (caller-supplied identity fields are rejected). `relay_unavailable` fallback semantics apply to all tools when the bundle relay is unreachable.
 ## Requirements
-### Requirement: MCP Tool Set
+### Requirement: Advertise MCP list meta-tool
 
-The system SHALL expose the following MCP tools:
-
-- `list`
-- `help`
-- `look`
-- `send`
-- `raww`
-- `choose`
-- `updown`
-- `new`
-- `change`
-- `drop`
-
-The relocked pre-stable MCP surface uses `list.principals` with no
-compatibility alias for the prior `list.sessions` shape.
+MCP tool inventory SHALL advertise top-level meta-tool `list`. The
+relocked pre-stable MCP surface uses `list.principals` with no
+compatibility alias for the prior `list.sessions` shape, so the prior
+shape SHALL NOT be advertised.
 
 #### Scenario: Advertise relocked list meta-tool
 
 - **WHEN** an MCP client enumerates available tools
 - **THEN** tool inventory includes `list`
-- **AND** includes `help`
-- **AND** includes `look`
-- **AND** includes `send`
-- **AND** includes `raww`
-- **AND** includes `choose`
 - **AND** does not include `list.sessions`
-- **AND** does not include `grant`
 
-#### Scenario: Advertise admin meta-tools
+### Requirement: Advertise MCP send tool
 
-- **WHEN** an MCP client enumerates available tools
-- **THEN** tool inventory includes `updown`
-- **AND** includes `new`
-- **AND** includes `change`
-- **AND** includes `drop`
+MCP tool inventory SHALL advertise top-level tool `send`.
+
+#### Scenario: Include send in tool inventory
+
+- **WHEN** an MCP client requests the tool catalog
+- **THEN** catalog includes `send`
 
 ### Requirement: MCP Help Tool
 
@@ -113,6 +97,11 @@ Unknown help queries SHALL fail fast with `validation_invalid_params`.
 - **WHEN** an MCP client calls `help` with `query="choose"`
 - **THEN** the response includes JSON argument schema for the `choose` tool
 - **AND** includes canonical invoke shape
+
+#### Scenario: Advertise help tool
+
+- **WHEN** an MCP client enumerates available tools
+- **THEN** the system includes `help`
 
 ### Requirement: Manual Bundle Configuration
 
@@ -956,6 +945,17 @@ These fields mirror the `choices.requested` relay event payload.
 - **AND** the MCP stream principal lacks `choose` capability
 - **THEN** MCP returns `authorization_forbidden`
 - **AND** denial details include `capability = "choose"`
+
+### Requirement: Advertise MCP choose tool
+
+MCP tool inventory SHALL advertise top-level tool `choose`. `grant` was
+renamed to `choose` and SHALL NOT be advertised as an alias for it.
+
+#### Scenario: Include choose in tool inventory
+
+- **WHEN** an MCP client requests the tool catalog
+- **THEN** catalog includes `choose`
+- **AND** does not include `grant`
 
 ### Requirement: MCP choose request contract
 

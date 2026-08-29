@@ -150,11 +150,11 @@ proposal's approval.
     and Look Shall Not Block a Tokio Worker Thread` restated for the pull
     model; per-transport injection substance unchanged)
 - Affected code:
-  - `src/relay/delivery/dispatch/worker.rs` (`HandoverWindow` use, held-member
+  - `src/relay/delivery/dispatch/worker/` (`HandoverWindow` use, held-member
     slot, `TargetGate`/`gate_target`/`decide_gate`, `authorize_batch` call
     site)
   - `src/relay/delivery/dispatch/batch.rs` (`HandoverWindow` itself)
-  - `src/relay/delivery/admission.rs` (`ADMISSION_LEDGER`, `authorize_batch`,
+  - `src/relay/delivery/admission/` (`ADMISSION_LEDGER`, `authorize_batch`,
     packing-unit binding — retained and re-scoped to bind at `declare` rather
     than at authorization; adds the monotonic per-target generation-id
     sequence)
@@ -165,7 +165,7 @@ proposal's approval.
     `is_ready_for_handover` removed; consumer-generation binding and a
     peek/declare/ack client surface added)
   - `src/transports/vocabulary.rs` (promoted to the neutral protocol crate)
-  - `src/acp/transport.rs`, `src/tmux/transport.rs`, `src/pty/transport.rs`
+  - `src/acp/transport/`, `src/tmux/transport/`, `src/pty/transport/`
     (`WriteItem` FIFO becomes each transport's own serial delivery-loop
     executor, calling `peek`/`declare`/`ack` instead of receiving
     `mailw`/`raww`)
@@ -173,9 +173,9 @@ proposal's approval.
   - `agentmux:todos/backend/2` (process-global singleton removal) and the
     refactor phase (`linecheck`, TUI/relay test splits, ACP transport
     decomposition) proceed independently of this proposal's review.
-  - Implementation should land against `admission.rs`/`worker.rs` as
-    decomposed by the in-flight refactor pass, not against their
-    pre-decomposition shape.
+  - Implementation should land against `admission/`/`dispatch/worker/`
+    as decomposed by the refactor pass, which has since completed, not
+    against their pre-decomposition shape.
   - `agentmux:issues/pty/5` and `todos/pty/14` (Pty anchor theme's lead
     delivery-bug items) are gated on this proposal landing, per
     `agentmux:coordination/general/18`.

@@ -45,12 +45,12 @@
       terminalize covered members through the guard's evidence order, and
       release quota.
 - [ ] 2.5 Remove `HandoverWindow` (`dispatch/batch.rs`) and its use in
-      `dispatch/worker.rs` (construction, `SubmitContext.window`,
-      `form_batch`). Remove the held-member slot (`worker.rs:275` and its
+      `dispatch/worker/` (construction, `SubmitContext.window`,
+      `form_batch`). Remove the held-member slot (`worker/run.rs` and its
       call sites) and `TargetGate`/`gate_target`/`decide_gate`
-      (`worker.rs:774-882`).
-- [ ] 2.6 Remove `authorize_batch` (`admission.rs:423-456`) and its call site
-      (`worker.rs:961-990`). Fold its packing-unit-binding logic
+      (`worker/gate.rs`, `worker/submit.rs`).
+- [ ] 2.6 Remove `authorize_batch` (`admission/authorize.rs`) and its call
+      site (`worker/submit.rs`). Fold its packing-unit-binding logic
       (`declare_packing_unit`, `record_unit_evidence`,
       `record_evidence_for_member`) into the `declare`/`ack` split from 2.3
       and 2.4 — binding at `declare` time, evidence at `ack` time, matching
@@ -64,7 +64,8 @@
       flipping it, under the same lock `declare`/`ack` use.
 - [ ] 2.8 Add the delivery doorbell: a per-generation `Arc<Notify>`
       constructed at the same point `readiness_changed` is today
-      (`worker.rs:210,716-718`), invoked on a mailbox empty-to-non-empty
+      (`worker/run.rs`, `worker/spawn.rs`), invoked on a mailbox
+      empty-to-non-empty
       transition, paired with a bounded poll backstop mirroring
       `ASYNC_WORKER_POLL_INTERVAL_MS`.
 - [ ] 2.9 Add the policy-admission-snapshot behavior: confirm (or add, if
@@ -84,8 +85,8 @@
       all transports (peek → coalesce/render → measure against token budget
       → declare the decided prefix → write it → ack from the write's
       evidence → repeat, woken by doorbell + poll), replacing each
-      transport's `WriteItem` FIFO consumer loop (`src/acp/transport.rs`,
-      `src/tmux/transport.rs`). Include the failure path: a declared unit
+      transport's `WriteItem` FIFO consumer loop (`src/acp/transport/`,
+      `src/tmux/transport/`). Include the failure path: a declared unit
       whose write fails observably MUST still be acked (`NotSubmitted` or
       `SubmissionUnknown`) rather than left to the watchdog when the
       executor is able to report.
