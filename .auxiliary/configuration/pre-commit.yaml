@@ -73,6 +73,28 @@ repos:
       verbose: true
       fail_fast: true
 
+    - id: linecheck
+      name: 'Check: Line Counts'
+      # Pre-commit's `always_run: true` fires the gate on every commit
+      # regardless of which files the commit touches, so the rule cannot be
+      # bypassed by a commit whose `.rs` files happen to all be in-limit while
+      # another branch grows an over-limit module separately. `pass_filenames:
+      # false` keeps `linecheck` in charge of its own file selection -- the
+      # config under `.auxiliary/configuration/linecheck.yaml` scopes the
+      # patterns to `src/**/*.rs` and `tests/**/*.rs` and an `exclude:` list
+      # opts markdown, generated build artifacts, and vendored sources out
+      # of `linecheck`'s built-in default fallback. See
+      # `documentation/development-practices.md` for the rationale, the
+      # 800/999 thresholds, and the no-exception rule that makes the cap a
+      # mechanical gate rather than a prose convention.
+      language: system
+      entry: 'linecheck --config .auxiliary/configuration/linecheck.yaml src tests'
+      pass_filenames: false
+      always_run: true
+      require_serial: true
+      stages: [ 'pre-commit' ]
+      fail_fast: true
+
     - id: cargo-fmt
       name: 'Check Style (Rust)'
       language: system

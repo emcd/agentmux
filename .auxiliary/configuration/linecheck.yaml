@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/tupe12334/linecheck/main/schema/linecheck.schema.json
+
+# `linecheck` applies its built-in default rule (warn 200, error 400) to any
+# file that does not match a custom rule. Without the exclude list, the
+# markdown design docs under `src/**/README.md` (and any future long-form
+# markdown in those trees) would surface as `[ERROR]` lines even though
+# the dispatch scopes this hook to Rust modules. The exclude list opts
+# markdown, generated build artifacts, and vendored sources out of that
+# fallback so a manual `linecheck src tests` invocation reports only what
+# the hook is gating.
+
+exclude:
+  - "**/*.md"
+  - "**/*.toml"
+  - "**/*.yaml"
+  - "**/*.yml"
+  - "**/*.json"
+  - "target/**"
+  - ".git/**"
+
+rules:
+  - pattern: "src/**/*.rs"
+    warn: 800
+    warn_message: "Approaching the line-count limit; please consider separating concerns."
+    error: 999
+    error_message: "Exceeds the line-count limit; please separate concerns."
+  - pattern: "tests/**/*.rs"
+    warn: 800
+    warn_message: "Approaching the line-count limit; please consider separating concerns."
+    error: 999
+    error_message: "Exceeds the line-count limit; please separate concerns."
