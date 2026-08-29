@@ -34,9 +34,7 @@ are documented in `documentation/development/README.md` Zig-free Pty Builds.
 - `state` — cross-thread shared state (`PtyShared`, `PtyConfigSnapshot`,
   `SnapshotRequest`/`SnapshotResponse`) plus the look and prompt observer
   consumers (`PtyOutputView`, `PtyPromptProbe`).
-- `transport` — `PtyTransport` (the per-target `Transport` implementation
-  with its worker thread, delivery task, and reader thread) plus
-  `PtyTargetConfiguration` (the per-coder config bundle).
+- `transport` — `PtyTransport` facade (struct, `Transport`/`GenerationFence` impls, `PtyTargetConfiguration`); `transport::lifecycle` owns bring-up (`startup_inner`, `StartupGuard`, bounded `observe_thread_finished`); `transport::runtime` owns the `!Send` terminal worker/reader threads (`run_worker`, `run_reader`, handlers, snapshot render, `publish`). `delivery` remains `src/pty/delivery.rs` (worker-thread `Delivery` state machine).
 
 ## Terminal-outcome receipt rendering
 
