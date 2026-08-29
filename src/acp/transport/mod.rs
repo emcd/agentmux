@@ -39,14 +39,12 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
-use std::time::Instant;
 
 use tokio::sync::mpsc;
 
 use crate::acp::client::{AcpGenerationHandle, SharedReplay};
 use crate::acp::permission::{ChoiceCorrelation, build_acp_permission_handler};
 use crate::acp::persistent_runtime::PersistentAcpWorkerRuntime;
-use crate::acp::state::{AcpLookSnapshot, derive_acp_look_snapshot};
 use crate::acp::{
     AcpStdioClient, DispatchHandler, PermissionHandler, PermissionResponder, PromptCompletion,
     PromptCompletionHandler, PromptDispatchOutcome,
@@ -56,18 +54,19 @@ use crate::envelope::PromptBatchSettings;
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
-    ChoiceMade, DeliveryEnvelope, GenerationFence, LookMode, LookSnapshotPayload, OutputView,
-    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportHealth,
-    TransportStatus, stopped_before_submission_outcome,
+    ChoiceMade, DeliveryEnvelope, GenerationFence, OutputView, SingleDeliveryOutcome,
+    StartupContext, Transport, TransportError, TransportHealth, TransportStatus,
+    stopped_before_submission_outcome,
 };
 use crate::transports::{PartitionSink, SendOutcome, SubmissionEvidence, WorkerReadinessState};
 
 pub mod state;
 use self::state::{
-    ACP_LOOK_ENTRIES_DEFAULT, ACP_LOOK_PRIME_POLL_INTERVAL, ACP_PROMPT_WAIT_POLL_INTERVAL,
-    ACP_WRITE_CHANNEL_CAPACITY, AcpSharedState, BootstrapInFlight, BootstrapRecord,
-    BootstrapRegistry, NEXT_BOOTSTRAP_ID, ReadinessMirror, raise_respawn_signal,
+    ACP_PROMPT_WAIT_POLL_INTERVAL, ACP_WRITE_CHANNEL_CAPACITY, AcpSharedState, BootstrapInFlight,
+    BootstrapRecord, BootstrapRegistry, NEXT_BOOTSTRAP_ID, ReadinessMirror, raise_respawn_signal,
 };
+
+pub mod output;
 
 // ACP delivery failure taxonomy (see the relay delivery README for the full
 // catalogue). The delivery outcomes the ACP transport now produces are typed:
@@ -737,72 +736,9 @@ impl Transport for AcpTransport {
         // handle reads the shared state, which the transport repoints across
         // startup/respawn. This keeps the prime-wait reachable during the very
         // windows (initial startup, respawn gap) when there is no live runtime.
-        Some(Arc::new(AcpOutputView {
+        Some(Arc::new(output::AcpOutputView {
             shared: Arc::clone(&self.shared),
         }))
-    }
-}
-
-/// Concurrent look view over an ACP transport's output. Captures the shared
-/// state ([`AcpSharedState`]) so the relay look path can read a snapshot without
-/// borrowing the worker-owned transport, and so the handle stays valid across
-/// startup and respawn (the transport repoints the inner replay buffer).
-struct AcpOutputView {
-    shared: Arc<AcpSharedState>,
-}
-
-impl OutputView for AcpOutputView {
-    fn look(&self, mode: LookMode) -> Result<LookSnapshotPayload, TransportError> {
-        // Own the bounded prime-wait: while the worker is still initializing,
-        // wait up to `prime_timeout` for the first snapshot to populate.
-        let deadline = Instant::now() + mode.prime_timeout;
-        let prime_timed_out = loop {
-            let state = *self.shared.readiness.lock().expect("readiness mutex");
-            if !matches!(state, WorkerReadinessState::Initializing) {
-                break false;
-            }
-            if Instant::now() >= deadline {
-                break true;
-            }
-            thread::sleep(ACP_LOOK_PRIME_POLL_INTERVAL);
-        };
-
-        let worker_state = *self.shared.readiness.lock().expect("readiness mutex");
-        let entries = match self
-            .shared
-            .replay
-            .lock()
-            .expect("replay slot mutex")
-            .as_ref()
-        {
-            Some(buffer) => buffer.lock().expect("replay buffer mutex").clone(),
-            None => Vec::new(),
-        };
-        let requested_entries = mode
-            .lines
-            .map(|lines| lines as usize)
-            .unwrap_or(ACP_LOOK_ENTRIES_DEFAULT);
-        let offset = mode.offset.map(|offset| offset as usize).unwrap_or(0);
-        let snapshot = derive_acp_look_snapshot(
-            Some(worker_state),
-            Some(entries.as_slice()),
-            requested_entries,
-            offset,
-            prime_timed_out,
-        );
-        Ok(acp_snapshot_to_payload(snapshot))
-    }
-}
-
-fn acp_snapshot_to_payload(snapshot: AcpLookSnapshot) -> LookSnapshotPayload {
-    LookSnapshotPayload::StructuredEntries {
-        snapshot_entries: snapshot.snapshot_entries,
-        entries_total: snapshot.entries_total,
-        returned_entries_count: snapshot.returned_entries_count,
-        freshness: snapshot.freshness,
-        snapshot_source: snapshot.snapshot_source,
-        stale_reason_code: snapshot.stale_reason_code,
-        snapshot_age_ms: snapshot.snapshot_age_ms,
     }
 }
 
