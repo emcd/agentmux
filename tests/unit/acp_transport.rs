@@ -283,3 +283,54 @@ fn mailw_and_raww_on_full_channel_stay_busy() {
         "full channel keeps Busy while the delivery task is alive and saturated",
     );
 }
+
+/// Handover readiness is the narrow predicate: only `Available` qualifies.
+/// This exercises the public `Transport` surface without reaching private
+/// `set_readiness` — the matrix is driven via `install_write_channel_for_testing`,
+/// `mailw` (Busy), `release_runtime` (Recovering), and `shutdown` (Unavailable).
+/// Kept in `tests/unit` per the project rule: `AcpTransport` is `pub` and the
+/// handover predicate is exercised via its public `Transport` impl, so inline
+/// `#[cfg(test)]` would require widening or an escape hatch.
+#[tokio::test]
+async fn handover_readiness_matrix_and_delivery_task_handle_retention_via_public_api() {
+    // Initial is `Initializing` — not ready for handover.
+    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
+    assert_eq!(transport.readiness(), WorkerReadinessState::Initializing);
+    assert!(!transport.is_ready_for_handover().await);
+
+    // `Available` is the single handover-ready state. The test seam puts the
+    // transport into `Available` without a live delivery task.
+    let guard = transport.install_write_channel_for_testing(false);
+    assert_eq!(transport.readiness(), WorkerReadinessState::Available);
+    assert!(transport.is_ready_for_handover().await);
+
+    // `Busy` is intentionally NOT handover-ready — accepting another batch
+    // while a turn is in flight would dispatch the wrong message to the same
+    // turn. `mailw` marks `Busy` synchronously on successful enqueue; the
+    // future stays pending until a delivery task would resolve it, but the
+    // readiness transition is immediate and observable here.
+    let _pending = Transport::mailw(&mut transport, test_envelope("m_busy"));
+    assert_eq!(transport.readiness(), WorkerReadinessState::Busy);
+    assert!(!transport.is_ready_for_handover().await);
+    drop(guard);
+
+    // `Recovering` and `Unavailable` are also not ready. `release_runtime`
+    // and `shutdown` are the public transitions that reach them without
+    // private `set_readiness`.
+    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
+    transport.release_runtime();
+    assert_eq!(transport.readiness(), WorkerReadinessState::Recovering);
+    assert!(!transport.is_ready_for_handover().await);
+
+    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
+    Transport::shutdown(&mut transport);
+    assert_eq!(transport.readiness(), WorkerReadinessState::Unavailable);
+    assert!(!transport.is_ready_for_handover().await);
+
+    // No delivery task has been spawned yet, so there is no handle for a
+    // generation supervisor to take — the field starts empty and a second
+    // `take` after the first stays empty.
+    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
+    assert!(transport.take_delivery_task_handle().is_none());
+    assert!(transport.take_delivery_task_handle().is_none());
+}
