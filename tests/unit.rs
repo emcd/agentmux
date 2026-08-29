@@ -45,7 +45,7 @@ mod tui;
 mod tui_relay_error_mapping;
 #[path = "unit/tui_session.rs"]
 mod tui_session;
-#[path = "unit/tui_workbench.rs"]
+#[path = "unit/tui_workbench/mod.rs"]
 mod tui_workbench;
 #[path = "unit/ui_transport.rs"]
 mod ui_transport;
