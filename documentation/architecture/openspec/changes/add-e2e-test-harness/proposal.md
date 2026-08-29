@@ -90,7 +90,7 @@ driven by a scripted harness.
 - Affected code: `src/commands/test/` (new), `src/commands/mod.rs`
   (router), `src/runtime/bootstrap.rs` (test-bundle opt-in
   deserialization; `serde` rename `test-isolated` -> `test_isolated`),
-  `src/relay/host.rs` (autostart filter rejecting `test-isolated=true`
+  `src/relay/watcher.rs` (autostart filter rejecting `test-isolated=true`
   bundles), and `src/test_harness/` (new; relay peer + script
   interpreter). No ACP transport code is touched in v1.
 - Tests: `tests/unit/test_harness/` (script grammar),
@@ -114,7 +114,7 @@ driven by a scripted harness.
 - The harness does NOT include GPT/LLM-driven simulation. v1 is fully
   scripted; future work may add an LLM-backed Coordinator mode if scripted
   flows are insufficient.
-- The harness does NOT touch `src/acp/transport.rs` or any ACP code
+- The harness does NOT touch `src/acp/transport/` or any ACP code
   path in v1. v1 scripted tests are pure relay flows (envelope
   recipients, SIGTERM, `on_behalf_of` end-to-end). v2 may add ACP-touching
   flows if needed; the design allows this without changing the v1
