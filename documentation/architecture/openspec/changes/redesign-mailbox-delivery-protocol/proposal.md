@@ -161,7 +161,7 @@ proposal's approval.
   - `src/relay/delivery/guard.rs` (`QueueEntryState`, `GuardKey` — collapse to
     two states; guard creation moves to `declare`, evidence recording stays
     at `ack`)
-  - `src/transports/contract.rs` (`Transport` trait: `mailw`/`raww`/
+  - `src/transports/contract/transport.rs` (`Transport` trait: `mailw`/`raww`/
     `is_ready_for_handover` removed; consumer-generation binding and a
     peek/declare/ack client surface added)
   - `src/transports/vocabulary.rs` (promoted to the neutral protocol crate)

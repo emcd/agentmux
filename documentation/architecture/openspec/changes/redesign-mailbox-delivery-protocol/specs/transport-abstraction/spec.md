@@ -4,8 +4,8 @@
 
 The relay delivery subsystem SHALL NOT dispatch delivery by invoking a
 transport method per envelope. Instead, each transport implementation of the
-`Transport` trait in `src/transports/contract.rs` SHALL own one **serial
-delivery-loop executor**, spawned during `startup` and living for the
+`Transport` trait in `src/transports/contract/transport.rs` SHALL own one
+**serial delivery-loop executor**, spawned during `startup` and living for the
 transport instance's lifetime, which calls the relay's `peek`, `declare`,
 and `ack` entry points (`delivery-quiescence`'s `Mailbox Peek Operation`,
 `Mailbox Submission Declaration`, and `Mailbox Acknowledgment and Partial
