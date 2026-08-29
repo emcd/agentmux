@@ -90,7 +90,7 @@
       `SubmissionUnknown`) rather than left to the watchdog when the
       executor is able to report.
 - [ ] 3.2 Remove `mailw`, `raww`, and `is_ready_for_handover` from the
-      `Transport` trait (`src/transports/contract.rs:274-386`). Spawn the
+      `Transport` trait (`src/transports/contract/transport.rs`). Spawn the
       delivery-loop executor from each transport's `startup`.
 - [ ] 3.3 Enforce one serial delivery executor per transport instance —
       no per-connection executor spawn. In-process scope only; no
