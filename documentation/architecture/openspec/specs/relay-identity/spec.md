@@ -212,6 +212,13 @@ introspection violates this requirement.
 
 ### Requirement: Revocation and Expiry Enforcement
 
+The relay SHALL apply this requirement when a principal ceases to be valid —
+explicit removal, or `expires_at` being reached — and SHALL NOT treat a
+credential rotation as a revocation under it: a rotation replaces the credential
+while the principal persists and is expected to reconnect with the new one.
+Rotation's teardown and event obligations are specified by the
+`mcp-tool-surface` capability's MCP Change Tool requirement.
+
 The relay SHALL emit an `identity.snapshot` stream event to a trusted-host
 connection at the time the trusted-host stream is established. The snapshot
 SHALL carry the current set of active principal records within the trusted
