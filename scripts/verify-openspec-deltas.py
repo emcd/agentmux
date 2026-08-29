@@ -212,8 +212,17 @@ def audit(change_id, quiet):
                     section.setdefault(name, []).extend(scenarios)
         header_shown = False
 
+        pairs = delta.get("RENAMED", {}).get("__pairs__", [])
+        renamed_to = {name for kind, name in pairs if kind == "TO"}
+
         for operation in ("MODIFIED", "REMOVED"):
             for name in delta.get(operation, {}):
+                # A MODIFIED requirement keyed by a RENAMED TO name has no
+                # live counterpart under that name until sync rewrites the
+                # live spec — its continuity is established by the RENAMED
+                # pair check below verifying the FROM name is live instead.
+                if operation == "MODIFIED" and name in renamed_to:
+                    continue
                 if name not in live:
                     errors.append(
                         f"{capability}: {operation} '{name}' has no live counterpart"
@@ -226,7 +235,6 @@ def audit(change_id, quiet):
                     "(should this be MODIFIED?)"
                 )
 
-        pairs = delta.get("RENAMED", {}).get("__pairs__", [])
         for kind, name in pairs:
             if kind == "FROM" and name not in live:
                 errors.append(f"{capability}: RENAMED FROM '{name}' is not live")
