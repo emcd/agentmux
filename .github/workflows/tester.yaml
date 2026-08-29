@@ -27,9 +27,29 @@ jobs:
         run: scripts/lint-client-configuration.sh
 
       - name: Install Rust
+        # Brought forward so `cargo install linecheck` below has a toolchain
+        # to build from. The previous ordering (Rust later) was correct when
+        # the only Rust-using steps were fmt/clippy/nextest; linecheck now
+        # joins them.
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - name: Install linecheck
+        # Pinned to the same version this project develops against locally.
+        # `linecheck` is not a repository dependency (it is not a runtime
+        # dependency of the crate and is not in `Cargo.toml`), so the host
+        # runner must install it explicitly. Bumping the version is a workflow
+        # edit, intentionally separate from a hook change, so a binary
+        # upgrade does not silently widen enforcement.
+        run: cargo install linecheck --locked --version 1.2.1
+
+      - name: Check Line Counts
+        # Mirrors the pre-commit `linecheck` hook. Runs after `linecheck`
+        # itself is installed (the step above) and before any later Rust
+        # hook, so a 1000-line commit attempt fails in seconds rather than
+        # after a full Rust toolchain setup.
+        run: linecheck --config .auxiliary/configuration/linecheck.yaml src tests
 
       - name: Check Formatting
         run: cargo fmt --all -- --check

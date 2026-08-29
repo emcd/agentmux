@@ -449,5 +449,37 @@ being touched, so the hook never fires:
 scripts/verify-openspec-deltas.py <change-id>
 ```
 
+### Rust Module Line-Count Limit
+
+A Rust module whose line count exceeds 999 is treated as a request to split.
+A module of exactly 1000 lines already fails; the cap is a hard 1000-line
+ceiling. The cap is enforced mechanically by the `linecheck` pre-commit
+hook and the matching CI step in `.github/workflows/tester.yaml` so the
+rule does not drift into a prose-only convention -- the same defect
+`agentmux:procedures/2`'s proof-of-absence gate warned about. The
+threshold is `warn: 800` (printed, non-blocking) and `error: 999` (blocks
+the commit and the pull request).
+
+There are no exceptions. The gate is unconditional: a pre-existing
+over-limit module blocks this hook on every commit until it is split;
+growth past an in-limit module's current count blocks the same way. There
+is no inline ignore marker and no per-file allowlist in the configuration
+-- an entry in `.auxiliary/configuration/linecheck.yaml` for a specific
+path would be the same graveyard the proof-of-absence gate records, and
+the no-exception requirement forbids both.
+
+`linecheck` reads its rule definition from
+`.auxiliary/configuration/linecheck.yaml`. The config covers two patterns
+(`src/**/*.rs` and `tests/**/*.rs`) at the same thresholds, and an
+`exclude:` list that opts markdown, generated build artifacts, and vendored
+sources out of `linecheck`'s built-in default fallback. The pre-commit hook
+runs on every commit (`always_run: true`, `pass_filenames: false`) so the
+rule cannot be bypassed by a commit whose staged files happen to not match
+the gate's filter.
+
+The hook fails the chain before any expensive Rust hook (`cargo fmt`,
+`cargo clippy`, `cargo nextest`) runs, so the cost of a 1001-line commit
+attempt is a sub-second warning and exit, not a full toolchain setup.
+
 There is no window after archiving: the script resolves `changes/<change-id>`
 and an archived change no longer lives there.
