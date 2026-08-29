@@ -36,11 +36,11 @@
 //!
 //! [`is_ready_for_handover`]: Transport::is_ready_for_handover
 
-pub mod api;
-pub mod delivery;
-pub mod output;
-pub mod state;
-pub mod turn;
+mod api;
+mod delivery;
+mod output;
+mod state;
+mod turn;
 
 pub use api::AcpTransport;
 #[doc(hidden)]
