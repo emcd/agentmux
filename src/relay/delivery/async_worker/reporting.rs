@@ -73,8 +73,7 @@ pub(super) fn report_terminal_outcome(
                     "reason_code": result.reason_code,
                     "reason": result.reason,
                     "details": result.details,
-                    "batch_id": guard.map(|key| key.batch.value()),
-                    "attempt_id": guard.map(|key| key.attempt.value()),
+                    "entry_sequence": guard.map(|key| key.sequence().value()),
                 }),
             );
         }

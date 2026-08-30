@@ -1,0 +1,150 @@
+//! Placing an admitted entry into its target's mailbox, and naming the
+//! generation entitled to consume it.
+
+use crate::protocol::identity::ConsumerBinding;
+use crate::protocol::mailbox::{EntrySequence, MailboxPayload};
+
+use super::super::super::guard::QueueEntryState;
+use super::super::ledger::{MailboxSlot, lock_ledger};
+use super::addressing::target_key;
+
+/// Why an entry could not be placed in its target's mailbox.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::relay) enum EnqueueRejection {
+    /// No reservation is held under this message id, so there is no position to
+    /// fill and no quota backing the entry.
+    NotAdmitted,
+    /// The entry already occupies its position. Enqueueing is write-once: a
+    /// second payload for one position would change what a peek already reported.
+    AlreadyEnqueued,
+    /// The entry has already terminalized, so its position no longer exists.
+    AlreadyTerminal,
+}
+
+/// Places an admitted entry's payload at the position admission gave it, making
+/// it peekable.
+///
+/// Separate from admission because the two know different things: admission runs
+/// at the request boundary and knows what an entry costs, while the payload a
+/// transport is asked to write is settled afterwards. The position is fixed at
+/// admission either way, so the order entries become peekable in cannot differ
+/// from the order they were admitted in.
+pub(in crate::relay) fn enqueue(
+    message_id: &str,
+    payload: MailboxPayload,
+) -> Result<EntrySequence, EnqueueRejection> {
+    let Ok(mut state) = lock_ledger() else {
+        return Err(EnqueueRejection::NotAdmitted);
+    };
+    let Some(entry) = state.entries.get(message_id) else {
+        return Err(EnqueueRejection::NotAdmitted);
+    };
+    if entry.state == QueueEntryState::Terminal {
+        return Err(EnqueueRejection::AlreadyTerminal);
+    }
+    let (target, sequence) = (entry.target.clone(), entry.sequence);
+    let mailbox = state.mailboxes.entry(target).or_default();
+    if mailbox.slots.contains_key(&sequence) {
+        return Err(EnqueueRejection::AlreadyEnqueued);
+    }
+    mailbox.slots.insert(
+        sequence,
+        MailboxSlot {
+            message_id: message_id.to_string(),
+            payload,
+        },
+    );
+    Ok(sequence)
+}
+
+/// Binds a target's consumer generation.
+///
+/// The minting sequence this value is drawn from — monotonic, never reused, never
+/// reset across a target's teardown and recreation — and the fence-gated
+/// replacement path are specified by `Consumer Generation Ownership and
+/// Replacement` and are not established here. What this provides is the datum
+/// every operation below is checked against.
+pub(in crate::relay) fn bind_consumer_generation(binding: &ConsumerBinding) {
+    let Ok(mut state) = lock_ledger() else {
+        return;
+    };
+    let target = target_key(binding);
+    state.mailboxes.entry(target).or_default().generation = binding.generation;
+}
+
+/// A position that leaves the mailbox without being acknowledged does not park
+/// the ones behind it.
+///
+/// Inline for the reason given on the peek block above. One test because the two
+/// ways a position can leave — a reservation rolled back before its payload
+/// arrived, and an entry a lifecycle trigger resolved — are one defect: absence
+/// from the mailbox is ambiguous, and every way of producing it has to be told
+/// apart from a position still waiting for its payload or the cursor stalls
+/// behind it forever.
+#[cfg(test)]
+mod mailbox_retirement_tests {
+    use super::super::super::admit::rollback_admission;
+    use super::super::super::terminal::terminalize;
+    use super::super::declare::declare;
+    use super::super::fixtures::{admit_only, binding, mail, peeked, place, range};
+    use crate::protocol::operations::AckAccepted;
+
+    use super::super::ack::ack;
+    use super::*;
+
+    #[test]
+    fn a_position_abandoned_or_resolved_outside_an_ack_does_not_park_the_mailbox() {
+        // A reservation taken and rolled back before its payload was enqueued.
+        // Its position is gone, and the entry behind it must still be reachable:
+        // the cursor expects the abandoned position, so leaving it merely absent
+        // parks every later entry for this target permanently.
+        let rolled_back = "mbx-retire-rollback";
+        let rollback_bound = binding(rolled_back, 1);
+        admit_only(rolled_back, "mbx-retire-rollback-a", 1);
+        admit_only(rolled_back, "mbx-retire-rollback-b", 1);
+        rollback_admission("mbx-retire-rollback-a");
+        enqueue("mbx-retire-rollback-b", mail("body")).expect("enqueue");
+        assert_eq!(
+            peeked(&rollback_bound, 10, 1_000),
+            vec![2],
+            "an entry behind an abandoned position is still peekable"
+        );
+        assert!(
+            declare(&rollback_bound, range(2, 2)).is_ok(),
+            "the cursor moved over the abandoned position, so the entry behind it can be declared"
+        );
+
+        // An entry resolved by a lifecycle trigger rather than by an
+        // acknowledgment. Its slot must go with its reservation, or the head of
+        // the mailbox names an entry the ledger no longer holds.
+        let triggered = "mbx-retire-trigger";
+        let trigger_bound = binding(triggered, 1);
+        for index in 1..=3 {
+            place(triggered, &format!("{triggered}-{index}"), 1, mail("body"));
+        }
+        terminalize("mbx-retire-trigger-1");
+        assert_eq!(
+            peeked(&trigger_bound, 10, 1_000),
+            vec![2, 3],
+            "a member resolved outside an acknowledgment leaves the head clear"
+        );
+
+        // The same trigger against a *declared* member. Its declaration then
+        // describes nothing, and leaving it outstanding would refuse every later
+        // declaration for this target with a unit no one can ever acknowledge.
+        let declared = declare(&trigger_bound, range(2, 2)).expect("declare");
+        terminalize("mbx-retire-trigger-2");
+        assert_eq!(
+            declare(&trigger_bound, range(3, 3)).map(|accepted| accepted.range),
+            Ok(range(3, 3)),
+            "a declaration whose members were all resolved elsewhere stops blocking"
+        );
+        // And the executor that acknowledges it afterwards is told what actually
+        // happened — already resolved — rather than that it never declared it.
+        assert_eq!(
+            ack(&trigger_bound, declared.unit, &[]),
+            Ok(AckAccepted::AlreadyTerminalized { range: range(2, 2) }),
+            "the abandoned declaration is remembered as resolved, not as never made"
+        );
+    }
+}

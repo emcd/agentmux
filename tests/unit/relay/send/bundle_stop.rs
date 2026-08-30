@@ -117,14 +117,14 @@ fn a_bundle_stop_is_never_reported_to_a_sender_as_a_relay_shutdown() {
         .collect::<Vec<_>>();
 
     // The queue shape this test depends on, asserted rather than assumed. One
-    // member reached a batch and two did not: the held one and the one still in
+    // member acquired a guard and two did not: the held one and the one still in
     // the worker's receiver, which are the two routes into the drain. The first
     // draft of this fixture authorized all three, leaving the receiver empty, and
     // passed against the defect for that reason alone — so a fixture that stops
     // building the queue must fail here rather than quietly stop testing.
     let unbound = records
         .iter()
-        .filter(|record| record["details"]["batch_id"].is_null())
+        .filter(|record| record["details"]["entry_sequence"].is_null())
         .count();
     assert_eq!(
         unbound, 2,

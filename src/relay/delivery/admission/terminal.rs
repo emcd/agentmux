@@ -8,7 +8,7 @@
 //! [`TerminalTransition::Won`].
 
 use super::super::guard::{GuardKey, QueueEntryState, SubmissionEvidence, resolve_from_evidence};
-use super::ledger::lock_ledger;
+use super::ledger::{LedgerState, lock_ledger};
 
 /// The outcome of attempting the single terminal transition for one member.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -69,6 +69,40 @@ pub(in crate::relay) fn terminalize(message_id: &str) -> TerminalTransition {
         // whose uniqueness we cannot establish is worse than reporting none.
         return TerminalTransition::AlreadyTerminal;
     };
+    let target = state
+        .entries
+        .get(message_id)
+        .map(|entry| entry.target.clone());
+    let transition = release_entry(&mut state, message_id, None);
+    // A declared member resolved by a lifecycle trigger rather than by an
+    // acknowledgment leaves its unit describing nothing once the last of its
+    // members has gone. Reconciled here rather than in `release_entry` because an
+    // acknowledgment manages its own declaration and would otherwise retire it
+    // twice, once through this path and once through its own.
+    if let Some(mailbox) = target.and_then(|target| state.mailboxes.get_mut(&target)) {
+        mailbox.reconcile_outstanding();
+    }
+    transition
+}
+
+/// The transition itself, performed against an already-held ledger guard.
+///
+/// Split from [`terminalize`] so an operation that must resolve several members
+/// as one act — an acknowledgment covering a whole declared range — can do so
+/// under the single lock it already holds. The lock is not reentrant, so calling
+/// [`terminalize`] from inside such a section would deadlock rather than merely
+/// split the operation; taking the guard as an argument is what makes the
+/// composition expressible at all.
+///
+/// `supplied` is evidence the caller observed for *this* member. When present it
+/// is the outcome: an acknowledgment reports what a write actually did, and the
+/// guard's evidence order exists for triggers that bring no outcome of their own,
+/// not to second-guess one that does. When absent the order runs as usual.
+pub(in crate::relay) fn release_entry(
+    state: &mut LedgerState,
+    message_id: &str,
+    supplied: Option<SubmissionEvidence>,
+) -> TerminalTransition {
     let Some(entry) = state.entries.get(message_id).cloned() else {
         return TerminalTransition::NoReservation;
     };
@@ -96,8 +130,15 @@ pub(in crate::relay) fn terminalize(message_id: &str) -> TerminalTransition {
         }
         evidence
     });
+    // The entry's position leaves the mailbox with it. Retiring rather than
+    // merely removing is what lets the cursor advance over it: a position left
+    // absent is indistinguishable from one still waiting for its payload, and
+    // the head of a target's mailbox would park there permanently.
+    if let Some(mailbox) = state.mailboxes.get_mut(&entry.target) {
+        mailbox.retire(entry.sequence);
+    }
     TerminalTransition::Won {
-        evidence: resolve_from_evidence(unit_evidence, entry.unit),
+        evidence: supplied.unwrap_or_else(|| resolve_from_evidence(unit_evidence, entry.unit)),
         bound: entry.unit.is_some(),
         guard: entry.guard,
     }

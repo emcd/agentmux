@@ -75,12 +75,18 @@ pub fn report_undelivered_queue(reporting: UndeliveredReporting) {
         return;
     };
 
-    // Undelivered means *waiting*, not merely reserved. An `Authorized` member
-    // has been handed over and is executing under the watchdog's bound; counting
-    // it here would report work in progress as a backlog, and would age it
-    // toward a warning that describes a target not draining when the target is
-    // in fact being written to right now. So this pass scopes to `Pending` and
-    // computes its own totals rather than reading the all-state quota counters.
+    // Undelivered means *waiting*, not merely reserved. A member holding a guard
+    // has had responsibility for it taken and is executing under the watchdog's
+    // bound; counting it here would report work in progress as a backlog, and
+    // would age it toward a warning that describes a target not draining when the
+    // target is in fact being written to right now.
+    //
+    // The guard, rather than the entry's state, is what discriminates: a declared
+    // entry is still `Queued`, so the state alone no longer separates waiting from
+    // in flight. The guard is assigned exactly when something takes
+    // responsibility, which is the distinction this pass is after. So it scopes to
+    // unguarded entries and computes its own totals rather than reading the
+    // all-state quota counters.
     let mut oldest: HashMap<AdmissionTargetKey, Instant> = HashMap::new();
     let mut pending_per_target: HashMap<AdmissionTargetKey, TargetUsage> = HashMap::new();
     let mut pending_envelopes_total: usize = 0;
@@ -88,7 +94,7 @@ pub fn report_undelivered_queue(reporting: UndeliveredReporting) {
     for entry in state
         .entries
         .values()
-        .filter(|entry| entry.state == QueueEntryState::Pending)
+        .filter(|entry| entry.state == QueueEntryState::Queued && entry.guard.is_none())
     {
         oldest
             .entry(entry.target.clone())

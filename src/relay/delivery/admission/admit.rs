@@ -137,13 +137,21 @@ pub(super) fn admit_with_limits(
     let entry = state.per_target.entry(target.clone()).or_default();
     entry.envelopes += 1;
     entry.bytes += canonical_bytes;
+    // The position is taken here, under the same lock as the reservation, because
+    // admission is what puts an entry in its target's order. Two concurrent sends
+    // that both find headroom are linearized by this lock, and the numbers they
+    // leave with are the order they were linearized in.
+    let mailbox = state.mailboxes.entry(target.clone()).or_default();
+    let sequence = mailbox.next_sequence;
+    mailbox.next_sequence = sequence.next();
     state.entries.insert(
         message_id.to_string(),
         AdmittedEntry {
             target,
             canonical_bytes,
             admitted_at: Instant::now(),
-            state: QueueEntryState::Pending,
+            sequence,
+            state: QueueEntryState::Queued,
             guard: None,
             unit: None,
         },
@@ -175,6 +183,17 @@ pub(in crate::relay) fn rollback_admission(message_id: &str) {
         if usage.envelopes == 0 && usage.bytes == 0 {
             state.per_target.remove(&entry.target);
         }
+    }
+    // The position the entry was given is retired rather than handed back.
+    // Rewinding the counter would hand a live position to a second entry
+    // whenever a concurrent admission had already taken the next one, so the
+    // position is instead recorded as one that will never be served — which is
+    // what lets the cursor move over it. Left merely absent it would be
+    // indistinguishable from a position still waiting for its payload, and the
+    // cursor would stall behind it, parking every entry the target received
+    // afterwards.
+    if let Some(mailbox) = state.mailboxes.get_mut(&entry.target) {
+        mailbox.retire(entry.sequence);
     }
 }
 

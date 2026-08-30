@@ -161,6 +161,19 @@ pub enum AckRejection {
     /// resolve, and the relay does not distinguish them, because the caller may
     /// do nothing differently in either case.
     UnitNotDeclared,
+    /// The supplied evidence is not one entry per position the unit covers.
+    ///
+    /// Rejected rather than repaired. An acknowledgment reports what a write
+    /// observed for each member, so a missing member has no evidence to be
+    /// resolved from and a surplus or repeated one names a member this unit does
+    /// not answer for. Filling a gap from a sibling's report would terminalize a
+    /// member with an outcome nothing observed for it — the invented evidence
+    /// this contract exists to make impossible.
+    EvidenceDoesNotCoverUnit {
+        /// The range the unit was declared over, which the evidence must match
+        /// exactly, once per position.
+        expected: EntryRange,
+    },
 }
 
 pub type AckResult = Result<AckAccepted, AckRejection>;

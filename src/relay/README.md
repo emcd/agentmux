@@ -11,7 +11,7 @@ exported from `src/relay/mod.rs`.
   delivery.
 - [`delivery-decisions.md`](delivery-decisions.md) — why the delivery contract has
   that shape: the retired timers, why no bound replaced them, why `Authorized`
-  exists, and the tradeoffs behind each. Append-only.
+  existed and what replaced it, and the tradeoffs behind each. Append-only.
 
 ## Primary Responsibilities
 
@@ -291,10 +291,13 @@ exported from `src/relay/mod.rs`.
   - tmux/process adapters used by delivery and look paths.
 - `delivery/`
   - transport-specific delivery decomposition:
-  - `admission.rs`: the request-boundary admission gate and its quota ledger.
+  - `admission/`: the request-boundary admission gate, its quota ledger, and the
+    per-target mailbox the pull model reads.
     Every accepted entry reserves envelope count and canonical payload bytes
     against a per-target and a relay-global limit, atomically across both, before
-    `queued` is returned; the reservation is released at terminalization and
+    `queued` is returned; admission also fixes the entry's position in its
+    target's mailbox, because admission is what linearizes two concurrent sends
+    against each other. The reservation is released at terminalization and
     nowhere else. Three refusals happen here rather than after queueing: an
     exhausted quota, an envelope whose canonical payload exceeds its transport's
     maximum handover dimensions, and a `Pubsub` target, which is refused
@@ -318,16 +321,40 @@ exported from `src/relay/mod.rs`.
     the listener binds; before that (in tests, and on any path that never hosts a
     relay) reads fall back to the same defaults a missing `relay.toml` resolves
     to.
-  - `guard.rs`: the queue entry state model (`Pending`/`Authorized`/`Terminal`),
-    the delivery identities (batch, attempt), the typed
-    submission evidence, and the guard's single evidence order. The types live
+    Its `mailbox` module holds the pull model's relay side: the per-target ordered
+    mailbox and the three operations a delivery-loop executor calls against it —
+    `peek`, which reports the head run and advances nothing; `declare`, which
+    records the exact range about to be written as one packing unit; and `ack`,
+    which terminalizes exactly that range from the executor's evidence. Of the
+    three, only `ack` moves the cursor or resolves anything, so an executor that
+    dies after peeking or after declaring leaves the mailbox in a state a watchdog
+    or a replacement can still reason about. The cursor does also advance outside
+    those three, over a position the target will never serve: one whose
+    reservation was rolled back, or whose entry a lifecycle trigger resolved.
+    Retiring such a position is what distinguishes it from one still waiting for
+    its payload, which the cursor must not pass. At most one
+    declared-and-unacknowledged unit exists per target at a time: nothing
+    acknowledges or resolves a declared range on its own, so the cursor still
+    stands where the first declaration found it, and without that rule two
+    declarations of the same range would both pass every position and contiguity
+    check and mint two packing units over one entry. The executors that drive these operations arrive with the
+    push-model handover's removal; until then nothing outside the module's own
+    tests calls them.
+  - `guard.rs`: the queue entry state model (`Queued`/`Terminal`), the guard
+    identity, the typed submission evidence, and the guard's single evidence
+    order. The types live
     here but the state itself lives on the admission ledger's entries, under the
     lock that also releases quota — the terminal transition and the release are
     one atomic operation, and splitting them across two structures is exactly how
-    a released reservation could end up on a still-live entry. `Pending` is
-    unbounded by design and holds nothing but its own reservation; `Authorized`
-    holds the target's ordering position, which is why the bound belongs on that
-    side. Every lifecycle trigger — collector panic, closed channel, graceful
+    a released reservation could end up on a still-live entry. `Queued` is
+    unbounded by design. A declared entry is still `Queued`: declaration is
+    metadata an entry carries — which packing unit it is bound to — rather than a
+    third lifecycle position, so the only thing that resolves an entry is
+    acknowledgment. A guard is keyed by the entry's own mailbox position, which is
+    its stable identity; there is no separate attempt identifier, because
+    acknowledging an already-terminal entry is idempotent rather than a distinct
+    attempt to tell apart from the first. Every lifecycle trigger — collector
+    panic, closed channel, graceful
     shutdown — terminalizes through the same evidence order rather than choosing
     an outcome, so a member the relay can prove was never handed to a transport
     resolves `not_submitted` instead of being smeared into `submission_unknown`
@@ -496,9 +523,13 @@ exported from `src/relay/mod.rs`.
     (`build_ui_transport_services`), so the transport never imports `crate::relay`.
   - There is no quiescence module. Nothing here waits on a target: readiness is
     a level the relay reads before authorizing, and a member that cannot be
-    handed over stays `Pending` rather than parking on a timer. See
+    handed over stays `Queued` rather than parking on a timer. See
     `dispatch/worker.rs`'s `decide_gate` for the one place that judgement is
-    made.
+    made. Authorization here is the push model's, which is the path still in
+    production; under the pull model the same judgement moves to the transport's
+    delivery-loop executor, which decides what to declare and when. Both leave
+    an unready target's member `Queued` on no timer, which is the property this
+    paragraph is about.
 
 ## Runtime Behavior Notes
 
@@ -873,7 +904,7 @@ operational details that do not fit a diagram.
   ignores it like any other unrecognised field.
 - The send API carries no caller-supplied delivery timeout, and no per-coder
   configuration bounds a delivery's wait on a target that is reachable but not
-  ready — such a member stays `Pending` indefinitely. Per-target admission
+  ready — such a member stays `Queued` indefinitely. Per-target admission
   quota bounds the consequence, and the undelivered-queue inscriptions are how
   the backlog is observed.
 - Reachability is the other axis and is bounded. A target continuously

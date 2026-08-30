@@ -32,6 +32,8 @@
 //! - [`ledger`] — the process-global state every event below mutates, and the one
 //!   lock that guards it.
 //! - [`admit`] — the reservation, its three refusals, and its rollback.
+//! - [`mailbox`] — the per-target ordered mailbox and the three operations a
+//!   delivery-loop executor calls against it: peek, declare, acknowledge.
 //! - [`authorize`] — the all-or-none batch transition, packing units, evidence.
 //! - [`terminal`] — the single terminal transition, which is also the only quota
 //!   release.
@@ -47,6 +49,13 @@ mod admit;
 mod authorize;
 mod config;
 mod ledger;
+// The pull model's relay side lands before the transports that drive it: the
+// delivery-loop executors that peek, declare, and acknowledge are wired when the
+// push-model handover is removed, so until then nothing outside this module's own
+// tests calls any of it. Scoped to this module rather than to each operation, so
+// that removing it is one edit at the point the executors arrive.
+#[allow(dead_code, unused_imports)]
+mod mailbox;
 mod reporting;
 mod terminal;
 
