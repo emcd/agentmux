@@ -5,6 +5,7 @@ pub mod commands;
 pub mod configuration;
 pub mod envelope;
 pub mod mcp;
+pub mod protocol;
 pub mod relay;
 pub mod runtime;
 pub mod tmux;

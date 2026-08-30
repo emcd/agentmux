@@ -14,9 +14,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::transports::vocabulary::{
-    LookSnapshotPayload, PackingUnitId, PartitionError, SubmissionEvidence,
-};
+use crate::protocol::{LookSnapshotPayload, PackingUnitId, PartitionError, SubmissionEvidence};
 
 use super::{
     DeliveryEnvelope, LookMode, OutcomeFuture, StartupContext, TransportError, TransportStatus,

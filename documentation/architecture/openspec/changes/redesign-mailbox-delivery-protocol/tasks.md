@@ -1,17 +1,20 @@
 ## 1. Neutral protocol crate
 
-- [ ] 1.1 Promote `src/transports/vocabulary.rs` into the neutral delivery
-      protocol crate boundary. Add mailbox entry/entry-kind types, target and
+- [x] 1.1 Promote `src/transports/vocabulary.rs` into `src/protocol`, the
+      neutral delivery protocol crate boundary. Add mailbox entry/entry-kind
+      types, target and
       consumer identity, consumer-generation binding, cursor position, and
       `peek`/`declare`/`ack` request/response types alongside the existing
       `PackingUnitId`, `SubmissionEvidence`, `PartitionError`, `SendOutcome`,
       `WorkerReadinessState`, `DeliveryPayloadMode`, `WorkerFailureReason`,
       `ToolCallStatus`, `StructuredEntry`, `LookFreshness`,
       `LookSnapshotSource`, `LookSnapshotPayload`.
-- [ ] 1.2 Verify the promoted boundary imports nothing from `crate::relay`,
-      `crate::acp`, `crate::tmux`, `crate::pty`, or `crate::transports::ui`.
-      Add a compile-time or lint check that fails if a back-edge is
-      reintroduced.
+- [x] 1.2 Verify the promoted boundary imports nothing from `crate::relay`,
+      `crate::acp`, `crate::tmux`, `crate::pty`, or `crate::transports` —
+      the whole of `transports`, not only its `ui` module, since the
+      boundary sits below it and every part of it is one side of the
+      inversion. Add a compile-time or lint check that fails if a back-edge
+      is reintroduced.
 
 ## 2. Relay-side mailbox (`src/relay/delivery/`)
 

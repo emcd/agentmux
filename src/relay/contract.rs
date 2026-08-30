@@ -2,19 +2,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{configuration::SessionType, transports::StructuredEntry};
-// Delivery/look vocabulary now lives canonically in `crate::transports`. Re-export
-// only the variants that relay contract wire types below embed, so external
-// deserializers of those payloads resolve them from `crate::relay`: `SendOutcome`
-// rides in `SendResult`; `LookFreshness`/`LookSnapshotSource` ride in
-// `LookSnapshotPayload`. `DeliveryPayloadMode` is not embedded in a wire type but is
-// re-exported as the convenience path for relay's own delivery dispatch, which
-// branches on it across the worker/handler surface. Relay-internal code that merely
-// consumes a transport-vocabulary type without embedding it (e.g. the
-// `read_worker_readiness` stringify over `WorkerReadinessState`) imports it from
-// `crate::transports` directly rather than through this re-export.
-pub use crate::transports::vocabulary::{
-    DeliveryPayloadMode, LookFreshness, LookSnapshotSource, SendOutcome,
-};
+// Delivery/look vocabulary lives canonically in `crate::protocol`, the boundary
+// both delivery call directions depend on. Re-export only the variants that relay
+// contract wire types below embed, so external deserializers of those payloads
+// resolve them from `crate::relay`: `SendOutcome` rides in `SendResult`;
+// `LookFreshness`/`LookSnapshotSource` ride in `LookSnapshotPayload`.
+// `DeliveryPayloadMode` is not embedded in a wire type but is re-exported as the
+// convenience path for relay's own delivery dispatch, which branches on it across
+// the worker/handler surface. Relay-internal code that merely consumes a delivery
+// vocabulary type without embedding it (e.g. the `read_worker_readiness`
+// stringify over `WorkerReadinessState`) imports it from `crate::transports`
+// directly rather than through this re-export.
+pub use crate::protocol::{DeliveryPayloadMode, LookFreshness, LookSnapshotSource, SendOutcome};
 
 /// Declared session type for one listed bundle session.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

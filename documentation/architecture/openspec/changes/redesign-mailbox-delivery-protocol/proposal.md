@@ -97,10 +97,10 @@ proposal's approval.
   machinery; a missed doorbell only delays the next `peek`, backstopped by
   the existing bounded poll.
 - Promote the neutral vocabulary already living in `src/transports/
-  vocabulary.rs` into the crate boundary both delivery directions (relay to
-  transport for `look`, transport to relay for `peek`/`ack`) depend on
-  without a back-edge; add the module-boundary requirement that says what it
-  may and must not hold.
+  vocabulary.rs` into `src/protocol`, the crate boundary both delivery
+  directions (relay to transport for `look`, transport to relay for
+  `peek`/`ack`) depend on without a back-edge; add the module-boundary
+  requirement that says what it may and must not hold.
 - Normatively resolve, not defer: revocation/ack serialization mechanism
   (above), doorbell durability (deliberately ephemeral, rebuilt per
   generation, correctness never depends on it), policy-change-while-queued
@@ -143,8 +143,10 @@ proposal's approval.
     `Transport Health as a Separate Axis` all restated for the pull model;
     `Transport Generation Fencing and Termination Authority` gets a
     single-word terminology fix (`Authorized` → `declared`) with its
-    mechanism otherwise reused verbatim; neutral-crate module-boundary
-    requirement added)
+    mechanism otherwise reused verbatim; `Transport-Neutral Look Snapshot
+    Vocabulary` repointed at the neutral boundary, since the look vocabulary
+    it binds to `src/transports/vocabulary` moves there with the delivery
+    vocabulary; neutral-crate module-boundary requirement added)
   - `transport-contracts` (`Prompt-Readiness Template Gating`, `Relay raww
     transport behavior`, `ACP Transport Error Code`, and `Pty Prompt Probe
     and Look Shall Not Block a Tokio Worker Thread` restated for the pull
@@ -164,7 +166,9 @@ proposal's approval.
   - `src/transports/contract/transport.rs` (`Transport` trait: `mailw`/`raww`/
     `is_ready_for_handover` removed; consumer-generation binding and a
     peek/declare/ack client surface added)
-  - `src/transports/vocabulary.rs` (promoted to the neutral protocol crate)
+  - `src/transports/vocabulary.rs` (promoted to `src/protocol`, the neutral
+    delivery protocol boundary, and re-exported from `crate::transports` and
+    `crate::relay` so existing paths keep resolving)
   - `src/acp/transport/`, `src/tmux/transport/`, `src/pty/transport/`
     (`WriteItem` FIFO becomes each transport's own serial delivery-loop
     executor, calling `peek`/`declare`/`ack` instead of receiving

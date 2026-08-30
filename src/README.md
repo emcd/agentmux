@@ -21,10 +21,19 @@ End-user workflows are documented under `documentation/usage/`.
 - `configuration/`
   - Bundle/coder/policy parsing and validation, plus session identity helpers.
   - See [src/configuration/README.md](configuration/README.md).
+- `protocol/`
+  - The delivery protocol boundary: the mailbox, look, and submission-evidence
+    vocabulary both delivery call directions name, so neither imports the other.
+  - Depends on no sibling layer. `scripts/lint-delivery-protocol-boundary.py`
+    fails a commit that gives it one.
 - `relay/`
   - Relay IPC contracts, socket/client entrypoints, authorization checks,
     lifecycle actions, delivery engine, and stream registration/event routing.
   - See [src/relay/README.md](relay/README.md).
+- `transports/`
+  - The `Transport` trait, its dispatch enum, and the UI stream-broadcast
+    transport. Concrete transports live in `acp/`, `tmux/`, and `pty/` (the
+    last behind the `pty` Cargo feature).
 - `mcp/`
   - MCP server handlers that validate MCP payloads and forward relay requests.
   - See [src/mcp/README.md](mcp/README.md).

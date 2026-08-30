@@ -890,16 +890,49 @@ the diagnostic difference this requirement exists to preserve.
 - **WHEN** a transport determines its own health
 - **THEN** it references no `crate::relay` type
 
+### Requirement: Transport-Neutral Look Snapshot Vocabulary
+
+The look-snapshot vocabulary SHALL live in the neutral delivery protocol
+boundary (the `src/protocol` module), which SHALL NOT import any concrete
+transport module, `crate::relay`, or `crate::transports`. This vocabulary
+comprises the structured entry type (`StructuredEntry`), `ToolCallStatus`, the
+freshness/source enums (`LookFreshness`, `LookSnapshotSource`), and the
+transport-level `LookSnapshotPayload` (`Lines` | `StructuredEntries`).
+Concrete transports SHALL produce this vocabulary rather than define it:
+`src/acp` SHALL map its `ReplayEntry` intermediate into the neutral
+`StructuredEntry`, with `ReplayEntry` remaining ACP-local. No
+`transports → relay` edge SHALL be introduced.
+
+It lives in that boundary rather than beneath `src/transports` because `look`
+is the relay-to-transport call direction while the mailbox operations are the
+transport-to-relay one, and a vocabulary owned by one of the two sides is not
+shared. `Neutral Delivery Protocol Crate Boundary` states the placement rule
+once; this requirement names the look half of what it holds.
+
+#### Scenario: Vocabulary layer is concrete-transport-free
+
+- **WHEN** a developer reads the `src/protocol` module
+- **THEN** the structured entry type, `ToolCallStatus`, freshness/source enums,
+  and transport-level `LookSnapshotPayload` are defined there
+- **AND** the module imports no `crate::acp`, `crate::tmux`, `crate::pty`,
+  `crate::relay`, or `crate::transports` item
+
+#### Scenario: ACP produces the neutral entry type
+
+- **WHEN** the ACP worker renders a look snapshot
+- **THEN** it maps `ReplayEntry` values into the neutral `StructuredEntry`
+- **AND** the `StructuredEntry` kinds are `user`/`agent`/`cognition`/`invocation`/`update`
+
 ## ADDED Requirements
 
 ### Requirement: Neutral Delivery Protocol Crate Boundary
 
 The system SHALL hold the vocabulary shared by both delivery call
 directions — relay-to-transport for `look`, transport-to-relay for
-`peek`/`declare`/`ack` — in a crate (or crate-internal module boundary) that both
-sides depend on, promoted from the `src/transports/vocabulary` module
-rather than
-newly constructed.
+`peek`/`declare`/`ack` — in a crate (or crate-internal module boundary) that
+both sides depend on. This crate SHALL be the single definition of that
+vocabulary; no parallel or duplicate definition of these types SHALL remain in
+`src/transports`, `src/relay`, or any concrete transport module.
 
 This crate SHALL hold: mailbox entry and entry-kind representations, target
 and consumer identity, consumer-generation binding, cursor position,
