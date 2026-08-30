@@ -1,7 +1,16 @@
 # ui-surface-configuration Specification
 
 ## Purpose
-TBD - created by archiving change add-ui-surface-configuration. Update Purpose after archive.
+Operator configuration of UI-surface defaults, held separately from identity and
+policy. The spec governs the `ui.toml` file: its resolution through the shared
+effective-file lookup across configuration layers, where a copy in an earlier
+layer shadows one in a later layer; its kebab-case fields, of which
+`default-bundle` names the bundle the TUI browses when none is given explicitly;
+absence from every layer treated as no configured defaults rather than a fault;
+malformed content failing fast without falling through to a shadowed copy; and
+pre-flight validation through the same read-only loader, reporting the physical
+file in effect so an operator can tell which layer is at fault. Loading is
+read-only and never scaffolds or modifies configuration artifacts.
 ## Requirements
 ### Requirement: UI Surface Configuration File
 

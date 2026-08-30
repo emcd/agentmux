@@ -1,7 +1,18 @@
 # transport-abstraction Specification
 
 ## Purpose
-TBD - created by archiving change decouple-transport-layer. Update Purpose after archive.
+The contract between the relay delivery subsystem and the concrete transports
+that carry messages to targets, and the boundary that keeps the two independent.
+The spec governs the `Transport` interface and its delivery semantics; the
+division of concerns across that boundary, with queueing and payload limits
+relay-side and packing, rendering, and readiness determination transport-side;
+the transport-neutral vocabulary for look snapshots and delivery payloads, which
+concrete transports produce rather than define; typed submission evidence and
+the packing units it is derived from; generation fencing and termination
+authority; and transport health as an axis separate from readiness, so that a
+target which is merely not ready waits, while one observed sustainably
+unreachable resolves. Every target is transport-delivered; the only
+target-type-dependent step is transport construction.
 ## Requirements
 ### Requirement: Transport Interface Contract
 

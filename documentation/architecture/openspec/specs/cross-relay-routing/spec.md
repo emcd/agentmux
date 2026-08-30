@@ -1,7 +1,18 @@
 # cross-relay-routing Specification
 
 ## Purpose
-TBD - created by archiving change add-outbound-peer-relay-routing. Update Purpose after archive.
+Delivery and discovery that cross a relay boundary to a configured peer relay.
+The spec governs outbound peer connection management — established lazily on
+first use, so an unreachable peer neither blocks nor destabilizes startup, and
+authenticated with a per-peer credential under the identity that peer issued
+this relay; propagation of peer-authored delivery and discovery outcomes back to
+the originating requester, including typed peer-connection errors; sender
+attribution, forwarded as the canonical identity the origin relay admitted the
+requester under, following admission rather than re-deciding it; and peer naming
+authority, where a relay names a peer by the relay id it issued rather than by
+any value that peer supplies. Foreign namespaces, bundle ids, and principals are
+authored by the peer that owns them and are never synthesized or rewritten by
+the origin.
 ## Requirements
 ### Requirement: Outbound Peer Connection Management
 
