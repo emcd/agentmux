@@ -534,10 +534,6 @@ authorization outcomes:
 - `list` -> `list.read`
 - `send` -> `send.deliver`
 - `look` -> `look.inspect`
-- `do list` -> `do.list`
-- `do show` -> `do.show`
-- `do run` -> `do.run`
-- `find` -> `find.query`
 
 #### Scenario: Preserve look capability label in denial payload
 
