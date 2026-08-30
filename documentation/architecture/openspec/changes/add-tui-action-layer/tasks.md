@@ -1,0 +1,107 @@
+## 1. Action vocabulary and context resolution
+
+- [ ] 1.1 Add `src/tui/actions/` with an import-only `mod.rs` hub, plus
+      `action.rs`, `bindings.rs`, and `context.rs`.
+- [ ] 1.2 Define the `Action` enum covering every behavior currently invoked
+      from the six handlers in `src/tui/input.rs`. Derive the member list from
+      the existing arms so no behavior is dropped in translation.
+- [ ] 1.3 Define `BindingContext` and `binding_context(&AppState)`, encoding
+      overlay-over-mode precedence and focused-field selection within a mode.
+- [ ] 1.4 Test that `binding_context` returns the overlay context when an
+      overlay is open over each screen mode, and the field-scoped context
+      otherwise.
+- [ ] 1.5 Test that applying an `Action` to state produces the behavior with no
+      `KeyEvent` constructed, establishing the resolution/behavior split.
+- [ ] 1.6 Export `Action` from `agentmux::tui` and add action application to the
+      public `Workbench` facade alongside `dispatch_event`. Keep
+      `BindingContext` internal.
+- [ ] 1.7 Test the public boundary from `tests/unit/tui.rs` — a caller naming
+      only public types applies an action through `Workbench` and observes the
+      behavior, with no `KeyEvent` constructed.
+- [ ] 1.8 Test that applying an action directly and dispatching the chord bound
+      to it produce the same resulting state, so the two paths cannot diverge.
+
+## 2. Binding table
+
+- [ ] 2.1 Define the table as (context, chord) rows carrying the action and the
+      display section. Carry no capability field: nothing varies by probe
+      outcome, so a per-row flag would be unused machinery.
+- [ ] 2.2 Populate every row from the current handlers, preserving each
+      context's existing bare-`Enter` action unchanged.
+- [ ] 2.3 Declare `Enter`, `Shift+Enter`, and `Ctrl+Enter` explicitly for every
+      context, with both modified chords bound to the same action that context
+      binds to `Enter`.
+- [ ] 2.4 Test that every context declaring an `Enter` row also declares both
+      modified rows, so no context can inherit modified-`Enter` behavior by
+      omission.
+- [ ] 2.5 Test capability neutrality directly: for every context, the action
+      resolved for `Shift+Enter` and `Ctrl+Enter` equals the action resolved for
+      `Enter`. Assert it over the whole table rather than per context, so a row
+      added later cannot quietly reintroduce divergence.
+- [ ] 2.6 Test that `Ctrl+J` resolves to insert-newline in both multi-line
+      contexts, and that no other context binds that action.
+- [ ] 2.7 Test that `Shift+Enter` in the compose `Message` field sends the
+      message. This is the regression detection introduced and this change
+      repairs, so assert it rather than assuming it follows from 2.5.
+
+## 3. Dispatch rewiring
+
+- [ ] 3.1 Replace the six handlers' key-condition match arms with lookup
+      against the table followed by action application. Keep event-shape
+      handling (paste, mouse, non-`Press` filtering) in `input.rs`.
+- [ ] 3.2 Verify the full existing TUI test suite passes unchanged except for
+      the deliberate modified-`Enter` cases, and record which tests changed and
+      why.
+- [ ] 3.3 Teeth-check the omission guarantee: remove one context's
+      `Shift+Enter` row and confirm task 2.4's test fails.
+
+## 4. Generated help and hints
+
+- [ ] 4.1 Define the help presentation rule as a function distinct from
+      `binding_context`: it selects every reachable context, not the dispatched
+      one. Generate the help overlay from it, grouped by declared display
+      section in declaration order.
+- [ ] 4.2 Test that the generated help contains the compose, interaction, and
+      picker bindings, and that its binding set and order are identical
+      whichever context the overlay was opened from. This is the regression
+      that a context-filtered help would produce, so assert it directly rather
+      than inferring it from a passing render.
+- [ ] 4.3 Generate `picker_hint_line` and the interaction write-pane hint from
+      the table, retiring their hand-rolled context-sensitive labels. These stay
+      filtered to the context they annotate.
+- [ ] 4.4 Test that a hint strip presents only its own context's bindings,
+      pinning the asymmetry with help rather than leaving it to reviewer memory.
+- [ ] 4.5 Test that generated presentation does not read the keyboard-enhancement
+      probe outcome, so no capability-conditioned behavior enters through the
+      rendering path.
+- [ ] 4.6 Compare the rendered help overlay before and after generation and
+      resolve any readability regression before proceeding.
+
+## 5. Documentation single-sourcing
+
+- [ ] 5.1 Add a generated, delimited binding section to
+      `documentation/usage/tui.md` and populate it from the table.
+- [ ] 5.2 Add a repository lint that regenerates that section and fails on
+      mismatch, following the existing repo lint conventions.
+- [ ] 5.3 Teeth-check the lint: change a binding row without regenerating and
+      confirm the lint fails.
+- [ ] 5.4 Remove the now-duplicated binding prose from `src/tui/README.md` and
+      the interaction pane hint text, leaving architecture description only.
+
+## 6. Spec and behavior reconciliation
+
+- [ ] 6.1 Update `src/tui/README.md` to describe the action layer, the binding
+      table as single source of truth, and the context precedence rule.
+- [ ] 6.2 Record two durable constraints in `src/tui/README.md`, where they
+      survive proposal archival: that action application goes through `AppState`
+      methods rather than fields, and that default bindings are
+      capability-neutral because capability variance belongs to a binding
+      configuration rather than to compiled defaults.
+- [ ] 6.3 Update the usage guide's terminal-capability section: the probe
+      outcome reports what the TUI determined, not a terminal limitation, and no
+      longer implies any behavior difference. Remove the per-mode
+      modified-`Enter` split it currently documents, and check the surrounding
+      prose for claims a failed probe cannot support.
+- [ ] 6.4 Confirm the `tui-surface` delta matches shipped behavior, and that the
+      five unrelated keyboard-enhancement scenarios remain byte-identical to the
+      live spec.
