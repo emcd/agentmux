@@ -21,6 +21,7 @@ mod compose;
 mod history;
 mod relay;
 
+use super::keyboard::KeyboardEnhancement;
 use super::status::BundleStatusDisplay;
 
 const STATUS_HISTORY_MAXIMUM: usize = 6;
@@ -138,6 +139,10 @@ pub(crate) struct AppState {
     pub picker_bundle_state: ListState,
     pub mode: ScreenMode,
     pub focus: FocusField,
+    /// Startup keyboard-enhancement probe outcome. Defaults to `Unsupported` —
+    /// the same reporting a terminal without the protocol gives — and `run`
+    /// overwrites it with the real probe result before the event loop starts.
+    pub keyboard_enhancement: KeyboardEnhancement,
     pub to_field: String,
     to_cursor_index: usize,
     pub message_field: String,
@@ -208,6 +213,7 @@ impl AppState {
             picker_bundle_state: ListState::default(),
             mode: ScreenMode::Communication,
             focus: FocusField::To,
+            keyboard_enhancement: KeyboardEnhancement::default(),
             to_field: String::new(),
             to_cursor_index: 0,
             message_field: String::new(),

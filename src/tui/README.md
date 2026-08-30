@@ -57,6 +57,11 @@ auto-opens it.
     lifecycle.
 - `input.rs`
   - mode-aware key handling and command intent updates.
+- `keyboard.rs`
+  - progressive keyboard-enhancement (Kitty keyboard protocol) capability
+    detection: the `KeyboardEnhancement` outcome, its operator-facing
+    description, and `KeyboardEnhancementSession`, which pushes the
+    disambiguation flag when supported and pops it on drop.
 - `render/`
   - per-mode pane rendering, overlays, and key help text. Split by area:
     - `mod.rs` — pure hub: submodule decls and `pub(crate) use frame::render`
@@ -225,7 +230,24 @@ auto-opens it.
     `choices.pick` (`selected` with explicit `option_id` or `cancelled`),
 - startup relay auto-spawn fallback when relay socket is unavailable, using the
   same resolved configuration/state/inscriptions roots as the active TUI
-  launch.
+  launch,
+- keyboard-enhancement capability detection: `run` probes the terminal once,
+  after terminal setup and before the event loop reads any key, and pushes
+  `DISAMBIGUATE_ESCAPE_CODES` when the terminal advertises the Kitty keyboard
+  protocol. The probe writes a query and consumes its reply from the same input
+  queue the loop drains, so it cannot run concurrently with the loop. The
+  outcome (`Active` / `Unsupported` / `ProbeFailed`) is reported in the help
+  overlay, because it decides whether `Shift+Enter` is distinguishable from a
+  bare `Enter`. Only the disambiguation flag is pushed; the remaining flags
+  change which events are delivered at all and nothing in `input.rs` consumes
+  them. Detection assigns no binding, but it changes which events reach the
+  existing ones: the `Communication` arm at `input.rs` guards `Enter` on
+  `modifiers.is_empty()`, so a modified `Enter` reaches no binding when the
+  protocol is active and takes the send/accept path when it is not. The
+  `Interaction` and picker arms have no modifier guard and are unaffected. That
+  mode-dependent split is incidental to how the arms are written; the action
+  layer tracked as `todos/tui/60` is where it gets resolved. `Ctrl+J` inserts a
+  newline under every outcome.
 
 ## Stream and State Notes
 

@@ -6,10 +6,11 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
+use super::super::super::keyboard::format_keyboard_enhancement_lines;
 use super::super::super::state::AppState;
 use super::super::geometry::centered_rect;
 
-pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, _state: &AppState) {
+pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, state: &AppState) {
     let popup = centered_rect(72, 80, frame.area());
     frame.render_widget(Clear, popup);
     let block = Block::default().borders(Borders::ALL).title("Help");
@@ -52,7 +53,7 @@ pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, _state: &Ap
         Line::from("session@GLOBAL — relay-wide user"),
         Line::from("Comma-separate multiple recipients"),
     ];
-    let right_lines = vec![
+    let mut right_lines = vec![
         help_section_heading("Interaction Mode"),
         Line::from("PgUp/PgDn: Scroll look snapshot"),
         Line::from("Write input (write has text or no pending):"),
@@ -75,7 +76,14 @@ pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, _state: &Ap
         Line::from("Enter (session, Interact): Open look"),
         Line::from("Esc / F2 / F5: Close picker"),
         Line::from("Auto-opens entering Interaction w/o target"),
+        Line::from(""),
+        help_section_heading("Keyboard Capability"),
     ];
+    right_lines.extend(
+        format_keyboard_enhancement_lines(state.keyboard_enhancement)
+            .into_iter()
+            .map(Line::from),
+    );
 
     frame.render_widget(
         Paragraph::new(left_lines).wrap(Wrap { trim: false }),

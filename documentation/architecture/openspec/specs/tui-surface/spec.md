@@ -716,3 +716,96 @@ the active mode.
 - **WHEN** operator presses `F3` in either mode
 - **THEN** the events overlay opens over the active mode surface
 
+### Requirement: Keyboard Enhancement Capability Detection
+
+The TUI SHALL probe the terminal once for progressive keyboard enhancement
+(the Kitty keyboard protocol) after terminal setup and before the event loop
+reads any key event, so the probe's query reply is not consumed by the loop's
+input drain.
+
+The probe SHALL resolve to exactly one of three outcomes:
+
+- `Active` — the terminal advertised the protocol and the TUI pushed
+  `DISAMBIGUATE_ESCAPE_CODES`,
+- `Unsupported` — the terminal answered the probe without advertising the
+  protocol,
+- `ProbeFailed` — the probe did not complete (no controlling terminal, I/O
+  failure, or no reply before the query timeout).
+
+`ProbeFailed` SHALL be reported distinctly from `Unsupported`; the TUI SHALL
+NOT collapse an unanswered probe into a negative answer.
+
+The TUI SHALL push only `DISAMBIGUATE_ESCAPE_CODES`. It SHALL NOT push flags
+that change which events are delivered (`REPORT_EVENT_TYPES`,
+`REPORT_ALTERNATE_KEYS`, `REPORT_ALL_KEYS_AS_ESCAPE_CODES`) while no input
+handler consumes them.
+
+Pushed flags SHALL be popped before the terminal is restored, so the terminal
+is left in the key-reporting mode it had before launch.
+
+The probe outcome SHALL be visible to the operator in the help overlay,
+because it determines whether `Shift+Enter` is distinguishable from `Enter`.
+
+The report for `ProbeFailed` SHALL NOT assert that the terminal lacks the
+protocol. An unanswered probe establishes only that the TUI could not
+determine or enable disambiguation.
+
+Detection SHALL NOT introduce, remove, or reassign any key binding. It does,
+however, change which events reach the existing bindings: `Communication` mode
+binds `Enter` only with no modifiers, so under `Active` a modified `Enter` is
+reported distinctly and reaches no binding, while under `Unsupported` and
+`ProbeFailed` it is indistinguishable from a bare `Enter` and takes the
+send/accept path. `Interaction` mode and the picker bind `Enter` without a
+modifier guard and are therefore unaffected by the probe outcome.
+
+`Ctrl+J` SHALL insert a newline under every outcome; it is the binding that
+does not depend on terminal capability.
+
+#### Scenario: Modified Enter reaches no Communication binding when active
+
+- **WHEN** the protocol is active and the operator presses `Shift+Enter` or
+  `Ctrl+Enter` in the `To` or `Message` field
+- **THEN** the event is reported with its modifier
+- **AND** it matches no `Communication` mode binding, so no message is sent and
+  no completion is accepted
+
+#### Scenario: Modified Enter sends when the protocol is unavailable
+
+- **WHEN** the protocol is unsupported or the probe failed, and the operator
+  presses `Shift+Enter` in the `Message` field
+- **THEN** the event is indistinguishable from a bare `Enter`
+- **AND** it takes the same send path a bare `Enter` takes
+
+#### Scenario: Probe failure claims nothing about the terminal
+
+- **WHEN** the probe does not complete
+- **THEN** the operator-facing report states that the capability is
+  undetermined
+- **AND** it does not state that the terminal lacks the protocol
+
+#### Scenario: Capable terminal activates disambiguation
+
+- **WHEN** the terminal advertises progressive keyboard enhancement at TUI
+  startup
+- **THEN** the TUI pushes `DISAMBIGUATE_ESCAPE_CODES`
+- **AND** the help overlay reports the protocol as active
+- **AND** the flags are popped before the terminal is restored
+
+#### Scenario: Terminal answers without advertising support
+
+- **WHEN** the terminal answers the probe without advertising the protocol
+- **THEN** the TUI pushes no enhancement flags
+- **AND** the help overlay reports the protocol as unsupported
+
+#### Scenario: Unanswered probe is distinct from an unsupported terminal
+
+- **WHEN** the keyboard-enhancement probe does not complete
+- **THEN** the outcome is reported as a probe failure
+- **AND** that report is distinguishable from the report for a terminal that
+  answered without advertising support
+
+#### Scenario: Newline binding is unchanged by the probe outcome
+
+- **WHEN** the operator inserts a newline in `Message` or the write input
+- **THEN** `Ctrl+J` inserts the newline regardless of the probe outcome
+
