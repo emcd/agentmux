@@ -12,6 +12,8 @@ mod config;
 mod delivery_fence;
 #[path = "unit/delivery_message.rs"]
 mod delivery_message;
+#[path = "unit/delivery_protocol.rs"]
+mod delivery_protocol;
 #[path = "unit/envelope.rs"]
 mod envelope;
 #[path = "unit/opencode_prompt_regex.rs"]

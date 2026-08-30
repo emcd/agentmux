@@ -73,6 +73,32 @@ repos:
       verbose: true
       fail_fast: true
 
+    - id: lint-delivery-protocol-boundary
+      name: 'Lint: Delivery Protocol Boundary'
+      # Asserts a property of the module graph rather than behavior of the
+      # crate, so it is a lint and not a test. Grouped with the other cheap
+      # repository checks, ahead of the expensive Rust hooks.
+      #
+      # Runs unconditionally rather than scoped by `files` to `src/protocol/`.
+      # A back-edge can only be introduced by editing that tree, but the rule
+      # also names its forbidden modules by path, and renaming one of those --
+      # a commit touching `src/relay/` and nothing else -- would leave the rule
+      # matching a module that no longer exists. The script fails on that too,
+      # which it can only do if it runs.
+      #
+      # The script expands `use` trees rather than matching lines, because a
+      # grouped or multi-line import puts the forbidden segment on a line that
+      # does not name `crate::` at all. It self-tests that detector on every
+      # invocation, so a refactor that stops seeing grouped imports fails here
+      # rather than going unnoticed until a back-edge lands.
+      language: system
+      entry: 'scripts/lint-delivery-protocol-boundary.py'
+      pass_filenames: false
+      always_run: true
+      require_serial: true
+      stages: [ 'pre-commit' ]
+      fail_fast: true
+
     - id: linecheck
       name: 'Check: Line Counts'
       # Pre-commit's `always_run: true` fires the gate on every commit

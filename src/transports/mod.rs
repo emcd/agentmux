@@ -5,13 +5,22 @@
 //! transport-neutral delivery-progress inscription context. Concrete transport
 //! implementations live in `src/acp/`, `src/tmux/`, and `src/pty/` when the
 //! `pty` Cargo feature is enabled.
+//!
+//! The delivery and look vocabulary both call directions speak lives one level
+//! up, in [`crate::protocol`], and is re-exported below so `crate::transports::`
+//! paths keep resolving. It sits there rather than here because the relay depends
+//! on it too, and a shared vocabulary owned by one side is not shared.
 
 pub mod contract;
 pub mod diagnostics;
 pub mod ui;
-pub mod vocabulary;
 
 pub use crate::acp::{AcpDriverServices, AcpTransport, AcpWorkerDriver};
+pub use crate::protocol::{
+    DeliveryPayloadMode, LookFreshness, LookSnapshotPayload, LookSnapshotSource, PackingUnitId,
+    PartitionError, SendOutcome, StructuredEntry, SubmissionEvidence, ToolCallStatus,
+    WorkerFailureReason, WorkerReadinessState,
+};
 #[cfg(feature = "pty")]
 pub use crate::pty::{PtyTargetConfiguration, PtyTransport};
 pub use crate::tmux::TmuxTransport;
@@ -29,9 +38,4 @@ pub use diagnostics::{
 pub use ui::{
     UiBroadcastFn, UiBroadcastStatus, UiIncomingMessage, UiOutcomePhase, UiPhaseFn, UiTransport,
     UiTransportServices,
-};
-pub use vocabulary::{
-    DeliveryPayloadMode, LookFreshness, LookSnapshotPayload, LookSnapshotSource, PackingUnitId,
-    PartitionError, SendOutcome, StructuredEntry, SubmissionEvidence, ToolCallStatus,
-    WorkerFailureReason, WorkerReadinessState,
 };
