@@ -1081,7 +1081,7 @@ A `send`/`raww` to a Pty member that triggers a handover-readiness check (`is_re
 - **THEN** the probe completes without panicking the `tokio-runtime-worker` thread
 - **AND** the relay logs `relay.send.async.queued` followed by `relay.send.async.completed` (or a structured `runtime_transport_startup_failed` on failure), never a stranded `queued` with no `completed`
 
-> **Note:** `Pty look` uses the same snapshot channel and is fixed by the same `state.rs` change, but is currently unreachable from the relay’s look handler; end-to-end verification is a follow-up.
+> **Note:** `Pty look` uses the same snapshot channel and is fixed by the same change to the `src/pty/state` module, but is currently unreachable from the relay’s look handler; end-to-end verification is a follow-up.
 
 ### Requirement: Held Bundle Deliveries Shall Not Spawn Workers
 
