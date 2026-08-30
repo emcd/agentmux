@@ -6,8 +6,7 @@ TBD - created by archiving change decouple-transport-layer. Update Purpose after
 ### Requirement: Transport Interface Contract
 
 The relay delivery subsystem SHALL dispatch all agent delivery operations
-through two non-blocking write methods defined on the `Transport` trait in
-`src/transports/contract/transport.rs`:
+through two non-blocking write methods defined on the `Transport` trait:
 
 - `mailw` — structured relay message write. The relay SHALL populate routing,
   attribution, message body, timestamp, choice-decider, and quiescence fields
@@ -362,8 +361,8 @@ SHALL map validation-class transport error codes to relay validation errors. A
 ### Requirement: Transport-Neutral Look Snapshot Vocabulary
 
 The look-snapshot vocabulary SHALL live in the acp-free transport vocabulary
-layer (`src/transports/vocabulary.rs`), which SHALL NOT import any concrete
-transport module. This vocabulary comprises the structured entry type
+layer (the `src/transports/vocabulary` module), which SHALL NOT import any
+concrete transport module. This vocabulary comprises the structured entry type
 (`StructuredEntry`), `ToolCallStatus`, the freshness/source enums (`LookFreshness`,
 `LookSnapshotSource`), and the transport-level `LookSnapshotPayload`
 (`Lines` | `StructuredEntries`). Concrete transports SHALL produce this
@@ -373,7 +372,7 @@ ACP-local. No `transports → relay` edge SHALL be introduced.
 
 #### Scenario: Vocabulary layer is concrete-transport-free
 
-- **WHEN** a developer reads `src/transports/vocabulary.rs`
+- **WHEN** a developer reads the `src/transports/vocabulary` module
 - **THEN** the structured entry type, `ToolCallStatus`, freshness/source enums,
   and transport-level `LookSnapshotPayload` are defined there
 - **AND** the module imports no `crate::acp` or `crate::tmux` item
@@ -521,8 +520,7 @@ SHALL assert a terminal failure derived from observation.
 
 - **WHEN** a developer reads a transport's probe module
 - **THEN** the trait is not re-exported from `src/transports/`
-- **AND** the `Transport` trait in `src/transports/contract/transport.rs` has no
-  knowledge of probes
+- **AND** the `Transport` trait has no knowledge of probes
 
 #### Scenario: No probe sequence asserts an observation-derived failure
 
@@ -598,13 +596,12 @@ advance, and both are conformant.
 
 ### Requirement: Pty Transport Implementation
 
-The system SHALL provide a `PtyTransport` in `src/pty/transport.rs` that
-implements the `Transport` trait and is wired into `TransportImpl::Pty`. The
-transport SHALL own one `libghostty_vt::Terminal<'static, 'static>`, one
-`portable_pty` master, one reader thread, and one delivery task. Because all
-`libghostty_vt` types are `!Send + !Sync`, the terminal SHALL live on the
-delivery thread and be reached from other threads through a `SnapshotRequest`
-channel.
+The system SHALL provide a `PtyTransport` that implements the `Transport` trait
+and is wired into `TransportImpl::Pty`. The transport SHALL own one
+`libghostty_vt::Terminal<'static, 'static>`, one `portable_pty` master, one
+reader thread, and one delivery task. Because all `libghostty_vt` types are
+`!Send + !Sync`, the terminal SHALL live on the delivery thread and be reached
+from other threads through a `SnapshotRequest` channel.
 
 **Pty SHALL buffer, then write** — the ordering Tmux already uses. The transport
 SHALL NOT write any member to the PTY master before that member's partition is

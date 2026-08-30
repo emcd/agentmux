@@ -45,34 +45,35 @@ implementation of the `Transport` trait, ACP delivery state, ACP permission
 handling, and the ACP worker-driver lifecycle (bootstrap/respawn). Both the relay
 delivery subsystem and the `agentmux-acp` binary SHALL use types from `src/acp/`.
 
-The relay's `acp_client.rs` SHALL be merged into the existing `src/acp/client.rs`;
-`acp_delivery.rs` and `acp_state.rs` SHALL move into `src/acp/` as `transport.rs`
-and `state.rs`; ACP permission handling SHALL be extracted from the inline
-handlers in `acp_delivery.rs` into `src/acp/permission.rs`; and the ACP
-worker-driver lifecycle SHALL move from `relay/delivery/dispatch/worker.rs` into
-`src/acp/worker_driver.rs`. The relay-side `observability.rs` SHALL remain in
-`src/relay/delivery/` — it is relay-side pub/sub over relay's own registries, not
-ACP protocol code.
+The relay delivery subsystem SHALL NOT host ACP-specific implementation code.
+The ACP stdio client, transport, delivery state, permission handling, and
+worker-driver lifecycle SHALL each reside in their own module under `src/acp/`.
+Relay-side transport selection and injected-service wiring, which name the ACP
+variant without implementing it, are not such code. The relay-side observability
+module SHALL remain under `src/relay/delivery/` — it is relay-side pub/sub over
+relay's own registries, not ACP protocol code.
 
 #### Scenario: Relay uses shared module for delivery
 
 - **WHEN** the relay delivers messages to an ACP target
-- **THEN** it instantiates `AcpTransport` from `src/acp/transport.rs` and
+- **THEN** it instantiates `AcpTransport` from the `src/acp/transport` module and
   dispatches through `TransportImpl::Acp`
 
 #### Scenario: Client uses shared module
 
 - **WHEN** the `agentmux-acp` binary connects to an ACP server
-- **THEN** it uses `AcpStdioClient` from `src/acp/client.rs`
+- **THEN** it uses `AcpStdioClient` from the `src/acp/client` module
 
 #### Scenario: No ACP delivery or lifecycle code in relay/delivery/
 
 - **WHEN** a developer reads `src/relay/delivery/`
-- **THEN** no ACP-specific delivery, transport, or worker-lifecycle code is
-  present (`acp_delivery.rs` and `acp_state.rs` moved to `src/acp/`; the ACP
-  bootstrap/respawn driver moved to `src/acp/worker_driver.rs`)
-- **AND** `observability.rs` remains, as relay-side pub/sub over relay's own
-  registries
+- **THEN** no ACP-specific delivery, transport, or worker-lifecycle
+  implementation code is present — ACP transport, delivery state, and the ACP
+  bootstrap/respawn driver all reside under `src/acp/`
+- **AND** relay-side transport selection and injected-service wiring, which name
+  the ACP variant without implementing it, are permitted there
+- **AND** the relay-side observability module remains, as relay-side pub/sub over
+  relay's own registries
 
 ### Requirement: Clean Shutdown
 The agentmux-acp binary SHALL cleanly terminate the ACP child process and restore the terminal on exit.
