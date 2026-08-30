@@ -1,7 +1,15 @@
 # pty-terminal-protocols Specification
 
 ## Purpose
-TBD - created by archiving change add-pty-terminal-protocol-config. Update Purpose after archive.
+Operator control over the terminal type advertised to coder processes that the
+Pty transport spawns. The spec governs the per-coder `term-protocol` field: its
+closed enum of well-known terminal names, each mapping to the literal `TERM`
+value of the same name; the `xterm-256color` default that preserves prior
+behavior; rejection of an unknown value at configuration load; and the field's
+confinement to the Pty transport, leaving Tmux and ACP unaffected. Agentmux sets
+the environment variable and makes no claim about how a child interprets it —
+downstream capability detection is the child's responsibility. `COLORTERM`
+remains `truecolor` for every Pty-spawned child and is not configurable here.
 ## Requirements
 ### Requirement: Per-coder TERM env var selection
 
