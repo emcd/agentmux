@@ -1,6 +1,7 @@
 //! Interactive terminal workbench for `agentmux` operator workflows.
 
 mod input;
+mod keyboard;
 mod render;
 mod state;
 mod status;
@@ -17,6 +18,9 @@ use crate::runtime::{
     signals::{install_shutdown_signal_handlers, shutdown_requested},
 };
 
+use keyboard::KeyboardEnhancementSession;
+
+pub use keyboard::{KeyboardEnhancement, format_keyboard_enhancement_lines};
 pub use state::TuiLaunchOptions;
 pub use status::{
     BundleStatusDisplay, BundleStatusSeverity, RecipientReadiness, StartupFailureSummary,
@@ -39,12 +43,26 @@ impl Drop for TerminalRestoreGuard {
 pub fn run(options: TuiLaunchOptions) -> Result<(), RuntimeError> {
     let mut terminal = ratatui::init();
     let _restore_guard = TerminalRestoreGuard;
+    // Probed after terminal setup and before the loop reads keys, so the query
+    // reply is not swallowed by the loop's input drain.
+    let keyboard_session = KeyboardEnhancementSession::activate();
     let _signal_handlers = install_shutdown_signal_handlers()?;
-    run_loop(&mut terminal, options)
+    let result = run_loop(&mut terminal, options, keyboard_session.enhancement());
+    // Explicit so the pop happens while the terminal is still in the mode the
+    // flags were pushed in, rather than relying on where the binding above sits
+    // relative to the restore guard. On a panic the declaration order (session
+    // after guard, so it drops first) preserves the same ordering.
+    drop(keyboard_session);
+    result
 }
 
-fn run_loop(terminal: &mut DefaultTerminal, options: TuiLaunchOptions) -> Result<(), RuntimeError> {
+fn run_loop(
+    terminal: &mut DefaultTerminal,
+    options: TuiLaunchOptions,
+    keyboard_enhancement: KeyboardEnhancement,
+) -> Result<(), RuntimeError> {
     let mut state = state::AppState::new(options);
+    state.keyboard_enhancement = keyboard_enhancement;
     if let Err(error) = state.refresh_recipients() {
         state.push_runtime_error(error);
     }

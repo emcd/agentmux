@@ -50,6 +50,48 @@ open the picker (`F2`) and press `Enter` to choose a session.
 
 ## Keybindings
 
+### Terminal keyboard capability
+
+Newline is bound to `Ctrl+J` rather than `Shift+Enter` because a terminal
+without the Kitty keyboard protocol sends the same bytes for `Enter`,
+`Shift+Enter`, and `Ctrl+Enter`, leaving the TUI no way to tell them apart.
+
+At startup the TUI probes for that protocol once and enables key
+disambiguation when the terminal advertises it. The help overlay (`F1`) reports
+the outcome under "Keyboard Capability":
+
+- `Kitty keyboard protocol: active` — the terminal advertised the protocol and
+  reports modified keys distinctly.
+- `Kitty keyboard protocol: unsupported` — the terminal answered the probe
+  without advertising the protocol.
+- `Kitty keyboard protocol: probe failed` — the probe could not complete: no
+  controlling terminal, an I/O failure, or no reply before the query timeout.
+  This says nothing about the terminal; it may well support the protocol.
+
+Which terminals and multiplexers land in which bucket has not been measured
+yet; that survey is tracked as `todos/tui/62`.
+
+#### What changes between the outcomes
+
+Detection assigns no new binding, but it does change which events reach the
+existing ones, in exactly one place:
+
+- **Communication mode** binds `Enter` only when no modifier is held. When the
+  protocol is active, `Shift+Enter` and `Ctrl+Enter` arrive as themselves and
+  match nothing — they neither send nor insert a newline. When it is
+  unavailable, the terminal cannot tell them from a bare `Enter`, so they send
+  the message (or accept the completion, in `To`).
+- **Interaction mode and the picker** bind `Enter` without a modifier guard, so
+  a modified `Enter` dispatches the write, resolves the choice, or commits the
+  picker selection under every outcome.
+
+`Ctrl+J` inserts a newline under every outcome. It is the binding that does not
+depend on your terminal.
+
+The mode-dependent inconsistency above is a consequence of how the bindings are
+written today, not a deliberate design; resolving it belongs to the action layer
+tracked as `todos/tui/60`.
+
 ### Global
 
 - `Ctrl+C`: quit

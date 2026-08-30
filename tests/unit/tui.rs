@@ -3,10 +3,10 @@ use agentmux::relay::{
     ListedSessionTransport, StartupFailureRecord,
 };
 use agentmux::tui::{
-    BundleStatusDisplay, BundleStatusSeverity, RecipientReadiness, autocomplete_recipient_input,
-    bundle_status_severity, format_bundle_status_line, format_recipient_picker_label,
-    format_startup_failure_lines, merge_tui_targets, parse_tui_target_identifier,
-    sender_bound_bundle,
+    BundleStatusDisplay, BundleStatusSeverity, KeyboardEnhancement, RecipientReadiness,
+    autocomplete_recipient_input, bundle_status_severity, format_bundle_status_line,
+    format_keyboard_enhancement_lines, format_recipient_picker_label, format_startup_failure_lines,
+    merge_tui_targets, parse_tui_target_identifier, sender_bound_bundle,
 };
 
 #[test]
@@ -387,4 +387,85 @@ fn bundle_status_line_renders_hosted_up_degraded() {
         bundle_status_severity(&display),
         BundleStatusSeverity::Degraded
     );
+}
+
+#[test]
+fn keyboard_enhancement_defaults_to_unsupported() {
+    // The TUI renders help before it can prove anything about the terminal, so
+    // the default has to be the conservative reading rather than the capable
+    // one.
+    assert_eq!(
+        KeyboardEnhancement::default(),
+        KeyboardEnhancement::Unsupported
+    );
+}
+
+#[test]
+fn only_active_keyboard_enhancement_disambiguates_modified_keys() {
+    assert!(KeyboardEnhancement::Active.disambiguates_modified_keys());
+    assert!(!KeyboardEnhancement::Unsupported.disambiguates_modified_keys());
+    assert!(!KeyboardEnhancement::ProbeFailed.disambiguates_modified_keys());
+}
+
+#[test]
+fn active_keyboard_enhancement_reports_distinct_modified_enter() {
+    assert_eq!(
+        format_keyboard_enhancement_lines(KeyboardEnhancement::Active),
+        vec![
+            "Kitty keyboard protocol: active".to_string(),
+            "Enter with modifiers is reported distinctly".to_string(),
+            "Ctrl+J inserts a newline in every case".to_string(),
+        ]
+    );
+}
+
+#[test]
+fn unsupported_keyboard_enhancement_names_the_collapsed_modified_enter() {
+    let lines = format_keyboard_enhancement_lines(KeyboardEnhancement::Unsupported);
+    assert_eq!(lines[0], "Kitty keyboard protocol: unsupported");
+    assert_eq!(lines[1], "Enter with modifiers arrives as bare Enter");
+}
+
+#[test]
+fn probe_failure_reads_differently_from_an_answered_unsupported_probe() {
+    // A terminal that answered "no" and a probe that never got an answer are
+    // different operator problems: the first is the terminal, the second is
+    // usually a missing tty or a swallowed reply. Collapsing them would hide
+    // the second behind a wrong explanation.
+    let failed = format_keyboard_enhancement_lines(KeyboardEnhancement::ProbeFailed);
+    let unsupported = format_keyboard_enhancement_lines(KeyboardEnhancement::Unsupported);
+    assert_eq!(failed[0], "Kitty keyboard protocol: probe failed");
+    assert_ne!(failed[0], unsupported[0]);
+}
+
+#[test]
+fn probe_failure_claims_nothing_about_the_terminal() {
+    // A failed probe establishes only that the TUI could not determine or
+    // enable disambiguation. Wording it as a fact about the terminal ("cannot
+    // distinguish Shift+Enter") would send the operator after the wrong
+    // problem, since a capable terminal reaches this outcome whenever the
+    // query is swallowed.
+    let lines = format_keyboard_enhancement_lines(KeyboardEnhancement::ProbeFailed);
+    assert_eq!(lines[1], "Keyboard capability is undetermined");
+    assert!(
+        !lines.iter().any(|line| line.contains("Terminal cannot")),
+        "probe-failure report must not assert a terminal limitation: {lines:?}"
+    );
+}
+
+#[test]
+fn every_keyboard_enhancement_outcome_names_the_portable_newline_binding() {
+    // Ctrl+J is the one binding that holds regardless of the probe outcome, so
+    // it belongs in all three reports rather than only the degraded ones.
+    for enhancement in [
+        KeyboardEnhancement::Active,
+        KeyboardEnhancement::Unsupported,
+        KeyboardEnhancement::ProbeFailed,
+    ] {
+        let lines = format_keyboard_enhancement_lines(enhancement);
+        assert!(
+            lines.iter().any(|line| line.contains("Ctrl+J")),
+            "{enhancement:?} report omits the portable newline binding: {lines:?}"
+        );
+    }
 }
