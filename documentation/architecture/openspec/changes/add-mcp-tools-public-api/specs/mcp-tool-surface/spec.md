@@ -1,139 +1,188 @@
 ## ADDED Requirements
 
-### Requirement: MCP Tools Public Rust API
+### Requirement: MCP Tool Adapter Delegation
 
-The system SHALL expose a public Rust API for hosting and invoking the canonical
-Agentmux MCP tools without requiring the Agentmux stdio MCP server process.
+MCP SHALL execute the semantics of every operation-backed tool by delegating to
+the canonical Agentmux tool operations, and SHALL derive each such tool's result
+from the operation outcome it receives.
 
-The public API SHALL preserve the same request validation, request-to-relay
-mapping, success response contracts, error taxonomy, help/schema behavior, and
-relay authorization pass-through semantics used by the stdio MCP server.
+An operation-backed tool is one whose subject matter is Agentmux state or
+behavior. The `help` tool is not operation-backed, because its subject matter is
+the MCP adapter's own tool catalog and generated JSON schemas; it is governed by
+the MCP Help Adapter Ownership requirement instead.
 
-#### Scenario: Embedded MCP server invokes Agentmux tool
+MCP SHALL NOT carry a second implementation of an operation-backed tool's
+request validation against relay contracts, relay dispatch, or outcome
+interpretation.
 
-- **GIVEN** another Rust MCP server embeds Agentmux MCP tools through the public
-  API
-- **WHEN** it invokes a canonical Agentmux tool with the same MCP association
-  context and request payload as the stdio server
-- **THEN** the public API applies the same validation and relay dispatch
-- **AND** returns the same success or error payload contract as the stdio MCP
-  server
+Delegation SHALL preserve every existing operation-backed MCP tool contract:
+tool names, request shapes, success payload fields and ordering semantics,
+optional-field omission, generated input schemas, and error codes and details.
+Preservation of the `help` contract lives under the MCP Help Adapter Ownership
+requirement.
 
-#### Scenario: Stdio server delegates to public API
+#### Scenario: Stdio tool call delegates to the canonical operation
 
-- **WHEN** the Agentmux stdio MCP server receives a tool call
-- **THEN** it frames the MCP request through rmcp/stdin/stdout transport glue
-- **AND** delegates canonical tool execution to the same public API used by
-  embedded hosts
+- **WHEN** the Agentmux stdio MCP server receives a call for an operation-backed
+  tool
+- **THEN** it deserializes the request, resolves its own association into
+  relay-verified principal context, and invokes the canonical tool operation
+- **AND** it renders its response from that operation's outcome
 
-### Requirement: Public MCP Tool Contract Types
+#### Scenario: MCP tool contract is unchanged by delegation
 
-The system SHALL publish intentional Rust types for canonical MCP tool request
-parameters, success responses, error payloads, and help/schema metadata where
-those types are part of the MCP embedding contract.
+- **GIVEN** an MCP client issues a tool call that succeeded before delegation
+- **WHEN** the same call is issued after MCP delegates to the canonical
+  operation
+- **THEN** the client observes the same tool name, success payload, and field
+  omission behavior
 
-Public request types SHALL preserve strict unknown-field rejection for MCP tool
-payloads and meta-tool argument payloads. Public response types SHALL preserve
-the documented optional-field serialization behavior for each tool contract.
+### Requirement: MCP Help Adapter Ownership
 
-Generated tool input schemas for optional request fields SHALL render the bare
-inner JSON type accepted by the tool contract and SHALL NOT advertise a
-`[T, "null"]` union unless the tool contract explicitly accepts JSON `null`.
+The `help` tool SHALL be an MCP adapter-native introspection tool rather than a
+canonical Agentmux tool operation.
 
-#### Scenario: Public parameter type rejects unknown fields
+`help` SHALL answer from the adapter's own tool catalog and the schemas
+generated from the adapter's MCP parameter types, and SHALL NOT invoke a
+canonical tool operation. There SHALL be no canonical operation for `help`, and
+`help` SHALL NOT appear in the public tool-operations surface.
 
-- **GIVEN** an embedded host deserializes a public MCP request parameter type
-- **WHEN** the payload contains a field not accepted by the tool contract
-- **THEN** the public API rejects the request with `validation_invalid_params`
-- **AND** does not silently drop the unknown field
+The existing `help` contract SHALL be preserved unchanged: its query modes,
+returned inventory and schema payloads, association-status reporting, and its
+`validation_invalid_params` failure for unknown queries.
 
-#### Scenario: Public response type omits absent optional field
+#### Scenario: Help answers from the adapter catalog
 
-- **GIVEN** a canonical MCP response field is documented as optional or present
-  only when provided
-- **WHEN** the public API serializes a response where that field is absent
-- **THEN** the field is omitted unless the tool contract explicitly requires a
-  JSON `null` value
+- **WHEN** an MCP client calls `help` with any supported query
+- **THEN** the adapter answers from its own tool catalog and generated schemas
+- **AND** it invokes no canonical tool operation
+- **AND** the returned payload matches the existing `help` contract for that
+  query
 
-#### Scenario: Public optional request schema suppresses null unions
+#### Scenario: Help is absent from the public operation surface
 
-- **GIVEN** a canonical MCP request parameter field is optional and has an inner
-  type such as `string`, `integer`, or `boolean`
-- **WHEN** stdio MCP or an embedded host generates the tool input schema from
-  the public request type
-- **THEN** the generated schema advertises the bare inner JSON type for that
-  field
+- **WHEN** an in-process caller enumerates the public tool operations
+- **THEN** no operation corresponds to `help`
+- **AND** no operation input, output, or error type carries the MCP tool catalog
+  or a generated JSON schema
+
+### Requirement: MCP Adapter Presentation Boundary
+
+The MCP adapter SHALL own JSON input-schema generation, the help catalog,
+optional-field omission in serialized payloads, unknown-field rejection at the
+JSON boundary, rmcp result construction, and rmcp error mapping.
+
+The adapter's parameter types for operation-backed tools SHALL map to the typed
+operation inputs, and every MCP schema SHALL be generated from the adapter's own
+parameter types. A canonical tool operation input SHALL NOT be required to carry
+MCP schema or MCP deserialization artifacts, and no rmcp type SHALL appear in a
+canonical tool operation signature.
+
+Where a parameter type maps to an operation input, that correspondence SHALL be
+contract-tested rather than asserted, so that a divergence between the
+advertised MCP contract and the operation contract fails. The `help` parameter
+type maps to no operation input and is exempt from that pairing.
+
+#### Scenario: Optional request field schema stays a bare inner type
+
+- **GIVEN** an MCP parameter field is optional with an inner type such as
+  `string`, `integer`, or `boolean`
+- **WHEN** the MCP adapter generates the tool input schema from its MCP
+  parameter type
+- **THEN** the generated schema advertises the bare inner JSON type
 - **AND** does not advertise a `[T, "null"]` union unless the tool contract
   explicitly accepts JSON `null`
 
-### Requirement: MCP Stdio Wrapper Boundary
+#### Scenario: Parameter type divergence from the operation input fails
 
-The system SHALL treat rmcp router construction, stdio lifecycle handling, and
-MCP transport framing as wrapper concerns over the public MCP tools API rather
-than as the public Rust embedding boundary.
+- **GIVEN** an MCP parameter type maps to a canonical operation input
+- **WHEN** either side gains, loses, or retypes a field so the mapping no longer
+  covers the tool contract
+- **THEN** the contract test between them fails
 
-The public MCP tools API SHALL NOT require embedders to instantiate the stdio
-server, depend on private `ToolRouter` construction, or route calls through
-private relay socket frame structs.
+#### Scenario: Adapter rejects unknown JSON fields
 
-#### Scenario: Embedder bypasses stdio transport
+- **WHEN** an MCP tool payload or meta-tool argument payload carries a field the
+  tool contract does not accept
+- **THEN** the adapter rejects the request with `validation_invalid_params`
+- **AND** does not silently drop the unknown field
 
-- **GIVEN** an embedded host has configured the public MCP tools API
-- **WHEN** it invokes an Agentmux MCP tool
-- **THEN** it does not need to launch the stdio MCP server
-- **AND** it does not serialize through private stdio or relay socket frames
+#### Scenario: Adapter omits an absent optional output field
 
-#### Scenario: Router glue remains transport-specific
+- **GIVEN** an operation outcome in which an optional output field is absent
+- **WHEN** the MCP adapter serializes the response
+- **THEN** the field is omitted from the JSON payload rather than serialized as
+  `null`, unless the tool contract explicitly requires a JSON `null` value
 
-- **WHEN** the stdio MCP server advertises tools to an MCP client
-- **THEN** rmcp router glue is used only to expose the tools over stdio
-- **AND** the tool semantics remain defined by the public MCP tools API
+#### Scenario: Canonical operation error maps to the existing MCP error
 
-### Requirement: MCP Public API Authorization Boundary
+- **WHEN** a canonical tool operation returns a canonical operation error
+- **THEN** the MCP adapter maps it onto the MCP error code and details schema
+  that tool contract already defines
+- **AND** rmcp error construction remains inside the adapter
 
-The public MCP tools API SHALL derive sender and actor authority from explicit
-MCP server association or relay-verified context and SHALL NOT accept
-caller-supplied sender-like payload fields as authorization authority.
+### Requirement: MCP Advertised Tool Fidelity
 
-Relay SHALL remain the centralized authorization decision point for relay-backed
-MCP tools. The public MCP tools API SHALL perform validation and adaptation, then
-pass through relay authorization denials with the canonical MCP error taxonomy.
+An MCP adapter SHALL advertise each operation-backed Agentmux tool under the
+canonical tool name, input schema, response contract, and error taxonomy defined
+by that tool's operation contract.
 
-#### Scenario: Caller cannot override sender through public API payload
+An adapter MAY advertise a subset of the available Agentmux tools. An adapter
+SHALL NOT advertise a renamed, reshaped, or partially implemented variant of an
+Agentmux tool.
 
-- **WHEN** a public MCP API caller includes a sender-like identity field in a
-  tool payload
-- **THEN** the public API rejects the request according to the canonical MCP
-  validation contract
-- **AND** does not use that field as authorization authority
+Advertised schema and help metadata for an operation-backed tool SHALL be
+generated from the adapter's MCP parameter types, and those types SHALL be
+contract-tested against the operation inputs they map to rather than maintained
+independently of them.
 
-#### Scenario: Relay denial passes through public API
+The `help` tool is governed by the MCP Help Adapter Ownership requirement. It
+has no operation contract, no operation input, and no parameter-to-operation
+mapping; its schema and catalog behavior is its own preserved adapter contract,
+and this requirement imposes no operation mapping on it.
 
-- **WHEN** relay denies a request submitted through the public MCP tools API
-- **THEN** the public API returns the same `authorization_forbidden` code and
-  denial detail schema as the stdio MCP server
+#### Scenario: Adapter advertises a subset of Agentmux tools
 
-### Requirement: MCP Embedding Tool Inventory Consistency
+- **GIVEN** an MCP adapter advertises only some of the available operation-backed
+  Agentmux tools
+- **WHEN** it advertises one of them
+- **THEN** the advertised name is that tool's canonical name and the advertised
+  input schema accepts exactly that tool's canonical request contract
+- **AND** invoking it follows that tool's canonical request, response, and error
+  contract
 
-The public MCP tools API SHALL expose tool inventory and help/schema metadata
-from the same canonical catalog used by the stdio MCP server.
+#### Scenario: Help metadata comes from the mapped parameter type
 
-Embedded hosts MAY choose not to advertise every available Agentmux tool, but
-any advertised Agentmux tool SHALL use the canonical name, request schema,
-response contract, and error taxonomy for that tool.
-
-#### Scenario: Embedded host advertises subset of Agentmux tools
-
-- **GIVEN** an embedded host chooses to advertise only a subset of Agentmux MCP
-  tools
-- **WHEN** it advertises one of those tools
-- **THEN** the advertised tool name and schema match the canonical Agentmux MCP
-  catalog
-- **AND** invoking the tool follows the canonical Agentmux MCP contract
-
-#### Scenario: Help schema comes from canonical public type
-
-- **WHEN** either stdio MCP or an embedded host requests schema metadata for an
+- **WHEN** an MCP adapter reports schema metadata for an operation-backed
   Agentmux tool
-- **THEN** the schema is generated from the same public parameter type used for
-  tool invocation
+- **THEN** the metadata is generated from the same MCP parameter type the
+  adapter deserializes and maps to that tool's operation input
+- **AND** it is not a separately maintained description that can drift from
+  either the parameter type or the operation contract
+
+### Requirement: MCP Association Is Adapter Internal
+
+MCP server association SHALL be internal to the MCP adapter, including the
+associated bundle and sender session resolved at MCP startup.
+
+The adapter SHALL resolve association into relay-verified principal context
+before invoking a canonical tool operation, and SHALL NOT pass association
+itself to an operation as authorization authority.
+
+Association failures SHALL remain adapter-level failures and SHALL NOT be
+members of the canonical operation error set.
+
+#### Scenario: Unassociated MCP server still fails with the existing code
+
+- **GIVEN** the MCP server has no associated bundle or sender session
+- **WHEN** a client invokes a tool that requires association
+- **THEN** the adapter returns `validation_unassociated_server` with its
+  existing details and remedy text
+- **AND** it does not invoke the canonical tool operation
+
+#### Scenario: Association is absent from the operation boundary
+
+- **WHEN** an in-process caller invokes a canonical tool operation
+- **THEN** it supplies no MCP association value
+- **AND** `validation_unassociated_server` is not a reachable outcome of that
+  call
