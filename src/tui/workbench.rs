@@ -6,7 +6,7 @@ use crate::relay::{RelayStreamEvent, SendResult};
 use crate::runtime::error::RuntimeError;
 
 use super::{
-    Action, input,
+    Action, BindingContext, actions, input,
     state::{
         AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField, PendingChoiceEntry,
         PickerColumn, Recipient, ScreenMode, TuiLaunchOptions,
@@ -195,6 +195,21 @@ impl Workbench {
 
     pub fn picker_filter(&self) -> &str {
         self.state.picker_filter.as_str()
+    }
+
+    /// The binding context the workbench's current state resolves to — the
+    /// surface whose rows own a chord right now. Pair it with
+    /// [`crate::tui::default_binding`] to ask what a chord would do here.
+    pub fn binding_context(&self) -> BindingContext {
+        actions::binding_context(&self.state)
+    }
+
+    /// The contexts a chord is resolved against right now, in precedence order:
+    /// the global rows first, then the surface [`Workbench::binding_context`]
+    /// names. A chord bound globally is therefore not shadowed by whatever
+    /// surface is open over it.
+    pub fn binding_lookup_order(&self) -> [BindingContext; 2] {
+        actions::binding_lookup_order(&self.state)
     }
 
     pub fn events_overlay_open(&self) -> bool {

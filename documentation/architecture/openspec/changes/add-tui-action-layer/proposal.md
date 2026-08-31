@@ -89,7 +89,10 @@ a public render entry taking a caller-supplied `Rect`, and decomposing
   resolved action; the match arms lose their embedded key conditions.
 - `src/tui/workbench.rs` and the `agentmux::tui` exports — new public surface:
   the `Action` type and an action-application method alongside the existing
-  `dispatch_event`. `BindingContext` stays internal.
+  `dispatch_event`, plus `BindingContext` and the `default_binding` lookup that
+  answers what a chord means on a given surface. The table itself stays
+  internal; its rows are the shape most likely to move, and nothing outside the
+  crate needs them in order to ask what a chord does.
 - `src/tui/render/overlays/help.rs` — 49 hardcoded `Line::from` binding strings
   are replaced by generation from the table.
 - `src/tui/render/overlays/picker.rs` (`picker_hint_line`) and

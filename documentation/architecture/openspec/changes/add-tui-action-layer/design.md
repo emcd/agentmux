@@ -163,7 +163,7 @@ presentation rule would have had nothing to annotate. The probe outcome is
 still reported to the operator — that requirement lives in `tui-surface` — as a
 statement about the terminal, not about any binding.
 
-### The action vocabulary is public; the binding context is not
+### The action vocabulary and the binding context are public; the table is not
 
 `Action` is exported from the TUI's public API and the public `Workbench`
 facade gains direct action application. Without that, the capability's stated
@@ -173,10 +173,20 @@ only `dispatch_event`, so a requirement phrased as "a caller applies an action
 to state" would be satisfied by a crate-private function that no host can
 reach.
 
-`BindingContext` stays internal. Embedding needs the action vocabulary, not the
-TUI's own precedence model; a host that supplies its own bindings has no use
-for it. Exporting it now would fix a shape before `ideas/tui/1` has said what
-it needs.
+`BindingContext` is public alongside it, with a `default_binding` lookup that
+answers what a chord means on a given surface. An earlier draft kept the
+context internal, on the grounds that embedding needs the vocabulary rather
+than the TUI's precedence model, and that exporting it would fix a shape before
+`ideas/tui/1` has said what it needs. Operator direction reversed that: the
+public API is meant to grow toward reuse, and one intended effect is that the
+test suite lives under `tests/` rather than inside implementation modules.
+Keeping the context internal would have forced the table's own invariants —
+capability neutrality, the omission guarantee — into inline tests in the very
+module they check.
+
+The table itself stays internal. Its rows, chord patterns, and display sections
+are the shape most likely to move, and nothing outside the crate needs them in
+order to ask what a chord does.
 
 ### Presentation is a separate rule from dispatch precedence
 
@@ -275,7 +285,7 @@ roll back. Reverting is reverting a refactor.
 - Should the lint also cover `src/tui/README.md`, or only the operator-facing
   usage guide? The README describes architecture rather than bindings, so it
   may not need to be generated — but it does currently restate `Ctrl+J`.
-- What else, beyond `Action` application, does the embedding host in
-  `ideas/tui/1` need from the public facade? `BindingContext` is deliberately
-  internal for now; the widget-surface question decides whether anything more is
-  required, and does not block this change.
+- What else, beyond `Action` application and `BindingContext`, does the
+  embedding host in `ideas/tui/1` need from the public facade? The widget-surface
+  question decides whether anything more is required, and does not block this
+  change.

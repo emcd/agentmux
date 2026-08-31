@@ -13,8 +13,11 @@
 - [x] 1.5 Test that applying an `Action` to state produces the behavior with no
       `KeyEvent` constructed, establishing the resolution/behavior split.
 - [x] 1.6 Export `Action` from `agentmux::tui` and add action application to the
-      public `Workbench` facade alongside `dispatch_event`. Keep
-      `BindingContext` internal.
+      public `Workbench` facade alongside `dispatch_event`. Export
+      `BindingContext` with it: this task first said to keep the context
+      internal, and operator direction reversed that, since keeping it internal
+      would have forced the table's own invariants into inline tests in the
+      module they check. The table itself stays internal.
 - [x] 1.7 Test the public boundary from `tests/unit/tui.rs` — a caller naming
       only public types applies an action through `Workbench` and observes the
       behavior, with no `KeyEvent` constructed.
@@ -23,28 +26,32 @@
 
 ## 2. Binding table
 
-- [ ] 2.1 Define the table as (context, chord) rows carrying the action and the
+- [x] 2.1 Define the table as (context, chord) rows carrying the action and the
       display section. Carry no capability field: nothing varies by probe
       outcome, so a per-row flag would be unused machinery. The global context
       is one of the keys, holding the rows that survive any open surface.
-- [ ] 2.2 Populate every row from the current handlers, preserving each
+- [x] 2.2 Populate every row from the current handlers, preserving each
       context's existing bare-`Enter` action unchanged.
-- [ ] 2.3 Declare `Enter`, `Shift+Enter`, and `Ctrl+Enter` explicitly for every
+- [x] 2.3 Declare `Enter`, `Shift+Enter`, and `Ctrl+Enter` explicitly for every
       context, with both modified chords bound to the same action that context
       binds to `Enter`.
-- [ ] 2.4 Test that every context declaring an `Enter` row also declares both
+- [x] 2.4 Test that every context declaring an `Enter` row also declares both
       modified rows, so no context can inherit modified-`Enter` behavior by
       omission.
-- [ ] 2.5 Test capability neutrality directly: for every context, the action
+- [x] 2.5 Test capability neutrality directly: for every context, the action
       resolved for `Shift+Enter` and `Ctrl+Enter` equals the action resolved for
       `Enter`. Assert it over the whole table rather than per context, so a row
       added later cannot quietly reintroduce divergence.
-- [ ] 2.6 Test that `Ctrl+J` resolves to insert-newline in both multi-line
-      contexts, and that no other context binds that action.
-- [ ] 2.7 Test that `Shift+Enter` in the compose `Message` field sends the
+- [x] 2.6 Test that `Ctrl+J` resolves to insert-newline in exactly the contexts
+      that own a text draft, and in no other. That is three contexts, not the
+      two this task first named: the interaction choice pane forwards typed
+      characters into the write draft today, and its unguarded `Ctrl+J` arm
+      inserts there too rather than being inert, so dropping the row would
+      change behavior.
+- [x] 2.7 Test that `Shift+Enter` in the compose `Message` field sends the
       message. This is the regression detection introduced and this change
       repairs, so assert it rather than assuming it follows from 2.5.
-- [ ] 2.8 Declare `Ctrl+C` and `F1` as global rows — the two chords `handle_key`
+- [x] 2.8 Declare `Ctrl+C` and `F1` as global rows — the two chords `handle_key`
       tests ahead of every overlay today — and test that each resolves to its
       action with the picker, the events overlay, and the help overlay open.
       Without this the chords either lose their reach or survive as an

@@ -61,8 +61,10 @@ auto-opens it.
     resolution / behavior split. Split by concern:
     - `mod.rs` — pure hub: submodule decls and the `Action` re-export
     - `action.rs` — the public `Action` enum and `Action::apply`
-    - `bindings.rs` — the default chord-to-action table
-    - `context.rs` — `BindingContext` and `binding_context`
+    - `bindings.rs` — the default chord-to-action table, grouped by
+      context, and `default_binding`, which reads it
+    - `context.rs` — `BindingContext`, `binding_context`, and
+      `binding_lookup_order`
 - `input.rs`
   - mode-aware key handling and command intent updates.
 - `keyboard.rs`
@@ -100,7 +102,9 @@ auto-opens it.
   - the public `Workbench` facade over the internal `AppState`: launch-option
     plumbing plus the event-driven integration boundary for tests. It exposes
     `dispatch_event`, `apply_action` (the chord-free seam a host with its own
-    bindings uses), focus/field/mode accessors, the relay-event ingestion
+    bindings uses), `binding_context` / `binding_lookup_order` (which surface
+    owns a chord now, and the order it is resolved in),
+    focus/field/mode accessors, the relay-event ingestion
     seams (`record_stream_events`, `record_chat_events`), and read-only
     projections (e.g. `WorkbenchPendingChoice`, `pending_choices`). Callers
     drive it with contract-faithful inputs; the projections are a test/inspection
