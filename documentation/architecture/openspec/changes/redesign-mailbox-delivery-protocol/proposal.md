@@ -43,8 +43,19 @@ proposal's approval.
 
 - Replace the `Pending`/`Authorized`/`Terminal` queue-entry state machine with
   a two-state `queued`/`terminal` model. There is no authorization event: an
-  admitted entry is immediately visible to `peek` and stays queued until an
-  `ack` advances the cursor past it.
+  entry stays queued from the moment it is peekable until an `ack` advances
+  the cursor past it.
+- Place admitted entries into their target's mailbox. Admission fixes an
+  entry's position, which is what linearizes two concurrent sends against
+  each other; the payload a transport is asked to write is attached
+  afterwards, since the relay-authored envelope is built per target
+  downstream of the reservation. An entry becomes peekable when that payload
+  is attached, not when its quota is reserved — the two are separate points
+  and the gap between them is where a relay-built `MailboxPayload` is
+  produced. The mailbox holds the artifact that is actually delivered:
+  one payload per entry, built once and stamped once, consumed by whatever
+  writes it. Rebuilding an envelope at write time would put something on
+  the wire that the relay's own record of the delivery does not describe.
 - Add `peek(target, entry_max, canonical_bytes_max)`: a read-only relay
   operation returning the head contiguous run of mailbox entries within the
   given bounds, advancing nothing. A raw-kind entry at the head is always
@@ -154,7 +165,8 @@ proposal's approval.
 - Affected code:
   - `src/relay/delivery/dispatch/worker/` (`HandoverWindow` use, held-member
     slot, `TargetGate`/`gate_target`/`decide_gate`, `authorize_batch` call
-    site)
+    site; and the task intake, which becomes where an admitted entry's
+    payload is built and placed into its target's mailbox)
   - `src/relay/delivery/dispatch/batch.rs` (`HandoverWindow` itself)
   - `src/relay/delivery/admission/` (`ADMISSION_LEDGER`, `authorize_batch`,
     packing-unit binding — retained and re-scoped to bind at `declare` rather
@@ -174,6 +186,19 @@ proposal's approval.
     executor, calling `peek`/`declare`/`ack` instead of receiving
     `mailw`/`raww`)
 - Sequencing:
+  - No push-path mechanism may be retired before its pull-model replacement
+    is reachable in production. Retiring the gate, the handover window, or
+    batch authorization ahead of a delivery-loop executor that can peek
+    leaves no delivery path at all; standing an executor up beside a live
+    push path writes every entry twice. The relay-side mailbox, the
+    generation datum, the doorbell, and the enqueue seam are all landable
+    ahead of that point, because each leaves exactly one delivery path in
+    place — which is what keeps the cutover itself as small as it can be.
+    The enqueue seam does change where an entry's payload is built, and
+    the push path then delivers what it built; that is the point of
+    landing it early rather than an exception to the rule, since it puts
+    the executor's future input under the production suite while the push
+    path is still there to deliver it.
   - `agentmux:todos/backend/2` (process-global singleton removal) and the
     refactor phase (`linecheck`, TUI/relay test splits, ACP transport
     decomposition) proceed independently of this proposal's review.

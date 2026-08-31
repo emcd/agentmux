@@ -18,6 +18,19 @@
 
 ## 2. Relay-side mailbox (`src/relay/delivery/`)
 
+Every task in this section is separately landable. The property that makes
+one landable is not that it changes nothing, but that it leaves exactly one
+delivery path in place: it may add state nothing reads yet, or move where
+an artifact is built, but it may not retire the push path or stand a second
+consumer beside it. A task that would do either belongs in section 3.
+
+2.7 through 2.10 are inert in the stronger sense — nothing in production
+reads what they add. 2.5 is not: it moves payload construction ahead of the
+write, and the push path then delivers what it built. That is deliberate.
+A shadow that built a parallel payload nothing delivered would prove
+nothing about the artifact the executor later consumes, which is the one
+thing the shadow exists to establish.
+
 - [x] 2.1 Collapse `QueueEntryState` (`guard.rs`) from `Pending`/
       `Authorized`/`Terminal` to `queued`/`terminal`. Remove `GuardKey`'s
       `(batch, attempt)` composite identity; key the guard by mailbox entry
@@ -47,17 +60,67 @@
       record evidence, advance the cursor by exactly the declared range,
       terminalize covered members through the guard's evidence order, and
       release quota.
-- [ ] 2.5 Remove `HandoverWindow` (`dispatch/batch.rs`) and its use in
-      `dispatch/worker/` (construction, `SubmitContext.window`,
-      `form_batch`). Remove the held-member slot (`worker/run.rs` and its
-      call sites) and `TargetGate`/`gate_target`/`decide_gate`
-      (`worker/gate.rs`, `worker/submit.rs`).
-- [ ] 2.6 Remove `authorize_batch` (`admission/authorize.rs`) and its call
-      site (`worker/submit.rs`). Fold its packing-unit-binding logic
-      (`declare_packing_unit`, `record_unit_evidence`,
-      `record_evidence_for_member`) into the `declare`/`ack` split from 2.3
-      and 2.4 — binding at `declare` time, evidence at `ack` time, matching
-      the pre-effect/post-effect split the push model already had.
+- [ ] 2.5 Wire admission-to-mailbox enqueue: every admitted entry gains a
+      relay-built `MailboxPayload` and becomes peekable. Nothing peeks
+      until the cutover in section 3; the push model keeps delivering, but
+      it delivers **the stored payload** rather than one of its own. This
+      adds no delivery path and removes none.
+      - **One payload per entry, built exactly once, at enqueue.** The
+        push path during shadow and the delivery-loop executor after
+        cutover both consume that same stored artifact. A second payload
+        built at write time would put a different envelope on the wire
+        than the one the mailbox holds, and the shadow would then prove
+        nothing about the artifact the executor later delivers.
+      - **One timestamp, stamped at enqueue.** `build_delivery_message`
+        already takes `created_at` from its caller, but
+        `build_ui_envelope` reads the clock itself; that read must move
+        out so both paths are stamped by the enqueue rather than by
+        whoever renders. The `Date` header therefore moves from write time
+        to enqueue time — confirm no requirement or test depends on
+        write-time stamping.
+      - **One envelope-metadata inscription per task**, emitted where the
+        payload is built. `emit_envelope_metadata_inscription` fires today
+        from the coder envelope path at write time; moving payload
+        construction without moving it emits metadata describing an
+        envelope other than the one delivered, and emitting at both points
+        double-counts.
+      - Build the payload from the `AsyncDeliveryTask` and a supplied
+        timestamp, touching no transport, so the seam sits at the delivery
+        worker's task intake — the first point the relay holds the task,
+        and still before any transport contact.
+      - Do NOT place the enqueue inside `admit`. Admission is a
+        reservation pass across a request's targets and no
+        `DeliveryEnvelope` exists there; envelopes are built per target
+        downstream.
+      - Mailbox order does not depend on where the enqueue lands, because
+        `admit` already assigns the sequence. Placement is therefore free
+        to follow the payload rather than constraining it.
+      - A terminal-outcome receipt bypasses admission, so it holds no
+        ledger entry and no sequence. `enqueue` refuses it `NotAdmitted`,
+        and the receipt MUST continue to reach its sender outside the
+        mailbox rather than being dropped on that refusal.
+      - Entries admitted before this lands, and any entry whose payload
+        cannot be built, MUST still resolve through the push path; a
+        failed enqueue may not strand a member.
+- [ ] 2.6 Prove the shadow before anything depends on it. Two claims need
+      establishing, and neither is demonstrated by 2.5 landing.
+      - **The mailbox stays bounded.** The argument is that the push path
+        still terminalizes every entry and `terminalize` retires the
+        entry's mailbox position, so the cursor advances. That is reasoned
+        from the retirement semantics added in 2.1-2.4, not observed.
+        Establish against the full suite: a target's mailbox returns to
+        empty once its entries are delivered; the cursor advances rather
+        than stalling behind a retired position; no entry is delivered
+        twice or left unresolved; quota returns to its pre-send level.
+      - **The delivered artifact is the stored one.** The payload and
+        `Date` observed at enqueue are the payload and `Date` that reach
+        the target, exactly one envelope-metadata inscription is emitted
+        per task, and push-path delivery behaviour is otherwise unchanged.
+        This is what makes the shadow evidence about the executor's future
+        input rather than about a parallel artifact nothing delivers.
+      Treat a mailbox that grows without bound under sustained delivery,
+      or a delivered envelope that differs from the stored one, as a gate
+      on the cutover rather than a defect to fix later.
 - [ ] 2.7 Add `active_generation_id` as a durable per-target field in
       `LedgerState`, drawn from a monotonically increasing, never-reused
       per-target-identity sequence (never a recycled or default value, even
@@ -82,7 +145,20 @@
       covered for the state added in 2.2-2.7. The monotonic generation-id
       sequence itself MUST NOT reset on this cleanup.
 
-## 3. Transport-side delivery-loop executors
+## 3. Production cutover
+
+This whole section lands as one change. No task in it is separately
+mergeable, because each removes or replaces a mechanism the others depend
+on: retiring the push path before an executor can peek leaves no delivery
+path at all, and standing an executor up beside a live push path would
+write every entry twice. Removing `mailw`/`raww` from the trait likewise
+forces every transport to be wired in the same change rather than one at a
+time.
+
+The section is therefore sized by that constraint rather than by
+convenience. Splitting it requires a migration switch that routes per
+target between the two paths — a decision to take deliberately, not by
+letting a tranche boundary fall somewhere convenient.
 
 - [ ] 3.1 Design and implement the delivery-loop executor shape shared by
       all transports (peek → coalesce/render → measure against token budget
@@ -93,22 +169,49 @@
       whose write fails observably MUST still be acked (`NotSubmitted` or
       `SubmissionUnknown`) rather than left to the watchdog when the
       executor is able to report.
-- [ ] 3.2 Remove `mailw`, `raww`, and `is_ready_for_handover` from the
+- [ ] 3.2 Give readiness and unreachable-dwell an explicit owner in the
+      executor. Both behaviours live in `decide_gate` today and are deleted
+      by 3.4, so this task exists to keep them from being lost in the gap:
+      a target continuously `Unreachable` past
+      `[delivery].unreachable-dwell-ms` MUST still resolve its entries
+      `not_submitted`, which the `transport-abstraction` capability
+      requires normatively, and an unready target MUST leave its entries
+      `queued` rather than being written to. Neither may be left to fall
+      out of 3.1's shape by accident; name where each is judged, and
+      confirm the dwell is measured over continuous unreachability rather
+      than restarted by an unobservable reading.
+- [ ] 3.3 Remove `mailw`, `raww`, and `is_ready_for_handover` from the
       `Transport` trait (`src/transports/contract/transport.rs`). Spawn the
       delivery-loop executor from each transport's `startup`.
-- [ ] 3.3 Enforce one serial delivery executor per transport instance —
+- [ ] 3.4 Remove `HandoverWindow` (`dispatch/batch.rs`) and its use in
+      `dispatch/worker/` (construction, `SubmitContext.window`,
+      `form_batch`). Remove the held-member slot (`worker/run.rs` and its
+      call sites) and `TargetGate`/`gate_target`/`decide_gate`
+      (`worker/gate.rs`, `worker/submit.rs`).
+- [ ] 3.5 Remove `authorize_batch` (`admission/authorize.rs`) and its call
+      site (`worker/submit.rs`). Complete the transfer of its
+      packing-unit-binding logic (`declare_packing_unit`,
+      `record_unit_evidence`, `record_evidence_for_member`) to the
+      `declare`/`ack` split from 2.3 and 2.4 — binding at `declare` time,
+      evidence at `ack` time, matching the pre-effect/post-effect split the
+      push model already had. `declare_packing_unit` also backs
+      `PartitionSink` (`src/relay/delivery/partition.rs`), the seam a
+      transport calls to report its own partition, so that caller MUST be
+      moved to `declare` in the same change rather than left pointing at a
+      removed function.
+- [ ] 3.6 Enforce one serial delivery executor per transport instance —
       no per-connection executor spawn. In-process scope only; no
       reconnect handling (see `design.md`'s scope note).
-- [ ] 3.4 Wire ACP's delivery-loop executor: peek, declare, render
+- [ ] 3.7 Wire ACP's delivery-loop executor: peek, declare, render
       pane-envelope text, submit via `session/prompt`, ack from partition
       evidence.
-- [ ] 3.5 Wire Tmux's delivery-loop executor: peek, pack into token-budget
+- [ ] 3.8 Wire Tmux's delivery-loop executor: peek, pack into token-budget
       prompts, declare each resulting unit, inject, ack from partition
       evidence.
-- [ ] 3.6 Wire Pty's delivery-loop executor analogously.
-- [ ] 3.7 Wire UI's delivery-loop executor: peek, declare, emit as relay
+- [ ] 3.9 Wire Pty's delivery-loop executor analogously.
+- [ ] 3.10 Wire UI's delivery-loop executor: peek, declare, emit as relay
       stream events through the injected broadcaster closure, ack.
-- [ ] 3.8 Wire raw-entry handling into each delivery-loop executor per
+- [ ] 3.11 Wire raw-entry handling into each delivery-loop executor per
       `transport-contracts`' `Relay raww transport behavior`: a peeked raw
       singleton is declared as its own packing unit, written using the same
       per-transport injection mechanics as today, then acked.
