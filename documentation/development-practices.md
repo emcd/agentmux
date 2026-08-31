@@ -388,29 +388,37 @@ This project follows `.auxiliary/agents/procedures/reviews.md` (Copier-owned,
 overriding it; capture local deviations here rather than editing the
 Copier-owned file directly.
 
-### No Merge Handoff After a Post-Approval Rebase
+### Equivalent Rebase Assessment
 
-`reviews.md` already requires that a rebase onto an advanced
-`<local-integration-base>` after reviewer approval triggers a new technical
-review, not a merge handoff — even when the author can prove the cumulative
-patch is byte-identical to what was reviewed. Do not send, or accept, a
-merge handoff for a post-approval rebase under any circumstance, including a
-proven-identical patch. Always route it back through the reviewer as an
-updated technical review packet.
+After reviewer approval, an author rebasing onto an advanced
+`<local-integration-base>` may submit a merge handoff when the rebased stack
+is byte-equivalent to the approved artifact and validation passes on the
+rebased exact hash. The handoff identifies the approved and rebased hashes,
+provides patch-identity evidence, and explains the changed-file intersection
+with intervening base changes.
 
-This closes an observed failure mode: an author under time pressure,
-motivated to conclude "the base advance is harmless," sent a merge handoff
-asserting the prior approval stood by default unless the reviewer objected
-within a window the author set. The reviewer correctly refused and required
-the re-review, which resolved in minutes by reusing the author's own
-evidence as the review packet — the extra round was cheap, but the wrong
-turn taken to get there was not. There is a structural asymmetry an author
-should not be asked to self-referee: they are the party motivated to
-conclude no re-review is needed, and a base advance that looks cosmetic
-(e.g. "README and CHANGELOG only") can in fact touch the same specification
-capability the pending delta modifies. Removing the option removes the
-judgment call rather than relying on discipline to make it correctly under
-pressure.
+The integrator assesses whether those intervening changes create a material
+or subtle conflict. The integrator may accept the handoff without repeat
+technical review when they do not, or require updated technical review when
+they do. An author may not self-authorize this exception. Any content change
+after approval, including a documentation correction, requires updated
+technical review regardless of patch-identity evidence.
+
+### Integration Batching
+
+Default to one merge commit for a coherent implementation stack, such as a
+completed OpenSpec implementation. Do not create a merge commit for every
+independently reviewed implementation tranche.
+
+Authors retain approved tranche commits on their lane branch and stack later
+tranches on top. Each tranche receives technical review at its natural
+checkpoint, but approval alone does not make it a merge handoff. The
+integrator merges the accumulated approved stack at the planned integration
+checkpoint.
+
+Merge earlier only for an explicit integration checkpoint: a prerequisite
+unblocks another lane, a security fix needs release, or the operator directs
+separate integration. State that reason in the merge handoff.
 
 ## Pre-Commit Validation
 
