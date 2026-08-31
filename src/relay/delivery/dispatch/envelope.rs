@@ -450,13 +450,19 @@ pub(super) fn build_ui_transport_services(key: &AsyncWorkerKey) -> UiTransportSe
 /// rendering pane text. No timing knob is threaded through the envelope, and the
 /// UI transport no longer keeps one of its own: a delivery resolves from the one
 /// broadcast it attempts.
-pub(super) fn build_ui_envelope(task: &AsyncDeliveryTask) -> DeliveryEnvelope {
+///
+/// `created_at` is supplied rather than read here. Both delivery directions stamp
+/// one entry once, at the point its payload is built and placed in the mailbox, so
+/// a builder that read the clock itself would restamp whatever it was asked to
+/// render — and the mailbox would then hold an envelope carrying a different
+/// `Date` from the one that reached the target.
+pub(super) fn build_ui_envelope(task: &AsyncDeliveryTask, created_at: &str) -> DeliveryEnvelope {
     let target_member = task
         .bundle
         .members
         .iter()
         .find(|member| member.id == task.target_session);
-    let message = build_delivery_message(task, target_member, outcomes::now_rfc3339().as_str());
+    let message = build_delivery_message(task, target_member, created_at);
     DeliveryEnvelope {
         message_id: task.message_id.clone(),
         message,

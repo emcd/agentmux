@@ -1,12 +1,17 @@
 //! Placing an admitted entry into its target's mailbox, and naming the
 //! generation entitled to consume it.
 
+use serde_json::json;
+
 use crate::protocol::identity::ConsumerBinding;
 use crate::protocol::mailbox::{EntrySequence, MailboxPayload};
+use crate::runtime::inscriptions::emit_inscription;
 
 use super::super::super::guard::QueueEntryState;
 use super::super::ledger::{MailboxSlot, lock_ledger};
 use super::addressing::target_key;
+
+const INSCRIPTION_MAILBOX_ENQUEUED: &str = "relay.delivery.mailbox.enqueued";
 
 /// Why an entry could not be placed in its target's mailbox.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,7 +48,14 @@ pub(in crate::relay) fn enqueue(
         return Err(EnqueueRejection::AlreadyTerminal);
     }
     let (target, sequence) = (entry.target.clone(), entry.sequence);
-    let mailbox = state.mailboxes.entry(target).or_default();
+    // The reservation this entry was admitted under, read before the mailbox
+    // borrow rather than after it because both live on the same guarded state.
+    // Admission has already counted this entry, so the figures include it: with
+    // one entry outstanding at a time they are one envelope and that envelope's
+    // bytes, and a target whose deliveries failed to release would report them
+    // climbing with the send count instead.
+    let reserved = state.per_target.get(&target).copied().unwrap_or_default();
+    let mailbox = state.mailboxes.entry(target.clone()).or_default();
     if mailbox.slots.contains_key(&sequence) {
         return Err(EnqueueRejection::AlreadyEnqueued);
     }
@@ -53,6 +65,42 @@ pub(in crate::relay) fn enqueue(
             message_id: message_id.to_string(),
             payload,
         },
+    );
+    // What the mailbox holds is otherwise invisible from outside the relay, and
+    // three things about it have to be observable rather than argued. Its depth
+    // must not grow without bound while the push path — which acknowledges
+    // nothing — is the only consumer. The reservation behind it must come back:
+    // depth and quota are released by the same terminal transition but through
+    // separate state, so one can return while the other leaks. And the stamp on
+    // the payload this position now holds is what ties the delivered envelope
+    // back to the stored one: a write that rebuilt its own envelope would carry
+    // a different one.
+    //
+    // All three are read from the ledger's own state under the same lock as the
+    // insertion, so what is reported is the mailbox's contents rather than a
+    // later reading of them or a copy of what the caller passed in.
+    let payload_created_at = mailbox
+        .slots
+        .get(&sequence)
+        .and_then(|slot| match &slot.payload {
+            MailboxPayload::Mail(envelope) => Some(envelope.message.created_at.as_str()),
+            // Raw input is written through verbatim and carries no envelope, so
+            // there is no stamp to report and none to compare against.
+            MailboxPayload::Raw { .. } => None,
+        });
+    emit_inscription(
+        INSCRIPTION_MAILBOX_ENQUEUED,
+        &json!({
+            "namespace": target.namespace,
+            "target_session": target.target_session,
+            "message_id": message_id,
+            "sequence": sequence.value(),
+            "mailbox_depth": mailbox.slots.len(),
+            "cursor": mailbox.cursor.value(),
+            "target_envelopes_reserved": reserved.envelopes,
+            "target_bytes_reserved": reserved.bytes,
+            "payload_created_at": payload_created_at,
+        }),
     );
     Ok(sequence)
 }

@@ -10,7 +10,17 @@ Companion document: [`delivery-decisions.md`](delivery-decisions.md) records
 still in production.** The relay-side mailbox of the pull model that replaces it
 — `peek`, `declare`, `ack`, and the two-state entry lifecycle — is implemented
 and described in [`README.md`](README.md), but no transport drives it yet, so
-every delivery still travels the path drawn here. Read the entry states below
+every delivery still travels the path drawn here.
+
+One part of it is nevertheless live. Each admitted entry's payload is now built
+at the delivery worker's task intake and placed in its target's mailbox, and the
+push path writes *that* stored artifact rather than rendering one of its own — so
+the envelope a future executor will be handed is the envelope production delivers
+today. The mailbox is drained by the terminal transition, which retires each
+position as it resolves it, because nothing acknowledges yet. What has not moved
+is who decides when to write, which is the whole of the remaining cutover.
+
+Read the entry states below
 (`Pending`, `Authorized`, `Terminal`) as the states of that path. They are
 collapsed to `Queued` and `Terminal`, and authorization is replaced by
 declaration, when the transports' delivery-loop executors land; these diagrams

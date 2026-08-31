@@ -60,7 +60,7 @@ thing the shadow exists to establish.
       record evidence, advance the cursor by exactly the declared range,
       terminalize covered members through the guard's evidence order, and
       release quota.
-- [ ] 2.5 Wire admission-to-mailbox enqueue: every admitted entry gains a
+- [x] 2.5 Wire admission-to-mailbox enqueue: every admitted entry gains a
       relay-built `MailboxPayload` and becomes peekable. Nothing peeks
       until the cutover in section 3; the push model keeps delivering, but
       it delivers **the stored payload** rather than one of its own. This
@@ -102,7 +102,7 @@ thing the shadow exists to establish.
       - Entries admitted before this lands, and any entry whose payload
         cannot be built, MUST still resolve through the push path; a
         failed enqueue may not strand a member.
-- [ ] 2.6 Prove the shadow before anything depends on it. Two claims need
+- [x] 2.6 Prove the shadow before anything depends on it. Two claims need
       establishing, and neither is demonstrated by 2.5 landing.
       - **The mailbox stays bounded.** The argument is that the push path
         still terminalizes every entry and `terminalize` retires the

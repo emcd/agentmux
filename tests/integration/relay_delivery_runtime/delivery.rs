@@ -4,7 +4,6 @@
 
 use std::{
     fs,
-    path::Path,
     time::{Duration, Instant},
 };
 
@@ -513,22 +512,4 @@ send = "all"
         zulu_envelope.contains("Cc: bravo@party <session:bravo@party>"),
         "expected cross-bundle co-recipient in Cc, envelope={zulu_envelope:?}"
     );
-}
-
-fn read_all_paste_buffers(directory: &Path) -> Vec<String> {
-    let mut contents = Vec::new();
-    let Ok(entries) = fs::read_dir(directory) else {
-        return contents;
-    };
-    for entry in entries.flatten() {
-        let file_name = entry.file_name();
-        if file_name
-            .to_string_lossy()
-            .starts_with("fake-tmux.log.buffer.")
-            && let Ok(content) = fs::read_to_string(entry.path())
-        {
-            contents.push(content);
-        }
-    }
-    contents
 }

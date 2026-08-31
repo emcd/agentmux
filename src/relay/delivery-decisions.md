@@ -1,11 +1,20 @@
 # Relay Delivery — Architectural Decision Record
 
 Why the delivery contract has the shape described in
-[`delivery-architecture.md`](delivery-architecture.md). Append-only: superseded
-decisions stay, marked as superseded, because the reasoning that was rejected is
-usually the reasoning someone proposes again.
+[`delivery-architecture.md`](delivery-architecture.md). Superseded decisions
+stay, marked as superseded, because the reasoning that was rejected is usually
+the reasoning someone proposes again.
 
 Each entry records what was given up, not only what was chosen.
+
+**This file is closed to new entries.** Closed decisions go to
+`documentation/decisions/`, per `documentation/development-practices.md`.
+Migration of D1-D11 to that home is pending and is not being done entry by
+entry here; until it happens this file remains the authority for the decisions
+it holds. An entry written to the new home that continues a thread started here
+is named below, so a reader following the thread reaches it.
+
+- D12 → `documentation/decisions/0004-the-mailbox-holds-the-delivered-artifact.md`
 
 ---
 
@@ -399,3 +408,5 @@ reads that distinction, but a future transport that reports its own partition
 back would be describing attempts the relay cannot name. That is a reason to
 revisit the identity then, with the requirement in hand, rather than to keep an
 unused component now.
+
+---

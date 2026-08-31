@@ -7,20 +7,16 @@ use serde_json::json;
 use tokio::task::JoinSet;
 
 use crate::configuration::SessionType;
-use crate::relay::{
-    AsyncDeliveryTask, DeliveryPayloadMode, RelayError, session_type_not_implemented,
-};
+use crate::protocol::mailbox::MailboxPayload;
+use crate::protocol::message::DeliveryEnvelope;
+use crate::relay::{AsyncDeliveryTask, session_type_not_implemented};
 use crate::runtime::inscriptions::emit_inscription;
-use crate::transports::{OutcomeFuture, PartitionError, TransportImpl};
+use crate::transports::{PartitionError, TransportImpl};
 
 use super::super::super::admission::canonical_payload_bytes;
 use super::super::batch::HandoverWindow;
-use super::super::envelope::{build_coder_envelope, build_ui_envelope};
-use super::super::outcomes::now_rfc3339;
-use super::super::payload::{
-    build_delivery_message, emit_envelope_metadata_inscription, resolve_target_member,
-};
 use super::gate::{TargetGate, gate_target, target_unreachable_result};
+use super::intake::IntakeTask;
 use super::spawn::{InflightMember, InflightOutcome};
 
 /// The relay-owned bookkeeping one batch is submitted against.
@@ -58,18 +54,18 @@ pub(super) struct SubmitContext<'worker> {
 /// is the head of the next batch, so the target's FIFO order survives: this is
 /// the only way a member leaves here without a terminal outcome.
 pub(super) async fn submit_batch(
-    head: AsyncDeliveryTask,
+    head: IntakeTask,
     context: SubmitContext<'_>,
     transport: &mut TransportImpl,
     inflight: &mut JoinSet<InflightOutcome>,
     inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
-) -> Option<AsyncDeliveryTask> {
+) -> Option<IntakeTask> {
     // Pubsub is rejected rather than gated or batched. It reports unready like any
     // transport with no delivery path, so gating it would hold a member no
     // transport can ever accept, and there is nothing to authorize a batch
     // against: its `mailw`/`raww` are `unimplemented!`.
     if matches!(transport, TransportImpl::Pubsub) {
-        reject_undeliverable(&head, context.pending);
+        reject_undeliverable(&head.task, context.pending);
         return None;
     }
     // Readiness gates authorization, not submission. A target that cannot take a
@@ -89,8 +85,11 @@ pub(super) async fn submit_batch(
         TargetGate::Hold => return Some(head),
         TargetGate::Unreachable => {
             super::super::super::async_worker::complete_task_outcome(
-                &head,
-                Ok(target_unreachable_result(&head, context.unreachable_dwell)),
+                &head.task,
+                Ok(target_unreachable_result(
+                    &head.task,
+                    context.unreachable_dwell,
+                )),
             );
             super::super::super::async_worker::release_pending_slot(context.pending);
             return None;
@@ -133,8 +132,8 @@ pub(super) async fn submit_batch(
     let authorized = {
         let member_ids: Vec<&str> = members
             .iter()
-            .filter(|task| task.admitted)
-            .map(|task| task.message_id.as_str())
+            .filter(|member| member.task.admitted)
+            .map(|member| member.task.message_id.as_str())
             .collect();
         // A set holding no admitted member is relay-originated work alone. There
         // is nothing to authorize and nothing that could refuse it, so it proceeds
@@ -171,9 +170,9 @@ pub(super) async fn submit_batch(
         // the spelling from the guard's evidence order, which reads
         // `not_submitted` for a member never bound to a unit, and the reason from
         // here.
-        for task in &members {
+        for member in &members {
             super::super::super::async_worker::complete_task_refusal(
-                task,
+                &member.task,
                 "delivery_batch_not_authorized",
                 "the relay could not authorize this batch, so no member of it was submitted",
             );
@@ -183,9 +182,9 @@ pub(super) async fn submit_batch(
     }
     *context.window = proposed;
 
-    for task in members {
+    for member in members {
         submit_member(
-            task,
+            member,
             authorized_at,
             transport,
             inflight,
@@ -219,8 +218,8 @@ pub(super) async fn submit_batch(
 /// a batch still in flight left is held rather than skipped, because the window is
 /// a prefix of this target's FIFO and letting a smaller member behind it pass
 /// would reorder the queue.
-fn form_batch(head: AsyncDeliveryTask, proposed: &mut HandoverWindow) -> BatchFormation {
-    let head_bytes = canonical_payload_bytes(head.message.as_str());
+fn form_batch(head: IntakeTask, proposed: &mut HandoverWindow) -> BatchFormation {
+    let head_bytes = canonical_payload_bytes(head.task.message.as_str());
     if !proposed.admits(head_bytes) {
         return BatchFormation::NoRoom(Box::new(head));
     }
@@ -235,10 +234,10 @@ fn form_batch(head: AsyncDeliveryTask, proposed: &mut HandoverWindow) -> BatchFo
 /// was before.
 enum BatchFormation {
     /// The batch's membership, fixed and never revised. Never empty.
-    Fixed(Vec<AsyncDeliveryTask>),
+    Fixed(Vec<IntakeTask>),
     /// The head did not fit the room a batch still in flight had left. Boxed so
     /// the common arm does not carry a task-sized hole through every submission.
-    NoRoom(Box<AsyncDeliveryTask>),
+    NoRoom(Box<IntakeTask>),
 }
 
 /// Resolves a member whose target is the forward-declared `Pubsub` stub.
@@ -257,41 +256,63 @@ fn reject_undeliverable(task: &AsyncDeliveryTask, pending: &std::sync::atomic::A
 }
 
 /// Submits one already-authorized member to its transport via the non-blocking
-/// write seam and spawns an in-flight collector for its outcome. Delivery is
-/// uniform: `Ui` builds the stream envelope and coder transports (ACP/Tmux/Pty)
-/// render the framed envelope or submit raw input. A render or refusal failure
-/// completes the member immediately and releases its slot.
+/// write seam and spawns an in-flight collector for its outcome.
+///
+/// The artifact written is the one the mailbox holds, built at intake and carried
+/// here rather than rendered again: a second envelope built at this point would
+/// put something on the wire that the relay's own record of the delivery does not
+/// describe. What remains transport-specific is only which seam carries it —
+/// `mailw` for an envelope, `raww` for raw input — and whether a successful write
+/// clears startup failures.
 ///
 /// Every path from here is terminal for the member. Its batch was authorized
-/// before this ran, so there is no path that returns it to `Pending` and none
-/// that leaves it unresolved.
+/// before this ran, so there is no path that returns it to the queue's head and
+/// none that leaves it unresolved.
 fn submit_member(
-    task: AsyncDeliveryTask,
+    member: IntakeTask,
     authorized_at: Instant,
     transport: &mut TransportImpl,
     inflight: &mut JoinSet<InflightOutcome>,
     inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
-    let (future, record_served) = if matches!(transport, TransportImpl::Ui(_)) {
-        let envelope = build_ui_envelope(&task);
-        // Declared immediately before the call that can produce an effect, and
-        // never earlier: the gap between authorization and this point is exactly
-        // the window in which the guard can still prove nothing was written.
-        if declare_singleton_unit(&task).is_err() {
+    let IntakeTask { task, payload } = member;
+    let payload = match payload {
+        Ok(payload) => payload,
+        Err(error) => {
+            // Refused before any target-side effect, so nothing reached the
+            // target. Routed through the guard rather than reported as an explicit
+            // error: an `Err` would spell this `failed`, the undifferentiated
+            // outcome, for a member the evidence order can prove was never
+            // submitted. The refusal's own code and message travel with it,
+            // because the guard knows the member was not written but not that its
+            // target member could not be resolved.
+            super::super::super::async_worker::complete_task_refusal(
+                &task,
+                error.code.as_str(),
+                error.message.as_str(),
+            );
             super::super::super::async_worker::release_pending_slot(pending);
             return;
         }
-        (transport.mailw(envelope), false)
-    } else {
-        // Every coder submission marks handover too. Omitting it here let a
-        // coder member that panicked *after* its write resolve `not_submitted` —
-        // a positive claim that nothing reached the target — when bytes may well
-        // have landed. That is the exact inversion the evidence order exists to
-        // prevent.
-        match prepare_coder_write(&task, transport) {
-            CoderWrite::Submitted(future) => (future, true),
-            CoderWrite::Undeclared => {
+    };
+    // Declared immediately before the call that can produce a target-side effect,
+    // and never earlier: the gap between authorization and this point is exactly
+    // the window in which the guard can still prove nothing was written.
+    //
+    // Every coder submission marks handover too (`record_served`). Omitting it let
+    // a coder member that panicked *after* its write resolve `not_submitted` — a
+    // positive claim that nothing reached the target — when bytes may well have
+    // landed. That is the exact inversion the evidence order exists to prevent.
+    let (future, record_served) = match &payload {
+        MailboxPayload::Mail(envelope) => {
+            // Skipped for a transport that reports its own partition: binding here
+            // would consume the member's one write-once binding, and the
+            // transport's `declare` for the group it actually pastes would then be
+            // refused. UI reports no partition of its own, so its single member is
+            // declared here — which is the same call the branch it replaced made
+            // unconditionally.
+            if !transport.reports_own_partition() && declare_singleton_unit(&task).is_err() {
                 // The relay refused to bind a unit, so no write was attempted and
                 // this caller has no outcome to report: the member is either
                 // already terminal — someone else reported it — or the ledger
@@ -300,22 +321,26 @@ fn submit_member(
                 super::super::super::async_worker::release_pending_slot(pending);
                 return;
             }
-            CoderWrite::Refused(error) => {
-                // Refused before any target-side effect, so nothing reached the
-                // target. Routed through the guard rather than reported as an
-                // explicit error: an `Err` would spell this `failed`, the
-                // undifferentiated outcome, for a member the evidence order can
-                // prove was never submitted. The refusal's own code and message
-                // travel with it, because the guard knows the member was not
-                // written but not that its target member could not be resolved.
-                super::super::super::async_worker::complete_task_refusal(
-                    &task,
-                    error.code.as_str(),
-                    error.message.as_str(),
-                );
+            (
+                transport.mailw(DeliveryEnvelope::clone(envelope)),
+                !matches!(transport, TransportImpl::Ui(_)),
+            )
+        }
+        MailboxPayload::Raw {
+            content,
+            append_enter,
+        } => {
+            // Raw stays relay-declared, permanently. Neither transport can name
+            // the member at its raw write — ACP routes `submit_raw_turn` through
+            // `submit_envelope_turn` with a synthetic empty member id, and neither
+            // `Transport::raww` nor Pty's `DeliveryCommand::Raw` carries a message
+            // id — so the relay is the only layer that knows which member this
+            // singleton unit covers.
+            if declare_singleton_unit(&task).is_err() {
                 super::super::super::async_worker::release_pending_slot(pending);
                 return;
             }
+            (transport.raww(content.clone(), *append_enter), true)
         }
     };
 
@@ -328,66 +353,6 @@ fn submit_member(
             authorized_at,
         },
     );
-}
-
-/// Builds a coder task's structured payload and submits it via the non-blocking
-/// write seam. Envelope-mode tasks build a [`DeliveryMessage`] (and emit the
-/// out-of-band metadata inscription) then go through `mailw`, where the transport
-/// renders its own pane envelope; raw-input tasks go through `raww` with the
-/// task's `append_enter`.
-fn prepare_coder_write(task: &AsyncDeliveryTask, transport: &mut TransportImpl) -> CoderWrite {
-    match task.payload_mode {
-        DeliveryPayloadMode::EnvelopeMessage => {
-            let target_member = match resolve_target_member(task) {
-                Ok(member) => member,
-                Err(error) => return CoderWrite::Refused(error),
-            };
-            let message = build_delivery_message(task, target_member, now_rfc3339().as_str());
-            emit_envelope_metadata_inscription(&message, task.message_id.as_str());
-            let envelope = build_coder_envelope(task, message);
-            // Declared immediately before the call that can produce a target-side
-            // effect. Everything above this line is relay-local rendering, so a
-            // failure there is still provably non-delivery.
-            //
-            // Skipped for a transport that reports its own partition: binding here
-            // would consume the member's one write-once binding, and the
-            // transport's `declare` for the group it actually pastes would then be
-            // refused. This arm shrinks as each transport adopts the sink.
-            if !transport.reports_own_partition() && declare_singleton_unit(task).is_err() {
-                return CoderWrite::Undeclared;
-            }
-            CoderWrite::Submitted(transport.mailw(envelope))
-        }
-        DeliveryPayloadMode::RawInput => {
-            // Raw stays relay-declared, permanently. Neither transport can name
-            // the member at its raw write — ACP routes `submit_raw_turn` through
-            // `submit_envelope_turn` with a synthetic empty member id, and neither
-            // `Transport::raww` nor Pty's `DeliveryCommand::Raw` carries a message
-            // id — so the relay is the only layer that knows which member this
-            // singleton unit covers.
-            if declare_singleton_unit(task).is_err() {
-                return CoderWrite::Undeclared;
-            }
-            CoderWrite::Submitted(transport.raww(task.message.clone(), task.append_enter))
-        }
-    }
-}
-
-/// What `prepare_coder_write` did, distinguishing the two ways it can decline.
-///
-/// [`Refused`](Self::Refused) carries an error the sender should be told about;
-/// [`Undeclared`](Self::Undeclared) deliberately carries none. Collapsing them
-/// into one `Result` would report a failure for a member that may already have
-/// been resolved by whoever terminalized it, which is the duplicate resolution
-/// the guard exists to prevent.
-enum CoderWrite {
-    /// The write was submitted; its outcome resolves through this future.
-    Submitted(OutcomeFuture),
-    /// Refused before any target-side effect, with an error to report.
-    Refused(RelayError),
-    /// The relay declined to bind a packing unit, so no write was attempted and
-    /// no outcome is this caller's to report.
-    Undeclared,
 }
 
 /// Declares the one-member packing unit for a member the relay submits alone.
