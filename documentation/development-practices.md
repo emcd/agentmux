@@ -157,9 +157,20 @@ references point to. Every comment must be self-contained.
   `src/**/<module>/mod.rs` as a thin re-export hub.
 - Re-export important items at appropriate levels using `pub use`.
 
-Architecture and design rationale live in `src/**/README.md` files.
-Each subsystem README documents design decisions, invariants, and
-constraints — not in separate ADR documents.
+Current architecture lives in `src/**/README.md` files. Each subsystem README
+documents how that subsystem is built now, together with its invariants and
+constraints. A README stays accurate because anyone changing the code is
+already reading it.
+
+A closed decision, and the alternative it rejected, goes to
+`documentation/decisions/` instead. The split is by tense rather than by
+topic: a README says what *is*, and gets rewritten when the code moves; a
+decision record says what was settled and why an attractive alternative was
+not taken, and stays true afterwards.
+
+So do not describe current architecture in a decision record, and do not leave
+a rejected alternative's reasoning only in a README, where the next rewrite
+drops it silently.
 
 
 ## TOML Practices
