@@ -21,6 +21,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::protocol::mailbox::EntrySequence;
 use crate::transports::SendOutcome;
 // Both are transport-facing: `PartitionSink`'s signature names them, and
 // `src/transports` may not import `crate::relay`, so they are defined there and
@@ -30,21 +31,22 @@ pub(in crate::relay) use crate::transports::{PackingUnitId, SubmissionEvidence};
 
 /// Where a queue entry sits in the delivery lifecycle.
 ///
-/// The three states are ordered and the transitions are one-way. `Pending` is
+/// There are two states, and the transition between them is one-way. `Queued` is
 /// unbounded by design — an entry waits as long as its target takes, because
-/// elapsed time spent waiting for readiness is not evidence about the target —
-/// and it holds nothing but its own admission reservation. `Authorized` is the
-/// state that holds a target's ordering position, so it is the side that carries
-/// a bound.
+/// elapsed time spent waiting for readiness is not evidence about the target.
+///
+/// **Declaration does not add a third state.** A declared-but-unacknowledged
+/// entry is still `Queued`; which packing unit it is bound to is metadata the
+/// entry carries, not a lifecycle position. The distinction matters because a
+/// third state would have to be *left* by something, and the only thing that may
+/// resolve an entry is acknowledgment — so a state between the two would be one
+/// no event owns.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::relay) enum QueueEntryState {
-    /// Admitted and waiting. Leaves this state only by authorization, positively
-    /// observed transport teardown, or graceful shutdown — never by elapsed time.
-    Pending,
-    /// Authorization has irrevocably transferred delivery responsibility. The
-    /// relay never reclaims, never retries, and never asserts non-delivery by
-    /// inference from here.
-    Authorized,
+    /// Admitted and waiting, whether or not a packing unit has been declared over
+    /// it. Leaves this state only by acknowledgment, positively observed
+    /// transport teardown, or graceful shutdown — never by elapsed time.
+    Queued,
     /// Resolved exactly once. Admission quota is released on entry to this state
     /// and nowhere else.
     Terminal,
@@ -148,36 +150,44 @@ pub(in crate::relay) fn resolve_from_evidence(
     }
 }
 
-/// The identities a member carries from authorization to resolution.
+/// The identity a member's guard is keyed by: the entry's own position in its
+/// target's mailbox.
 ///
-/// Both are assigned at authorization and never reassigned. `batch` is the unit
-/// of authorization, and `attempt` distinguishes one authorization from any
-/// other for the same member — which is what lets the relay claim *at most one
-/// relay-authorized injection attempt* rather than the stronger
-/// at-most-once-delivered claim it cannot support, since transports do not
-/// deduplicate attempt ids.
+/// An entry's sequence number is its stable identity, so the guard needs nothing
+/// further to name it. There is deliberately no attempt component: acknowledgment
+/// is idempotent per entry, so a second acknowledgment of an entry already
+/// terminal is a no-op rather than a distinct attempt to be told apart from the
+/// first. An identifier distinguishing them would only ever be read to conclude
+/// that it did not matter.
 ///
-/// There is deliberately no generation component. A generation is the worker
-/// that owns a transport for its lifetime, and a fence verdict ends both
-/// together — so a member cannot outlive the generation it was authorized
-/// against, and a key naming one would only ever carry a constant.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(in crate::relay) struct GuardKey {
-    pub(in crate::relay) batch: BatchId,
-    pub(in crate::relay) attempt: AttemptId,
+/// There is no generation component either. A generation is the worker that owns
+/// a transport for its lifetime, and a fence verdict ends both together — so a
+/// member cannot outlive the generation it was declared under, and a key naming
+/// one would only ever carry a constant.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub(in crate::relay) struct GuardKey(EntrySequence);
+
+impl GuardKey {
+    pub(in crate::relay) fn new(sequence: EntrySequence) -> Self {
+        Self(sequence)
+    }
+
+    pub(in crate::relay) fn sequence(self) -> EntrySequence {
+        self.0
+    }
 }
 
-/// The unit of authorization. Authorizing a batch authorizes every member in it
-/// atomically; there is no partially-authorized batch.
+/// The unit of authorization under the push model: authorizing a batch
+/// authorizes every member in it atomically.
+///
+/// No longer part of any member's identity — a member is named by its mailbox
+/// position — and retained only because the batch inscription still reports which
+/// members the relay committed to at one instant. It is removed together with the
+/// authorization step it names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(in crate::relay) struct BatchId(u64);
 
-/// One authorization of one member, distinct from every other.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(in crate::relay) struct AttemptId(u64);
-
 static NEXT_BATCH_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_ATTEMPT_ID: AtomicU64 = AtomicU64::new(1);
 
 impl BatchId {
     /// Mints the next batch id. Process-local and monotonic; identities never
@@ -185,16 +195,6 @@ impl BatchId {
     /// ledger is in-memory.
     pub(in crate::relay) fn mint() -> Self {
         Self(NEXT_BATCH_ID.fetch_add(1, Ordering::Relaxed))
-    }
-
-    pub(in crate::relay) fn value(self) -> u64 {
-        self.0
-    }
-}
-
-impl AttemptId {
-    pub(in crate::relay) fn mint() -> Self {
-        Self(NEXT_ATTEMPT_ID.fetch_add(1, Ordering::Relaxed))
     }
 
     pub(in crate::relay) fn value(self) -> u64 {

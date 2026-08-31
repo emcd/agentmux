@@ -68,7 +68,8 @@ implementation state.
 
 ## D3 — `Authorized` exists because the relay must give up the right to reclaim
 
-**Status:** decided, implemented
+**Status:** decided, implemented, superseded by D11 — the line this state drew
+survives; the state itself does not.
 
 `Authorized` is frequently misread as a handshake with the transport. It is not:
 the transport is never told about it and never acknowledges it. It is the relay
@@ -93,7 +94,8 @@ Both are reporting from position rather than from evidence.
 
 ## D4 — The guard cannot be deferred past `Authorized`
 
-**Status:** decided, implemented
+**Status:** decided, implemented, superseded by D11 — the governing invariant
+holds unchanged; only the transition it is anchored to has moved.
 
 An earlier draft deferred the authorization guard on the grounds that
 exactly-once resolution is already not guaranteed today. That was wrong on a
@@ -352,3 +354,48 @@ scope:
 The second half is not what was asked for. It is what "no bound at all" costs.
 D2 remains the right call; the cost should be named rather than absorbed
 silently.
+
+---
+
+## D11 — `Authorized` collapses into declaration; the line it drew survives
+
+**Status:** decided, implemented
+
+D3 justified `Authorized` as the relay's promise to itself — the line between
+"safe to report non-delivery from policy" and "must report from evidence." The
+pull model keeps that line and deletes the state.
+
+Under the push model the relay chose when to hand a member over, so it needed a
+state recording that it had. Under the pull model a transport's executor decides
+what to write and says so first, by declaring the exact contiguous range it is
+about to submit. Declaration lands at the same point in the sequence and carries
+the same meaning: before it the relay can prove nothing was written; after it,
+partial effect cannot be excluded. What changed is who initiates, not where the
+line falls.
+
+So an entry now has two states, `Queued` and `Terminal`, and a declared entry is
+still `Queued`. Declaration is metadata the entry carries — which packing unit it
+is bound to — rather than a lifecycle position. Modelling it as a third state
+would recreate the problem D4 names from the other direction: a state is
+something an entry must be able to *leave*, and the only event that resolves an
+entry is acknowledgment. A third state would be one no event owns.
+
+D4's governing invariant survives unchanged, reworded to its new anchor: *no
+declaration may bind a packing unit unless an owner capable of terminalizing and
+releasing it is created in the same atomic operation.* Declaration is still the
+guard's creation point; it moved earlier and changed initiator, not owner.
+
+**Given up:** the composite `(batch, attempt)` member identity. A member is now
+named by its own mailbox position. The attempt component existed to support the
+claim of *at most one relay-authorized injection attempt*, which needed to
+distinguish one authorization of a member from another. Acknowledgment is
+idempotent per entry, so a second acknowledgment of an entry already terminal is
+a no-op rather than a second attempt — an identifier separating them would only
+ever be read to conclude that it did not matter.
+
+**Cost, named rather than absorbed:** the relay's own bookkeeping no longer
+records a delivery *attempt* distinctly from the entry it was for. Nothing today
+reads that distinction, but a future transport that reports its own partition
+back would be describing attempts the relay cannot name. That is a reason to
+revisit the identity then, with the requirement in hand, rather than to keep an
+unused component now.

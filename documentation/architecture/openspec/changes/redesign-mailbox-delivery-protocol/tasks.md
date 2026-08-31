@@ -18,15 +18,15 @@
 
 ## 2. Relay-side mailbox (`src/relay/delivery/`)
 
-- [ ] 2.1 Collapse `QueueEntryState` (`guard.rs`) from `Pending`/
+- [x] 2.1 Collapse `QueueEntryState` (`guard.rs`) from `Pending`/
       `Authorized`/`Terminal` to `queued`/`terminal`. Remove `GuardKey`'s
       `(batch, attempt)` composite identity; key the guard by mailbox entry
       sequence number, since acknowledgment is idempotent per entry.
-- [ ] 2.2 Add `peek(target, entry_max, canonical_bytes_max)` to
+- [x] 2.2 Add `peek(target, entry_max, canonical_bytes_max)` to
       `AdmissionLedger`, read-only, returning the head contiguous mail run or
       a singleton raw entry, gated on the calling connection's consumer
       generation matching `active_generation_id`.
-- [ ] 2.3 Add `declare(target, generation_id, through_seq)` to
+- [x] 2.3 Add `declare(target, generation_id, through_seq)` to
       `AdmissionLedger`. Under the ledger's existing single lock: check
       `generation_id` against `active_generation_id` first (reject on
       mismatch without effect); validate the named range starts exactly at
@@ -39,7 +39,7 @@
       on success, mint a `PackingUnitId`, create the guard, and bind it to
       the named entries. This is the guard's creation point (relocated
       from `authorize_batch`), not `ack`.
-- [ ] 2.4 Add `ack(target, generation_id, packing_unit_id, evidence)` to
+- [x] 2.4 Add `ack(target, generation_id, packing_unit_id, evidence)` to
       `AdmissionLedger`. Under the same lock: check `generation_id` first
       (reject on mismatch); look up `packing_unit_id`'s bound range from the
       `declare` record (reject if never declared or already terminalized

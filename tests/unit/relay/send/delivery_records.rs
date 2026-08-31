@@ -5,22 +5,20 @@ use agentmux::relay::RelayRequest;
 
 use super::*;
 
-/// Authorization mints a batch and an attempt id for every member and binds them
-/// to the entry, so the terminal record can name the authorization a delivery
-/// resolved under.
+/// A member's guard is keyed by its position in its target's mailbox, so the
+/// terminal record can name the entry a delivery resolved under.
 ///
-/// Without those identities on the wire the state model would be internal
+/// Without that identity on the wire the state model would be internal
 /// bookkeeping no operator could correlate — a stuck target's outcome could not
-/// be traced back to the authorization that produced it.
+/// be traced back to the entry that produced it.
 ///
-/// The target is the UI session rather than a tmux one, and that is load-bearing
-/// now that authorization is gated. A tmux target with no server behind it is
-/// unreachable, so its member resolves during `Pending` and never mints a batch
-/// at all — a correct outcome that simply is not the one under test. UI reports
-/// healthy and ready unconditionally, so it reaches the authorized state this
-/// test is about.
+/// The target is the UI session rather than a tmux one, and that is load-bearing.
+/// A tmux target with no server behind it is unreachable, so its member resolves
+/// before anything takes responsibility for it and never acquires a guard at all
+/// — a correct outcome that simply is not the one under test. UI reports healthy
+/// and ready unconditionally, so it reaches the guarded state this test is about.
 #[test]
-fn a_terminal_outcome_names_the_authorization_it_resolved_under() {
+fn a_terminal_outcome_names_the_entry_it_resolved_under() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
@@ -57,17 +55,10 @@ fn a_terminal_outcome_names_the_authorization_it_resolved_under() {
         .expect("completed inscription carries a details object");
     assert!(
         payload
-            .get("batch_id")
+            .get("entry_sequence")
             .and_then(serde_json::Value::as_u64)
             .is_some(),
-        "an authorized member's terminal record carries its batch id: {completed}"
-    );
-    assert!(
-        payload
-            .get("attempt_id")
-            .and_then(serde_json::Value::as_u64)
-            .is_some(),
-        "an authorized member's terminal record carries its attempt id: {completed}"
+        "a guarded member's terminal record carries its mailbox position: {completed}"
     );
 }
 

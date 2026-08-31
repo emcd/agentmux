@@ -6,6 +6,17 @@ relay's responsibilities end and a transport's begin.
 Companion document: [`delivery-decisions.md`](delivery-decisions.md) records
 *why* the shape is this way. This file records *what* the shape is.
 
+**Transitional: the diagrams below describe the push model, which is the path
+still in production.** The relay-side mailbox of the pull model that replaces it
+— `peek`, `declare`, `ack`, and the two-state entry lifecycle — is implemented
+and described in [`README.md`](README.md), but no transport drives it yet, so
+every delivery still travels the path drawn here. Read the entry states below
+(`Pending`, `Authorized`, `Terminal`) as the states of that path. They are
+collapsed to `Queued` and `Terminal`, and authorization is replaced by
+declaration, when the transports' delivery-loop executors land; these diagrams
+are rewritten in the same change rather than tracking a model that is half
+migrated. See D11 in `delivery-decisions.md` for what survives the collapse.
+
 Diagrams are ASCII rather than Mermaid so they read identically in a terminal,
 an editor, and a web view. The repository uses no Mermaid elsewhere.
 
