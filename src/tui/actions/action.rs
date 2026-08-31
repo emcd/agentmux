@@ -1,0 +1,170 @@
+//! The named operator behaviors the workbench can perform.
+
+use crate::runtime::error::RuntimeError;
+
+use super::super::state::AppState;
+
+/// Every operator-invocable workbench behavior, named independently of the key
+/// chord that reaches it.
+///
+/// Resolving a chord to an `Action` is separable from applying one: applying
+/// requires no `KeyEvent`, so a host that owns its own event loop and its own
+/// bindings can drive the workbench by action alone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Action {
+    /// Asks the event loop to shut down.
+    Quit,
+    /// Opens the help overlay, or closes it when it is already open. Opening
+    /// dismisses the picker and the events overlay.
+    ToggleHelpOverlay,
+    /// Opens the events overlay, or closes it when it is already open. Opening
+    /// dismisses the picker and the help overlay.
+    ToggleEventsOverlay,
+    /// Switches the active screen mode, dismissing whichever surface is open so
+    /// the mode beneath it is the one that changes.
+    ToggleMode,
+    /// Opens the unified picker on its session column.
+    OpenPicker,
+    /// Opens the unified picker on its bundle column.
+    OpenBundlePicker,
+    ClosePicker,
+    /// Re-enumerates recipients and cross-bundle completion candidates.
+    RefreshRecipients,
+    CycleNextFocus,
+    CyclePreviousFocus,
+    AcceptToCompletion,
+    SendMessage,
+    InsertMessageNewline,
+    AutocompleteRecipient,
+    ClearToField,
+    MoveNextToCompletion,
+    MovePreviousToCompletion,
+    MoveMessageCursorUp,
+    MoveMessageCursorDown,
+    MoveMessageCursorLeft,
+    MoveMessageCursorRight,
+    MoveMessageCursorHome,
+    MoveMessageCursorEnd,
+    MoveToFieldCursorLeft,
+    MoveToFieldCursorRight,
+    MoveToFieldCursorHome,
+    MoveToFieldCursorEnd,
+    DeleteComposeCharacter,
+    InsertComposeCharacter(char),
+    SnapChatHistoryToLatest,
+    ScrollChatHistoryPageUp,
+    ScrollChatHistoryPageDown,
+    DispatchRaww,
+    InsertRawwNewline,
+    DeleteRawwCharacter,
+    InsertRawwCharacter(char),
+    MoveRawwCursorLeft,
+    MoveRawwCursorRight,
+    MoveRawwCursorHome,
+    MoveRawwCursorEnd,
+    /// Moves up within the interaction pane: through the write draft when one
+    /// is present, through the look snapshot when it is not.
+    NavigateInteractionUp,
+    /// Moves down within the interaction pane, mirroring
+    /// [`Action::NavigateInteractionUp`].
+    NavigateInteractionDown,
+    ScrollInteractionSnapshotPageUp,
+    ScrollInteractionSnapshotPageDown,
+    MoveNextChoiceRequest,
+    MovePreviousChoiceRequest,
+    MoveNextChoiceOption,
+    MovePreviousChoiceOption,
+    ResolveChoiceSelected,
+    ResolveChoiceCancelled,
+    TogglePickerFocus,
+    MoveNextPickerSelection,
+    MovePreviousPickerSelection,
+    CommitPickerBundle,
+    /// Commits the selected session: inserted into the `To` field in
+    /// Communication mode, opened as the interaction target in Interaction mode.
+    CommitPickerSession,
+    DeletePickerFilterCharacter,
+    AppendPickerFilterCharacter(char),
+}
+
+impl Action {
+    /// Applies the behavior this action names.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `RuntimeError` the underlying state operation produced, for
+    /// the actions that reach the relay.
+    pub(crate) fn apply(self, state: &mut AppState) -> Result<(), RuntimeError> {
+        match self {
+            Self::Quit => state.request_quit(),
+            Self::ToggleHelpOverlay => state.toggle_help_overlay(),
+            Self::ToggleEventsOverlay => state.toggle_events_overlay(),
+            Self::ToggleMode => {
+                state.dismiss_surfaces();
+                return state.toggle_mode();
+            }
+            Self::OpenPicker => state.open_picker(),
+            Self::OpenBundlePicker => state.open_bundle_picker(),
+            Self::ClosePicker => state.close_picker(),
+            Self::RefreshRecipients => return state.refresh_recipients(),
+            Self::CycleNextFocus => state.cycle_focus_forward(),
+            Self::CyclePreviousFocus => state.cycle_focus_backward(),
+            Self::AcceptToCompletion => {
+                state.accept_active_to_completion();
+            }
+            Self::SendMessage => return state.send_message(),
+            Self::InsertMessageNewline => state.insert_newline_if_message(),
+            Self::AutocompleteRecipient => state.autocomplete_active_recipient_field(),
+            Self::ClearToField => state.clear_to_field(),
+            Self::MoveNextToCompletion => {
+                state.move_to_completion_selection(1);
+            }
+            Self::MovePreviousToCompletion => {
+                state.move_to_completion_selection(-1);
+            }
+            Self::MoveMessageCursorUp => state.move_message_cursor_up(),
+            Self::MoveMessageCursorDown => state.move_message_cursor_down(),
+            Self::MoveMessageCursorLeft => state.move_message_cursor_left(),
+            Self::MoveMessageCursorRight => state.move_message_cursor_right(),
+            Self::MoveMessageCursorHome => state.move_message_cursor_home(),
+            Self::MoveMessageCursorEnd => state.move_message_cursor_end(),
+            Self::MoveToFieldCursorLeft => state.move_to_field_cursor_left(),
+            Self::MoveToFieldCursorRight => state.move_to_field_cursor_right(),
+            Self::MoveToFieldCursorHome => state.move_to_field_cursor_home(),
+            Self::MoveToFieldCursorEnd => state.move_to_field_cursor_end(),
+            Self::DeleteComposeCharacter => state.backspace(),
+            Self::InsertComposeCharacter(character) => state.insert_character(character),
+            Self::SnapChatHistoryToLatest => state.snap_chat_history_to_latest(),
+            Self::ScrollChatHistoryPageUp => state.scroll_chat_history_page_up(),
+            Self::ScrollChatHistoryPageDown => state.scroll_chat_history_page_down(),
+            Self::DispatchRaww => return state.dispatch_raww_from_interaction(),
+            Self::InsertRawwNewline => state.insert_newline_in_raww(),
+            Self::DeleteRawwCharacter => state.backspace_raww(),
+            Self::InsertRawwCharacter(character) => state.insert_character_in_raww(character),
+            Self::MoveRawwCursorLeft => state.move_raww_cursor_left(),
+            Self::MoveRawwCursorRight => state.move_raww_cursor_right(),
+            Self::MoveRawwCursorHome => state.move_raww_cursor_home(),
+            Self::MoveRawwCursorEnd => state.move_raww_cursor_end(),
+            Self::NavigateInteractionUp => state.navigate_interaction_up(),
+            Self::NavigateInteractionDown => state.navigate_interaction_down(),
+            Self::ScrollInteractionSnapshotPageUp => state.scroll_interaction_snapshot_page_up(),
+            Self::ScrollInteractionSnapshotPageDown => {
+                state.scroll_interaction_snapshot_page_down()
+            }
+            Self::MoveNextChoiceRequest => state.move_look_choice_request_selection(1),
+            Self::MovePreviousChoiceRequest => state.move_look_choice_request_selection(-1),
+            Self::MoveNextChoiceOption => state.move_look_choice_option_selection(1),
+            Self::MovePreviousChoiceOption => state.move_look_choice_option_selection(-1),
+            Self::ResolveChoiceSelected => return state.resolve_selected_look_choice_selected(),
+            Self::ResolveChoiceCancelled => return state.resolve_selected_look_choice_cancelled(),
+            Self::TogglePickerFocus => state.toggle_picker_focus(),
+            Self::MoveNextPickerSelection => state.move_picker_selection(1),
+            Self::MovePreviousPickerSelection => state.move_picker_selection(-1),
+            Self::CommitPickerBundle => return state.commit_selected_picker_bundle(),
+            Self::CommitPickerSession => return state.commit_selected_picker_session(),
+            Self::DeletePickerFilterCharacter => state.picker_filter_backspace(),
+            Self::AppendPickerFilterCharacter(character) => state.picker_filter_push(character),
+        }
+        Ok(())
+    }
+}

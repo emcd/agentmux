@@ -1,4 +1,6 @@
-use super::{AppState, PickerColumn, append_recipient_token};
+use crate::runtime::error::RuntimeError;
+
+use super::{AppState, PickerColumn, ScreenMode, append_recipient_token};
 
 impl AppState {
     /// Opens the unified picker focused on the session column. Used by the
@@ -27,6 +29,15 @@ impl AppState {
     pub fn close_picker(&mut self) {
         self.picker_open = false;
         self.picker_filter.clear();
+    }
+
+    /// Closes the picker and both overlays. A surface-switching behavior applies
+    /// it first so the change lands on the mode beneath, whichever surface the
+    /// operator invoked it from.
+    pub fn dismiss_surfaces(&mut self) {
+        self.close_picker();
+        self.events_overlay_open = false;
+        self.help_overlay_open = false;
     }
 
     /// Moves picker focus to the session column and clears the column-scoped
@@ -160,6 +171,24 @@ impl AppState {
         self.last_selected_recipient = Some(session_name.clone());
         self.close_picker();
         self.push_status(None, format!("Inserted recipient {session_name}."));
+    }
+
+    /// Commits the selected session-column row, which the active screen mode
+    /// interprets: Communication inserts the recipient into `To`, Interaction
+    /// opens the Interaction screen on it.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `RuntimeError` from the relay `Look` that Interaction-mode
+    /// entry performs.
+    pub fn commit_selected_picker_session(&mut self) -> Result<(), RuntimeError> {
+        match self.mode {
+            ScreenMode::Communication => {
+                self.insert_picker_selection();
+                Ok(())
+            }
+            ScreenMode::Interaction => self.enter_interaction_from_picker(),
+        }
     }
 
     pub fn apply_recipient_list_update(&mut self) {

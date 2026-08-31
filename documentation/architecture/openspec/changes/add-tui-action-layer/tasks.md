@@ -1,21 +1,21 @@
 ## 1. Action vocabulary and context resolution
 
-- [ ] 1.1 Add `src/tui/actions/` with an import-only `mod.rs` hub, plus
+- [x] 1.1 Add `src/tui/actions/` with an import-only `mod.rs` hub, plus
       `action.rs`, `bindings.rs`, and `context.rs`.
-- [ ] 1.2 Define the `Action` enum covering every behavior currently invoked
+- [x] 1.2 Define the `Action` enum covering every behavior currently invoked
       from the six handlers in `src/tui/input.rs`. Derive the member list from
       the existing arms so no behavior is dropped in translation.
-- [ ] 1.3 Define `BindingContext` and `binding_context(&AppState)`, encoding
+- [x] 1.3 Define `BindingContext` and `binding_context(&AppState)`, encoding
       overlay-over-mode precedence and focused-field selection within a mode.
-- [ ] 1.4 Test that `binding_context` returns the overlay context when an
+- [x] 1.4 Test that `binding_context` returns the overlay context when an
       overlay is open over each screen mode, and the field-scoped context
       otherwise.
-- [ ] 1.5 Test that applying an `Action` to state produces the behavior with no
+- [x] 1.5 Test that applying an `Action` to state produces the behavior with no
       `KeyEvent` constructed, establishing the resolution/behavior split.
-- [ ] 1.6 Export `Action` from `agentmux::tui` and add action application to the
+- [x] 1.6 Export `Action` from `agentmux::tui` and add action application to the
       public `Workbench` facade alongside `dispatch_event`. Keep
       `BindingContext` internal.
-- [ ] 1.7 Test the public boundary from `tests/unit/tui.rs` — a caller naming
+- [x] 1.7 Test the public boundary from `tests/unit/tui.rs` — a caller naming
       only public types applies an action through `Workbench` and observes the
       behavior, with no `KeyEvent` constructed.
 - [ ] 1.8 Test that applying an action directly and dispatching the chord bound
@@ -25,7 +25,8 @@
 
 - [ ] 2.1 Define the table as (context, chord) rows carrying the action and the
       display section. Carry no capability field: nothing varies by probe
-      outcome, so a per-row flag would be unused machinery.
+      outcome, so a per-row flag would be unused machinery. The global context
+      is one of the keys, holding the rows that survive any open surface.
 - [ ] 2.2 Populate every row from the current handlers, preserving each
       context's existing bare-`Enter` action unchanged.
 - [ ] 2.3 Declare `Enter`, `Shift+Enter`, and `Ctrl+Enter` explicitly for every
@@ -43,17 +44,27 @@
 - [ ] 2.7 Test that `Shift+Enter` in the compose `Message` field sends the
       message. This is the regression detection introduced and this change
       repairs, so assert it rather than assuming it follows from 2.5.
+- [ ] 2.8 Declare `Ctrl+C` and `F1` as global rows — the two chords `handle_key`
+      tests ahead of every overlay today — and test that each resolves to its
+      action with the picker, the events overlay, and the help overlay open.
+      Without this the chords either lose their reach or survive as an
+      unmodelled early return, and both defeat the single source of truth.
 
 ## 3. Dispatch rewiring
 
 - [ ] 3.1 Replace the six handlers' key-condition match arms with lookup
-      against the table followed by action application. Keep event-shape
-      handling (paste, mouse, non-`Press` filtering) in `input.rs`.
+      against the table followed by action application, walking
+      `binding_lookup_order` so the global rows are consulted before the
+      contextual ones. Keep event-shape handling (paste, mouse, non-`Press`
+      filtering) in `input.rs`.
 - [ ] 3.2 Verify the full existing TUI test suite passes unchanged except for
       the deliberate modified-`Enter` cases, and record which tests changed and
       why.
 - [ ] 3.3 Teeth-check the omission guarantee: remove one context's
       `Shift+Enter` row and confirm task 2.4's test fails.
+- [ ] 3.4 Confirm `handle_key` retains no chord-specific early return ahead of
+      the table, so the global rows are the only thing granting a chord reach
+      across surfaces.
 
 ## 4. Generated help and hints
 

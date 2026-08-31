@@ -254,6 +254,11 @@ impl AppState {
         }
     }
 
+    /// Asks the event loop to shut down after the current iteration.
+    pub fn request_quit(&mut self) {
+        self.should_quit = true;
+    }
+
     pub fn push_status(&mut self, code: Option<String>, message: impl Into<String>) {
         self.status_history.push_front(StatusEntry {
             code,

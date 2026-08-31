@@ -77,6 +77,17 @@ single value, rather than as an ordering of handler early-returns.
 Overlay contexts SHALL take precedence over screen-mode contexts. Within a
 screen mode, the focused field SHALL select the context.
 
+Bindings that hold whichever surface is active SHALL be declared as global rows
+in the same table and resolved before the contextual row. Dispatch SHALL NOT
+test a chord ahead of the table.
+
+#### Scenario: A global chord is not shadowed by an open surface
+
+- **WHEN** a chord declared in the global rows is pressed while the picker or an
+  overlay is open
+- **THEN** it invokes the action its global row names
+- **AND** no contextual row is consulted for that chord
+
 #### Scenario: An overlay outranks the mode beneath it
 
 - **WHEN** an overlay is open over a screen mode
