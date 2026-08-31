@@ -8,11 +8,14 @@
 
 ## Decision
 
-Cross-target scheduling fairness is out of scope. Each target is served by its
-own worker and the relay does not arbitrate between targets. No rotation,
-credit, or per-visit budget is specified, and none may be introduced without
-first naming the resource being allocated and the fairness guarantee being
-offered.
+The cross-target scheduler the proposal specified was withdrawn rather than
+implemented, and no rotation, credit, or per-visit budget was introduced in its
+place.
+
+The standing rule this left behind — what a later proposal has to establish
+before adding one — is normative, and lives in the `delivery-quiescence`
+capability's `Async Queue Lifecycle and Ordering` requirement rather than in this
+record.
 
 ## What we rejected, and why
 
@@ -30,22 +33,23 @@ to allocate the budget. Neither justified the other.
 
 ## Targets do contend — that is not an argument for restoring it
 
-Real contention exists, and it is worth being precise that none of it is what
-the rejected design measured:
+An early defence of this withdrawal claimed that targets do not contend. That
+claim was false, and correcting it did not change the conclusion.
 
-- Tmux targets in one bundle share a single tmux server and socket.
-- ACP bootstrap enters a shared blocking pool.
-- A transport whose write seam blocks can occupy a delivery-runtime worker
-  thread.
+The counterexamples raised at the time were the shared per-bundle tmux server
+and socket, the shared blocking pool that ACP bootstrap enters, and a transport
+whose write seam blocks occupying a delivery-runtime worker thread. The third
+was treated not as load to be scheduled around but as a defect to repair at its
+source, on the grounds that a blocking write seam contradicted the transport
+contract as it then stood; it was repaired subsequently. The first two were
+still live when this was recorded.
 
-A global byte quantum represents none of these — not runtime occupancy, not
-channel slots, not tmux-server capacity. A resource-grounded policy would be
-denominated per shared resource and would state a throughput or fairness
-objective. No such objective is required today.
-
-The third item is a contract violation to be repaired at its source, not a
-load to be scheduled around: the transport contract requires non-blocking
-handover.
+The conclusion survived on different ground. A global byte quantum measured none
+of those things — not runtime occupancy, not channel slots, not tmux-server
+capacity. The withdrawn proposal named no resource-grounded objective for the
+quantum to serve, so there was no stated purpose the quantum was failing to
+meet, and nothing to weigh the contention against. That was so whether or not
+targets contend.
 
 ## Why this record exists
 
