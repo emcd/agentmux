@@ -6,7 +6,7 @@ use crate::relay::{RelayStreamEvent, SendResult};
 use crate::runtime::error::RuntimeError;
 
 use super::{
-    input,
+    Action, input,
     state::{
         AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField, PendingChoiceEntry,
         PickerColumn, Recipient, ScreenMode, TuiLaunchOptions,
@@ -57,6 +57,17 @@ impl Workbench {
 
     pub fn dispatch_event(&mut self, event: Event) -> Result<(), RuntimeError> {
         input::handle_event(&mut self.state, event)
+    }
+
+    /// Applies a named action directly, without resolving a key chord. This is
+    /// the seam for a host that owns its own event loop and bindings; the same
+    /// action reached through `dispatch_event` produces the same behavior.
+    ///
+    /// # Errors
+    ///
+    /// Returns the `RuntimeError` the underlying operation produced.
+    pub fn apply_action(&mut self, action: Action) -> Result<(), RuntimeError> {
+        action.apply(&mut self.state)
     }
 
     pub fn set_focus(&mut self, field: WorkbenchField) {
@@ -184,6 +195,19 @@ impl Workbench {
 
     pub fn picker_filter(&self) -> &str {
         self.state.picker_filter.as_str()
+    }
+
+    pub fn events_overlay_open(&self) -> bool {
+        self.state.events_overlay_open
+    }
+
+    pub fn help_overlay_open(&self) -> bool {
+        self.state.help_overlay_open
+    }
+
+    /// Scroll offset into the look snapshot, in lines from the bottom.
+    pub fn interaction_snapshot_scroll(&self) -> usize {
+        self.state.look_overlay_scroll
     }
 
     pub fn bundle_picker_selected_index(&self) -> Option<usize> {

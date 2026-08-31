@@ -35,15 +35,22 @@ the relevant types from the parent module via `super::{...}`.
     `open_picker_focused`, the column-focus toggle, the
     column-scoped filter resolution (`column_filter`),
     visible-(filtered) index resolution, the session-insert and
-    bundle-commit selection actions, and the
-    `toggle_events_overlay` / `toggle_help_overlay` overlay-open
-    helpers (which enforce the mutual-exclusion invariant).
+    bundle-commit selection actions (`commit_selected_picker_session`
+    resolves the mode-dependent meaning of committing a session row),
+    the `toggle_events_overlay` / `toggle_help_overlay` overlay-open
+    helpers (which enforce the mutual-exclusion invariant), and
+    `dismiss_surfaces`, which clears the picker and both overlays so a
+    surface-switching behavior lands on the mode beneath.
 - `interaction.rs`
   - `impl AppState` for Interaction-mode entry
     (`enter_interaction_mode`, `enter_interaction_from_picker`),
     target-set helpers, raww draft editing plus cursor,
     snapshot scrolling (`scroll_interaction_snapshot_*`),
-    interaction-region visibility, the snapshot loader
+    the `navigate_interaction_*` helpers that move through the write
+    draft when one is present and the snapshot when it is not,
+    interaction-region visibility (`interaction_choice_active` is the
+    predicate; `interaction_raww_region_visible` is its negation), the
+    snapshot loader
     (`overlay_snapshot_from_payload`), and the
     `render_transport_label` helper consumed by the Interaction
     target header.

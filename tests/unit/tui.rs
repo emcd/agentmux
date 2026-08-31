@@ -1,12 +1,17 @@
+use std::path::PathBuf;
+
 use agentmux::relay::{
     ListedBundle, ListedBundleStartupHealth, ListedBundleState, ListedSession,
     ListedSessionTransport, StartupFailureRecord,
 };
+use agentmux::runtime::error::RuntimeError;
 use agentmux::tui::{
-    BundleStatusDisplay, BundleStatusSeverity, KeyboardEnhancement, RecipientReadiness,
-    autocomplete_recipient_input, bundle_status_severity, format_bundle_status_line,
-    format_keyboard_enhancement_lines, format_recipient_picker_label, format_startup_failure_lines,
-    merge_tui_targets, parse_tui_target_identifier, sender_bound_bundle,
+    Action, BundleStatusDisplay, BundleStatusSeverity, KeyboardEnhancement, RecipientReadiness,
+    TuiLaunchOptions, autocomplete_recipient_input, bundle_status_severity,
+    format_bundle_status_line, format_keyboard_enhancement_lines, format_recipient_picker_label,
+    format_startup_failure_lines, merge_tui_targets, parse_tui_target_identifier,
+    sender_bound_bundle,
+    workbench::{Workbench, WorkbenchField, WorkbenchMode, WorkbenchPickerColumn},
 };
 
 #[test]
@@ -451,6 +456,159 @@ fn probe_failure_claims_nothing_about_the_terminal() {
         !lines.iter().any(|line| line.contains("Terminal cannot")),
         "probe-failure report must not assert a terminal limitation: {lines:?}"
     );
+}
+
+/// Builds a workbench from public launch options alone. The relay socket is
+/// never contacted: every action these tests apply is local to workbench state.
+fn action_workbench() -> Workbench {
+    Workbench::new(TuiLaunchOptions {
+        namespace: "agentmux".to_string(),
+        sender_session: "tui".to_string(),
+        relay_socket: PathBuf::from("/tmp/agentmux-action-test-relay.sock"),
+        look_lines: None,
+        available_bundles: vec!["agentmux".to_string()],
+    })
+}
+
+fn apply(workbench: &mut Workbench, action: Action) {
+    workbench
+        .apply_action(action)
+        .unwrap_or_else(|error| panic!("apply {action:?}: {error}"));
+}
+
+#[test]
+fn applying_an_action_produces_its_behavior_without_a_key_event() {
+    // Resolution and behavior are separable: naming the action is enough to
+    // reach the behavior, with nothing standing in for a terminal event.
+    let mut workbench = action_workbench();
+    assert_eq!(workbench.focus(), WorkbenchField::To);
+    apply(&mut workbench, Action::CycleNextFocus);
+    assert_eq!(workbench.focus(), WorkbenchField::Message);
+    apply(&mut workbench, Action::InsertComposeCharacter('h'));
+    apply(&mut workbench, Action::InsertComposeCharacter('i'));
+    assert_eq!(workbench.message_field(), "hi");
+    apply(&mut workbench, Action::DeleteComposeCharacter);
+    assert_eq!(workbench.message_field(), "h");
+    apply(&mut workbench, Action::OpenPicker);
+    assert!(workbench.picker_open());
+    assert_eq!(workbench.picker_column(), WorkbenchPickerColumn::Sessions);
+    apply(&mut workbench, Action::TogglePickerFocus);
+    assert_eq!(workbench.picker_column(), WorkbenchPickerColumn::Bundles);
+    apply(&mut workbench, Action::AppendPickerFilterCharacter('a'));
+    assert_eq!(workbench.picker_filter(), "a");
+    apply(&mut workbench, Action::DeletePickerFilterCharacter);
+    assert_eq!(workbench.picker_filter(), "");
+    apply(&mut workbench, Action::ClosePicker);
+    assert!(!workbench.picker_open());
+    assert!(!workbench.should_quit());
+    apply(&mut workbench, Action::Quit);
+    assert!(workbench.should_quit());
+}
+
+#[test]
+fn a_public_caller_drives_the_workbench_by_action_alone() {
+    // Everything named here is public: `Workbench`, `Action`, and the launch
+    // options. A host outside the crate can compose and navigate a message
+    // without constructing a `KeyEvent` and without reaching internal state.
+    let mut workbench = action_workbench();
+    apply(&mut workbench, Action::CycleNextFocus);
+    for character in "line".chars() {
+        apply(&mut workbench, Action::InsertComposeCharacter(character));
+    }
+    apply(&mut workbench, Action::InsertMessageNewline);
+    for character in "two".chars() {
+        apply(&mut workbench, Action::InsertComposeCharacter(character));
+    }
+    assert_eq!(workbench.message_field(), "line\ntwo");
+    assert_eq!(workbench.message_cursor_line_and_column(), (1, 3));
+    apply(&mut workbench, Action::MoveMessageCursorHome);
+    assert_eq!(workbench.message_cursor_line_and_column(), (1, 0));
+    apply(&mut workbench, Action::MoveMessageCursorUp);
+    assert_eq!(workbench.message_cursor_line_and_column(), (0, 0));
+    // A surface-switching action reaches the mode beneath from the same seam,
+    // and Interaction with no target opens the picker to choose one.
+    assert_eq!(workbench.mode(), WorkbenchMode::Communication);
+    apply(&mut workbench, Action::ToggleMode);
+    assert_eq!(workbench.mode(), WorkbenchMode::Interaction);
+    assert!(workbench.picker_open());
+}
+
+#[test]
+fn toggling_the_mode_dismisses_whichever_surface_is_open() {
+    // The mode beneath is what changes, so a surface open over it is cleared
+    // first. Applying the action directly is the only path that exercises this;
+    // the key handlers reach the same end state through per-surface sequences.
+    let mut workbench = action_workbench();
+    apply(&mut workbench, Action::ToggleEventsOverlay);
+    assert!(workbench.events_overlay_open());
+    apply(&mut workbench, Action::ToggleMode);
+    assert!(!workbench.events_overlay_open());
+    assert_eq!(workbench.mode(), WorkbenchMode::Interaction);
+    // Interaction without a target auto-opens the picker to choose one, which
+    // makes the picker the surface the next toggle has to dismiss.
+    assert!(workbench.picker_open());
+    apply(&mut workbench, Action::ToggleMode);
+    assert!(!workbench.picker_open());
+    assert_eq!(workbench.mode(), WorkbenchMode::Communication);
+    apply(&mut workbench, Action::ToggleHelpOverlay);
+    assert!(workbench.help_overlay_open());
+    apply(&mut workbench, Action::ToggleMode);
+    assert!(!workbench.help_overlay_open());
+    assert_eq!(workbench.mode(), WorkbenchMode::Interaction);
+}
+
+#[test]
+fn committing_a_picker_session_resolves_by_screen_mode() {
+    let mut workbench = action_workbench();
+    workbench.set_recipients(&["master"]);
+    apply(&mut workbench, Action::OpenPicker);
+    apply(&mut workbench, Action::CommitPickerSession);
+    assert_eq!(workbench.mode(), WorkbenchMode::Communication);
+    assert_eq!(workbench.to_field(), "master");
+    assert!(!workbench.picker_open());
+
+    // The same action in Interaction mode opens the target instead, which needs
+    // a relay `Look`. Reaching the relay at all is the assertion: a selection
+    // that never got that far would fail with `validation_unknown_target`.
+    let mut workbench = action_workbench();
+    workbench.set_recipients(&["master"]);
+    apply(&mut workbench, Action::ToggleMode);
+    assert_eq!(workbench.mode(), WorkbenchMode::Interaction);
+    assert!(workbench.picker_open());
+    match workbench.apply_action(Action::CommitPickerSession) {
+        Err(RuntimeError::Validation { code, .. }) => assert_eq!(code, "relay_unavailable"),
+        Err(RuntimeError::Io { source, .. }) => {
+            assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied)
+        }
+        other => panic!("unexpected result: {other:?}"),
+    }
+}
+
+#[test]
+fn navigating_the_interaction_pane_follows_the_write_draft() {
+    let mut workbench = action_workbench();
+    apply(&mut workbench, Action::ToggleMode);
+    apply(&mut workbench, Action::ClosePicker);
+    // With no draft there is no cursor to move, so the look snapshot takes the
+    // movement.
+    assert_eq!(workbench.interaction_snapshot_scroll(), 0);
+    apply(&mut workbench, Action::NavigateInteractionUp);
+    apply(&mut workbench, Action::NavigateInteractionUp);
+    assert_eq!(workbench.interaction_snapshot_scroll(), 2);
+    apply(&mut workbench, Action::NavigateInteractionDown);
+    assert_eq!(workbench.interaction_snapshot_scroll(), 1);
+    // A draft claims the movement, and the snapshot stops taking it.
+    apply(&mut workbench, Action::InsertRawwCharacter('a'));
+    apply(&mut workbench, Action::InsertRawwCharacter('b'));
+    apply(&mut workbench, Action::InsertRawwNewline);
+    apply(&mut workbench, Action::InsertRawwCharacter('c'));
+    apply(&mut workbench, Action::InsertRawwCharacter('d'));
+    assert_eq!(workbench.raww_draft(), "ab\ncd");
+    apply(&mut workbench, Action::NavigateInteractionUp);
+    assert_eq!(workbench.interaction_snapshot_scroll(), 1);
+    // The write cursor moved up a line, which the next insertion reveals.
+    apply(&mut workbench, Action::InsertRawwCharacter('X'));
+    assert_eq!(workbench.raww_draft(), "abX\ncd");
 }
 
 #[test]

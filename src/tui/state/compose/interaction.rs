@@ -259,6 +259,27 @@ impl AppState {
         self.move_raww_cursor_vertical(1);
     }
 
+    /// Moves up within the interaction pane. A write draft takes the movement;
+    /// with no draft there is no cursor to move, so the look snapshot scrolls
+    /// instead.
+    pub fn navigate_interaction_up(&mut self) {
+        if self.raww_draft.is_empty() {
+            self.scroll_interaction_snapshot_up();
+        } else {
+            self.move_raww_cursor_up();
+        }
+    }
+
+    /// Moves down within the interaction pane, mirroring
+    /// [`AppState::navigate_interaction_up`].
+    pub fn navigate_interaction_down(&mut self) {
+        if self.raww_draft.is_empty() {
+            self.scroll_interaction_snapshot_down();
+        } else {
+            self.move_raww_cursor_down();
+        }
+    }
+
     fn move_raww_cursor_vertical(&mut self, delta: isize) {
         let line_ranges = super::text_util::line_ranges(self.raww_draft.as_str());
         if line_ranges.is_empty() {
@@ -298,8 +319,15 @@ impl AppState {
         self.raww_cursor_preferred_column = None;
     }
 
+    /// Whether the choice-decisioning pane owns the interaction region: it does
+    /// when the target has pending choice requests and the write draft is
+    /// empty, since an in-progress draft keeps the write input in place.
+    pub(crate) fn interaction_choice_active(&self) -> bool {
+        self.raww_draft.is_empty() && !self.look_pending_choices().is_empty()
+    }
+
     pub(crate) fn interaction_raww_region_visible(&self) -> bool {
-        !self.raww_draft.is_empty() || self.look_pending_choices().is_empty()
+        !self.interaction_choice_active()
     }
 }
 

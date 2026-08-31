@@ -1,5 +1,6 @@
 //! Interactive terminal workbench for `agentmux` operator workflows.
 
+mod actions;
 mod input;
 mod keyboard;
 mod render;
@@ -20,6 +21,7 @@ use crate::runtime::{
 
 use keyboard::KeyboardEnhancementSession;
 
+pub use actions::Action;
 pub use keyboard::{KeyboardEnhancement, format_keyboard_enhancement_lines};
 pub use state::TuiLaunchOptions;
 pub use status::{

@@ -55,6 +55,14 @@ auto-opens it.
 - `state/relay.rs`
   - relay request/response plumbing, recipient refresh, and stream polling
     lifecycle.
+- `actions/`
+  - the named-action vocabulary and the binding context that decides
+    which surface owns a chord. See `actions/README.md` for the
+    resolution / behavior split. Split by concern:
+    - `mod.rs` — pure hub: submodule decls and the `Action` re-export
+    - `action.rs` — the public `Action` enum and `Action::apply`
+    - `bindings.rs` — the default chord-to-action table
+    - `context.rs` — `BindingContext` and `binding_context`
 - `input.rs`
   - mode-aware key handling and command intent updates.
 - `keyboard.rs`
@@ -91,7 +99,8 @@ auto-opens it.
 - `workbench.rs`
   - the public `Workbench` facade over the internal `AppState`: launch-option
     plumbing plus the event-driven integration boundary for tests. It exposes
-    `dispatch_event`, focus/field/mode accessors, the relay-event ingestion
+    `dispatch_event`, `apply_action` (the chord-free seam a host with its own
+    bindings uses), focus/field/mode accessors, the relay-event ingestion
     seams (`record_stream_events`, `record_chat_events`), and read-only
     projections (e.g. `WorkbenchPendingChoice`, `pending_choices`). Callers
     drive it with contract-faithful inputs; the projections are a test/inspection
