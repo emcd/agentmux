@@ -17,9 +17,10 @@ The same person may wear more than one role only when the project explicitly all
 3. Reviewer approves or requests changes.
 4. If changes are requested: author addresses them with fixup commits or first-class follow-up commits (see below), then sends an **updated** review packet. Return to step 3.
 5. When the reviewer **approves**: author autosquashes targeted fixups into their targets.
-6. **Base check after approval (required distinction):**
+6. **Base check after approval:**
    - If `<local-integration-base>` is **unchanged** since the approved packet and only autosquash rewrote hashes: hand the cleaned stack to the **integrator** for merge (merge handoff with updated commit list; no repeat technical review).
-   - If the base **advanced** and the author must rebase onto the new base — especially if conflicts are resolved — the result is a **changed technical artifact**. Send an **updated technical review packet** and return to step 3. Do not send a rebased stack straight to the integrator.
+   - If the base **advanced**, rebase onto the current base and rerun validation. When the author demonstrates that the rebased stack is byte-equivalent to the approved content, send the **integrator** a rebase handoff with that evidence. The integrator assesses the base changes and may merge without repeat technical review, or require updated technical review for a material conflict or other substantive risk.
+   - Any content change after approval, including a documentation correction, requires an updated technical review packet. Patch-identity evidence does not replace review of a changed artifact.
 7. Integrator merges (see Integrator flow). Merge/push only after explicit human approval.
 
 Hold the unsquashed fixup stack for the entire technical review. Autosquash only after reviewer approval, as the step that produces the stack the integrator merges when the base has not moved.
@@ -29,7 +30,7 @@ The agreed `<local-integration-base>` is a Git ref in the current repository, su
 ## Integrator flow
 
 1. Confirm the stack is reviewer-approved and already cleaned (fixups autosquashed). If fixups are still present, send it back to the author to fold before merge — do not start a content review.
-2. Confirm the cleaned stack is based on the **current** `<local-integration-base>`. If the base has advanced (stale-base stack), **refuse the merge handoff** and route the author to rebase and return through **technical review** — do not independently assess the rebased content, and do not merge a stale-base cleaned stack.
+2. Confirm the cleaned stack is based on the **current** `<local-integration-base>`. If the base has advanced (stale-base stack), route the author to rebase and rerun validation. Accept a byte-equivalent rebase handoff when it identifies the approved and rebased hashes, demonstrates patch identity, and reports validation on the rebased hash. Assess whether intervening base changes create a material conflict or risk; require updated technical review when they do. Do not merge a stale-base stack.
 3. If the base is current and the merge is otherwise clear, merge approved review branches with `--no-ff` when preserving a delegated-work or lane boundary; this creates a clear integration point and avoids mutually rebasing branches into increasingly long histories.
 4. Merge/push only after explicit human approval.
 
@@ -49,7 +50,7 @@ For non-trivial delegated work, review requests should include:
 
 Author-provided review concerns are supplemental context, not a limit on review scope. Independent inspection remains the reviewer responsibility.
 
-Packets to the **integrator** after approval are merge handoffs: cleaned commit list, validation status, and base/merge refs. They apply only when the base is unchanged since reviewer approval (autosquash-only hash changes are fine). They are not a second technical review packet. A rebase onto an advanced base requires a new technical review packet to the **reviewer**, not a merge handoff.
+Packets to the **integrator** after approval are merge handoffs: cleaned commit list, validation status, and base/merge refs. When a rebase advances the stack to the current base, also identify the approved and rebased hashes, demonstrate byte-equivalent patch content, and report validation on the rebased hash. They are not a second technical review packet unless the integrator identifies a material conflict or the artifact changed after approval.
 
 # Reviewing Stacked Commits
 
@@ -59,9 +60,10 @@ A fixup is valid only when the entire fix belongs to code introduced by one targ
 
 The author holds targeted fixups in place until the **reviewer** approves. Each fixup stays visible on the branch in the context of its target commit, which preserves review visibility for the response. Do **not** autosquash before or during technical review — that rewrites hashes, stales the packet under review, and hides which fix addressed which finding. After reviewer approval, the author autosquashes into the target commits.
 
-Distinguish post-approval hash changes:
+Distinguish post-approval changes:
 - **Autosquash only, base unchanged:** include the new commit list and validation status on the merge handoff to the integrator. No repeat technical review.
-- **Rebase onto an advanced base** (with or without conflict resolution): send an updated technical review packet to the reviewer and obtain approval again before any merge handoff. Do not treat a base rebase as equivalent to autosquash.
+- **Byte-equivalent rebase onto an advanced base:** provide patch-identity and validation evidence to the integrator. The integrator assesses intervening changes and can accept the handoff without repeat technical review.
+- **Any content change after approval:** send an updated technical review packet to the reviewer and obtain approval again before any merge handoff.
 
 Fold the stack with `--autosquash`, which requires `-i` explicitly — `--autosquash` alone is a silent no-op. Use `<local-integration-base>` as the rebase base.
 
