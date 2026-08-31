@@ -112,6 +112,20 @@ thing the shadow exists to establish.
         empty once its entries are delivered; the cursor advances rather
         than stalling behind a retired position; no entry is delivered
         twice or left unresolved; quota returns to its pre-send level.
+        Each needs its own observable, because they are separate state
+        released by one transition and either can return while another
+        leaks. **Quota restoration** is not implied by the mailbox
+        emptying: report the reservation an entry joined, in both
+        components, and require it to cover that entry alone. **Not
+        delivered twice** is a claim about the target, not the ledger:
+        count the representations that actually reached it, since the
+        terminal transition suppresses a second *resolution* and would
+        hide a second *write* behind one outcome. **Not left unresolved**
+        is the wait itself, which must fail rather than pass when an
+        entry never completes. And require the outcome to be `delivered`:
+        every other figure here is equally satisfied by a relay that
+        refuses every write, since a refused member is admitted,
+        enqueued, and terminalized like any other.
       - **The delivered artifact is the stored one.** The payload and
         `Date` observed at enqueue are the payload and `Date` that reach
         the target, exactly one envelope-metadata inscription is emitted
@@ -287,3 +301,16 @@ letting a tranche boundary fall somewhere convenient.
       each either resolved by this design or explicitly re-derived against
       the pull model, per that residue's own "do not port these verbatim"
       instruction, before this change is archived.
+- [ ] 5.13 Confirm `Mailbox Payload Custody` has reached the live
+      `delivery-quiescence` spec before this change is archived, and not
+      merely that a sync was offered. The requirement is delta-only until
+      then, and decision record 0004 in `documentation/decisions/` names it
+      as where its standing rule lives — a citation that resolves against
+      nothing until the sync happens.
+      Tracked here rather than in the notebook because `opsx-archive` reads
+      this file and warns on an unchecked box, which puts the warning at the
+      moment the mistake would be made; nothing reads the notebook at
+      archive time. Neither `openspec validate --strict` nor
+      `verify-openspec-deltas.py` substitutes: the first checks that a delta
+      is well formed and the second that a MODIFIED delta retains what it
+      replaces, and a requirement that never reaches a live spec passes both.

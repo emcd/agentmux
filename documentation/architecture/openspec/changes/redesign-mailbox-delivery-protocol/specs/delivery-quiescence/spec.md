@@ -977,6 +977,74 @@ ceased.
 
 ## ADDED Requirements
 
+### Requirement: Mailbox Payload Custody
+
+A mailbox entry SHALL carry the payload that is actually delivered for it.
+The relay SHALL build that payload exactly once, before the entry becomes
+peekable, and every writer of that entry SHALL write the payload the mailbox
+holds. No writer SHALL construct a payload of its own for an entry the
+mailbox already carries.
+
+An entry's payload SHALL be stamped once, when it is built. Any timestamp
+the delivered representation carries — the pane envelope's `Date` header
+above all — and any out-of-band record the relay emits describing that
+payload SHALL take their value from that single stamping. A writer SHALL NOT
+re-read the clock for an entry whose payload already exists.
+
+The relay SHALL emit at most one out-of-band envelope-metadata record per
+entry, at the point the payload is built. Emitting it at the write instead
+would describe an artifact other than the one under custody; emitting it at
+both points would report one entry twice.
+
+This is the property that makes a mailbox entry evidence about what a target
+received rather than about a parallel object that resembles it: an entry
+whose stored payload is not the delivered one leaves the relay's own record
+of a delivery describing something that never went on the wire. See
+`documentation/decisions/0004-the-mailbox-holds-the-delivered-artifact.md`
+for the shadow-payload alternative this rejects and the cost it accepts —
+that a `Date` now names when the relay built an envelope rather than when a
+transport wrote it.
+
+Building the payload before the entry is peekable is what admits a payload
+that cannot be built at all: such an entry SHALL still resolve through a
+terminal outcome rather than being stranded, and SHALL NOT become peekable.
+Relay-originated work that bypasses admission holds no mailbox position and
+SHALL be delivered without one rather than refused for want of it.
+
+#### Scenario: The delivered payload is the stored payload
+
+- **WHEN** an entry is written to its target
+- **THEN** the payload written is the payload the mailbox holds for that
+  entry
+- **AND** no second payload is constructed for it at the write
+
+#### Scenario: One stamping per entry
+
+- **WHEN** an entry's payload is built
+- **THEN** the timestamp it carries is read once
+- **AND** the delivered representation and the out-of-band metadata record
+  both carry that same value
+- **AND** a delay between building the payload and writing it does not
+  change either
+
+#### Scenario: One envelope-metadata record per entry
+
+- **WHEN** an entry's payload is built and subsequently written
+- **THEN** exactly one envelope-metadata record exists for that entry
+
+#### Scenario: An entry whose payload cannot be built still resolves
+
+- **WHEN** the relay cannot build a payload for an admitted entry
+- **THEN** that entry does not become peekable
+- **AND** it still reaches a terminal outcome reported to its sender
+
+#### Scenario: Work that bypasses admission is delivered without a position
+
+- **WHEN** relay-originated work holding no admission reservation is
+  delivered
+- **THEN** it takes no mailbox position
+- **AND** it is delivered rather than refused for holding none
+
 ### Requirement: Mailbox Peek Operation
 
 The relay SHALL expose a read-only `peek(target, entry_max,

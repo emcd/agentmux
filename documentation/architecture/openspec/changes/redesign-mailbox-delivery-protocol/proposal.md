@@ -145,8 +145,8 @@ proposal's approval.
 - Affected specs:
   - `delivery-quiescence` (primary — queue model, guard, observability,
     receipts, recovery scope all restated in mailbox/cursor/generation
-    vocabulary; new peek/declare/ack/generation/revocation-serialization/
-    doorbell/policy/retention requirements added)
+    vocabulary; new payload-custody/peek/declare/ack/generation/
+    revocation-serialization/doorbell/policy/retention requirements added)
   - `transport-abstraction` (`Transport Interface Contract`, `Transport
     Handover Capacity and Readiness`, `Transport Module Boundaries`,
     `Synchronous Delivery Completion`, `Worker Readiness Interface`,

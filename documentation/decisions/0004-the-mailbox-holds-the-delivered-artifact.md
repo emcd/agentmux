@@ -4,7 +4,7 @@
 - Status: accepted
 - Supersedes: —
 - Superseded by: —
-- Specs: delivery-quiescence / Mailbox Ordering and Cursor Lifecycle
+- Specs: delivery-quiescence / Mailbox Payload Custody
 
 ## Decision
 
