@@ -157,9 +157,20 @@ references point to. Every comment must be self-contained.
   `src/**/<module>/mod.rs` as a thin re-export hub.
 - Re-export important items at appropriate levels using `pub use`.
 
-Architecture and design rationale live in `src/**/README.md` files.
-Each subsystem README documents design decisions, invariants, and
-constraints — not in separate ADR documents.
+Current architecture lives in `src/**/README.md` files. Each subsystem README
+documents how that subsystem is built now, together with its invariants and
+constraints. A README stays accurate because anyone changing the code is
+already reading it.
+
+A closed decision, and the alternative it rejected, goes to
+`documentation/decisions/` instead. The split is by tense rather than by
+topic: a README says what *is*, and gets rewritten when the code moves; a
+decision record says what was settled and why an attractive alternative was
+not taken, and stays true afterwards.
+
+So do not describe current architecture in a decision record, and do not leave
+a rejected alternative's reasoning only in a README, where the next rewrite
+drops it silently.
 
 
 ## TOML Practices
@@ -456,6 +467,38 @@ being touched, so the hook never fires:
 ```shell
 scripts/verify-openspec-deltas.py <change-id>
 ```
+
+### Durable Content From a Change
+
+A change's `design.md` is change-scoped. At archive it moves into
+`changes/archive/` with the rest of the change and is never synced anywhere,
+so anything durable left in it goes dormant: the archive is not a spec, and a
+live spec that cites one is a defect rather than a reference.
+
+This is not a small residue. There are 84 archived `design.md` files holding
+roughly 13,000 lines, within a few percent of the entire live spec corpus.
+
+Write durable content to its home **during the change**, not at archive time:
+
+| Content | Home |
+|---|---|
+| Required behavior | the change's spec deltas |
+| Justification for one requirement | inline, in that requirement |
+| A closed decision and the alternatives it rejected | `documentation/decisions/` |
+| How a subsystem is built | the subsystem's `README.md` |
+| How an algorithm works | a comment beside the code |
+| Planning, sequencing, scratch reasoning | leave it in `design.md` to go dormant |
+
+`documentation/decisions/README.md` defines the record format and the rule
+that keeps such records from rotting.
+
+Writing during the change rather than at archive is deliberate: the archive is
+the moment the author is least motivated to review several hundred lines, and
+the reasoning is freshest while the work is live. The drift this invites is
+narrow, because a decision record states what was *rejected* rather than what
+was built, and a rejected alternative does not go stale as the implementation
+moves. The one real exposure is a decision reversed mid-change, which is what
+the archive-time check exists to catch.
 
 ### Rust Module Line-Count Limit
 
