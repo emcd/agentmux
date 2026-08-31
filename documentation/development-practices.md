@@ -457,6 +457,38 @@ being touched, so the hook never fires:
 scripts/verify-openspec-deltas.py <change-id>
 ```
 
+### Durable Content From a Change
+
+A change's `design.md` is change-scoped. At archive it moves into
+`changes/archive/` with the rest of the change and is never synced anywhere,
+so anything durable left in it goes dormant: the archive is not a spec, and a
+live spec that cites one is a defect rather than a reference.
+
+This is not a small residue. There are 84 archived `design.md` files holding
+roughly 13,000 lines, within a few percent of the entire live spec corpus.
+
+Write durable content to its home **during the change**, not at archive time:
+
+| Content | Home |
+|---|---|
+| Required behavior | the change's spec deltas |
+| Justification for one requirement | inline, in that requirement |
+| A closed decision and the alternatives it rejected | `documentation/decisions/` |
+| How a subsystem is built | the subsystem's `README.md` |
+| How an algorithm works | a comment beside the code |
+| Planning, sequencing, scratch reasoning | leave it in `design.md` to go dormant |
+
+`documentation/decisions/README.md` defines the record format and the rule
+that keeps such records from rotting.
+
+Writing during the change rather than at archive is deliberate: the archive is
+the moment the author is least motivated to review several hundred lines, and
+the reasoning is freshest while the work is live. The drift this invites is
+narrow, because a decision record states what was *rejected* rather than what
+was built, and a rejected alternative does not go stale as the implementation
+moves. The one real exposure is a decision reversed mid-change, which is what
+the archive-time check exists to catch.
+
 ### Rust Module Line-Count Limit
 
 A Rust module whose line count exceeds 999 is treated as a request to split.
