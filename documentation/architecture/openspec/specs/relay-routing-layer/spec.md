@@ -249,11 +249,13 @@ operation bodies, and SHALL preserve the existence-before-authorization ordering
 filter composes with, and does not replace, the origin-side capability model: it
 is an independent authority exercised by the receiving trust domain.
 
-This slice filters at peer-relay granularity (the `<id>@RELAY` principal's
-scope). Distinguishing which originating principal *inside* the peer relay is
-acting is out of scope; carrying the original sender identity across the boundary
-(the reserved `on_behalf_of` field) is deferred to a follow-on, so this slice
-gates solely on the peer relay principal.
+The filter operates at peer-relay granularity (the `<id>@RELAY` principal's
+scope), and SHALL continue to do so. Distinguishing which originating principal
+*inside* the peer relay is acting is not part of it: the origin identity is
+carried across the boundary as `on_behalf_of` per the `cross-relay-routing`
+capability's `Cross-Relay Sender Attribution Forwarding` requirement, and that
+value is advisory — the receiving relay authenticates the peer relay, not the
+foreign origin — so it SHALL NOT be consumed as an authorization input here.
 
 #### Scenario: In-scope cross-relay target accepted
 
@@ -274,6 +276,15 @@ gates solely on the peer relay principal.
   forwarded target operation
 - **THEN** the relay returns `authorization_forbidden` for every target
   (deny-by-default)
+
+#### Scenario: Attribution does not widen ingress
+
+- **WHEN** a forwarded target operation carries an `on_behalf_of` naming an
+  origin principal
+- **AND** that origin is outside the peer relay principal's registered `scope`
+- **THEN** the ingress filter still evaluates the peer relay principal's scope
+  alone
+- **AND** the attribution does not permit or deny any target
 
 ### Requirement: Cross-Relay Discovery Origin Authorization
 

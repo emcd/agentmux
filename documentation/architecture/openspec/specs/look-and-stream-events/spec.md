@@ -230,13 +230,14 @@ For ACP targets, relay SHALL:
 - return look results ordered oldest -> newest,
 - avoid spawning a second ACP client for steady-state look requests,
 - read look snapshot via a non-draining accessor exposed by the ACP
-  client (the existing draining `take_replay_entries` accessor is
-  reserved for non-look consumers such as the debug TUI binary).
+  client (see the `acp-client` capability's `Non-Draining Replay Buffer
+  Accessor` requirement, which defines the snapshot and cursor accessors
+  every consumer uses).
 
 Canonical ACP snapshot entry vocabulary SHALL be:
 
 - `kind = "user"` with `lines: string[]` and a `source` discriminator
-  (`PromptPath` for an operator\'s local submission, `ReaderThread`
+  (`PromptPath` for an operator's local submission, `ReaderThread`
   for chunks parsed from `session/update` / `session/load`).
   Cross-source User adjacency is not coalesced; same-source
   adjacency coalesces under the dedicated User-rule (the
@@ -253,7 +254,7 @@ Canonical ACP snapshot entry vocabulary SHALL be:
   separate `result` entry is emitted. The coalescence is per-
   `call_id` and operates by in-place mutation of the buffer entry
   tracked by the parser-side accumulator (the parser records the
-  Pending entry\'s buffer position when `tool_call` is parsed and
+  Pending entry's buffer position when `tool_call` is parsed and
   mutates that position in place when the matching `tool_call_update`
   with `status="completed"` arrives), NOT by buffer-position
   adjacency. v1 scope: `Pending` -> `Completed` transition only;
@@ -309,7 +310,7 @@ Relay restart behavior SHALL be:
 - **AND** if the matching `tool_call_update` arrives later than
   intervening notifications (other agent text, cognition, or
   other in-flight tool calls), the existing Pending entry is
-  mutated in place to reflect the new state; the buffer\'s entry
+  mutated in place to reflect the new state; the buffer's entry
   count does not advance
 - **AND** the recorded `buffer_position` of the Pending entry
   remains valid under cap eviction: the parser tracks any
@@ -321,7 +322,7 @@ Relay restart behavior SHALL be:
 
 #### Scenario: Pending tool call evicted before completion
 
-- **WHEN** relay observes a `tool_call` and the buffer\'s 1000-entry
+- **WHEN** relay observes a `tool_call` and the buffer's 1000-entry
   cap drains the front enough times that the Pending Invocation
   itself is evicted before the matching `tool_call_update` arrives
 - **THEN** the parser removes the call_id from `pending_calls` at
@@ -339,9 +340,9 @@ Relay restart behavior SHALL be:
   (possibly out of arrival order)
 - **THEN** the in-memory snapshot carries one entry per `call_id`
 - **AND** an in-flight `tool_call_update` for call_id A mutates
-  ONLY the buffer entry that recorded call A\'s original Pending
+  ONLY the buffer entry that recorded call A's original Pending
   notification; it does not touch the buffer entry for call B
-- **AND** call B\'s final state is preserved at the buffer
+- **AND** call B's final state is preserved at the buffer
   position that recorded its own Pending notification
 
 #### Scenario: Out-of-order terminal tool_call_update mutates the right entry
@@ -349,14 +350,14 @@ Relay restart behavior SHALL be:
 - **WHEN** relay observes `tool_call(A)`, `tool_call(B)`,
   `tool_call_update(B)` (with terminal status + result),
   `tool_call_update(A)` (with terminal status + result)
-- **THEN** the buffer entry that recorded call A\'s Pending
-  notification is now `status="completed"` with call A\'s result
+- **THEN** the buffer entry that recorded call A's Pending
+  notification is now `status="completed"` with call A's result
   payload
-- **AND** the buffer entry that recorded call B\'s Pending
-  notification is now `status="completed"` with call B\'s result
+- **AND** the buffer entry that recorded call B's Pending
+  notification is now `status="completed"` with call B's result
   payload
 - **AND** the buffer holds exactly two `Invocation` entries, neither
-  carrying the other call\'s result
+  carrying the other call's result
 
 #### Scenario: Look returns fresh-but-empty during cold-start prime
 

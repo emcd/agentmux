@@ -14,9 +14,10 @@ workflows:
 - delivery-events inspection and pending indicator.
 
 The TUI SHALL reuse existing relay delivery and inspection semantics.
-The TUI SHALL consume inbound message and delivery-outcome updates from relay
-stream transport contracts defined in
-`add-relay-stream-hello-transport-mvp`.
+The TUI SHALL consume inbound message and delivery-outcome updates from the
+relay stream transport contracts specified by the `look-and-stream-events`
+capability's `Relay Stream Event Contract` and `Hello Registration Contract`
+requirements.
 
 #### Scenario: Cover core operator loop with structured update flow
 

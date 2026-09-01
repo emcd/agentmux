@@ -329,7 +329,7 @@ override involved.
 ### Requirement: UI Request-Path Sender Validation
 
 Relay SHALL validate non-hello request-path UI sender identities using global
-TUI sessions from `<config-root>/tui.toml`.
+TUI sessions from `<config-root>/users.toml`.
 
 For request-path operations such as `send`, relay SHALL:
 
