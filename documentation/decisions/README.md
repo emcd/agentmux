@@ -68,6 +68,21 @@ That is the property supersession depends on. Marking a record superseded only
 works if the record remains an accurate account of what was decided at the time;
 otherwise the file is not history, it is a stale claim with a banner on it.
 
+**Apply the test with this decision as its subject.** The question is "would
+reversing *this* decision make the sentence false?", not "could this sentence
+ever become false?" Almost anything can become false eventually; that is not
+what the test is for. A sentence that only goes stale because of some unrelated
+later change is not what the test is hunting — it is usually a motivating
+constraint, and those are supposed to be there.
+
+Read the looser way, the test over-applies, and the cost is real: it converts
+the reasons into an archival note. "Write time reports the target's
+availability, which the terminal outcome already carries" is a live tripwire —
+if terminal outcomes ever stop carrying it, this decision deserves revisiting.
+Pinned to the past, it can no longer trip. The record is still accurate and
+nobody is misled, which is why this is worth getting right rather than worth
+arguing about: what is lost is silent.
+
 **Tense is a useful hint but is not the rule.** Past-tense framing does not save
 a mutable referent — "we rejected a bounded wait because startup returns
 `TransportReadiness::Pending`" is still false once that type is renamed. And
