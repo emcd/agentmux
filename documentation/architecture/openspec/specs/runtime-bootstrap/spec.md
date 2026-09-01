@@ -1061,6 +1061,7 @@ file SHALL use kebab-case TOML keys and MAY contain:
   |---|---|---|---|
   | `submission-timeout-ms` | `5_000` | `500..=60_000` | how long an authorized batch's ingestion may run before the relay initiates the generation fence |
   | `fence-observation-timeout-ms` | `5_000` | `100..=60_000` | the budget for each of the generation fence's two cessation observations, so total acknowledgment is bounded by twice this value |
+  | `unreachable-dwell-ms` | `30_000` | `1_000..=600_000` | how long a target may be **continuously** unreachable before its still-waiting members resolve |
   | `queued-envelopes-max` | `10_000` | `1..=1_000_000` | relay-global admission quota, envelope count |
   | `queued-bytes-max` | `268_435_456` | `1_048_576..=4_294_967_296` | relay-global admission quota, canonical payload bytes |
   | `queued-envelopes-per-target-max` | `1_000` | `1..=1_000_000` | per-target admission quota, envelope count |

@@ -1,7 +1,7 @@
 # cli-surface Specification
 
 ## Purpose
-The operator-facing `agentmux` command surface plus the legacy `agentmux-relay`/`agentmux-mcp` binary entrypoints. The spec governs each subcommand's argument validation, target-mode selection, response payload contracts, and authorization passthrough to relay, one requirement per command surface. The credential-administration commands (`new peer`, `change psk`, `drop peer`) are the exception: their contracts live in `mcp-tool-surface` alongside the meta-tools they mirror, and `cli-surface` covers only their presence in the help topology. The CLI is a thin adapter throughout: it surfaces relay decisions unchanged and resolves `--as-session`/`--bundle` selectors against `tui.toml` defaults.
+The operator-facing `agentmux` command surface plus the legacy `agentmux-relay`/`agentmux-mcp` binary entrypoints. The spec governs each subcommand's argument validation, target-mode selection, response payload contracts, and authorization passthrough to relay, one requirement per command surface. The credential-administration commands (`new peer`, `change psk`, `drop peer`) are the exception: their contracts live in `mcp-tool-surface` alongside the meta-tools they mirror, and `cli-surface` covers only their presence in the help topology. The CLI is a thin adapter throughout: it surfaces relay decisions unchanged and resolves `--as-session` against `users.toml` defaults and `--bundle` against `ui.toml` defaults.
 ## Requirements
 ### Requirement: Unified Agentmux Command Topology
 
@@ -866,7 +866,7 @@ CLI SHALL provide direct-write command:
 
 CLI raww acting identity SHALL follow global TUI-session selector contract:
 - explicit `--as-session`
-- otherwise configured default session in `tui.toml`
+- otherwise `default-session` from `users.toml`
 
 CLI SHALL NOT use repository association fallback for raww actor identity.
 
