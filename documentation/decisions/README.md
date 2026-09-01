@@ -51,6 +51,51 @@ the second way is false the next time that type is touched. Name a live symbol
 only where it identifies the thing that was *rejected* — a rejected artifact
 cannot drift, because it is already gone.
 
+### The test
+
+To check a sentence mechanically:
+
+> **A decision record must stay true even after the decision is superseded.**
+
+Reversing a decision must leave its record accurate. If we adopt round-robin
+scheduling tomorrow, "we rejected it because the quantum had to be at least the
+largest handover byte component, while batch formation was already capped there"
+is *still true* — it becomes superseded, not wrong. Whereas "the relay
+arbitrates between no targets" becomes flatly false. A superseded record is
+bounded, not falsified.
+
+That is the property supersession depends on. Marking a record superseded only
+works if the record remains an accurate account of what was decided at the time;
+otherwise the file is not history, it is a stale claim with a banner on it.
+
+**Tense is a useful hint but is not the rule.** Past-tense framing does not save
+a mutable referent — "we rejected a bounded wait because startup returns
+`TransportReadiness::Pending`" is still false once that type is renamed. And
+present tense is often correct: "a bound that cannot be made true is worse than
+none" is timeless, and a constraint that *motivated* the decision belongs in the
+record even in the present tense, because if it ever stops holding, the decision
+itself deserves revisiting. Ask what the sentence refers to, not what its verb
+is doing.
+
+### Recording a fact that can change
+
+Sometimes a mutable fact is genuinely part of the decision. Three ways to keep
+it honest, in increasing order of usefulness:
+
+1. **Omit it**, and let the spec or subsystem README carry it.
+2. **Pin it to when it was observed** — "the counterexamples raised at the time
+   were…" — so a later reader knows it is a snapshot rather than a standing
+   claim.
+3. **Record the correction**, when a fact in the record has since been found
+   wrong or has changed. Name the original claim, say what was wrong with it,
+   and note what has since changed and what has not.
+
+The third is the strongest, because the correction becomes part of the
+decision's history rather than erasing it. `src/relay/delivery-decisions.md`
+does this well in D6, which records that an early defence of a withdrawal
+claimed targets "do not contend", that the claim was false, and which
+counterexamples have since been fixed versus which remain live.
+
 ## Format
 
 Deliberately informal. One file per decision:
