@@ -1405,9 +1405,9 @@ worth a `peek`. The notification SHALL carry **no data and no custody** — it
 is a hint to call `peek`, not a substitute for calling it.
 
 The doorbell SHALL be implemented as an injected closure the relay invokes,
-following the existing upward-signal pattern already specified in
-`transport-abstraction` (the readiness edge-hint a transport invokes today);
-it is not a new signaling mechanism, only a new event it is invoked for.
+following the opaque injected-closure pattern `transport-abstraction` retains
+under `Transport Handover Capacity and Readiness`; it is not a new signaling
+mechanism, only a new event it is invoked for.
 
 **Losing a doorbell notification loses nothing but time.** A transport's
 delivery executor SHALL also poll at a bounded cadence as a backstop, so a

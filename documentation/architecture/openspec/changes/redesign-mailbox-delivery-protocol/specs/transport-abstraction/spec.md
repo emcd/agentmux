@@ -194,6 +194,13 @@ mailbox consumption.
 - **AND** the relay observes no readiness signal from the transport and
   makes no decision on the basis of one
 
+#### Scenario: A transport signals upward through an injected closure
+
+- **WHEN** a transport needs to prompt the relay that its target's own state
+  changed in a way worth reporting
+- **THEN** it invokes a closure the relay supplied at construction
+- **AND** it does not reference any `crate::relay` type
+
 ### Requirement: Transport Module Boundaries
 
 ACP-specific delivery code SHALL reside in `src/acp/`. Tmux-specific delivery
