@@ -8,9 +8,14 @@
 
 ## Decision
 
-An entry has one payload. It is built once and stamped once, it is in place
-before the entry becomes peekable, and whatever writes the entry writes that
-payload. No writer builds an envelope of its own.
+A mailbox entry's payload was made the artifact delivered for it: one payload,
+built once and stamped once before the entry becomes peekable, written by
+whatever writes that entry. No writer was left free to build an envelope of its
+own.
+
+The standing rule this established is normative and lives in the
+`delivery-quiescence` capability's `Mailbox Payload Custody` requirement rather
+than in this record.
 
 ## What we rejected, and why
 
@@ -33,24 +38,24 @@ contents are always delivered cannot help surfacing it.
 ## The cost that makes this a decision rather than an obvious call
 
 Building before the write means stamping before the write, and the timestamp is
-observable. A message's `Date` now names when the relay built its envelope, not
-when a transport got round to writing it; for an entry that waits out a busy
-target the two differ by however long the target stayed busy.
+observable. The `Date` a message carries came to name when the relay built its
+envelope rather than when a transport wrote it; for an entry that waits out a
+busy target the two differ by however long the target stayed busy.
 
-That was the argument for building late, and it loses. Build time is the only
+That was the argument for building late, and it lost. Build time is the only
 reading that can be the same on both sides of the mailbox, which is the whole
-property being bought. It is also the more useful of the two: write time reports
-the target's availability, which the terminal outcome already carries, while
-build time reports when the relay accepted the message.
+property being bought. It was also judged the more useful of the two: write time
+reports the target's availability, which the terminal outcome already carried,
+while build time reports when the relay accepted the message.
 
-The second cost is that any out-of-band record emitted where the payload is
-built now describes envelopes that are subsequently not delivered: an envelope
-exists for every entry the relay accepted, and not every such entry reaches its
-target. That is the correct reading of such a record — the envelope exists and
-the relay is holding it — but it is a weaker reading than the one it had when
-only a written envelope produced a record. A reader correlating it against
-deliveries pairs it with the terminal outcome, which was already required for
-any entry whose write failed.
+The second cost accepted was that an out-of-band record emitted where the
+payload is built describes envelopes that are subsequently not delivered: an
+envelope exists for every entry the relay accepted, and not every such entry
+reaches its target. That is the correct reading of such a record — the envelope
+exists and the relay is holding it — but it is a weaker reading than the one it
+had when only a written envelope produced a record. A reader correlating such
+records against deliveries pairs them with the terminal outcome, which was
+already required for any entry whose write failed.
 
 ## What this does not decide
 
