@@ -66,7 +66,9 @@ auto-opens it.
     - `context.rs` — `BindingContext`, `binding_context`, and
       `binding_lookup_order`
 - `input.rs`
-  - mode-aware key handling and command intent updates.
+  - terminal event handling: which events carry a binding, and how a
+    paste or a scroll reaches state. Keys resolve against `actions/`
+    rather than being matched here, so no chord is named in this module.
 - `keyboard.rs`
   - progressive keyboard-enhancement (Kitty keyboard protocol) capability
     detection: the `KeyboardEnhancement` outcome, its operator-facing
@@ -253,14 +255,12 @@ auto-opens it.
   overlay, because it decides whether `Shift+Enter` is distinguishable from a
   bare `Enter`. Only the disambiguation flag is pushed; the remaining flags
   change which events are delivered at all and nothing in `input.rs` consumes
-  them. Detection assigns no binding, but it changes which events reach the
-  existing ones: the `Communication` arm at `input.rs` guards `Enter` on
-  `modifiers.is_empty()`, so a modified `Enter` reaches no binding when the
-  protocol is active and takes the send/accept path when it is not. The
-  `Interaction` and picker arms have no modifier guard and are unaffected. That
-  mode-dependent split is incidental to how the arms are written; the action
-  layer tracked as `todos/tui/60` is where it gets resolved. `Ctrl+J` inserts a
-  newline under every outcome.
+  them. Detection assigns no binding and reaches no behavior: every context
+  that binds `Enter` binds `Shift+Enter` and `Ctrl+Enter` to the same action,
+  and the two overlays bind none of the three, so no probe outcome can resolve
+  to a different one. The outcome reports what the TUI determined about the
+  terminal, not a difference in what the TUI does. `Ctrl+J` inserts a newline
+  under every outcome.
 
 ## Stream and State Notes
 

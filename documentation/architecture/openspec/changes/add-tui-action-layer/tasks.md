@@ -21,8 +21,11 @@
 - [x] 1.7 Test the public boundary from `tests/unit/tui.rs` — a caller naming
       only public types applies an action through `Workbench` and observes the
       behavior, with no `KeyEvent` constructed.
-- [ ] 1.8 Test that applying an action directly and dispatching the chord bound
+- [x] 1.8 Test that applying an action directly and dispatching the chord bound
       to it produce the same resulting state, so the two paths cannot diverge.
+      Sweep the surfaces rather than sampling one, and compare the whole public
+      read surface: a projection narrow enough to omit a field is a way the
+      paths could drift without the test noticing.
 
 ## 2. Binding table
 
@@ -33,8 +36,11 @@
 - [x] 2.2 Populate every row from the current handlers, preserving each
       context's existing bare-`Enter` action unchanged.
 - [x] 2.3 Declare `Enter`, `Shift+Enter`, and `Ctrl+Enter` explicitly for every
-      context, with both modified chords bound to the same action that context
-      binds to `Enter`.
+      context that binds `Enter`, with both modified chords bound to the same
+      action that context binds to `Enter`. The events and help overlays bind
+      no `Enter` action and declare none of the three, as the design's binding
+      table already records; neutrality holds there because all three forms are
+      equally inert, not because they share an action.
 - [x] 2.4 Test that every context declaring an `Enter` row also declares both
       modified rows, so no context can inherit modified-`Enter` behavior by
       omission.
@@ -59,19 +65,21 @@
 
 ## 3. Dispatch rewiring
 
-- [ ] 3.1 Replace the six handlers' key-condition match arms with lookup
+- [x] 3.1 Replace the six handlers' key-condition match arms with lookup
       against the table followed by action application, walking
       `binding_lookup_order` so the global rows are consulted before the
       contextual ones. Keep event-shape handling (paste, mouse, non-`Press`
       filtering) in `input.rs`.
-- [ ] 3.2 Verify the full existing TUI test suite passes unchanged except for
+- [x] 3.2 Verify the full existing TUI test suite passes unchanged except for
       the deliberate modified-`Enter` cases, and record which tests changed and
       why.
-- [ ] 3.3 Teeth-check the omission guarantee: remove one context's
+- [x] 3.3 Teeth-check the omission guarantee: remove one context's
       `Shift+Enter` row and confirm task 2.4's test fails.
-- [ ] 3.4 Confirm `handle_key` retains no chord-specific early return ahead of
+- [x] 3.4 Confirm `handle_key` retains no chord-specific early return ahead of
       the table, so the global rows are the only thing granting a chord reach
-      across surfaces.
+      across surfaces. Task 1.8's sweep is what holds this: a chord answered
+      ahead of lookup makes dispatch diverge from the action the table names,
+      so the confirmation is mechanical rather than a reading of the source.
 
 ## 4. Generated help and hints
 

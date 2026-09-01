@@ -102,9 +102,11 @@ test a chord ahead of the table.
 
 ### Requirement: Capability-Neutral Default Bindings
 
-Every binding context SHALL declare its `Enter`, `Shift+Enter`, and
-`Ctrl+Enter` rows explicitly. A context SHALL NOT acquire a modified-`Enter`
-behavior by omitting a modifier condition.
+Every binding context that binds `Enter` SHALL declare its `Shift+Enter` and
+`Ctrl+Enter` rows explicitly, and a context that binds no `Enter` action SHALL
+declare none of the three, leaving all three forms equally inert there. A
+context SHALL NOT acquire a modified-`Enter` behavior by omitting a modifier
+condition.
 
 In the default table, `Shift+Enter` and `Ctrl+Enter` SHALL each invoke the same
 action their context binds to `Enter`.
@@ -113,14 +115,15 @@ No default binding SHALL vary with the keyboard-enhancement probe outcome. The
 default table SHALL produce identical observable behavior on a terminal that
 disambiguates modified keys and one that does not.
 
-`Enter` SHALL retain its existing action in every context, and `Ctrl+J` SHALL
-retain the insert-newline action in the compose `Message` field and the
-interaction write input.
+`Enter` SHALL retain its existing action in every context that has one, and
+`Ctrl+J` SHALL retain the insert-newline action in the compose `Message` field
+and the interaction write input.
 
 #### Scenario: Modified Enter behaves identically regardless of terminal
 
 - **WHEN** the operator presses `Shift+Enter` or `Ctrl+Enter` in any context
-- **THEN** the action invoked is the same one that context binds to `Enter`
+- **THEN** the action invoked is the one that context binds to `Enter`, and no
+  action is invoked in a context that binds no `Enter` action
 - **AND** the observable result does not depend on whether the terminal
   disambiguates modified keys
 

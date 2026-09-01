@@ -73,24 +73,23 @@ yet; that survey is tracked as `todos/tui/62`.
 
 #### What changes between the outcomes
 
-Detection assigns no new binding, but it does change which events reach the
-existing ones, in exactly one place:
+Nothing you can act on. Wherever `Enter` does something, `Shift+Enter` and
+`Ctrl+Enter` do the same thing, so whether the terminal reports the three
+distinctly or as one is invisible: a modified `Enter` sends the message,
+accepts the completion, dispatches the write, resolves the choice, or commits
+the picker selection exactly as a bare `Enter` would on that surface. The
+events and help overlays bind no `Enter` action at all, and all three forms
+are equally inert there.
 
-- **Communication mode** binds `Enter` only when no modifier is held. When the
-  protocol is active, `Shift+Enter` and `Ctrl+Enter` arrive as themselves and
-  match nothing — they neither send nor insert a newline. When it is
-  unavailable, the terminal cannot tell them from a bare `Enter`, so they send
-  the message (or accept the completion, in `To`).
-- **Interaction mode and the picker** bind `Enter` without a modifier guard, so
-  a modified `Enter` dispatches the write, resolves the choice, or commits the
-  picker selection under every outcome.
+Earlier releases bound `Enter` in Communication mode only when no modifier was
+held, so on a terminal reporting the protocol a `Shift+Enter` matched nothing
+and did neither. That is no longer the case.
 
 `Ctrl+J` inserts a newline under every outcome. It is the binding that does not
 depend on your terminal.
 
-The mode-dependent inconsistency above is a consequence of how the bindings are
-written today, not a deliberate design; resolving it belongs to the action layer
-tracked as `todos/tui/60`.
+The outcome reported above therefore describes what the TUI determined about
+your terminal, not a difference in what the TUI will do.
 
 ### Global
 

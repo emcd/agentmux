@@ -269,7 +269,9 @@ resolved actions.
 ## Migration Plan
 
 1. Land `actions/` (enum, table, context resolution) with dispatch rewired and
-   every context's `Enter`/`Shift+Enter`/`Ctrl+Enter` row declared explicitly.
+   the `Enter`/`Shift+Enter`/`Ctrl+Enter` rows declared explicitly in every
+   context that binds `Enter`, matching the table above — the two overlays bind
+   none of the three.
 2. Rewire the help overlay and both pane hint strips to read the table.
 3. Add the usage-guide lint and regenerate the documented block.
 

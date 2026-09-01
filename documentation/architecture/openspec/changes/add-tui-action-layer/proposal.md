@@ -35,8 +35,10 @@ deliberately.
   overlays, global).
 - Declare modified `Enter` per context instead of inheriting it, with
   **capability-neutral defaults**: `Shift+Enter` and `Ctrl+Enter` each invoke
-  the same action their context binds to `Enter`. Every context must declare
-  all three rows, so none can acquire a behavior by omitting a modifier guard.
+  the same action their context binds to `Enter`. Every context that binds
+  `Enter` must declare all three rows, and a context binding no `Enter` action
+  must declare none of them, so no context can acquire a behavior by omitting a
+  modifier guard.
 - **No operator-visible behavior change on any terminal.** The neutral defaults
   also repair a regression: activating disambiguation made `Shift+Enter` in
   `Message` stop sending on capable terminals, because the compose handler

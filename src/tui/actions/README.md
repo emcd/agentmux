@@ -104,5 +104,7 @@ one line rather than printing each.
   the vocabulary.
 - Paste and mouse events stay event-shape concerns in `../input.rs`
   and have no action members.
-- Tests live under `tests/unit/` in `tui_bindings.rs` and `tui.rs`;
+- Tests live under `tests/unit/`: `tui_bindings.rs` for what the table
+  declares, `tui_dispatch.rs` for dispatch and direct application
+  agreeing on what a chord does, and `tui.rs` for the public seam.
   `src/tui/` carries no inline `#[cfg(test)]`.

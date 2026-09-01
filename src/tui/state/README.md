@@ -29,7 +29,7 @@ lives in `relay.rs`; and the per-mode interaction helpers live in
     `EVENT_HISTORY_MAXIMUM`, `CHAT_HISTORY_MAXIMUM`,
     `SEEN_STREAM_IDS_MAXIMUM`) live here.
   - Tests live under `tests/unit/` in `tui.rs`, `tui_bindings.rs`,
-    `tui_workbench/`, `tui_session.rs`, and
+    `tui_dispatch.rs`, `tui_workbench/`, `tui_session.rs`, and
     `tui_relay_error_mapping.rs`; no inline `#[cfg(test)]` is used in
     `src/tui/`.
 - `history.rs`

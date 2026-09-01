@@ -1,5 +1,4 @@
 mod action;
-#[cfg_attr(not(test), allow(dead_code))]
 mod bindings;
 mod context;
 

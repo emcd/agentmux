@@ -10,9 +10,10 @@
 //! rows that survive any open surface, and dispatch consults it first.
 //!
 //! Rows carry no capability field. Nothing varies by keyboard-enhancement probe
-//! outcome, because every modified `Enter` invokes the same action its context
-//! binds to bare `Enter`, so a per-row flag would be unused machinery. Terminal
-//! classes are meant to diverge through a binding configuration, not here.
+//! outcome: a modified `Enter` invokes whatever its context binds to bare
+//! `Enter`, and invokes nothing in the two overlays, which bind none of the
+//! three. A per-row flag would therefore be unused machinery. Terminal classes
+//! are meant to diverge through a binding configuration, not here.
 //!
 //! A behavior is declared only in the contexts where it has an effect. Several
 //! `AppState` methods guard on the focused field and do nothing elsewhere --
