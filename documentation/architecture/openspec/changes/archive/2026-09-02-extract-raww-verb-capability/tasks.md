@@ -15,17 +15,17 @@ prerequisite of THIS CHANGE'S ARCHIVE, not of its sync.
       Backend's edits exist only in their delta, never in the text this change
       moves, so syncing first cannot drop them. Their delta then replaces the
       requirement in `raww` with their version
-- [ ] 0.3 Backend migrates the `Relay raww transport behavior` section from
+- [x] 0.3 Backend migrates the `Relay raww transport behavior` section from
       `specs/transport-contracts/` to `specs/raww/` and repoints its `tasks.md`
       3.11 citation, reviewed before their own sync and archive. Per
       `session-relay`'s partition index requirement, which obliges migration
       before the affected change archives
-- [ ] 0.4 Backend repoints ONE citation in their MODIFIED `Transport Interface
+- [x] 0.4 Backend repoints ONE citation in their MODIFIED `Transport Interface
       Contract` delta: the passage naming `transport-contracts`'
       `Relay raww transport behavior`. The other `transport-contracts`
       reference in that requirement is the prompt-readiness predicate, which
       this change does not touch and which must be left alone
-- [ ] 0.5 This change SHALL NOT archive until 0.3 and 0.4 are reviewed and
+- [x] 0.5 This change SHALL NOT archive until 0.3 and 0.4 are reviewed and
       landed
 
 ## 1. Create the capability
@@ -96,7 +96,8 @@ prerequisite of THIS CHANGE'S ARCHIVE, not of its sync.
 ## 5. Close out
 
 - [x] 5.1 Mark `todos/openspec/5` tasks complete through the raww half
-- [ ] 5.2 Record the evaluation: whether the boundary held, what had to be
+- [x] 5.2 Record the evaluation: whether the boundary held, what had to be
       judged rather than ruled, and whether `send` should follow
+      (recorded as notebook reviews/13)
 - [x] 5.3 Confirm the send-specific duplication in `authorization-scope`
       (`todos/openspec/12`) is still tracked and was deliberately left alone
