@@ -59,10 +59,26 @@ hand against the post-archive live spec in that case.
 
 import re
 import sys
+from collections import namedtuple
 from pathlib import Path
 
 REQUIREMENT = "### Requirement:"
 SCENARIO = "#### Scenario:"
+
+# One requirement as it appears in a spec or a delta: its name, the titles of
+# the scenarios beneath it, and the verbatim text of the whole block.
+#
+# The block text is retained because several properties of a delta cannot be
+# decided from names alone -- whether a relocated requirement arrived intact,
+# and whether a MODIFIED delta has already been applied to live. Both compare
+# text, and both would be impossible against a name-and-scenario summary.
+Requirement = namedtuple("Requirement", "name scenarios text")
+
+# A requirement block runs to the next requirement header or the next section
+# header, whichever comes first.
+REQUIREMENT_HEADER = re.compile(r"^### Requirement:[ \t]*(.+?)[ \t]*$", re.M)
+BLOCK_STOP = re.compile(r"^(?:### Requirement:|## )", re.M)
+SECTION_HEADER = re.compile(r"^## ([A-Z]+) Requirements\s*$", re.M)
 
 # Candidate planning homes, relative to the repository root, in priority order.
 #
@@ -86,8 +102,8 @@ DELTA_PATH = re.compile(r"/changes/([^/]+)/specs/")
 ARCHIVE_SEGMENT = "archive"
 
 
-def resolve_paths(change_id):
-    """Return (change_specs_dir, live_specs_dir), or None if the change is absent."""
+def planning_home():
+    """Return the OpenSpec planning home directory, or exit if there is none."""
     repo_root = Path(__file__).resolve().parents[1]
     home = next(
         (
@@ -100,54 +116,111 @@ def resolve_paths(change_id):
     if home is None:
         looked = " and ".join(str(repo_root / c) for c in PLANNING_HOMES)
         sys.exit(f"cannot locate the OpenSpec planning home; looked for {looked}")
+    return home
+
+
+def resolve_paths(change_id):
+    """Return (change_specs_dir, live_specs_dir), or None if the change is absent."""
+    home = planning_home()
     change_root = home / "changes" / change_id
     if not change_root.is_dir():
         return None
     return change_root / "specs", home / "specs"
 
 
-def parse(path):
-    """Return {requirement_name: [scenario_name, ...]} for one spec file."""
-    out, current = {}, None
-    if not path.is_file():
-        return out
-    for line in path.read_text().splitlines():
-        if line.startswith(REQUIREMENT):
-            current = line[len(REQUIREMENT):].strip()
-            out.setdefault(current, [])
-        elif line.startswith(SCENARIO) and current is not None:
-            out[current].append(line[len(SCENARIO):].strip())
+def parse_requirements(body):
+    """Return {name: Requirement} for one span of markdown."""
+    out = {}
+    for header in REQUIREMENT_HEADER.finditer(body):
+        name = header.group(1)
+        stop = BLOCK_STOP.search(body, header.end())
+        text = body[header.start():stop.start() if stop else len(body)]
+        scenarios = [
+            line[len(SCENARIO):].strip()
+            for line in text.splitlines()
+            if line.startswith(SCENARIO)
+        ]
+        # A name repeated within one span is malformed markdown rather than a
+        # merge; keep the first block and accumulate the scenarios, so the
+        # retention comparison sees every scenario that would be at risk.
+        if name in out:
+            out[name] = out[name]._replace(scenarios=out[name].scenarios + scenarios)
+        else:
+            out[name] = Requirement(name, scenarios, text)
     return out
 
 
+def parse(path):
+    """Return {name: Requirement} for one spec file."""
+    if not path.is_file():
+        return {}
+    return parse_requirements(path.read_text())
+
+
 def parse_delta(path):
-    """Return {operation: {requirement_name: [scenario_name, ...]}}.
+    """Return ({operation: {name: Requirement}}, [(FROM|TO, name), ...]).
 
     Splits on `## <OP> Requirements` headers so each requirement is attributed
-    to the operation it appears under.
+    to the operation it appears under. A RENAMED block carries FROM:/TO: lines
+    rather than requirement headers, so its pairs are returned separately.
     """
-    blocks = re.split(r"^## ([A-Z]+) Requirements\s*$", path.read_text(), flags=re.M)
-    result = {}
-    for i in range(1, len(blocks), 2):
-        operation, body = blocks[i], blocks[i + 1]
+    text = path.read_text()
+    blocks = re.split(SECTION_HEADER, text)
+    result, pairs = {}, []
+    for index in range(1, len(blocks), 2):
+        operation, body = blocks[index], blocks[index + 1]
         section = result.setdefault(operation, {})
-        current = None
-        for line in body.splitlines():
-            if line.startswith(REQUIREMENT):
-                current = line[len(REQUIREMENT):].strip()
-                section.setdefault(current, [])
-            elif line.startswith(SCENARIO) and current is not None:
-                section[current].append(line[len(SCENARIO):].strip())
-        # A RENAMED block carries FROM:/TO: lines rather than requirement
-        # headers; capture them as a pair list under a private key.
+        section.update(parse_requirements(body))
         if operation == "RENAMED":
-            names = re.findall(
-                r"^\s*-\s*(FROM|TO):\s*`?(?:### Requirement:)?\s*([^`\n]+?)`?\s*$",
-                body,
-                flags=re.M,
+            pairs.extend(
+                re.findall(
+                    r"^\s*-\s*(FROM|TO):\s*`?(?:### Requirement:)?\s*([^`\n]+?)`?\s*$",
+                    body,
+                    flags=re.M,
+                )
             )
-            section["__pairs__"] = names
-    return result
+    return result, pairs
+
+
+def read_capability(live_specs, capability):
+    """Return {name: Requirement} merged across every file of one capability.
+
+    OpenSpec declares the specs artifact as `specs/**/*.md`, so a capability may
+    be split across several files rather than a single `spec.md`. Merge every
+    file under the capability directory, or a requirement defined in a sibling
+    file reads as missing. Filtering by basename instead would skip a nested
+    `<capability>/parts/spec.md` too.
+    """
+    root_spec = live_specs / capability / "spec.md"
+    merged = parse(root_spec)
+    for extra in sorted((live_specs / capability).rglob("*.md")):
+        if extra == root_spec:
+            continue
+        for name, requirement in parse(extra).items():
+            if name in merged:
+                merged[name] = merged[name]._replace(
+                    scenarios=merged[name].scenarios + requirement.scenarios
+                )
+            else:
+                merged[name] = requirement
+    return merged
+
+
+def read_change(change_specs):
+    """Return {capability: ({operation: {name: Requirement}}, pairs)}.
+
+    Delta files under one capability directory are merged, so a capability split
+    across several files audits as one unit.
+    """
+    by_capability = {}
+    for delta_path in sorted(change_specs.rglob("*.md")):
+        capability = delta_path.relative_to(change_specs).parts[0]
+        sections, pairs = parse_delta(delta_path)
+        merged_sections, merged_pairs = by_capability.setdefault(capability, ({}, []))
+        for operation, requirements in sections.items():
+            merged_sections.setdefault(operation, {}).update(requirements)
+        merged_pairs.extend(pairs)
+    return by_capability
 
 
 def change_ids(arguments):
@@ -172,6 +245,36 @@ def change_ids(arguments):
     return ids
 
 
+def check_renames(capability, pairs, live, errors):
+    """Validate RENAMED FROM/TO pairs; return the set of validated TO names.
+
+    Only a name from a well-formed, individually-valid pair is returned. A
+    malformed or partially invalid pair must not silently smuggle an unaudited
+    MODIFIED requirement past the live-counterpart check.
+    """
+    validated = set()
+    if len(pairs) % 2 != 0:
+        errors.append(f"{capability}: RENAMED has an odd number of FROM/TO lines")
+    for index in range(0, len(pairs) - 1, 2):
+        (from_kind, from_name), (to_kind, to_name) = pairs[index], pairs[index + 1]
+        if from_kind != "FROM" or to_kind != "TO":
+            errors.append(
+                f"{capability}: RENAMED pair at position {index // 2 + 1} is "
+                f"not an alternating FROM/TO ({from_kind}, {to_kind})"
+            )
+            continue
+        pair_valid = True
+        if from_name not in live:
+            errors.append(f"{capability}: RENAMED FROM '{from_name}' is not live")
+            pair_valid = False
+        if to_name in live:
+            errors.append(f"{capability}: RENAMED TO '{to_name}' already exists live")
+            pair_valid = False
+        if pair_valid:
+            validated.add(to_name)
+    return validated
+
+
 def audit(change_id, quiet):
     """Audit one change's deltas. Returns (errors, dropped_scenario_count)."""
     resolved = resolve_paths(change_id)
@@ -182,64 +285,13 @@ def audit(change_id, quiet):
         return [f"{change_id}: no specs/ directory -- nothing to audit"], 0
 
     errors, drops = [], 0
+    by_capability = read_change(change_specs)
 
-    # OpenSpec declares the specs artifact as `specs/**/*.md`, so a capability
-    # may be split across several files rather than a single `spec.md`. Group
-    # every file under its capability directory and merge their deltas before
-    # comparing, or a requirement defined in a sibling file reads as missing.
-    by_capability = {}
-    for delta_path in sorted(change_specs.rglob("*.md")):
-        capability = delta_path.relative_to(change_specs).parts[0]
-        by_capability.setdefault(capability, []).append(delta_path)
-
-    for capability, delta_paths in sorted(by_capability.items()):
-        # Merge every live file for the capability, skipping only the root
-        # spec.md already parsed. Filtering by basename instead would skip a
-        # nested `<capability>/parts/spec.md` too, and every requirement defined
-        # there would be falsely reported as having no live counterpart.
-        root_spec = live_specs / capability / "spec.md"
-        live = parse(root_spec)
-        for extra in sorted((live_specs / capability).rglob("*.md")):
-            if extra != root_spec:
-                for name, scenarios in parse(extra).items():
-                    live.setdefault(name, []).extend(scenarios)
-
-        delta = {}
-        for delta_path in delta_paths:
-            for operation, requirements in parse_delta(delta_path).items():
-                section = delta.setdefault(operation, {})
-                for name, scenarios in requirements.items():
-                    section.setdefault(name, []).extend(scenarios)
+    for capability, (delta, pairs) in sorted(by_capability.items()):
+        live = read_capability(live_specs, capability)
         header_shown = False
 
-        # Validate RENAMED pairs first, and only exempt a MODIFIED name from
-        # the live-counterpart check below when it is the TO half of a
-        # well-formed, individually-valid pair. A malformed or partially
-        # invalid pair must not silently smuggle an unaudited MODIFIED
-        # requirement past the existence check.
-        pairs = delta.get("RENAMED", {}).get("__pairs__", [])
-        validated_renamed_to = set()
-        if len(pairs) % 2 != 0:
-            errors.append(
-                f"{capability}: RENAMED has an odd number of FROM/TO lines"
-            )
-        for i in range(0, len(pairs) - 1, 2):
-            (from_kind, from_name), (to_kind, to_name) = pairs[i], pairs[i + 1]
-            if from_kind != "FROM" or to_kind != "TO":
-                errors.append(
-                    f"{capability}: RENAMED pair at position {i // 2 + 1} is "
-                    f"not an alternating FROM/TO ({from_kind}, {to_kind})"
-                )
-                continue
-            pair_valid = True
-            if from_name not in live:
-                errors.append(f"{capability}: RENAMED FROM '{from_name}' is not live")
-                pair_valid = False
-            if to_name in live:
-                errors.append(f"{capability}: RENAMED TO '{to_name}' already exists live")
-                pair_valid = False
-            if pair_valid:
-                validated_renamed_to.add(to_name)
+        validated_renamed_to = check_renames(capability, pairs, live, errors)
 
         for operation in ("MODIFIED", "REMOVED"):
             for name in delta.get(operation, {}):
@@ -247,9 +299,6 @@ def audit(change_id, quiet):
                 # live counterpart under that name until sync rewrites the
                 # live spec — its continuity is established by the validated
                 # RENAMED pair above verifying the FROM name is live instead.
-                # Only a name from a *validated* pair is exempt; an
-                # unvalidated or malformed TO still falls through to the
-                # existence check.
                 if operation == "MODIFIED" and name in validated_renamed_to:
                     continue
                 if name not in live:
@@ -264,22 +313,22 @@ def audit(change_id, quiet):
                     "(should this be MODIFIED?)"
                 )
 
-        for name, scenarios in delta.get("MODIFIED", {}).items():
+        for name, requirement in delta.get("MODIFIED", {}).items():
             before = live.get(name)
             if before is None:
                 continue
-            dropped = [s for s in before if s not in scenarios]
-            added = [s for s in scenarios if s not in before]
+            dropped = [s for s in before.scenarios if s not in requirement.scenarios]
+            added = [s for s in requirement.scenarios if s not in before.scenarios]
             drops += len(dropped)
             if (dropped or added) and not quiet:
                 if not header_shown:
                     print(f"\n=== {capability}")
                     header_shown = True
                 print(f"\n  {name}")
-                for s in dropped:
-                    print(f"     - DROPPED  {s}")
-                for s in added:
-                    print(f"     + added    {s}")
+                for scenario in dropped:
+                    print(f"     - DROPPED  {scenario}")
+                for scenario in added:
+                    print(f"     + added    {scenario}")
 
     print()
     print(f"{len(by_capability)} capabilities audited in '{change_id}'")
