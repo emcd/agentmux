@@ -280,7 +280,7 @@ letting a tranche boundary fall somewhere convenient.
 - [ ] 3.10 Wire UI's delivery-loop executor: peek, declare, emit as relay
       stream events through the injected broadcaster closure, ack.
 - [ ] 3.11 Wire raw-entry handling into each delivery-loop executor per
-      `transport-contracts`' `Relay raww transport behavior`: a peeked raw
+      the `raww` capability's `Relay raww transport behavior`: a peeked raw
       singleton is declared as its own packing unit, written using the same
       per-transport injection mechanics as today, then acked.
 

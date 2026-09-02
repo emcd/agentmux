@@ -76,7 +76,7 @@ The legacy synchronous methods — `deliver`, `prepare_delivery`, and
 `raww` as a **relay-inbound** operation name is unaffected by this
 requirement: a caller still invokes `raww` to submit raw input, and the
 relay still admits it, but as a raw-kind mailbox entry rather than as a
-direct push into a transport. `transport-contracts`' `Relay raww transport
+direct push into a transport. The `raww` capability's `Relay raww transport
 behavior` requirement specifies how a transport's delivery-loop executor
 discovers and writes it.
 

@@ -158,10 +158,14 @@ proposal's approval.
     Vocabulary` repointed at the neutral boundary, since the look vocabulary
     it binds to `src/transports/vocabulary` moves there with the delivery
     vocabulary; neutral-crate module-boundary requirement added)
-  - `transport-contracts` (`Prompt-Readiness Template Gating`, `Relay raww
-    transport behavior`, `ACP Transport Error Code`, and `Pty Prompt Probe
-    and Look Shall Not Block a Tokio Worker Thread` restated for the pull
-    model; per-transport injection substance unchanged)
+  - `transport-contracts` (`Prompt-Readiness Template Gating`, `ACP Transport
+    Error Code`, and `Pty Prompt Probe and Look Shall Not Block a Tokio
+    Worker Thread` restated for the pull model; per-transport injection
+    substance unchanged)
+  - `raww` (`Relay raww transport behavior` restated for the pull model,
+    unchanged in substance from when it was restated against
+    `transport-contracts` — the requirement moved capability while this
+    change was in flight, and only its home moved)
 - Affected code:
   - `src/relay/delivery/dispatch/worker/` (`HandoverWindow` use, held-member
     slot, `TargetGate`/`gate_target`/`decide_gate`, `authorize_batch` call
