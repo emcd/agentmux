@@ -36,9 +36,16 @@ event-overlay visibility).
     kind, `enqueued_at`) and a delivery-events log. Used by `F3`
     from either workbench mode.
 - `help.rs`
-  - Help overlay. Two-column keybinding reference covering modes,
-    Communication-mode editing, Interaction-mode actions, and
-    picker navigation. Triggered by `F1` from anywhere.
+  - Help overlay. Triggered by `F1` from anywhere. Three columns: two
+    of bindings generated from the binding table (`actions/help.rs`)
+    and one of reference material. What stays hand-written here is
+    what no binding row can hold — the mouse wheel, the predicate
+    deciding which interaction pane is live, the `To` address grammar,
+    and the keyboard-capability report — declared beside the section it
+    annotates. Its one inline `#[cfg(test)]` test is the documented
+    exception: the renderer is crate-private by design and no public
+    interface reaches it, so the alternative would be a
+    render-to-buffer method on `Workbench` existing only for the test.
 
 ## Open / close protocol
 

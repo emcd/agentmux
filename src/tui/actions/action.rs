@@ -88,6 +88,76 @@ pub enum Action {
 }
 
 impl Action {
+    /// One line naming this behavior for an operator.
+    ///
+    /// Generated presentation groups rows by the behavior they reach, so this
+    /// is the only place a binding's prose lives. Where two contexts bind the
+    /// same chord to different behaviors -- `Enter` in the write pane and in
+    /// the choice pane, `Ctrl+A` in `To` and in `Message` -- the wording says
+    /// which, because presentation groups by action rather than by surface and
+    /// the chord alone would not distinguish them.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::Quit => "Quit from anywhere",
+            Self::ToggleHelpOverlay => "Toggle help",
+            Self::ToggleEventsOverlay => "Toggle events overlay",
+            Self::ToggleMode => "Switch Communication / Interaction",
+            Self::OpenPicker => "Open picker (sessions)",
+            Self::OpenBundlePicker => "Open picker (bundles)",
+            Self::ClosePicker => "Close picker",
+            Self::RefreshRecipients => "Refresh recipients",
+            Self::CycleNextFocus => "Focus next field",
+            Self::CyclePreviousFocus => "Focus previous field",
+            Self::AcceptToCompletion => "To: accept completion",
+            Self::SendMessage => "Message: send",
+            Self::InsertMessageNewline => "Message: insert newline",
+            Self::AutocompleteRecipient => "To: trigger completion",
+            Self::ClearToField => "To: clear field",
+            Self::MoveNextToCompletion => "To: next completion",
+            Self::MovePreviousToCompletion => "To: previous completion",
+            Self::MoveMessageCursorUp => "Message: cursor up a line",
+            Self::MoveMessageCursorDown => "Message: cursor down a line",
+            Self::MoveMessageCursorLeft => "Message: cursor left",
+            Self::MoveMessageCursorRight => "Message: cursor right",
+            Self::MoveMessageCursorHome => "Message: line start",
+            Self::MoveMessageCursorEnd => "Message: line end",
+            Self::MoveToFieldCursorLeft => "To: cursor left",
+            Self::MoveToFieldCursorRight => "To: cursor right",
+            Self::MoveToFieldCursorHome => "To: field start",
+            Self::MoveToFieldCursorEnd => "To: field end",
+            Self::DeleteComposeCharacter => "Delete before cursor",
+            Self::InsertComposeCharacter(_) => "Insert into focused field",
+            Self::SnapChatHistoryToLatest => "Message: snap history",
+            Self::ScrollChatHistoryPageUp => "Scroll chat history up",
+            Self::ScrollChatHistoryPageDown => "Scroll chat history down",
+            Self::DispatchRaww => "Write: dispatch to active target",
+            Self::InsertRawwNewline => "Write: insert newline",
+            Self::DeleteRawwCharacter => "Write: delete before cursor",
+            Self::InsertRawwCharacter(_) => "Insert into write input",
+            Self::MoveRawwCursorLeft => "Write: cursor left",
+            Self::MoveRawwCursorRight => "Write: cursor right",
+            Self::MoveRawwCursorHome => "Write: line start",
+            Self::MoveRawwCursorEnd => "Write: line end",
+            Self::NavigateInteractionUp => "Write: cursor up / scroll",
+            Self::NavigateInteractionDown => "Write: cursor down / scroll",
+            Self::ScrollInteractionSnapshotPageUp => "Scroll look snapshot up",
+            Self::ScrollInteractionSnapshotPageDown => "Scroll look snapshot down",
+            Self::MoveNextChoiceRequest => "Choice: next request",
+            Self::MovePreviousChoiceRequest => "Choice: previous request",
+            Self::MoveNextChoiceOption => "Choice: next ACP option",
+            Self::MovePreviousChoiceOption => "Choice: previous ACP option",
+            Self::ResolveChoiceSelected => "Choice: resolve selected option",
+            Self::ResolveChoiceCancelled => "Choice: resolve as cancelled",
+            Self::TogglePickerFocus => "Switch column",
+            Self::MoveNextPickerSelection => "Next entry in column",
+            Self::MovePreviousPickerSelection => "Previous entry in column",
+            Self::CommitPickerBundle => "Bundle col: switch bundle",
+            Self::CommitPickerSession => "Session col: insert or open look",
+            Self::DeletePickerFilterCharacter => "Delete from column filter",
+            Self::AppendPickerFilterCharacter(_) => "Filter focused column",
+        }
+    }
+
     /// Applies the behavior this action names.
     ///
     /// # Errors

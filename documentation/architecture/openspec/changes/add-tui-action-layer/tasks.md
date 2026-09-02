@@ -83,15 +83,21 @@
 
 ## 4. Generated help and hints
 
-- [ ] 4.1 Define the help presentation rule as a function distinct from
+- [x] 4.1 Define the help presentation rule as a function distinct from
       `binding_context`: it selects every reachable context, not the dispatched
       one. Generate the help overlay from it, grouped by declared display
-      section in declaration order.
-- [ ] 4.2 Test that the generated help contains the compose, interaction, and
+      section in declaration order. The rule takes no `AppState`, which is what
+      makes task 4.2's property structural rather than merely tested. Its
+      context order is presentation's own, not `BindingContext::ALL`'s, which
+      pairs each surface with its dispatch precedence rather than with what
+      reads well.
+- [x] 4.2 Test that the generated help contains the compose, interaction, and
       picker bindings, and that its binding set and order are identical
       whichever context the overlay was opened from. This is the regression
       that a context-filtered help would produce, so assert it directly rather
-      than inferring it from a passing render.
+      than inferring it from a passing render. Assert it through the workbench,
+      which a context-filtered implementation would have to read: comparing the
+      state-free catalogue against itself proves nothing.
 - [ ] 4.3 Generate `picker_hint_line` and the interaction write-pane hint from
       the table, retiring their hand-rolled context-sensitive labels. These stay
       filtered to the context they annotate.
@@ -100,8 +106,19 @@
 - [ ] 4.5 Test that generated presentation does not read the keyboard-enhancement
       probe outcome, so no capability-conditioned behavior enters through the
       rendering path.
-- [ ] 4.6 Compare the rendered help overlay before and after generation and
-      resolve any readability regression before proceeding.
+- [x] 4.6 Compare the rendered help overlay before and after generation and
+      resolve any readability regression before proceeding. Generation is
+      taller and wider than the transcript it replaces: one line per behavior
+      where the transcript combined directions ("Arrows/Home/End: Move
+      cursor"), and every chord spelled out. In two columns the result
+      overflowed at terminal sizes the old overlay fitted, pushing the
+      keyboard-capability report off the bottom. Resolved by folding the
+      redundant modified `Enter` forms out of the printing, shortening the
+      behavior wording to the transcript's register, and moving to three
+      gutter-separated columns with the reference material in the third.
+      Asserted, not just inspected: one inline test renders the overlay at the
+      target geometry and checks that the retained hand-written material
+      survives and that the columns stay separated.
 
 ## 5. Documentation single-sourcing
 

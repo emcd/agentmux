@@ -6,7 +6,7 @@ use crate::relay::{RelayStreamEvent, SendResult};
 use crate::runtime::error::RuntimeError;
 
 use super::{
-    Action, BindingContext, actions, input,
+    Action, BindingContext, HelpSection, actions, input,
     state::{
         AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField, PendingChoiceEntry,
         PickerColumn, Recipient, ScreenMode, TuiLaunchOptions,
@@ -210,6 +210,18 @@ impl Workbench {
     /// surface is open over it.
     pub fn binding_lookup_order(&self) -> [BindingContext; 2] {
         actions::binding_lookup_order(&self.state)
+    }
+
+    /// The bindings as the help overlay presents them, from this workbench.
+    ///
+    /// Deliberately answers from the whole table rather than from
+    /// [`Workbench::binding_context`]: help is a catalogue of what exists, not
+    /// a report of what the current surface owns. Taking `&self` and ignoring
+    /// it is what makes that assertable from outside the crate -- a later
+    /// change that filtered by the active surface would have to read state
+    /// here, and the callers that compare two workbenches would catch it.
+    pub fn help_bindings(&self) -> Vec<HelpSection> {
+        actions::help_bindings()
     }
 
     pub fn events_overlay_open(&self) -> bool {

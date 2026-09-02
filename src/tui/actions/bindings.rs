@@ -53,7 +53,40 @@ pub(crate) enum Chord {
 }
 
 impl Chord {
-    fn matches(self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+    /// How this chord is written for an operator. Presentation folds several
+    /// rows onto one line, so a chord that renders the same as one already on
+    /// the line disappears into it -- which is what keeps the `Enter` fallback
+    /// row from printing a second, identical "Enter".
+    pub(crate) fn display(self) -> String {
+        match self {
+            Self::Key(code, modifiers) => {
+                let mut text = String::new();
+                if modifiers.contains(KeyModifiers::CONTROL) {
+                    text.push_str("Ctrl+");
+                }
+                if modifiers.contains(KeyModifiers::ALT) {
+                    text.push_str("Alt+");
+                }
+                if modifiers.contains(KeyModifiers::SHIFT) {
+                    text.push_str("Shift+");
+                }
+                text.push_str(&key_code_display(code));
+                text
+            }
+            Self::AnyModifiers(code) => key_code_display(code),
+            // Control chords are conventionally written with a capital, and
+            // the table stores them lowercase because that is the character
+            // the terminal reports. A literal typed character is not
+            // capitalised: `c` and `C` are separate rows on purpose.
+            Self::Control(character) => {
+                format!("Ctrl+{}", character_display(character.to_ascii_uppercase()))
+            }
+            Self::Char(character) => character_display(character),
+            Self::Text => "Type".to_string(),
+        }
+    }
+
+    pub(super) fn matches(self, code: KeyCode, modifiers: KeyModifiers) -> bool {
         match self {
             Self::Key(row_code, row_modifiers) => code == row_code && modifiers == row_modifiers,
             Self::AnyModifiers(row_code) => code == row_code,
@@ -72,6 +105,34 @@ fn is_typed(modifiers: KeyModifiers) -> bool {
     modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
 }
 
+fn key_code_display(code: KeyCode) -> String {
+    match code {
+        KeyCode::Enter => "Enter".to_string(),
+        KeyCode::Esc => "Esc".to_string(),
+        KeyCode::Tab => "Tab".to_string(),
+        KeyCode::BackTab => "Shift+Tab".to_string(),
+        KeyCode::Backspace => "Backspace".to_string(),
+        KeyCode::Left => "Left".to_string(),
+        KeyCode::Right => "Right".to_string(),
+        KeyCode::Up => "Up".to_string(),
+        KeyCode::Down => "Down".to_string(),
+        KeyCode::Home => "Home".to_string(),
+        KeyCode::End => "End".to_string(),
+        KeyCode::PageUp => "PgUp".to_string(),
+        KeyCode::PageDown => "PgDn".to_string(),
+        KeyCode::F(number) => format!("F{number}"),
+        KeyCode::Char(character) => character_display(character),
+        other => format!("{other:?}"),
+    }
+}
+
+fn character_display(character: char) -> String {
+    match character {
+        ' ' => "Space".to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// The draft a context's typed characters land in.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TextSink {
@@ -86,6 +147,17 @@ impl TextSink {
             Self::Compose => Action::InsertComposeCharacter(character),
             Self::Raww => Action::InsertRawwCharacter(character),
             Self::PickerFilter => Action::AppendPickerFilterCharacter(character),
+        }
+    }
+
+    /// What typing into this sink does, said without naming a character. The
+    /// per-character actions carry the operator's own keystroke, so they have
+    /// no description of their own worth presenting.
+    fn describe(self) -> &'static str {
+        match self {
+            Self::Compose => "Insert into focused field",
+            Self::Raww => "Insert into write input",
+            Self::PickerFilter => "Filter focused column",
         }
     }
 }
@@ -106,6 +178,16 @@ impl BoundAction {
                 KeyCode::Char(character) => Some(sink.action(character)),
                 _ => None,
             },
+        }
+    }
+
+    /// What this row does, for presentation. This is also the key presentation
+    /// groups rows by, which is why it is defined on `BoundAction` rather than
+    /// on `Action`: the typing rows have no single action to describe.
+    pub(crate) fn describe(self) -> &'static str {
+        match self {
+            Self::Fixed(action) => action.describe(),
+            Self::Typed(sink) => sink.describe(),
         }
     }
 }

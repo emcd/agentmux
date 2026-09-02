@@ -1,103 +1,286 @@
+//! The help overlay.
+//!
+//! Bindings are generated from the binding table rather than transcribed, so a
+//! row added there appears here without anyone remembering to copy it. What
+//! stays hand-written is the material the table cannot hold: the mouse wheel,
+//! which is not a key binding; the conditions under which the interaction
+//! region shows its write pane or its choice pane, which are
+//! `binding_context`'s predicate rather than a row; the `To` field's address
+//! grammar; and the keyboard-capability report, which reads probe state.
+//!
+//! Those notes are declared beside the section they annotate and rendered
+//! after its generated bindings.
+
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout},
+    layout::{Constraint, Direction, Layout, Rect},
     style::Modifier,
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
+use super::super::super::actions::{HelpSection, help_bindings};
 use super::super::super::keyboard::format_keyboard_enhancement_lines;
 use super::super::super::state::AppState;
 use super::super::geometry::centered_rect;
 
 pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, state: &AppState) {
-    let popup = centered_rect(72, 80, frame.area());
+    let popup = centered_rect(96, 92, frame.area());
     frame.render_widget(Clear, popup);
     let block = Block::default().borders(Borders::ALL).title("Help");
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
 
-    let columns = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(inner);
+    let columns = help_columns(inner);
 
-    let left_lines = vec![
-        help_section_heading("Modes"),
-        Line::from("F4: Toggle Communication / Interaction"),
-        Line::from("F1: Toggle help"),
-        Line::from("F2: Open picker (sessions)"),
-        Line::from("F3: Open events overlay"),
-        Line::from("F5: Open picker (bundles)"),
-        Line::from("Ctrl+R: Refresh recipients"),
-        Line::from("Ctrl+C: Quit from anywhere"),
-        Line::from(""),
-        help_section_heading("Communication Mode (default)"),
-        Line::from("Tab / Shift+Tab: Focus next/previous"),
-        Line::from("Ctrl+Space: Trigger completion in To"),
-        Line::from("Up/Down in To: Navigate completion"),
-        Line::from("Arrows/Home/End in To: Move cursor"),
-        Line::from("Ctrl+A/Ctrl+E in To: Field start/end"),
-        Line::from("Ctrl+U in To: Clear field"),
-        Line::from("Arrows/Home/End in Message: Move cursor"),
-        Line::from("Ctrl+A/Ctrl+E in Message: Line start/end"),
-        Line::from("Enter: Accept completion / send"),
-        Line::from("Ctrl+J: Insert newline in Message"),
-        Line::from("Esc in Message: Snap history to latest"),
-        Line::from("PgUp/PgDn: Scroll chat history"),
-        Line::from("Mouse wheel: Scroll chat history"),
-        Line::from(""),
-        help_section_heading("To Field Grammar"),
-        Line::from("session — route to active bundle"),
-        Line::from("session@bundle — route to named bundle"),
-        Line::from("session@GLOBAL — relay-wide user"),
-        Line::from("Comma-separate multiple recipients"),
-    ];
-    let mut right_lines = vec![
-        help_section_heading("Interaction Mode"),
-        Line::from("PgUp/PgDn: Scroll look snapshot"),
-        Line::from("Write input (write has text or no pending):"),
-        Line::from("  Arrows/Home/End: Move write cursor"),
-        Line::from("  Enter: Dispatch write to active target"),
-        Line::from("  Ctrl+J: Insert newline"),
-        Line::from("  Backspace: Backspace write input"),
-        Line::from("Choose (write empty and pending exists):"),
-        Line::from("  Left/Right: Previous/next request"),
-        Line::from("  Up/Down: Previous/next ACP option"),
-        Line::from("  Enter: Resolve selected option"),
-        Line::from("  c: Resolve as cancelled"),
-        Line::from(""),
-        help_section_heading("Picker (F2 sessions / F5 bundles)"),
-        Line::from("Up/Down: Move selection in column"),
-        Line::from("Tab / Left/Right: Switch column"),
-        Line::from("Type / Backspace: Filter column"),
-        Line::from("Enter (bundle col): Switch bundle"),
-        Line::from("Enter (session, Comm): Insert into To"),
-        Line::from("Enter (session, Interact): Open look"),
-        Line::from("Esc / F2 / F5: Close picker"),
-        Line::from("Auto-opens entering Interaction w/o target"),
-        Line::from(""),
-        help_section_heading("Keyboard Capability"),
-    ];
-    right_lines.extend(
+    // Three columns rather than the two the hand-written overlay used. The
+    // generated bindings are one line per behavior where the transcript
+    // combined directions onto a line ("Arrows/Home/End: Move cursor"), so the
+    // same content is taller; in two columns it overflowed at terminal sizes
+    // the old overlay fitted, and the keyboard-capability report was the part
+    // pushed off the bottom.
+    let mut binding_columns: [Vec<Line<'static>>; 2] = [Vec::new(), Vec::new()];
+    for section in &help_bindings() {
+        let column = match section.heading {
+            "Modes" | "Communication Mode" => 0,
+            _ => 1,
+        };
+        push_section(&mut binding_columns[column], section);
+    }
+
+    let mut reference_lines = vec![help_section_heading("To Field Grammar")];
+    for note in TO_FIELD_GRAMMAR {
+        reference_lines.push(Line::from(*note));
+    }
+    reference_lines.push(Line::from(""));
+    reference_lines.push(help_section_heading("Modified Enter"));
+    for note in MODIFIED_ENTER_NOTES {
+        reference_lines.push(Line::from(*note));
+    }
+    reference_lines.push(Line::from(""));
+    reference_lines.push(help_section_heading("Keyboard Capability"));
+    reference_lines.extend(
         format_keyboard_enhancement_lines(state.keyboard_enhancement)
             .into_iter()
             .map(Line::from),
     );
 
-    frame.render_widget(
-        Paragraph::new(left_lines).wrap(Wrap { trim: false }),
-        columns[0],
-    );
-    frame.render_widget(
-        Paragraph::new(right_lines).wrap(Wrap { trim: false }),
-        columns[1],
-    );
+    let [first, second] = binding_columns;
+    for (lines, area) in [
+        (first, columns[0]),
+        (second, columns[1]),
+        (reference_lines, columns[2]),
+    ] {
+        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+    }
 }
 
-fn help_section_heading(text: &'static str) -> Line<'static> {
+fn push_section(lines: &mut Vec<Line<'static>>, section: &HelpSection) {
+    if !lines.is_empty() {
+        lines.push(Line::from(""));
+    }
+    lines.push(help_section_heading(section.heading));
+    for entry in &section.entries {
+        lines.push(Line::from(format!(
+            "{}: {}",
+            entry.chords, entry.description
+        )));
+    }
+    for note in notes_for(section.heading) {
+        lines.push(Line::from(*note));
+    }
+}
+
+/// Behavior a section needs explained that no binding row carries.
+fn notes_for(heading: &str) -> &'static [&'static str] {
+    match heading {
+        "Communication Mode" => &["Mouse wheel: Scroll chat history"],
+        "Interaction Mode" => &[
+            "Write pane: write has text, or none pending",
+            "Choice pane: write empty and a request pending",
+        ],
+        "Picker" => &["Auto-opens entering Interaction w/o target"],
+        _ => &[],
+    }
+}
+
+const TO_FIELD_GRAMMAR: &[&str] = &[
+    "session — route to active bundle",
+    "session@bundle — route to named bundle",
+    "session@GLOBAL — relay-wide user",
+    "Comma-separate multiple recipients",
+];
+
+/// Stated once rather than on every `Enter` line. Capability-neutral defaults
+/// make the modified forms redundant wherever `Enter` is bound, and repeating
+/// them inline tripled the width of the lines that carry them.
+///
+/// Two facts, not one. The neutrality contract governs `Shift+Enter` and
+/// `Ctrl+Enter` everywhere; the interaction panes and the picker additionally
+/// carry a modifier-agnostic fallback row, so `Alt+Enter` reaches their `Enter`
+/// action too, and compose deliberately does not. Saying only the first would
+/// understate what the table binds.
+const MODIFIED_ENTER_NOTES: &[&str] = &[
+    "Shift+Enter and Ctrl+Enter match Enter wherever it is bound.",
+    "In the write and choice panes and the picker, any modifier on Enter matches.",
+    "Compose binds only the three.",
+];
+
+/// The three column areas, laid out with a gutter so they do not run together
+/// when the terminal is narrow enough to wrap their lines.
+fn help_columns(inner: Rect) -> std::rc::Rc<[Rect]> {
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(40),
+            Constraint::Percentage(40),
+            Constraint::Percentage(20),
+        ])
+        .spacing(GUTTER)
+        .split(inner)
+}
+
+/// Blank columns between the three panes.
+const GUTTER: u16 = 2;
+
+fn help_section_heading(text: &str) -> Line<'static> {
     Line::from(Span::styled(
-        text,
+        text.to_string(),
         ratatui::style::Style::default().add_modifier(Modifier::BOLD),
     ))
+}
+
+// Inline by exception, under the project's three conditions for it.
+// `render_help_overlay` is crate-private by design and no public interface
+// reaches it; making it externally testable would mean adding a
+// render-to-buffer method to `Workbench` that exists only for this test, which
+// is exactly the unintended API surface the policy is guarding against. One
+// `#[test]` function, as the policy caps it.
+//
+// It earns the exception by covering what the catalogue tests cannot: that the
+// generated bindings and the hand-written material actually fit the geometry
+// task 4.6 claims, and that the three columns do not collide.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    use crate::tui::state::{AppState, TuiLaunchOptions};
+
+    fn rendered(width: u16, height: u16) -> Vec<String> {
+        let mut state = AppState::new(TuiLaunchOptions {
+            namespace: "agentmux".to_string(),
+            sender_session: "tui".to_string(),
+            relay_socket: std::path::PathBuf::from("/tmp/agentmux-help-render.sock"),
+            look_lines: None,
+            available_bundles: vec!["agentmux".to_string()],
+        });
+        state.help_overlay_open = true;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| render_help_overlay(frame, &state))
+            .expect("draw");
+        let buffer = terminal.backend().buffer().clone();
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect()
+    }
+
+    fn columns_of(width: u16, height: u16) -> (Rect, std::rc::Rc<[Rect]>) {
+        let popup = centered_rect(96, 92, Rect::new(0, 0, width, height));
+        let inner = Block::default().borders(Borders::ALL).inner(popup);
+        let columns = help_columns(inner);
+        (inner, columns)
+    }
+
+    /// One column's text with its wrapping undone, so an assertion is about
+    /// what the column says rather than about where the terminal broke it.
+    fn column_text(lines: &[String], area: Rect) -> String {
+        let joined = (area.y..area.y + area.height)
+            .filter_map(|row| lines.get(row as usize))
+            .map(|line| {
+                line.chars()
+                    .skip(area.x as usize)
+                    .take(area.width as usize)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        joined.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
+
+    #[test]
+    fn the_overlay_fits_its_target_geometry_without_colliding_columns() {
+        let (inner, columns) = columns_of(120, 44);
+        let lines = rendered(120, 44);
+        let bindings = format!(
+            "{} {}",
+            column_text(&lines, columns[0]),
+            column_text(&lines, columns[1])
+        );
+        let reference = column_text(&lines, columns[2]);
+
+        // Material no binding row can carry, which survives only because this
+        // module still declares it.
+        for expected in [
+            "Mouse wheel: Scroll chat history",
+            "Write pane: write has text, or none pending",
+            "Choice pane: write empty and a request pending",
+            "Auto-opens entering Interaction w/o target",
+        ] {
+            assert!(
+                bindings.contains(expected),
+                "{expected:?} missing from the binding columns"
+            );
+        }
+        for expected in [
+            "session@GLOBAL",
+            "Kitty keyboard protocol",
+            "Shift+Enter and Ctrl+Enter match Enter wherever it is bound.",
+            "any modifier on Enter matches",
+            "Compose binds only the three.",
+        ] {
+            assert!(
+                reference.contains(expected),
+                "{expected:?} missing from the reference column"
+            );
+        }
+
+        // Generated bindings from every section reached the buffer, including
+        // the last entry of the second column, which is what overflowed while
+        // this was a two-column layout.
+        for expected in [
+            "Ctrl+C: Quit from anywhere",
+            "Ctrl+J: Message: insert newline",
+            "Enter: Choice: resolve selected option",
+            "Enter: Session col: insert or open look",
+        ] {
+            assert!(
+                bindings.contains(expected),
+                "{expected:?} missing from the binding columns"
+            );
+        }
+
+        // Columns are separated, and nothing is written into the separation.
+        // The width is asserted against a literal rather than against `GUTTER`,
+        // because deriving the bound from the constant under test makes the
+        // check vacuous when the constant goes to zero.
+        for (left, right) in [(columns[0], columns[1]), (columns[1], columns[2])] {
+            let gap = right.x - (left.x + left.width);
+            assert!(gap >= 1, "columns are flush: {left:?} then {right:?}");
+            for row in inner.y..inner.y + inner.height {
+                for column in left.x + left.width..right.x {
+                    let cell = lines[row as usize]
+                        .chars()
+                        .nth(column as usize)
+                        .expect("cell within the buffer");
+                    assert_eq!(cell, ' ', "gutter at {column} occupied on row {row}");
+                }
+            }
+        }
+    }
 }

@@ -21,7 +21,9 @@ use crate::runtime::{
 
 use keyboard::KeyboardEnhancementSession;
 
-pub use actions::{Action, BindingContext, default_binding};
+pub use actions::{
+    Action, BindingContext, HelpEntry, HelpSection, HelpSource, default_binding, help_bindings,
+};
 pub use keyboard::{KeyboardEnhancement, format_keyboard_enhancement_lines};
 pub use state::TuiLaunchOptions;
 pub use status::{

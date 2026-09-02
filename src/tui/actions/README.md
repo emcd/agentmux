@@ -41,6 +41,27 @@ Two halves, deliberately independent:
     from a whole screen mode in the handlers; declaring those inert
     rows would preserve no behavior and would make generated help
     offer bindings that do nothing.
+- `help.rs`
+  - `help_bindings`, which renders the whole table the way the help
+    overlay presents it, and `help_contexts`, the presentation rule.
+    That rule is deliberately separate from `binding_context` and
+    takes no state: help answers for every context, so what it shows
+    cannot depend on the surface it was opened from.
+  - Entries group by behavior rather than by chord, so a context's
+    several `Enter` rows fold onto one line. Capability-neutral
+    defaults make `Shift+Enter` and `Ctrl+Enter` redundant once
+    `Enter` is on that line, so they are stated once beside the
+    bindings instead of on each. Both remain resolvable through
+    `default_binding`; only the printing folds.
+  - Every row is recorded in `HelpEntry::sources`, folded or not, with
+    the context that declared it and `HelpSource::matches`, which
+    answers whether that row is one that answers a given key. That
+    provenance is what lets a test check presentation against the table
+    rather than against a copy of it. Both halves are load-bearing: the
+    context catches a surface dropped from `help_contexts`, whose
+    behaviors some other context still describes; the pattern catches a
+    single row dropped from a context that binds two chords to one
+    behavior, as the events overlay does with `Esc` and `F3`.
 - `context.rs`
   - `BindingContext`, `binding_context`, and `binding_lookup_order`.
     `binding_context` resolves the surface that owns a chord from
@@ -52,12 +73,15 @@ Two halves, deliberately independent:
 
 ## Public surface
 
-`Action`, `BindingContext`, and `default_binding` are exported from
-`agentmux::tui`, and `Workbench` exposes `apply_action`,
-`binding_context`, and `binding_lookup_order`. Together they let a
-caller outside the crate ask what surface is active, what a chord means
-there, and then invoke it — without naming a chord the TUI compiled in,
-and without a `KeyEvent`.
+`Action`, `BindingContext`, `default_binding`, `help_bindings`,
+`HelpSection`, `HelpEntry`, and `HelpSource` are exported from
+`agentmux::tui`, and
+`Workbench` exposes `apply_action`, `binding_context`,
+`binding_lookup_order`, and `help_bindings`. Together they let a caller
+outside the crate ask what surface is active, what a chord means there,
+and then invoke it — without naming a chord the TUI compiled in, and
+without a `KeyEvent` — or render its own binding reference from
+`help_bindings` and `Action::describe`.
 
 `default_binding` reports the compiled **defaults**. It is not a claim
 that a chord is fixed: operator-configured bindings are the intended
@@ -94,8 +118,9 @@ them as they are:
 The three explicit `Enter` rows own the modifier sets the
 capability-neutrality contract governs. The fallback exists so the
 other sets keep their current behavior, not to weaken that contract.
-Presentation will need to fold a context's several `Enter` rows into
-one line rather than printing each.
+Presentation folds a context's several `Enter` rows onto one line and
+then folds the modified forms out of it entirely, since neutrality
+makes them redundant wherever `Enter` is bound; see `help.rs`.
 
 ## Notes
 
@@ -106,5 +131,8 @@ one line rather than printing each.
   and have no action members.
 - Tests live under `tests/unit/`: `tui_bindings.rs` for what the table
   declares, `tui_dispatch.rs` for dispatch and direct application
-  agreeing on what a chord does, and `tui.rs` for the public seam.
-  `src/tui/` carries no inline `#[cfg(test)]`.
+  agreeing on what a chord does, `tui_help.rs` for generated
+  presentation, and `tui.rs` for the public seam. `src/tui/` carries
+  one inline `#[cfg(test)]`, in `../render/overlays/help.rs`, where the
+  renderer it covers is crate-private by design; everything else lives
+  under `tests/`.

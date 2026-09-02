@@ -65,6 +65,9 @@ auto-opens it.
       context, and `default_binding`, which reads it
     - `context.rs` — `BindingContext`, `binding_context`, and
       `binding_lookup_order`
+    - `help.rs` — `help_bindings`, the whole table as the help
+      overlay presents it, and `help_contexts`, the presentation
+      rule that answers for every context rather than the active one
 - `input.rs`
   - terminal event handling: which events carry a binding, and how a
     paste or a scroll reaches state. Keys resolve against `actions/`
@@ -91,7 +94,8 @@ auto-opens it.
         strip
       - `events.rs` — events overlay (pending choices + delivery
         events)
-      - `help.rs` — help overlay (two-column keybinding reference)
+      - `help.rs` — help overlay; bindings generated from the
+        binding table, reference material hand-written
     - `cursor.rs` — active cursor, compose/raww cursor placement, position
       + column helpers, raww pane area
     - `geometry.rs` — shared measure/layout helpers (`centered_rect`,
