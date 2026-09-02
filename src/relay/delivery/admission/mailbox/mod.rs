@@ -30,6 +30,7 @@
 //! - [`addressing`] — naming the target an operation acts on.
 //! - [`generation`] — issuing the generation entitled to consume a target, and
 //!   replacing it behind a fence.
+//! - [`doorbell`] — the notify-only hint that a peek is worth making.
 //! - [`enqueue`] — placing an admitted entry into its mailbox.
 //! - [`peek`] — reading the head run without advancing anything.
 //! - [`declare`] — recording the run about to be submitted as one packing unit.
@@ -40,6 +41,7 @@
 mod ack;
 mod addressing;
 mod declare;
+mod doorbell;
 mod enqueue;
 #[cfg(test)]
 mod fixtures;
@@ -49,6 +51,7 @@ mod reap;
 
 pub(in crate::relay) use self::ack::ack;
 pub(in crate::relay) use self::declare::declare;
+pub(in crate::relay) use self::doorbell::{Doorbell, register_doorbell};
 pub(in crate::relay) use self::enqueue::{EnqueueRejection, enqueue};
 pub(in crate::relay) use self::generation::{
     GenerationRejection, GenerationReplacement, ResolvedMember, claim_consumer_generation,

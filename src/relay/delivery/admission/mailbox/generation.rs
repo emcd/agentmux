@@ -138,6 +138,14 @@ pub(in crate::relay) fn replace_consumer_generation(
     if let Some(mailbox) = state.mailboxes.get_mut(&key) {
         mailbox.acknowledged.clear();
     }
+    // The doorbell is deliberately left alone, under the same rule the reap
+    // follows: only a registration displaces a registration. The replacement
+    // registers its own as it is constructed, and clearing here would put the
+    // flip and that registration into an order that has to be got right — one
+    // that registered before flipping would erase its own doorbell, and one
+    // arriving late would erase a successor's. The window a clear would close is
+    // one where a ring is lost either way, since the fence has just established
+    // that the generation the old handle belonged to has ceased.
     let generation = state.generations.entry(key).or_default().issue();
     Ok(GenerationReplacement {
         generation,

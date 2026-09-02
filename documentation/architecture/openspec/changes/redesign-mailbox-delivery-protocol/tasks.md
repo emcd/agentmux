@@ -163,12 +163,61 @@ thing the shadow exists to establish.
         later declaration for the target with a unit nobody can acknowledge.
         Hand the resolved members back rather than swallowing them: each still
         owes its sender a terminal outcome, and this call emits none.
-- [ ] 2.8 Add the delivery doorbell: a per-generation `Arc<Notify>`
+- [x] 2.8 Add the delivery doorbell: a per-generation `Arc<Notify>`
       constructed at the same point `readiness_changed` is today
       (`worker/run.rs`, `worker/spawn.rs`), invoked on a mailbox
       empty-to-non-empty
       transition, paired with a bounded poll backstop mirroring
       `ASYNC_WORKER_POLL_INTERVAL_MS`.
+      - **Registered as a generation is built, not beside
+        `readiness_changed`.** That notifier belongs to the worker and outlives
+        every generation the worker goes on to build; a doorbell belongs to the
+        generation that waits on it. So it is built in `build_generation` — the
+        same function that injects the readiness notifier into the transport —
+        which gives it the generation's lifetime rather than the worker's, and
+        makes a replacement that forgot to register one impossible rather than
+        merely unlikely.
+      - **The `Arc<Notify>` is `protocol::DeliveryDoorbell`, which task 1.1
+        already landed.** Its `ring` retains a signal when nobody is waiting, so
+        a ring made before this generation's executor exists is not a lost
+        notification. What the relay holds is not that handle but an opaque
+        closure over it, which is the injected-closure shape the requirement
+        names and keeps the relay from holding a type belonging to the side it
+        signals.
+      - **Rung on the transition a peek can see, which is narrower than the
+        mailbox gaining an entry and narrower than the mailbox having been
+        empty.** A run starts at the cursor, so an entry filling a position
+        behind one that is admitted and not yet filled leaves every peek
+        returning nothing. Ringing there tells a consumer about a run it cannot
+        see; the empty-to-non-empty reading does exactly that and is then silent
+        for the entry that finally exposes the run. Both readings are pinned
+        against by the same test.
+      - **The lock is released before the ring**, the one place in this
+        subsystem where a lock is dropped before its operation finishes. A
+        doorbell is foreign code and the ledger lock is a non-reentrant
+        `std::sync::Mutex`.
+      - **Only a registration displaces a registration.** Neither the reap nor
+        the fenced replacement clears one, and that is the whole of the
+        arrangement's safety rather than tidiness deferred. Both run *behind* the
+        target they act on, so a successor can already have registered by the
+        time either reaches the ledger; a clear would take the successor's
+        doorbell with nothing left to put one back, since a generation registers
+        once as it is built. RG found this on the reap (round 1): the
+        consumer-generation naming that protects the mailbox does not cover it
+        and cannot yet, because until the executors claim a generation every
+        target answers `None` and a late reap matches. Leaving a stale
+        registration costs one closure per target identity the process has
+        served — the bound `generations` already carries — and nothing rings one,
+        because an entry reaches a mailbox only through a worker's own intake.
+      - **The poll backstop is the one the worker already runs.** The doorbell
+        arm and the readiness arm are backstopped by the same
+        `ASYNC_WORKER_POLL_INTERVAL_MS` tick; a second timer would be duplicate
+        machinery for one bound.
+      - Nothing waits on a doorbell until the executors arrive, so a ring's only
+        trace today is `doorbell_rung` on the enqueue inscription. It is
+        asserted against a live relay rather than only in the ledger's tests,
+        which is what catches a generation that registered nothing — a failure
+        the ledger's own tests cannot see, since they register their own.
 - [ ] 2.9 Add the policy-admission-snapshot behavior: confirm (or add, if
       not already the case) that an admitted entry carries no live policy
       reference re-checked later; a policy change affects only new

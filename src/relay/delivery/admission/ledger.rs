@@ -226,6 +226,16 @@ impl TargetMailbox {
         }
     }
 
+    /// Whether a `peek` would come back with anything: the position after the
+    /// cursor is filled.
+    ///
+    /// Not the same question as whether the mailbox holds anything. A run has to
+    /// start at the cursor, so an entry sitting behind a position that has been
+    /// admitted and not yet filled is in the mailbox and invisible to a peek.
+    pub(super) fn head_is_peekable(&self) -> bool {
+        self.slots.contains_key(&self.cursor.next_sequence())
+    }
+
     /// Releases an outstanding declaration once nothing it named is still held.
     ///
     /// A declared entry can reach a terminal state without an acknowledgment —
@@ -319,6 +329,13 @@ pub(super) struct LedgerState {
     /// governs, so cleaning a target's mailbox and cursor up leaves the sequence
     /// where it stood.
     pub(super) generations: HashMap<AdmissionTargetKey, TargetGenerations>,
+    /// The doorbell to ring for each target whose consumer registered one.
+    ///
+    /// Beside the mailboxes rather than on one for the same reason the
+    /// generations are: it is registered as a generation is built, which can
+    /// precede the target's first entry, and holding it on the mailbox would
+    /// mean a registration created the mailbox it is waiting for.
+    pub(super) doorbells: HashMap<AdmissionTargetKey, super::mailbox::Doorbell>,
     pub(super) global: TargetUsage,
     pub(super) per_target: HashMap<AdmissionTargetKey, TargetUsage>,
 }

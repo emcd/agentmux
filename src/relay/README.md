@@ -394,6 +394,40 @@ exported from `src/relay/mod.rs`.
     function (`resolve_queued_tasks_and_reclaim`) rather than at each call site,
     because while they were separate only one of the two paths carried the
     retry.
+    The **doorbell** is the one signal running the other way, from the relay
+    toward a consumer, and it is deliberately the weakest thing that works: an
+    opaque closure the consumer's side injects, carrying no data and taking no
+    custody, so everything a consumer acts on it still reads back out of the
+    mailbox for itself. It is registered as a generation is built
+    (`build_generation`, alongside the readiness notifier a transport is handed),
+    and **only a registration ever displaces a registration** — neither the reap
+    nor the fenced replacement clears one. That is not tidiness deferred but the
+    whole of its safety: both of those run *behind* the target they act on, so a
+    successor can already have registered by the time either reaches the ledger,
+    and a clear would take the successor's doorbell with nothing left to put one
+    back — it registers once, as it is built, and would be poll-only for the rest
+    of its life. The consumer-generation naming that protects the mailbox does
+    not cover this and cannot yet: until the executors claim a generation every
+    target answers `None`, so a late reap matches and proceeds. Leaving them
+    costs one small closure per target identity the process has served — the
+    bound `generations` already carries — and nothing rings a stale one, because
+    an entry reaches a mailbox only through a worker's own intake, so a target
+    with no worker has nothing to enqueue. What the closure rings in production
+    is `protocol::DeliveryDoorbell`, the neutral handle the delivery-loop
+    executor waits on once the cutover gives it one. The relay rings it when a
+    `peek` that would have come back empty would now come back with something —
+    narrower than "the mailbox gained an entry", because an entry filling a
+    position behind one that is admitted and still unfilled leaves every peek
+    returning nothing, and narrower than "the mailbox was empty", which is that
+    same case read from the other side and rings for the invisible entry rather
+    than for the one that finally exposes it. Ringing happens after the ledger
+    lock is released, the one place in this subsystem where a lock is dropped
+    before the operation finishes: a doorbell is foreign code and the lock is
+    not reentrant. Nothing waits on one yet, so a ring's only trace today is the
+    `doorbell_rung` field on the enqueue inscription; correctness never depends
+    on a ring arriving either way, and each executor pairs the doorbell with its
+    own bounded poll (`ASYNC_WORKER_POLL_INTERVAL_MS`), which is what makes a
+    missed notification cost a delay and nothing else.
   - `guard.rs`: the queue entry state model (`Queued`/`Terminal`), the guard
     identity, the typed submission evidence, and the guard's single evidence
     order. The types live

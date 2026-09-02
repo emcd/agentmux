@@ -53,10 +53,17 @@ pub(in crate::relay) fn enqueue(
     // bytes, and a target whose deliveries failed to release would report them
     // climbing with the send count instead.
     let reserved = state.per_target.get(&target).copied().unwrap_or_default();
+    // Taken ahead of the mailbox borrow rather than after the insertion, so
+    // nothing below has to hold two borrows of the ledger at once. It is an
+    // `Arc` clone, and whether it is rung is decided afterwards.
+    let registered = state.doorbells.get(&target).cloned();
     let mailbox = state.mailboxes.entry(target.clone()).or_default();
     if mailbox.slots.contains_key(&sequence) {
         return Err(EnqueueRejection::AlreadyEnqueued);
     }
+    // Read before the insertion, because a doorbell reports a transition and
+    // only the reading taken beforehand establishes one.
+    let head_was_peekable = mailbox.head_is_peekable();
     mailbox.slots.insert(
         sequence,
         MailboxSlot {
@@ -64,6 +71,17 @@ pub(in crate::relay) fn enqueue(
             payload,
         },
     );
+    // Rung when a peek that would have come back empty would now come back with
+    // something. Deliberately narrower than "the mailbox gained an entry": an
+    // entry filling a position behind one that is admitted and still unfilled
+    // leaves every peek returning nothing, so telling a consumer to look would
+    // be telling it about a run it cannot see. It is also narrower than "the
+    // mailbox was empty", which is the same case read from the other side —
+    // that reading rings for the invisible entry and then stays silent for the
+    // one that finally exposes it.
+    let doorbell = (!head_was_peekable && mailbox.head_is_peekable())
+        .then_some(registered)
+        .flatten();
     // What the mailbox holds is otherwise invisible from outside the relay, and
     // three things about it have to be observable rather than argued. Its depth
     // must not grow without bound while the push path — which acknowledges
@@ -98,8 +116,20 @@ pub(in crate::relay) fn enqueue(
             "target_envelopes_reserved": reserved.envelopes,
             "target_bytes_reserved": reserved.bytes,
             "payload_created_at": payload_created_at,
+            "doorbell_rung": doorbell.is_some(),
         }),
     );
+    // The one place in this subsystem where the lock is deliberately released
+    // before the operation finishes. A doorbell is foreign code the relay does
+    // not own, and the ledger lock is a non-reentrant `std::sync::Mutex`, so a
+    // doorbell that reached the ledger — directly, or by waking something that
+    // does before it returns — would deadlock the whole of delivery. Ringing
+    // afterwards costs nothing: the entry is already placed, so a consumer that
+    // peeks the instant it is rung finds what it was rung about.
+    drop(state);
+    if let Some(doorbell) = doorbell {
+        doorbell();
+    }
     Ok(sequence)
 }
 

@@ -154,6 +154,20 @@ async fn the_mailbox_returns_to_empty_as_the_push_path_delivers() {
             "the released reservation returns this target's byte count to the one \
              entry it now holds: {details:?}"
         );
+        // The doorbell, which is otherwise invisible from outside the relay:
+        // nothing waits on it until the cutover, so a ring leaves no other
+        // trace. Each of these sends arrives at a mailbox the one before it
+        // emptied, which is exactly the transition a doorbell reports — so a
+        // `false` here means either that the generation never registered one or
+        // that the transition was misjudged, and the two failures the relay
+        // could not otherwise be caught in are the whole reason this is read
+        // against a live worker rather than only in the ledger's own tests.
+        assert_eq!(
+            details.get("doorbell_rung").and_then(Value::as_bool),
+            Some(true),
+            "each generation registers a doorbell and the relay rings it when \
+             its target's head becomes peekable: {details:?}"
+        );
     }
 
     // Every entry resolved, exactly once, and *delivered*. The outcome value is
