@@ -84,8 +84,74 @@ pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, state: &App
         (second, columns[1]),
         (reference_lines, columns[2]),
     ] {
-        frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+        frame.render_widget(wrapped(fit_column(lines, area)), area);
     }
+}
+
+fn wrapped(lines: Vec<Line<'static>>) -> Paragraph<'static> {
+    Paragraph::new(lines).wrap(Wrap { trim: false })
+}
+
+/// How many rows a column's text needs at this width.
+///
+/// `Paragraph`'s own measurement, at the same width and with the same wrapping
+/// the drawing uses. A second implementation of wrapping could disagree with
+/// the renderer about where a line breaks, and a row budget computed from a
+/// disagreeing measure would mis-place the very marker it is being computed
+/// for. With `Wrap` each source line wraps independently, so a column's cost is
+/// the sum of its lines'.
+fn row_cost(line: &Line<'static>, width: u16) -> usize {
+    wrapped(vec![line.clone()]).line_count(width).max(1)
+}
+
+/// A column's lines, with an explicit marker in place of whatever does not fit.
+///
+/// `Paragraph` draws the rows that fit and discards the rest with no trace on
+/// screen. That is how three bindings -- committing a picker session among them
+/// -- went missing from this overlay below 41 rows while every test passed. The
+/// content is not made reachable here; it is made *visible* that content is
+/// missing, which is the difference between a short terminal and a wrong
+/// binding table.
+fn fit_column(lines: Vec<Line<'static>>, area: Rect) -> Vec<Line<'static>> {
+    let available = usize::from(area.height);
+    if available == 0 {
+        return Vec::new();
+    }
+    let costs: Vec<usize> = lines
+        .iter()
+        .map(|line| row_cost(line, area.width))
+        .collect();
+    if costs.iter().sum::<usize>() <= available {
+        return lines;
+    }
+    // The marker is measured at its widest -- every line hidden -- so a
+    // narrow column that wraps it onto a second row has already reserved
+    // that row. Reserving one row instead would overflow by exactly the
+    // amount this function exists to prevent.
+    let reserved = row_cost(&overflow_marker(lines.len()), area.width);
+    let mut used = 0usize;
+    let mut kept = 0usize;
+    for cost in &costs {
+        if used + cost + reserved > available {
+            break;
+        }
+        used += cost;
+        kept += 1;
+    }
+    let hidden = lines.len() - kept;
+    let mut shown: Vec<Line<'static>> = lines.into_iter().take(kept).collect();
+    shown.push(overflow_marker(hidden));
+    shown
+}
+
+/// Counts the entries a column could not show, not the rows they would have
+/// taken. An operator reads the overlay in bindings, and a row count would
+/// overstate the loss wherever a line wrapped.
+fn overflow_marker(hidden: usize) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("… {hidden} more (resize taller)"),
+        ratatui::style::Style::default().add_modifier(Modifier::BOLD),
+    ))
 }
 
 fn push_section(lines: &mut Vec<Line<'static>>, section: &HelpSection) {
@@ -255,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn the_overlay_fits_its_geometry_and_ignores_the_probe_outcome() {
+    fn the_overlay_presents_every_binding_or_counts_the_ones_it_hid() {
         let (inner, columns) = columns_of(120, 44);
         let lines = rendered(120, 44);
         let bindings = format!(
@@ -381,6 +447,107 @@ mod tests {
                     assert_eq!(cell, ' ', "gutter at {column} occupied on row {row}");
                 }
             }
+        }
+
+        // A sweep over heights rather than the single geometry this test used
+        // to render at. 120x44 is where the content happens to fit, and an
+        // assertion that only ever runs there cannot fail -- which is why three
+        // bindings went missing at 36 rows with this test green. A parameter a
+        // test takes must be swept or derived, never chosen.
+        let expected: Vec<String> = help_bindings()
+            .iter()
+            .flat_map(|section| section.entries.iter())
+            .map(|entry| format!("{}: {}", entry.chords, entry.description))
+            .collect();
+        assert!(!expected.is_empty(), "the table presents no bindings");
+
+        let mut visible_counts = Vec::new();
+        for height in [30u16, 36, 40, 41, 44] {
+            let (_, areas) = columns_of(120, height);
+            let buffer = rendered(120, height);
+            // Undo the wrapping first: a binding split across two rows is
+            // present, and searching the raw buffer would report it missing
+            // wherever the column happened to be narrow.
+            let shown = format!(
+                "{} {}",
+                column_text(&buffer, areas[0]),
+                column_text(&buffer, areas[1])
+            );
+            let missing: Vec<&String> = expected
+                .iter()
+                .filter(|entry| !shown.contains(entry.as_str()))
+                .collect();
+            let claimed: usize = shown
+                .match_indices("… ")
+                .filter_map(|(at, _)| {
+                    shown[at + "… ".len()..]
+                        .split_whitespace()
+                        .next()
+                        .and_then(|count| count.parse::<usize>().ok())
+                })
+                .sum();
+
+            if missing.is_empty() {
+                assert_eq!(
+                    claimed, 0,
+                    "everything is shown at 120x{height} but a marker claims {claimed} hidden"
+                );
+            } else {
+                // The markers count hidden *lines*, which include the
+                // hand-written notes and the blank separators, so they can only
+                // be asserted to cover the missing bindings rather than to
+                // equal them. What matters is that nothing disappears without
+                // being counted.
+                assert!(
+                    claimed >= missing.len(),
+                    "120x{height} hides {} bindings but the markers claim only {claimed}: {missing:?}",
+                    missing.len()
+                );
+            }
+            visible_counts.push(expected.len() - missing.len());
+        }
+
+        // 41 rows is the height at which the whole overlay fits; 44 is the one
+        // this test used to render at alone. Both must show everything, or the
+        // inequality above is satisfied everywhere by an overlay that shows
+        // nothing and admits it.
+        assert_eq!(
+            (visible_counts[3], visible_counts[4]),
+            (expected.len(), expected.len()),
+            "the overlay does not fit even at its documented minimum height"
+        );
+
+        // And the 36-row case that the smoke test found: the picker's commit
+        // binding is the entry that went missing, and it must now be counted
+        // rather than simply absent.
+        let commit = binding_for(BindingContext::PickerSessions, Action::CommitPickerSession)
+            .expect("the session column binds committing a selection");
+        let commit_line = format!("{}: {}", commit.chords, commit.description);
+        let (_, narrow_areas) = columns_of(120, 36);
+        let narrow = rendered(120, 36);
+        let narrow_text = format!(
+            "{} {}",
+            column_text(&narrow, narrow_areas[0]),
+            column_text(&narrow, narrow_areas[1])
+        );
+        assert!(
+            !narrow_text.contains(&commit_line),
+            "120x36 now fits {commit_line:?}; this regression case no longer reproduces \
+             and the sweep needs a height that does"
+        );
+        assert!(
+            narrow_text.contains("… "),
+            "120x36 drops {commit_line:?} without a marker saying so:\n{narrow_text}"
+        );
+
+        // A taller terminal never shows fewer bindings. A budget that
+        // miscounted rows could satisfy every check above while regressing
+        // here.
+        for pair in visible_counts.windows(2) {
+            assert!(
+                pair[1] >= pair[0],
+                "a taller overlay shows fewer bindings: {visible_counts:?}"
+            );
         }
     }
 }

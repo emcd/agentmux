@@ -66,6 +66,17 @@ event-overlay visibility).
     deciding which interaction pane is live, the `To` address grammar,
     and the keyboard-capability report — declared beside the section it
     annotates.
+  - A column whose text does not fit renders an explicit marker naming
+    how many entries it could not show. `Paragraph` otherwise draws the
+    rows that fit and discards the rest with nothing on screen to say
+    so, which hid three bindings below 41 rows. The row count comes
+    from `Paragraph::line_count` — the renderer's own measurement at
+    the same width — because a second wrapping implementation could
+    disagree with the drawing about where a line breaks, and a budget
+    computed from a disagreeing measure would misplace the marker it
+    is being computed for. This makes the loss visible, not reachable:
+    the whole overlay still needs 41 rows, and scrolling or a layout
+    change is a deferred product decision.
   - The report's own subject is delivery: how a key reaches the TUI
     under each probe outcome. The line naming the chord that inserts a
     newline regardless of the outcome is about what a key *does*, so it
