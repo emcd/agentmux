@@ -68,6 +68,7 @@
 mod choices;
 mod delivery;
 mod dispatch;
+mod executor;
 mod status;
 mod transport;
 
@@ -81,6 +82,9 @@ pub use choices::{ChoiceMade, ChoiceToMake, Chooser, StartupContext, ThingToChoo
 pub(crate) use delivery::stopped_before_submission_outcome;
 pub use delivery::{DeliveryEnvelope, DeliveryMessage, OutcomeFuture, SingleDeliveryOutcome};
 pub use dispatch::{HandoverDimensions, TransportImpl};
+pub use executor::{
+    DeliveryExecutorContext, DeliveryWriter, MailboxConsumer, PlannedWrite, run_delivery_executor,
+};
 pub use status::{LookMode, TransportError, TransportReadiness, TransportStatus};
 pub use transport::{
     GenerationFence, OutputView, PartitionSink, Transport, TransportHealth, UnreachableSince,

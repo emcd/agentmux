@@ -153,37 +153,50 @@ fn an_entry_reports_the_kind_of_its_payload() {
     assert!(entry.is_barrier());
 }
 
-/// A ring that lands before anyone is waiting is retained rather than dropped.
+/// A ring that lands before anyone is waiting is retained rather than dropped,
+/// and is consumed by the wait that observes it.
 ///
 /// This is the one doorbell property worth pinning: correctness never depends on
 /// a ring arriving, but an entry admitted moments before an executor begins
 /// waiting should not have to sit until the poll backstop, and that is a property
 /// of the primitive rather than of the caller.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_ring_before_anyone_waits_is_retained() {
+///
+/// The second half is what stops retention from becoming a stuck signal. A ring
+/// that survived the wait it woke would make every subsequent wait return
+/// immediately, and the executor's poll interval — which it paces itself by,
+/// passing it as this timeout — would collapse into a spin for the life of the
+/// generation.
+#[test]
+fn a_ring_before_anyone_waits_is_retained_and_then_consumed() {
     let doorbell = DeliveryDoorbell::new();
 
     doorbell.ring();
 
-    tokio::time::timeout(std::time::Duration::from_secs(5), doorbell.rung())
-        .await
-        .expect("a ring delivered before the wait began should still wake it");
+    assert!(
+        doorbell.wait_for(std::time::Duration::from_secs(5)),
+        "a ring delivered before the wait began should still wake it"
+    );
+    assert!(
+        !doorbell.wait_for(std::time::Duration::from_millis(50)),
+        "the wait that observed the ring consumed it, so the next one times out"
+    );
 }
 
 /// Both handles name the same doorbell: the relay holds one to ring, the target's
 /// delivery executor holds the other to wait on.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_cloned_handle_observes_the_same_doorbell() {
+#[test]
+fn a_cloned_handle_observes_the_same_doorbell() {
     let relay_side = DeliveryDoorbell::new();
     let executor_side = relay_side.clone();
 
-    let waiting = tokio::spawn(async move { executor_side.rung().await });
-    // Retained if the spawned task has not reached its wait yet, so this does not
-    // depend on the two tasks interleaving in any particular order.
+    let waiting =
+        std::thread::spawn(move || executor_side.wait_for(std::time::Duration::from_secs(5)));
+    // Retained if the spawned thread has not reached its wait yet, so this does
+    // not depend on the two threads interleaving in any particular order.
     relay_side.ring();
 
-    tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
-        .await
-        .expect("a clone should observe a ring made through its sibling")
-        .expect("the waiting task should not panic");
+    assert!(
+        waiting.join().expect("the waiting thread should not panic"),
+        "a clone should observe a ring made through its sibling"
+    );
 }
