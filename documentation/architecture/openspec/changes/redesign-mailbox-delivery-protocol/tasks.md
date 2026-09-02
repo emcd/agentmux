@@ -368,3 +368,38 @@ letting a tranche boundary fall somewhere convenient.
       `verify-openspec-deltas.py` substitutes: the first checks that a delta
       is well formed and the second that a MODIFIED delta retains what it
       replaces, and a requirement that never reaches a live spec passes both.
+- [ ] 5.14 Settle `agentmux:todos/backend/7` before this change is archived:
+      `declare` is specified as `declare(target, generation_id, through_seq)`
+      by `Mailbox Submission Declaration` and by task 2.3, and takes an
+      `EntryRange` carrying both ends in the implementation. Either author a
+      delta naming a range, correcting task 2.3's wording in the same change,
+      or decide explicitly that `through_seq` is shorthand rather than
+      binding and record that where a later author will see it. The divergence
+      is deliberate — with only `through_seq` a caller cannot express a wrong
+      start, which makes the requirement's own `NotAtCursor` rejection
+      unrepresentable and task 5.4 unwritable — but a reviewed type shape is
+      not an amended requirement, and a MODIFIED delta replaces a whole
+      requirement at sync, so whoever authors against the live text next
+      reintroduces the mismatch without noticing.
+- [ ] 5.15 Run the retention audit against this change at its **pre-archive**
+      state and confirm every dropped scenario, per
+      `agentmux:todos/backend/8`, which holds the recorded baseline, the
+      extraction command, and the per-scenario classification. The count is
+      **41** at time of writing; that note's title still says 42, which was
+      the figure before `Keep the upward-signal closure pinned by a scenario`
+      restored one. Re-running is not optional at archive: a MODIFIED delta
+      replaces the whole requirement, so the drop set moves whenever another
+      change archives into a requirement this one targets — with no delta
+      file edited and therefore no commit firing the `lint-openspec-deltas`
+      hook. That is the one shape the hook structurally cannot see.
+      Sweep backwards as well as forwards while there: drops are found live
+      spec into delta, but a citation going stale is found only delta prose
+      into what the change deletes, and that backwards sweep is what caught
+      the single real loss in the early audit while both gates were green.
+
+Tasks 5.12 through 5.15 are archive preconditions rather than testing work,
+and they are recorded here rather than only in the notebook for one reason:
+`opsx-archive` reads this file and warns on an unchecked box, which puts the
+warning at the moment the mistake would be made. Nothing reads the notebook
+at archive time, so an obligation living only there warns whoever thinks to
+look — which, months later, is nobody.
