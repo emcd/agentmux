@@ -48,8 +48,25 @@ about which state they are in -- some applied, some not -- are an error in their
 own right. See `applied_state` for how the state is inferred and why it is not
 recorded.
 
+`--citations` runs a different audit, over the corpus rather than over one
+change. A requirement cited by name in prose is either live, or supplied by a
+change that has not synced yet, or supplied by nothing at all. The middle case
+is not a defect -- it is a promise that comes true at sync -- and the third is
+permanent. What makes the distinction worth drawing is that archiving a change
+without syncing it converts every citation of the first kind into the second,
+silently, which is the enforcement gap this mode exists to close.
+
+Citations are recognized by matching a backticked span against the set of known
+requirement names, not by the words around it. An earlier checker required the
+word "requirement" near the name and missed a real instance phrased as "the
+`transport-contracts` capability's `Relay raww operation contract` governs its
+request shape". The cost is that a name no requirement ever had -- a typo --
+matches nothing and is invisible; this finds citations that stopped resolving,
+not citations that were never right.
+
 Usage:  scripts/verify-openspec-deltas.py <change-id> [<change-id> ...]
         scripts/verify-openspec-deltas.py [--quiet] <delta-spec-path> ...
+        scripts/verify-openspec-deltas.py [--quiet] --citations
 
 Arguments are change ids, or paths to delta spec files from which the change id
 is read. The path form is what the `lint-openspec-deltas` pre-commit hook uses:
@@ -120,9 +137,14 @@ DELTA_PATH = re.compile(r"/changes/([^/]+)/specs/")
 ARCHIVE_SEGMENT = "archive"
 
 
+def repository_root():
+    """Return the repository root, derived from this script's own location."""
+    return Path(__file__).resolve().parents[1]
+
+
 def planning_home():
     """Return the OpenSpec planning home directory, or exit if there is none."""
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = repository_root()
     home = next(
         (
             (repo_root / candidate).resolve()
@@ -239,6 +261,179 @@ def read_change(change_specs):
             merged_sections.setdefault(operation, {}).update(requirements)
         merged_pairs.extend(pairs)
     return by_capability
+
+
+# A citation is a requirement name written in backticks somewhere in prose.
+#
+# Matching is by NAME against the set of requirement names that exist anywhere
+# in the corpus, and deliberately not by the phrasing around the name. An
+# earlier checker keyed on a backticked name followed by the word "requirement"
+# and missed the instance found in review -- `transport-abstraction` read "the
+# `transport-contracts` capability's `Relay raww operation contract` governs its
+# request shape", with no "requirement" anywhere near it. Citations take too
+# many phrasings to enumerate; requirement names are distinctive enough to
+# recognize on their own.
+#
+# The cost of that choice is recall in the other direction: a citation naming a
+# requirement that never existed anywhere -- a typo, or a name invented in
+# prose -- matches nothing and is invisible here. This finds citations that
+# have stopped resolving, not every citation that was never right.
+CITATION = re.compile(r"`([^`\n]{4,120})`")
+
+# Where a citation may be written. Archived changes are excluded: an archived
+# change is a record of what was decided, and a name it cites that never
+# reached live is history rather than a defect to repair.
+CORPUS_GLOBS = ("documentation/**/*.md", "src/**/*.md", "src/**/*.rs", "*.md")
+
+
+def delta_names(change_root):
+    """Return {requirement_name: capability} a change would bring into being.
+
+    Only ADDED and the TO half of a RENAMED create a requirement that does not
+    exist yet. MODIFIED does not: it edits a requirement that is already live,
+    so a MODIFIED delta naming something absent is a broken delta rather than a
+    promise of one. Counting MODIFIED here made this function answer a
+    different question than its two callers ask -- it let a change excuse
+    another change's missing target merely by editing the same name, and it
+    made a citation to a name nothing creates read as merely early.
+
+    RENAMED was missed in the other direction: its TO names entered only by
+    accident, because a rename is usually written alongside a MODIFIED block
+    keyed by the new name. Dropping MODIFIED without adding TO explicitly would
+    have taken real renames out of the citation universe with it.
+    """
+    found = {}
+    specs = change_root / "specs"
+    if not specs.is_dir():
+        return found
+    for path in sorted(specs.rglob("*.md")):
+        capability = path.relative_to(specs).parts[0]
+        sections, pairs = parse_delta(path)
+        for name in sections.get("ADDED", {}):
+            found.setdefault(name, capability)
+        for _, to_name in rename_pairs(pairs):
+            found.setdefault(to_name, capability)
+    return found
+
+
+def name_universe(home):
+    """Return (live, inflight, archived) requirement-name maps.
+
+    `live` maps a name to the capability holding it. The other two map a name
+    to the changes that would supply it, which is what separates a citation
+    that is merely early from one that can never resolve.
+    """
+    live, inflight, archived = {}, {}, {}
+    for spec in sorted((home / "specs").rglob("*.md")):
+        capability = spec.relative_to(home / "specs").parts[0]
+        for name in parse(spec):
+            live.setdefault(name, capability)
+    for change_root in sorted((home / "changes").iterdir()):
+        if not change_root.is_dir() or change_root.name == ARCHIVE_SEGMENT:
+            continue
+        for name in delta_names(change_root):
+            inflight.setdefault(name, []).append(change_root.name)
+    archive_dir = home / "changes" / ARCHIVE_SEGMENT
+    for change_root in sorted(archive_dir.iterdir()) if archive_dir.is_dir() else []:
+        if not change_root.is_dir():
+            continue
+        for name in delta_names(change_root):
+            archived.setdefault(name, []).append(change_root.name)
+    return live, inflight, archived
+
+
+def citation_corpus(root, home):
+    """Return the paths that may carry a citation, deduplicated and ordered.
+
+    `documentation/**` reaches the archive tree, so archived changes are
+    filtered out here rather than merely omitted from the globs. Leaving them
+    in buries the live findings: the archive holds 46 citations to requirements
+    that were renamed or removed by changes that came after, every one of them
+    an accurate record of what was true when it was written.
+    """
+    archive = home / "changes" / ARCHIVE_SEGMENT
+    paths, seen = [], set()
+    for glob in CORPUS_GLOBS:
+        for path in sorted(root.glob(glob)):
+            if not path.is_file() or path in seen or archive in path.parents:
+                continue
+            seen.add(path)
+            paths.append(path)
+    for change_root in sorted((home / "changes").iterdir()):
+        if not change_root.is_dir() or change_root.name == ARCHIVE_SEGMENT:
+            continue
+        for path in sorted(change_root.rglob("*.md")):
+            if path not in seen:
+                seen.add(path)
+                paths.append(path)
+    return paths
+
+
+def citing_change(path, home):
+    """Return the change id whose directory holds this file, or None."""
+    changes = home / "changes"
+    try:
+        parts = path.relative_to(changes).parts
+    except ValueError:
+        return None
+    return parts[0] if parts and parts[0] != ARCHIVE_SEGMENT else None
+
+
+def classify_citation(name, owner, live, inflight, archived):
+    """Return (verdict, sources) for one cited name, or None when it resolves.
+
+    `owner` is the change whose directory holds the citing file, if any. A
+    change citing a requirement it introduces itself is self-consistent and
+    reports nothing; only a citation from outside is waiting on somebody else.
+    """
+    if name in live:
+        return None
+    if name in inflight:
+        sources = inflight[name]
+        return None if owner in sources else ("PENDING", sources)
+    if name in archived:
+        return "DANGLING", archived[name]
+    return None
+
+
+def check_citations(quiet):
+    """Audit requirement citations across the corpus.
+
+    Returns (errors, pending) where pending lists citations that resolve only
+    into a change that has not synced yet. Those are not defects: they are
+    promises that come true at sync, which is exactly why archiving a change
+    without syncing it is the moment they become permanent.
+    """
+    home = planning_home()
+    root = repository_root()
+    live, inflight, archived = name_universe(home)
+
+    errors, pending = [], []
+    for path in citation_corpus(root, home):
+        owner = citing_change(path, home)
+        text = path.read_text()
+        for match in CITATION.finditer(text):
+            name = match.group(1).strip()
+            verdict = classify_citation(name, owner, live, inflight, archived)
+            if verdict is None:
+                continue
+            kind, sources = verdict
+            line = text.count("\n", 0, match.start()) + 1
+            where = f"{path.relative_to(root)}:{line}"
+            if kind == "PENDING":
+                pending.append((where, name, sources))
+            else:
+                errors.append(
+                    f"{where}: '{name}' resolves to no live requirement; it was "
+                    f"last named by archived {', '.join(sources)}"
+                )
+
+    if pending and not quiet:
+        print("\n=== citations awaiting a sync")
+        for where, name, sources in pending:
+            print(f"\n  {where}")
+            print(f"     PENDING  '{name}' <- {', '.join(sources)}")
+    return errors, pending
 
 
 def change_ids(arguments):
@@ -678,14 +873,64 @@ SELFTEST_CASES = [
 ]
 
 
+# Each case is `(name, cited_name, citing_change, expected_verdict)` against the
+# fixed universe below. The DANGLING branch reports nothing on today's corpus,
+# so without these it would be an assertion of absence from a check that has
+# never once fired.
+#
+# `Amended Requirement` and `Restored Requirement` are the ordinary case rather
+# than a curiosity: a MODIFIED delta names a requirement that is already live,
+# and an ADDED one stays named by its change after that change archives. Both
+# are live AND named by a change, so a universe without them cannot tell
+# whether the live check is doing anything.
+CITATION_UNIVERSE = (
+    {
+        "Live Requirement": "some-capability",
+        "Amended Requirement": "some-capability",
+        "Restored Requirement": "some-capability",
+    },
+    {"Arriving Requirement": ["some-change"], "Amended Requirement": ["some-change"]},
+    {
+        "Departed Requirement": ["2026-01-01-some-archived-change"],
+        "Restored Requirement": ["2026-01-01-some-archived-change"],
+    },
+)
+
+CITATION_CASES = [
+    ("a live requirement", "Live Requirement", None, None),
+    ("a name nobody has ever used", "Invented Requirement", None, None),
+    ("a live requirement an in-flight change also modifies",
+     "Amended Requirement", None, None),
+    ("a live requirement an archived change introduced",
+     "Restored Requirement", None, None),
+    ("an in-flight requirement cited from outside", "Arriving Requirement",
+     None, "PENDING"),
+    ("an in-flight requirement cited by another change", "Arriving Requirement",
+     "other-change", "PENDING"),
+    ("an in-flight requirement cited by the change adding it",
+     "Arriving Requirement", "some-change", None),
+    ("a requirement no change will restore", "Departed Requirement",
+     None, "DANGLING"),
+    ("a departed requirement cited from within a change",
+     "Departed Requirement", "some-change", "DANGLING"),
+]
+
+
 def run_selftest():
-    """Return a list of failure descriptions; empty when the classifier works."""
+    """Return a list of failure descriptions; empty when the classifiers work."""
     failures = []
     for name, delta, pairs, live, expected in SELFTEST_CASES:
         state, _ = applied_state({"c": (delta, pairs)}, {"c": live})
         if state != expected:
             failures.append(
-                f"self-test case {name!r} classified {state}, expected {expected}"
+                f"applied-state case {name!r} classified {state}, expected {expected}"
+            )
+    for name, cited, owner, expected in CITATION_CASES:
+        verdict = classify_citation(cited, owner, *CITATION_UNIVERSE)
+        actual = verdict[0] if verdict else None
+        if actual != expected:
+            failures.append(
+                f"citation case {name!r} classified {actual}, expected {expected}"
             )
     return failures
 
@@ -802,13 +1047,32 @@ def audit(change_id, quiet):
     return errors, drops
 
 
-USAGE = "usage: verify-openspec-deltas.py [--quiet] <change-id|delta-path> ..."
+USAGE = (
+    "usage: verify-openspec-deltas.py [--quiet] <change-id|delta-path> ...\n"
+    "       verify-openspec-deltas.py [--quiet] --citations"
+)
+
+FLAGS = ("--quiet", "--citations")
+
+
+def report(errors, trailer=None):
+    """Print the error block and return the process exit status."""
+    print()
+    if errors:
+        for message in errors:
+            print(f"ERROR  {message}")
+        print()
+    print(f"{len(errors)} errors")
+    if trailer:
+        print(trailer)
+    return 1 if errors else 0
 
 
 def main():
-    arguments = [a for a in sys.argv[1:] if a != "--quiet"]
+    arguments = [a for a in sys.argv[1:] if a not in FLAGS]
     quiet = "--quiet" in sys.argv
-    if not arguments:
+    citations = "--citations" in sys.argv
+    if not arguments and not citations:
         sys.exit(USAGE)
 
     failures = run_selftest()
@@ -822,6 +1086,17 @@ def main():
             file=sys.stderr,
         )
         return 1
+
+    if citations:
+        errors, pending = check_citations(quiet)
+        trailer = None
+        if pending:
+            trailer = (
+                f"\n{len(pending)} citation(s) resolve only into a change that has\n"
+                "not synced yet. Each is a promise rather than a defect -- and\n"
+                "each becomes permanent if that change archives unsynced."
+            )
+        return report(errors, trailer)
 
     # No recognizable change among the arguments is not a failure: the hook is
     # reached by any commit whose files match its filter, and an archive-only
