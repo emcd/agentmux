@@ -135,13 +135,34 @@ thing the shadow exists to establish.
       Treat a mailbox that grows without bound under sustained delivery,
       or a delivered envelope that differs from the stored one, as a gate
       on the cutover rather than a defect to fix later.
-- [ ] 2.7 Add `active_generation_id` as a durable per-target field in
+- [x] 2.7 Add `active_generation_id` as a durable per-target field in
       `LedgerState`, drawn from a monotonically increasing, never-reused
       per-target-identity sequence (never a recycled or default value, even
       across a full teardown-and-recreation of the target). Add the
       replacement path: require a positive `GenerationFence` verdict for the
       outgoing generation (`src/relay/delivery/fence.rs`, unchanged) before
       flipping it, under the same lock `declare`/`ack` use.
+      - **The datum's whole value is that a stale identifier cannot come back
+        around**, so the sequence must outlive the mailbox it governs: hold it
+        beside the mailboxes rather than on one, or 2.10's cleanup reclaims it
+        along with the cursor and a recreated target restarts at the first
+        value.
+      - **There is no default generation.** The placeholder this replaces
+        defaulted every target to the first identifier, which any caller could
+        name; a target nobody has claimed must refuse `peek`, `declare` and
+        `ack` rather than admit whichever caller guessed.
+      - The fence is driven outside the lock — it is async and the ledger lock
+        is never held across an await — so the verdict is presented to the flip.
+        Name the outgoing generation in the same call, or a verdict obtained for
+        a generation that has since been replaced is spent on whichever
+        generation happens to be active by then.
+      - A replacement MUST resolve what the outgoing generation had declared and
+        not acknowledged. The fence establishes that execution ceased, never
+        whether it took effect first, so re-serving those entries risks writing
+        a message twice — and leaving the declaration outstanding refuses every
+        later declaration for the target with a unit nobody can acknowledge.
+        Hand the resolved members back rather than swallowing them: each still
+        owes its sender a terminal outcome, and this call emits none.
 - [ ] 2.8 Add the delivery doorbell: a per-generation `Arc<Notify>`
       constructed at the same point `readiness_changed` is today
       (`worker/run.rs`, `worker/spawn.rs`), invoked on a mailbox
@@ -157,7 +178,16 @@ thing the shadow exists to establish.
       (`src/relay/delivery/async_worker/registry.rs`) when a generation is
       torn down without replacement; add cleanup there if it is not already
       covered for the state added in 2.2-2.7. The monotonic generation-id
-      sequence itself MUST NOT reset on this cleanup.
+      sequence itself MUST NOT reset on this cleanup: the seam for giving a
+      target up without replacing it exists (`release_consumer_generation`),
+      and what remains is wiring it to the reap. Two obligations fall on that
+      wiring rather than on the seam. The reap MUST name the generation it is
+      reaping and treat a refusal as the correct answer: a reap runs behind the
+      target it reaps, so one for a generation already replaced would otherwise
+      clear an owner that is still consuming. And it MUST resolve the target's
+      entries before releasing, because the release is what admits the next
+      claimant, and a claimant that inherited an outstanding declaration could
+      neither acknowledge nor declare past it.
 
 ## 3. Production cutover
 

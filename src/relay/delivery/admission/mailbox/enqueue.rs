@@ -3,13 +3,11 @@
 
 use serde_json::json;
 
-use crate::protocol::identity::ConsumerBinding;
 use crate::protocol::mailbox::{EntrySequence, MailboxPayload};
 use crate::runtime::inscriptions::emit_inscription;
 
 use super::super::super::guard::QueueEntryState;
 use super::super::ledger::{MailboxSlot, lock_ledger};
-use super::addressing::target_key;
 
 const INSCRIPTION_MAILBOX_ENQUEUED: &str = "relay.delivery.mailbox.enqueued";
 
@@ -105,21 +103,6 @@ pub(in crate::relay) fn enqueue(
     Ok(sequence)
 }
 
-/// Binds a target's consumer generation.
-///
-/// The minting sequence this value is drawn from — monotonic, never reused, never
-/// reset across a target's teardown and recreation — and the fence-gated
-/// replacement path are specified by `Consumer Generation Ownership and
-/// Replacement` and are not established here. What this provides is the datum
-/// every operation below is checked against.
-pub(in crate::relay) fn bind_consumer_generation(binding: &ConsumerBinding) {
-    let Ok(mut state) = lock_ledger() else {
-        return;
-    };
-    let target = target_key(binding);
-    state.mailboxes.entry(target).or_default().generation = binding.generation;
-}
-
 /// A position that leaves the mailbox without being acknowledged does not park
 /// the ones behind it.
 ///
@@ -134,7 +117,7 @@ mod mailbox_retirement_tests {
     use super::super::super::admit::rollback_admission;
     use super::super::super::terminal::terminalize;
     use super::super::declare::declare;
-    use super::super::fixtures::{admit_only, binding, mail, peeked, place, range};
+    use super::super::fixtures::{admit_only, claim, mail, peeked, place, range};
     use crate::protocol::operations::AckAccepted;
 
     use super::super::ack::ack;
@@ -147,7 +130,7 @@ mod mailbox_retirement_tests {
         // the cursor expects the abandoned position, so leaving it merely absent
         // parks every later entry for this target permanently.
         let rolled_back = "mbx-retire-rollback";
-        let rollback_bound = binding(rolled_back, 1);
+        let rollback_bound = claim(rolled_back);
         admit_only(rolled_back, "mbx-retire-rollback-a", 1);
         admit_only(rolled_back, "mbx-retire-rollback-b", 1);
         rollback_admission("mbx-retire-rollback-a");
@@ -166,7 +149,7 @@ mod mailbox_retirement_tests {
         // acknowledgment. Its slot must go with its reservation, or the head of
         // the mailbox names an entry the ledger no longer holds.
         let triggered = "mbx-retire-trigger";
-        let trigger_bound = binding(triggered, 1);
+        let trigger_bound = claim(triggered);
         for index in 1..=3 {
             place(triggered, &format!("{triggered}-{index}"), 1, mail("body"));
         }

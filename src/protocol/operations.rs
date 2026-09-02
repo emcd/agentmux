@@ -44,7 +44,12 @@ pub struct PeekResponse {
 /// Why a peek returned nothing at all rather than an empty run.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PeekRejection {
-    /// The binding names a generation that is no longer the target's active one.
+    /// The binding does not name the target's active generation.
+    ///
+    /// Covers a generation that has been superseded and a target no consumer
+    /// holds at all, and does not distinguish them: in neither case does the
+    /// caller own the target, and there is nothing it could do differently
+    /// knowing which it was.
     GenerationSuperseded,
     /// The relay holds no mailbox for the named target.
     UnknownTarget,
@@ -83,7 +88,12 @@ pub struct DeclareAccepted {
 /// declaration already outstanding untouched.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeclareRejection {
-    /// The binding names a generation that is no longer the target's active one.
+    /// The binding does not name the target's active generation.
+    ///
+    /// Covers a generation that has been superseded and a target no consumer
+    /// holds at all, and does not distinguish them: in neither case does the
+    /// caller own the target, and there is nothing it could do differently
+    /// knowing which it was.
     GenerationSuperseded,
     /// The relay holds no mailbox for the named target.
     UnknownTarget,
@@ -150,7 +160,12 @@ pub enum AckAccepted {
 /// Why an acknowledgment terminalized nothing and advanced no cursor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AckRejection {
-    /// The binding names a generation that is no longer the target's active one.
+    /// The binding does not name the target's active generation.
+    ///
+    /// Covers a generation that has been superseded and a target no consumer
+    /// holds at all, and does not distinguish them: in neither case does the
+    /// caller own the target, and there is nothing it could do differently
+    /// knowing which it was.
     GenerationSuperseded,
     /// The relay holds no mailbox for the named target.
     UnknownTarget,

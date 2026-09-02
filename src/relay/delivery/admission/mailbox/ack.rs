@@ -9,6 +9,7 @@ use super::super::super::guard::{PackingUnitId, SubmissionEvidence};
 use super::super::ledger::lock_ledger;
 use super::super::terminal::release_entry;
 use super::addressing::target_key;
+use super::generation::active_generation;
 
 /// Terminalizes exactly the entries a prior declaration bound, from what the
 /// executor observed writing them.
@@ -25,11 +26,11 @@ pub(in crate::relay) fn ack(
     let Ok(mut state) = lock_ledger() else {
         return Err(AckRejection::UnknownTarget);
     };
-    let target = target_key(binding);
+    let target = target_key(&binding.target);
     let Some(mailbox) = state.mailboxes.get(&target) else {
         return Err(AckRejection::UnknownTarget);
     };
-    if mailbox.generation != binding.generation {
+    if active_generation(&state, &target) != Some(binding.generation) {
         return Err(AckRejection::GenerationSuperseded);
     }
     let outstanding = match mailbox.outstanding {
@@ -127,13 +128,13 @@ mod mailbox_evidence_tests {
     use super::super::super::ledger::lock_ledger;
     use super::super::super::terminal::{TerminalTransition, release_entry};
     use super::super::declare::declare;
-    use super::super::fixtures::{binding, mail, peeked, place, range, seq};
+    use super::super::fixtures::{claim, mail, peeked, place, range, seq};
     use super::*;
 
     #[test]
     fn an_acknowledgment_needs_one_report_per_member_and_uses_each() {
         let namespace = "mbx-evidence";
-        let bound = binding(namespace, 1);
+        let bound = claim(namespace);
         for index in 1..=3 {
             place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
         }
@@ -225,7 +226,7 @@ mod mailbox_evidence_tests {
         // acknowledgment relies on.
         let plumbing = "mbx-evidence-plumbing";
         place(plumbing, "mbx-evidence-plumbing-1", 1, mail("body"));
-        let plumbing_bound = binding(plumbing, 1);
+        let plumbing_bound = claim(plumbing);
         let unit = declare(&plumbing_bound, range(1, 1)).expect("declare").unit;
         record_unit_evidence(unit, SubmissionEvidence::Submitted);
         let mut state = lock_ledger().expect("ledger");
@@ -260,13 +261,13 @@ mod mailbox_acknowledgment_tests {
 
     use super::super::super::terminal::{TerminalTransition, terminalize};
     use super::super::declare::declare;
-    use super::super::fixtures::{binding, mail, peeked, place, range, seq};
+    use super::super::fixtures::{claim, mail, peeked, place, range, seq};
     use super::*;
 
     #[test]
     fn an_acknowledgment_resolves_exactly_the_declared_range() {
         let namespace = "mbx-ack";
-        let bound = binding(namespace, 1);
+        let bound = claim(namespace);
         for index in 1..=5 {
             place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
         }

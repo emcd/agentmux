@@ -347,6 +347,34 @@ exported from `src/relay/mod.rs`.
     `enqueue` stored, and its terminal transition retires each position as it
     resolves it, which is what keeps the mailbox bounded while nothing
     acknowledges.
+    Who may call those three is a target's **consumer generation**, and the
+    module's `generation` operations own it: `claim` issues a target's first,
+    `replace` hands the target over, and `release` gives it up. Both `replace`
+    and `release` name the generation they are acting against and do nothing
+    unless it is still the incumbent — a reap runs behind the target it reaps,
+    so a release for a generation already replaced would otherwise clear an
+    owner that is still consuming and let the next claimant bind beside it.
+    A caller must also resolve a released target's entries before releasing,
+    since the release is what opens the target to a claimant that could inherit
+    a declaration nobody can acknowledge. This is a
+    different axis from the transport generation the fence below governs — that
+    one names an instance of a transport, this one names who is entitled to
+    consume a mailbox — and the two meet at exactly one point: a replacement is
+    admitted only on a positive fence verdict for the outgoing consumer, which
+    the caller obtains before the flip because the ledger lock is never held
+    across an await. Identifiers are drawn per target identity from a monotonic
+    sequence that is never reused and never reset, and the sequence is held
+    beside the mailboxes rather than on one so that reclaiming a torn-down
+    target's mailbox and cursor cannot take it along; a target recreated under
+    the same session name therefore continues it. There is deliberately no
+    default value: a target nobody has claimed refuses `peek`, `declare` and
+    `ack` alike, rather than answering whichever caller names the first
+    identifier. A replacement resolves what the outgoing generation had declared
+    and not acknowledged — the fence establishes that execution ceased, never
+    whether it took effect first, so re-serving those entries could write a
+    message twice — and hands the resolved members back to its caller, which
+    owes each one a terminal outcome. Undeclared entries are untouched and become
+    the incoming generation's to serve.
   - `guard.rs`: the queue entry state model (`Queued`/`Terminal`), the guard
     identity, the typed submission evidence, and the guard's single evidence
     order. The types live

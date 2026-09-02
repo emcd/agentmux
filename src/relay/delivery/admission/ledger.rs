@@ -153,8 +153,12 @@ pub(super) struct OutstandingDeclaration {
     pub(super) generation: ConsumerGenerationId,
 }
 
-/// One target's ordered mailbox: what it holds, how far it has been
-/// acknowledged, and who is entitled to consume it.
+/// One target's ordered mailbox: what it holds and how far it has been
+/// acknowledged.
+///
+/// Who is entitled to consume it is deliberately not here. That record has to
+/// survive this one being reclaimed, so it lives beside the mailboxes in
+/// [`TargetGenerations`] rather than on the mailbox it governs.
 #[derive(Debug)]
 pub(super) struct TargetMailbox {
     /// Peekable positions in mailbox order.
@@ -195,13 +199,6 @@ pub(super) struct TargetMailbox {
     /// points that reclaim it are generation replacement and the worker-registry
     /// reap of a target torn down without replacement.
     pub(super) acknowledged: HashMap<PackingUnitId, EntryRange>,
-    /// The generation currently entitled to peek, declare, and acknowledge.
-    ///
-    /// Every one of those operations is checked against this before it takes
-    /// effect. The sequence it is drawn from — monotonic, never reused, never
-    /// reset — and the fence-gated path that replaces it are relay-owned and
-    /// specified by `Consumer Generation Ownership and Replacement`.
-    pub(super) generation: ConsumerGenerationId,
 }
 
 impl TargetMailbox {
@@ -266,8 +263,44 @@ impl Default for TargetMailbox {
             outstanding: None,
             retired: BTreeSet::new(),
             acknowledged: HashMap::new(),
-            generation: ConsumerGenerationId::new(1),
         }
+    }
+}
+
+/// One target identity's consumer-generation sequence, and which generation
+/// currently owns its mailbox.
+///
+/// Kept beside the mailboxes rather than on one because the sequence has to
+/// outlive every mailbox drawn from it. A target whose mailbox and cursor are
+/// cleaned up and later recreated under the same session name continues this
+/// sequence rather than restarting it, which is what makes an identifier held
+/// from before the teardown guaranteed non-matching afterwards instead of
+/// possibly colliding with a freshly issued one.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct TargetGenerations {
+    /// The highest identifier ever issued for this target identity, or `None`
+    /// before the first one is. Never lowered and never cleared.
+    pub(super) issued: Option<ConsumerGenerationId>,
+    /// The generation entitled to peek, declare, and acknowledge; `None` while
+    /// no consumer holds the target.
+    ///
+    /// An absent owner refuses all three rather than admitting whichever caller
+    /// names a plausible value: there is no default generation, so a mailbox
+    /// nobody has claimed is one nobody may consume.
+    pub(super) active: Option<ConsumerGenerationId>,
+}
+
+impl TargetGenerations {
+    /// Draws the next identifier in this target's sequence and makes it active.
+    ///
+    /// The only place a `ConsumerGenerationId` becomes a target's own. It
+    /// advances from the high-water mark rather than from the active generation,
+    /// so a release that cleared the latter cannot restart the sequence.
+    pub(super) fn issue(&mut self) -> ConsumerGenerationId {
+        let issued = ConsumerGenerationId::new(self.issued.map_or(1, |issued| issued.value() + 1));
+        self.issued = Some(issued);
+        self.active = Some(issued);
+        issued
     }
 }
 
@@ -281,6 +314,11 @@ pub(super) struct LedgerState {
     pub(super) units: HashMap<PackingUnitId, UnitRecord>,
     /// Per-target ordered mailboxes, keyed the same way usage is.
     pub(super) mailboxes: HashMap<AdmissionTargetKey, TargetMailbox>,
+    /// Per-target consumer-generation sequences, keyed the same way, and
+    /// deliberately not held on the mailbox: this record outlives the mailbox it
+    /// governs, so cleaning a target's mailbox and cursor up leaves the sequence
+    /// where it stood.
+    pub(super) generations: HashMap<AdmissionTargetKey, TargetGenerations>,
     pub(super) global: TargetUsage,
     pub(super) per_target: HashMap<AdmissionTargetKey, TargetUsage>,
 }
