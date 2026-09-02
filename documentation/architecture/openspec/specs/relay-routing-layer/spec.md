@@ -105,24 +105,6 @@ cross-namespace reach.
 - **THEN** relay routes each target through the unified registry
 - **AND** does not return `validation_missing_routing_namespace`
 
-#### Scenario: Cross-bundle Raww denied under home
-
-- **WHEN** a requester issues a Raww request to a target in a different bundle
-- **AND** the requester's configured `raww` scope is `home` or narrower
-- **THEN** relay returns `authorization_forbidden`
-
-Note: for a relay-wide (`@GLOBAL`) principal, `home` covers only the `GLOBAL`
-namespace, which is populated by relay-wide sessions. Sessions whose registry
-entry carries `can_be_written = false` are rejected by the raww capability gate,
-so `home` confers no effective raww reach to those targets. `all` remains the
-meaningful tier for cross-bundle raww from a relay-wide principal.
-
-#### Scenario: Cross-bundle Raww permitted under all
-
-- **WHEN** a requester issues a Raww request to a target in a different bundle
-- **AND** the requester's configured `raww` scope is `all`
-- **THEN** relay routes to the target's bundle and delivers
-
 #### Scenario: Cross-bundle List resolves requester in home bundle
 
 - **WHEN** a session in bundle A issues a List request enumerating bundle B

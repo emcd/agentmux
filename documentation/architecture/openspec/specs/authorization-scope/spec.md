@@ -291,9 +291,9 @@ borrowed) bundle in place of its home namespace, on any target operation.
 
 #### Scenario: Cross-bundle operation denied under home scope
 
-- **WHEN** a requester issues a cross-bundle `look`, `send`, or `list`
-- **AND** the requester's configured scope for that capability is `home` or
-  narrower
+- **WHEN** a requester issues any cross-bundle target operation
+- **AND** the requester's configured scope for that operation's capability is
+  `home` or narrower
 - **THEN** relay returns `authorization_forbidden`
 
 #### Scenario: Cross-bundle list enumerates peer bundle under all-all scope
@@ -344,32 +344,3 @@ Relay SHALL NOT accept all-bundle list selectors.
 
 - **WHEN** a caller requests relay list with all-bundle selector semantics
 - **THEN** relay rejects request with `validation_invalid_params`
-
-### Requirement: Relay raww authorization mapping
-
-Relay SHALL evaluate raww authorization using policy control `raww`.
-
-Policy scope contract:
-- allowed values: `none`, `self`, `home`, `all`
-- invalid values (unknown values) SHALL fail configuration validation with
-  `validation_invalid_policy_scope`
-
-When raww is denied by policy, relay SHALL return `authorization_forbidden`
-with canonical minimum details:
-- `capability` = `raww.write`
-- `requester_session`
-- `bundle_name`
-- `reason`
-
-#### Scenario: Deny raww under self scope for non-self target
-
-- **WHEN** requester policy sets `raww = "self"`
-- **AND** requester invokes raww to another session in the same bundle
-- **THEN** relay returns `authorization_forbidden`
-- **AND** denial details include `capability = "raww.write"`
-
-#### Scenario: Cross-bundle raww permitted under all
-
-- **WHEN** requester policy sets `raww = "all"`
-- **AND** requester invokes raww to a session in a different bundle
-- **THEN** relay routes to the target and delivers
