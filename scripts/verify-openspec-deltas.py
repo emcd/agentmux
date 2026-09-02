@@ -24,20 +24,28 @@ see a scenario whose title survived while its body was hollowed out, nor a
 requirement whose prose lost a normative clause. Those remain a manual-review
 concern; this catches the silent-deletion class, not every regression.
 
-Five checks, four of which are errors and one of which is a report:
+Errors, which set a non-zero exit status:
 
-- ERROR   a change whose deltas disagree about whether they have been synced
-- ERROR   MODIFIED or REMOVED naming a requirement that does not exist live
-          (a typo, or a rename that happened upstream)
-- ERROR   ADDED naming a requirement that already exists live
-          (it should be MODIFIED, or the delta will collide at sync)
-- ERROR   RENAMED whose FROM is absent live, or whose TO already exists
-- REPORT  scenarios present live but absent from a MODIFIED delta
+- a change whose deltas disagree about whether they have been synced
+- MODIFIED or REMOVED naming a requirement that no live spec holds and no
+  other in-flight change supplies (a typo, or a rename that happened upstream)
+- ADDED naming a requirement that already exists live in the same capability
+  (it should be MODIFIED, or the delta will collide at sync)
+- ADDED naming a requirement that exists live in a different capability the
+  change does not remove it from, which would leave two definitions of it
+- RENAMED whose FROM is absent live, or whose TO already exists
 
-The last is a report rather than an error because dropping a scenario is often
-exactly right -- it describes retired behavior. The point is that each drop
-should be a decision someone made, not something that happened. Read the list
-and confirm every line. Only an ERROR sets a non-zero exit status.
+Reports, which print and pass:
+
+- scenarios present live but absent from a MODIFIED delta
+- a requirement relocated between capabilities whose text changed in transit
+- a delta target that is not live yet because another change has not synced
+
+The reports are reports because each describes something that is often exactly
+right: a dropped scenario may describe retired behavior, a move may be
+deliberately edited, an ordering constraint may be understood and accepted. The
+point is that each should be a decision someone made rather than something that
+happened. Read them and confirm every line.
 
 Every one of those checks asks whether a delta agrees with the spec it is about
 to modify, so all of them invert once it has modified it. A change is therefore
@@ -84,6 +92,7 @@ set changes with no delta file touched, so no commit fires the hook. Run this by
 hand against the post-archive live spec in that case.
 """
 
+import difflib
 import re
 import sys
 from collections import namedtuple
@@ -928,9 +937,48 @@ CITATION_CASES = [
 ]
 
 
+# Each case is `(name, by_capability, live_owners, expected_error_count)`.
+# All three short-circuit before any live spec is read, so they need no
+# filesystem. They cover the two ways an ADDED requirement can collide with a
+# live one in another capability, neither of which the per-capability collision
+# check can see.
+MOVE_CASES = [
+    (
+        "a move with one source and one destination",
+        {"source": ({"REMOVED": {"Moved": _requirement("Moved", "a")}}, []),
+         "dest": ({"ADDED": {"Moved": _requirement("Moved", "a")}}, [])},
+        {"Moved": "source"},
+        0,
+    ),
+    (
+        "one source claimed by two destinations",
+        {"source": ({"REMOVED": {"Moved": _requirement("Moved", "a")}}, []),
+         "dest_a": ({"ADDED": {"Moved": _requirement("Moved", "a")}}, []),
+         "dest_b": ({"ADDED": {"Moved": _requirement("Moved", "a")}}, [])},
+        {"Moved": "source"},
+        1,
+    ),
+    (
+        "an addition duplicating a live requirement it does not remove",
+        {"dest": ({"ADDED": {"Moved": _requirement("Moved", "a")}}, [])},
+        {"Moved": "source"},
+        1,
+    ),
+]
+
+
 def run_selftest():
     """Return a list of failure descriptions; empty when the classifiers work."""
     failures = []
+    for name, by_capability, live_owners, expected in MOVE_CASES:
+        errors, _, _ = check_moves(
+            "selftest", by_capability, Path("/nonexistent"), live_owners, True
+        )
+        if len(errors) != expected:
+            failures.append(
+                f"move case {name!r} reported {len(errors)} errors, "
+                f"expected {expected}"
+            )
     for name, delta, pairs, live, expected in SELFTEST_CASES:
         state, _ = applied_state({"c": (delta, pairs)}, {"c": live})
         if state != expected:
@@ -945,6 +993,96 @@ def run_selftest():
                 f"citation case {name!r} classified {actual}, expected {expected}"
             )
     return failures
+
+
+# A relocated requirement's text is shown as a diff rather than a verdict,
+# capped so that a deliberate rewrite does not bury the run. A transit casualty
+# -- a truncation, a lost scenario, a paragraph that did not survive a
+# copy-paste -- is a short diff; a long one means the move is also an edit, and
+# the author knows whether that was the intent.
+MOVE_DIFF_LINES = 40
+
+
+def check_moves(change_id, by_capability, live_specs, live_owners, quiet):
+    """Compare each relocated requirement against the text it is leaving.
+
+    A move between capabilities is a REMOVED delta in the source and an ADDED
+    delta in the destination, and nothing compares the two halves. The retention
+    check audits within a capability, so a move that rewrites, truncates or
+    drops scenarios in transit passes it; `openspec validate --strict` sees two
+    well-formed deltas and is satisfied.
+
+    The comparison is against the live source text rather than against the
+    REMOVED delta, because a REMOVED block carries a `**Reason**` and not the
+    requirement it removes. That makes this a pre-sync check by construction:
+    once the change syncs, the text it moved away from is gone. It is also
+    exactly when the check is wanted.
+
+    Detection matches on name, so a move that also renames is invisible here and
+    should be authored as a removal plus an addition, with the rename called out.
+    """
+    errors, moved, altered = [], 0, 0
+    removed_from = {}
+    for capability, (delta, _) in by_capability.items():
+        for name in delta.get("REMOVED", {}):
+            removed_from.setdefault(name, []).append(capability)
+
+    sources, destinations = {}, {}
+    for capability, (delta, _) in sorted(by_capability.items()):
+        for name, arriving in delta.get("ADDED", {}).items():
+            origin = live_owners.get(name)
+            # Absent live: a genuinely new requirement. Live in this same
+            # capability: the collision the ADDED check already reports.
+            if origin is None or origin == capability:
+                continue
+            if origin not in removed_from.get(name, []):
+                errors.append(
+                    f"{capability}: ADDED '{name}' already exists live in "
+                    f"{origin}, which this change does not remove it from -- "
+                    "two capabilities would define the same requirement"
+                )
+                continue
+            # One requirement leaving one capability can arrive in only one.
+            # Two ADDED destinations sharing a source both look like a
+            # well-formed move from their own side, and sync obligingly writes
+            # the requirement into both.
+            if name in destinations:
+                errors.append(
+                    f"{capability}: ADDED '{name}' moves out of {origin}, but "
+                    f"{destinations[name]} claims the same move -- one "
+                    "requirement cannot arrive in two capabilities"
+                )
+                continue
+            destinations[name] = capability
+            if origin not in sources:
+                sources[origin] = read_capability(live_specs, origin)
+            leaving = sources[origin].get(name)
+            if leaving is None:
+                continue
+            moved += 1
+            before = normalized(leaving).splitlines()
+            after = normalized(arriving).splitlines()
+            if before == after:
+                continue
+            altered += 1
+            if quiet:
+                continue
+            lines = list(
+                difflib.unified_diff(
+                    before,
+                    after,
+                    f"{origin} (live)",
+                    f"{capability} (ADDED)",
+                    n=1,
+                    lineterm="",
+                )
+            )
+            print(f"\n=== {change_id}: '{name}' moves {origin} -> {capability}")
+            for line in lines[:MOVE_DIFF_LINES]:
+                print(f"     {line}")
+            if len(lines) > MOVE_DIFF_LINES:
+                print(f"     ... {len(lines) - MOVE_DIFF_LINES} more diff lines")
+    return errors, moved, altered
 
 
 def check_renames(capability, pairs, live, errors):
@@ -977,7 +1115,7 @@ def check_renames(capability, pairs, live, errors):
     return validated
 
 
-def audit(change_id, inflight, quiet):
+def audit(change_id, live_owners, inflight, quiet):
     """Audit one change's deltas. Returns (errors, dropped_scenarios, waits)."""
     resolved = resolve_paths(change_id)
     if resolved is None:
@@ -1069,6 +1207,11 @@ def audit(change_id, inflight, quiet):
                 for scenario in added:
                     print(f"     + added    {scenario}")
 
+    move_errors, moved, altered = check_moves(
+        change_id, by_capability, live_specs, live_owners, quiet
+    )
+    errors.extend(move_errors)
+
     if waits and not quiet:
         print(f"\n=== {change_id} waits on another change's sync")
         for capability, operation, name, producers in waits:
@@ -1078,6 +1221,11 @@ def audit(change_id, inflight, quiet):
 
     print()
     print(f"{len(by_capability)} capabilities audited in '{change_id}'")
+    if moved:
+        print(
+            f"{moved} requirement(s) relocated between capabilities, "
+            f"{altered} of them altered in transit"
+        )
     return errors, drops, waits
 
 
@@ -1139,11 +1287,13 @@ def main():
     if not selected:
         return 0
 
-    _, inflight, _ = name_universe(planning_home())
+    live_owners, inflight, _ = name_universe(planning_home())
 
     errors, drops, waits = [], 0, 0
     for change_id in selected:
-        change_errors, change_drops, change_waits = audit(change_id, inflight, quiet)
+        change_errors, change_drops, change_waits = audit(
+            change_id, live_owners, inflight, quiet
+        )
         errors.extend(change_errors)
         drops += change_drops
         waits += len(change_waits)
