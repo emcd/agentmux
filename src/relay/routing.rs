@@ -14,9 +14,8 @@
 //! requester-to-target relationship to a uniform scope tier
 //! (self / home / all) and checks it against the requester's *configured*
 //! scope (the authorization stage in `authorization.rs`). No operation carries a
-//! hardcoded cross-bundle policy: whether a capability can ever reach the
-//! cross-bundle (`all`) tier is governed entirely by the policy schema's
-//! per-capability allowed-scope set.
+//! hardcoded cross-bundle policy: whether a requester reaches the cross-bundle
+//! (`all`) tier is governed entirely by the scope its policy configures.
 
 use serde_json::json;
 

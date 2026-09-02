@@ -689,9 +689,9 @@ exported from `src/relay/mod.rs`.
   relationship to the requester (self / same-namespace / other namespace), maps
   it to a uniform scope tier (`self` / `home` / `all`), and checks the
   requester's *configured* scope for the operation's capability against the
-  maximum tier the route demands. Whether a capability can ever reach the
-  cross-namespace (`all`) tier is governed solely by the policy schema's
-  per-capability allowed-scope set (`parse_policy_controls`).
+  maximum tier the route demands. Every control accepts the full
+  `none`/`self`/`home`/`all` ladder at parse time; reach is governed solely by
+  the scope a requester's policy configures, never by a cap in code or schema.
 - **Home is the principal's native namespace**, not whichever bundle a request
   routes through (`requester_home_namespace`): a session's home is its bundle; a
   relay-wide principal's home is its reserved namespace (`GLOBAL` / `EXTERNAL` /
