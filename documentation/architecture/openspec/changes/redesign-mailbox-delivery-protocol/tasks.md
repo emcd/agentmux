@@ -163,16 +163,95 @@ thing the shadow exists to establish.
         later declaration for the target with a unit nobody can acknowledge.
         Hand the resolved members back rather than swallowing them: each still
         owes its sender a terminal outcome, and this call emits none.
-- [ ] 2.8 Add the delivery doorbell: a per-generation `Arc<Notify>`
+- [x] 2.8 Add the delivery doorbell: a per-generation `Arc<Notify>`
       constructed at the same point `readiness_changed` is today
       (`worker/run.rs`, `worker/spawn.rs`), invoked on a mailbox
       empty-to-non-empty
       transition, paired with a bounded poll backstop mirroring
       `ASYNC_WORKER_POLL_INTERVAL_MS`.
-- [ ] 2.9 Add the policy-admission-snapshot behavior: confirm (or add, if
+      - **Registered as a generation is built, not beside
+        `readiness_changed`.** That notifier belongs to the worker and outlives
+        every generation the worker goes on to build; a doorbell belongs to the
+        generation that waits on it. So it is built in `build_generation` — the
+        same function that injects the readiness notifier into the transport —
+        which gives it the generation's lifetime rather than the worker's, and
+        makes a replacement that forgot to register one impossible rather than
+        merely unlikely.
+      - **The `Arc<Notify>` is `protocol::DeliveryDoorbell`, which task 1.1
+        already landed.** Its `ring` retains a signal when nobody is waiting, so
+        a ring made before this generation's executor exists is not a lost
+        notification. What the relay holds is not that handle but an opaque
+        closure over it, which is the injected-closure shape the requirement
+        names and keeps the relay from holding a type belonging to the side it
+        signals.
+      - **Rung on the transition a peek can see, which is narrower than the
+        mailbox gaining an entry and narrower than the mailbox having been
+        empty.** A run starts at the cursor, so an entry filling a position
+        behind one that is admitted and not yet filled leaves every peek
+        returning nothing. Ringing there tells a consumer about a run it cannot
+        see; the empty-to-non-empty reading does exactly that and is then silent
+        for the entry that finally exposes the run. Both readings are pinned
+        against by the same test.
+      - **The lock is released before the ring**, the one place in this
+        subsystem where a lock is dropped before its operation finishes. A
+        doorbell is foreign code and the ledger lock is a non-reentrant
+        `std::sync::Mutex`.
+      - **Only a registration displaces a registration.** Neither the reap nor
+        the fenced replacement clears one, and that is the whole of the
+        arrangement's safety rather than tidiness deferred. Both run *behind* the
+        target they act on, so a successor can already have registered by the
+        time either reaches the ledger; a clear would take the successor's
+        doorbell with nothing left to put one back, since a generation registers
+        once as it is built. RG found this on the reap (round 1): the
+        consumer-generation naming that protects the mailbox does not cover it
+        and cannot yet, because until the executors claim a generation every
+        target answers `None` and a late reap matches. Leaving a stale
+        registration costs one closure per target identity the process has
+        served — the bound `generations` already carries — and nothing rings one,
+        because an entry reaches a mailbox only through a worker's own intake.
+      - **The poll backstop is the one the worker already runs.** The doorbell
+        arm and the readiness arm are backstopped by the same
+        `ASYNC_WORKER_POLL_INTERVAL_MS` tick; a second timer would be duplicate
+        machinery for one bound.
+      - Nothing waits on a doorbell until the executors arrive, so a ring's only
+        trace today is `doorbell_rung` on the enqueue inscription. It is
+        asserted against a live relay rather than only in the ledger's tests,
+        which is what catches a generation that registered nothing — a failure
+        the ledger's own tests cannot see, since they register their own.
+- [x] 2.9 Add the policy-admission-snapshot behavior: confirm (or add, if
       not already the case) that an admitted entry carries no live policy
       reference re-checked later; a policy change affects only new
       admissions.
+      - **Already the case, and nothing was added to make it so.** Every
+        `authorize_*` call, every `AuthorizationContext`, and every
+        `load_authorization_context` lives in `src/relay/handlers/`,
+        `src/relay/mod.rs` or `src/relay/lifecycle.rs` — the request boundary.
+        `src/relay/delivery/` names `authorization` only in prose, and its
+        `authorize_batch` is the push model's own all-or-none batch
+        transition, which is about custody rather than about who may send.
+      - **What an admitted entry does carry is a snapshot and a name, neither
+        of which is a decision.** `AsyncDeliveryTask` holds a cloned
+        `BundleConfiguration`; `AdmittedEntry` and `MailboxSlot` hold nothing
+        policy-shaped at all. `BundleMember.policy_id` rides along, but every
+        occurrence of it under `src/relay/delivery/` is a struct-literal
+        initializer — the field is written and never read, so the delivery
+        side holds the *name* of a policy and no means of resolving it.
+      - **The prospective half is structural too**:
+        `load_authorization_context` reads `policies.toml` from disk on each
+        call and memoizes nothing, so what a request is judged against is the
+        file as it stood when that request arrived.
+      - Pinned behaviorally rather than by a lint, because the requirement is
+        about behavior: an entry held under a long unreachable dwell survives a
+        total tightening of `send` to `none`, while the next request is refused
+        under it. Neither half stands alone — the survival is satisfied by a
+        relay that never re-read the file, and the refusal says nothing about
+        the entry already in the mailbox.
+      - Teeth: memoizing `load_authorization_context` fails the refusal;
+        resolving the held member after admission fails both the still-waiting
+        and the no-terminal-outcome assertions, which read one transition from
+        its two sides. The queued-nothing assertion is a disambiguation of the
+        waiting count rather than a new claim — the refusal-admits-nothing
+        property has its own coverage in the admission cluster.
 - [x] 2.10 Confirm mailbox/cursor/generation-sequence cleanup rides the
       existing worker-registry reap path when a generation is torn down
       without replacement; add cleanup there if it is not already covered for
@@ -368,3 +447,38 @@ letting a tranche boundary fall somewhere convenient.
       `verify-openspec-deltas.py` substitutes: the first checks that a delta
       is well formed and the second that a MODIFIED delta retains what it
       replaces, and a requirement that never reaches a live spec passes both.
+- [ ] 5.14 Settle `agentmux:todos/backend/7` before this change is archived:
+      `declare` is specified as `declare(target, generation_id, through_seq)`
+      by `Mailbox Submission Declaration` and by task 2.3, and takes an
+      `EntryRange` carrying both ends in the implementation. Either author a
+      delta naming a range, correcting task 2.3's wording in the same change,
+      or decide explicitly that `through_seq` is shorthand rather than
+      binding and record that where a later author will see it. The divergence
+      is deliberate — with only `through_seq` a caller cannot express a wrong
+      start, which makes the requirement's own `NotAtCursor` rejection
+      unrepresentable and task 5.4 unwritable — but a reviewed type shape is
+      not an amended requirement, and a MODIFIED delta replaces a whole
+      requirement at sync, so whoever authors against the live text next
+      reintroduces the mismatch without noticing.
+- [ ] 5.15 Run the retention audit against this change at its **pre-archive**
+      state and confirm every dropped scenario, per
+      `agentmux:todos/backend/8`, which holds the recorded baseline, the
+      extraction command, and the per-scenario classification. The count is
+      **41** at time of writing; that note's title still says 42, which was
+      the figure before `Keep the upward-signal closure pinned by a scenario`
+      restored one. Re-running is not optional at archive: a MODIFIED delta
+      replaces the whole requirement, so the drop set moves whenever another
+      change archives into a requirement this one targets — with no delta
+      file edited and therefore no commit firing the `lint-openspec-deltas`
+      hook. That is the one shape the hook structurally cannot see.
+      Sweep backwards as well as forwards while there: drops are found live
+      spec into delta, but a citation going stale is found only delta prose
+      into what the change deletes, and that backwards sweep is what caught
+      the single real loss in the early audit while both gates were green.
+
+Tasks 5.12 through 5.15 are archive preconditions rather than testing work,
+and they are recorded here rather than only in the notebook for one reason:
+`opsx-archive` reads this file and warns on an unchecked box, which puts the
+warning at the moment the mistake would be made. Nothing reads the notebook
+at archive time, so an obligation living only there warns whoever thinks to
+look — which, months later, is nobody.

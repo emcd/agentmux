@@ -13,6 +13,18 @@
 //! reap arriving after some other consumer has claimed the target is a reachable
 //! ordering rather than a defensive hypothetical. Naming is what makes that case
 //! a refusal instead of the silent theft of a live consumer's mailbox.
+//!
+//! **The naming does not protect anything yet, and nothing added here may lean
+//! on it until it does.** No worker claims a consumer generation before the
+//! delivery-loop executors arrive, so every target answers `None`, every reap
+//! names `None`, and the check above matches for a late reap exactly as it does
+//! for a timely one. What the window currently costs is nothing, because the
+//! only state the reap takes is the successor's not-yet-used mailbox — recreated
+//! on its first enqueue, from a sequence the reap deliberately leaves behind.
+//! That is a property of what is reaped, not of the check, and it stops holding
+//! the moment something the successor cannot rebuild is reaped alongside it.
+//! Whatever is added here has to survive a reap arriving behind a live
+//! successor on its own terms.
 
 use serde_json::json;
 
@@ -74,6 +86,26 @@ pub(in crate::relay) fn reap_target(
     if let Some(generations) = state.generations.get_mut(&key) {
         generations.active = None;
     }
+    // The doorbell is deliberately left alone, and this is the one piece of a
+    // target's state the reap does not take.
+    //
+    // A reap runs *behind* the target it reaps — the registration is removed
+    // first and the ledger is reached afterwards — so a successor can be elected,
+    // spawned, and have registered its own doorbell before this call acquires the
+    // lock. The naming above does not cover that: it compares consumer
+    // generations, and until the delivery-loop executors claim one every target
+    // answers `None`, so a late reap matches and proceeds. Removing here would
+    // therefore take the successor's registration, and nothing would put one
+    // back — the successor registers once, as it is built. It would be poll-only
+    // for the rest of its life.
+    //
+    // Leaving it costs one small closure per target identity the process has
+    // served, which is the same bound `generations` already carries and for a
+    // similar reason. Nothing rings it: an entry reaches a mailbox only through a
+    // worker's own intake, so a target with no worker has nothing to enqueue, and
+    // the successor that does arrive overwrites the registration before its first
+    // entry. Only a registration ever displaces a registration, which is what
+    // makes the ordering above unable to strand anyone.
     let entries_held = state
         .entries
         .values()
