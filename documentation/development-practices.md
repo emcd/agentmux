@@ -261,6 +261,19 @@ cargo nextest run --features pty --run-ignored all -E 'test(/^pty_transport::/)'
 - If a candidate inline test fails any of these conditions, move it to
   `tests/unit` and widen visibility or restructure as needed.
 
+## Notebook Todo Status
+
+For notebook todo notes, the title checkbox is the authoritative completion
+state. Create todos without `#status-open` and do not add or maintain a status
+tag when closing one. Use `nb.do` and `nb.tasks` to update and query todo state.
+
+Do not rewrite existing todo notes merely to remove legacy status tags. They are
+redundant but harmless; a destructive whole-note rewrite risks losing unrelated
+content solely to remove duplicated state.
+
+Status tags remain appropriate for non-todo notes, such as reviews and
+coordination records, because those notes have no checkbox state.
+
 ### Absence Assertions Need a Positive Control
 
 An assertion that something does **not** happen is satisfied by a mechanism
