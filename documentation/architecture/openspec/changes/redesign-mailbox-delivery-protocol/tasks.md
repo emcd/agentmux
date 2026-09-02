@@ -218,10 +218,40 @@ thing the shadow exists to establish.
         asserted against a live relay rather than only in the ledger's tests,
         which is what catches a generation that registered nothing — a failure
         the ledger's own tests cannot see, since they register their own.
-- [ ] 2.9 Add the policy-admission-snapshot behavior: confirm (or add, if
+- [x] 2.9 Add the policy-admission-snapshot behavior: confirm (or add, if
       not already the case) that an admitted entry carries no live policy
       reference re-checked later; a policy change affects only new
       admissions.
+      - **Already the case, and nothing was added to make it so.** Every
+        `authorize_*` call, every `AuthorizationContext`, and every
+        `load_authorization_context` lives in `src/relay/handlers/`,
+        `src/relay/mod.rs` or `src/relay/lifecycle.rs` — the request boundary.
+        `src/relay/delivery/` names `authorization` only in prose, and its
+        `authorize_batch` is the push model's own all-or-none batch
+        transition, which is about custody rather than about who may send.
+      - **What an admitted entry does carry is a snapshot and a name, neither
+        of which is a decision.** `AsyncDeliveryTask` holds a cloned
+        `BundleConfiguration`; `AdmittedEntry` and `MailboxSlot` hold nothing
+        policy-shaped at all. `BundleMember.policy_id` rides along, but every
+        occurrence of it under `src/relay/delivery/` is a struct-literal
+        initializer — the field is written and never read, so the delivery
+        side holds the *name* of a policy and no means of resolving it.
+      - **The prospective half is structural too**:
+        `load_authorization_context` reads `policies.toml` from disk on each
+        call and memoizes nothing, so what a request is judged against is the
+        file as it stood when that request arrived.
+      - Pinned behaviorally rather than by a lint, because the requirement is
+        about behavior: an entry held under a long unreachable dwell survives a
+        total tightening of `send` to `none`, while the next request is refused
+        under it. Neither half stands alone — the survival is satisfied by a
+        relay that never re-read the file, and the refusal says nothing about
+        the entry already in the mailbox.
+      - Teeth: memoizing `load_authorization_context` fails the refusal;
+        resolving the held member after admission fails both the still-waiting
+        and the no-terminal-outcome assertions, which read one transition from
+        its two sides. The queued-nothing assertion is a disambiguation of the
+        waiting count rather than a new claim — the refusal-admits-nothing
+        property has its own coverage in the admission cluster.
 - [x] 2.10 Confirm mailbox/cursor/generation-sequence cleanup rides the
       existing worker-registry reap path when a generation is torn down
       without replacement; add cleanup there if it is not already covered for

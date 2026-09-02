@@ -7,6 +7,8 @@
 //! - [`queue_reporting`]: the undelivered aggregate and its warnings.
 //! - [`bundle_stop`]: how a bundle teardown resolves the members it held.
 //! - [`delivery_records`]: batch, partition, and terminal-record identity.
+//! - [`policy_snapshot`]: when authorization policy is judged, and what a
+//!   change to it may reach.
 //! - [`unreachable`]: how an unreachable target resolves, and when it does
 //!   not.
 //!
@@ -27,6 +29,7 @@ mod admission;
 mod bundle_stop;
 mod cross_relay;
 mod delivery_records;
+mod policy_snapshot;
 mod queue_reporting;
 mod targeting;
 mod unreachable;
