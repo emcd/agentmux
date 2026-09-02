@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use agentmux::tui::{
-    Action, BindingContext, HelpSection, TuiLaunchOptions, default_binding, help_bindings,
+    Action, BindingContext, HelpSection, KeyboardEnhancement, TuiLaunchOptions, default_binding,
+    help_bindings, interaction_write_hint, picker_hint,
     workbench::{Workbench, WorkbenchField},
 };
 
@@ -357,4 +358,109 @@ fn a_modified_enter_is_folded_into_the_bare_one_it_matches() {
         Some(Action::SendMessage),
         "folding it out of the presentation must not unbind it"
     );
+}
+
+#[test]
+fn a_hint_strip_presents_only_the_context_it_annotates() {
+    // The asymmetry with the help overlay, pinned rather than left to a
+    // reviewer's memory: help catalogues every surface, a strip annotates the
+    // one it sits on. Composing a strip from `help_bindings` would compile and
+    // look plausible, and would advertise compose bindings on the write pane.
+    for source in picker_hint().iter().flat_map(|entry| entry.sources.iter()) {
+        assert!(
+            matches!(
+                source.context,
+                BindingContext::PickerBundles | BindingContext::PickerSessions
+            ),
+            "the picker strip advertises {:?} from {:?}",
+            source.chord,
+            source.context
+        );
+    }
+    for source in interaction_write_hint()
+        .iter()
+        .flat_map(|entry| entry.sources.iter())
+    {
+        assert_eq!(
+            source.context,
+            BindingContext::InteractionWrite,
+            "the write pane strip advertises {:?} from {:?}",
+            source.chord,
+            source.context
+        );
+    }
+
+    // And each strip actually says something, so the assertions above are not
+    // satisfied by an empty strip.
+    assert!(picker_hint().len() >= 3);
+    assert!(interaction_write_hint().len() >= 3);
+}
+
+#[test]
+fn the_chord_a_hint_prints_resolves_to_the_behavior_it_names() {
+    // Not that the chord resolves -- it is built from a row of that context, so
+    // it does by construction -- but that it resolves to *this* behavior. A row
+    // shadowed by an earlier one in the same context would still appear as a
+    // source while its chord reached something else, and the strip would then
+    // advertise a key that does the wrong thing.
+    for entry in picker_hint().into_iter().chain(interaction_write_hint()) {
+        let printed = entry.primary_chord();
+        let source = entry
+            .sources
+            .iter()
+            .find(|source| source.shown && source.chord == printed)
+            .unwrap_or_else(|| panic!("no source backs the printed chord {printed:?}"));
+        let resolved = chord_space()
+            .into_iter()
+            .filter(|(code, modifiers)| source.matches(*code, *modifiers))
+            .filter_map(|(code, modifiers)| default_binding(source.context, code, modifiers))
+            .next()
+            .unwrap_or_else(|| panic!("{:?} resolves nothing for {printed:?}", source.context));
+        assert_eq!(
+            resolved.describe(),
+            entry.description,
+            "{:?} advertises {printed:?} as {:?}, but that chord resolves to {resolved:?}",
+            source.context,
+            entry.description
+        );
+    }
+}
+
+#[test]
+fn generated_presentation_does_not_read_the_keyboard_enhancement_probe() {
+    // Capability conditioning must not re-enter through the rendering path.
+    // The generated presentation functions take no probe outcome -- they take
+    // no state at all -- so the property is structural, and this pins the
+    // signatures against a later change that threads one in.
+    //
+    // The help overlay does still report the probe outcome, but as a report of
+    // what the TUI determined, not as a binding. That separation is asserted
+    // in the renderer's own test, where the rendered buffer is available.
+    let catalogue = help_bindings();
+    let picker = picker_hint();
+    let write = interaction_write_hint();
+    for enhancement in [
+        KeyboardEnhancement::Active,
+        KeyboardEnhancement::Unsupported,
+        KeyboardEnhancement::ProbeFailed,
+    ] {
+        // Nothing to thread the outcome through: the calls take no argument.
+        // Constructing it here is the point -- if a capability parameter is
+        // ever added to any of the three, this stops compiling.
+        let _ = enhancement;
+        assert_eq!(help_bindings(), catalogue);
+        assert_eq!(picker_hint(), picker);
+        assert_eq!(interaction_write_hint(), write);
+    }
+
+    // No presented chord names a modified Enter, which is the only chord the
+    // probe outcome changes the delivery of. If presentation ever became
+    // capability-conditioned, this is the shape it would take.
+    for entry in entries(&catalogue) {
+        assert!(
+            !entry.chords.contains("Shift+Enter") && !entry.chords.contains("Ctrl+Enter"),
+            "presentation names a modified Enter in {:?}",
+            entry.chords
+        );
+    }
 }

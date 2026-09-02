@@ -30,7 +30,30 @@ event-overlay visibility).
     summary (`bundle.hosted`, `bundle.state`, `bundle.startup_health`,
     reason code) plus capped per-session startup failure lines
     (header `startup_failure_count` carries the true total; see
-    `STARTUP_FAILURE_PICKER_MAX_LINES`).
+    `STARTUP_FAILURE_PICKER_MAX_LINES`). The hint strip is generated
+    from the binding table via `actions::picker_hint`, filtered to the
+    two picker contexts. It is laid out before the vertical split so
+    its row count can size its own section — generated wording needs
+    more than the one row the hand-written strip fitted in — and it
+    packs at entry boundaries rather than wrapping mid-binding. The
+    mode-sensitive session label it replaced is gone: the table gives
+    one description covering both modes.
+  - Every packed row is reserved; there is no row cap. A cap clips
+    whichever binding lands last, silently, and the session list's
+    `Min(1)` is what should surrender the space instead.
+  - Where a single entry cannot fit a row even alone, it degrades to
+    the unqualified description (`HelpEntry::detail`) rather than
+    being split or clipped. The qualified form is preferred because
+    "Bundle col" and "Session col" are what separate the two entries
+    that both read as `Enter`; below that width, an ambiguous entry
+    beats a missing one.
+  - Its one inline `#[cfg(test)]` test is the documented exception,
+    on the same grounds as `help.rs`: the renderer is crate-private by
+    design and no public interface reaches it. It renders across five
+    widths, including those that force a fourth row and the
+    unqualified fallback, because the defect it pins was a mismatch
+    between the rows the strip reserved and the rows it produced —
+    invisible to any test of the packing alone.
 - `events.rs`
   - Events overlay. Two stacked panes: pending choices (target,
     kind, `enqueued_at`) and a delivery-events log. Used by `F3`

@@ -15,7 +15,8 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use super::bindings::{BINDINGS, BoundAction, Chord, DisplaySection};
+use super::action::Action;
+use super::bindings::{BINDINGS, BoundAction, Chord, ContextRow, DisplaySection};
 use super::context::BindingContext;
 
 /// One row that contributed to a presented binding.
@@ -64,6 +65,27 @@ impl HelpEntry {
     /// Whether this entry carries a binding declared by `context`.
     pub fn covers(&self, context: BindingContext) -> bool {
         self.sources.iter().any(|source| source.context == context)
+    }
+
+    /// The first chord shown for this behavior.
+    ///
+    /// The catalogue lists every chord that reaches a behavior; a one-line hint
+    /// strip has room for one, and the first is the one the table declares
+    /// first.
+    pub fn primary_chord(&self) -> &str {
+        self.chords.split(" / ").next().unwrap_or(&self.chords)
+    }
+
+    /// The description without the pane or field it opens with.
+    ///
+    /// Descriptions are written for the catalogue, where `Enter` appears for
+    /// several surfaces at once and the qualifier is what separates them. A
+    /// hint strip sits on one surface and has already established it, so the
+    /// qualifier is noise there.
+    pub fn detail(&self) -> &'static str {
+        self.description
+            .split_once(": ")
+            .map_or(self.description, |(_, detail)| detail)
     }
 }
 
@@ -138,60 +160,144 @@ pub fn help_bindings() -> Vec<HelpSection> {
         .collect()
 }
 
-fn entries_for(section: DisplaySection) -> Vec<HelpEntry> {
-    // Behaviors in first-reached order, each accumulating the rows that reach
-    // it. A Vec rather than a map: the order rows are declared in is the order
-    // they are presented in, and a hash map would discard it.
-    let mut entries: Vec<(BoundAction, Vec<HelpSource>)> = Vec::new();
+/// Every binding one context declares, as presented.
+///
+/// Where [`help_bindings`] answers for the whole surface, this answers for a
+/// single context. That asymmetry is deliberate and is the difference between
+/// the help overlay and a pane hint strip: help is a catalogue of everything,
+/// a strip annotates the one surface it sits on.
+pub fn context_bindings(context: BindingContext) -> Vec<HelpEntry> {
+    finish(fold_rows(rows_of(context).map(|row| (context, row))))
+}
 
-    for context in help_contexts() {
-        let Some(group) = BINDINGS.iter().find(|group| group.context == context) else {
-            continue;
-        };
-        for row in group.rows.iter().filter(|row| row.section == section) {
-            let chord = row.chord.display();
-            match entries.iter_mut().find(|(action, _)| *action == row.action) {
-                Some((_, sources)) => {
-                    // Every row is recorded; only some are printed. A chord
-                    // whose text is already on the line is folded -- which is
-                    // what absorbs the modifier-agnostic `Enter` fallback,
-                    // since it renders as plain "Enter", and the same chord
-                    // declared again by a second context.
-                    let shown = !already_shown(&chord, sources)
-                        && !is_redundant_modified_enter(&chord, sources);
-                    sources.push(HelpSource {
-                        context,
-                        chord,
-                        shown,
-                        pattern: row.chord,
-                    });
-                }
-                None => entries.push((
-                    row.action,
-                    vec![HelpSource {
-                        context,
-                        chord,
-                        shown: true,
-                        pattern: row.chord,
-                    }],
-                )),
+/// The presented binding for one behavior in one context, or `None` where that
+/// context does not bind it.
+pub fn binding_for(context: BindingContext, action: Action) -> Option<HelpEntry> {
+    one(context, BoundAction::Fixed(action))
+}
+
+/// The presented binding for typing an ordinary character into this context's
+/// draft, or `None` where the context takes no typed text.
+pub fn typing_binding(context: BindingContext) -> Option<HelpEntry> {
+    fold_rows(rows_of(context).map(|row| (context, row)))
+        .into_iter()
+        .find(|(action, _)| matches!(action, BoundAction::Typed(_)))
+        .map(entry_of)
+}
+
+/// The bindings the picker's hint strip advertises.
+///
+/// Which few behaviors are worth a one-line strip is an editorial judgment and
+/// stays declared here; their chords and their wording are not, and come from
+/// the table. Both picker columns contribute, because the strip annotates the
+/// picker rather than whichever column currently holds focus -- and because
+/// `Enter` means something different in each, which is the fact the strip
+/// exists to convey.
+pub fn picker_hint() -> Vec<HelpEntry> {
+    [
+        binding_for(BindingContext::PickerBundles, Action::TogglePickerFocus),
+        binding_for(BindingContext::PickerBundles, Action::CommitPickerBundle),
+        binding_for(BindingContext::PickerSessions, Action::CommitPickerSession),
+        binding_for(BindingContext::PickerBundles, Action::ClosePicker),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+/// The bindings the interaction write pane's hint advertises.
+pub fn interaction_write_hint() -> Vec<HelpEntry> {
+    [
+        typing_binding(BindingContext::InteractionWrite),
+        binding_for(BindingContext::InteractionWrite, Action::DispatchRaww),
+        binding_for(BindingContext::InteractionWrite, Action::InsertRawwNewline),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+fn rows_of(context: BindingContext) -> impl Iterator<Item = &'static ContextRow> {
+    BINDINGS
+        .iter()
+        .find(move |group| group.context == context)
+        .map(|group| group.rows.iter())
+        .unwrap_or_default()
+}
+
+fn one(context: BindingContext, wanted: BoundAction) -> Option<HelpEntry> {
+    fold_rows(rows_of(context).map(|row| (context, row)))
+        .into_iter()
+        .find(|(action, _)| *action == wanted)
+        .map(entry_of)
+}
+
+fn entries_for(section: DisplaySection) -> Vec<HelpEntry> {
+    finish(fold_rows(help_contexts().into_iter().flat_map(
+        move |context| {
+            rows_of(context)
+                .filter(move |row| row.section == section)
+                .map(move |row| (context, row))
+        },
+    )))
+}
+
+/// Groups rows by the behavior they reach, in the order the rows are first
+/// reached, recording every row and marking which of them are printed.
+///
+/// A `Vec` rather than a map: the order rows are declared in is the order they
+/// are presented in, and a hash map would discard it.
+fn fold_rows<'a>(
+    rows: impl Iterator<Item = (BindingContext, &'a ContextRow)>,
+) -> Vec<(BoundAction, Vec<HelpSource>)> {
+    let mut entries: Vec<(BoundAction, Vec<HelpSource>)> = Vec::new();
+    for (context, row) in rows {
+        let chord = row.chord.display();
+        match entries.iter_mut().find(|(action, _)| *action == row.action) {
+            Some((_, sources)) => {
+                // Every row is recorded; only some are printed. A chord whose
+                // text is already on the line is folded -- which is what
+                // absorbs the modifier-agnostic `Enter` fallback, since it
+                // renders as plain "Enter", and the same chord declared again
+                // by a second context.
+                let shown = !already_shown(&chord, sources)
+                    && !is_redundant_modified_enter(&chord, sources);
+                sources.push(HelpSource {
+                    context,
+                    chord,
+                    shown,
+                    pattern: row.chord,
+                });
             }
+            None => entries.push((
+                row.action,
+                vec![HelpSource {
+                    context,
+                    chord,
+                    shown: true,
+                    pattern: row.chord,
+                }],
+            )),
         }
     }
-
     entries
-        .into_iter()
-        .map(|(action, sources)| HelpEntry {
-            chords: sources
-                .iter()
-                .filter(|source| source.shown)
-                .map(|source| source.chord.as_str())
-                .collect::<Vec<_>>()
-                .join(" / "),
-            description: action.describe(),
-            sources,
-        })
-        .collect()
+}
+
+fn entry_of((action, sources): (BoundAction, Vec<HelpSource>)) -> HelpEntry {
+    HelpEntry {
+        chords: sources
+            .iter()
+            .filter(|source| source.shown)
+            .map(|source| source.chord.as_str())
+            .collect::<Vec<_>>()
+            .join(" / "),
+        description: action.describe(),
+        sources,
+    }
+}
+
+fn finish(folded: Vec<(BoundAction, Vec<HelpSource>)>) -> Vec<HelpEntry> {
+    folded.into_iter().map(entry_of).collect()
 }
 
 fn already_shown(chord: &str, sources: &[HelpSource]) -> bool {

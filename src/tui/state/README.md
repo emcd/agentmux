@@ -31,9 +31,10 @@ lives in `relay.rs`; and the per-mode interaction helpers live in
   - Tests live under `tests/unit/` in `tui.rs`, `tui_bindings.rs`,
     `tui_dispatch.rs`, `tui_help.rs`, `tui_workbench/`,
     `tui_session.rs`, and
-    `tui_relay_error_mapping.rs`. `src/tui/` carries one inline
-    `#[cfg(test)]`, in `render/overlays/help.rs`, covering a
-    crate-private renderer no public interface reaches.
+    `tui_relay_error_mapping.rs`. `src/tui/` carries two inline
+    `#[cfg(test)]` blocks, one `#[test]` each, in
+    `render/overlays/help.rs` and `render/overlays/picker.rs` — both
+    covering crate-private renderers no public interface reaches.
 - `history.rs`
   - `impl AppState` for the chat-history and stream-event domain:
     `send_message`, `record_chat_events`, `record_stream_events`,

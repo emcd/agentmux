@@ -62,6 +62,15 @@ Two halves, deliberately independent:
     behaviors some other context still describes; the pattern catches a
     single row dropped from a context that binds two chords to one
     behavior, as the events overlay does with `Esc` and `F3`.
+  - `context_bindings`, `binding_for`, and `typing_binding` answer for
+    one context rather than the whole surface, and `picker_hint` and
+    `interaction_write_hint` compose the pane hint strips from them.
+    That asymmetry is the point: help catalogues every surface, a strip
+    annotates the one it sits on. Which few behaviors a strip
+    advertises stays declared here; their chords and wording are the
+    table's. `HelpEntry::primary_chord` and `HelpEntry::detail` are
+    what a one-line strip uses, the catalogue using the full chord list
+    and the qualified description.
 - `context.rs`
   - `BindingContext`, `binding_context`, and `binding_lookup_order`.
     `binding_context` resolves the surface that owns a chord from
@@ -74,8 +83,9 @@ Two halves, deliberately independent:
 ## Public surface
 
 `Action`, `BindingContext`, `default_binding`, `help_bindings`,
-`HelpSection`, `HelpEntry`, and `HelpSource` are exported from
-`agentmux::tui`, and
+`context_bindings`, `binding_for`, `typing_binding`, `picker_hint`,
+`interaction_write_hint`, `HelpSection`, `HelpEntry`, and `HelpSource`
+are exported from `agentmux::tui`, and
 `Workbench` exposes `apply_action`, `binding_context`,
 `binding_lookup_order`, and `help_bindings`. Together they let a caller
 outside the crate ask what surface is active, what a chord means there,
@@ -133,6 +143,9 @@ makes them redundant wherever `Enter` is bound; see `help.rs`.
   declares, `tui_dispatch.rs` for dispatch and direct application
   agreeing on what a chord does, `tui_help.rs` for generated
   presentation, and `tui.rs` for the public seam. `src/tui/` carries
-  one inline `#[cfg(test)]`, in `../render/overlays/help.rs`, where the
-  renderer it covers is crate-private by design; everything else lives
-  under `tests/`.
+  two inline `#[cfg(test)]` blocks, one `#[test]` each, both covering
+  crate-private overlay renderers no public interface reaches:
+  `../render/overlays/help.rs` for the overlay's geometry and its
+  independence from the keyboard probe, and
+  `../render/overlays/picker.rs` for the hint strip surviving widths
+  that force extra rows. Everything else lives under `tests/`.

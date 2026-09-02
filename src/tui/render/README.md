@@ -36,6 +36,9 @@ purely for reads, never for writes.
     pane (tmux line-mode and ACP structured-entry-mode rendering),
     the raww pane, and the choice decisioning pane (which replaces
     the raww pane when an active look target has pending choices).
+    The empty write pane's prompt is generated from the binding
+    table via `actions::interaction_write_hint`, filtered to the
+    write pane's own context and wrapped rather than truncated.
 - `cursor.rs`
   - Active cursor placement: compose cursor in Communication mode,
     raww cursor in Interaction mode. Position helpers that depend on

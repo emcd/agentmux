@@ -165,9 +165,14 @@ mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
 
+    use crate::tui::keyboard::KeyboardEnhancement;
     use crate::tui::state::{AppState, TuiLaunchOptions};
 
     fn rendered(width: u16, height: u16) -> Vec<String> {
+        rendered_under(width, height, KeyboardEnhancement::Unsupported)
+    }
+
+    fn rendered_under(width: u16, height: u16, enhancement: KeyboardEnhancement) -> Vec<String> {
         let mut state = AppState::new(TuiLaunchOptions {
             namespace: "agentmux".to_string(),
             sender_session: "tui".to_string(),
@@ -175,6 +180,7 @@ mod tests {
             look_lines: None,
             available_bundles: vec!["agentmux".to_string()],
         });
+        state.keyboard_enhancement = enhancement;
         state.help_overlay_open = true;
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
         terminal
@@ -214,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn the_overlay_fits_its_target_geometry_without_colliding_columns() {
+    fn the_overlay_fits_its_geometry_and_ignores_the_probe_outcome() {
         let (inner, columns) = columns_of(120, 44);
         let lines = rendered(120, 44);
         let bindings = format!(
@@ -264,6 +270,43 @@ mod tests {
                 "{expected:?} missing from the binding columns"
             );
         }
+
+        // Task 4.5, where the buffer is available to assert it. The generated
+        // bindings must be byte-identical under every probe outcome, so no
+        // capability conditioning can re-enter through the rendering path.
+        // The capability report is the deliberate exception -- it reports what
+        // the probe determined, which is not a binding -- so it is asserted to
+        // differ, or this check would pass on a page that ignored the outcome
+        // entirely and prove nothing about the separation.
+        let mut reports = Vec::new();
+        for enhancement in [
+            KeyboardEnhancement::Active,
+            KeyboardEnhancement::Unsupported,
+            KeyboardEnhancement::ProbeFailed,
+        ] {
+            let under = rendered_under(120, 44, enhancement);
+            assert_eq!(
+                (
+                    column_text(&under, columns[0]),
+                    column_text(&under, columns[1])
+                ),
+                (
+                    column_text(&lines, columns[0]),
+                    column_text(&lines, columns[1])
+                ),
+                "the generated bindings changed under {enhancement:?}"
+            );
+            reports.push(column_text(&under, columns[2]));
+        }
+        assert_eq!(
+            reports
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len(),
+            reports.len(),
+            "the capability report is the same under every outcome, so this test \
+             cannot tell an ignored probe from a respected one"
+        );
 
         // Columns are separated, and nothing is written into the separation.
         // The width is asserted against a literal rather than against `GUTTER`,

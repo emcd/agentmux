@@ -98,14 +98,26 @@
       than inferring it from a passing render. Assert it through the workbench,
       which a context-filtered implementation would have to read: comparing the
       state-free catalogue against itself proves nothing.
-- [ ] 4.3 Generate `picker_hint_line` and the interaction write-pane hint from
+- [x] 4.3 Generate `picker_hint_line` and the interaction write-pane hint from
       the table, retiring their hand-rolled context-sensitive labels. These stay
-      filtered to the context they annotate.
-- [ ] 4.4 Test that a hint strip presents only its own context's bindings,
+      filtered to the context they annotate. Generated wording is longer than
+      the shorthand it replaces, so both strips wrap rather than truncate: the
+      picker's is laid out before the vertical split so its row count sizes its
+      own section, and it packs at entry boundaries so a binding is never split
+      across rows. Every packed row is reserved, with no cap: a cap clips
+      whichever binding lands last and discloses nothing. Where a single entry
+      cannot fit a row even alone, it degrades to the unqualified description
+      rather than being clipped, which is asserted at the widths that force it.
+- [x] 4.4 Test that a hint strip presents only its own context's bindings,
       pinning the asymmetry with help rather than leaving it to reviewer memory.
-- [ ] 4.5 Test that generated presentation does not read the keyboard-enhancement
+      Assert as well that the chord a strip prints resolves to the behavior it
+      names, which is what a row shadowed within its own context would break.
+- [x] 4.5 Test that generated presentation does not read the keyboard-enhancement
       probe outcome, so no capability-conditioned behavior enters through the
-      rendering path.
+      rendering path. Two halves: the generation functions take no state, and
+      the rendered overlay's binding columns are byte-identical under all three
+      outcomes. The capability report is asserted to differ, or the second half
+      would pass on a page that ignored the outcome entirely.
 - [x] 4.6 Compare the rendered help overlay before and after generation and
       resolve any readability regression before proceeding. Generation is
       taller and wider than the transcript it replaces: one line per behavior

@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::transports::StructuredEntry;
 
+use super::super::actions;
 use super::super::state::AppState;
 use super::frame::INTERACTION_RAWW_PANE_HEIGHT;
 use super::geometry::{raww_titled_block, wrap_text};
@@ -54,14 +55,40 @@ fn render_interaction_target_header(frame: &mut Frame, area: Rect, state: &AppSt
     frame.render_widget(paragraph, area);
 }
 
+/// The empty write pane's prompt, generated from the binding table.
+///
+/// Filtered to the write pane's own context, which is the asymmetry with the
+/// help overlay: help catalogues every surface, a hint annotates the one it
+/// sits on. Which behaviors are worth advertising is declared in
+/// `actions::interaction_write_hint`; their chords and wording are the table's.
+fn write_pane_hint() -> String {
+    // The scope qualifier is dropped: every one of these is a write-pane
+    // binding and the pane it is printed in has already said so.
+    let advertised = actions::interaction_write_hint()
+        .into_iter()
+        .map(|entry| {
+            format!(
+                "{} {}",
+                entry.primary_chord(),
+                entry.detail().to_lowercase()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!("({advertised})")
+}
+
 fn render_interaction_raww_pane(frame: &mut Frame, area: Rect, state: &AppState) {
     let block = raww_titled_block("  Write  ");
     let inner = block.inner(area);
     let lines: Vec<Line<'static>> = if state.raww_draft.is_empty() {
-        vec![Line::from(Span::styled(
-            "(type to compose write; Enter dispatches, Ctrl+J inserts newline)",
-            Style::default().fg(Color::DarkGray),
-        ))]
+        // Wrapped rather than truncated: the generated wording is longer than
+        // the sentence it replaces, and a prompt that loses its last binding
+        // to the pane edge is worse than one that takes a second row.
+        wrap_text(&write_pane_hint(), inner.width as usize)
+            .into_iter()
+            .map(|line| Line::from(Span::styled(line, Style::default().fg(Color::DarkGray))))
+            .collect()
     } else {
         state
             .raww_draft
