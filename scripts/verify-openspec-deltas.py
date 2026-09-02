@@ -24,8 +24,9 @@ see a scenario whose title survived while its body was hollowed out, nor a
 requirement whose prose lost a normative clause. Those remain a manual-review
 concern; this catches the silent-deletion class, not every regression.
 
-Four checks, three of which are errors and one of which is a report:
+Five checks, four of which are errors and one of which is a report:
 
+- ERROR   a change whose deltas disagree about whether they have been synced
 - ERROR   MODIFIED or REMOVED naming a requirement that does not exist live
           (a typo, or a rename that happened upstream)
 - ERROR   ADDED naming a requirement that already exists live
@@ -37,6 +38,15 @@ The last is a report rather than an error because dropping a scenario is often
 exactly right -- it describes retired behavior. The point is that each drop
 should be a decision someone made, not something that happened. Read the list
 and confirm every line. Only an ERROR sets a non-zero exit status.
+
+Every one of those checks asks whether a delta agrees with the spec it is about
+to modify, so all of them invert once it has modified it. A change is therefore
+classified as authored-but-not-yet-synced or as already-synced before any check
+runs, and an already-synced change is reported and skipped rather than audited
+against a live spec that now contains it. Deltas that disagree with each other
+about which state they are in -- some applied, some not -- are an error in their
+own right. See `applied_state` for how the state is inferred and why it is not
+recorded.
 
 Usage:  scripts/verify-openspec-deltas.py <change-id> [<change-id> ...]
         scripts/verify-openspec-deltas.py [--quiet] <delta-spec-path> ...
@@ -79,6 +89,14 @@ Requirement = namedtuple("Requirement", "name scenarios text")
 REQUIREMENT_HEADER = re.compile(r"^### Requirement:[ \t]*(.+?)[ \t]*$", re.M)
 BLOCK_STOP = re.compile(r"^(?:### Requirement:|## )", re.M)
 SECTION_HEADER = re.compile(r"^## ([A-Z]+) Requirements\s*$", re.M)
+
+# A markdown thematic break: three or more of the same dash, asterisk or
+# underscore on a line of their own.
+THEMATIC_BREAK = re.compile(r"^\s*([-*_])\1{2,}\s*$")
+
+# OpenSpec requires a requirement statement to say SHALL or MUST, so these
+# words mark the sentences that carry the obligation.
+NORMATIVE_WORD = re.compile(r"\b(?:SHALL|MUST)\b")
 
 # Candidate planning homes, relative to the repository root, in priority order.
 #
@@ -245,6 +263,433 @@ def change_ids(arguments):
     return ids
 
 
+def flattened(text):
+    """Return text with whitespace collapsed and markdown emphasis removed.
+
+    Both sides of every clause comparison go through this, so a requirement
+    that is only rewrapped, reindented, or emphasised differently compares
+    equal. Stripping the markers is not cosmetic: a sentence ending `one.**`
+    has no whitespace after its period, so a splitter that looks for one runs
+    two sentences together and then fails to match live whenever the *second*
+    one changed. That produced a false positive convincing enough to be
+    reported as a finding before it was checked.
+    """
+    return " ".join(re.sub(r"[*`_]+", "", text).split())
+
+
+def prose_of(requirement):
+    """Return the requirement's non-list text, flattened.
+
+    Both the clauses extracted from a delta and the live text they are looked
+    up in must come through here. Dropping list lines joins whatever sat on
+    either side of a list, so a clause extracted from stripped text can only
+    be found in text stripped the same way -- searching the full live text for
+    it flagged 72 of 96 archives instead of 3.
+    """
+    kept = "\n".join(
+        line for line in requirement.text.splitlines()
+        if not line.lstrip().startswith(("-", "*", "+"))
+    )
+    return flattened(kept)
+
+
+def normative_clauses(requirement):
+    """Return the requirement's SHALL/MUST prose sentences, flattened.
+
+    These are the sentences that carry the obligation, so they are what a
+    change is for and what is lost if its delta never reaches live. Comparing
+    them survives the drift that defeats comparing whole texts: rewrapping and
+    reindenting vanish under flattening, and a later change adding prose
+    leaves the existing clauses where they were.
+
+    List items are excluded, and that exclusion is what makes this usable as a
+    gate. Bullets rarely end in a period, so a list flattens into one enormous
+    pseudo-sentence that swallows the prose after it; any edit to any item then
+    makes the whole block compare unequal. Two archives were flagged that way
+    -- for a changed parameter list, not a lost obligation -- which is the kind
+    of noise that teaches people to bypass a gate. The cost is narrower reach:
+    an obligation stated only inside a bullet is not compared.
+    """
+    sentences = re.split(r"(?<=\.)\s+", prose_of(requirement))
+    return [s for s in sentences if NORMATIVE_WORD.search(s)]
+
+
+def rename_pairs(pairs):
+    """Yield (from_name, to_name) for each well-formed RENAMED pair.
+
+    Well-formed means alternating FROM/TO with both names non-empty. Whether
+    the pair is *valid* -- FROM live, TO not yet live -- is a separate question
+    answered against a particular capability's live spec by `check_renames`,
+    which is the one place that reports it. Callers that only need to know what
+    a change intends to rename use this.
+    """
+    for index in range(0, len(pairs) - 1, 2):
+        (from_kind, from_name), (to_kind, to_name) = pairs[index], pairs[index + 1]
+        if from_kind == "FROM" and to_kind == "TO" and from_name and to_name:
+            yield from_name, to_name
+
+
+def normalized(requirement):
+    """Return a requirement's block text with incidental whitespace removed.
+
+    Sync copies a delta block into the live spec verbatim, so equality here is
+    exact apart from the surrounding blank lines the two files happen to carry.
+    """
+    return "\n".join(line.rstrip() for line in requirement.text.strip().splitlines())
+
+
+def applied_state(by_capability, live_by_capability):
+    """Classify a change as APPLIED, PENDING, or MIXED against the live specs.
+
+    A delta has two normal states -- authored but not yet synced, and synced --
+    and every existence check in this script inverts between them. Read without
+    that distinction, a correctly synced change reports one error per delta:
+    its REMOVED targets are gone (as intended) and its ADDED requirements are
+    present (as intended). Twelve such errors on `extract-raww-verb-capability`
+    immediately after its sync are what motivated this.
+
+    The state is inferred rather than recorded. `opsx-sync` edits live specs by
+    hand, so a marker written at sync time would be one more thing to forget;
+    inferring from the artifacts is self-correcting and needs no new discipline.
+
+    Every operation contributes evidence, and they are weighed together. An
+    earlier version let ADDED and REMOVED names decide alone whenever a change
+    had any, which silently discarded the rest: a change with one synced
+    removal and one unsynced modification read as fully applied, and the
+    archive gate would have accepted it while the modification was lost.
+
+    - REMOVED is live before sync and absent after.
+    - ADDED is the reverse.
+    - MODIFIED is live in both states, so the signal is whether the scenarios
+      AND the normative prose clauses the delta introduces are present. Scenario
+      headings alone left the case that matters most unguarded: a delta that
+      rewrites a SHALL without touching a heading is exactly the edit a change
+      exists to make, and exactly what is lost if it never syncs.
+    - RENAMED leaves FROM gone and TO live. Only the two together are evidence;
+      either half alone is ambiguous.
+
+    Comparing MODIFIED texts for equality was tried first and is wrong. Live
+    drifts away from an applied delta for reasons that have nothing to do with
+    syncing -- a later change edits the same requirement, or the paragraph is
+    rewrapped -- and against real archive commits it produced false verdicts on
+    two of twelve, each of which would have blocked a correct archive.
+    Containment survives both: rewrapping does not move a scenario, and a live
+    requirement that has since gained more still holds what the delta added.
+
+    Returns (state, evidence). APPLIED, PENDING, MIXED when the evidence
+    disagrees with itself, and SATISFIED when there is none.
+
+    SATISFIED is not ignorance, which is why it is not called UNKNOWN. It means
+    every requirement, scenario and normative clause the delta names is already
+    present in live. Whether this change put it there is unknowable and also
+    immaterial: nothing the delta asserts would be lost by filing it. That is
+    the invariant the archive gate enforces, stated exactly.
+
+    Every correctly synced MODIFIED-only change lands here by construction --
+    once its edits are live there is nothing left for it to introduce -- so
+    blocking on SATISFIED would block 25 of this repository's 96 archives. It
+    is a pass.
+
+    The residual hole is a delta whose purpose is DELETION: if it removes an
+    obligation and never syncs, live retains the old clause, the delta's
+    remaining clauses are all present, and it reports SATISFIED. That case is
+    not detectable here, because live holding more than the delta is also what
+    ordinary later drift looks like.
+    """
+    applied, pending = [], []
+    for capability, (delta, pairs) in sorted(by_capability.items()):
+        live = live_by_capability[capability]
+        for name in delta.get("REMOVED", {}):
+            (applied if name not in live else pending).append(
+                f"{capability}: REMOVED '{name}' is "
+                f"{'absent from' if name not in live else 'present in'} live"
+            )
+        for name in delta.get("ADDED", {}):
+            (applied if name in live else pending).append(
+                f"{capability}: ADDED '{name}' is "
+                f"{'present in' if name in live else 'absent from'} live"
+            )
+        for name, requirement in delta.get("MODIFIED", {}).items():
+            before = live.get(name)
+            if before is None:
+                continue
+            introduced = [
+                scenario
+                for scenario in requirement.scenarios
+                if scenario not in before.scenarios
+            ]
+            # Scenario headings alone leave the case that matters most
+            # unguarded: a delta that rewrites a normative clause without
+            # touching a heading. That is precisely the edit a change exists
+            # to make, and precisely what is lost if the delta never syncs.
+            live_text = prose_of(before)
+            rewritten = [
+                clause
+                for clause in normative_clauses(requirement)
+                if clause not in live_text
+            ]
+            # MODIFIED yields a one-sided signal only. A scenario or clause
+            # counts as introduced precisely when live lacks it, so once the
+            # delta has synced there is nothing left to introduce and the
+            # evidence goes quiet. It can show that a delta has NOT landed,
+            # never that it has.
+            if introduced or rewritten:
+                missing = []
+                if introduced:
+                    missing.append(f"{len(introduced)} scenario(s)")
+                if rewritten:
+                    missing.append(f"{len(rewritten)} normative clause(s)")
+                pending.append(
+                    f"unsynced: {capability}: MODIFIED '{name}' introduces "
+                    f"{' and '.join(missing)} the live spec lacks"
+                )
+        for from_name, to_name in rename_pairs(pairs):
+            # A completed rename leaves the FROM name gone and the TO name
+            # live. Exactly that shape is evidence of a sync; every other shape
+            # is evidence against one, and none of them is merely ambiguous.
+            #
+            # Treating the other shapes as no-evidence let an unsynced rename
+            # archive whenever the TO name happened to exist for an unrelated
+            # reason: FROM was still live -- the old name never removed, the
+            # rename never performed -- and the gate passed it because the two
+            # signals cancelled. The old name being live is the whole thing a
+            # rename removes, so it decides this on its own.
+            if from_name not in live and to_name in live:
+                applied.append(
+                    f"synced: {capability}: RENAMED '{from_name}' -> "
+                    f"'{to_name}' is reflected live"
+                )
+            elif from_name in live and to_name in live:
+                pending.append(
+                    f"unsynced: {capability}: RENAMED '{from_name}' -> "
+                    f"'{to_name}' left both names live, so the rename never "
+                    "removed the old one"
+                )
+            elif from_name in live:
+                pending.append(
+                    f"unsynced: {capability}: RENAMED '{from_name}' -> "
+                    f"'{to_name}' has not been applied"
+                )
+            else:
+                pending.append(
+                    f"unsynced: {capability}: RENAMED '{from_name}' -> "
+                    f"'{to_name}' left neither name live"
+                )
+
+    if applied and pending:
+        return "MIXED", applied + pending
+    if applied:
+        return "APPLIED", []
+    if pending:
+        return "PENDING", pending
+    return "SATISFIED", []
+
+
+# Each case is `(name, delta_sections, rename_pairs, live, expected_state)`.
+#
+# The classifier decides which half of the script's checks apply, so getting it
+# wrong is worse than not having it: a change misread as APPLIED skips the
+# retention report entirely, and the archive gate accepts it. Real changes
+# exercise only a few of these branches, so the rest are covered here or
+# nowhere.
+def _requirement(name, text, scenarios=()):
+    body = f"### Requirement: {name}\n\n{text}\n"
+    for scenario in scenarios:
+        body += f"\n#### Scenario: {scenario}\n\n- **WHEN** a thing\n- **THEN** another\n"
+    return Requirement(name, list(scenarios), body)
+
+
+def _renamed(from_name, to_name):
+    return [("FROM", from_name), ("TO", to_name)]
+
+
+SELFTEST_CASES = [
+    (
+        "authored, not yet synced",
+        {"ADDED": {"New": _requirement("New", "a")},
+         "REMOVED": {"Old": _requirement("Old", "b")}},
+        [],
+        {"Old": _requirement("Old", "b")},
+        "PENDING",
+    ),
+    (
+        "synced",
+        {"ADDED": {"New": _requirement("New", "a")},
+         "REMOVED": {"Old": _requirement("Old", "b")}},
+        [],
+        {"New": _requirement("New", "a")},
+        "APPLIED",
+    ),
+    (
+        "half-synced: the addition landed, the removal did not",
+        {"ADDED": {"New": _requirement("New", "a")},
+         "REMOVED": {"Old": _requirement("Old", "b")}},
+        [],
+        {"New": _requirement("New", "a"), "Old": _requirement("Old", "b")},
+        "MIXED",
+    ),
+    # Evidence from different operations has to be weighed together. Letting
+    # ADDED and REMOVED decide alone read this as fully applied, and the
+    # archive gate accepted it while the modification was lost.
+    (
+        "a synced removal alongside a modification that never landed",
+        {"REMOVED": {"Gone": _requirement("Gone", "b")},
+         "MODIFIED": {"Kept": _requirement("Kept", "after", ["Old", "New"])}},
+        [],
+        {"Kept": _requirement("Kept", "before", ["Old"])},
+        "MIXED",
+    ),
+    (
+        "modified only, the scenario it introduces is not live yet",
+        {"MODIFIED": {"Same": _requirement("Same", "after", ["Old", "New"])}},
+        [],
+        {"Same": _requirement("Same", "before", ["Old"])},
+        "PENDING",
+    ),
+    (
+        "modified only, one of two has not landed",
+        {"MODIFIED": {"One": _requirement("One", "after", ["A"]),
+                      "Two": _requirement("Two", "after", ["B"])}},
+        [],
+        {"One": _requirement("One", "after", ["A"]),
+         "Two": _requirement("Two", "before", [])},
+        "PENDING",
+    ),
+    # A MODIFIED delta can show that it has NOT landed and never that it has:
+    # a scenario counts as introduced exactly when live lacks it, so an applied
+    # delta has nothing left to introduce and looks like one editing only
+    # prose. All three of these are indistinguishable, and SATISFIED says so
+    # rather than guessing. Live has also drifted in the last two -- rewrapped,
+    # and grown a scenario of its own -- both of which comparing texts for
+    # equality wrongly called unsynced on real archive commits.
+    (
+        "modified only, already synced",
+        {"MODIFIED": {"Same": _requirement("Same", "after", ["Old", "New"])}},
+        [],
+        {"Same": _requirement("Same", "after", ["Old", "New"])},
+        "SATISFIED",
+    ),
+    (
+        "modified only, synced and since rewrapped",
+        {"MODIFIED": {"Same": _requirement("Same", "one line", ["A"])}},
+        [],
+        {"Same": _requirement("Same", "one\nline", ["A"])},
+        "SATISFIED",
+    ),
+    (
+        "modified only, synced and live has since gained a scenario",
+        {"MODIFIED": {"Same": _requirement("Same", "after", ["A"])}},
+        [],
+        {"Same": _requirement("Same", "after", ["A", "Added Later"])},
+        "SATISFIED",
+    ),
+    (
+        "modified only, introducing no scenario is not evidence of anything",
+        {"MODIFIED": {"Same": _requirement("Same", "after", ["A"])}},
+        [],
+        {"Same": _requirement("Same", "before", ["A"])},
+        "SATISFIED",
+    ),
+    # A normative clause rewritten without touching a scenario heading. This is
+    # the edit a change most often exists to make, and checking headings alone
+    # let it through the archive gate to be lost.
+    (
+        "modified only, a normative clause the live spec does not have",
+        {"MODIFIED": {"Rule": _requirement(
+            "Rule", "The relay MUST use the new rule.", ["A case"])}},
+        [],
+        {"Rule": _requirement("Rule", "The relay MUST use the old rule.", ["A case"])},
+        "PENDING",
+    ),
+    (
+        "modified only, that clause has landed and live was since rewrapped",
+        {"MODIFIED": {"Rule": _requirement(
+            "Rule", "The relay MUST use the new rule.", ["A case"])}},
+        [],
+        {"Rule": _requirement(
+            "Rule", "The relay MUST use the\nnew rule.", ["A case"])},
+        "SATISFIED",
+    ),
+    (
+        "modified only, that clause has landed and live gained prose after it",
+        {"MODIFIED": {"Rule": _requirement(
+            "Rule", "The relay MUST use the new rule.", ["A case"])}},
+        [],
+        {"Rule": _requirement(
+            "Rule", "The relay MUST use the new rule. A later change added this.",
+            ["A case"])},
+        "SATISFIED",
+    ),
+    # A parameter list that gained an item, with the surrounding obligations
+    # unchanged. Comparing list text flagged two real archives for this, which
+    # is churn rather than a lost obligation -- so list lines are dropped from
+    # both sides, and this case must stay a pass.
+    (
+        "modified only, a list item differs but the obligations do not",
+        {"MODIFIED": {"Tool": _requirement(
+            "Tool",
+            "look SHALL support:\n\n- target_session\n- lines\n\n"
+            "Routing context SHALL be inferred from the suffix.",
+            ["A case"])}},
+        [],
+        {"Tool": _requirement(
+            "Tool",
+            "look SHALL support:\n\n- target_session\n- lines\n- bundle_name\n\n"
+            "Routing context SHALL be inferred from the suffix.",
+            ["A case"])},
+        "SATISFIED",
+    ),
+    # A rename carries its own evidence, in neither the ADDED nor the REMOVED
+    # section. Ignoring it made a correctly synced pure rename read as PENDING,
+    # so the archive gate refused it.
+    (
+        "pure rename, synced",
+        {},
+        _renamed("Old Name", "New Name"),
+        {"New Name": _requirement("New Name", "a", ["A"])},
+        "APPLIED",
+    ),
+    (
+        "pure rename, not yet synced",
+        {},
+        _renamed("Old Name", "New Name"),
+        {"Old Name": _requirement("Old Name", "a", ["A"])},
+        "PENDING",
+    ),
+    # Only one shape is a completed rename. The other three are evidence
+    # against one, not absence of evidence -- reading them as absence let an
+    # unsynced rename archive whenever the new name existed for an unrelated
+    # reason, with the old name still sitting live beside it.
+    (
+        "pure rename, neither name live",
+        {},
+        _renamed("Old Name", "New Name"),
+        {},
+        "PENDING",
+    ),
+    (
+        "pure rename, both names live so the old one was never removed",
+        {},
+        _renamed("Old Name", "New Name"),
+        {"Old Name": _requirement("Old Name", "a"),
+         "New Name": _requirement("New Name", "a")},
+        "PENDING",
+    ),
+]
+
+
+def run_selftest():
+    """Return a list of failure descriptions; empty when the classifier works."""
+    failures = []
+    for name, delta, pairs, live, expected in SELFTEST_CASES:
+        state, _ = applied_state({"c": (delta, pairs)}, {"c": live})
+        if state != expected:
+            failures.append(
+                f"self-test case {name!r} classified {state}, expected {expected}"
+            )
+    return failures
+
+
 def check_renames(capability, pairs, live, errors):
     """Validate RENAMED FROM/TO pairs; return the set of validated TO names.
 
@@ -286,9 +731,31 @@ def audit(change_id, quiet):
 
     errors, drops = [], 0
     by_capability = read_change(change_specs)
+    live_by_capability = {
+        capability: read_capability(live_specs, capability)
+        for capability in by_capability
+    }
+
+    state, evidence = applied_state(by_capability, live_by_capability)
+    if state == "MIXED":
+        errors.append(
+            f"{change_id}: deltas are half-synced -- some already applied to "
+            "live and some not; sync the remainder or correct the delta"
+        )
+        errors.extend(f"{change_id}: {line}" for line in evidence)
+    if state == "APPLIED":
+        # Every check below asks whether the delta agrees with the spec it will
+        # modify. Once it has modified it, the question is answered and the
+        # checks read backwards, so there is nothing left here to verify.
+        print()
+        print(
+            f"{len(by_capability)} capabilities in '{change_id}' are already "
+            "synced to live -- nothing to audit until the deltas change"
+        )
+        return errors, drops
 
     for capability, (delta, pairs) in sorted(by_capability.items()):
-        live = read_capability(live_specs, capability)
+        live = live_by_capability[capability]
         header_shown = False
 
         validated_renamed_to = check_renames(capability, pairs, live, errors)
@@ -343,6 +810,18 @@ def main():
     quiet = "--quiet" in sys.argv
     if not arguments:
         sys.exit(USAGE)
+
+    failures = run_selftest()
+    if failures:
+        for failure in failures:
+            print(f"verify-openspec-deltas: {failure}", file=sys.stderr)
+        print(
+            "verify-openspec-deltas: the applied-state classifier does not "
+            "behave as specified, so it cannot be trusted to decide which "
+            "checks apply",
+            file=sys.stderr,
+        )
+        return 1
 
     # No recognizable change among the arguments is not a failure: the hook is
     # reached by any commit whose files match its filter, and an archive-only
