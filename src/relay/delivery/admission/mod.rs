@@ -85,7 +85,8 @@ pub(in crate::relay) use self::ledger::AdmissionTargetKey;
 // should be one edit at the point the executors arrive.
 #[allow(unused_imports)]
 pub(in crate::relay) use self::mailbox::{
-    Doorbell, GenerationRejection, TargetReap, claim_consumer_generation, enqueue, reap_target,
-    register_doorbell,
+    Acknowledgment, Doorbell, GenerationRejection, GenerationReplacement, ResolvedMember,
+    TargetReap, ack, claim_consumer_generation, declare, enqueue, peek, reap_target,
+    register_doorbell, replace_consumer_generation, resolve_unreachable,
 };
 pub(in crate::relay) use self::terminal::{TerminalTransition, terminalize};

@@ -1,6 +1,8 @@
 //! Placing an admitted entry into its target's mailbox, and naming the
 //! generation entitled to consume it.
 
+use std::sync::Arc;
+
 use serde_json::json;
 
 use crate::protocol::mailbox::{EntrySequence, MailboxPayload};
@@ -25,17 +27,24 @@ pub(in crate::relay) enum EnqueueRejection {
 }
 
 /// Places an admitted entry's payload at the position admission gave it, making
-/// it peekable.
+/// it peekable, and takes custody of the send it answers for.
 ///
 /// Separate from admission because the two know different things: admission runs
 /// at the request boundary and knows what an entry costs, while the payload a
 /// transport is asked to write is settled afterwards. The position is fixed at
 /// admission either way, so the order entries become peekable in cannot differ
 /// from the order they were admitted in.
+///
+/// The task is taken here because this is where the worker stops holding it. An
+/// acknowledgment names a sequence number and arrives from an executor that
+/// knows nothing else about the entry, so the outcome it produces can only be
+/// reported to the right sender if the mailbox held what answers for the
+/// position.
 pub(in crate::relay) fn enqueue(
-    message_id: &str,
+    task: &Arc<crate::relay::AsyncDeliveryTask>,
     payload: MailboxPayload,
 ) -> Result<EntrySequence, EnqueueRejection> {
+    let message_id = task.message_id.as_str();
     let Ok(mut state) = lock_ledger() else {
         return Err(EnqueueRejection::NotAdmitted);
     };
@@ -69,6 +78,7 @@ pub(in crate::relay) fn enqueue(
         MailboxSlot {
             message_id: message_id.to_string(),
             payload,
+            task: Arc::clone(task),
         },
     );
     // Rung when a peek that would have come back empty would now come back with
@@ -147,7 +157,9 @@ mod mailbox_retirement_tests {
     use super::super::super::admit::rollback_admission;
     use super::super::super::terminal::terminalize;
     use super::super::declare::declare;
-    use super::super::fixtures::{admit_only, claim, mail, peeked, place, range};
+    use super::super::fixtures::{
+        acknowledge, admit_only, claim, mail, peeked, place, range, task,
+    };
     use crate::protocol::operations::AckAccepted;
 
     use super::super::ack::ack;
@@ -164,7 +176,7 @@ mod mailbox_retirement_tests {
         admit_only(rolled_back, "mbx-retire-rollback-a", 1);
         admit_only(rolled_back, "mbx-retire-rollback-b", 1);
         rollback_admission("mbx-retire-rollback-a");
-        enqueue("mbx-retire-rollback-b", mail("body")).expect("enqueue");
+        enqueue(&task(rolled_back, "mbx-retire-rollback-b"), mail("body")).expect("enqueue");
         assert_eq!(
             peeked(&rollback_bound, 10, 1_000),
             vec![2],
@@ -203,7 +215,7 @@ mod mailbox_retirement_tests {
         // And the executor that acknowledges it afterwards is told what actually
         // happened — already resolved — rather than that it never declared it.
         assert_eq!(
-            ack(&trigger_bound, declared.unit, &[]),
+            acknowledge(&trigger_bound, declared.unit, &[]),
             Ok(AckAccepted::AlreadyTerminalized { range: range(2, 2) }),
             "the abandoned declaration is remembered as resolved, not as never made"
         );

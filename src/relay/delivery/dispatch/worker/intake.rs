@@ -28,7 +28,10 @@ use super::super::payload::{
 /// A task the worker has taken custody of, with the artifact its target is to be
 /// written.
 pub(super) struct IntakeTask {
-    pub(super) task: AsyncDeliveryTask,
+    /// Shared with the mailbox, which holds the same handle for as long as the
+    /// entry occupies a position: an acknowledgment names a sequence number, and
+    /// only the task names the sender that acknowledgment owes an outcome.
+    pub(super) task: Arc<AsyncDeliveryTask>,
     /// What this entry's mailbox slot holds, or the refusal that stopped one from
     /// being built.
     ///
@@ -43,6 +46,7 @@ pub(super) struct IntakeTask {
 /// Builds one task's payload, stamps it once, and enqueues it into its target's
 /// mailbox.
 pub(super) fn take_into_mailbox(task: AsyncDeliveryTask, transport: &TransportImpl) -> IntakeTask {
+    let task = Arc::new(task);
     // One read of the clock per entry. `Date` therefore names when the relay
     // built the envelope rather than when a transport got round to writing it,
     // which is the only stamp that can be the same on both sides of the mailbox.
@@ -55,7 +59,7 @@ pub(super) fn take_into_mailbox(task: AsyncDeliveryTask, transport: &TransportIm
         // same. The same holds for any entry whose position the ledger refuses:
         // a refused enqueue leaves the mailbox without the entry, never the
         // sender without an answer.
-        let _ = enqueue(task.message_id.as_str(), payload.clone());
+        let _ = enqueue(&task, payload.clone());
     }
     IntakeTask { task, payload }
 }

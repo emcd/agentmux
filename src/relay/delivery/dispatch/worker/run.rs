@@ -20,8 +20,8 @@ use super::super::batch::HandoverWindow;
 use super::super::outcomes::collect_outcome;
 use super::intake::{IntakeTask, take_into_mailbox};
 use super::spawn::{
-    ASYNC_WORKER_POLL_INTERVAL_MS, InflightMember, InflightOutcome, WorkerTransportSource,
-    build_generation,
+    ASYNC_WORKER_POLL_INTERVAL_MS, BuiltGeneration, ConsumerGenerationStep, InflightMember,
+    InflightOutcome, WorkerTransportSource, build_generation,
 };
 use super::stop::{
     StopCause, WorkerHoldings, emit_fence_verdict, resolve_queued_tasks_and_reclaim,
@@ -81,32 +81,46 @@ pub(super) async fn run_async_delivery_worker(
     // agent parked in its `initialize` handshake is forever. The queue is held
     // until the bootstrap settles either way, so delivery semantics are unchanged;
     // what the loop gains is the ability to observe shutdown during that wait.
-    let (mut transport, mut bootstrap_settled) =
-        match build_generation(&key, &source, batch_settings, &readiness_changed).await {
-            Ok(built) => built,
-            Err(error) => {
-                // Construction failed, so this worker has no transport and never
-                // will. Resolve everything it was elected to carry rather than
-                // installing a dead transport the health gate would then hold
-                // through the whole dwell before reporting a generic unreachable.
-                // Unregistering — rather than fail-stopping — is deliberate: no
-                // generation ever started, so there is nothing a replacement could
-                // race, and the next send is free to try again.
-                //
-                // Unregistering happens BEFORE the drain, and the order is the
-                // whole of its correctness. `try_existing_worker` holds the
-                // registry lock across `sender.send`, so once the entry is gone no
-                // send can still be in flight — whereas draining first leaves the
-                // entry accepting, and a send landing between the drain observing
-                // empty and the unregister is lost with the receiver: no terminal
-                // outcome, no quota release. That is the accept-after-drain race
-                // `close_worker` exists to prevent on the shutdown path, and this
-                // path has to close the same way.
-                super::super::super::async_worker::unregister_worker(&key, owner);
-                resolve_queued_tasks_and_reclaim(&key, &mut receiver, pending.as_ref(), &error);
-                return;
-            }
-        };
+    let BuiltGeneration {
+        mut transport,
+        mut bootstrap_settled,
+        // Held so the next generation can name this one as outgoing, and so the
+        // worker keeps one place that answers "who consumes this target now".
+        mut binding,
+        doorbell: _doorbell,
+    } = match build_generation(
+        &key,
+        &source,
+        batch_settings,
+        &readiness_changed,
+        ConsumerGenerationStep::Claim,
+    )
+    .await
+    {
+        Ok(built) => built,
+        Err(error) => {
+            // Construction failed, so this worker has no transport and never
+            // will. Resolve everything it was elected to carry rather than
+            // installing a dead transport the health gate would then hold
+            // through the whole dwell before reporting a generic unreachable.
+            // Unregistering — rather than fail-stopping — is deliberate: no
+            // generation ever started, so there is nothing a replacement could
+            // race, and the next send is free to try again.
+            //
+            // Unregistering happens BEFORE the drain, and the order is the
+            // whole of its correctness. `try_existing_worker` holds the
+            // registry lock across `sender.send`, so once the entry is gone no
+            // send can still be in flight — whereas draining first leaves the
+            // entry accepting, and a send landing between the drain observing
+            // empty and the unregister is lost with the receiver: no terminal
+            // outcome, no quota release. That is the accept-after-drain race
+            // `close_worker` exists to prevent on the shutdown path, and this
+            // path has to close the same way.
+            super::super::super::async_worker::unregister_worker(&key, owner);
+            resolve_queued_tasks_and_reclaim(&key, &mut receiver, pending.as_ref(), &error);
+            return;
+        }
+    };
     let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
     // In-flight writes: each entry awaits one transport `OutcomeFuture` and yields
     // its originating task so the collect arm can complete it. Completion order is
@@ -303,11 +317,21 @@ pub(super) async fn run_async_delivery_worker(
                     // The replacement is the same construction as the original,
                     // from the same source, so a target cannot acquire a second
                     // transport kind by being fenced.
-                    match build_generation(&key, &source, batch_settings, &readiness_changed).await
+                    match build_generation(
+                        &key,
+                        &source,
+                        batch_settings,
+                        &readiness_changed,
+                        ConsumerGenerationStep::Replace {
+                            outgoing: binding.generation,
+                        },
+                    )
+                    .await
                     {
-                        Ok((built, settled)) => {
-                            transport = built;
-                            bootstrap_settled = settled;
+                        Ok(built) => {
+                            transport = built.transport;
+                            bootstrap_settled = built.bootstrap_settled;
+                            binding = built.binding;
                         }
                         Err(error) => {
                             // No replacement could be built. The old generation

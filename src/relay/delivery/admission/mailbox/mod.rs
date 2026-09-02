@@ -35,6 +35,10 @@
 //! - [`peek`] — reading the head run without advancing anything.
 //! - [`declare`] — recording the run about to be submitted as one packing unit.
 //! - [`ack`] — terminalizing exactly that run from the executor's evidence.
+//! - [`unreachable`] — resolving what a target holds once its transport has been
+//!   unreachable past the relay's dwell.
+//! - [`resolution`] — the shared terminalization the three resolving paths run,
+//!   and what they hand their caller to report.
 //! - [`reap`] — giving the target up and reclaiming its mailbox when its
 //!   registration goes away.
 
@@ -48,14 +52,18 @@ mod fixtures;
 mod generation;
 mod peek;
 mod reap;
+mod resolution;
+mod unreachable;
 
-pub(in crate::relay) use self::ack::ack;
+pub(in crate::relay) use self::ack::{Acknowledgment, ack};
 pub(in crate::relay) use self::declare::declare;
 pub(in crate::relay) use self::doorbell::{Doorbell, register_doorbell};
 pub(in crate::relay) use self::enqueue::{EnqueueRejection, enqueue};
 pub(in crate::relay) use self::generation::{
-    GenerationRejection, GenerationReplacement, ResolvedMember, claim_consumer_generation,
+    GenerationRejection, GenerationReplacement, claim_consumer_generation,
     replace_consumer_generation,
 };
 pub(in crate::relay) use self::peek::peek;
 pub(in crate::relay) use self::reap::{TargetReap, reap_target};
+pub(in crate::relay) use self::resolution::ResolvedMember;
+pub(in crate::relay) use self::unreachable::resolve_unreachable;

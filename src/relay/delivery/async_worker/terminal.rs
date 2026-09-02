@@ -11,7 +11,7 @@
 //! while the guard's evidence order contributes the outcome. Publishing the
 //! result is [`super::reporting`]'s job, not this module's.
 
-use crate::relay::delivery::admission::TerminalTransition;
+use crate::relay::delivery::admission::{ResolvedMember, TerminalTransition};
 use crate::relay::delivery::guard::{GuardKey, GuardTrigger, SubmissionEvidence};
 use crate::relay::{AsyncDeliveryTask, RelayError, SendOutcome, SendResult};
 
@@ -172,6 +172,49 @@ pub(in crate::relay::delivery) fn complete_task_refusal(
             details: None,
         }),
         guard,
+    );
+}
+
+/// Reports a member the ledger already terminalized, without attempting the
+/// transition a second time.
+///
+/// Every other function here begins by contesting the transition, because every
+/// other caller holds only a task and has to find out whether it won. A
+/// [`ResolvedMember`] is the transition's own output: it exists only for a member
+/// this caller won, produced under the ledger lock by an operation that resolved
+/// several members as one act. Routing it back through
+/// [`complete_task_outcome`] would find the reservation already gone and stay
+/// silent, which is exactly the duplicate-suppression working correctly against
+/// the one caller that is not a duplicate.
+///
+/// The outcome comes from the evidence, as it does everywhere: the acknowledgment
+/// that produced it reported what its write observed for this member, and a
+/// lifecycle trigger that produced it brought none and took the guard's order.
+/// The *cause* is what the evidence cannot carry — "the target has been
+/// unreachable past the dwell" and "the generation was replaced" resolve to the
+/// same spellings and are not the same thing to a sender — so each caller names
+/// its own. Both parts default to the evidence: omitting the reason code leaves
+/// the evidence's own to speak for itself, which is what an ordinary
+/// acknowledgment wants, since the write is the whole story.
+pub(in crate::relay::delivery) fn report_resolved_member(
+    member: &ResolvedMember,
+    reason_code: Option<&str>,
+    reason: Option<&str>,
+) {
+    let reason_code = reason_code
+        .map(str::to_string)
+        .unwrap_or_else(|| member.evidence.reason_code().to_string());
+    report_terminal_outcome(
+        &member.task,
+        Ok(SendResult {
+            target_session: member.task.target_session.clone(),
+            message_id: member.message_id.clone(),
+            outcome: member.evidence.outcome(),
+            reason_code: Some(reason_code),
+            reason: reason.map(str::to_string),
+            details: None,
+        }),
+        member.guard,
     );
 }
 

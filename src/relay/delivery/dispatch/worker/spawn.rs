@@ -11,9 +11,13 @@ use std::{sync::OnceLock, time::Instant};
 use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver};
 
 use crate::protocol::DeliveryDoorbell;
-use crate::protocol::identity::DeliveryTargetId;
-use crate::relay::delivery::admission::register_doorbell;
-use crate::relay::{AsyncDeliveryTask, RelayError};
+use crate::protocol::identity::{ConsumerBinding, ConsumerGenerationId, DeliveryTargetId};
+use crate::relay::delivery::admission::{
+    GenerationRejection, claim_consumer_generation, register_doorbell, replace_consumer_generation,
+};
+use crate::relay::delivery::async_worker::report_resolved_member;
+use crate::relay::delivery::fence::FenceVerdict;
+use crate::relay::{AsyncDeliveryTask, RelayError, relay_error};
 use crate::transports::{SingleDeliveryOutcome, TransportImpl};
 use crate::{configuration::BundleMember, envelope::PromptBatchSettings};
 
@@ -42,7 +46,7 @@ pub(super) type InflightOutcome = Option<SingleDeliveryOutcome>;
 /// The worker-side record for one in-flight member, held outside the collector
 /// task that carries its write.
 pub(in crate::relay::delivery::dispatch) struct InflightMember {
-    pub(in crate::relay::delivery::dispatch) task: AsyncDeliveryTask,
+    pub(in crate::relay::delivery::dispatch) task: std::sync::Arc<AsyncDeliveryTask>,
     /// Whether a successful delivery should clear startup failures: `true` for
     /// coder transports, `false` for UI.
     pub(in crate::relay::delivery::dispatch) record_served: bool,
@@ -162,34 +166,137 @@ fn delivery_runtime_handle() -> Handle {
         .clone()
 }
 
-/// Builds one generation: its transport, the flag that says when an ACP
-/// bootstrap has settled (`None` for every other kind, which has no such wait),
-/// and the doorbell the relay rings for it.
+/// How this generation comes to own its target's mailbox.
+///
+/// The two are genuinely different acts and only the caller knows which applies:
+/// a first generation takes a target nobody holds, while a replacement takes one
+/// from an incumbent and may do so only behind a positive fence verdict for it.
+/// Naming the outgoing generation is what keeps a verdict from being spent on
+/// whichever generation happens to be active by the time the flip runs.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum ConsumerGenerationStep {
+    /// The worker's first generation, for a target no consumer holds.
+    Claim,
+    /// A replacement for `outgoing`, whose fence reached a positive verdict.
+    Replace { outgoing: ConsumerGenerationId },
+}
+
+/// One generation, everything it owns, and the identity it consumes under.
+pub(super) struct BuiltGeneration {
+    pub(super) transport: TransportImpl,
+    /// When an ACP bootstrap has settled; `None` for every other kind, which has
+    /// no such wait.
+    pub(super) bootstrap_settled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// The generation this one consumes its target's mailbox under, which the
+    /// worker names as outgoing when it builds the next.
+    pub(super) binding: ConsumerBinding,
+    /// The handle the relay rings for this generation, and the one its
+    /// delivery-loop executor waits on.
+    pub(super) doorbell: DeliveryDoorbell,
+}
+
+/// Builds one generation: the identity it consumes under, its transport, the
+/// flag that says when an ACP bootstrap has settled, and the doorbell the relay
+/// rings for it.
 ///
 /// One function for both the worker's first generation and every replacement it
 /// builds after a positive fence verdict. They must be the same construction: a
 /// replacement that differed from the original would be a second transport kind
 /// for one target, which the transport-abstraction contract does not allow. The
-/// doorbell is inside that sameness rather than beside it — a replacement that
-/// forgot to register one would leave its target reachable only by the poll.
+/// generation and the doorbell are inside that sameness rather than beside it —
+/// a replacement that forgot either would be a consumer with no entitlement, or
+/// a target reachable only by the poll.
+///
+/// **The generation is issued before the transport is built**, because the
+/// transport is what will consume under it: an executor spawned by a
+/// construction that had not yet been given an identity would have nothing to
+/// bind to. A construction that then fails leaves the generation issued and the
+/// target held, which is the worker's failure path's business — it unregisters,
+/// and the reap that rides the unregister is what gives the target up.
 pub(super) async fn build_generation(
     key: &AsyncWorkerKey,
     source: &WorkerTransportSource,
     batch_settings: PromptBatchSettings,
     readiness_changed: &std::sync::Arc<tokio::sync::Notify>,
-) -> Result<
-    (
-        TransportImpl,
-        Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    ),
-    RelayError,
-> {
-    let built = build_transport(key, source, batch_settings, readiness_changed).await?;
-    register_generation_doorbell(key);
-    Ok(built)
+    step: ConsumerGenerationStep,
+) -> Result<BuiltGeneration, RelayError> {
+    let target = consumer_target(key);
+    let generation = issue_consumer_generation(&target, step)?;
+    let (transport, bootstrap_settled) =
+        build_transport(key, source, batch_settings, readiness_changed).await?;
+    let doorbell = register_generation_doorbell(&target);
+    Ok(BuiltGeneration {
+        transport,
+        bootstrap_settled,
+        binding: ConsumerBinding::new(target, generation),
+        doorbell,
+    })
 }
 
-/// Registers the doorbell the relay rings for this generation's target.
+/// Takes the target's mailbox for this generation, by whichever act the step
+/// names.
+///
+/// A replacement resolves what the outgoing generation had declared and not
+/// acknowledged, and those members are reported here rather than swallowed: each
+/// still owes its sender a terminal outcome, and the ledger call that resolved
+/// them deliberately emits none.
+fn issue_consumer_generation(
+    target: &DeliveryTargetId,
+    step: ConsumerGenerationStep,
+) -> Result<ConsumerGenerationId, RelayError> {
+    match step {
+        ConsumerGenerationStep::Claim => claim_consumer_generation(target)
+            .map_err(|rejection| generation_failure(step, rejection)),
+        ConsumerGenerationStep::Replace { outgoing } => {
+            // Positive by construction: this arm is reached only from the
+            // positive branch of a fence verdict the worker has already
+            // observed, and the ledger refuses anything else.
+            let replacement = replace_consumer_generation(target, outgoing, FenceVerdict::Positive)
+                .map_err(|rejection| generation_failure(step, rejection))?;
+            for member in &replacement.resolved {
+                report_resolved_member(
+                    member,
+                    None,
+                    Some("the delivery generation was replaced before this unit was acknowledged"),
+                );
+            }
+            Ok(replacement.generation)
+        }
+    }
+}
+
+/// Turns a refused claim or replacement into a construction failure.
+///
+/// A refusal here is a relay defect rather than a target problem: the worker's
+/// own registration is what guarantees at most one worker per target, and the
+/// reap that rides an unregister is what gives a target up, so a target that is
+/// still held when a fresh worker claims it means one of those did not happen.
+/// Failing construction is the loud reading — the worker resolves what it was
+/// elected to carry and unregisters, so the next send may elect a fresh one —
+/// where taking the target anyway would put two consumers on one mailbox, which
+/// is the single condition every generation check exists to exclude.
+fn generation_failure(step: ConsumerGenerationStep, rejection: GenerationRejection) -> RelayError {
+    relay_error(
+        "internal_unexpected_failure",
+        "the relay could not take this target's mailbox for a new delivery generation",
+        Some(serde_json::json!({
+            "step": format!("{step:?}"),
+            "rejection": format!("{rejection:?}"),
+        })),
+    )
+}
+
+/// The target a generation consumes, in the neutral boundary's spelling.
+fn consumer_target(key: &AsyncWorkerKey) -> DeliveryTargetId {
+    DeliveryTargetId::new(
+        key.namespace.as_str(),
+        key.runtime_directory.as_path(),
+        key.target_session.as_str(),
+    )
+}
+
+/// Registers the doorbell the relay rings for this generation's target, and
+/// returns the handle its executor waits on.
 ///
 /// Built here rather than beside `readiness_changed`, which belongs to the
 /// worker and outlives every generation it goes on to build. A doorbell belongs
@@ -208,21 +315,19 @@ pub(super) async fn build_generation(
 /// What the relay is handed is a closure, not the handle itself, so the relay
 /// never learns what it rings — the same opaque shape a transport's readiness
 /// notifier already has, invoked for a new event rather than through new
-/// machinery. What the closure rings is the neutral [`DeliveryDoorbell`], which
-/// is what the generation's delivery-loop executor waits on once the cutover
-/// gives it one; a clone for that side is what this grows then. Until then the
-/// handle is the closure's alone, and a ring made with nobody waiting is
-/// retained rather than lost, so nothing accumulates a debt in the meantime.
-fn register_generation_doorbell(key: &AsyncWorkerKey) {
+/// machinery. What the closure rings is the neutral [`DeliveryDoorbell`] this
+/// returns, which is what the generation's delivery-loop executor waits on.
+///
+/// Registered *after* the transport is built, so a construction that fails
+/// leaves no registration behind for a generation that never existed. The window
+/// this opens is one in which a ring is lost, and it costs nothing: an executor's
+/// first act is to peek, so it finds whatever arrived during it without being
+/// told.
+fn register_generation_doorbell(target: &DeliveryTargetId) -> DeliveryDoorbell {
     let doorbell = DeliveryDoorbell::new();
-    register_doorbell(
-        &DeliveryTargetId::new(
-            key.namespace.as_str(),
-            key.runtime_directory.as_path(),
-            key.target_session.as_str(),
-        ),
-        std::sync::Arc::new(move || doorbell.ring()),
-    );
+    let ring = doorbell.clone();
+    register_doorbell(target, std::sync::Arc::new(move || ring.ring()));
+    doorbell
 }
 
 /// The transport half of building a generation, separated so the doorbell above

@@ -323,6 +323,7 @@ pub(super) async fn stop_drain(
 #[cfg(test)]
 mod reclaim_after_drain_tests {
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
 
     use crate::configuration::{
         BUNDLE_SCHEMA_VERSION, BundleConfiguration, BundleMember, SessionType, TargetConfiguration,
@@ -353,7 +354,14 @@ mod reclaim_after_drain_tests {
             1,
         )
         .expect("admit");
-        enqueue("reclaim-after-drain-1", raw()).expect("enqueue");
+        enqueue(
+            &Arc::new(queued_task(
+                runtime_directory.as_path(),
+                "reclaim-after-drain-1",
+            )),
+            raw(),
+        )
+        .expect("enqueue");
 
         // The reap that rides the unregister, which on these paths runs before
         // the drain. It finds the queued task still admitted and keeps the
@@ -366,7 +374,10 @@ mod reclaim_after_drain_tests {
 
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         sender
-            .send(queued_task(runtime_directory.as_path()))
+            .send(queued_task(
+                runtime_directory.as_path(),
+                "reclaim-after-drain-1",
+            ))
             .expect("the receiver is live");
         drop(sender);
         let pending = std::sync::atomic::AtomicUsize::new(1);
@@ -387,15 +398,21 @@ mod reclaim_after_drain_tests {
         // mailbox belonging to a target that no longer has a worker.
         admit("reclaim-after-drain-2", admission, SessionType::Tmux, 1).expect("admit");
         assert_eq!(
-            enqueue("reclaim-after-drain-2", raw())
-                .expect("enqueue")
-                .value(),
+            enqueue(
+                &Arc::new(queued_task(
+                    runtime_directory.as_path(),
+                    "reclaim-after-drain-2",
+                )),
+                raw(),
+            )
+            .expect("enqueue")
+            .value(),
             1,
             "the retry after the drain reclaimed the mailbox, so numbering starts over"
         );
     }
 
-    fn queued_task(runtime_directory: &Path) -> AsyncDeliveryTask {
+    fn queued_task(runtime_directory: &Path, message_id: &str) -> AsyncDeliveryTask {
         AsyncDeliveryTask {
             admitted: true,
             bundle: BundleConfiguration {
@@ -420,7 +437,7 @@ mod reclaim_after_drain_tests {
             all_target_sessions: Vec::new(),
             target_session: TARGET.to_string(),
             message: "body".to_string(),
-            message_id: "reclaim-after-drain-1".to_string(),
+            message_id: message_id.to_string(),
             runtime_directory: runtime_directory.to_path_buf(),
             payload_mode: DeliveryPayloadMode::EnvelopeMessage,
             append_enter: true,

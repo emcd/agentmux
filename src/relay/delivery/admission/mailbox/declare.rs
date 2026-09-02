@@ -113,7 +113,9 @@ pub(in crate::relay) fn declare(binding: &ConsumerBinding, range: EntryRange) ->
 /// through the ordering between them.
 #[cfg(test)]
 mod mailbox_declaration_tests {
-    use super::super::fixtures::{admit_only, binding, claim, mail, place, range, seq};
+    use super::super::fixtures::{
+        acknowledge, admit_only, binding, claim, mail, place, range, seq,
+    };
     use crate::protocol::operations::MemberAcknowledgment;
 
     use super::super::super::super::guard::SubmissionEvidence;
@@ -179,7 +181,7 @@ mod mailbox_declaration_tests {
             "an outstanding unit blocks even a range that shares no entry with it"
         );
 
-        ack(
+        acknowledge(
             &bound,
             accepted.unit,
             &[

@@ -41,5 +41,5 @@ pub(in crate::relay::delivery) use self::registry::register_worker;
 
 pub(in crate::relay::delivery) use self::terminal::{
     complete_task_on_shutdown, complete_task_outcome, complete_task_outcome_from_trigger,
-    complete_task_refusal,
+    complete_task_refusal, report_resolved_member,
 };

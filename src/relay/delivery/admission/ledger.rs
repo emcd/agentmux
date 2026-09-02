@@ -8,7 +8,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
     time::Instant,
 };
 
@@ -131,10 +131,29 @@ pub(super) struct UnitRecord {
 /// duplicated here — they live on [`AdmittedEntry`], which stays the one
 /// authoritative record for everything about an entry, so a peek's byte
 /// accounting cannot drift from the reservation it was charged against.
+///
+/// It also holds the send itself, which is custody rather than convenience. An
+/// entry's terminal outcome is owed to *its sender* — as a `SendResult`, and for
+/// a non-delivered outcome as a receipt routed back through that sender's own
+/// transport — and none of that is derivable from a message id. Under the push
+/// model the worker held the task for as long as it held the member, so the
+/// mailbox never needed it; under the pull model the worker lets go at the
+/// enqueue and the acknowledgment can arrive an arbitrary time later, from an
+/// executor that knows only sequence numbers. Whoever holds the entry has to
+/// hold what answers for it.
 #[derive(Clone, Debug)]
 pub(super) struct MailboxSlot {
     pub(super) message_id: String,
     pub(super) payload: MailboxPayload,
+    /// The send this position answers for, kept so a resolution reached under
+    /// the ledger's lock can be reported to its sender once that lock is
+    /// released.
+    ///
+    /// Shared rather than owned: a task is immutable from admission onward and
+    /// is read by every path that resolves the entry, so cloning the handle
+    /// costs nothing where cloning the task would copy a bundle configuration
+    /// per peek.
+    pub(super) task: Arc<crate::relay::AsyncDeliveryTask>,
 }
 
 /// A declaration that has been made and not yet acknowledged.
