@@ -18,6 +18,7 @@ use crate::protocol::operations::PeekRequest;
 use super::super::admit::admit;
 use super::super::ledger::AdmissionTargetKey;
 use super::enqueue::enqueue;
+use super::generation::claim_consumer_generation;
 
 pub(super) const TARGET_SESSION: &str = "target";
 
@@ -25,15 +26,45 @@ pub(super) fn runtime_directory(namespace: &str) -> PathBuf {
     Path::new("/nonexistent").join(namespace)
 }
 
-pub(super) fn binding(namespace: &str, generation: u64) -> ConsumerBinding {
-    ConsumerBinding::new(
-        DeliveryTargetId::new(
-            namespace,
-            runtime_directory(namespace).as_path(),
-            TARGET_SESSION,
-        ),
-        ConsumerGenerationId::new(generation),
+pub(super) fn target(namespace: &str) -> DeliveryTargetId {
+    DeliveryTargetId::new(
+        namespace,
+        runtime_directory(namespace).as_path(),
+        TARGET_SESSION,
     )
+}
+
+/// A binding naming a generation of the caller's choosing, for the cases that
+/// need one the relay did not issue.
+pub(super) fn binding(namespace: &str, generation: u64) -> ConsumerBinding {
+    ConsumerBinding::new(target(namespace), ConsumerGenerationId::new(generation))
+}
+
+/// Takes the target's generation from the relay and binds to it.
+///
+/// The only way a test gets a usable binding, because a mailbox nobody has
+/// claimed has no generation and refuses every operation. Which identifier comes
+/// back is the relay's business: each fixture namespace is its own target, so the
+/// sequence starts fresh, and a test that named the number instead of taking it
+/// would be re-asserting the sequence rather than using it.
+pub(super) fn claim(namespace: &str) -> ConsumerBinding {
+    let issued = claim_consumer_generation(&target(namespace)).expect("the fixture target is free");
+    ConsumerBinding::new(target(namespace), issued)
+}
+
+/// The highest generation identifier this target's sequence has issued.
+///
+/// Read from the ledger because the sequence is deliberately not observable
+/// through any operation: what a caller sees is the identifier it was handed,
+/// and the high-water mark behind it is exactly the state a reap must leave
+/// alone.
+pub(super) fn target_generation(namespace: &str) -> u64 {
+    let state = super::super::ledger::lock_ledger().expect("ledger");
+    state
+        .generations
+        .get(&admission_key(namespace))
+        .and_then(|held| held.issued)
+        .map_or(0, ConsumerGenerationId::value)
 }
 
 pub(super) fn admission_key(namespace: &str) -> AdmissionTargetKey {

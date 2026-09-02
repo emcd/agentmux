@@ -321,8 +321,11 @@ exported from `src/relay/mod.rs`.
     the listener binds; before that (in tests, and on any path that never hosts a
     relay) reads fall back to the same defaults a missing `relay.toml` resolves
     to.
-    Its `mailbox` module holds the pull model's relay side: the per-target ordered
-    mailbox and the three operations a delivery-loop executor calls against it —
+    Its `mailbox` module holds the pull model's relay side. `enqueue` fills the
+    position admission fixed, with the relay-built payload the target is to be
+    written; that is the one operation here with a live caller today, the delivery
+    worker's task intake. The other three are what a delivery-loop executor calls
+    against what it fills —
     `peek`, which reports the head run and advances nothing; `declare`, which
     records the exact range about to be written as one packing unit; and `ack`,
     which terminalizes exactly that range from the executor's evidence. Of the
@@ -337,9 +340,60 @@ exported from `src/relay/mod.rs`.
     acknowledges or resolves a declared range on its own, so the cursor still
     stands where the first declaration found it, and without that rule two
     declarations of the same range would both pass every position and contiguity
-    check and mint two packing units over one entry. The executors that drive these operations arrive with the
-    push-model handover's removal; until then nothing outside the module's own
-    tests calls them.
+    check and mint two packing units over one entry. The executors that drive
+    `peek`/`declare`/`ack` arrive with the push-model handover's removal; until
+    then nothing outside the module's own tests calls those three. The mailbox is
+    nevertheless filled and drained in production today: the push path writes what
+    `enqueue` stored, and its terminal transition retires each position as it
+    resolves it, which is what keeps the mailbox bounded while nothing
+    acknowledges.
+    Who may call those three is a target's **consumer generation**, and the
+    module's `generation` and `reap` operations own it: `claim` issues a
+    target's first, `replace` hands the target over, and `reap` gives it up
+    when the target itself is going. Both `replace` and `reap` name the
+    generation they act against and do nothing unless it is still the
+    incumbent — a reap runs behind the target it reaps, so one for a generation
+    already replaced would otherwise clear an owner that is still consuming and
+    let the next claimant bind beside it. There is deliberately no bare release
+    beside the reap: giving up ownership and reclaiming what the target held
+    happen under one acquisition of the lock, or a consumer could claim in
+    between and be handed a mailbox reclaimed underneath it. This is a
+    different axis from the transport generation the fence below governs — that
+    one names an instance of a transport, this one names who is entitled to
+    consume a mailbox — and the two meet at exactly one point: a replacement is
+    admitted only on a positive fence verdict for the outgoing consumer, which
+    the caller obtains before the flip because the ledger lock is never held
+    across an await. Identifiers are drawn per target identity from a monotonic
+    sequence that is never reused and never reset, and the sequence is held
+    beside the mailboxes rather than on one so that reclaiming a torn-down
+    target's mailbox and cursor cannot take it along; a target recreated under
+    the same session name therefore continues it. There is deliberately no
+    default value: a target nobody has claimed refuses `peek`, `declare` and
+    `ack` alike, rather than answering whichever caller names the first
+    identifier. A replacement resolves what the outgoing generation had declared
+    and not acknowledged — the fence establishes that execution ceased, never
+    whether it took effect first, so re-serving those entries could write a
+    message twice — and hands the resolved members back to its caller, which
+    owes each one a terminal outcome. Undeclared entries are untouched and become
+    the incoming generation's to serve.
+    The reap rides `unregister_worker`, which is already the
+    teardown-without-replacement event — a fenced worker that rebuilds its
+    transport in place keeps its registration, so an entry leaving means the
+    target is going rather than changing hands. It reaches the ledger *after*
+    releasing the registry lock, because nesting the two would introduce a lock
+    ordering nothing else in the subsystem observes; the window that opens
+    instead is exactly what the naming covers. A reap that finds entries still
+    admitted gives the target up but keeps the mailbox: it knows those entries
+    by id rather than as the tasks that produced them, so resolving them would
+    leave every waiting sender in silence. Resolution is owed by the teardown
+    path holding the tasks, which does it before unregistering everywhere except
+    the two construction-failure paths — a first attempt, and a replacement
+    after a positive fence verdict. Those unregister first on purpose, since the
+    registry lock is what keeps a send out of a receiver nothing will poll, so
+    they retry the reclamation after their drain. Drain and retry live in one
+    function (`resolve_queued_tasks_and_reclaim`) rather than at each call site,
+    because while they were separate only one of the two paths carried the
+    retry.
   - `guard.rs`: the queue entry state model (`Queued`/`Terminal`), the guard
     identity, the typed submission evidence, and the guard's single evidence
     order. The types live
@@ -460,9 +514,10 @@ exported from `src/relay/mod.rs`.
   - `dispatch/payload.rs`: structured delivery-message construction
     (`build_delivery_message`) and the out-of-band metadata inscription
     (`emit_envelope_metadata_inscription`), target-member resolution, and the
-    prompt-batch settings read. Pane-envelope rendering, coalescing, and the
-    token-budget combine now live inside each transport's internal delivery task,
-    not here.
+    prompt-batch settings read. Neither builder reads the clock: the timestamp is
+    supplied by the caller, so one entry is stamped once. Pane-envelope rendering,
+    coalescing, and the token-budget combine now live inside each transport's
+    internal delivery task, not here.
   - `dispatch/worker.rs`: per-target tokio worker task. A concurrent
     produce-and-collect loop (`select!` over `receiver.recv()` and a `JoinSet` of
     in-flight write outcomes) submits each task to its transport via the
@@ -470,6 +525,16 @@ exported from `src/relay/mod.rs`.
     transport-type gate — and collects the resolved `OutcomeFuture`s. The
     blocking IO, quiescence/coalesce waits, ACP bootstrap/respawn, and readiness
     mirroring all live inside the transports now; the loop never names an ACP type.
+    Its `intake` module is where a received task's payload is built — once, from
+    one clock read — and placed in its target's mailbox; `submit` then writes that
+    stored artifact rather than rendering a second one. Building at intake is what
+    makes the mailbox's contents and the delivered envelope the same thing, and
+    it is why the envelope-metadata inscription is emitted there rather than at
+    the write. A payload that cannot be built (an unresolvable target member) is
+    carried as a refusal and reported at the write it stands in for, so the target
+    gate still runs first; a refused enqueue never strands a member, because
+    delivery does not depend on it — a terminal-outcome receipt bypasses admission
+    and is refused `NotAdmitted` here in the ordinary course.
   - `async_worker/`: split three ways along the boundary the module's own
     tests already followed. `registry.rs` holds the worker registry (tokio
     mpsc senders), the readiness/failure/output-view accessors, the ACP

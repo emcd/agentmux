@@ -446,7 +446,8 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
-    use crate::relay::delivery::async_worker::registry::{register_worker, unregister_worker};
+    use crate::relay::delivery::async_worker::reap::unregister_worker;
+    use crate::relay::delivery::async_worker::registry::register_worker;
     use crate::relay::delivery::async_worker::terminal::complete_task_outcome;
 
     fn tmux_member(id: &str) -> BundleMember {
@@ -595,7 +596,8 @@ mod receipt_non_recursion_tests {
     use std::sync::atomic::AtomicUsize;
 
     use super::*;
-    use crate::relay::delivery::async_worker::registry::{register_worker, unregister_worker};
+    use crate::relay::delivery::async_worker::reap::unregister_worker;
+    use crate::relay::delivery::async_worker::registry::register_worker;
     use crate::relay::delivery::async_worker::terminal::complete_task_outcome;
 
     fn tmux_member(id: &str) -> BundleMember {

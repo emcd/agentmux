@@ -5,6 +5,7 @@ use crate::protocol::operations::{PeekRejection, PeekRequest, PeekResponse, Peek
 
 use super::super::ledger::lock_ledger;
 use super::addressing::target_key;
+use super::generation::active_generation;
 
 /// Reads the head of a target's mailbox, advancing nothing.
 ///
@@ -20,11 +21,11 @@ pub(in crate::relay) fn peek(request: &PeekRequest) -> PeekResult {
     let Ok(state) = lock_ledger() else {
         return Err(PeekRejection::UnknownTarget);
     };
-    let target = target_key(&request.binding);
+    let target = target_key(&request.binding.target);
     let Some(mailbox) = state.mailboxes.get(&target) else {
         return Err(PeekRejection::UnknownTarget);
     };
-    if mailbox.generation != request.binding.generation {
+    if active_generation(&state, &target) != Some(request.binding.generation) {
         return Err(PeekRejection::GenerationSuperseded);
     }
 
@@ -87,13 +88,13 @@ pub(in crate::relay) fn peek(request: &PeekRequest) -> PeekResult {
 /// would let a change that collapsed two of them into each other still pass.
 #[cfg(test)]
 mod mailbox_peek_tests {
-    use super::super::fixtures::{binding, mail, peeked, place, raw, request};
+    use super::super::fixtures::{binding, claim, mail, peeked, place, raw, request};
     use super::*;
 
     #[test]
     fn a_peek_reports_the_head_run_and_changes_nothing() {
         let namespace = "mbx-peek";
-        let bound = binding(namespace, 1);
+        let bound = claim(namespace);
         for index in 1..=3 {
             place(namespace, &format!("{namespace}-{index}"), 10, mail("body"));
         }
@@ -133,7 +134,7 @@ mod mailbox_peek_tests {
         // A raw entry at the head is the whole answer, so a bound too small to
         // carry it beside mail cannot park it.
         let raw_head = "mbx-peek-raw";
-        let raw_bound = binding(raw_head, 1);
+        let raw_bound = claim(raw_head);
         place(raw_head, "mbx-peek-raw-1", 10, raw("input"));
         place(raw_head, "mbx-peek-raw-2", 10, mail("body"));
         assert_eq!(
@@ -145,7 +146,7 @@ mod mailbox_peek_tests {
         // A raw entry behind mail ends the run instead of joining it, so mail is
         // never reordered around it.
         let barrier = "mbx-peek-barrier";
-        let barrier_bound = binding(barrier, 1);
+        let barrier_bound = claim(barrier);
         place(barrier, "mbx-peek-barrier-1", 10, mail("body"));
         place(barrier, "mbx-peek-barrier-2", 10, raw("input"));
         place(barrier, "mbx-peek-barrier-3", 10, mail("body"));
@@ -155,12 +156,17 @@ mod mailbox_peek_tests {
             "the run stops before a raw entry rather than coalescing it into mail"
         );
 
-        // A generation that is no longer the target's returns nothing at all,
-        // which is distinct from returning an empty run.
+        // A generation that is not the target's returns nothing at all, which is
+        // distinct from returning an empty run.
         assert_eq!(
-            peek(&request(&binding(namespace, 2), 10, 1_000)).unwrap_err(),
+            peek(&request(
+                &binding(namespace, bound.generation.value() + 1),
+                10,
+                1_000
+            ))
+            .unwrap_err(),
             PeekRejection::GenerationSuperseded,
-            "a superseded generation is refused rather than handed an empty run"
+            "a generation the target does not hold is refused rather than handed an empty run"
         );
     }
 }

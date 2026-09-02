@@ -18,12 +18,13 @@ use super::super::super::fence::{FenceInProgress, FenceVerdict};
 use super::super::super::guard::GuardTrigger;
 use super::super::batch::HandoverWindow;
 use super::super::outcomes::collect_outcome;
+use super::intake::{IntakeTask, take_into_mailbox};
 use super::spawn::{
     ASYNC_WORKER_POLL_INTERVAL_MS, InflightMember, InflightOutcome, WorkerTransportSource,
     build_generation,
 };
 use super::stop::{
-    StopCause, WorkerHoldings, emit_fence_verdict, resolve_queued_tasks_with_error,
+    StopCause, WorkerHoldings, emit_fence_verdict, resolve_queued_tasks_and_reclaim,
     shutdown_before_generation, stop_drain, terminalize_unresolved_members,
 };
 use super::submit::{SubmitContext, submit_batch};
@@ -102,7 +103,7 @@ pub(super) async fn run_async_delivery_worker(
                 // `close_worker` exists to prevent on the shutdown path, and this
                 // path has to close the same way.
                 super::super::super::async_worker::unregister_worker(&key, owner);
-                resolve_queued_tasks_with_error(&mut receiver, pending.as_ref(), &error);
+                resolve_queued_tasks_and_reclaim(&key, &mut receiver, pending.as_ref(), &error);
                 return;
             }
         };
@@ -121,12 +122,17 @@ pub(super) async fn run_async_delivery_worker(
     // One member received but not yet authorized — the head of the next batch.
     // It arrives here either straight off the channel, or because the last
     // attempt found its target unable to take a handover, or because it did not
-    // fit the room the batch ahead of it left. In every case it stays `Pending` —
+    // fit the room the batch ahead of it left. In every case it stays queued —
     // quota reserved, nothing submitted, no batch minted — and is offered ahead
     // of anything newer so the target's FIFO order survives the wait. At most
     // one, and the receive arm is gated on its absence: taking a second member
     // off the channel while this one waits would reorder the target's queue.
-    let mut held: Option<AsyncDeliveryTask> = None;
+    //
+    // It carries the artifact its target is to be written, built and enqueued
+    // when the task was received. The wait does not restamp or rebuild it: the
+    // mailbox holds one payload per entry, and a member that waits out several
+    // gate refusals must still be delivered the envelope the mailbox holds.
+    let mut held: Option<IntakeTask> = None;
     // Graceful shutdown and the execution watchdog are what fence a generation.
     // Both bounds are the relay's own `[delivery]` settings, read once per worker.
     let delivery = super::super::super::admission::delivery_configuration();
@@ -179,14 +185,14 @@ pub(super) async fn run_async_delivery_worker(
             // Shutdown has its own spelling; a bundle stop goes through the guard,
             // whose evidence order reaches `not_submitted` for an unbound member
             // without needing a second wire outcome to mean the same thing.
-            if let Some(task) = held.take() {
+            if let Some(member) = held.take() {
                 match cause {
                     StopCause::Shutdown => {
-                        super::super::super::async_worker::complete_task_on_shutdown(&task);
+                        super::super::super::async_worker::complete_task_on_shutdown(&member.task);
                     }
                     StopCause::BundleStop => {
                         super::super::super::async_worker::complete_task_outcome_from_trigger(
-                            &task,
+                            &member.task,
                             cause.guard_trigger(),
                         );
                     }
@@ -315,16 +321,17 @@ pub(super) async fn run_async_delivery_worker(
                             // between the drain observing empty and the entry
                             // going, and it would be lost with the receiver.
                             super::super::super::async_worker::unregister_worker(&key, owner);
-                            if let Some(task) = held.take() {
+                            if let Some(member) = held.take() {
                                 super::super::super::async_worker::complete_task_outcome(
-                                    &task,
+                                    &member.task,
                                     Err(error.clone()),
                                 );
                                 super::super::super::async_worker::release_pending_slot(
                                     pending.as_ref(),
                                 );
                             }
-                            resolve_queued_tasks_with_error(
+                            resolve_queued_tasks_and_reclaim(
+                                &key,
                                 &mut receiver,
                                 pending.as_ref(),
                                 &error,
@@ -344,9 +351,9 @@ pub(super) async fn run_async_delivery_worker(
                     // wait it exists to replace.
                     super::super::super::async_worker::mark_worker_fail_stopped(&key, owner);
                     fail_stopped = true;
-                    if let Some(task) = held.take() {
+                    if let Some(member) = held.take() {
                         super::super::super::async_worker::complete_task_outcome_from_trigger(
-                            &task,
+                            &member.task,
                             GuardTrigger::ExecutionBound,
                         );
                         super::super::super::async_worker::release_pending_slot(pending.as_ref());
@@ -410,7 +417,13 @@ pub(super) async fn run_async_delivery_worker(
                         // Received, not yet authorized: exactly what `held`
                         // means. The submission site at the top of the loop is
                         // what turns it into the head of a batch.
-                        held = Some(task);
+                        //
+                        // Custody is taken here, which is where the entry's
+                        // payload is built and placed in its target's mailbox.
+                        // This is the first point the relay holds the task and
+                        // still before any transport is contacted, so building
+                        // here cannot depend on — or disturb — the gate below.
+                        held = Some(take_into_mailbox(task, &transport));
                     }
                     None => senders_dropped = true,
                 }

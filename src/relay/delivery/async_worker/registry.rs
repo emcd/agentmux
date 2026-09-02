@@ -26,6 +26,7 @@ use crate::runtime::signals::shutdown_requested;
 use crate::tmux::TmuxOutputView;
 use crate::transports::{OutputView, WorkerFailureReason, WorkerReadinessState};
 
+use crate::protocol::identity::ConsumerGenerationId;
 use crate::relay::delivery::observability;
 use crate::relay::{AsyncDeliveryTask, RelayError, relay_error};
 
@@ -93,6 +94,22 @@ pub(in crate::relay::delivery) struct AsyncWorkerEntry {
     /// be writing. Recovery is by operator action, which is the fail-stop the
     /// fence chooses over an ordering hazard.
     pub fail_stopped: bool,
+    /// The consumer generation this worker currently holds for its target, if it
+    /// holds one.
+    ///
+    /// Recorded here because the reap has to *name* what it is giving up, and
+    /// this entry is the only thing that knows. A registry entry outlives
+    /// individual consumer generations — a worker that is fenced and rebuilds
+    /// its transport in place keeps its registration — so the ledger's own
+    /// answer to "what is active now" is exactly the wrong one to reap by: it
+    /// would name whatever holds the target at reap time, including a consumer
+    /// installed after this worker was already gone.
+    ///
+    /// `None` until a worker claims one, which is what the delivery-loop
+    /// executors do when they arrive. Until then a reap names nothing, and
+    /// matches a target nobody has claimed — which is the truth about every
+    /// target today.
+    pub consumer_generation: Option<ConsumerGenerationId>,
 }
 
 pub(in crate::relay::delivery) fn build_worker_key(
@@ -292,6 +309,7 @@ pub(in crate::relay::delivery) fn register_worker(
                 closing: false,
                 stopping: false,
                 fail_stopped: false,
+                consumer_generation: None,
             },
         );
     }
@@ -328,6 +346,7 @@ pub(in crate::relay::delivery) fn register_worker_if_absent(
             closing: false,
             stopping: false,
             fail_stopped: false,
+            consumer_generation: None,
         },
     );
     Ok(Some(owner))
@@ -618,21 +637,6 @@ pub(in crate::relay) fn acp_session_is_ready(
         runtime_directory,
         target_session,
     ))
-}
-
-/// Removes this target's registry entry, but only if `owner` still holds it.
-///
-/// The ownership check is what keeps an exiting worker from deleting a
-/// successor's entry. A worker that lost a registration race, or whose entry was
-/// already replaced, finds a different owner here and leaves it alone — removing
-/// it would drop the only sender for a live worker and silently strand every
-/// subsequent send to that target.
-pub(in crate::relay::delivery) fn unregister_worker(key: &AsyncWorkerKey, owner: WorkerOwner) {
-    if let Ok(mut workers) = async_delivery_registry().workers.lock()
-        && workers.get(key).is_some_and(|entry| entry.owner == owner)
-    {
-        workers.remove(key);
-    }
 }
 
 /// Removes all workers for `runtime_directory`, regardless of owner.

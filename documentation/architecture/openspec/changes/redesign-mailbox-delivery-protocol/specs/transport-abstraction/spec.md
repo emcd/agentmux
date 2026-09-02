@@ -76,7 +76,7 @@ The legacy synchronous methods — `deliver`, `prepare_delivery`, and
 `raww` as a **relay-inbound** operation name is unaffected by this
 requirement: a caller still invokes `raww` to submit raw input, and the
 relay still admits it, but as a raw-kind mailbox entry rather than as a
-direct push into a transport. `transport-contracts`' `Relay raww transport
+direct push into a transport. The `raww` capability's `Relay raww transport
 behavior` requirement specifies how a transport's delivery-loop executor
 discovers and writes it.
 
@@ -193,6 +193,13 @@ mailbox consumption.
 - **THEN** it does not call `peek`, or calls `peek` and writes nothing
 - **AND** the relay observes no readiness signal from the transport and
   makes no decision on the basis of one
+
+#### Scenario: A transport signals upward through an injected closure
+
+- **WHEN** a transport needs to prompt the relay that its target's own state
+  changed in a way worth reporting
+- **THEN** it invokes a closure the relay supplied at construction
+- **AND** it does not reference any `crate::relay` type
 
 ### Requirement: Transport Module Boundaries
 

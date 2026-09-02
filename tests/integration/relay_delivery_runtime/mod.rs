@@ -8,17 +8,18 @@
 //!   reaping idle pre-hello connections.
 //! - [`delivery`]: what reaches the pane — the paste sequence, envelope
 //!   metadata, canonical addressing, and what admission refuses outright.
+//! - [`mailbox`]: what the relay's per-target mailbox holds while the push
+//!   path is still the only thing delivering out of it.
 //! - [`raww`]: raww's literal-text delivery and its submit behaviour.
 //!
 //! Helpers shared across more than one of those clusters live in this hub:
-//! the paste-line classifiers and buffer reader are used by both [`delivery`]
-//! and [`raww`], and the graceful-shutdown helper by nearly every module.
+//! the paste-line classifiers and buffer readers are used by [`delivery`],
+//! [`mailbox`] and [`raww`], and the graceful-shutdown helper by nearly every
+//! module.
 //!
-//! Two helpers deliberately stay with their only caller rather than moving
-//! here — `RELAY_SIGNAL_EXIT_BUDGET` in [`shutdown`] and
-//! `read_all_paste_buffers` in [`delivery`] — because nothing outside those
-//! modules reads them, and the budget's rationale is only legible beside the
-//! signal tests it bounds.
+//! One helper deliberately stays with its only caller rather than moving
+//! here — `RELAY_SIGNAL_EXIT_BUDGET` in [`shutdown`] — because the budget's
+//! rationale is only legible beside the signal tests it bounds.
 //!
 //! Fixture writers and the relay spawners come from `crate::support` and are
 //! imported per module.
@@ -34,6 +35,7 @@ use crate::support::process::HARNESS_CHILD_WAIT_DEFAULT;
 
 mod connections;
 mod delivery;
+mod mailbox;
 mod raww;
 mod shutdown;
 mod startup;
@@ -47,6 +49,27 @@ fn is_body_paste_line(line: &str) -> bool {
 /// from the body paste by the absence of the `-p` (bracketed) flag.
 fn is_submit_paste_line(line: &str) -> bool {
     line.contains(" paste-buffer ") && line.contains("-t %1") && !line.contains(" -p ")
+}
+
+/// Every pane envelope the fake tmux has been asked to paste, in no particular
+/// order. Each paste writes its buffer beside the tmux log, so the directory
+/// holding the log is the whole record of what reached the panes.
+fn read_all_paste_buffers(directory: &Path) -> Vec<String> {
+    let mut contents = Vec::new();
+    let Ok(entries) = fs::read_dir(directory) else {
+        return contents;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        if file_name
+            .to_string_lossy()
+            .starts_with("fake-tmux.log.buffer.")
+            && let Ok(content) = fs::read_to_string(entry.path())
+        {
+            contents.push(content);
+        }
+    }
+    contents
 }
 
 fn read_paste_buffer_content(log_file: &Path, paste_line: &str) -> String {

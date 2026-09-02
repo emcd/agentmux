@@ -7,6 +7,7 @@ use crate::protocol::operations::{DeclareAccepted, DeclareRejection, DeclareResu
 use super::super::super::guard::{GuardKey, PackingUnitId};
 use super::super::ledger::{OutstandingDeclaration, UnitRecord, lock_ledger};
 use super::addressing::target_key;
+use super::generation::active_generation;
 
 /// Records, before any write is attempted, the exact run an executor is about to
 /// submit as one packing unit.
@@ -34,11 +35,11 @@ pub(in crate::relay) fn declare(binding: &ConsumerBinding, range: EntryRange) ->
     let Ok(mut state) = lock_ledger() else {
         return Err(DeclareRejection::UnknownTarget);
     };
-    let target = target_key(binding);
+    let target = target_key(&binding.target);
     let Some(mailbox) = state.mailboxes.get(&target) else {
         return Err(DeclareRejection::UnknownTarget);
     };
-    if mailbox.generation != binding.generation {
+    if active_generation(&state, &target) != Some(binding.generation) {
         return Err(DeclareRejection::GenerationSuperseded);
     }
     // Before any check on the range asked for, and independent of it. Two
@@ -112,27 +113,28 @@ pub(in crate::relay) fn declare(binding: &ConsumerBinding, range: EntryRange) ->
 /// through the ordering between them.
 #[cfg(test)]
 mod mailbox_declaration_tests {
-    use super::super::fixtures::{admit_only, binding, mail, place, range, seq};
+    use super::super::fixtures::{admit_only, binding, claim, mail, place, range, seq};
     use crate::protocol::operations::MemberAcknowledgment;
 
     use super::super::super::super::guard::SubmissionEvidence;
     use super::super::ack::ack;
-    use super::super::enqueue::bind_consumer_generation;
     use super::*;
 
     #[test]
     fn a_declaration_binds_one_well_formed_range_at_a_time() {
         let namespace = "mbx-declare";
-        let bound = binding(namespace, 7);
+        let bound = claim(namespace);
         for index in 1..=5 {
             place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
         }
-        bind_consumer_generation(&bound);
 
         assert_eq!(
-            declare(&binding(namespace, 1), range(1, 1)),
+            declare(
+                &binding(namespace, bound.generation.value() + 1),
+                range(1, 1)
+            ),
             Err(DeclareRejection::GenerationSuperseded),
-            "a superseded generation binds nothing"
+            "a generation the target does not hold binds nothing"
         );
         assert_eq!(
             declare(&bound, range(2, 3)),
@@ -205,7 +207,7 @@ mod mailbox_declaration_tests {
         // shortening the bound range, because a transport that asked for five
         // entries and was handed three would write a set the relay did not record.
         let gapped = "mbx-declare-gap";
-        let gapped_bound = binding(gapped, 1);
+        let gapped_bound = claim(gapped);
         place(gapped, "mbx-declare-gap-1", 1, mail("body"));
         admit_only(gapped, "mbx-declare-gap-2", 1);
         place(gapped, "mbx-declare-gap-3", 1, mail("body"));

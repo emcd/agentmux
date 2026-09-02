@@ -4,13 +4,15 @@
 //! - [`run`] — the produce-and-collect loop that drives a generation.
 //! - [`stop`] — ending a generation, bounded by the same fence the watchdog uses.
 //! - [`gate`] — whether a target will take a handover right now.
+//! - [`intake`] — building a task's payload and placing it in its mailbox.
 //! - [`submit`] — forming a batch, authorizing it whole, and writing it.
 //!
 //! The dependency runs outward from [`run`]: it owns the loop and calls into
-//! [`gate`] and [`submit`] for the two decisions a delivery turns on, into
-//! [`stop`] for every ending, and back into [`spawn`] for a replacement
-//! generation after a positive fence verdict. Nothing calls [`run`] but
-//! [`spawn`], which is where the tokio task is created.
+//! [`intake`] as each task arrives, into [`gate`] and [`submit`] for the two
+//! decisions a delivery turns on, into [`stop`] for every ending, and back into
+//! [`spawn`] for a replacement generation after a positive fence verdict.
+//! Nothing calls [`run`] but [`spawn`], which is where the tokio task is
+//! created.
 //!
 //! The five items other `dispatch` modules consume are re-exported here at the
 //! visibility they carried when this was one file. They are declared
@@ -20,6 +22,7 @@
 //! sibling of the parent.
 
 mod gate;
+mod intake;
 mod run;
 mod spawn;
 mod stop;
