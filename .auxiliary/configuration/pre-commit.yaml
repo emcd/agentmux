@@ -73,6 +73,65 @@ repos:
       verbose: true
       fail_fast: true
 
+    - id: lint-openspec-citations
+      name: 'Lint: OpenSpec Requirement Citations'
+      # Asserts that a requirement named in prose still names a requirement
+      # that exists -- another property of committed artifacts, so a lint.
+      #
+      # Runs unconditionally rather than scoped by `files`, because a citation
+      # can be invalidated from either end: by editing the prose that carries
+      # it, or by editing the spec it points at. Scoping to one of those leaves
+      # the other silent, and the scan costs about a tenth of a second over the
+      # whole corpus, so there is nothing to buy by narrowing it.
+      #
+      # `verbose` is deliberately off, unlike the retention hook next to it.
+      # This check's passing output is a list of citations waiting on a change
+      # to sync, which is true for weeks at a time and unchanged by the commit
+      # in front of you. Printing it on every commit is how a report gets
+      # skimmed past. It is available on demand via --citations, and the case
+      # that actually needs attention -- a citation that can no longer resolve
+      # -- is an error, which prints.
+      language: system
+      entry: 'scripts/verify-openspec-deltas.py --citations'
+      pass_filenames: false
+      always_run: true
+      require_serial: true
+      stages: [ 'pre-commit' ]
+      fail_fast: true
+
+    - id: lint-openspec-archive
+      name: 'Lint: OpenSpec Archive Readiness'
+      # The gate this whole script grew out of. Syncing a change's deltas into
+      # the live specs is required by nothing: `opsx-archive` offers to sync
+      # and then archives whichever answer it gets, and once the deltas are
+      # under `changes/archive/` no validator reads them again -- so a
+      # requirement that was specified and never synced simply never existed,
+      # silently and permanently.
+      #
+      # An archive commit is the last moment the delta and the live spec are
+      # still comparable, so it is the only place the check can be made. It is
+      # also the moment a citation waiting on that change's sync stops being
+      # able to resolve, which this checks too, scoped to the change being
+      # filed rather than to the whole corpus.
+      #
+      # `files` matches any path in an archived change directory, not only a
+      # delta spec: the archive is a directory move, so a commit may stage a
+      # proposal or a tasks file and no delta at all.
+      #
+      # There is no override flag. Sampling twenty-five past archive commits,
+      # three carried deltas that never reached live, and the largest -- the
+      # session-relay partition -- filed ten `runtime-api` requirements into
+      # an archive for a capability that was never created. A change that
+      # means to defer requirements to another change's capability should not
+      # carry deltas for them.
+      language: system
+      entry: 'scripts/verify-openspec-deltas.py --archived'
+      files: '^(documentation/architecture/)?openspec/changes/archive/'
+      require_serial: true
+      stages: [ 'pre-commit' ]
+      verbose: true
+      fail_fast: true
+
     - id: lint-delivery-protocol-boundary
       name: 'Lint: Delivery Protocol Boundary'
       # Asserts a property of the module graph rather than behavior of the

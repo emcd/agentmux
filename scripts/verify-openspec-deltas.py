@@ -72,28 +72,56 @@ request shape". The cost is that a name no requirement ever had -- a typo --
 matches nothing and is invisible; this finds citations that stopped resolving,
 not citations that were never right.
 
+`--archived` is the gate at the other end. Syncing is required by nothing:
+`opsx-archive` offers to sync and archives whichever answer it gets, and once
+the deltas are filed no validator reads them again, so a requirement that was
+specified and never synced simply never existed. An archive commit is the last
+moment the delta and the live spec are still comparable, so it is the only
+place the check can be made. It also runs the citation audit, scoped to the
+change being filed.
+
+It gates only archives this commit is actually filing, read from the index, so
+that amending an archived record later is not gated on a verdict about specs
+that have moved on. With nothing staged it therefore checks nothing. To ask the
+question anyway -- replaying the gate over history, one archive commit at a
+time, where the answer is meaningful because the tree under test is the one
+that filed the archive -- add `--unstaged`. Nothing in the hook path passes it,
+which is what keeps `pre-commit run --all-files` from turning into a
+retrospective sweep of every archive there has ever been.
+
 Usage:  scripts/verify-openspec-deltas.py <change-id> [<change-id> ...]
         scripts/verify-openspec-deltas.py [--quiet] <delta-spec-path> ...
         scripts/verify-openspec-deltas.py [--quiet] --citations
+        scripts/verify-openspec-deltas.py [--quiet] --archived <path> ...
+        scripts/verify-openspec-deltas.py --archived --unstaged <path> ...
 
 Arguments are change ids, or paths to delta spec files from which the change id
 is read. The path form is what the `lint-openspec-deltas` pre-commit hook uses:
 pre-commit hands it the staged delta specs, and each change they belong to is
-audited once. Paths naming an archived change are skipped -- an archived change
-is a completed record rather than a delta under authorship.
+audited once. Paths naming an archived change are skipped in that mode -- an
+archived change is a completed record rather than a delta under authorship --
+and are what `--archived` reads instead.
 
 Run from anywhere; paths resolve from this script's own location. Run it after
 `openspec validate <change-id> --strict` passes and before requesting review.
 
-The pre-commit hook covers every commit that touches a delta spec. It cannot
+The per-change hook covers every commit that touches a delta spec. It cannot
 cover the archive-order case: when another change archives into the same
 requirement, the live spec moves beneath an already-committed delta and the drop
-set changes with no delta file touched, so no commit fires the hook. Run this by
-hand against the post-archive live spec in that case.
+set changes with no delta file touched, so no commit fires the hook. In that
+case run the per-change form by hand against the post-archive live spec:
+
+    scripts/verify-openspec-deltas.py <change-id>
+
+That is the first usage above and has nothing to do with `--archived`, whose
+`--unstaged` flag governs replaying the ARCHIVE gate over history. The two
+by-hand cases are easy to conflate because both are described as running the
+script manually; they audit different things.
 """
 
 import difflib
 import re
+import subprocess
 import sys
 from collections import namedtuple
 from pathlib import Path
@@ -140,6 +168,11 @@ PLANNING_HOMES = (Path("openspec"), Path("documentation/architecture/openspec"))
 
 # The change id sits between `changes/` and `specs/` in a delta spec path.
 DELTA_PATH = re.compile(r"/changes/([^/]+)/specs/")
+
+# An archived change's directory is its id under a date prefix. Any file in it
+# identifies the change, not only a delta spec: the archive commit is a
+# directory move, so it may stage a proposal or a tasks file and nothing else.
+ARCHIVE_PATH = re.compile(r"/changes/archive/([^/]+)/")
 
 # An archived change lives under `changes/archive/<date>-<id>/`, so its id
 # segment reads as the literal `archive`.
@@ -414,13 +447,20 @@ def classify_citation(name, owner, live, inflight, archived):
     return None
 
 
-def check_citations(quiet):
+def check_citations(quiet, only_changes=None):
     """Audit requirement citations across the corpus.
 
     Returns (errors, pending) where pending lists citations that resolve only
     into a change that has not synced yet. Those are not defects: they are
     promises that come true at sync, which is exactly why archiving a change
     without syncing it is the moment they become permanent.
+
+    `only_changes` narrows the errors to citations the named changes are
+    responsible for. The archive gate passes the change it is archiving,
+    because an archive commit must answer for the citations it strands and not
+    for every citation the corpus already carried: run unscoped against an
+    older commit, this reports two hundred historical errors and gates nothing
+    anybody can act on.
     """
     home = planning_home()
     root = repository_root()
@@ -440,7 +480,7 @@ def check_citations(quiet):
             where = f"{path.relative_to(root)}:{line}"
             if kind == "PENDING":
                 pending.append((where, name, sources))
-            else:
+            elif only_changes is None or any(s in only_changes for s in sources):
                 errors.append(
                     f"{where}: '{name}' resolves to no live requirement; it was "
                     f"last named by archived {', '.join(sources)}"
@@ -543,12 +583,25 @@ def rename_pairs(pairs):
 
 
 def normalized(requirement):
-    """Return a requirement's block text with incidental whitespace removed.
+    """Return a requirement's block text with document furniture removed.
 
-    Sync copies a delta block into the live spec verbatim, so equality here is
-    exact apart from the surrounding blank lines the two files happen to carry.
+    Sync copies a delta block into the live spec verbatim, so equality is
+    otherwise exact. Two things are not part of the requirement and must not
+    count as differences between two copies of it: the blank lines each file
+    happens to carry around it, and a trailing horizontal rule.
+
+    A block runs to the next requirement or section header, so a rule written
+    between requirements is absorbed into the one above it. Live specs use them
+    as separators and deltas do not, which made an archived change read as
+    unsynced when the only difference between its delta and live was four
+    dashes that belonged to neither.
     """
-    return "\n".join(line.rstrip() for line in requirement.text.strip().splitlines())
+    lines = [line.rstrip() for line in requirement.text.strip().splitlines()]
+    while lines and THEMATIC_BREAK.match(lines[-1]):
+        lines.pop()
+        while lines and not lines[-1]:
+            lines.pop()
+    return "\n".join(lines)
 
 
 def applied_state(by_capability, live_by_capability):
@@ -612,15 +665,24 @@ def applied_state(by_capability, live_by_capability):
     applied, pending = [], []
     for capability, (delta, pairs) in sorted(by_capability.items()):
         live = live_by_capability[capability]
+        # Each line says which state it is evidence for, not merely what is
+        # true. "REMOVED 'X' is absent from live" is evidence the change HAS
+        # synced, while the identical phrase about an ADDED requirement is
+        # evidence it has NOT; a reader should not have to invert the sense
+        # per operation to read the list.
         for name in delta.get("REMOVED", {}):
-            (applied if name not in live else pending).append(
-                f"{capability}: REMOVED '{name}' is "
-                f"{'absent from' if name not in live else 'present in'} live"
+            gone = name not in live
+            (applied if gone else pending).append(
+                f"synced: {capability}: REMOVED '{name}' is gone from live"
+                if gone
+                else f"unsynced: {capability}: REMOVED '{name}' is still live"
             )
         for name in delta.get("ADDED", {}):
-            (applied if name in live else pending).append(
-                f"{capability}: ADDED '{name}' is "
-                f"{'present in' if name in live else 'absent from'} live"
+            there = name in live
+            (applied if there else pending).append(
+                f"synced: {capability}: ADDED '{name}' is live"
+                if there
+                else f"unsynced: {capability}: ADDED '{name}' never reached live"
             )
         for name, requirement in delta.get("MODIFIED", {}).items():
             before = live.get(name)
@@ -690,7 +752,9 @@ def applied_state(by_capability, live_by_capability):
                 )
 
     if applied and pending:
-        return "MIXED", applied + pending
+        # Unsynced first: on a large change the applied half runs to dozens of
+        # lines that say only that the parts which worked, worked.
+        return "MIXED", pending + applied
     if applied:
         return "APPLIED", []
     if pending:
@@ -1085,6 +1149,135 @@ def check_moves(change_id, by_capability, live_specs, live_owners, quiet):
     return errors, moved, altered
 
 
+# Evidence lines shown for one state verdict. The partition of session-relay
+# moved 94 requirements at once, and reporting every signal for a change that
+# size buries the verdict under two hundred lines confirming that the parts
+# which worked, worked.
+EVIDENCE_LINES = 10
+
+
+def evidence_for(label, evidence):
+    """Return capped evidence lines, each prefixed with the change they concern."""
+    lines = [f"{label}: {line}" for line in evidence[:EVIDENCE_LINES]]
+    if len(evidence) > EVIDENCE_LINES:
+        lines.append(
+            f"{label}: ... {len(evidence) - EVIDENCE_LINES} further signals not shown"
+        )
+    return lines
+
+
+def archived_dirs(arguments):
+    """Return the unique archived change directories named by the arguments."""
+    found = []
+    for argument in arguments:
+        path = argument if argument.startswith("/") else f"/{argument}"
+        match = ARCHIVE_PATH.search(path)
+        if match and match.group(1) not in found:
+            found.append(match.group(1))
+    return found
+
+
+def being_archived(candidates, unstaged=False):
+    """Narrow archived directories to the ones this commit is creating.
+
+    The archive-readiness verdict is only true at the moment of archiving. It
+    compares deltas against a live spec that later changes go on editing, so
+    re-asking the question months afterwards gets a different and meaningless
+    answer -- running it now against a change archived correctly this morning
+    reports it unsynced, because a change that landed since rewrote two of the
+    capabilities it touched.
+
+    That matters because a commit amending an archived record touches the same
+    paths as the commit that filed it. Without this, appending a note to an
+    archived proposal would be gated on a verdict about that proposal's sync
+    state, computed against a spec that has moved on -- and the only way past
+    it would be bypassing the hook.
+
+    The index distinguishes them: filing an archive adds or renames its files,
+    while amending one modifies them. An index with nothing being ADDED is
+    precisely the amendment case and returns nothing.
+
+    A clean index means no commit is being made, so nothing is being filed and
+    there is nothing to gate. Returning every candidate there was wrong in a
+    way that surfaced only under `pre-commit run --all-files`, which hands the
+    hook every archived change there has ever been: the gate then answered the
+    retrospective question it exists to avoid, and failed with 461 errors about
+    changes archived correctly months ago.
+
+    `unstaged=True` is how a caller asks for that retrospective question on
+    purpose -- replaying the gate over history one archive commit at a time,
+    where the answer IS meaningful because the tree is the one that filed it.
+    Nothing in the hook path passes it.
+    """
+    if unstaged:
+        return candidates
+
+    def staged(*filters):
+        return subprocess.run(
+            ["git", "diff", "--cached", "--name-only", *filters],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    try:
+        additions = staged("--diff-filter=AR")
+    except (OSError, subprocess.CalledProcessError):
+        # Outside a repository there is no index to consult and no commit to
+        # gate; say so by checking nothing rather than by checking everything.
+        return []
+    added = set(archived_dirs(additions.splitlines()))
+    return [candidate for candidate in candidates if candidate in added]
+
+
+def audit_archive(archived_dir, quiet):
+    """Verify an archived change reached the live specs before it was filed.
+
+    This is the gap the whole script grew out of. Syncing a change's deltas
+    into the live specs is required by nothing: `opsx-archive` offers to sync
+    and then archives whichever answer it gets, and once the deltas are under
+    `changes/archive/` no validator reads them again, so a requirement that
+    was specified and never synced simply never existed. The failure is silent
+    at commit, silent at archive, and silent forever after.
+
+    An archive commit is the last moment the two artifacts are still
+    comparable, so it is the only place the check can be made.
+    """
+    home = planning_home()
+    change_specs = home / "changes" / ARCHIVE_SEGMENT / archived_dir / "specs"
+    if not change_specs.is_dir():
+        # A change may legitimately carry no spec deltas at all.
+        return []
+    by_capability = read_change(change_specs)
+    live_by_capability = {
+        capability: read_capability(home / "specs", capability)
+        for capability in by_capability
+    }
+    state, evidence = applied_state(by_capability, live_by_capability)
+    if state in ("APPLIED", "SATISFIED"):
+        # SATISFIED passes because nothing the deltas assert is missing from
+        # live, which is the guarantee this gate exists to give. It is not the
+        # same as knowing the change is what put it there, and it does not
+        # catch a delta whose purpose was to DELETE an obligation; see
+        # `applied_state` for why that case is not decidable here.
+        if not quiet:
+            print(
+                f"\n{archived_dir}: deltas are present in the live specs"
+                if state == "APPLIED"
+                else f"\n{archived_dir}: every requirement, scenario and clause "
+                "these deltas name is present in the live specs"
+            )
+        return []
+    errors = [
+        f"{archived_dir}: archiving deltas that have not reached the live "
+        f"specs (state: {state}). Sync the change, then archive it -- once it "
+        "is filed, nothing reads these deltas again and the requirements they "
+        "carry will never have existed."
+    ]
+    errors.extend(evidence_for(archived_dir, evidence))
+    return errors
+
+
 def check_renames(capability, pairs, live, errors):
     """Validate RENAMED FROM/TO pairs; return the set of validated TO names.
 
@@ -1137,7 +1330,7 @@ def audit(change_id, live_owners, inflight, quiet):
             f"{change_id}: deltas are half-synced -- some already applied to "
             "live and some not; sync the remainder or correct the delta"
         )
-        errors.extend(f"{change_id}: {line}" for line in evidence)
+        errors.extend(evidence_for(change_id, evidence))
     if state == "APPLIED":
         # Every check below asks whether the delta agrees with the spec it will
         # modify. Once it has modified it, the question is answered and the
@@ -1231,10 +1424,15 @@ def audit(change_id, live_owners, inflight, quiet):
 
 USAGE = (
     "usage: verify-openspec-deltas.py [--quiet] <change-id|delta-path> ...\n"
-    "       verify-openspec-deltas.py [--quiet] --citations"
+    "       verify-openspec-deltas.py [--quiet] --citations\n"
+    "       verify-openspec-deltas.py [--quiet] --archived <archived-path> ...\n"
+    "       verify-openspec-deltas.py --archived --unstaged <archived-path> ...\n"
+    "\n"
+    "  --unstaged  gate the named archives even though this commit is not\n"
+    "              filing them; for replaying the check over history"
 )
 
-FLAGS = ("--quiet", "--citations")
+FLAGS = ("--quiet", "--citations", "--archived", "--unstaged")
 
 
 def report(errors, trailer=None):
@@ -1254,6 +1452,8 @@ def main():
     arguments = [a for a in sys.argv[1:] if a not in FLAGS]
     quiet = "--quiet" in sys.argv
     citations = "--citations" in sys.argv
+    archived = "--archived" in sys.argv
+    unstaged = "--unstaged" in sys.argv
     if not arguments and not citations:
         sys.exit(USAGE)
 
@@ -1268,6 +1468,23 @@ def main():
             file=sys.stderr,
         )
         return 1
+
+    if archived:
+        # An archive commit is a directory move, so pre-commit may hand over a
+        # proposal or a tasks file and no delta at all; the change is
+        # identified by its directory either way. Nothing recognizable is not
+        # a failure, for the same reason it is not in the per-change mode.
+        errors, filing = [], being_archived(archived_dirs(arguments), unstaged)
+        for archived_dir in filing:
+            errors.extend(audit_archive(archived_dir, quiet))
+        # Archiving is also the moment a citation waiting on this change's sync
+        # stops being able to resolve, so the corpus check belongs on the same
+        # commit rather than on some later one that happens to touch prose --
+        # scoped to the changes being filed, which are the ones this commit is
+        # answerable for.
+        citation_errors, _ = check_citations(quiet=True, only_changes=filing)
+        errors.extend(citation_errors)
+        return report(errors)
 
     if citations:
         errors, pending = check_citations(quiet)
