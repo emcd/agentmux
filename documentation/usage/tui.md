@@ -52,44 +52,48 @@ open the picker and choose a session.
 
 ### Terminal keyboard capability
 
-Newline is bound to `Ctrl+J` rather than `Shift+Enter` because a terminal
-without the Kitty keyboard protocol sends the same bytes for `Enter`,
-`Shift+Enter`, and `Ctrl+Enter`, leaving the TUI no way to tell them apart.
+Terminals differ in whether they can report a modified `Enter` as something
+other than a bare `Enter`. Without the Kitty keyboard protocol, `Enter`,
+`Shift+Enter`, and `Ctrl+Enter` arrive as the same bytes, and nothing
+downstream can tell them apart. Inserting a newline therefore has a chord of
+its own rather than a modified `Enter`: it is the one editing action that would
+otherwise be unreachable on a terminal without the protocol.
+[Default bindings](#default-bindings) names it.
 
 At startup the TUI probes for that protocol once and enables key
-disambiguation when the terminal advertises it. The help overlay (`F1`) reports
-the outcome under "Keyboard Capability":
+disambiguation when the terminal advertises it. The help overlay reports the
+outcome under "Keyboard Capability":
 
-- `Kitty keyboard protocol: active` — the terminal advertised the protocol and
-  reports modified keys distinctly.
+- `Kitty keyboard protocol: active` — the terminal advertised the protocol, so
+  modified keys arrive distinctly.
 - `Kitty keyboard protocol: unsupported` — the terminal answered the probe
-  without advertising the protocol.
+  without advertising the protocol, so they arrive collapsed.
 - `Kitty keyboard protocol: probe failed` — the probe could not complete: no
   controlling terminal, an I/O failure, or no reply before the query timeout.
-  This says nothing about the terminal; it may well support the protocol.
+  This says nothing about the terminal; it may well support the protocol, and
+  the TUI simply could not determine it.
 
 Which terminals and multiplexers land in which bucket has not been measured
 yet; that survey is tracked as `todos/tui/62`.
 
-#### What changes between the outcomes
+#### What the outcome tells you
 
-Nothing you can act on. Wherever `Enter` does something, `Shift+Enter` and
-`Ctrl+Enter` do the same thing, so whether the terminal reports the three
-distinctly or as one is invisible: a modified `Enter` sends the message,
-accepts the completion, dispatches the write, resolves the choice, or commits
-the picker selection exactly as a bare `Enter` would on that surface. The
-events and help overlays bind no `Enter` action at all, and all three forms
-are equally inert there.
+What the TUI determined about your terminal, and nothing more. It is not a
+statement that your terminal is limited, and it does not predict a difference
+in what the TUI will do.
 
-Earlier releases bound `Enter` in Communication mode only when no modifier was
-held, so on a terminal reporting the protocol a `Shift+Enter` matched nothing
-and did neither. That is no longer the case.
+The default bindings are deliberately arranged so that it cannot. Wherever
+`Enter` does something, the modified forms do the same thing; where `Enter`
+does nothing, none of them do. So whether your terminal reports the three
+distinctly or as one is invisible in the defaults, on every surface.
 
-`Ctrl+J` inserts a newline under every outcome. It is the binding that does not
-depend on your terminal.
-
-The outcome reported above therefore describes what the TUI determined about
-your terminal, not a difference in what the TUI will do.
+That neutrality is a choice about where terminal differences belong, not a
+verdict that the distinction is worthless. Disambiguation is exactly what makes
+a modified chord bindable at all, and operator-configurable bindings are the
+intended successor to the compiled defaults. When they arrive, a terminal that
+reports the three distinctly will be able to do three different things with
+them — because you asked it to, in a configuration you control, rather than
+because the TUI guessed from a probe.
 
 ### Default bindings
 

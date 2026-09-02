@@ -189,18 +189,38 @@
 
 ## 6. Spec and behavior reconciliation
 
-- [ ] 6.1 Update `src/tui/README.md` to describe the action layer, the binding
-      table as single source of truth, and the context precedence rule.
-- [ ] 6.2 Record two durable constraints in `src/tui/README.md`, where they
+- [x] 6.1 Update `src/tui/README.md` to describe the action layer, the binding
+      table as single source of truth, and the context precedence rule. Carried
+      at the strength of the normative delta rather than the task's summary,
+      per the standing rule that the requirement governs where task phrasing is
+      narrower: that dispatch tests no chord ahead of the table, that the table
+      declares defaults rather than compile-time facts, and that the context is
+      a value derived from state, which is what makes precedence testable
+      rather than a property of control flow.
+- [x] 6.2 Record two durable constraints in `src/tui/README.md`, where they
       survive proposal archival: that action application goes through `AppState`
       methods rather than fields, and that default bindings are
       capability-neutral because capability variance belongs to a binding
-      configuration rather than to compiled defaults.
-- [ ] 6.3 Update the usage guide's terminal-capability section: the probe
+      configuration rather than to compiled defaults. Both are recorded with
+      their reasons, since a constraint whose rationale is archived with the
+      proposal reads as an arbitrary rule and gets relaxed. The neutrality
+      entry keeps the non-obvious half: leaving a modified form reserved and
+      unbound would itself be capability-conditioned.
+- [x] 6.3 Update the usage guide's terminal-capability section: the probe
       outcome reports what the TUI determined, not a terminal limitation, and no
       longer implies any behavior difference. Remove the per-mode
       modified-`Enter` split it currently documents, and check the surrounding
-      prose for claims a failed probe cannot support.
+      prose for claims a failed probe cannot support. The section now opens on
+      the delivery fact rather than on a binding, and closes on where terminal
+      differences are meant to live, so an operator reading it learns that
+      neutrality is a choice with a successor rather than a limitation. The
+      newline rationale is retained without naming the chord, and links to the
+      generated section that does.
 - [ ] 6.4 Confirm the `tui-surface` delta matches shipped behavior, and that the
       five unrelated keyboard-enhancement scenarios remain byte-identical to the
-      live spec.
+      live spec. **Blocked on evidence, not deferred.** Confirming shipped
+      behavior requires observing the `KeyboardEnhancement::Active` branch and
+      real modified-`Enter` delivery, and neither is reachable from the test
+      suite or from `pty-debug`, which implements no Kitty keyboard protocol.
+      The operator's terminal pass is the evidence; asserting conformance
+      before it would be asserting the one thing nothing has measured.

@@ -21,6 +21,82 @@ modes. The unified picker is a single window with a bundle column and a session
 column, and has two entry points, one focused on each. Entering Interaction mode
 without an active session auto-opens it on the session column.
 
+## Action Layer
+
+Every operator-invocable behavior is a member of one named vocabulary,
+`Action`, declared separately from the chords that invoke it. The layer has two
+independent halves:
+
+- **Resolution** turns a chord plus the current state into an `Action`.
+- **Behavior** applies an `Action` to `AppState`, and needs neither a
+  `KeyEvent` nor a binding context.
+
+The split is what lets a host drive the workbench without synthesizing terminal
+events: a host that owns its event loop and its own bindings skips resolution
+entirely and applies actions directly through `Workbench`. `Action` and the
+application seam are public for that reason, not incidentally.
+
+### The table is the single source of truth
+
+`actions/bindings.rs` holds one row per (binding context, chord), carrying the
+action and the display section that presents it. That table is the only place a
+chord-to-action association is declared, and every consumer reads it: dispatch,
+the help overlay, the pane hint strips, and — through a generated block — the
+operator usage guide. Changing a row changes all of them with no other edit.
+
+Dispatch tests no chord ahead of the table. A chord answered before lookup
+would be a second declaration of what that chord means, which is the
+duplication this layer exists to remove, so even the chords that reach their
+behavior from every surface are ordinary rows under the global context.
+
+The table declares **defaults**. Nothing here requires a chord's action to be
+fixed at compile time; operator-configurable bindings are the intended
+successor, and a configuration is expected to answer the same question
+differently.
+
+### Context precedence
+
+The active binding context is resolved from `AppState` as a single value rather
+than as an ordering of handler early-returns. An open overlay outranks the
+screen mode beneath it; within a mode, the focused field selects the context.
+Resolution consults the global rows first, then that context, so a global chord
+is not shadowed by whatever is open over it.
+
+Because the context is a value derived from state alone, it can be asked for
+without dispatching an event — which is what makes the precedence rule
+testable rather than a property of control flow.
+
+### Two constraints that outlive this module's current shape
+
+**Action application goes through `AppState` methods, never its fields.** The
+state struct is expected to be regrouped, and a layer that reached into fields
+would have to be rewritten each time it moved. Applying through methods also
+keeps a behavior's guards in one place: several of them do nothing unless the
+right field is focused, and that decision belongs to the state, not to the
+action that asks for it.
+
+**Default bindings are capability-neutral, and that is a statement about where
+capability variance belongs rather than about what terminals can do.** In every
+context that binds `Enter`, the `Shift+Enter` and `Ctrl+Enter` rows are
+declared explicitly and reach the same action; a context that binds no `Enter`
+action declares none of the three, leaving all three equally inert. No default
+binding varies with the keyboard-enhancement probe outcome, so the defaults
+produce identical observable behavior on a terminal that disambiguates modified
+keys and one that does not.
+
+The reason is not that the distinction is worthless — detection is what makes
+modified chords bindable at all. It is that a compiled default is the wrong
+place to spend it. Terminal classes are meant to diverge through a binding
+configuration the operator controls, and a default that behaved differently on
+two terminals would put that divergence somewhere they cannot reach. Note that
+neutrality has to cover *every* modified form: leaving one "reserved and
+unbound" would itself be capability-conditioned, since a disambiguating
+terminal would do nothing while a non-disambiguating one collapsed the chord
+onto `Enter` and acted.
+
+See `actions/README.md` for the per-file shape and the reasoning that is local
+to it.
+
 ## Module Map
 
 - `mod.rs`
@@ -260,15 +336,15 @@ without an active session auto-opens it on the session column.
   protocol. The probe writes a query and consumes its reply from the same input
   queue the loop drains, so it cannot run concurrently with the loop. The
   outcome (`Active` / `Unsupported` / `ProbeFailed`) is reported in the help
-  overlay, because it decides whether `Shift+Enter` is distinguishable from a
-  bare `Enter`. Only the disambiguation flag is pushed; the remaining flags
-  change which events are delivered at all and nothing in `input.rs` consumes
-  them. Detection assigns no binding and reaches no behavior: every context
-  that binds `Enter` binds `Shift+Enter` and `Ctrl+Enter` to the same action,
-  and the two overlays bind none of the three, so no probe outcome can resolve
-  to a different one. The outcome reports what the TUI determined about the
-  terminal, not a difference in what the TUI does. `Ctrl+J` inserts a newline
-  under every outcome.
+  overlay, because it decides whether a modified `Enter` is delivered
+  distinctly from a bare one. Only the disambiguation flag is pushed; the
+  remaining flags change which events are delivered at all and nothing in
+  `input.rs` consumes them. Detection answers a delivery question and nothing
+  else: it assigns no binding and reaches no behavior, so no probe outcome can
+  resolve a chord differently. The outcome reports what the TUI determined
+  about the terminal, not a difference in what the TUI does — see the
+  capability-neutrality constraint under Action Layer for why the defaults are
+  arranged so that it cannot.
 
 ## Stream and State Notes
 
