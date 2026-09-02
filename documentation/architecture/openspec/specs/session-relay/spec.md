@@ -2,12 +2,12 @@
 
 ## Purpose
 
-The session-relay specification has been partitioned into 8 capability-scoped sibling specs. The canonical normative content lives in those partition specs, not in this file. This file is the hub for navigation and for the delta-path rule below.
+The session-relay specification has been partitioned into 9 capability-scoped sibling specs. The canonical normative content lives in those partition specs, not in this file. This file is the hub for navigation and for the delta-path rule below.
 
-The partition began with 97 requirements (94 relocated from the prior single-file spec at 44d59dd, plus 3 ADDED by the `add-pty-transport` archive at 774f116). That is a fact about where the partition started, not a count to keep current: the live total is whatever the eight specs hold, and
+The partition began with 97 requirements (94 relocated from the prior single-file spec at 44d59dd, plus 3 ADDED by the `add-pty-transport` archive at 774f116). That is a fact about where the partition started, not a count to keep current: the live total is whatever the nine specs hold, and
 
 ```
-grep -h '^### Requirement' openspec/specs/{addressing-routing,delivery-quiescence,transport-contracts,authorization-scope,look-and-stream-events,choice-decisions,bundle-lifecycle,environment-variables}/spec.md | wc -l
+grep -h '^### Requirement' openspec/specs/{addressing-routing,delivery-quiescence,transport-contracts,authorization-scope,look-and-stream-events,choice-decisions,bundle-lifecycle,environment-variables,raww}/spec.md | wc -l
 ```
 
 answers it without a number here going stale between archives.
@@ -22,14 +22,15 @@ The normative requirements previously governed: bundle membership configuration,
 
 | Partition | Spec directory | Description |
 |-----------|----------------|-------------|
-| Addressing & Routing | `openspec/specs/addressing-routing/spec.md` | Canonical IDs, namespace semantics, target resolution, list payloads, raww target resolution |
+| Addressing & Routing | `openspec/specs/addressing-routing/spec.md` | Canonical IDs, namespace semantics, target resolution, list payloads |
 | Delivery & Quiescence | `openspec/specs/delivery-quiescence/spec.md` | Send envelope, async queue lifecycle, terminal outcomes, ack semantics, and asynchronous terminal-outcome receipt |
-| Transport Contracts | `openspec/specs/transport-contracts/spec.md` | Per-transport execution contracts (tmux, ACP, raww, Pty): worker lifecycles, transport capability flags, copy-mode-transparent injection, and inter-transport error codes |
+| Transport Contracts | `openspec/specs/transport-contracts/spec.md` | Per-transport execution contracts (tmux, ACP, Pty): worker lifecycles, transport capability flags, copy-mode-transparent injection, and inter-transport error codes |
 | Authorization & Scope | `openspec/specs/authorization-scope/spec.md` | Policy presets, authorization vocabulary and evaluation, scope controls, uniform cross-bundle auth, UI sender validation, and per-operation authorization mappings |
 | Look & Stream Events | `openspec/specs/look-and-stream-events/spec.md` | Look operation (transport-agnostic + per-transport), persistent client streams, Hello registration, recipient routability, and stream event contracts |
 | Choice Decisions | `openspec/specs/choice-decisions/spec.md` | Choice/decision envelope, queue lifecycle, operator classes |
 | Bundle Lifecycle | `openspec/specs/bundle-lifecycle/spec.md` | Reconciliation, bundle up/down, startup health, file watching |
 | Environment Variables | `openspec/specs/environment-variables/spec.md` | Coder/bundle/session environment variable precedence and container-injected overrides |
+| Raww | `openspec/specs/raww/spec.md` | The relay-side semantic contract for the `raww` verb: operation, target resolution and bundle boundary, authorization mapping, transport behavior, response, input bounds |
 
 ## Future capability (not yet a live sibling spec)
 
@@ -60,7 +61,7 @@ question without drifting.
 
 ### Requirement: Session-Relay Specification Partition Index
 
-The session-relay specification SHALL be the hub reference for the 8 partition specs listed in `## Partitions` above. All normative content for session-relay capability domains (bundle membership, reconciliation, routing, delivery, transport, authorization, look, stream events, choice, environment variables) SHALL be authored in the partition spec that matches the capability, not in this hub file.
+The session-relay specification SHALL be the hub reference for the 9 partition specs listed in `## Partitions` above. All normative content for session-relay capability domains (bundle membership, reconciliation, routing, delivery, transport, authorization, look, stream events, choice, raw writes, environment variables) SHALL be authored in the partition spec that matches the capability, not in this hub file.
 
 Active OpenSpec changes SHALL migrate their delta spec files to the partition directory matching each requirement target before archive. Both `## MODIFIED Requirements` and `## ADDED Requirements` deltas follow this rule; the rule covers relocations of existing requirements and (via the future-capability note above) brand-new capabilities whose partition will be created on the active change's archive.
 

@@ -3,13 +3,13 @@
 This change SYNCS FIRST. `redesign-mailbox-delivery-protocol`'s migration is a
 prerequisite of THIS CHANGE'S ARCHIVE, not of its sync.
 
-- [ ] 0.1 Sync this change before Backend migrates. The migration cannot be
+- [x] 0.1 Sync this change before Backend migrates. The migration cannot be
       committed earlier: `verify-openspec-deltas.py` runs as a pre-commit hook
       on any changed delta path and rejects a MODIFIED delta whose live
       counterpart is absent, and live `raww` does not exist until this syncs.
       Requiring the migration first is a cycle, and the only exits from it are
       bypassing the hook or this ordering
-- [ ] 0.2 Confirm in the sync packet that the ADDED `Relay raww transport
+- [x] 0.2 Confirm in the sync packet that the ADDED `Relay raww transport
       behavior` is a content-preserving move — byte-identical to the live
       `transport-contracts` text. This is what makes the ordering safe:
       Backend's edits exist only in their delta, never in the text this change
@@ -30,7 +30,7 @@ prerequisite of THIS CHANGE'S ARCHIVE, not of its sync.
 
 ## 1. Create the capability
 
-- [ ] 1.1 Create `specs/raww/spec.md` with a Purpose line naming it the
+- [x] 1.1 Create `specs/raww/spec.md` with a Purpose line naming it the
       relay-side semantic contract for the `raww` verb, and the six ADDED
       requirements in the delta's order: operation contract, target resolution
       and bundle boundary, authorization mapping, transport behavior, response
@@ -38,18 +38,18 @@ prerequisite of THIS CHANGE'S ARCHIVE, not of its sync.
 
 ## 2. Sync the source capabilities
 
-- [ ] 2.1 Sync `transport-contracts` — the four raww requirements are removed
-- [ ] 2.2 Sync `addressing-routing` — raww target resolution is removed; the
+- [x] 2.1 Sync `transport-contracts` — the four raww requirements are removed
+- [x] 2.2 Sync `addressing-routing` — raww target resolution is removed; the
       general addressing grammar and session type taxonomy are untouched
-- [ ] 2.3 Sync `authorization-scope` — the raww authorization mapping is
+- [x] 2.3 Sync `authorization-scope` — the raww authorization mapping is
       removed, and `Cross-bundle operation denied under home scope` no longer
       enumerates verbs
-- [ ] 2.4 Sync `relay-routing-layer` — `Authorization Stage` loses the two
+- [x] 2.4 Sync `relay-routing-layer` — `Authorization Stage` loses the two
       raww-specific scenarios and the `can_be_written` note, and keeps
       `Requester authorized in home namespace for cross-bundle Raww` alongside
       its send and list siblings
-- [ ] 2.5 Sync `session-relay` — the partition index reads nine partitions
-- [ ] 2.6 Sync `transport-abstraction` — `Transport Interface Contract` cites
+- [x] 2.5 Sync `session-relay` — the partition index reads nine partitions
+- [x] 2.6 Sync `transport-abstraction` — `Transport Interface Contract` cites
       the `raww` capability for the raww operation contract. This repairs live
       at the moment this change breaks it. The prompt-readiness reference in
       the same requirement is untouched and must stay pointing at
@@ -57,37 +57,37 @@ prerequisite of THIS CHANGE'S ARCHIVE, not of its sync.
 
 ## 3. Direct edits to the session-relay hub (not delta-governed)
 
-- [ ] 3.1 Purpose preamble: "partitioned into 8 capability-scoped sibling
+- [x] 3.1 Purpose preamble: "partitioned into 8 capability-scoped sibling
       specs" becomes nine
-- [ ] 3.2 The `grep -h '^### Requirement'` command in the preamble gains
+- [x] 3.2 The `grep -h '^### Requirement'` command in the preamble gains
       `raww` in its brace expansion, so the live-total recipe stays correct
-- [ ] 3.3 `## Partitions` table gains a `Raww` row naming
+- [x] 3.3 `## Partitions` table gains a `Raww` row naming
       `openspec/specs/raww/spec.md`
-- [ ] 3.4 `## Partitions` table: the Addressing & Routing row drops "raww
+- [x] 3.4 `## Partitions` table: the Addressing & Routing row drops "raww
       target resolution", the Transport Contracts row drops "raww" from its
       per-transport list, and the Authorization & Scope row's "per-operation
       authorization mappings" is checked for accuracy now that raww's has left
 
 ## 4. Verify
 
-- [ ] 4.1 `scripts/verify-openspec-deltas.py extract-raww-verb-capability`
+- [x] 4.1 `scripts/verify-openspec-deltas.py extract-raww-verb-capability`
       reports zero errors and the expected drops; re-run immediately before
       sync in case a live spec moved underneath a delta
-- [ ] 4.2 `openspec validate --all --strict` passes with one more capability
+- [x] 4.2 `openspec validate --all --strict` passes with one more capability
       than before
-- [ ] 4.3 Diff each requirement in `specs/raww/spec.md` against the source it
+- [x] 4.3 Diff each requirement in `specs/raww/spec.md` against the source it
       came from; differences must be only the deliberate consolidations
-- [ ] 4.4 Confirm no raww requirement title survives in `transport-contracts`,
+- [x] 4.4 Confirm no raww requirement title survives in `transport-contracts`,
       `addressing-routing`, or `authorization-scope`
-- [ ] 4.5 Confirm the thirteen surface requirements in `mcp-tool-surface`,
+- [x] 4.5 Confirm the thirteen surface requirements in `mcp-tool-surface`,
       `cli-surface` and `tui-surface` are untouched
-- [ ] 4.6 Confirm the general rules that merely enumerate raww still do so,
+- [x] 4.6 Confirm the general rules that merely enumerate raww still do so,
       in the routing resolution stage, the operation body contract, and
       cross-relay target classification
-- [ ] 4.7 Confirm exactly one scenario in the corpus asserts that cross-bundle
+- [x] 4.7 Confirm exactly one scenario in the corpus asserts that cross-bundle
       raww under `all` routes and delivers, and exactly one asserts that
       `home` or narrower is denied
-- [ ] 4.8 Sweep prose for citations naming `transport-contracts`,
+- [x] 4.8 Sweep prose for citations naming `transport-contracts`,
       `addressing-routing` or `authorization-scope` as the authority for a raww
       requirement, in specs and in `src/` — a dangling citation is found
       backwards, from the prose to what this change deletes, and the retention
@@ -95,8 +95,8 @@ prerequisite of THIS CHANGE'S ARCHIVE, not of its sync.
 
 ## 5. Close out
 
-- [ ] 5.1 Mark `todos/openspec/5` tasks complete through the raww half
+- [x] 5.1 Mark `todos/openspec/5` tasks complete through the raww half
 - [ ] 5.2 Record the evaluation: whether the boundary held, what had to be
       judged rather than ruled, and whether `send` should follow
-- [ ] 5.3 Confirm the send-specific duplication in `authorization-scope`
+- [x] 5.3 Confirm the send-specific duplication in `authorization-scope`
       (`todos/openspec/12`) is still tracked and was deliberately left alone

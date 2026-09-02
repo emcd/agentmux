@@ -38,9 +38,8 @@ through two non-blocking write methods defined on the `Transport` trait:
   timing-derived. The prohibition was guarding a hazard the declaration mechanism
   now excludes, and a rule that forbids what all three coder transports do is a
   rule that is not being enforced.
-- `raww(content: String, append_enter: bool)` — raw input write. The
-  `transport-contracts` capability's `Relay raww operation contract` governs its
-  request shape.
+- `raww(content: String, append_enter: bool)` — raw input write. The `raww`
+  capability's `Relay raww operation contract` governs its request shape.
 
 **The invocation is fallible.** The relay's admission quota reserves count and
 bytes in the relay's own queue and nothing about a transport's channel, its live
