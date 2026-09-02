@@ -205,6 +205,29 @@ pub fn picker_hint() -> Vec<HelpEntry> {
     .collect()
 }
 
+/// The bindings the interaction choice pane's hint advertises.
+///
+/// Only the two decisions, where the write pane's hint also advertises typing.
+/// The pane names its bindings in a one-line block title, and the four
+/// navigation rows would take it past the width of an ordinary terminal --
+/// where a title does not wrap, it is cut. Navigation stays discoverable in the
+/// help overlay, which has room to present a surface in full.
+pub fn interaction_choice_hint() -> Vec<HelpEntry> {
+    [
+        binding_for(
+            BindingContext::InteractionChoice,
+            Action::ResolveChoiceSelected,
+        ),
+        binding_for(
+            BindingContext::InteractionChoice,
+            Action::ResolveChoiceCancelled,
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
 /// The bindings the interaction write pane's hint advertises.
 pub fn interaction_write_hint() -> Vec<HelpEntry> {
     [

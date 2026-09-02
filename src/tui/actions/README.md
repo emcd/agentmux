@@ -63,14 +63,20 @@ Two halves, deliberately independent:
     single row dropped from a context that binds two chords to one
     behavior, as the events overlay does with `Esc` and `F3`.
   - `context_bindings`, `binding_for`, and `typing_binding` answer for
-    one context rather than the whole surface, and `picker_hint` and
-    `interaction_write_hint` compose the pane hint strips from them.
-    That asymmetry is the point: help catalogues every surface, a strip
-    annotates the one it sits on. Which few behaviors a strip
-    advertises stays declared here; their chords and wording are the
-    table's. `HelpEntry::primary_chord` and `HelpEntry::detail` are
-    what a one-line strip uses, the catalogue using the full chord list
-    and the qualified description.
+    one context rather than the whole surface, and `picker_hint`,
+    `interaction_write_hint`, and `interaction_choice_hint` compose the
+    pane hint strips from them. That asymmetry is the point: help
+    catalogues every surface, a strip annotates the one it sits on.
+    Which few behaviors a strip advertises stays declared here; their
+    chords and wording are the table's. `HelpEntry::primary_chord` and
+    `HelpEntry::detail` are what a one-line strip uses, the catalogue
+    using the full chord list and the qualified description.
+  - The choice pane's strip is the short one, carrying its two
+    decisions and not its four navigation rows. It prints in a block
+    title, which does not wrap, so what a wider strip would gain in
+    completeness it loses to the pane edge. Where a strip's own
+    medium constrains it, the constraint is declared here rather than
+    solved by trimming the wording every consumer shares.
 - `context.rs`
   - `BindingContext`, `binding_context`, and `binding_lookup_order`.
     `binding_context` resolves the surface that owns a chord from
@@ -84,8 +90,8 @@ Two halves, deliberately independent:
 
 `Action`, `BindingContext`, `default_binding`, `help_bindings`,
 `context_bindings`, `binding_for`, `typing_binding`, `picker_hint`,
-`interaction_write_hint`, `HelpSection`, `HelpEntry`, and `HelpSource`
-are exported from `agentmux::tui`, and
+`interaction_write_hint`, `interaction_choice_hint`, `HelpSection`,
+`HelpEntry`, and `HelpSource` are exported from `agentmux::tui`, and
 `Workbench` exposes `apply_action`, `binding_context`,
 `binding_lookup_order`, and `help_bindings`. Together they let a caller
 outside the crate ask what surface is active, what a chord means there,
@@ -143,9 +149,20 @@ makes them redundant wherever `Enter` is bound; see `help.rs`.
   declares, `tui_dispatch.rs` for dispatch and direct application
   agreeing on what a chord does, `tui_help.rs` for generated
   presentation, and `tui.rs` for the public seam. `src/tui/` carries
-  two inline `#[cfg(test)]` blocks, one `#[test]` each, both covering
-  crate-private overlay renderers no public interface reaches:
+  four inline `#[cfg(test)]` blocks, one `#[test]` each, all covering
+  crate-private renderers no public interface reaches:
   `../render/overlays/help.rs` for the overlay's geometry and its
-  independence from the keyboard probe, and
+  independence from the keyboard probe,
   `../render/overlays/picker.rs` for the hint strip surviving widths
-  that force extra rows. Everything else lives under `tests/`.
+  that force extra rows, `../render/interaction.rs` for the choice
+  pane's title showing a whole advertised binding or none of it, and
+  `../render/frame.rs` for the footer and the startup status naming
+  the chords the table declares. Everything else lives under `tests/`.
+- The usage guide is a fourth consumer, and the only one that cannot
+  read the table at render time. `examples/tui-binding-reference.rs`
+  renders the guide's generated section from `help_bindings` and
+  nothing else, and `scripts/lint-tui-binding-documentation.sh` fails
+  the commit when the committed section and the regeneration disagree.
+  That the example reaches the table through the public exports alone
+  is the point: it compiles the claim that a caller outside the crate
+  can build its own binding reference.

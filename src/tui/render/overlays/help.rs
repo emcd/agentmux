@@ -10,6 +10,11 @@
 //!
 //! Those notes are declared beside the section they annotate and rendered
 //! after its generated bindings.
+//!
+//! The line naming the chord that inserts a newline under every probe outcome
+//! is generated here rather than carried by the report it sits under. The
+//! report's subject is delivery -- how a key reaches the TUI -- and that line
+//! is about what a key does, which only the table can answer.
 
 use ratatui::{
     Frame,
@@ -19,7 +24,9 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use super::super::super::actions::{HelpSection, help_bindings};
+use super::super::super::actions::{
+    Action, BindingContext, HelpSection, binding_for, help_bindings,
+};
 use super::super::super::keyboard::format_keyboard_enhancement_lines;
 use super::super::super::state::AppState;
 use super::super::geometry::centered_rect;
@@ -64,6 +71,12 @@ pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, state: &App
             .into_iter()
             .map(Line::from),
     );
+    // The probe report says how keys arrive; this says what one of them does,
+    // which is the table's to answer and not the probe's. It is the same line
+    // under every outcome, which is the whole of its point.
+    if let Some(note) = portable_newline_note() {
+        reference_lines.push(Line::from(note));
+    }
 
     let [first, second] = binding_columns;
     for (lines, area) in [
@@ -102,6 +115,28 @@ fn notes_for(heading: &str) -> &'static [&'static str] {
         "Picker" => &["Auto-opens entering Interaction w/o target"],
         _ => &[],
     }
+}
+
+/// The one binding whose reach does not depend on the probe outcome, named
+/// beside the outcome that does not change it.
+///
+/// The claim is universal, so it may only be printed while it is true. Every
+/// context that owns a text draft has to bind newline insertion to the same
+/// chord; where they diverge the note disappears rather than narrowing to one
+/// surface without saying so, since a line reading "in every case" beside a
+/// chord that reaches one pane is worse than no line.
+fn portable_newline_note() -> Option<String> {
+    let mut chords = [
+        binding_for(BindingContext::ComposeMessage, Action::InsertMessageNewline),
+        binding_for(BindingContext::InteractionWrite, Action::InsertRawwNewline),
+        binding_for(BindingContext::InteractionChoice, Action::InsertRawwNewline),
+    ]
+    .into_iter()
+    .map(|entry| entry.map(|entry| entry.primary_chord().to_string()));
+    let portable = chords.next()??;
+    chords
+        .all(|chord| chord.as_deref() == Some(portable.as_str()))
+        .then(|| format!("{portable} inserts a newline in every case"))
 }
 
 const TO_FIELD_GRAMMAR: &[&str] = &[
@@ -307,6 +342,28 @@ mod tests {
             "the capability report is the same under every outcome, so this test \
              cannot tell an ignored probe from a respected one"
         );
+
+        // The portable-newline line sits beside that report and is the opposite
+        // of it: generated rather than written down, and invariant rather than
+        // outcome-dependent. Both halves are asserted, and the chord comes from
+        // the table rather than from the function that prints it, which would
+        // only ask that function to agree with itself.
+        let newline = binding_for(BindingContext::ComposeMessage, Action::InsertMessageNewline)
+            .expect("the message field binds inserting a newline");
+        let portable = format!(
+            "{} inserts a newline in every case",
+            newline.primary_chord()
+        );
+        for (report, enhancement) in reports.iter().zip([
+            KeyboardEnhancement::Active,
+            KeyboardEnhancement::Unsupported,
+            KeyboardEnhancement::ProbeFailed,
+        ]) {
+            assert!(
+                report.contains(&portable),
+                "the capability column under {enhancement:?} omits {portable:?}: {report}"
+            );
+        }
 
         // Columns are separated, and nothing is written into the separation.
         // The width is asserted against a literal rather than against `GUTTER`,

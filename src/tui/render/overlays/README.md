@@ -22,8 +22,8 @@ event-overlay visibility).
   - Unified bundle+session picker overlay. Side-by-side columns
     (bundles on the left, the active bundle's sessions on the right)
     with a column-scoped filter and per-row readiness styling.
-    Opens focused on the session column via `F2` and on the bundle
-    column via `F5`. The bundle column drives active-bundle
+    Two entry points open it, one focused on each column. The bundle
+    column drives active-bundle
     switching; selecting a different bundle closes the picker
     overlay and rebinds the active bundle context in the same
     window. Bundle status header is one line of `key=value`
@@ -56,16 +56,25 @@ event-overlay visibility).
     invisible to any test of the packing alone.
 - `events.rs`
   - Events overlay. Two stacked panes: pending choices (target,
-    kind, `enqueued_at`) and a delivery-events log. Used by `F3`
-    from either workbench mode.
+    kind, `enqueued_at`) and a delivery-events log. Reachable from
+    either workbench mode.
 - `help.rs`
-  - Help overlay. Triggered by `F1` from anywhere. Three columns: two
+  - Help overlay, reachable from every surface. Three columns: two
     of bindings generated from the binding table (`actions/help.rs`)
     and one of reference material. What stays hand-written here is
     what no binding row can hold — the mouse wheel, the predicate
     deciding which interaction pane is live, the `To` address grammar,
     and the keyboard-capability report — declared beside the section it
-    annotates. Its one inline `#[cfg(test)]` test is the documented
+    annotates.
+  - The report's own subject is delivery: how a key reaches the TUI
+    under each probe outcome. The line naming the chord that inserts a
+    newline regardless of the outcome is about what a key *does*, so it
+    is generated here from the table rather than carried by
+    `keyboard.rs`, which would have made that module a second place a
+    binding is written down. It prints only while every drafting
+    context binds the same chord, since "in every case" is a universal
+    claim; where they diverge it disappears rather than narrowing to
+    one surface silently. Its one inline `#[cfg(test)]` test is the documented
     exception: the renderer is crate-private by design and no public
     interface reaches it, so the alternative would be a
     render-to-buffer method on `Workbench` existing only for the test.

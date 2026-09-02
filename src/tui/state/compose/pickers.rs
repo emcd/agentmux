@@ -4,12 +4,13 @@ use super::{AppState, PickerColumn, ScreenMode, append_recipient_token};
 
 impl AppState {
     /// Opens the unified picker focused on the session column. Used by the
-    /// recipient-oriented entry points (`F2`, Interaction-mode open).
+    /// recipient-oriented entry points: the session-picker action, and entering
+    /// Interaction mode without a target.
     pub fn open_picker(&mut self) {
         self.open_picker_focused(PickerColumn::Sessions);
     }
 
-    /// Opens the unified picker focused on the bundle column (`F5`). The bundle
+    /// Opens the unified picker focused on the bundle column. The bundle
     /// column drives active-bundle switching; selecting a bundle re-enumerates
     /// the session column in the same window.
     pub fn open_bundle_picker(&mut self) {

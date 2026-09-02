@@ -12,7 +12,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 use agentmux::tui::{
     Action, BindingContext, HelpSection, KeyboardEnhancement, TuiLaunchOptions, default_binding,
-    help_bindings, interaction_write_hint, picker_hint,
+    help_bindings, interaction_choice_hint, interaction_write_hint, picker_hint,
     workbench::{Workbench, WorkbenchField},
 };
 
@@ -390,10 +390,26 @@ fn a_hint_strip_presents_only_the_context_it_annotates() {
         );
     }
 
+    for source in interaction_choice_hint()
+        .iter()
+        .flat_map(|entry| entry.sources.iter())
+    {
+        assert_eq!(
+            source.context,
+            BindingContext::InteractionChoice,
+            "the choice pane strip advertises {:?} from {:?}",
+            source.chord,
+            source.context
+        );
+    }
+
     // And each strip actually says something, so the assertions above are not
-    // satisfied by an empty strip.
+    // satisfied by an empty strip. The choice pane advertises fewer: it prints
+    // its bindings in a block title, which does not wrap, so it carries the two
+    // decisions and leaves navigation to the help overlay.
     assert!(picker_hint().len() >= 3);
     assert!(interaction_write_hint().len() >= 3);
+    assert!(interaction_choice_hint().len() >= 2);
 }
 
 #[test]
@@ -403,7 +419,11 @@ fn the_chord_a_hint_prints_resolves_to_the_behavior_it_names() {
     // shadowed by an earlier one in the same context would still appear as a
     // source while its chord reached something else, and the strip would then
     // advertise a key that does the wrong thing.
-    for entry in picker_hint().into_iter().chain(interaction_write_hint()) {
+    for entry in picker_hint()
+        .into_iter()
+        .chain(interaction_write_hint())
+        .chain(interaction_choice_hint())
+    {
         let printed = entry.primary_chord();
         let source = entry
             .sources
@@ -439,6 +459,7 @@ fn generated_presentation_does_not_read_the_keyboard_enhancement_probe() {
     let catalogue = help_bindings();
     let picker = picker_hint();
     let write = interaction_write_hint();
+    let choice = interaction_choice_hint();
     for enhancement in [
         KeyboardEnhancement::Active,
         KeyboardEnhancement::Unsupported,
@@ -451,6 +472,7 @@ fn generated_presentation_does_not_read_the_keyboard_enhancement_probe() {
         assert_eq!(help_bindings(), catalogue);
         assert_eq!(picker_hint(), picker);
         assert_eq!(interaction_write_hint(), write);
+        assert_eq!(interaction_choice_hint(), choice);
     }
 
     // No presented chord names a modified Enter, which is the only chord the

@@ -134,14 +134,58 @@
 
 ## 5. Documentation single-sourcing
 
-- [ ] 5.1 Add a generated, delimited binding section to
-      `documentation/usage/tui.md` and populate it from the table.
-- [ ] 5.2 Add a repository lint that regenerates that section and fails on
-      mismatch, following the existing repo lint conventions.
-- [ ] 5.3 Teeth-check the lint: change a binding row without regenerating and
-      confirm the lint fails.
-- [ ] 5.4 Remove the now-duplicated binding prose from `src/tui/README.md` and
+- [x] 5.1 Add a generated, delimited binding section to
+      `documentation/usage/tui.md` and populate it from the table. The generator
+      is an example reaching the table through the public exports alone, which
+      compiles the claim that a caller outside the crate can build its own
+      binding reference; it emits the delimiters itself, so the marker text has
+      one definition and the lint cannot disagree with it about where the block
+      starts. The guide's hand-written binding lists are retired in the same
+      move: a generated block beside a transcribed one is two copies in one
+      file, which is worse than the one it replaced.
+- [x] 5.2 Add a repository lint that regenerates that section and fails on
+      mismatch, following the existing repo lint conventions. It runs after the
+      Rust lints rather than with the cheap repository checks, because the
+      declaration it reads is Rust and the only honest way to read it is to run
+      it. Guard against the vacuous pass: a generator that emits no bindings
+      would agree with an emptied block about nothing, so producing none is a
+      failure however well it matches. `--fix` lives in the lint rather than the
+      generator, so locating the block has one implementation in both
+      directions.
+- [x] 5.3 Teeth-check the lint: change a binding row without regenerating and
+      confirm the lint fails. Teeth-check its guards too, since a guard that
+      cannot fire is the failure it was written against: an emptied table, a
+      missing marker, and markers in the wrong order each fail, and the emptied
+      table fails `--fix` as well rather than writing an empty block.
+- [x] 5.4 Remove the now-duplicated binding prose from `src/tui/README.md` and
       the interaction pane hint text, leaving architecture description only.
+      Every runtime operator prompt is generated, not only the interaction
+      pane's: the footer's mode-switch hint and the startup status line named
+      chords too, and a prompt that names a chord is the consumer the spec
+      requires to read the table. They are generated rather than deleted, since
+      the guide is not on screen when the operator needs them.
+      - The choice pane's block title had never been reached by the hint work
+        at all. A block title does not wrap, so the pane advertises its two
+        decisions and drops them whole rather than cut when the width runs out,
+        leaving navigation to the help overlay.
+      - The footer's mode-switch hint reads the dispatch context rather than a
+        fixed one. A pane hint annotates the surface it sits on; the footer
+        spans the workbench and says what pressing a key would do right now.
+      - The startup line is composed in the render layer rather than seeded
+        into `AppState`, so the state layer keeps its independence from the
+        action layer. `Action::apply` calls `AppState` methods, and reversing
+        that direction for one string would be a poor trade.
+      - The keyboard-enhancement paragraphs in `src/tui/README.md` and the
+        usage guide keep their chords. They are the durable statement of the
+        neutrality contract, which is about those chords rather than a
+        reference to them.
+      - The runtime capability report is not covered by that exception. It once
+        ended by naming the chord that inserts a newline under every outcome,
+        which is a chord paired with a behavior and would go false the moment
+        the row moved. `keyboard.rs` now answers only for delivery — how a key
+        reaches the TUI — and the help renderer generates that line. It prints
+        only while every drafting context binds the same chord, since the claim
+        it makes is universal.
 
 ## 6. Spec and behavior reconciliation
 

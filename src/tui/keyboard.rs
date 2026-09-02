@@ -4,8 +4,12 @@
 //! Terminals that implement the protocol report modified keys as unambiguous
 //! `CSI u` sequences, which is what separates `Shift+Enter` and `Ctrl+Enter`
 //! from a bare `Enter`. Terminals that do not implement it collapse all three
-//! onto the same byte, so the TUI has no way to tell them apart and binds
-//! newline to `Ctrl+J` instead.
+//! onto the same byte, so the three forms arrive here indistinguishable.
+//!
+//! That is the whole of what this module knows: which chords a terminal can
+//! deliver distinctly. What a delivered chord then does is the binding table's,
+//! and naming one here would put a second copy of that answer in the module
+//! least able to keep it current.
 //!
 //! The capability is probed once, immediately after terminal setup and before
 //! the event loop starts reading keys: the probe writes a query to the terminal
@@ -42,9 +46,14 @@ impl KeyboardEnhancement {
     }
 }
 
-/// Operator-facing description of the probe outcome, how modified `Enter`
-/// reaches the TUI under it, and the newline binding that holds regardless.
-/// One line per element.
+/// Operator-facing description of the probe outcome and how modified `Enter`
+/// reaches the TUI under it. One line per element.
+///
+/// Delivery only: what a key does under an outcome is not this module's to say.
+/// The report once ended by naming the chord that inserts a newline regardless
+/// of the outcome, which made this a second place a binding was written down
+/// and would have gone false the moment the row moved. The help renderer
+/// appends that line now, generated from the binding table.
 ///
 /// The `ProbeFailed` wording claims nothing about the terminal. A failed probe
 /// establishes only that the TUI could not determine or enable disambiguation;
@@ -64,9 +73,7 @@ pub fn format_keyboard_enhancement_lines(enhancement: KeyboardEnhancement) -> Ve
             "Keyboard capability is undetermined",
         ],
     };
-    let mut lines: Vec<String> = outcome.iter().map(|line| (*line).to_string()).collect();
-    lines.push("Ctrl+J inserts a newline in every case".to_string());
-    lines
+    outcome.iter().map(|line| (*line).to_string()).collect()
 }
 
 /// Owns the pushed enhancement flags for the lifetime of a TUI run.

@@ -25,7 +25,7 @@ const HINT_GAP: &str = "   ";
 /// Renders the unified bundle+session picker. The bundle column (left) drives
 /// active-bundle switching; the session column (right) lists the active
 /// bundle's recipients. A column-scoped filter narrows whichever column has
-/// focus. Both `F2` (session focus) and `F5` (bundle focus) open this overlay.
+/// focus. Two entry points open this overlay, one focused on each column.
 pub(in crate::tui::render) fn render_picker_overlay(frame: &mut Frame, state: &mut AppState) {
     let popup = centered_rect(72, 72, frame.area());
     frame.render_widget(Clear, popup);

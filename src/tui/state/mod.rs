@@ -230,10 +230,11 @@ impl AppState {
             look_overlay_scroll: 0,
             look_choice_request_index: 0,
             look_choice_option_index: 0,
-            status_history: VecDeque::from([StatusEntry {
-                code: None,
-                message: "Ready. Press F1 for help.".to_string(),
-            }]),
+            // Deliberately empty. The startup line names a chord, and a chord
+            // belongs to the binding table, which this layer does not depend
+            // on -- the dependency runs the other way. The render layer, which
+            // does, composes it as the footer's empty-history fallback.
+            status_history: VecDeque::new(),
             event_history: VecDeque::new(),
             pending_choices: Vec::new(),
             pending_choices_state: ListState::default(),
