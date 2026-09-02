@@ -52,6 +52,21 @@ pub(super) fn claim(namespace: &str) -> ConsumerBinding {
     ConsumerBinding::new(target(namespace), issued)
 }
 
+/// The highest generation identifier this target's sequence has issued.
+///
+/// Read from the ledger because the sequence is deliberately not observable
+/// through any operation: what a caller sees is the identifier it was handed,
+/// and the high-water mark behind it is exactly the state a reap must leave
+/// alone.
+pub(super) fn target_generation(namespace: &str) -> u64 {
+    let state = super::super::ledger::lock_ledger().expect("ledger");
+    state
+        .generations
+        .get(&admission_key(namespace))
+        .and_then(|held| held.issued)
+        .map_or(0, ConsumerGenerationId::value)
+}
+
 pub(super) fn admission_key(namespace: &str) -> AdmissionTargetKey {
     AdmissionTargetKey::new(
         namespace,

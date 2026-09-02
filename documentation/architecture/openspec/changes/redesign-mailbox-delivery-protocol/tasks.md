@@ -173,21 +173,45 @@ thing the shadow exists to establish.
       not already the case) that an admitted entry carries no live policy
       reference re-checked later; a policy change affects only new
       admissions.
-- [ ] 2.10 Confirm mailbox/cursor/generation-sequence cleanup rides the
-      existing worker-registry reap path
-      (`src/relay/delivery/async_worker/registry.rs`) when a generation is
-      torn down without replacement; add cleanup there if it is not already
-      covered for the state added in 2.2-2.7. The monotonic generation-id
-      sequence itself MUST NOT reset on this cleanup: the seam for giving a
-      target up without replacing it exists (`release_consumer_generation`),
-      and what remains is wiring it to the reap. Two obligations fall on that
-      wiring rather than on the seam. The reap MUST name the generation it is
-      reaping and treat a refusal as the correct answer: a reap runs behind the
-      target it reaps, so one for a generation already replaced would otherwise
-      clear an owner that is still consuming. And it MUST resolve the target's
-      entries before releasing, because the release is what admits the next
-      claimant, and a claimant that inherited an outstanding declaration could
-      neither acknowledge nor declare past it.
+- [x] 2.10 Confirm mailbox/cursor/generation-sequence cleanup rides the
+      existing worker-registry reap path when a generation is torn down
+      without replacement; add cleanup there if it is not already covered for
+      the state added in 2.2-2.7. The monotonic generation-id sequence itself
+      MUST NOT reset on this cleanup.
+      - **Confirmed absent, not merely unverified.** Nothing removed a
+        `mailboxes` entry anywhere, so a target's cursor and next position
+        outlived every teardown. The cleanup had to be added rather than
+        found.
+      - The reap is `unregister_worker`, and it is already the
+        teardown-without-replacement event: a worker whose generation is
+        fenced and rebuilt in place keeps its registration, so an entry
+        leaving means the target is going rather than changing hands.
+      - **The reap names the generation it gives up**, which the registry
+        entry carries — not the ledger's current answer, since a registry
+        entry outlives individual consumer generations and the ledger would
+        name whoever holds the target at reap time.
+      - **Reach the ledger after the registry lock is released.** Nesting them
+        would introduce a lock ordering nothing else in the subsystem
+        observes. The window this opens is the one the naming exists for.
+      - **A reap that finds entries still admitted gives the target up but
+        keeps the mailbox.** It knows those entries by id rather than as the
+        tasks that produced them, so it could terminalize them and report none
+        — silence for every waiting sender. Resolution is owed by the teardown
+        path holding the tasks.
+      - That obligation is met everywhere except the two construction-failure
+        paths, and their exception is deliberate and pre-existing: a worker
+        whose transport could not be built — on its first attempt or on a
+        replacement after a positive fence verdict — unregisters *before*
+        draining, because the registry lock is what keeps a send from landing
+        in a receiver nothing will poll. Their reap can only retain, so the
+        reclamation is retried after the drain, naming nothing since the first
+        pass already gave the generation up.
+      - **Pair the drain and the retry in one function rather than at each
+        call site.** They were split when this landed, and only the first of
+        the two paths got the retry; the second left an empty mailbox and its
+        cursor behind for good, so a target recreated under that name kept
+        stale positions. Splitting them means a third such path inherits the
+        obligation without inheriting the code.
 
 ## 3. Production cutover
 

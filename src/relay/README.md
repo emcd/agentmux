@@ -348,15 +348,16 @@ exported from `src/relay/mod.rs`.
     resolves it, which is what keeps the mailbox bounded while nothing
     acknowledges.
     Who may call those three is a target's **consumer generation**, and the
-    module's `generation` operations own it: `claim` issues a target's first,
-    `replace` hands the target over, and `release` gives it up. Both `replace`
-    and `release` name the generation they are acting against and do nothing
-    unless it is still the incumbent — a reap runs behind the target it reaps,
-    so a release for a generation already replaced would otherwise clear an
-    owner that is still consuming and let the next claimant bind beside it.
-    A caller must also resolve a released target's entries before releasing,
-    since the release is what opens the target to a claimant that could inherit
-    a declaration nobody can acknowledge. This is a
+    module's `generation` and `reap` operations own it: `claim` issues a
+    target's first, `replace` hands the target over, and `reap` gives it up
+    when the target itself is going. Both `replace` and `reap` name the
+    generation they act against and do nothing unless it is still the
+    incumbent — a reap runs behind the target it reaps, so one for a generation
+    already replaced would otherwise clear an owner that is still consuming and
+    let the next claimant bind beside it. There is deliberately no bare release
+    beside the reap: giving up ownership and reclaiming what the target held
+    happen under one acquisition of the lock, or a consumer could claim in
+    between and be handed a mailbox reclaimed underneath it. This is a
     different axis from the transport generation the fence below governs — that
     one names an instance of a transport, this one names who is entitled to
     consume a mailbox — and the two meet at exactly one point: a replacement is
@@ -375,6 +376,24 @@ exported from `src/relay/mod.rs`.
     message twice — and hands the resolved members back to its caller, which
     owes each one a terminal outcome. Undeclared entries are untouched and become
     the incoming generation's to serve.
+    The reap rides `unregister_worker`, which is already the
+    teardown-without-replacement event — a fenced worker that rebuilds its
+    transport in place keeps its registration, so an entry leaving means the
+    target is going rather than changing hands. It reaches the ledger *after*
+    releasing the registry lock, because nesting the two would introduce a lock
+    ordering nothing else in the subsystem observes; the window that opens
+    instead is exactly what the naming covers. A reap that finds entries still
+    admitted gives the target up but keeps the mailbox: it knows those entries
+    by id rather than as the tasks that produced them, so resolving them would
+    leave every waiting sender in silence. Resolution is owed by the teardown
+    path holding the tasks, which does it before unregistering everywhere except
+    the two construction-failure paths — a first attempt, and a replacement
+    after a positive fence verdict. Those unregister first on purpose, since the
+    registry lock is what keeps a send out of a receiver nothing will poll, so
+    they retry the reclamation after their drain. Drain and retry live in one
+    function (`resolve_queued_tasks_and_reclaim`) rather than at each call site,
+    because while they were separate only one of the two paths carried the
+    retry.
   - `guard.rs`: the queue entry state model (`Queued`/`Terminal`), the guard
     identity, the typed submission evidence, and the guard's single evidence
     order. The types live

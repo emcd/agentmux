@@ -34,6 +34,8 @@
 //! - [`peek`] — reading the head run without advancing anything.
 //! - [`declare`] — recording the run about to be submitted as one packing unit.
 //! - [`ack`] — terminalizing exactly that run from the executor's evidence.
+//! - [`reap`] — giving the target up and reclaiming its mailbox when its
+//!   registration goes away.
 
 mod ack;
 mod addressing;
@@ -43,12 +45,14 @@ mod enqueue;
 mod fixtures;
 mod generation;
 mod peek;
+mod reap;
 
 pub(in crate::relay) use self::ack::ack;
 pub(in crate::relay) use self::declare::declare;
 pub(in crate::relay) use self::enqueue::{EnqueueRejection, enqueue};
 pub(in crate::relay) use self::generation::{
     GenerationRejection, GenerationReplacement, ResolvedMember, claim_consumer_generation,
-    release_consumer_generation, replace_consumer_generation,
+    replace_consumer_generation,
 };
 pub(in crate::relay) use self::peek::peek;
+pub(in crate::relay) use self::reap::{TargetReap, reap_target};

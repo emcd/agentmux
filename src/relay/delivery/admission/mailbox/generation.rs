@@ -16,6 +16,13 @@
 //! generation that has since been replaced admits nothing: it is rejected as
 //! naming a generation that no longer holds the target, rather than being
 //! spent on whichever generation happens to be active by then.
+//!
+//! A generation stops owning a target one of two ways: it is replaced, which is
+//! here, or the target goes away, which is [`reap`](super::reap). There is
+//! deliberately no bare release beside the reap — giving up ownership and
+//! reclaiming what the target held have to happen under one acquisition of the
+//! lock, or a consumer could claim the target in between and be handed a mailbox
+//! that is reclaimed underneath it.
 
 use crate::protocol::identity::{ConsumerGenerationId, DeliveryTargetId};
 
@@ -138,49 +145,6 @@ pub(in crate::relay) fn replace_consumer_generation(
     })
 }
 
-/// Releases a target's generation without replacing it.
-///
-/// The other way a generation stops owning a target: the target is going away
-/// rather than changing hands, so no fence verdict is called for — there is no
-/// incoming consumer for a ceased one to be ordered against. The sequence's
-/// high-water mark stays, which is the whole point: a target recreated under the
-/// same session name continues it, so an identifier from before the teardown
-/// cannot match one issued after.
-///
-/// **The generation being given up is named, and a release that does not name
-/// the incumbent gives up nothing.** A reap runs behind the target it is
-/// reaping, so a release for a generation that has since been replaced is a
-/// reachable ordering, not a defensive hypothetical: it would clear an owner
-/// that is currently consuming, and the next claimant would bind beside a live
-/// consumer rather than replacing it — the one condition the whole generation
-/// check exists to exclude, arrived at through the door marked cleanup.
-///
-/// It resolves nothing. Unlike a replacement, which has an incoming consumer
-/// that must not be handed a declared entry, a release leaves the target's
-/// entries to whatever resolves them on teardown — so its caller owes them that
-/// teardown terminalization **before** releasing, or the release opens the
-/// target to a claimant that inherits a declaration nobody can acknowledge.
-/// Where this is called from — the worker-registry reap that also reclaims a
-/// torn-down target's mailbox and cursor — is wired with that cleanup rather
-/// than here.
-pub(in crate::relay) fn release_consumer_generation(
-    target: &DeliveryTargetId,
-    outgoing: ConsumerGenerationId,
-) -> Result<(), GenerationRejection> {
-    let Ok(mut state) = lock_ledger() else {
-        return Err(GenerationRejection::LedgerUnavailable);
-    };
-    let key = target_key(target);
-    let active = state.generations.get(&key).and_then(|held| held.active);
-    if active != Some(outgoing) {
-        return Err(GenerationRejection::NotActive { active });
-    }
-    if let Some(generations) = state.generations.get_mut(&key) {
-        generations.active = None;
-    }
-    Ok(())
-}
-
 /// The generation entitled to consume a target's mailbox, or `None` while none
 /// is.
 ///
@@ -278,6 +242,7 @@ mod consumer_generation_tests {
         admission_key, binding, claim, mail, peeked, place, range, request, seq, target,
     };
     use super::super::peek::peek;
+    use super::super::reap::reap_target;
     use super::*;
 
     #[test]
@@ -438,43 +403,18 @@ mod consumer_generation_tests {
             "the resolved members released their reservations, leaving only the entry still held"
         );
 
-        // A reap runs behind the target it reaps, so a release for the
-        // generation that has already been replaced is an ordering that happens
-        // rather than one to guard against. It must give up nothing: clearing
-        // the owner here would leave the live consumer consuming while the next
-        // claimant bound beside it, which is the single-active-generation rule
-        // defeated through the cleanup path instead of the claim path.
-        assert_eq!(
-            release_consumer_generation(&target(namespace), first.generation),
-            Err(GenerationRejection::NotActive {
-                active: Some(second.generation)
-            }),
-            "a release naming a superseded generation releases nothing"
-        );
-        assert_eq!(
-            claim_consumer_generation(&target(namespace)),
-            Err(GenerationRejection::AlreadyHeld {
-                active: second.generation
-            }),
-            "and the incumbent still holds the target after that stale release"
-        );
-
         // Teardown and recreation. The sequence is the one thing that survives
         // it: a target whose mailbox and cursor are reclaimed and then recreated
         // under the same session name continues the sequence rather than
         // restarting it, so an identifier held from before cannot match one
-        // issued after.
-        // The terminalization comes first because the release is what opens the
-        // target to a claimant, and a claimant that inherited the outgoing
-        // generation's declaration could neither acknowledge nor declare past
-        // it. That ordering is the caller's obligation, and it is stated here as
-        // the shape a reap has to take rather than left to be rediscovered.
+        // issued after. What the reap itself refuses and reclaims is its own
+        // property and is asserted with it; this is only the teardown the
+        // sequence has to outlive.
         terminalize(&format!("{namespace}-4"));
-        release_consumer_generation(&target(namespace), second.generation)
-            .expect("the incumbent releases the target it holds");
-        discard_mailbox(namespace);
+        reap_target(&target(namespace), Some(second.generation))
+            .expect("the incumbent gives up the target it holds");
         let third = claim_consumer_generation(&target(namespace))
-            .expect("a released target is free to claim again");
+            .expect("a reaped target is free to claim again");
         assert_eq!(
             third.value(),
             replacement.generation.value() + 1,
@@ -505,16 +445,5 @@ mod consumer_generation_tests {
             .per_target
             .get(&admission_key(namespace))
             .map_or(0, |usage| usage.envelopes)
-    }
-
-    /// Drops a target's mailbox and cursor, as the worker-registry reap will.
-    ///
-    /// Stands in for that cleanup, which is wired separately. What it is here to
-    /// establish is the invariant the cleanup has to preserve: the generation
-    /// sequence is not part of what a mailbox holds, so reclaiming one cannot
-    /// take the sequence with it.
-    fn discard_mailbox(namespace: &str) {
-        let mut state = lock_ledger().expect("ledger");
-        state.mailboxes.remove(&admission_key(namespace));
     }
 }

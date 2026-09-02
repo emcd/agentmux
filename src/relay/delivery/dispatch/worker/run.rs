@@ -24,7 +24,7 @@ use super::spawn::{
     build_generation,
 };
 use super::stop::{
-    StopCause, WorkerHoldings, emit_fence_verdict, resolve_queued_tasks_with_error,
+    StopCause, WorkerHoldings, emit_fence_verdict, resolve_queued_tasks_and_reclaim,
     shutdown_before_generation, stop_drain, terminalize_unresolved_members,
 };
 use super::submit::{SubmitContext, submit_batch};
@@ -103,7 +103,7 @@ pub(super) async fn run_async_delivery_worker(
                 // `close_worker` exists to prevent on the shutdown path, and this
                 // path has to close the same way.
                 super::super::super::async_worker::unregister_worker(&key, owner);
-                resolve_queued_tasks_with_error(&mut receiver, pending.as_ref(), &error);
+                resolve_queued_tasks_and_reclaim(&key, &mut receiver, pending.as_ref(), &error);
                 return;
             }
         };
@@ -330,7 +330,8 @@ pub(super) async fn run_async_delivery_worker(
                                     pending.as_ref(),
                                 );
                             }
-                            resolve_queued_tasks_with_error(
+                            resolve_queued_tasks_and_reclaim(
+                                &key,
                                 &mut receiver,
                                 pending.as_ref(),
                                 &error,

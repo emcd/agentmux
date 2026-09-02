@@ -33,8 +33,10 @@
 //!   lock that guards it.
 //! - [`admit`] — the reservation, its three refusals, and its rollback.
 //! - [`mailbox`] — the per-target ordered mailbox: the enqueue that fills an
-//!   admitted entry's position, and the three operations a delivery-loop
-//!   executor calls against it: peek, declare, acknowledge.
+//!   admitted entry's position, the three operations a delivery-loop executor
+//!   calls against it (peek, declare, acknowledge), who is entitled to call
+//!   them, and the reap that reclaims the whole thing when a target's
+//!   registration goes away.
 //! - [`authorize`] — the all-or-none batch transition, packing units, evidence.
 //! - [`terminal`] — the single terminal transition, which is also the only quota
 //!   release.
@@ -76,5 +78,13 @@ pub(in crate::relay) use self::authorize::{
 };
 pub(in crate::relay) use self::config::delivery_configuration;
 pub(in crate::relay) use self::ledger::AdmissionTargetKey;
-pub(in crate::relay) use self::mailbox::enqueue;
+// `reap_target` and `enqueue` have live callers; the rest are the ledger side of
+// the pull model, reached today only from the tests that hold the reap to its
+// contract. Scoped to this line rather than to the module for the same reason
+// the `mailbox` allow is scoped to the module: removing it should be one edit at
+// the point the executors arrive.
+#[allow(unused_imports)]
+pub(in crate::relay) use self::mailbox::{
+    GenerationRejection, TargetReap, claim_consumer_generation, enqueue, reap_target,
+};
 pub(in crate::relay) use self::terminal::{TerminalTransition, terminalize};
