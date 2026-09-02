@@ -1,7 +1,7 @@
 # relay-routing-layer Specification
 
 ## Purpose
-The shared resolution and authorization stages that every target-addressed operation (Send, Look, Raww, List) flows through before reaching its operation-specific body. The spec governs suffix-based target classification (every target MUST carry an `@<namespace>` suffix; bare ids are rejected at the resolution stage without consulting bundle configuration) and uniform cross-bundle authorization evaluated in the requester's home namespace (no per-operation cross-bundle logic; the policy schema's per-capability allowed-scope set is the sole authority for cross-bundle reach). Operation bodies SHALL exclude routing and authorization logic — they receive a fully-resolved and authorized `ResolvedRoute`.
+The shared resolution and authorization stages that every target-addressed operation (Send, Look, Raww, List) flows through before reaching its operation-specific body. The spec governs suffix-based target classification (every target MUST carry an `@<namespace>` suffix; bare ids are rejected at the resolution stage without consulting bundle configuration) and uniform cross-bundle authorization evaluated in the requester's home namespace (no per-operation cross-bundle logic; the requester's configured scope, checked against the uniform tier, is the sole authority for cross-bundle reach). Operation bodies SHALL exclude routing and authorization logic — they receive a fully-resolved and authorized `ResolvedRoute`.
 ## Requirements
 ### Requirement: Routing Resolution Stage
 
@@ -79,12 +79,10 @@ resolution stage. The authorization stage SHALL:
   (its capability and addressing mode); it carries no per-operation
   cross-namespace policy.
 
-Whether a capability can ever be configured to reach the cross-namespace (`all`)
-tier is governed solely by the policy schema's per-capability allowed-scope set
-(`parse_policy_controls`). The relay SHALL NOT apply per-operation
-cross-namespace logic in handler or routing code; this data-driven spine —
-uniform tier classification plus the schema allowed-scope set — SHALL be the
-single authority for cross-namespace reach.
+The relay SHALL NOT apply per-operation cross-namespace logic in handler or
+routing code. This data-driven spine — uniform tier classification checked
+against the requester's configured scope — SHALL be the single authority for
+cross-namespace reach.
 
 #### Scenario: Requester authorized in home namespace for cross-bundle Raww
 

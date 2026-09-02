@@ -271,12 +271,6 @@ requester's membership in the peer namespace SHALL NOT be required, and the
 relay SHALL NOT resolve or authorize the requester in a target's (or any other
 borrowed) bundle in place of its home namespace, on any target operation.
 
-Whether a capability can be configured to a cross-bundle (`all`) scope SHALL be
-governed by the policy schema's per-capability allowed-scope set, not by relay
-routing code. A capability whose schema cap is below `all` SHALL therefore be
-unreachable cross-bundle until the policy schema is widened, with no code
-override involved.
-
 #### Scenario: Requester authorized in dispatch bundle, not peer bundle
 
 - **WHEN** a session in bundle A issues a cross-bundle operation targeting
@@ -317,14 +311,6 @@ override involved.
 - **THEN** relay returns `authorization_forbidden`, because the bundle is not the
   principal's home (`GLOBAL`) namespace
 - **AND** the same principal under `all` is permitted
-
-#### Scenario: Capability not configurable to cross-bundle scope fails uniformly
-
-- **WHEN** a requester issues a cross-bundle request for a capability whose
-  policy-schema cap is below `all`
-- **THEN** the request fails the uniform `all` threshold with
-  `authorization_forbidden`
-- **AND** no operation-specific code override is involved
 
 ### Requirement: UI Request-Path Sender Validation
 
