@@ -13,6 +13,18 @@
 //! reap arriving after some other consumer has claimed the target is a reachable
 //! ordering rather than a defensive hypothetical. Naming is what makes that case
 //! a refusal instead of the silent theft of a live consumer's mailbox.
+//!
+//! **The naming does not protect anything yet, and nothing added here may lean
+//! on it until it does.** No worker claims a consumer generation before the
+//! delivery-loop executors arrive, so every target answers `None`, every reap
+//! names `None`, and the check above matches for a late reap exactly as it does
+//! for a timely one. What the window currently costs is nothing, because the
+//! only state the reap takes is the successor's not-yet-used mailbox — recreated
+//! on its first enqueue, from a sequence the reap deliberately leaves behind.
+//! That is a property of what is reaped, not of the check, and it stops holding
+//! the moment something the successor cannot rebuild is reaped alongside it.
+//! Whatever is added here has to survive a reap arriving behind a live
+//! successor on its own terms.
 
 use serde_json::json;
 
