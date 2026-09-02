@@ -331,15 +331,24 @@ def name_universe(home):
     for change_root in sorted((home / "changes").iterdir()):
         if not change_root.is_dir() or change_root.name == ARCHIVE_SEGMENT:
             continue
-        for name in delta_names(change_root):
-            inflight.setdefault(name, []).append(change_root.name)
+        for name, capability in delta_names(change_root).items():
+            inflight.setdefault(name, []).append((change_root.name, capability))
     archive_dir = home / "changes" / ARCHIVE_SEGMENT
     for change_root in sorted(archive_dir.iterdir()) if archive_dir.is_dir() else []:
         if not change_root.is_dir():
             continue
-        for name in delta_names(change_root):
-            archived.setdefault(name, []).append(change_root.name)
+        for name, capability in delta_names(change_root).items():
+            archived.setdefault(name, []).append((change_root.name, capability))
     return live, inflight, archived
+
+
+def sourcing_changes(sources):
+    """Return the change ids from a name-universe source list, in order."""
+    seen = []
+    for change_id, _ in sources:
+        if change_id not in seen:
+            seen.append(change_id)
+    return seen
 
 
 def citation_corpus(root, home):
@@ -389,10 +398,10 @@ def classify_citation(name, owner, live, inflight, archived):
     if name in live:
         return None
     if name in inflight:
-        sources = inflight[name]
+        sources = sourcing_changes(inflight[name])
         return None if owner in sources else ("PENDING", sources)
     if name in archived:
-        return "DANGLING", archived[name]
+        return "DANGLING", sourcing_changes(archived[name])
     return None
 
 
@@ -889,10 +898,13 @@ CITATION_UNIVERSE = (
         "Amended Requirement": "some-capability",
         "Restored Requirement": "some-capability",
     },
-    {"Arriving Requirement": ["some-change"], "Amended Requirement": ["some-change"]},
     {
-        "Departed Requirement": ["2026-01-01-some-archived-change"],
-        "Restored Requirement": ["2026-01-01-some-archived-change"],
+        "Arriving Requirement": [("some-change", "some-capability")],
+        "Amended Requirement": [("some-change", "some-capability")],
+    },
+    {
+        "Departed Requirement": [("2026-01-01-archived-change", "some-capability")],
+        "Restored Requirement": [("2026-01-01-archived-change", "some-capability")],
     },
 )
 
@@ -965,16 +977,16 @@ def check_renames(capability, pairs, live, errors):
     return validated
 
 
-def audit(change_id, quiet):
-    """Audit one change's deltas. Returns (errors, dropped_scenario_count)."""
+def audit(change_id, inflight, quiet):
+    """Audit one change's deltas. Returns (errors, dropped_scenarios, waits)."""
     resolved = resolve_paths(change_id)
     if resolved is None:
-        return [f"no such change: '{change_id}'"], 0
+        return [f"no such change: '{change_id}'"], 0, []
     change_specs, live_specs = resolved
     if not change_specs.is_dir():
-        return [f"{change_id}: no specs/ directory -- nothing to audit"], 0
+        return [f"{change_id}: no specs/ directory -- nothing to audit"], 0, []
 
-    errors, drops = [], 0
+    errors, drops, waits = [], 0, []
     by_capability = read_change(change_specs)
     live_by_capability = {
         capability: read_capability(live_specs, capability)
@@ -997,7 +1009,7 @@ def audit(change_id, quiet):
             f"{len(by_capability)} capabilities in '{change_id}' are already "
             "synced to live -- nothing to audit until the deltas change"
         )
-        return errors, drops
+        return errors, drops, waits
 
     for capability, (delta, pairs) in sorted(by_capability.items()):
         live = live_by_capability[capability]
@@ -1013,10 +1025,25 @@ def audit(change_id, quiet):
                 # RENAMED pair above verifying the FROM name is live instead.
                 if operation == "MODIFIED" and name in validated_renamed_to:
                     continue
-                if name not in live:
-                    errors.append(
-                        f"{capability}: {operation} '{name}' has no live counterpart"
-                    )
+                if name in live:
+                    continue
+                # A target that is missing because another change has not put
+                # it there yet is an ordering constraint, not a defect. Failing
+                # the commit instead is what made this delta unwritable until
+                # its producer synced, while that producer was itself waiting
+                # on this delta -- a deadlock with no exit but bypassing the
+                # hook. Report the dependency and let the commit through.
+                producers = [
+                    (producer, target)
+                    for producer, target in inflight.get(name, [])
+                    if producer != change_id
+                ]
+                if producers:
+                    waits.append((capability, operation, name, producers))
+                    continue
+                errors.append(
+                    f"{capability}: {operation} '{name}' has no live counterpart"
+                )
 
         for name in delta.get("ADDED", {}):
             if name in live:
@@ -1042,9 +1069,16 @@ def audit(change_id, quiet):
                 for scenario in added:
                     print(f"     + added    {scenario}")
 
+    if waits and not quiet:
+        print(f"\n=== {change_id} waits on another change's sync")
+        for capability, operation, name, producers in waits:
+            print(f"\n  {capability}: {operation} '{name}'")
+            for producer, target in producers:
+                print(f"     WAITS ON  {producer}, which puts it in {target}")
+
     print()
     print(f"{len(by_capability)} capabilities audited in '{change_id}'")
-    return errors, drops
+    return errors, drops, waits
 
 
 USAGE = (
@@ -1105,11 +1139,14 @@ def main():
     if not selected:
         return 0
 
-    errors, drops = [], 0
+    _, inflight, _ = name_universe(planning_home())
+
+    errors, drops, waits = [], 0, 0
     for change_id in selected:
-        change_errors, change_drops = audit(change_id, quiet)
+        change_errors, change_drops, change_waits = audit(change_id, inflight, quiet)
         errors.extend(change_errors)
         drops += change_drops
+        waits += len(change_waits)
 
     print()
     if errors:
@@ -1122,6 +1159,12 @@ def main():
             "\nConfirm each DROPPED line describes behavior this change retires.\n"
             "A MODIFIED delta replaces the whole requirement, so anything not\n"
             "carried forward is deleted from the live spec at sync time."
+        )
+    if waits and not quiet:
+        print(
+            f"\n{waits} delta target(s) are not live yet because another change\n"
+            "has not synced. That is an ordering constraint, not a defect, but\n"
+            "it is one somebody has to honor: this change cannot sync first."
         )
     return 1 if errors else 0
 
