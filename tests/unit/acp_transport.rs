@@ -9,34 +9,47 @@
 //! living behind the handle so it survives the startup and respawn windows.
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use std::time::{Duration, Instant};
 
-use agentmux::acp::AcpTransport;
-use agentmux::envelope::{AddressIdentity, PromptBatchSettings};
+use agentmux::acp::{AcpReachability, AcpTransport};
+use agentmux::envelope::PromptBatchSettings;
+use agentmux::protocol::DeliveryDoorbell;
 use agentmux::relay::{LookFreshness, LookSnapshotSource};
 use agentmux::transports::{
-    DeliveryEnvelope, DeliveryMessage, LookMode, LookSnapshotPayload, PackingUnitId,
-    PartitionError, PartitionSink, SendOutcome, SubmissionEvidence, Transport,
+    DeliveryExecutorContext, LookMode, LookSnapshotPayload, Transport, UnreachableSince,
     WorkerReadinessState,
 };
 
-/// A sink for tests that never submit a turn.
+use crate::stub_mailbox::StubMailbox;
+
+/// A mailbox nothing will consume, for tests that never start a transport.
 ///
-/// Every use below drives readiness predicates, look capture, or handover state
-/// and reaches no `session/prompt`, so nothing is ever declared. Refusing rather
-/// than accepting is deliberate: if one of these tests ever did reach a
-/// submission, the turn would produce no effect and the test would notice,
-/// whereas an accepting stub would let it write with a unit the ledger never
-/// issued.
-fn no_declarations_sink() -> Arc<dyn PartitionSink> {
-    struct NoDeclarations;
-    impl PartitionSink for NoDeclarations {
-        fn declare(&self, _member_ids: &[&str]) -> Result<PackingUnitId, PartitionError> {
-            Err(PartitionError::MemberNotBindable)
-        }
-        fn record(&self, _unit: PackingUnitId, _evidence: SubmissionEvidence) {}
+/// Every use below drives readiness transitions or look capture and none calls
+/// `startup`, so no executor exists to peek it. An empty mailbox rather than a
+/// seeded one is deliberate: if one of these tests ever did spawn an executor,
+/// there would be nothing for it to write, where a seeded mailbox would let it
+/// reach a real `session/prompt` against no agent.
+fn delivery_context() -> DeliveryExecutorContext {
+    DeliveryExecutorContext {
+        consumer: Arc::new(StubMailbox::empty()) as Arc<_>,
+        doorbell: DeliveryDoorbell::default(),
+        poll_interval: Duration::from_millis(5),
+        unreachable_dwell: Duration::from_secs(30),
     }
-    Arc::new(NoDeclarations)
+}
+
+/// A transport reporting itself reachable, which is what a driver that has not
+/// abandoned its target hands in.
+fn reachable() -> AcpReachability {
+    AcpReachability::new(
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(UnreachableSince::default()),
+    )
+}
+
+fn test_transport() -> AcpTransport {
+    AcpTransport::new(test_batch_settings(), None, delivery_context(), reachable())
 }
 
 const TEST_MAX_PROMPT_TOKENS: usize = 4096;
@@ -50,7 +63,7 @@ fn test_batch_settings() -> PromptBatchSettings {
 
 #[test]
 fn acp_output_view_prime_waits_then_times_out_while_initializing() {
-    let transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
+    let transport = test_transport();
     let view = transport
         .give_output()
         .expect("ACP transport always publishes a handle");
@@ -96,7 +109,7 @@ fn acp_output_view_prime_waits_then_times_out_while_initializing() {
 
 #[test]
 fn acp_output_view_zero_prime_timeout_returns_immediately() {
-    let transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
+    let transport = test_transport();
     let view = transport.give_output().expect("handle");
 
     let started = Instant::now();
@@ -141,7 +154,7 @@ fn acp_output_view_zero_prime_timeout_returns_immediately() {
 /// current, so the newer cause outlives the older cause's answer by arithmetic.
 #[test]
 fn retiring_a_classified_cause_leaves_a_cause_published_since_it_outstanding() {
-    let transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
+    let transport = test_transport();
     assert_eq!(
         transport.respawn_signal_outstanding(),
         None,
@@ -169,7 +182,7 @@ fn retiring_a_classified_cause_leaves_a_cause_published_since_it_outstanding() {
 /// resurrect a cause that a later retirement already answered.
 #[test]
 fn retirement_never_moves_backwards() {
-    let transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
+    let transport = test_transport();
     transport.signal_respawn();
     let first = transport
         .respawn_signal_outstanding()
@@ -191,146 +204,37 @@ fn retirement_never_moves_backwards() {
     );
 }
 
-fn test_envelope(message_id: &str) -> DeliveryEnvelope {
-    DeliveryEnvelope {
-        message_id: message_id.to_string(),
-        message: DeliveryMessage {
-            body: format!("body {message_id}"),
-            created_at: "1970-01-01T00:00:00Z".to_string(),
-            namespace: "party".to_string(),
-            sender: AddressIdentity {
-                session_name: "alpha".to_string(),
-                display_name: None,
-            },
-            target: AddressIdentity {
-                session_name: "beta".to_string(),
-                display_name: None,
-            },
-            cc: vec![],
-            authenticated_identity: None,
-            on_behalf_of: None,
-        },
-        append_enter: true,
-        choice_decider_sessions: vec![],
-        is_receipt: false,
-    }
-}
-
-/// A Closed write channel means the delivery task has exited, so `mailw` and
-/// `raww` must refuse with `not_submitted` and publish `Unavailable` rather
-/// than linger `Busy` masking a dead executor. The guard's receiver is dropped
-/// at test scope end (no leak); dropping the guard closes the channel.
-#[test]
-fn mailw_and_raww_on_closed_channel_publish_unavailable() {
-    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
-    let guard = transport.install_write_channel_for_testing(false);
-    drop(guard);
-
-    let outcome = Transport::mailw(&mut transport, test_envelope("m1"))
-        .try_recv()
-        .expect("mailw refusal resolves synchronously");
-    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
-    assert_eq!(
-        transport.readiness(),
-        WorkerReadinessState::Unavailable,
-        "closed channel must publish Unavailable, not linger Busy",
-    );
-
-    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
-    let guard = transport.install_write_channel_for_testing(false);
-    drop(guard);
-
-    let outcome = Transport::raww(&mut transport, "hello".to_string(), true)
-        .try_recv()
-        .expect("raww refusal resolves synchronously");
-    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
-    assert_eq!(
-        transport.readiness(),
-        WorkerReadinessState::Unavailable,
-        "closed channel must publish Unavailable, not linger Busy",
-    );
-}
-
-/// A Full write channel means the delivery task is alive but saturated, so the
-/// refusal keeps `Busy` truthful until the live task drains and settles
-/// `Available`. The guard (owning the receiver) is retained for the test's
-/// lifetime so the channel stays open and prefilled.
-#[test]
-fn mailw_and_raww_on_full_channel_stay_busy() {
-    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
-    let _guard = transport.install_write_channel_for_testing(true);
-
-    let outcome = Transport::mailw(&mut transport, test_envelope("m2"))
-        .try_recv()
-        .expect("mailw refusal resolves synchronously");
-    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
-    assert_eq!(
-        transport.readiness(),
-        WorkerReadinessState::Busy,
-        "full channel keeps Busy while the delivery task is alive and saturated",
-    );
-
-    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
-    let _guard = transport.install_write_channel_for_testing(true);
-
-    let outcome = Transport::raww(&mut transport, "hello".to_string(), true)
-        .try_recv()
-        .expect("raww refusal resolves synchronously");
-    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
-    assert_eq!(
-        transport.readiness(),
-        WorkerReadinessState::Busy,
-        "full channel keeps Busy while the delivery task is alive and saturated",
-    );
-}
-
-/// Handover readiness is the narrow predicate: only `Available` qualifies.
-/// This exercises the public `Transport` surface without reaching private
-/// `set_readiness` — the matrix is driven via `install_write_channel_for_testing`,
-/// `mailw` (Busy), `release_runtime` (Recovering), and `shutdown` (Unavailable).
-/// Kept in `tests/unit` per the project rule: `AcpTransport` is `pub` and the
-/// handover predicate is exercised via its public `Transport` impl, so inline
+/// The readiness the relay's worker-state registry mirrors, over the lifecycle
+/// transitions a caller can reach without a live agent.
+///
+/// Whether a turn may be submitted *now* is no longer asked here — it is asked
+/// inside this transport's own delivery executor, against the outstanding turn,
+/// and nothing outside the crate can pose it. What is still public, and still
+/// worth pinning, is the readiness an operator reads: a transport that has
+/// released its runtime is `Recovering` and one that has shut down is
+/// `Unavailable`, and the two must not be collapsed — a respawn monitor acts on
+/// the first and must not act on the second.
+///
+/// Kept in `tests/unit` per the project rule: `AcpTransport` is `pub` and every
+/// transition below is reached through its public surface, so inline
 /// `#[cfg(test)]` would require widening or an escape hatch.
-#[tokio::test]
-async fn handover_readiness_matrix_and_delivery_task_handle_retention_via_public_api() {
-    // Initial is `Initializing` — not ready for handover.
-    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
+#[test]
+fn readiness_transitions_and_delivery_task_handle_retention_via_public_api() {
+    let transport = test_transport();
     assert_eq!(transport.readiness(), WorkerReadinessState::Initializing);
-    assert!(!transport.is_ready_for_handover().await);
 
-    // `Available` is the single handover-ready state. The test seam puts the
-    // transport into `Available` without a live delivery task.
-    let guard = transport.install_write_channel_for_testing(false);
-    assert_eq!(transport.readiness(), WorkerReadinessState::Available);
-    assert!(transport.is_ready_for_handover().await);
-
-    // `Busy` is intentionally NOT handover-ready — accepting another batch
-    // while a turn is in flight would dispatch the wrong message to the same
-    // turn. `mailw` marks `Busy` synchronously on successful enqueue; the
-    // future stays pending until a delivery task would resolve it, but the
-    // readiness transition is immediate and observable here.
-    let _pending = Transport::mailw(&mut transport, test_envelope("m_busy"));
-    assert_eq!(transport.readiness(), WorkerReadinessState::Busy);
-    assert!(!transport.is_ready_for_handover().await);
-    drop(guard);
-
-    // `Recovering` and `Unavailable` are also not ready. `release_runtime`
-    // and `shutdown` are the public transitions that reach them without
-    // private `set_readiness`.
-    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
+    let mut transport = test_transport();
     transport.release_runtime();
     assert_eq!(transport.readiness(), WorkerReadinessState::Recovering);
-    assert!(!transport.is_ready_for_handover().await);
 
-    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
+    let mut transport = test_transport();
     Transport::shutdown(&mut transport);
     assert_eq!(transport.readiness(), WorkerReadinessState::Unavailable);
-    assert!(!transport.is_ready_for_handover().await);
 
     // No delivery task has been spawned yet, so there is no handle for a
     // generation supervisor to take — the field starts empty and a second
     // `take` after the first stays empty.
-    let mut transport = AcpTransport::new(test_batch_settings(), None, no_declarations_sink());
+    let mut transport = test_transport();
     assert!(transport.take_delivery_task_handle().is_none());
     assert!(transport.take_delivery_task_handle().is_none());
 }

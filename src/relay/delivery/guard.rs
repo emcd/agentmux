@@ -19,8 +19,6 @@
 //! rather than being smeared into `submission_unknown` by whichever lifecycle
 //! event happened to fire.
 
-use std::sync::atomic::{AtomicU64, Ordering};
-
 use crate::protocol::mailbox::EntrySequence;
 use crate::transports::SendOutcome;
 // Both are transport-facing: `PartitionSink`'s signature names them, and
@@ -85,11 +83,6 @@ impl SubmissionEvidence {
 /// `submission_unknown` merely because a task panicked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::relay) enum GuardTrigger {
-    /// The collector task carrying this member panicked, taking the member's
-    /// outcome with it.
-    CollectorPanic,
-    /// The transport's outcome channel closed before resolving.
-    ChannelClosed,
     /// The relay is shutting down gracefully.
     GracefulShutdown,
     /// This member's bundle is being torn down while the relay keeps serving
@@ -111,8 +104,6 @@ impl GuardTrigger {
     /// trigger rather than restating the evidence.
     pub(in crate::relay) fn reason(self) -> &'static str {
         match self {
-            Self::CollectorPanic => "delivery collector task panicked before resolving",
-            Self::ChannelClosed => "transport outcome channel closed before resolving",
             Self::GracefulShutdown => "relay shut down before this member resolved",
             Self::BundleStop => "bundle stopped before this member resolved",
             Self::ExecutionBound => {
@@ -173,31 +164,6 @@ impl GuardKey {
     }
 
     pub(in crate::relay) fn sequence(self) -> EntrySequence {
-        self.0
-    }
-}
-
-/// The unit of authorization under the push model: authorizing a batch
-/// authorizes every member in it atomically.
-///
-/// No longer part of any member's identity — a member is named by its mailbox
-/// position — and retained only because the batch inscription still reports which
-/// members the relay committed to at one instant. It is removed together with the
-/// authorization step it names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub(in crate::relay) struct BatchId(u64);
-
-static NEXT_BATCH_ID: AtomicU64 = AtomicU64::new(1);
-
-impl BatchId {
-    /// Mints the next batch id. Process-local and monotonic; identities never
-    /// outlive the relay process, because crash recovery is out of scope and the
-    /// ledger is in-memory.
-    pub(in crate::relay) fn mint() -> Self {
-        Self(NEXT_BATCH_ID.fetch_add(1, Ordering::Relaxed))
-    }
-
-    pub(in crate::relay) fn value(self) -> u64 {
         self.0
     }
 }

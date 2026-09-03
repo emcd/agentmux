@@ -1,34 +1,23 @@
-//! Unit coverage for Tmux handover observation and pane rendering.
+//! Unit coverage for Tmux health observation, coalescing, and pane rendering.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::time::Duration;
 
 use agentmux::envelope::PromptBatchSettings;
+use agentmux::protocol::DeliveryDoorbell;
+use agentmux::protocol::mailbox::{EntrySequence, MailboxEntry, MailboxPayload};
 use agentmux::tmux::{TmuxTransport, coalescing_runs, render_paste_text};
-use agentmux::transports::{
-    DeliveryEnvelope, DeliveryMessage, PackingUnitId, PartitionError, PartitionSink, SendOutcome,
-    SubmissionEvidence, Transport,
-};
+use agentmux::transports::{DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage, Transport};
 
-/// A sink that accepts every declaration and remembers what it was told.
-///
-/// Declaring is what a real relay does for members it has admitted, so accepting
-/// keeps the transport on the path it takes in production; the record is what
-/// lets a test say which members the transport claimed shared a write.
-#[derive(Default)]
-struct RecordingSink {
-    declared: Mutex<Vec<Vec<String>>>,
-}
+use crate::stub_mailbox::StubMailbox;
 
-impl PartitionSink for RecordingSink {
-    fn declare(&self, member_ids: &[&str]) -> Result<PackingUnitId, PartitionError> {
-        self.declared
-            .lock()
-            .expect("recording sink mutex")
-            .push(member_ids.iter().map(|id| (*id).to_string()).collect());
-        Ok(PackingUnitId::mint())
+fn delivery_context(mailbox: &Arc<StubMailbox>) -> DeliveryExecutorContext {
+    DeliveryExecutorContext {
+        consumer: Arc::clone(mailbox) as Arc<_>,
+        doorbell: DeliveryDoorbell::default(),
+        poll_interval: Duration::from_millis(5),
+        unreachable_dwell: Duration::from_secs(30),
     }
-
-    fn record(&self, _unit: PackingUnitId, _evidence: SubmissionEvidence) {}
 }
 
 fn envelope(is_receipt: bool) -> DeliveryEnvelope {
@@ -56,15 +45,15 @@ fn envelope(is_receipt: bool) -> DeliveryEnvelope {
     }
 }
 
-#[tokio::test]
-async fn tmux_handover_is_not_accepted_before_startup() {
+#[test]
+fn tmux_is_unreachable_before_startup() {
+    let mailbox = Arc::new(StubMailbox::empty());
     let transport = TmuxTransport::new(
         PromptBatchSettings::default(),
         None,
-        Arc::new(RecordingSink::default()),
+        delivery_context(&mailbox),
     );
 
-    assert!(!transport.is_ready_for_handover().await);
     assert!(matches!(
         transport.health(),
         agentmux::transports::TransportHealth::Unreachable { .. }
@@ -83,40 +72,47 @@ fn tmux_transport_render_paste_text_emits_receipt_marker_for_receipt_only() {
     assert!(!peer.contains(MARKER));
 }
 
+/// A transport that was never started consumes nothing from its target's
+/// mailbox.
+///
+/// Under the pull model this is what "not started" *means*: the executor is
+/// spawned by `startup` and nothing else, so a transport that never started has
+/// nobody to peek on its behalf. The claim has teeth because the executor could
+/// plausibly have been spawned at construction — the context is available there,
+/// and it would work — and a transport that peeked before its runtime existed
+/// would declare units it could not write, binding members the guard would then
+/// have to resolve `submission_unknown` rather than proving they were never
+/// submitted.
+///
+/// Asserted over peeks rather than declarations. A peek is the first thing an
+/// executor does, so an executor that ran and then declined to declare is still
+/// caught, where a declaration-only assertion would pass.
 #[test]
-fn tmux_mailw_before_startup_resolves_immediately() {
-    let sink = Arc::new(RecordingSink::default());
-    let mut transport = TmuxTransport::new(
+fn tmux_consumes_nothing_before_startup() {
+    let mailbox = Arc::new(StubMailbox::with_entries(vec![MailboxEntry {
+        sequence: EntrySequence::first(),
+        message_id: "msg-peer".to_string(),
+        canonical_bytes: 9,
+        payload: MailboxPayload::Mail(Arc::new(envelope(false))),
+    }]));
+    let _transport = TmuxTransport::new(
         PromptBatchSettings::default(),
         None,
-        Arc::clone(&sink) as Arc<dyn PartitionSink>,
+        delivery_context(&mailbox),
     );
 
-    let outcome = Transport::mailw(&mut transport, envelope(false))
-        .blocking_recv()
-        .expect("stopped delivery thread must resolve mailw");
-    // `not_submitted`, not `failed`: the refusal happens before the delivery
-    // thread exists, so no packing unit was declared and nothing was written.
-    // That is provable non-delivery, and the sender is entitled to be told the
-    // stronger of the two true answers. The reason code still names which refusal
-    // it was, because the guard can establish that nothing was written but not
-    // why the transport declined.
-    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
-    assert_eq!(
-        outcome.reason_code.as_deref(),
-        Some("transport_not_started")
-    );
-    // The refusal happens before any delivery thread exists, so no packing unit
-    // was declared for this member. That is the difference between the guard
-    // being able to prove `not_submitted` for it and having to fall back to
-    // `submission_unknown`: binding, not the manner of the refusal, is what the
-    // evidence order reads.
+    // Long enough for an executor spawned at construction to have completed
+    // several poll intervals, so an empty record is evidence rather than a race
+    // the assertion happened to win.
+    std::thread::sleep(Duration::from_millis(50));
     assert!(
-        sink.declared
-            .lock()
-            .expect("recording sink mutex")
-            .is_empty(),
-        "a write refused before startup must leave its member unbound",
+        mailbox.peeks().is_empty(),
+        "a transport with no executor must consume nothing: {:?}",
+        mailbox.peeks(),
+    );
+    assert!(
+        !mailbox.is_drained(),
+        "the seeded entry must still be waiting for a started transport",
     );
 }
 

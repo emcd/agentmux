@@ -11,32 +11,21 @@ use std::time::{Duration, Instant};
 
 use agentmux::configuration::{BundleMember, TargetConfiguration, TmuxTargetConfiguration};
 use agentmux::envelope::{AddressIdentity, PromptBatchSettings};
-use agentmux::relay::{FenceResolution, FenceVerdict, acknowledge_fence};
+use agentmux::protocol::DeliveryDoorbell;
+use agentmux::protocol::mailbox::{EntrySequence, MailboxEntry, MailboxPayload};
 use agentmux::runtime::paths::tmux_socket_path_for_runtime_directory;
 use agentmux::tmux::TmuxTransport;
 use agentmux::transports::{
-    ChoiceMade, DeliveryEnvelope, DeliveryMessage, PackingUnitId, PartitionError, PartitionSink,
-    StartupContext, SubmissionEvidence, Transport,
+    ChoiceMade, DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage, GenerationFence,
+    StartupContext, Transport,
 };
 use tempfile::TempDir;
 
+use crate::support::mailbox::StubMailbox;
 use crate::support::relay_delivery::{
     TmuxServerGuard, capture_pane, spawn_session, tmux_available, tmux_command,
     wait_for_pane_contains,
 };
-
-/// Accepts every declaration, which is what a real relay does for members it has
-/// admitted. The transport's partition reporting is covered elsewhere; here it
-/// only has to stay on its production path.
-struct AcceptingSink;
-
-impl PartitionSink for AcceptingSink {
-    fn declare(&self, _member_ids: &[&str]) -> Result<PackingUnitId, PartitionError> {
-        Ok(PackingUnitId::mint())
-    }
-
-    fn record(&self, _unit: PackingUnitId, _evidence: SubmissionEvidence) {}
-}
 
 fn tmux_member(session: &str) -> BundleMember {
     BundleMember {
@@ -78,6 +67,17 @@ fn envelope(body: &str) -> DeliveryEnvelope {
     }
 }
 
+/// One mail entry at the head of the target's mailbox, which is what the
+/// executor peeks and writes into the pane.
+fn mailbox_entry(body: &str) -> MailboxEntry {
+    MailboxEntry {
+        sequence: EntrySequence::first(),
+        message_id: "m-fence".to_string(),
+        canonical_bytes: body.len() as u64,
+        payload: MailboxPayload::Mail(Arc::new(envelope(body))),
+    }
+}
+
 /// Forced termination reaches this generation's tmux clients and stops there.
 ///
 /// The tmux server is not owned by the generation being fenced — it holds the
@@ -92,8 +92,19 @@ fn envelope(body: &str) -> DeliveryEnvelope {
 /// before the fence begins, which puts actual tmux clients behind both its
 /// threads, and a bystander session shares the server without being any part of
 /// it.
+///
+/// The destructive step is invoked directly rather than reached by letting
+/// `acknowledge_fence` choose it, and that is not a shortcut — it is the only way
+/// this claim can be asserted non-vacuously. A tmux generation now fences
+/// *cooperatively* in the ordinary case: its delivery executor checks the stop
+/// flag every poll interval and returns well inside the fence's first window, so
+/// a test that waited for a `Forced` resolution would be asserting against a
+/// generation that had already ceased, where nothing surviving proves anything.
+/// The protocol's windows and verdicts are covered against a controllable
+/// generation in `unit/delivery_fence.rs`; what is wanted here is the real
+/// transport's response to the step, with its threads still live when it lands.
 #[test]
-fn fencing_a_tmux_generation_leaves_the_server_and_its_sessions_running() {
+fn terminating_a_tmux_generation_leaves_the_server_and_its_sessions_running() {
     if !tmux_available() {
         eprintln!("skipping tmux generation-fence test because tmux is unavailable");
         return;
@@ -107,10 +118,18 @@ fn fencing_a_tmux_generation_leaves_the_server_and_its_sessions_running() {
     spawn_session(&socket, "bystander", "exec sleep 45");
     let _server = TmuxServerGuard::new(socket.clone());
 
+    let mailbox = Arc::new(StubMailbox::with_entries(vec![mailbox_entry(
+        "fence-marker",
+    )]));
     let mut transport = TmuxTransport::new(
         PromptBatchSettings::default(),
         None,
-        Arc::new(AcceptingSink) as Arc<dyn PartitionSink>,
+        DeliveryExecutorContext {
+            consumer: Arc::clone(&mailbox) as Arc<_>,
+            doorbell: DeliveryDoorbell::default(),
+            poll_interval: Duration::from_millis(25),
+            unreachable_dwell: Duration::from_secs(30),
+        },
     );
     transport
         .startup(StartupContext {
@@ -126,36 +145,38 @@ fn fencing_a_tmux_generation_leaves_the_server_and_its_sessions_running() {
         .expect("tmux transport startup");
 
     // Write first, so the generation being fenced is one that has actually driven
-    // tmux rather than one that only ever held idle threads.
-    Transport::mailw(&mut transport, envelope("fence-marker"))
-        .blocking_recv()
-        .expect("mailw outcome future resolves");
+    // tmux rather than one that only ever held idle threads. Nothing hands the
+    // write to the transport: its executor peeks the seeded entry and writes it,
+    // and the pane is where that becomes observable.
     wait_for_pane_contains(
         &socket,
         "alpha",
         "fence-marker",
         Duration::from_millis(5_000),
     );
+    // Polled rather than read once. The paste reaches the pane inside the
+    // executor's `write`, and the acknowledgment follows it — so a read taken
+    // the moment the pane shows the text can legitimately precede the ack.
+    let started = Instant::now();
+    while !mailbox.is_drained() {
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the executor never acknowledged a write the pane shows: {:?}",
+            mailbox.acked(),
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
 
-    let outcome = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-        .expect("build multi-thread runtime")
-        .block_on(acknowledge_fence(
-            &mut transport,
-            Duration::from_millis(200),
-        ));
-
-    assert_eq!(outcome.verdict, FenceVerdict::Positive);
-    // Not incidental to the test — it is its precondition. The delivery thread
-    // parks on its channel, where the cooperative flag cannot reach it, so only
-    // the destructive step returns it. A `Cooperative` resolution here would mean
-    // that step never ran, and every assertion below would be vacuous.
-    assert_eq!(
-        outcome.resolution,
-        FenceResolution::Forced,
-        "the destructive step must have run for the assertions below to mean anything",
+    // Both threads are live at this point — the executor idles on its doorbell
+    // between polls and the observer keeps inspecting the pane — which is the
+    // precondition for the step below to have anything to destroy.
+    assert!(
+        !GenerationFence::generation_ceased(&transport),
+        "the generation's threads must still be running when the step lands",
     );
+
+    GenerationFence::fence_generation(&mut transport);
+    GenerationFence::terminate_generation(&mut transport);
 
     let sessions = tmux_command(&socket, &["list-sessions", "-F", "#{session_name}"]);
     assert!(
@@ -181,14 +202,15 @@ fn fencing_a_tmux_generation_leaves_the_server_and_its_sessions_running() {
         "the target pane must be the same one the generation wrote to",
     );
 
-    // The fence's own verdict is the transport's; re-reading it after the tmux
-    // assertions guards against a cessation observation that only holds while the
-    // server is being torn down.
+    // Cessation is what a fence's second window observes, and it must be
+    // reachable after the step rather than only during it. Read after the tmux
+    // assertions deliberately: a generation that ceased only because its server
+    // was being torn down would satisfy an observation taken earlier.
     let started = Instant::now();
-    while !agentmux::transports::GenerationFence::generation_ceased(&transport) {
+    while !GenerationFence::generation_ceased(&transport) {
         assert!(
             started.elapsed() < Duration::from_secs(5),
-            "a positively fenced generation must stay ceased",
+            "a terminated generation must cease",
         );
         std::thread::sleep(Duration::from_millis(10));
     }

@@ -128,74 +128,28 @@ impl OutputView for PtyOutputView {
     }
 }
 
-/// Pty prompt-readiness observer used by the handover predicate.
-pub struct PtyPromptProbe {
-    shared: PtyShared,
-}
-
-impl PtyPromptProbe {
-    #[must_use]
-    pub fn new(shared: PtyShared) -> Self {
-        Self { shared }
-    }
-
-    /// Async handshake for handover readiness. Uses `async send`/`await` +
-    /// `recv`/`await` so the calling tokio worker thread is never blocked.
-    pub async fn observe(&mut self) -> Result<bool, String> {
-        let (tx, rx) = oneshot::channel();
-        self.shared
-            .snapshot_tx
-            .send(SnapshotRequest {
-                inspect_lines: Some(usize::from(self.shared.config.prompt_inspect_lines)),
-                tx,
-            })
-            .await
-            .map_err(|_request| "pty snapshot channel closed; transport not running".to_string())?;
-        let response = rx
-            .await
-            .map_err(|_canceled| "pty snapshot response canceled before delivery".to_string())?;
-        let regex_matches = self
-            .shared
-            .config
-            .prompt_regex
-            .as_ref()
-            .is_none_or(|regex| regex.is_match(&response.tail));
-        let cursor_ready = self
-            .shared
-            .config
-            .prompt_idle_column
-            .is_none_or(|expected| response.cursor_x == expected);
-        Ok(regex_matches && cursor_ready)
-    }
-
-    /// Synchronous fallback for callers outside a tokio runtime (unit tests).
-    /// Uses blocking channel ops which are safe when no worker thread is being
-    /// blocked. Production handover path uses the async `observe` above.
-    pub fn observe_blocking(&mut self) -> Result<bool, String> {
-        let (tx, rx) = oneshot::channel();
-        self.shared
-            .snapshot_tx
-            .blocking_send(SnapshotRequest {
-                inspect_lines: Some(usize::from(self.shared.config.prompt_inspect_lines)),
-                tx,
-            })
-            .map_err(|_request| "pty snapshot channel closed; transport not running".to_string())?;
-        let response = rx
-            .blocking_recv()
-            .map_err(|_canceled| "pty snapshot response canceled before delivery".to_string())?;
-        let regex_matches = self
-            .shared
-            .config
-            .prompt_regex
-            .as_ref()
-            .is_none_or(|regex| regex.is_match(&response.tail));
-        let cursor_ready = self
-            .shared
-            .config
-            .prompt_idle_column
-            .is_none_or(|expected| response.cursor_x == expected);
-        Ok(regex_matches && cursor_ready)
-    }
+/// Whether a rendered terminal snapshot satisfies this target's prompt-readiness
+/// template.
+///
+/// Both halves are permissive when unconfigured, and deliberately so: a target
+/// with no template configured is one the operator has said nothing about, and
+/// withholding delivery from it would turn silence into a refusal.
+///
+/// Kept here rather than inside the delivery writer because it is the predicate,
+/// not the observation. The writer reads the terminal it owns directly; a
+/// cross-thread caller would have to go through the snapshot channel. Separating
+/// the two is what lets the predicate be exercised against a snapshot the test
+/// wrote itself, without a live terminal behind it.
+#[must_use]
+pub fn prompt_satisfied(config: &PtyConfigSnapshot, snapshot: &SnapshotResponse) -> bool {
+    let regex_matches = config
+        .prompt_regex
+        .as_ref()
+        .is_none_or(|regex| regex.is_match(&snapshot.tail));
+    let cursor_ready = config
+        .prompt_idle_column
+        .is_none_or(|expected| snapshot.cursor_x == expected);
+    regex_matches && cursor_ready
 }
 
 impl PtyConfigSnapshot {

@@ -103,7 +103,7 @@ impl MailboxConsumer for LedgerMailboxConsumer {
     }
 
     fn resolve_unreachable(&self) {
-        let resolved = super::admission::resolve_unreachable(&self.binding);
+        let resolved = super::admission::resolve_target_entries(&self.binding);
         Self::report(
             &resolved,
             Some(UNREACHABLE_REASON_CODE),

@@ -2,10 +2,10 @@
 //!
 //! `AcpTransport` owns the per-target `PersistentAcpWorkerRuntime` (moved here
 //! from the relay delivery worker, which previously threaded it through
-//! `spawn_blocking`). [`Transport::mailw`] hands a structured delivery message
-//! to the internal delivery task, which renders each message into pane-envelope
-//! text, combines a contiguous group into one ACP turn under the token budget,
-//! and resolves the future for each contributing task.
+//! `spawn_blocking`). Its delivery-loop executor peeks its target's mailbox,
+//! renders each entry into pane-envelope text, combines a contiguous run into
+//! one ACP turn under the token budget, declares that run, and acknowledges what
+//! the turn's framed write proved for each member of it.
 //!
 //! The framed `session/prompt` write is the delivery boundary: every member of
 //! the group resolves `Delivered` immediately when the write succeeds, before
@@ -23,18 +23,18 @@
 //!
 //! ## Readiness
 //!
-//! The transport owns an [`WorkerReadinessState`] signal for
-//! [`is_ready_for_handover`] and the [`OutputView`] prime-wait, because it
+//! The transport owns a [`WorkerReadinessState`] signal for its delivery
+//! executor's own readiness check and the [`OutputView`] prime-wait, because it
 //! cannot call relay's `set_worker_readiness`. The `AcpWorkerDriver` mirrors
 //! transitions into the global worker-state registry (which external observers
 //! and respawn/startup gating still read).
 //!
-//! Handover readiness is the narrow question: only `Available` qualifies, since
-//! a `Busy` worker is mid-turn and cannot take another. The wider
-//! "runtime exists" reading that `Busy` also satisfies is what the mirrored
-//! registry state carries for those other observers.
-//!
-//! [`is_ready_for_handover`]: Transport::is_ready_for_handover
+//! **The relay reads no readiness level from this transport.** Whether a turn may
+//! be submitted now is asked inside the executor, where it is the narrow
+//! question: only `Available` qualifies, since a `Busy` worker is mid-turn and
+//! cannot take another. The wider "runtime exists" reading that `Busy` also
+//! satisfies is what the mirrored registry state carries for those other
+//! observers, and it is the only one that leaves this crate.
 
 mod api;
 mod delivery;
@@ -43,5 +43,4 @@ mod state;
 mod turn;
 
 pub use api::AcpTransport;
-#[doc(hidden)]
-pub use api::WriteChannelGuard;
+pub use delivery::AcpReachability;

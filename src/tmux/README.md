@@ -22,8 +22,8 @@ introduced.
   driven by relay bundle reconcile/startup.
 - `pane` — pane operations: resolve active pane target, inject literal
   text into the pane, capture pane tail lines.
-- `prompt_probe` — the pane-readiness probe used by
-  [`TmuxTransport::is_ready_for_handover`] and its focused tests. Implements
+- `prompt_probe` — the pane-readiness probe the transport's observer thread
+  refreshes and its delivery-loop executor reads before each write. Implements
   [`PanePromptProbe`].
 
   OpenCode readiness has a second, private compose-region gate. It recognizes
@@ -37,14 +37,16 @@ introduced.
    the absence of change in rendered content cannot distinguish a hung
    coder from a permission dialog awaiting an operator, a compose box
    holding typed input, or a coder working without terminal output. The
-   delivery task therefore pastes immediately after handover; the relay
-   reads `is_ready_for_handover` as an advisory pane-readiness level before
-    authorization. The delivery task performs no readiness wait after
-    authorization.
+   executor therefore reads the cached pane observation as an advisory
+   readiness level and, when it is ready, declares and pastes immediately.
+   It performs no readiness wait after declaring.
 - `transport` — [`TmuxTransport`] (the per-target `Transport`
-  implementation with its internal delivery task + write channel +
-  ordering) plus [`render_paste_text`] (the per-envelope pane-text
+  implementation, its observer thread, and its one serial delivery-loop
+  executor) plus [`render_paste_text`] (the per-envelope pane-text
   rendering used by `paste_group`).
+- `transport::executor` — `TmuxDeliveryWriter`, this transport's half of the
+  shared delivery loop: what it peeks, how it packs a peeked run into one
+  paste, and what a paste proves.
 
 ## Terminal-outcome receipt rendering
 
@@ -66,20 +68,20 @@ pane bytes. The marker line and the rendered pane envelope are
 contiguous in the pasted prompt.
 
 **A receipt is never pasted alongside peer traffic.** `coalescing_runs`
-splits a flush group at receipt boundaries *before* token budgeting, so
+splits a peeked run at receipt boundaries *before* token budgeting, so
 every receipt is injected alone and peer envelopes coalesce only within
-peer-only runs. That separation is a correctness barrier rather than
-presentation: a receipt bypasses relay admission and so belongs to no
-packing unit, while its peer groupmates belong to one. A prompt carrying
-both would tie them to a single fate that only the peers have — when the
-peers' declaration is refused the prompt must produce no effect, and the
-receipt, which needed no declaration, would be dropped with it. It could
-not be rescued afterwards either, because a budget group's combined
-prompt is one string with no receipt-only text left to write.
+peer-only runs. That separation is presentation rather than a custody
+rule: a receipt is declared and acknowledged exactly like its peer
+neighbours — what it lacks is a quota reservation, not a mailbox position
+— so a prompt carrying both would not tie them to different fates. What it
+would do is render as one message to the agent reading it, with the marker
+line that identifies a receipt stranded in the middle of somebody else's
+text.
 
 ACP reaches the same rule from the other direction (receipts are its
-flush barrier), and Pty writes one member per primitive, so neither needs
-this. See `src/relay/delivery-architecture.md`, "Members no unit covers".
+flush barrier), and Pty writes one entry per primitive, so neither needs
+this. See `src/relay/delivery-architecture.md`, "Members no reservation
+covers".
 
 The `render_paste_text` helper is the per-envelope rendering seam
 and is `pub` so the rendering behavior can be tested directly

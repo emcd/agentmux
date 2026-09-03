@@ -1,9 +1,10 @@
 //! Unit coverage for the first-class UI transport.
 //!
-//! Exercises `UiTransport`'s `mailw` broadcast (via the injected services
-//! closures), the bounded reconnect timeout, and the unsupported raw-write /
-//! non-lookable capability surface — all through the public `Transport` trait,
-//! so the test never reaches into the relay or transport internals.
+//! Exercises the broadcast its delivery executor performs (via the injected
+//! services closures), what an absent subscriber proves, and the unsupported
+//! raw-write / non-lookable capability surface. Nothing is handed to the
+//! transport: entries are seeded into a stub mailbox and the transport's own
+//! executor peeks them, which is the shape production has.
 
 use std::sync::{
     Arc, Mutex,
@@ -12,10 +13,78 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use agentmux::envelope::AddressIdentity;
+use agentmux::protocol::DeliveryDoorbell;
+use agentmux::protocol::mailbox::{EntrySequence, MailboxEntry, MailboxPayload};
 use agentmux::transports::{
-    DeliveryEnvelope, DeliveryMessage, GenerationFence, SendOutcome, Transport, UiBroadcastStatus,
-    UiIncomingMessage, UiTransport, UiTransportServices,
+    DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage, GenerationFence, StartupContext,
+    SubmissionEvidence, Transport, UiBroadcastStatus, UiIncomingMessage, UiTransport,
+    UiTransportServices,
 };
+
+use crate::stub_mailbox::StubMailbox;
+
+/// A transport whose executor consumes `mailbox`, started and ready to run.
+///
+/// `startup` is where the executor is spawned, so every test here goes through
+/// it: a transport that was never started has no executor, and asserting against
+/// one would assert against a mailbox nothing was reading.
+fn started_transport(services: UiTransportServices, mailbox: &Arc<StubMailbox>) -> UiTransport {
+    let mut transport = UiTransport::new(
+        services,
+        DeliveryExecutorContext {
+            consumer: Arc::clone(mailbox) as Arc<_>,
+            doorbell: DeliveryDoorbell::default(),
+            poll_interval: Duration::from_millis(5),
+            unreachable_dwell: Duration::from_secs(30),
+        },
+    );
+    transport
+        .startup(StartupContext {
+            namespace: "party".to_string(),
+            runtime_directory: std::path::PathBuf::from("/nonexistent/ui"),
+            target_member: agentmux::configuration::BundleMember {
+                id: "bob".to_string(),
+                name: None,
+                working_directory: None,
+                target: agentmux::configuration::TargetConfiguration::Ui,
+                coder_session_id: None,
+                policy_id: None,
+                environment: Vec::new(),
+            },
+            choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
+                decided_by: String::new(),
+                reason_code: "not_applicable".to_string(),
+                reason: None,
+            }),
+        })
+        .expect("ui transport startup");
+    transport
+}
+
+/// One mail entry at the head of a UI target's mailbox.
+fn mail_entry(envelope: DeliveryEnvelope) -> MailboxEntry {
+    MailboxEntry {
+        sequence: EntrySequence::first(),
+        message_id: envelope.message_id.clone(),
+        canonical_bytes: envelope.message.body.len() as u64,
+        payload: MailboxPayload::Mail(Arc::new(envelope)),
+    }
+}
+
+/// Spins until the mailbox has an acknowledgment to report.
+fn wait_for_ack(mailbox: &StubMailbox) -> agentmux::transports::SubmissionEvidence {
+    let started = Instant::now();
+    loop {
+        if let Some(acked) = mailbox.acked().first() {
+            return acked.evidence;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the executor acknowledged nothing within the bound",
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
 
 fn ui_envelope() -> DeliveryEnvelope {
     DeliveryEnvelope {
@@ -57,16 +126,8 @@ fn wait_for(flag: &AtomicBool, description: &str) {
     }
 }
 
-fn block_on<F: std::future::Future>(future: F) -> F::Output {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("build current-thread runtime")
-        .block_on(future)
-}
-
 #[test]
-fn ui_mailw_broadcasts_incoming_and_resolves_delivered() {
+fn ui_executor_broadcasts_incoming_and_acknowledges_submitted() {
     let captured: Arc<Mutex<Option<UiIncomingMessage>>> = Arc::new(Mutex::new(None));
     let phases: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -87,11 +148,12 @@ fn ui_mailw_broadcasts_incoming_and_resolves_delivered() {
         },
     };
 
-    let mut transport = UiTransport::new(services);
-    let outcome = block_on(transport.mailw(ui_envelope())).expect("mailw outcome future resolves");
+    let mailbox = Arc::new(StubMailbox::with_entries(vec![mail_entry(ui_envelope())]));
+    let mut transport = started_transport(services, &mailbox);
 
-    assert_eq!(outcome.outcome, SendOutcome::Delivered);
-    assert_eq!(outcome.message_id, "m-1");
+    assert_eq!(wait_for_ack(&mailbox), SubmissionEvidence::Submitted);
+    assert_eq!(mailbox.acked()[0].message_id, "m-1");
+    transport.fence_generation();
 
     let incoming = captured.lock().unwrap().clone().expect("incoming captured");
     assert_eq!(incoming.message_id, "m-1");
@@ -108,7 +170,7 @@ fn ui_mailw_broadcasts_incoming_and_resolves_delivered() {
     assert_eq!(phases, vec!["routed".to_string(), "delivered".to_string()]);
 }
 
-/// A delivery with no UI listening resolves `not_submitted` at once, from one
+/// A delivery with no UI listening acknowledges `NotSubmitted` at once, from one
 /// attempt rather than a wait.
 ///
 /// This replaces a bounded reconnect poll. The wait was an absence timer with a
@@ -117,10 +179,10 @@ fn ui_mailw_broadcasts_incoming_and_resolves_delivered() {
 /// little while nothing replays to a reconnecting UI, and it cost every send to
 /// an unwatched target thirty seconds before the sender heard anything.
 ///
-/// `not_submitted` rather than a failure spelling: no subscriber received the
-/// broadcast, which the transport observed rather than inferred.
+/// `NotSubmitted` rather than an unknown: no subscriber received the broadcast,
+/// which the transport observed rather than inferred.
 #[test]
-fn a_broadcast_with_no_endpoint_resolves_not_submitted() {
+fn a_broadcast_with_no_endpoint_acknowledges_not_submitted() {
     let phases: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let services = UiTransportServices {
         broadcast_incoming: Arc::new(|_incoming: &UiIncomingMessage| UiBroadcastStatus::NoUi),
@@ -133,14 +195,16 @@ fn a_broadcast_with_no_endpoint_resolves_not_submitted() {
         },
     };
 
-    let mut transport = UiTransport::new(services);
-    let outcome = block_on(transport.mailw(ui_envelope())).expect("mailw outcome future resolves");
+    let mailbox = Arc::new(StubMailbox::with_entries(vec![mail_entry(ui_envelope())]));
+    let mut transport = started_transport(services, &mailbox);
 
-    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
-    assert_eq!(outcome.reason_code.as_deref(), Some("ui_no_endpoint"));
+    assert_eq!(wait_for_ack(&mailbox), SubmissionEvidence::NotSubmitted);
+    transport.fence_generation();
+
     // One attempt, not a poll. A `routed` phase that reported no endpoint used
     // to send the executor back around a sleep loop; the absence of a second
-    // one is what shows the wait is gone rather than merely shortened.
+    // one is what shows the wait is gone rather than merely shortened. Read
+    // after the fence, so the executor cannot add a phase between the two.
     assert_eq!(
         phases.lock().unwrap().clone(),
         vec!["routed".to_string()],
@@ -164,6 +228,13 @@ fn a_broadcast_with_no_endpoint_resolves_not_submitted() {
 /// request cannot reach it. Only the revocation check immediately before the
 /// broadcast can stop it.
 ///
+/// Both halves are driven, and that contrast is what carries the test. The
+/// acknowledgment cannot say *which* check stopped the write — it reports
+/// evidence and nothing else — so a run that only fenced is what shows the
+/// cooperative flag genuinely cannot reach an executor already past it. Without
+/// it, a `NotSubmitted` produced by the fenced rung would pass while proving
+/// nothing about the destructive step.
+///
 /// The steps are driven directly rather than through `acknowledge_fence`, because
 /// the protocol's windows and verdicts are covered against a controllable
 /// generation in `unit/delivery_fence.rs`; what is wanted here is the real
@@ -172,116 +243,168 @@ fn a_broadcast_with_no_endpoint_resolves_not_submitted() {
 /// Not asserted: the absence of a child process, because no UI code path spawns
 /// one and there is nothing to observe the absence of. The testable content of
 /// "no owned child" is that the destructive step still bites, which is what the
-/// broadcast count and the outcome pin.
+/// broadcast count and the evidence pin.
 #[test]
 fn a_terminated_ui_generation_stops_emitting_without_a_child_to_signal() {
-    let probe_entered = Arc::new(AtomicBool::new(false));
-    let released = Arc::new(AtomicBool::new(false));
-    let broadcasts = Arc::new(AtomicUsize::new(0));
+    /// Runs one delivery parked in the `routed` phase, applies `steps` while it
+    /// is parked, and reports what the write proved and how many broadcasts it
+    /// emitted.
+    fn parked_delivery(terminate: bool) -> (SubmissionEvidence, usize, bool) {
+        let probe_entered = Arc::new(AtomicBool::new(false));
+        let released = Arc::new(AtomicBool::new(false));
+        let broadcasts = Arc::new(AtomicUsize::new(0));
 
+        let services = UiTransportServices {
+            broadcast_incoming: {
+                let broadcasts = broadcasts.clone();
+                Arc::new(move |_incoming: &UiIncomingMessage| {
+                    broadcasts.fetch_add(1, Ordering::SeqCst);
+                    UiBroadcastStatus::Delivered
+                })
+            },
+            emit_phase: {
+                let probe_entered = probe_entered.clone();
+                let released = released.clone();
+                Arc::new(move |phase| {
+                    // Park the executor inside the probe, where neither fence
+                    // flag has been read yet on this iteration.
+                    if phase.phase == "routed" {
+                        probe_entered.store(true, Ordering::SeqCst);
+                        while !released.load(Ordering::SeqCst) {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                    }
+                    UiBroadcastStatus::Delivered
+                })
+            },
+        };
+
+        let mailbox = Arc::new(StubMailbox::with_entries(vec![mail_entry(ui_envelope())]));
+        let mut transport = started_transport(services, &mailbox);
+        wait_for(
+            &probe_entered,
+            "the delivery executor to enter the routed probe",
+        );
+
+        // An executor of this generation is running, so it has not ceased.
+        // Reading cessation as true here is the dangerous answer: it would let a
+        // replacement generation start alongside a live writer.
+        let ceased_while_running = transport.generation_ceased();
+
+        transport.fence_generation();
+        if terminate {
+            transport.terminate_generation();
+        }
+        released.store(true, Ordering::SeqCst);
+
+        let evidence = wait_for_ack(&mailbox);
+
+        // The observation the fence's second window would make. Polled rather
+        // than read once: the executor acknowledges before it returns, so the
+        // handle can still be live for an instant after the evidence lands.
+        let started = Instant::now();
+        while !transport.generation_ceased() {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "a fenced generation whose executor has acknowledged must cease",
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        (
+            evidence,
+            broadcasts.load(Ordering::SeqCst),
+            ceased_while_running,
+        )
+    }
+
+    // Cooperative step only. The executor is already past the flag's one read,
+    // so it goes on to broadcast — which is exactly why the destructive step
+    // exists, and what makes the contrast below evidence rather than assertion.
+    let (evidence, broadcasts, ceased_while_running) = parked_delivery(false);
+    assert!(
+        !ceased_while_running,
+        "a generation with a running executor must not report cessation",
+    );
+    assert_eq!(
+        (evidence, broadcasts),
+        (SubmissionEvidence::Submitted, 1),
+        "the cooperative flag cannot reach an executor already past its read",
+    );
+
+    // Both steps. Same parked position, same release, and now nothing is
+    // emitted: only the revocation check immediately before the broadcast can
+    // have stopped it.
+    let (evidence, broadcasts, ceased_while_running) = parked_delivery(true);
+    assert!(
+        !ceased_while_running,
+        "a generation with a running executor must not report cessation",
+    );
+    assert_eq!(
+        (evidence, broadcasts),
+        (SubmissionEvidence::NotSubmitted, 0),
+        "a terminated generation must not emit to a subscriber",
+    );
+}
+
+/// A raw entry reaching a UI executor is written by nothing and acknowledged
+/// `NotSubmitted`, rather than left at the head of the mailbox.
+///
+/// The relay's `raww` capability gate rejects a non-raw-writable target at the
+/// request boundary, so no raw entry is ever admitted for a UI target and this
+/// arm is unreachable in production. It is covered anyway because what it
+/// protects against is not a raw write succeeding — it is a raw entry parking
+/// every message behind it for the life of the target, which is what an arm that
+/// declined to plan would do.
+///
+/// `NotSubmitted` and not an unknown: the arm emits no frame at all, so
+/// non-delivery is provable rather than inferred.
+#[test]
+fn a_raw_entry_a_ui_cannot_write_is_acknowledged_rather_than_parked() {
+    let broadcasts = Arc::new(AtomicUsize::new(0));
     let services = UiTransportServices {
         broadcast_incoming: {
             let broadcasts = broadcasts.clone();
-            Arc::new(move |_incoming: &UiIncomingMessage| {
+            Arc::new(move |_| {
                 broadcasts.fetch_add(1, Ordering::SeqCst);
                 UiBroadcastStatus::Delivered
             })
         },
-        emit_phase: {
-            let probe_entered = probe_entered.clone();
-            let released = released.clone();
-            Arc::new(move |phase| {
-                // Park the executor inside the probe, where neither fence flag has
-                // been read yet on this iteration.
-                if phase.phase == "routed" {
-                    probe_entered.store(true, Ordering::SeqCst);
-                    while !released.load(Ordering::SeqCst) {
-                        std::thread::sleep(Duration::from_millis(5));
-                    }
-                }
-                UiBroadcastStatus::Delivered
-            })
-        },
+        emit_phase: Arc::new(|_| UiBroadcastStatus::Delivered),
     };
 
-    let mut transport = UiTransport::new(services);
-    let outcome_future = transport.mailw(ui_envelope());
-    wait_for(
-        &probe_entered,
-        "the delivery executor to enter the routed probe",
-    );
+    let mailbox = Arc::new(StubMailbox::with_entries(vec![MailboxEntry {
+        sequence: EntrySequence::first(),
+        message_id: "m-raw".to_string(),
+        canonical_bytes: 8,
+        payload: MailboxPayload::Raw {
+            content: "raw text".to_string(),
+            append_enter: true,
+        },
+    }]));
+    let mut transport = started_transport(services, &mailbox);
 
-    // An executor of this generation is running, so it has not ceased. Reading
-    // cessation as true here is the dangerous answer: it would let a replacement
-    // generation start alongside a live writer.
-    assert!(
-        !transport.generation_ceased(),
-        "a generation with a running executor must not report cessation",
-    );
-
+    assert_eq!(wait_for_ack(&mailbox), SubmissionEvidence::NotSubmitted);
     transport.fence_generation();
-    transport.terminate_generation();
-    released.store(true, Ordering::SeqCst);
-
-    let outcome = block_on(outcome_future).expect("mailw outcome future resolves");
-
-    assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
-    assert_eq!(outcome.reason_code.as_deref(), Some("ui_generation_fenced"));
-    // Pins the revoked rung specifically. Both rungs spell the same reason code,
-    // and only the reason text says which check stopped the executor — so without
-    // this, a delivery stopped by the cooperative flag would pass while proving
-    // nothing about the destructive step.
     assert!(
-        outcome
-            .reason
-            .as_deref()
-            .is_some_and(|reason| reason.contains("terminated")),
-        "the outcome must name the revocation rather than the cooperative flag: {:?}",
-        outcome.reason,
+        mailbox.is_drained(),
+        "an unwritable entry must leave the mailbox rather than park what follows it",
     );
     assert_eq!(
         broadcasts.load(Ordering::SeqCst),
         0,
-        "a terminated generation must not emit to a subscriber",
+        "the unsupported arm must emit no frame",
     );
-
-    // The observation the fence's second window would make. Polled rather than
-    // read once: the executor resolves its outcome before it returns, so the
-    // handle can still be live for an instant after the future settles.
-    let started = Instant::now();
-    while !transport.generation_ceased() {
-        assert!(
-            started.elapsed() < Duration::from_secs(5),
-            "a revoked generation whose executor has resolved must cease",
-        );
-        std::thread::sleep(Duration::from_millis(5));
-    }
 }
 
 #[test]
-fn ui_raww_is_unsupported() {
+fn ui_transport_is_not_lookable() {
     let services = UiTransportServices {
         broadcast_incoming: Arc::new(|_| UiBroadcastStatus::Delivered),
         emit_phase: Arc::new(|_| UiBroadcastStatus::Delivered),
     };
-    let mut transport = UiTransport::new(services);
-    let outcome = block_on(transport.raww("raw text".to_string(), true))
-        .expect("raww outcome future resolves");
-    assert_eq!(outcome.outcome, SendOutcome::Failed);
-    assert_eq!(
-        outcome.reason_code.as_deref(),
-        Some("ui_raw_write_unsupported"),
-    );
-}
-
-#[tokio::test]
-async fn ui_transport_is_ready_for_handover_and_not_lookable() {
-    let services = UiTransportServices {
-        broadcast_incoming: Arc::new(|_| UiBroadcastStatus::Delivered),
-        emit_phase: Arc::new(|_| UiBroadcastStatus::Delivered),
-    };
-    let transport = UiTransport::new(services);
-    assert!(transport.is_ready_for_handover().await);
+    let mailbox = Arc::new(StubMailbox::empty());
+    let transport = started_transport(services, &mailbox);
     assert!(transport.give_output().is_none());
 }
 
@@ -336,8 +459,10 @@ fn ui_incoming_message_emits_bare_canonical_identity_never_decorated() {
         is_receipt: false,
     };
 
-    let mut transport = UiTransport::new(services);
-    block_on(transport.mailw(envelope)).expect("mailw outcome future resolves");
+    let mailbox = Arc::new(StubMailbox::with_entries(vec![mail_entry(envelope)]));
+    let mut transport = started_transport(services, &mailbox);
+    wait_for_ack(&mailbox);
+    transport.fence_generation();
 
     let incoming = captured.lock().unwrap().clone().expect("incoming captured");
 

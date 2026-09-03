@@ -1,20 +1,19 @@
-//! What the relay's per-target mailbox holds while the push path is still the
-//! only thing delivering out of it.
+//! What the relay's per-target mailbox holds, and what leaves it, driven against
+//! a live relay.
 //!
-//! Every admitted entry now gains a relay-built payload and a position in its
-//! target's mailbox, and the push path writes that stored artifact rather than
-//! rendering one of its own. Nothing peeks yet, and nothing acknowledges — the
-//! cursor moves only because the push path's terminal transition retires each
-//! entry's position as it resolves it.
+//! Every admitted entry gains a relay-built payload and a position in its
+//! target's mailbox, and the target's transport writes that stored artifact
+//! rather than rendering one of its own. The cursor moves because the transport's
+//! delivery-loop executor peeks each entry, declares it, writes it, and
+//! acknowledges it — nothing else advances it.
 //!
 //! Two things follow from that arrangement and neither is demonstrated by the
-//! code that arranges it, which is why they are pinned here against a live relay
-//! rather than argued from the retirement semantics: the mailbox must stay
-//! bounded under sustained delivery, and what reaches the target must be the
-//! artifact the mailbox holds. Either failing is a gate on the cutover, not a
-//! defect to fix afterwards — an unbounded mailbox is a leak the executor would
-//! inherit, and a delivered envelope that differs from the stored one would mean
-//! this arrangement proves nothing about the executor's future input.
+//! code that arranges it, which is why they are pinned here rather than argued
+//! from the acknowledgment semantics: the mailbox must stay bounded under
+//! sustained delivery, and what reaches the target must be the artifact the
+//! mailbox holds. An unbounded mailbox is a leak no executor would drain, and a
+//! delivered envelope that differed from the stored one would mean the executor
+//! is writing something other than what it peeked.
 
 use std::{
     fs,
@@ -39,15 +38,15 @@ use super::*;
 /// and small enough that the sends stay sequential within the test's budget.
 const SENDS: usize = 4;
 
-/// The mailbox returns to empty as the push path delivers, the cursor moves with
+/// The mailbox returns to empty as its executor drains it, the cursor moves with
 /// it, the reservation behind it comes back, and each entry is resolved once.
 ///
-/// The reasoning this replaces: the push path terminalizes every entry, and the
-/// terminal transition retires that entry's mailbox position and releases its
-/// quota, so the cursor advances and the reservation returns even though nothing
-/// acknowledges. Sound, and still only reasoning — the retirement it depends on
-/// was added for an acknowledgment path that has no caller yet, so nothing had
-/// ever exercised it from the live delivery path.
+/// The reasoning this replaces: an acknowledgment terminalizes every member it
+/// covers, and the terminal transition retires that entry's mailbox position and
+/// releases its quota, so the cursor advances and the reservation returns. Sound,
+/// and still only reasoning — what it leaves out is whether anything actually
+/// reaches the acknowledgment from a live delivery path, which is the whole
+/// question a pull model turns on.
 ///
 /// Each enqueue reports the depth, cursor, and reservation it joined, under the
 /// same lock as the insertion. Sends are awaited to completion one at a time, so
@@ -65,7 +64,7 @@ const SENDS: usize = 4;
 /// [`the_delivered_envelope_carries_the_stamp_the_mailbox_stored`], which is
 /// where the rendered envelopes are read.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn the_mailbox_returns_to_empty_as_the_push_path_delivers() {
+async fn the_mailbox_returns_to_empty_as_its_executor_drains_it() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
     let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
@@ -154,14 +153,15 @@ async fn the_mailbox_returns_to_empty_as_the_push_path_delivers() {
             "the released reservation returns this target's byte count to the one \
              entry it now holds: {details:?}"
         );
-        // The doorbell, which is otherwise invisible from outside the relay:
-        // nothing waits on it until the cutover, so a ring leaves no other
-        // trace. Each of these sends arrives at a mailbox the one before it
-        // emptied, which is exactly the transition a doorbell reports — so a
-        // `false` here means either that the generation never registered one or
-        // that the transition was misjudged, and the two failures the relay
-        // could not otherwise be caught in are the whole reason this is read
-        // against a live worker rather than only in the ledger's own tests.
+        // The doorbell, which is otherwise invisible from outside the relay: a
+        // ring only wakes an executor that would have polled anyway, so it
+        // leaves no other trace. Each of these sends arrives at a mailbox the
+        // one before it emptied, which is exactly the transition a doorbell
+        // reports — so a `false` here means either that the generation never
+        // registered one or that the transition was misjudged, and the two
+        // failures the relay could not otherwise be caught in are the whole
+        // reason this is read against a live worker rather than only in the
+        // ledger's own tests.
         assert_eq!(
             details.get("doorbell_rung").and_then(Value::as_bool),
             Some(true),

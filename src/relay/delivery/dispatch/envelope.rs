@@ -22,7 +22,6 @@ use serde_json::{Value, json};
 use super::outcomes;
 use super::payload::build_delivery_message;
 use super::worker::{AcpWorkerBootstrap, WorkerTransportContext};
-use crate::relay::delivery::partition::ledger_partition_sink;
 
 use crate::relay::delivery::async_worker::{
     AsyncWorkerKey, install_acp_worker_output_view, set_worker_failure, set_worker_readiness,
@@ -38,13 +37,13 @@ use crate::relay::{
     AsyncDeliveryTask, RelayError, errors::relay_error, identity::canonical_session_id,
 };
 
-use crate::configuration::SessionType;
+use crate::configuration::{BundleMember, SessionType};
 use crate::envelope::PromptBatchSettings;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::transports::{
-    AcpDriverServices, ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryMessage,
-    StartupContext, TransportError, TransportImpl, UiBroadcastStatus, UiIncomingMessage,
-    UiOutcomePhase, UiTransportServices,
+    AcpDriverServices, ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope,
+    DeliveryExecutorContext, DeliveryMessage, StartupContext, TransportError, TransportImpl,
+    UiBroadcastStatus, UiIncomingMessage, UiOutcomePhase, UiTransportServices,
 };
 
 /// Builds the [`TransportImpl`] for a non-bootstrap worker delivery, dispatching
@@ -90,6 +89,26 @@ fn startup_failure(target_session: &str, error: TransportError) -> RelayError {
 /// creates: a startup that is still running when its awaiting task goes away
 /// must reach its own conclusion and clean up after itself. Both transports do,
 /// each through a guard whose `Drop` reclaims the partial runtime.
+/// Starts a transport whose `startup` performs no blocking work, on the caller's
+/// own thread.
+///
+/// The point is not to save a task switch. A `spawn_blocking` join is a
+/// dependency on the runtime living long enough to resolve it, and a worker
+/// cancelled at that await has already claimed its target's consumer generation
+/// — so the mailbox is left with a generation that holds it and no executor that
+/// will ever peek it. Starting inline removes the window entirely for the one
+/// transport that has nothing to block on.
+fn start_transport_inline(
+    mut transport: TransportImpl,
+    context: StartupContext,
+    target_session: String,
+) -> Result<TransportImpl, RelayError> {
+    match transport.startup(context) {
+        Ok(_) => Ok(transport),
+        Err(error) => Err(startup_failure(target_session.as_str(), error)),
+    }
+}
+
 async fn start_transport_off_runtime(
     mut transport: TransportImpl,
     context: StartupContext,
@@ -122,31 +141,57 @@ pub(super) async fn build_worker_transport(
     key: &AsyncWorkerKey,
     batch_settings: PromptBatchSettings,
     readiness_notifier: crate::tmux::ReadinessNotifier,
+    delivery: DeliveryExecutorContext,
 ) -> Result<TransportImpl, RelayError> {
+    // Every transport is started, including the two that used to skip `startup`
+    // entirely: `startup` is where a transport spawns its delivery-loop executor,
+    // so a transport the relay never started is one whose target nothing
+    // consumes.
+    //
+    // Where that start happens differs, and the discriminator is whether the
+    // start *blocks*. `spawn_blocking` exists to keep blocking IO off a runtime
+    // thread; it also makes the start depend on the runtime surviving long enough
+    // to resolve the join. tmux, pty and ACP open panes, spawn children and wait
+    // on them, so they pay that dependency for a reason. A UI target has no
+    // external resource to open at all — it is a broadcast surface over the
+    // relay's own registry — so putting its start behind a join buys nothing and
+    // costs the one thing that matters here: a worker cancelled while awaiting it
+    // leaves the target with a mailbox nothing will ever consume, and no executor
+    // to notice.
+    let startup = |target_member: &BundleMember| StartupContext {
+        namespace: context.namespace.clone(),
+        runtime_directory: context.runtime_directory.clone(),
+        target_member: target_member.clone(),
+        // tmux, pty and UI ignore the `choose` resolver (none raises operator
+        // choices), so a cancelling no-op satisfies the contract's required
+        // resolver field.
+        choose: noop_tmux_chooser(),
+    };
     let Some(target_member) = context.target_member.as_ref() else {
         // No bundle member is the relay-wide (UI) target: `WorkerTransportContext`
         // only resolves to `None` for one, since a configured coder target with no
         // member fails resolution outright.
-        return Ok(TransportImpl::ui(build_ui_transport_services(key)));
+        return start_transport_inline(
+            TransportImpl::ui(build_ui_transport_services(key), delivery),
+            startup(&relay_wide_member(key)),
+            context.target_session.clone(),
+        );
     };
     match target_member.target.session_type() {
         SessionType::Tmux => {
-            let transport = TransportImpl::tmux(
-                batch_settings,
-                Some(readiness_notifier),
-                ledger_partition_sink(),
-            );
-            // tmux ignores the `choose` resolver (it raises no operator choices),
-            // so a cancelling no-op chooser satisfies the `StartupContext` contract.
-            let startup = StartupContext {
-                namespace: context.namespace.clone(),
-                runtime_directory: context.runtime_directory.clone(),
-                target_member: target_member.clone(),
-                choose: noop_tmux_chooser(),
-            };
-            start_transport_off_runtime(transport, startup, context.target_session.clone()).await
+            let transport = TransportImpl::tmux(batch_settings, Some(readiness_notifier), delivery);
+            start_transport_off_runtime(
+                transport,
+                startup(target_member),
+                context.target_session.clone(),
+            )
+            .await
         }
-        SessionType::Ui => Ok(TransportImpl::ui(build_ui_transport_services(key))),
+        SessionType::Ui => start_transport_inline(
+            TransportImpl::ui(build_ui_transport_services(key), delivery),
+            startup(target_member),
+            context.target_session.clone(),
+        ),
         SessionType::Pubsub => Ok(TransportImpl::Pubsub),
         #[cfg(feature = "pty")]
         SessionType::Pty => {
@@ -204,20 +249,19 @@ pub(super) async fn build_worker_transport(
                 target_member.clone(),
                 pty_config,
                 Some(pty_mirror_state),
-                ledger_partition_sink(),
+                delivery,
             );
-            let startup = StartupContext {
-                namespace: context.namespace.clone(),
-                runtime_directory: context.runtime_directory.clone(),
-                target_member: target_member.clone(),
-                choose: noop_tmux_chooser(),
-            };
             // Propagated rather than discarded. A dropped startup error installed
-            // an already-dead transport, and the health gate then held the
-            // triggering member through the whole dwell before reporting a generic
-            // unreachable -- turning a spawn failure the relay already knew about
-            // into a delayed guess.
-            start_transport_off_runtime(transport, startup, context.target_session.clone()).await
+            // an already-dead transport whose executor would peek a mailbox it
+            // could not write, so the entries waited out the whole dwell before
+            // anything reported a generic unreachable -- turning a spawn failure
+            // the relay already knew about into a delayed guess.
+            start_transport_off_runtime(
+                transport,
+                startup(target_member),
+                context.target_session.clone(),
+            )
+            .await
         }
         #[cfg(not(feature = "pty"))]
         SessionType::Pty => Err(relay_error(
@@ -233,9 +277,28 @@ pub(super) async fn build_worker_transport(
     }
 }
 
-/// A cancelling no-op [`Chooser`] for the tmux `StartupContext`. Tmux never
-/// raises operator choices, so this is never invoked; it exists only to satisfy
-/// the contract's required resolver field.
+/// The synthetic member a relay-wide (UI) target is started against.
+///
+/// A relay-wide principal has no bundle member — that is what makes it
+/// relay-wide — but `startup` takes one, and the UI transport reads nothing from
+/// it: it has no runtime to establish, no pane to size, and no command to spawn.
+/// Naming the target is what the field is for here, so the stub carries that and
+/// nothing else.
+fn relay_wide_member(key: &AsyncWorkerKey) -> BundleMember {
+    BundleMember {
+        id: key.target_session.clone(),
+        name: None,
+        working_directory: None,
+        target: crate::configuration::TargetConfiguration::Ui,
+        coder_session_id: None,
+        policy_id: None,
+        environment: Vec::new(),
+    }
+}
+
+/// A cancelling no-op [`Chooser`] for a `StartupContext` whose transport raises
+/// no operator choices. Never invoked; it exists only to satisfy the contract's
+/// required resolver field.
 fn noop_tmux_chooser() -> Chooser {
     Arc::new(|_choice: ChoiceToMake| ChoiceMade::Cancelled {
         decided_by: String::new(),
@@ -274,7 +337,6 @@ pub(super) fn build_acp_driver_services(
     let choices_pending_max = bootstrap.choices_pending_max;
 
     AcpDriverServices {
-        partition_sink: ledger_partition_sink(),
         mirror_state: {
             let namespace = namespace.clone();
             let runtime_directory = runtime_directory.clone();

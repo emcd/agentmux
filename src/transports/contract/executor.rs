@@ -43,7 +43,7 @@ use crate::protocol::mailbox::{EntryRange, EntrySequence, MailboxEntry};
 use crate::protocol::operations::{AckResult, DeclareResult, MemberAcknowledgment, PeekResult};
 use crate::protocol::{DeliveryDoorbell, PackingUnitId, SubmissionEvidence};
 
-use super::{HandoverDimensions, TransportHealth};
+use super::{PeekDimensions, TransportHealth};
 
 /// The relay's mailbox, as a transport's delivery-loop executor sees it.
 ///
@@ -101,7 +101,7 @@ pub trait DeliveryWriter {
     /// bound expressed in them would ask the relay to know something it does not.
     /// The token budget is applied in [`plan`](Self::plan) instead, against what
     /// the peek actually returned.
-    fn peek_dimensions(&self) -> HandoverDimensions;
+    fn peek_dimensions(&self) -> PeekDimensions;
 
     /// Whether this transport can reach its target at all.
     ///
@@ -148,7 +148,27 @@ pub trait DeliveryWriter {
     /// The fence's cooperative step, read at every point the loop can act on it.
     /// Returning `true` ends the executor, and the executor's thread finishing is
     /// what the fence's cessation observation reads.
-    fn stop_requested(&self) -> bool;
+    ///
+    /// Takes `&mut self` because a stop signal is not always a flag: ACP's is a
+    /// dropped channel, and observing one consumes from the receiver.
+    fn stop_requested(&mut self) -> bool;
+
+    /// Waits for the doorbell or for `timeout`, whichever comes first.
+    ///
+    /// Defaulted, because for three of the four transports there is nothing to
+    /// do while idle and blocking on the doorbell is exactly right. **Pty is the
+    /// exception, and is the reason this is a method rather than a line in the
+    /// loop.** Its terminal is `!Send`, so the terminal lives on this thread —
+    /// which makes this thread also the one that feeds the terminal its child's
+    /// output and answers the snapshot requests `look` and the prompt probe
+    /// make. A plain block would stall both for the length of every wait.
+    ///
+    /// Whatever an override does, it must return: the loop's stop check runs
+    /// after this, and an implementation that waited forever would put the
+    /// executor beyond the fence's cooperative step.
+    fn wait_for_work(&mut self, doorbell: &DeliveryDoorbell, timeout: Duration) {
+        doorbell.wait_for(timeout);
+    }
 }
 
 /// One transport's decision about what to write next.
@@ -165,6 +185,18 @@ pub struct PlannedWrite<P> {
 }
 
 /// What the loop needs beyond the transport and the mailbox.
+///
+/// Injected once at construction, the way the chooser, the readiness notifier
+/// and the partition sink before it already are: the relay builds it closing
+/// over its own ledger and its own `[delivery]` policy, and the transport holds
+/// it without naming a `crate::relay` type.
+///
+/// `Clone` because a transport whose runtime is re-established in place — ACP
+/// respawns its child without the relay electing a new consumer generation —
+/// spawns a fresh executor against the same mailbox and the same entitlement.
+/// Cloning yields another handle on the same doorbell and the same consumer, not
+/// a second binding: only the relay issues those.
+#[derive(Clone)]
 pub struct DeliveryExecutorContext {
     /// The relay's mailbox for this executor's target and generation.
     pub consumer: Arc<dyn MailboxConsumer>,
@@ -179,6 +211,15 @@ pub struct DeliveryExecutorContext {
     /// down rather than read here, because the threshold is the relay's and the
     /// observation is the transport's.
     pub unreachable_dwell: Duration,
+}
+
+impl std::fmt::Debug for DeliveryExecutorContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DeliveryExecutorContext")
+            .field("poll_interval", &self.poll_interval)
+            .field("unreachable_dwell", &self.unreachable_dwell)
+            .finish_non_exhaustive()
+    }
 }
 
 /// Runs one transport's delivery loop until its generation is asked to stop.
@@ -201,7 +242,7 @@ pub fn run_delivery_executor<W: DeliveryWriter>(mut writer: W, context: Delivery
         }
         // Whichever comes first. The executor peeks either way on the next
         // iteration, so a lost ring costs the poll interval and nothing else.
-        context.doorbell.wait_for(context.poll_interval);
+        writer.wait_for_work(&context.doorbell, context.poll_interval);
     }
 }
 
@@ -338,6 +379,32 @@ fn drain_target<W: DeliveryWriter>(writer: &mut W, context: &DeliveryExecutorCon
             return;
         }
     }
+}
+
+/// Splits a peeked mail run into runs that may share one write, returning each
+/// run's length in order. A terminal-outcome receipt forms a run of its own.
+///
+/// Shared rather than per-transport because it is not a packing *decision* — how
+/// much of a run fits one write stays entirely with the transport that renders
+/// it — but a correctness barrier two transports reached independently and state
+/// identically. A receipt is a relay-issued notice about a delivery that failed,
+/// and a write carrying it beside a peer's message renders as one message to the
+/// agent reading it: the marker line that distinguishes a receipt ends up in the
+/// middle of somebody else's text. Tmux and ACP both split here; Pty writes one
+/// member per primitive and so needs no split at all.
+#[must_use]
+pub fn receipt_runs(is_receipt: &[bool]) -> Vec<usize> {
+    let mut runs: Vec<usize> = Vec::new();
+    let mut previous_was_peer = false;
+    for &receipt in is_receipt {
+        if receipt || !previous_was_peer {
+            runs.push(1);
+        } else if let Some(last) = runs.last_mut() {
+            *last += 1;
+        }
+        previous_was_peer = !receipt;
+    }
+    runs
 }
 
 /// Pairs each declared position with what the write observed for it.

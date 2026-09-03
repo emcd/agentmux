@@ -170,6 +170,16 @@ pub(super) struct OutstandingDeclaration {
     /// later generation must not resolve it: the binding belonged to a consumer
     /// that no longer owns the target.
     pub(super) generation: ConsumerGenerationId,
+    /// When the relay accepted the declaration — the execution watchdog's
+    /// anchor.
+    ///
+    /// A relay-observed event, which is the whole reason the anchor moved here.
+    /// The push model anchored the bound at "the point a packing unit's write
+    /// begins", which is not something the relay can see; a transport that began
+    /// writing and never reported was indistinguishable from one that never
+    /// started. Acceptance of the declaration is the earliest moment the relay
+    /// knows a write is about to happen, and it is recorded rather than inferred.
+    pub(super) declared_at: Instant,
 }
 
 /// One target's ordered mailbox: what it holds and how far it has been

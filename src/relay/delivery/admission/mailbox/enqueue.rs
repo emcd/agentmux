@@ -9,21 +9,20 @@ use crate::protocol::mailbox::{EntrySequence, MailboxPayload};
 use crate::runtime::inscriptions::emit_inscription;
 
 use super::super::super::guard::QueueEntryState;
-use super::super::ledger::{MailboxSlot, lock_ledger};
+use super::super::ledger::{AdmissionTargetKey, MailboxSlot, lock_ledger};
 
 const INSCRIPTION_MAILBOX_ENQUEUED: &str = "relay.delivery.mailbox.enqueued";
 
 /// Why an entry could not be placed in its target's mailbox.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(in crate::relay) enum EnqueueRejection {
-    /// No reservation is held under this message id, so there is no position to
-    /// fill and no quota backing the entry.
-    NotAdmitted,
     /// The entry already occupies its position. Enqueueing is write-once: a
     /// second payload for one position would change what a peek already reported.
     AlreadyEnqueued,
     /// The entry has already terminalized, so its position no longer exists.
     AlreadyTerminal,
+    /// The ledger could not be locked, so nothing was read and nothing changed.
+    LedgerUnavailable,
 }
 
 /// Places an admitted entry's payload at the position admission gave it, making
@@ -40,21 +39,37 @@ pub(in crate::relay) enum EnqueueRejection {
 /// knows nothing else about the entry, so the outcome it produces can only be
 /// reported to the right sender if the mailbox held what answers for the
 /// position.
+///
+/// **Relay-originated work that bypasses admission is given a position all the
+/// same.** A terminal-outcome receipt reserves no quota by design, and under the
+/// push model that cost it nothing because the relay wrote it directly. Nothing
+/// writes directly any more: an executor writes what it peeks, so an entry with
+/// no position is an entry nothing delivers. What such an entry lacks is a
+/// reservation, and the only thing that follows from lacking one is that its
+/// acknowledgment releases none.
 pub(in crate::relay) fn enqueue(
     task: &Arc<crate::relay::AsyncDeliveryTask>,
     payload: MailboxPayload,
 ) -> Result<EntrySequence, EnqueueRejection> {
     let message_id = task.message_id.as_str();
     let Ok(mut state) = lock_ledger() else {
-        return Err(EnqueueRejection::NotAdmitted);
+        return Err(EnqueueRejection::LedgerUnavailable);
     };
-    let Some(entry) = state.entries.get(message_id) else {
-        return Err(EnqueueRejection::NotAdmitted);
-    };
-    if entry.state == QueueEntryState::Terminal {
+    let admitted = state.entries.get(message_id);
+    if admitted.is_some_and(|entry| entry.state == QueueEntryState::Terminal) {
         return Err(EnqueueRejection::AlreadyTerminal);
     }
-    let (target, sequence) = (entry.target.clone(), entry.sequence);
+    let target = match admitted {
+        Some(entry) => entry.target.clone(),
+        // Un-admitted work is keyed the same way, from the task rather than from
+        // a reservation record it does not have.
+        None => AdmissionTargetKey::new(
+            task.bundle.bundle_name.as_str(),
+            task.runtime_directory.as_path(),
+            task.target_session.as_str(),
+        ),
+    };
+    let sequence = admitted.map(|entry| entry.sequence);
     // The reservation this entry was admitted under, read before the mailbox
     // borrow rather than after it because both live on the same guarded state.
     // Admission has already counted this entry, so the figures include it: with
@@ -67,6 +82,19 @@ pub(in crate::relay) fn enqueue(
     // `Arc` clone, and whether it is rung is decided afterwards.
     let registered = state.doorbells.get(&target).cloned();
     let mailbox = state.mailboxes.entry(target.clone()).or_default();
+    // An admitted entry occupies the position admission fixed for it, which is
+    // what linearizes two concurrent sends against each other. Un-admitted work
+    // was never linearized against anything, so it takes the next position going
+    // — which puts it behind everything already accepted for this target, where a
+    // notice about a delivery belongs.
+    let sequence = match sequence {
+        Some(sequence) => sequence,
+        None => {
+            let next = mailbox.next_sequence;
+            mailbox.next_sequence = next.next();
+            next
+        }
+    };
     if mailbox.slots.contains_key(&sequence) {
         return Err(EnqueueRejection::AlreadyEnqueued);
     }
@@ -94,8 +122,9 @@ pub(in crate::relay) fn enqueue(
         .flatten();
     // What the mailbox holds is otherwise invisible from outside the relay, and
     // three things about it have to be observable rather than argued. Its depth
-    // must not grow without bound while the push path — which acknowledges
-    // nothing — is the only consumer. The reservation behind it must come back:
+    // must not grow without bound under sustained delivery, which is a claim
+    // about the executor draining it and not about any state read here. The
+    // reservation behind it must come back:
     // depth and quota are released by the same terminal transition but through
     // separate state, so one can return while the other leaks. And the stamp on
     // the payload this position now holds is what ties the delivered envelope
@@ -162,7 +191,6 @@ mod mailbox_retirement_tests {
     };
     use crate::protocol::operations::AckAccepted;
 
-    use super::super::ack::ack;
     use super::*;
 
     #[test]

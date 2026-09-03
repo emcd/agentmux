@@ -7,7 +7,7 @@ use serde_json::json;
 
 use crate::configuration::{BundleConfiguration, SessionType};
 use crate::relay::{RelayError, canonical_session_id, relay_error};
-use crate::transports::HandoverDimensions;
+use crate::transports::PeekDimensions;
 
 use super::super::guard::QueueEntryState;
 use super::config::{AdmissionLimits, delivery_configuration};
@@ -98,7 +98,7 @@ pub(super) fn admit_with_limits(
     // A session type with no delivery path is refused before any quota is
     // considered: nothing is accepted, so nothing may be reserved, queued, or
     // authorized on its behalf.
-    let Some(dimensions) = HandoverDimensions::for_session_type(session_type) else {
+    let Some(dimensions) = PeekDimensions::for_session_type(session_type) else {
         return Err(crate::relay::session_type_not_implemented(
             target.target_session.as_str(),
             session_type,
@@ -107,7 +107,7 @@ pub(super) fn admit_with_limits(
     if canonical_bytes > dimensions.canonical_bytes_max {
         return Err(relay_error(
             ERROR_CODE_PAYLOAD_TOO_LARGE,
-            "message exceeds the target transport's maximum handover size",
+            "message exceeds the target transport's maximum payload size",
             Some(json!({
                 "target_session": target.target_session,
                 "session_type": session_type,

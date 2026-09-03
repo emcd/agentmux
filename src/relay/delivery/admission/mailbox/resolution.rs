@@ -41,6 +41,16 @@ pub(in crate::relay) struct ResolvedMember {
     /// inscription reports so a reader can correlate an outcome to a mailbox
     /// position.
     pub(in crate::relay) guard: Option<GuardKey>,
+    /// Whether a declaration had bound this entry to a packing unit.
+    ///
+    /// Reported because one caller spells its members' outcomes by it. Graceful
+    /// shutdown resolves an **undeclared** entry `dropped_on_shutdown` — nothing
+    /// was ever about to write it, and naming the process exiting is more use to
+    /// a sender than the generic non-delivery — while a **declared** one must
+    /// take the guard's evidence order instead, because a write may already have
+    /// reached the target for it. `evidence` cannot carry the distinction: it
+    /// reads `not_submitted` for an undeclared entry either way.
+    pub(in crate::relay) declared: bool,
 }
 
 /// Terminalizes each named position, collecting what the ones this caller won
@@ -63,22 +73,55 @@ pub(super) fn resolve_positions(
         .into_iter()
         .filter_map(|(sequence, supplied)| {
             let slot = state.mailboxes.get(key)?.slots.get(&sequence)?;
-            Some((slot.message_id.clone(), Arc::clone(&slot.task), supplied))
+            Some((
+                sequence,
+                slot.message_id.clone(),
+                Arc::clone(&slot.task),
+                supplied,
+            ))
         })
         .collect();
     held.into_iter()
-        .filter_map(|(message_id, task, supplied)| {
-            let TerminalTransition::Won {
-                evidence, guard, ..
-            } = release_entry(state, message_id.as_str(), supplied)
-            else {
-                return None;
-            };
+        .filter_map(|(sequence, message_id, task, supplied)| {
+            let (evidence, guard, declared) =
+                match release_entry(state, message_id.as_str(), supplied) {
+                    TerminalTransition::Won {
+                        evidence,
+                        guard,
+                        bound,
+                    } => (evidence, guard, bound),
+                    // Relay-originated work holds no reservation, so there is
+                    // nothing for the transition to win — and nothing racing it
+                    // either, which is what makes reporting safe here where
+                    // absence alone would not. The distinction is the task's:
+                    // for an *admitted* member an absent reservation means
+                    // another resolver already won and cleaned up, and reporting
+                    // would be the duplicate the guard exists to prevent.
+                    //
+                    // Its position is retired here, because the transition that
+                    // would otherwise have done it did not happen. Leaving it
+                    // would park the cursor on a slot nothing will ever resolve,
+                    // and every entry behind it with it.
+                    TerminalTransition::NoReservation if !task.admitted => {
+                        if let Some(mailbox) = state.mailboxes.get_mut(key) {
+                            mailbox.retire(sequence);
+                        }
+                        (
+                            supplied.unwrap_or(SubmissionEvidence::NotSubmitted),
+                            None,
+                            false,
+                        )
+                    }
+                    TerminalTransition::NoReservation | TerminalTransition::AlreadyTerminal => {
+                        return None;
+                    }
+                };
             Some(ResolvedMember {
                 message_id,
                 task,
                 evidence,
                 guard,
+                declared,
             })
         })
         .collect()

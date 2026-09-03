@@ -307,7 +307,7 @@ convenience. Splitting it requires a migration switch that routes per
 target between the two paths — a decision to take deliberately, not by
 letting a tranche boundary fall somewhere convenient.
 
-- [ ] 3.1 Design and implement the delivery-loop executor shape shared by
+- [x] 3.1 Design and implement the delivery-loop executor shape shared by
       all transports (peek → coalesce/render → measure against token budget
       → declare the decided prefix → write it → ack from the write's
       evidence → repeat, woken by doorbell + poll), replacing each
@@ -316,7 +316,7 @@ letting a tranche boundary fall somewhere convenient.
       whose write fails observably MUST still be acked (`NotSubmitted` or
       `SubmissionUnknown`) rather than left to the watchdog when the
       executor is able to report.
-- [ ] 3.2 Give readiness and unreachable-dwell an explicit owner in the
+- [x] 3.2 Give readiness and unreachable-dwell an explicit owner in the
       executor. Both behaviours live in `decide_gate` today and are deleted
       by 3.4, so this task exists to keep them from being lost in the gap:
       a target continuously `Unreachable` past
@@ -327,15 +327,15 @@ letting a tranche boundary fall somewhere convenient.
       out of 3.1's shape by accident; name where each is judged, and
       confirm the dwell is measured over continuous unreachability rather
       than restarted by an unobservable reading.
-- [ ] 3.3 Remove `mailw`, `raww`, and `is_ready_for_handover` from the
+- [x] 3.3 Remove `mailw`, `raww`, and `is_ready_for_handover` from the
       `Transport` trait (`src/transports/contract/transport.rs`). Spawn the
       delivery-loop executor from each transport's `startup`.
-- [ ] 3.4 Remove `HandoverWindow` (`dispatch/batch.rs`) and its use in
+- [x] 3.4 Remove `HandoverWindow` (`dispatch/batch.rs`) and its use in
       `dispatch/worker/` (construction, `SubmitContext.window`,
       `form_batch`). Remove the held-member slot (`worker/run.rs` and its
       call sites) and `TargetGate`/`gate_target`/`decide_gate`
       (`worker/gate.rs`, `worker/submit.rs`).
-- [ ] 3.5 Remove `authorize_batch` (`admission/authorize.rs`) and its call
+- [x] 3.5 Remove `authorize_batch` (`admission/authorize.rs`) and its call
       site (`worker/submit.rs`). Complete the transfer of its
       packing-unit-binding logic (`declare_packing_unit`,
       `record_unit_evidence`, `record_evidence_for_member`) to the
@@ -346,19 +346,19 @@ letting a tranche boundary fall somewhere convenient.
       transport calls to report its own partition, so that caller MUST be
       moved to `declare` in the same change rather than left pointing at a
       removed function.
-- [ ] 3.6 Enforce one serial delivery executor per transport instance —
+- [x] 3.6 Enforce one serial delivery executor per transport instance —
       no per-connection executor spawn. In-process scope only; no
       reconnect handling (see `design.md`'s scope note).
-- [ ] 3.7 Wire ACP's delivery-loop executor: peek, declare, render
+- [x] 3.7 Wire ACP's delivery-loop executor: peek, declare, render
       pane-envelope text, submit via `session/prompt`, ack from partition
       evidence.
-- [ ] 3.8 Wire Tmux's delivery-loop executor: peek, pack into token-budget
+- [x] 3.8 Wire Tmux's delivery-loop executor: peek, pack into token-budget
       prompts, declare each resulting unit, inject, ack from partition
       evidence.
-- [ ] 3.9 Wire Pty's delivery-loop executor analogously.
-- [ ] 3.10 Wire UI's delivery-loop executor: peek, declare, emit as relay
+- [x] 3.9 Wire Pty's delivery-loop executor analogously.
+- [x] 3.10 Wire UI's delivery-loop executor: peek, declare, emit as relay
       stream events through the injected broadcaster closure, ack.
-- [ ] 3.11 Wire raw-entry handling into each delivery-loop executor per
+- [x] 3.11 Wire raw-entry handling into each delivery-loop executor per
       the `raww` capability's `Relay raww transport behavior`: a peeked raw
       singleton is declared as its own packing unit, written using the same
       per-transport injection mechanics as today, then acked.

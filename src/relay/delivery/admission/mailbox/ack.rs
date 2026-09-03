@@ -152,9 +152,6 @@ fn apply(
 #[cfg(test)]
 mod mailbox_evidence_tests {
     use super::super::super::super::guard::SubmissionEvidence;
-    use super::super::super::authorize::record_unit_evidence;
-    use super::super::super::ledger::lock_ledger;
-    use super::super::super::terminal::{TerminalTransition, release_entry};
     use super::super::declare::declare;
     use super::super::fixtures::{acknowledge, claim, mail, peeked, place, range, seq};
     use super::*;
@@ -231,47 +228,36 @@ mod mailbox_evidence_tests {
 
         // Mixed reports across one unit are ordinary: a write can submit some
         // members and fail on others, and the unit's shared record cannot express
-        // that.
+        // that. The reports are ordered so the record — written from the first
+        // member's — disagrees with both of the others: a member resolved from
+        // the record rather than from its own report would come back `Submitted`
+        // here, which is the substitution this asserts against.
+        let acknowledgment = ack(
+            &bound,
+            accepted.unit,
+            &[
+                report(1, SubmissionEvidence::Submitted),
+                report(2, SubmissionEvidence::NotSubmitted),
+                report(3, SubmissionEvidence::SubmissionUnknown),
+            ],
+        );
         assert!(
-            acknowledge(
-                &bound,
-                accepted.unit,
-                &[
-                    report(1, SubmissionEvidence::Submitted),
-                    report(2, SubmissionEvidence::NotSubmitted),
-                    report(3, SubmissionEvidence::SubmissionUnknown),
-                ],
-            )
-            .is_ok(),
+            acknowledgment.result.is_ok(),
             "a complete set of reports is accepted whatever the reports say"
         );
-
-        // That each member resolves from its own report is asserted at the seam
-        // where the value is observable. The acknowledgment above consumes its
-        // members, so the outcome it derived for each is not readable from
-        // outside; what is readable is that the transition carries the supplied
-        // report rather than the unit's shared record, which is the step the
-        // acknowledgment relies on.
-        let plumbing = "mbx-evidence-plumbing";
-        place(plumbing, "mbx-evidence-plumbing-1", 1, mail("body"));
-        let plumbing_bound = claim(plumbing);
-        let unit = declare(&plumbing_bound, range(1, 1)).expect("declare").unit;
-        record_unit_evidence(unit, SubmissionEvidence::Submitted);
-        let mut state = lock_ledger().expect("ledger");
-        let transition = release_entry(
-            &mut state,
-            "mbx-evidence-plumbing-1",
-            Some(SubmissionEvidence::NotSubmitted),
-        );
-        assert!(
-            matches!(
-                transition,
-                TerminalTransition::Won {
-                    evidence: SubmissionEvidence::NotSubmitted,
-                    ..
-                }
-            ),
-            "a member resolves from its own report, not from its unit's record: {transition:?}"
+        let resolved: Vec<_> = acknowledgment
+            .resolved
+            .iter()
+            .map(|member| member.evidence)
+            .collect();
+        assert_eq!(
+            resolved,
+            vec![
+                SubmissionEvidence::Submitted,
+                SubmissionEvidence::NotSubmitted,
+                SubmissionEvidence::SubmissionUnknown,
+            ],
+            "each member resolves from its own report, not from its unit's record"
         );
     }
 }

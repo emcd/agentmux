@@ -8,10 +8,9 @@ use std::{
 
 use crate::configuration::BundleMember;
 use crate::envelope::PromptBatchSettings;
-use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
-    DeliveryEnvelope, GenerationFence, OutputView, StartupContext, Transport, TransportError,
-    TransportHealth, TransportStatus, UnreachableSince, WorkerReadinessState,
+    GenerationFence, OutputView, StartupContext, Transport, TransportError, TransportHealth,
+    TransportStatus, UnreachableSince, WorkerReadinessState,
 };
 
 use crate::acp::AcpTransport;
@@ -78,12 +77,23 @@ impl AcpWorkerDriver {
         namespace: String,
         services: AcpDriverServices,
         batch_settings: PromptBatchSettings,
+        delivery: crate::transports::DeliveryExecutorContext,
     ) -> Self {
+        // Built before the transport, because the transport hands them to its
+        // executor: under the pull model the executor is the only thing that
+        // observes health, so the latch the driver folds and the latch the dwell
+        // is measured from have to be the same one.
+        let respawn_abandoned = Arc::new(AtomicBool::new(false));
+        let unreachable_since = Arc::new(UnreachableSince::default());
         Self {
             transport: Arc::new(Mutex::new(AcpTransport::new(
                 batch_settings,
                 Some(Arc::clone(&services.mirror_state)),
-                Arc::clone(&services.partition_sink),
+                delivery,
+                crate::acp::AcpReachability::new(
+                    Arc::clone(&respawn_abandoned),
+                    Arc::clone(&unreachable_since),
+                ),
             ))),
             namespace,
             runtime_directory,
@@ -91,8 +101,8 @@ impl AcpWorkerDriver {
             services,
             respawn_monitor: None,
             bootstrap_task: None,
-            respawn_abandoned: Arc::new(AtomicBool::new(false)),
-            unreachable_since: Arc::new(UnreachableSince::default()),
+            respawn_abandoned,
+            unreachable_since,
         }
     }
 
@@ -215,21 +225,6 @@ impl GenerationFence for AcpWorkerDriver {
 impl Transport for AcpWorkerDriver {
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
         self.lock_transport().startup(context)
-    }
-
-    fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
-        self.lock_transport().mailw(envelope)
-    }
-
-    fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
-        self.lock_transport().raww(content, append_enter)
-    }
-
-    async fn is_ready_for_handover(&self) -> bool {
-        // Read readiness without holding the lock across an await. Delegates
-        // to the transport's sync predicate so the four ACP readiness call
-        // sites stay consistent.
-        self.lock_transport().is_available()
     }
 
     fn health(&self) -> TransportHealth {

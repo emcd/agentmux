@@ -300,7 +300,7 @@ exported from `src/relay/mod.rs`.
     against each other. The reservation is released at terminalization and
     nowhere else. Three refusals happen here rather than after queueing: an
     exhausted quota, an envelope whose canonical payload exceeds its transport's
-    maximum handover dimensions, and a `Pubsub` target, which is refused
+    maximum peek dimensions, and a `Pubsub` target, which is refused
     synchronously so no work is authorized merely to discover the
     forward-declared stub. Also owns the shared "which transport will deliver
     this target" judgement (`resolve_target_session_type`,
@@ -340,13 +340,13 @@ exported from `src/relay/mod.rs`.
     acknowledges or resolves a declared range on its own, so the cursor still
     stands where the first declaration found it, and without that rule two
     declarations of the same range would both pass every position and contiguity
-    check and mint two packing units over one entry. The executors that drive
-    `peek`/`declare`/`ack` arrive with the push-model handover's removal; until
-    then nothing outside the module's own tests calls those three. The mailbox is
-    nevertheless filled and drained in production today: the push path writes what
-    `enqueue` stored, and its terminal transition retires each position as it
-    resolves it, which is what keeps the mailbox bounded while nothing
-    acknowledges.
+    check and mint two packing units over one entry. `peek`/`declare`/`ack` are
+    driven by the target transport's own delivery-loop executor, which is the
+    only thing that delivers out of a mailbox: the relay fills a position and
+    rings the target's doorbell, and the executor peeks what it finds there,
+    declares the run it decided to write, writes it, and acknowledges what the
+    write proved. The cursor advances on acknowledgment and nowhere else, which
+    is what keeps the mailbox bounded.
     Who may call those three is a target's **consumer generation**, and the
     module's `generation` and `reap` operations own it: `claim` issues a
     target's first, `replace` hands the target over, and `reap` gives it up
@@ -537,8 +537,8 @@ exported from `src/relay/mod.rs`.
     from. A **negative** verdict could not
     establish it, so the target is marked fail-stopped: its registry entry is
     held for the rest of the process's life, which is what makes a replacement
-    generation unelectable, and every further send — `mailw` and `raww` alike,
-    since both reach the target through that one lookup — is refused with
+    generation unelectable, and every further send — mail and raw alike, since
+    both reach the target through that one lookup — is refused with
     `delivery_target_fail_stopped`. Recovery is by operator action. That is the
     deliberate trade: a target that accepts nothing is recoverable, and a target
     two generations may be writing to concurrently is not.
@@ -552,23 +552,26 @@ exported from `src/relay/mod.rs`.
     supplied by the caller, so one entry is stamped once. Pane-envelope rendering,
     coalescing, and the token-budget combine now live inside each transport's
     internal delivery task, not here.
-  - `dispatch/worker.rs`: per-target tokio worker task. A concurrent
-    produce-and-collect loop (`select!` over `receiver.recv()` and a `JoinSet` of
-    in-flight write outcomes) submits each task to its transport via the
-    non-blocking `mailw`/`raww` seam — uniformly for every target, with no
-    transport-type gate — and collects the resolved `OutcomeFuture`s. The
-    blocking IO, quiescence/coalesce waits, ACP bootstrap/respawn, and readiness
-    mirroring all live inside the transports now; the loop never names an ACP type.
-    Its `intake` module is where a received task's payload is built — once, from
-    one clock read — and placed in its target's mailbox; `submit` then writes that
-    stored artifact rather than rendering a second one. Building at intake is what
-    makes the mailbox's contents and the delivered envelope the same thing, and
-    it is why the envelope-metadata inscription is emitted there rather than at
-    the write. A payload that cannot be built (an unresolvable target member) is
-    carried as a refusal and reported at the write it stands in for, so the target
-    gate still runs first; a refused enqueue never strands a member, because
-    delivery does not depend on it — a terminal-outcome receipt bypasses admission
-    and is refused `NotAdmitted` here in the ordinary course.
+  - `dispatch/worker.rs`: per-target tokio worker task, and a **produce-only**
+    loop. It receives tasks, places each one's payload in the target's mailbox,
+    and supervises the generation; it writes nothing and collects no outcome,
+    because the target's transport owns the executor that does both. What is left
+    here is custody — the mailbox, the consumer generation, and the
+    submission-timeout watchdog anchored at a declaration's acceptance — and
+    supervision — the fence, fail-stop, and replacement. There is no gate module
+    and no submit module, and their absence is the shape of the pull model at
+    this seam. Blocking IO, quiescence/coalesce waits, ACP bootstrap/respawn, and
+    readiness mirroring all live inside the transports; the loop never names an
+    ACP type. Its `intake` module is where a received task's payload is built —
+    once, from one clock read — and placed in its target's mailbox, so what the
+    executor later peeks is the artifact that was stored rather than a second one
+    rendered at the write. Building at intake is what makes the mailbox's
+    contents and the delivered envelope the same thing, and it is why the
+    envelope-metadata inscription is emitted there. A payload that cannot be
+    built (an unresolvable target member) is carried as a refusal and reported in
+    place of the write it stands in for, so the target gate still runs first; a
+    refused enqueue never strands a member, because delivery does not depend on
+    it.
   - `async_worker/`: split three ways along the boundary the module's own
     tests already followed. `registry.rs` holds the worker registry (tokio
     mpsc senders), the readiness/failure/output-view accessors, the ACP
@@ -617,18 +620,18 @@ exported from `src/relay/mod.rs`.
     `delivery/` module is no longer the home of ACP internals.
   - UI delivery is a first-class transport (`crate::transports::ui::UiTransport`),
     not a relay-internal special case: the worker resolves UI-routed targets to a
-    `UiTransport` and delivers via `mailw`. The relay-side stream-broadcast
-    touchpoints are injected as closures by `dispatch/worker.rs`
-    (`build_ui_transport_services`), so the transport never imports `crate::relay`.
-  - There is no quiescence module. Nothing here waits on a target: readiness is
-    a level the relay reads before authorizing, and a member that cannot be
-    handed over stays `Queued` rather than parking on a timer. See
-    `dispatch/worker.rs`'s `decide_gate` for the one place that judgement is
-    made. Authorization here is the push model's, which is the path still in
-    production; under the pull model the same judgement moves to the transport's
-    delivery-loop executor, which decides what to declare and when. Both leave
-    an unready target's member `Queued` on no timer, which is the property this
-    paragraph is about.
+    `UiTransport` whose executor consumes the target's mailbox. The relay-side
+    stream-broadcast touchpoints are injected as closures by
+    `dispatch/worker.rs` (`build_ui_transport_services`), so the transport never
+    imports `crate::relay`. It is also the one transport started inline rather
+    than through `spawn_blocking`: it opens no external resource, so putting its
+    start behind a join would only make the executor's existence depend on the
+    runtime outliving the request that first touched the target.
+  - There is no quiescence module. Nothing here waits on a target. Readiness is
+    judged inside the owning transport's delivery-loop executor, which is also
+    what writes, so the relay reads no readiness level at all; an entry its
+    target is not ready for stays queued and undeclared rather than parking on a
+    timer.
 
 ## Runtime Behavior Notes
 
@@ -1008,9 +1011,10 @@ operational details that do not fit a diagram.
   the backlog is observed.
 - Reachability is the other axis and is bounded. A target continuously
   `Unreachable` for `[delivery].unreachable-dwell-ms` resolves its members
-  `not_submitted` (`delivery_target_unreachable`) at the dispatch worker's
-  health gate, so a dead target's queue drains rather than growing forever.
-  Health says whether a handover is possible; readiness says when.
+  `not_submitted` (`delivery_target_unreachable`) when its executor reports the
+  dwell has elapsed, so a dead target's queue drains rather than growing forever.
+  Health says whether the target can be reached at all; readiness says whether it
+  will take a write now. Only the first is a reason to stop waiting.
 - Pre-hello idle sockets are reaped in host connection workers to prevent
   starvation (`AGENTMUX_RELAY_PRE_HELLO_IDLE_TIMEOUT_MS` override).
 - Each connection owns a per-connection writer task (mpsc + tokio write half)
@@ -1029,13 +1033,14 @@ operational details that do not fit a diagram.
   exceed the cap receive a `runtime_connection_limit_reached` error.
 - Stream events are correlated by `message_id` for send completion workflows.
 - Per-target delivery workers run as tokio tasks (`tokio::spawn`) reading
-  from a `tokio::sync::mpsc::UnboundedReceiver`. The worker is a concurrent
-  produce-and-collect loop: it submits each task to its transport via the
-  non-blocking `mailw`/`raww` seam and collects the resolved `OutcomeFuture`s
-  from a `JoinSet`, so a transport's blocking IO never pins the worker. Each
-  transport owns its own internal delivery task and its `spawn_blocking` /
-  blocking thread (tmux pane quiescence + paste; the ACP single-flight
-  prompt-completion wait; ACP bootstrap and a driver-owned respawn monitor).
+  from a `tokio::sync::mpsc::UnboundedReceiver`. The worker is a produce-only
+  loop: it places each task's payload in the target's mailbox and supervises the
+  generation, so a transport's blocking IO never pins it because no write
+  happens here at all. Each transport owns one serial delivery-loop executor on
+  a thread of its own, plus whatever blocking work that executor does (tmux pane
+  observation + paste; the ACP turn observation; the Pty terminal, which is
+  `!Send` and therefore lives on the executor thread; ACP bootstrap and a
+  driver-owned respawn monitor).
   Worker tasks normally run on the host's main runtime; sync callers that
   enqueue work without an ambient runtime (CLI helpers, unit tests) fall
   back to a process-wide multi-thread runtime created on demand. Worker
@@ -1051,17 +1056,16 @@ operational details that do not fit a diagram.
   with `Runtime::shutdown_timeout` instead of an implicit drop, so any residual
   stuck blocking task is abandoned within a bounded window rather than hanging
   the process.
-- Coalescing now lives inside each transport's internal delivery task, not the
-  worker. The worker renders each task individually and submits it via
-  `mailw`/`raww`; the transport buffers writes on its own ordered channel and,
-  during its readiness/quiescence wait, absorbs contiguous envelopes into one
-  flush group (tmux: one paste-buffer sequence against the resolved pane; ACP:
-  one `session/prompt` turn respecting the prompt-token budget, with overflow
-  left on the channel for the next turn). FIFO ordering at the target is
-  preserved because the worker enqueues to the transport in receive order, and a
-  raw write acts as a batch barrier that flushes the preceding envelope group
-  first. The worker no longer batches, hoists the quiescence wait, holds a carry
-  buffer, or emits a `batch_drain.coalesced` inscription.
+- Coalescing lives inside each transport's delivery-loop executor, not the
+  worker. The executor peeks a run bounded by its declared peek dimensions and
+  decides how much of that run one write may carry (tmux: one paste-buffer
+  sequence against the resolved pane; ACP: one `session/prompt` turn respecting
+  the prompt-token budget; Pty and UI: one entry, because each writes one member
+  per primitive). Whatever it does not cover stays queued and undeclared for the
+  next iteration. FIFO ordering at the target needs no further coordination: one
+  serial executor per transport instance issues every write, and `peek`'s own
+  contract makes a raw entry a barrier — it is returned alone, and mail behind
+  it is unreachable until it is acknowledged.
 - On shutdown the worker signals its transport(s) to resolve every in-flight
   write with `DroppedOnShutdown`, collects those resolutions, then drops any
   not-yet-submitted queued tasks (`complete_task_on_shutdown`). The transport

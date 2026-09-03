@@ -36,9 +36,16 @@ pub(in crate::relay) fn peek(request: &PeekRequest) -> PeekResult {
         let Some(slot) = mailbox.slots.get(&expected) else {
             break;
         };
-        let Some(admitted) = state.entries.get(slot.message_id.as_str()) else {
-            break;
-        };
+        // Relay-originated work holds no reservation, so it has no admitted size
+        // to charge against the caller's byte bound. Zero is the honest figure
+        // rather than a fallback: the bound exists to keep a peek within what the
+        // *admission* quota already accounted for, and this entry was accounted
+        // for nowhere. Refusing it instead would park a receipt — and everything
+        // behind it — for the life of the target.
+        let canonical_bytes = state
+            .entries
+            .get(slot.message_id.as_str())
+            .map_or(0, |admitted| admitted.canonical_bytes);
         let kind = slot.payload.kind();
         // A raw entry joins nothing. At the head it is the whole answer; after
         // mail it ends the run, so mail is never reordered around it and it is
@@ -50,7 +57,7 @@ pub(in crate::relay) fn peek(request: &PeekRequest) -> PeekResult {
         // against it would let one entry larger than the caller's budget park
         // every entry behind it indefinitely — the same permanent park the
         // raw-singleton rule exists to prevent, arrived at from the other side.
-        let next_total = bytes_total.saturating_add(admitted.canonical_bytes);
+        let next_total = bytes_total.saturating_add(canonical_bytes);
         if !entries.is_empty() && next_total > request.canonical_bytes_max {
             break;
         }
@@ -58,7 +65,7 @@ pub(in crate::relay) fn peek(request: &PeekRequest) -> PeekResult {
         entries.push(MailboxEntry {
             sequence: expected,
             message_id: slot.message_id.clone(),
-            canonical_bytes: admitted.canonical_bytes,
+            canonical_bytes,
             payload: slot.payload.clone(),
         });
         if kind == MailboxEntryKind::Raw {

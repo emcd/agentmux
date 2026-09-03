@@ -6,19 +6,20 @@
 //! construction as the original rather than a second path that has to agree
 //! with it.
 
-use std::{sync::OnceLock, time::Instant};
+use std::sync::OnceLock;
 
 use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver};
 
 use crate::protocol::DeliveryDoorbell;
 use crate::protocol::identity::{ConsumerBinding, ConsumerGenerationId, DeliveryTargetId};
+use crate::relay::delivery::LedgerMailboxConsumer;
 use crate::relay::delivery::admission::{
     GenerationRejection, claim_consumer_generation, register_doorbell, replace_consumer_generation,
 };
 use crate::relay::delivery::async_worker::report_resolved_member;
 use crate::relay::delivery::fence::FenceVerdict;
 use crate::relay::{AsyncDeliveryTask, RelayError, relay_error};
-use crate::transports::{SingleDeliveryOutcome, TransportImpl};
+use crate::transports::{DeliveryExecutorContext, TransportImpl};
 use crate::{configuration::BundleMember, envelope::PromptBatchSettings};
 
 use super::super::super::async_worker::{AsyncWorkerKey, WorkerOwner};
@@ -33,32 +34,6 @@ pub(super) const ASYNC_WORKER_POLL_INTERVAL_MS: u64 = 100;
 /// fence that spent the entire remaining grace would satisfy its own bound and
 /// leave every one of those to be cut off by the forced exit.
 pub(super) const SHUTDOWN_FENCE_RESERVE_MS: u64 = 300;
-
-/// What one in-flight collector task yields: the resolved transport outcome, or
-/// `None` if the outcome future was dropped before resolving.
-///
-/// Deliberately carries no task and no outcome *interpretation*. The member's
-/// identity lives in the worker's [`InflightMember`] table instead, so a
-/// collector that panics does not take its member's identity with it — which is
-/// what lets the guard resolve that member rather than strand it.
-pub(super) type InflightOutcome = Option<SingleDeliveryOutcome>;
-
-/// The worker-side record for one in-flight member, held outside the collector
-/// task that carries its write.
-pub(in crate::relay::delivery::dispatch) struct InflightMember {
-    pub(in crate::relay::delivery::dispatch) task: std::sync::Arc<AsyncDeliveryTask>,
-    /// Whether a successful delivery should clear startup failures: `true` for
-    /// coder transports, `false` for UI.
-    pub(in crate::relay::delivery::dispatch) record_served: bool,
-    /// When this member was authorized — the execution watchdog's anchor.
-    ///
-    /// Anchored at authorization rather than at the write because the bound covers
-    /// the relay's whole supervised path, including the rendering and submission
-    /// work between the two. Held here rather than in the ledger for the same
-    /// reason the member's identity is: the worker is what can act on the bound,
-    /// and it can only act on members it still holds.
-    pub(in crate::relay::delivery::dispatch) authorized_at: Instant,
-}
 
 /// What a worker builds its transport from, fixed at spawn and reused for every
 /// generation it goes on to build.
@@ -119,12 +94,11 @@ pub(in crate::relay::delivery::dispatch) struct AcpWorkerBootstrap {
 
 /// Spawns the per-target async delivery worker as a tokio task.
 ///
-/// The worker runs a concurrent produce-and-collect loop: a `select!` over
-/// `receiver.recv()` and a `JoinSet` of in-flight `OutcomeFuture`s submits
-/// each task to its transport via the non-blocking `mailw`/`raww` seam and
-/// collects the resolved outcomes. Blocking IO, quiescence/coalesce waits,
-/// ACP bootstrap/respawn, and readiness mirroring all live inside the
-/// transports' internal delivery tasks. Shutdown is observed via
+/// The worker runs a produce-only loop: it receives tasks, places each one's
+/// payload in its target's mailbox, and supervises the generation. It writes
+/// nothing and collects no outcome, because the target's transport owns the
+/// executor that does both. Blocking IO, coalescing, ACP bootstrap/respawn, and
+/// readiness mirroring all live inside the transports. Shutdown is observed via
 /// `shutdown_requested()` polled between receives.
 pub(in crate::relay::delivery::dispatch) fn spawn_async_delivery_worker(
     key: AsyncWorkerKey,
@@ -184,20 +158,13 @@ pub(super) enum ConsumerGenerationStep {
 /// One generation, everything it owns, and the identity it consumes under.
 pub(super) struct BuiltGeneration {
     pub(super) transport: TransportImpl,
-    /// When an ACP bootstrap has settled; `None` for every other kind, which has
-    /// no such wait.
-    pub(super) bootstrap_settled: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     /// The generation this one consumes its target's mailbox under, which the
     /// worker names as outgoing when it builds the next.
     pub(super) binding: ConsumerBinding,
-    /// The handle the relay rings for this generation, and the one its
-    /// delivery-loop executor waits on.
-    pub(super) doorbell: DeliveryDoorbell,
 }
 
-/// Builds one generation: the identity it consumes under, its transport, the
-/// flag that says when an ACP bootstrap has settled, and the doorbell the relay
-/// rings for it.
+/// Builds one generation: the identity it consumes under, the doorbell the relay
+/// rings for it, and the transport whose executor drives both.
 ///
 /// One function for both the worker's first generation and every replacement it
 /// builds after a positive fence verdict. They must be the same construction: a
@@ -213,6 +180,15 @@ pub(super) struct BuiltGeneration {
 /// bind to. A construction that then fails leaves the generation issued and the
 /// target held, which is the worker's failure path's business — it unregisters,
 /// and the reap that rides the unregister is what gives the target up.
+///
+/// **The doorbell is registered before the transport too**, which reverses the
+/// order this had while nothing waited on one. The executor is spawned inside
+/// `startup`, so a registration made afterwards would leave a window in which an
+/// entry admitted to a live executor rang nothing — recoverable, since the
+/// executor polls, but recoverable is a worse answer than unrepresentable when
+/// the cost of the other order is a stale registration for a target that never
+/// got a transport. Nothing rings such a registration: an entry reaches a mailbox
+/// only through a worker's own intake, and this worker is about to end.
 pub(super) async fn build_generation(
     key: &AsyncWorkerKey,
     source: &WorkerTransportSource,
@@ -222,15 +198,32 @@ pub(super) async fn build_generation(
 ) -> Result<BuiltGeneration, RelayError> {
     let target = consumer_target(key);
     let generation = issue_consumer_generation(&target, step)?;
-    let (transport, bootstrap_settled) =
-        build_transport(key, source, batch_settings, readiness_changed).await?;
+    let binding = ConsumerBinding::new(target.clone(), generation);
     let doorbell = register_generation_doorbell(&target);
-    Ok(BuiltGeneration {
-        transport,
-        bootstrap_settled,
-        binding: ConsumerBinding::new(target, generation),
+    let delivery = executor_context(&binding, doorbell);
+    let transport =
+        build_transport(key, source, batch_settings, readiness_changed, delivery).await?;
+    Ok(BuiltGeneration { transport, binding })
+}
+
+/// What the relay injects so this generation's executor can consume its target.
+///
+/// Assembled here because this is the one place that holds all four parts at
+/// once: the binding just issued, the doorbell just registered, and the two
+/// `[delivery]` durations. The executor paces itself by the same poll interval
+/// this worker uses, so a missed ring costs the same delay on both sides of the
+/// mailbox rather than two unrelated ones.
+fn executor_context(
+    binding: &ConsumerBinding,
+    doorbell: DeliveryDoorbell,
+) -> DeliveryExecutorContext {
+    let delivery = crate::relay::delivery::admission::delivery_configuration();
+    DeliveryExecutorContext {
+        consumer: LedgerMailboxConsumer::bind(binding.clone()),
         doorbell,
-    })
+        poll_interval: std::time::Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS),
+        unreachable_dwell: std::time::Duration::from_millis(delivery.unreachable_dwell_ms),
+    }
 }
 
 /// Takes the target's mailbox for this generation, by whichever act the step
@@ -318,11 +311,12 @@ fn consumer_target(key: &AsyncWorkerKey) -> DeliveryTargetId {
 /// machinery. What the closure rings is the neutral [`DeliveryDoorbell`] this
 /// returns, which is what the generation's delivery-loop executor waits on.
 ///
-/// Registered *after* the transport is built, so a construction that fails
-/// leaves no registration behind for a generation that never existed. The window
-/// this opens is one in which a ring is lost, and it costs nothing: an executor's
-/// first act is to peek, so it finds whatever arrived during it without being
-/// told.
+/// Registered *before* the transport is built, because the transport spawns the
+/// executor that waits on this. A registration made afterwards would leave a
+/// window in which an entry admitted to a live executor rang nothing; the other
+/// order leaves at worst a stale registration for a generation whose construction
+/// failed, and nothing rings one of those, since an entry reaches a mailbox only
+/// through a worker's own intake and that worker is about to end.
 fn register_generation_doorbell(target: &DeliveryTargetId) -> DeliveryDoorbell {
     let doorbell = DeliveryDoorbell::new();
     let ring = doorbell.clone();
@@ -330,21 +324,15 @@ fn register_generation_doorbell(target: &DeliveryTargetId) -> DeliveryDoorbell {
     doorbell
 }
 
-/// The transport half of building a generation, separated so the doorbell above
-/// is registered for a generation that exists rather than for one whose
-/// construction is about to fail.
+/// The transport half of building a generation, separated so the identity and
+/// the doorbell above are settled before anything can consume under them.
 async fn build_transport(
     key: &AsyncWorkerKey,
     source: &WorkerTransportSource,
     batch_settings: PromptBatchSettings,
     readiness_changed: &std::sync::Arc<tokio::sync::Notify>,
-) -> Result<
-    (
-        TransportImpl,
-        Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-    ),
-    RelayError,
-> {
+    delivery: DeliveryExecutorContext,
+) -> Result<TransportImpl, RelayError> {
     match source {
         WorkerTransportSource::Acp(bootstrap) => {
             let services = build_acp_driver_services(key, bootstrap);
@@ -354,22 +342,22 @@ async fn build_transport(
                 key.namespace.clone(),
                 services,
                 batch_settings,
+                delivery,
             );
             // The bootstrap runs supervised in the background; construction itself
             // cannot fail here, which is why only the Direct arm returns an error.
-            let settled = match &mut transport {
-                TransportImpl::Acp(driver) => Some(driver.start_bootstrap()),
-                _ => None,
-            };
-            Ok((transport, settled))
+            // The executor is spawned by the bootstrap's own `startup`, once there
+            // is a client for it to write through.
+            if let TransportImpl::Acp(driver) = &mut transport {
+                driver.start_bootstrap();
+            }
+            Ok(transport)
         }
         WorkerTransportSource::Direct(context) => {
             let notify = std::sync::Arc::clone(readiness_changed);
             let readiness_notifier: crate::tmux::ReadinessNotifier =
                 std::sync::Arc::new(move || notify.notify_waiters());
-            let transport =
-                build_worker_transport(context, key, batch_settings, readiness_notifier).await?;
-            Ok((transport, None))
+            build_worker_transport(context, key, batch_settings, readiness_notifier, delivery).await
         }
     }
 }

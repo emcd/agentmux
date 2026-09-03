@@ -1008,8 +1008,11 @@ transport wrote it.
 Building the payload before the entry is peekable is what admits a payload
 that cannot be built at all: such an entry SHALL still resolve through a
 terminal outcome rather than being stranded, and SHALL NOT become peekable.
-Relay-originated work that bypasses admission holds no mailbox position and
-SHALL be delivered without one rather than refused for want of it.
+Relay-originated work that bypasses admission holds no admission **reservation**
+and SHALL be given a mailbox position all the same, rather than refused for want
+of a reservation it is not required to hold. It is peeked, declared, written and
+acknowledged like any other entry; what it lacks is quota to release, so its
+acknowledgment releases none.
 
 #### Scenario: The delivered payload is the stored payload
 
@@ -1038,12 +1041,17 @@ SHALL be delivered without one rather than refused for want of it.
 - **THEN** that entry does not become peekable
 - **AND** it still reaches a terminal outcome reported to its sender
 
-#### Scenario: Work that bypasses admission is delivered without a position
+#### Scenario: Work that bypasses admission is delivered without a reservation
 
 - **WHEN** relay-originated work holding no admission reservation is
   delivered
-- **THEN** it takes no mailbox position
-- **AND** it is delivered rather than refused for holding none
+- **THEN** it takes a mailbox position and is peeked, declared, written and
+  acknowledged like any other entry
+- **AND** it is delivered rather than refused for holding no reservation
+- **AND** acknowledging it releases no admission quota, because it reserved
+  none
+- **BECAUSE** the transport's delivery-loop executor writes what it peeks and
+  nothing else, so work with no position is work nothing delivers
 
 ### Requirement: Mailbox Peek Operation
 

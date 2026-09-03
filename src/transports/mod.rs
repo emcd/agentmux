@@ -27,10 +27,10 @@ pub use crate::tmux::TmuxTransport;
 pub(crate) use contract::stopped_before_submission_outcome;
 pub use contract::{
     ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage,
-    DeliveryWriter, GenerationFence, HandoverDimensions, LookMode, MailboxConsumer, OutcomeFuture,
-    OutputView, PartitionSink, PlannedWrite, PromptReadinessTemplate, SingleDeliveryOutcome,
-    StartupContext, ThingToChoose, Transport, TransportError, TransportHealth, TransportImpl,
-    TransportReadiness, TransportStatus, UnreachableSince, run_delivery_executor,
+    DeliveryWriter, GenerationFence, LookMode, MailboxConsumer, OutputView, PeekDimensions,
+    PlannedWrite, PromptReadinessTemplate, SingleDeliveryOutcome, StartupContext, ThingToChoose,
+    Transport, TransportError, TransportHealth, TransportImpl, TransportReadiness, TransportStatus,
+    UnreachableSince, receipt_runs, run_delivery_executor,
 };
 pub use diagnostics::{
     DIAGNOSTIC_MESSAGE_IDS_MAXIMUM, DeliveryDiagnosticContext, emit_delivery_progress,

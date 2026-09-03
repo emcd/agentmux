@@ -224,7 +224,6 @@ mod consumer_generation_tests {
 
     use super::super::super::super::guard::SubmissionEvidence;
     use super::super::super::terminal::terminalize;
-    use super::super::ack::ack;
     use super::super::declare::declare;
     use super::super::fixtures::{
         acknowledge, admission_key, binding, claim, mail, peeked, place, range, request, seq,

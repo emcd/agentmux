@@ -1,8 +1,13 @@
 //! Recording the run an executor is about to submit as one packing unit.
 
+use std::time::Duration;
+
+use serde_json::json;
+
 use crate::protocol::identity::ConsumerBinding;
 use crate::protocol::mailbox::EntryRange;
 use crate::protocol::operations::{DeclareAccepted, DeclareRejection, DeclareResult};
+use crate::runtime::inscriptions::emit_inscription;
 
 use super::super::super::guard::{GuardKey, PackingUnitId};
 use super::super::ledger::{OutstandingDeclaration, UnitRecord, lock_ledger};
@@ -87,6 +92,7 @@ pub(in crate::relay) fn declare(binding: &ConsumerBinding, range: EntryRange) ->
         unit,
         range,
         generation: binding.generation,
+        declared_at: std::time::Instant::now(),
     });
     for message_id in &member_ids {
         if let Some(entry) = state.entries.get_mut(message_id.as_str()) {
@@ -101,7 +107,52 @@ pub(in crate::relay) fn declare(binding: &ConsumerBinding, range: EntryRange) ->
             unresolved_members: member_ids.len(),
         },
     );
+    // The partition is otherwise invisible. Every other step of a delivery leaves
+    // a record, but which members shared a fate — the thing that decides whose
+    // outcome is derived from whose evidence — could not be answered from the log
+    // at all. That is a gap in an arc whose subject is per-member attribution: a
+    // reader could see two members resolve identically without being able to tell
+    // whether that was one record answering for both or two records agreeing.
+    //
+    // Emitted with the ledger lock still held, which is deliberate here where
+    // resolutions are deliberately handed back to be reported after release. A
+    // resolution reaches another target's worker and locks of its own; this
+    // writes one line about state that has just been committed, and moving it
+    // outside would let a reader see the acknowledgment of a unit whose
+    // declaration had not been recorded yet.
+    emit_inscription(
+        "relay.delivery.partition.declared",
+        &json!({
+            "unit_id": unit.value(),
+            "member_ids": member_ids,
+            "member_count": member_ids.len(),
+            "from_sequence": range.from().value(),
+            "through_sequence": range.through().value(),
+        }),
+    );
     Ok(DeclareAccepted { unit, range })
+}
+
+/// How long the target's outstanding declaration has been outstanding, or `None`
+/// when it has none.
+///
+/// The execution watchdog's read. It is a question about the *relay's* record
+/// rather than about the transport, which is what lets the bound be described as
+/// one over the relay's own supervised execution: an unacknowledged declaration
+/// past the bound says the executor overran, and says nothing at all about the
+/// target's health.
+///
+/// Scoped to the caller's generation. A worker supervising its own generation
+/// must not arm its watchdog on a declaration a successor made, and after a
+/// replacement the outgoing declaration is resolved rather than inherited.
+pub(in crate::relay) fn declaration_age(binding: &ConsumerBinding) -> Option<Duration> {
+    let state = lock_ledger().ok()?;
+    let key = target_key(&binding.target);
+    if active_generation(&state, &key) != Some(binding.generation) {
+        return None;
+    }
+    let outstanding = state.mailboxes.get(&key)?.outstanding?;
+    (outstanding.generation == binding.generation).then(|| outstanding.declared_at.elapsed())
 }
 
 /// A declaration binds one well-formed range, and only one at a time.
@@ -119,7 +170,6 @@ mod mailbox_declaration_tests {
     use crate::protocol::operations::MemberAcknowledgment;
 
     use super::super::super::super::guard::SubmissionEvidence;
-    use super::super::ack::ack;
     use super::*;
 
     #[test]

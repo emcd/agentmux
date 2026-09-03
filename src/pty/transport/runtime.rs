@@ -1,9 +1,14 @@
-//! Pty worker/reader runtime — the `!Send` terminal lives here.
+//! Pty worker/reader threads — the `!Send` terminal lives here.
 //!
-//! Extracted from `transport.rs` as a mechanical split — no behavior
-//! change. The worker owns the `libghostty-vt` terminal (thread-local),
-//! the delivery `Delivery` state machine, and the snapshot/bytes/write
-//! channel pumps. The reader owns the blocking PTY master read.
+//! The worker thread constructs the `libghostty-vt` terminal, installs its
+//! callbacks, and then hands it to
+//! [`PtyDeliveryWriter`](crate::pty::delivery::PtyDeliveryWriter) and runs the
+//! shared delivery-loop executor for the rest of the generation's life. That is
+//! the whole of this thread's job: the terminal cannot leave it, so the delivery
+//! loop has to come to the terminal rather than the other way round.
+//!
+//! The reader owns the blocking PTY master read and feeds its bytes across to
+//! the worker.
 
 use std::{
     io::Write,
@@ -16,19 +21,20 @@ use std::{
 
 use tokio::sync::mpsc;
 
-use crate::pty::delivery::{Delivery, DeliveryStep, PendingRaw};
-use crate::pty::state::{PtyShared, SnapshotRequest, SnapshotResponse};
-use crate::transports::{SingleDeliveryOutcome, WorkerReadinessState};
+use crate::pty::delivery::PtyDeliveryWriter;
+use crate::pty::state::{PtyShared, SnapshotRequest};
+use crate::transports::{
+    DeliveryExecutorContext, UnreachableSince, WorkerReadinessState, run_delivery_executor,
+};
 
-use super::{PTY_VERSION_STRING, PtyMirrorStateFn, READER_IDLE_POLL, WORKER_IDLE_POLL};
+use super::{PTY_VERSION_STRING, PtyMirrorStateFn, READER_IDLE_POLL};
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn run_worker(
     cols: u16,
     rows: u16,
-    mut bytes_rx: mpsc::Receiver<Vec<u8>>,
-    mut write_rx: mpsc::Receiver<super::DeliveryCommand>,
-    mut snapshot_rx: mpsc::Receiver<SnapshotRequest>,
+    bytes_rx: mpsc::Receiver<Vec<u8>>,
+    snapshot_rx: mpsc::Receiver<SnapshotRequest>,
     shared: PtyShared,
     writer: Arc<std::sync::Mutex<Box<dyn Write + Send>>>,
     child: Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
@@ -36,7 +42,8 @@ pub(super) fn run_worker(
     shutdown_flag: Arc<AtomicBool>,
     mirror_state: Option<PtyMirrorStateFn>,
     readiness: Arc<Mutex<WorkerReadinessState>>,
-    partition_sink: Arc<dyn crate::transports::PartitionSink>,
+    unreachable_since: Arc<UnreachableSince>,
+    delivery: DeliveryExecutorContext,
 ) {
     let mut terminal = match libghostty_vt::Terminal::new(libghostty_vt::TerminalOptions {
         cols,
@@ -70,163 +77,31 @@ pub(super) fn run_worker(
         WorkerReadinessState::Available,
     );
 
-    let mut delivery: Option<Delivery> = None;
-    let mut pending_raw: Option<PendingRaw> = None;
+    run_delivery_executor(
+        PtyDeliveryWriter::new(
+            terminal,
+            bytes_rx,
+            snapshot_rx,
+            writer,
+            shared,
+            Arc::clone(&readiness),
+            mirror_state.clone(),
+            unreachable_since,
+            shutdown_flag,
+        ),
+        delivery,
+    );
 
-    while !shutdown_flag.load(Ordering::Acquire) {
-        if shared.child_exited.load(Ordering::Acquire) {
-            publish(
-                &readiness,
-                mirror_state.as_ref(),
-                WorkerReadinessState::Unavailable,
-            );
-            resolve_pending_raw_failed(&mut pending_raw, &target_session);
-            abandon_in_flight(&mut delivery, &target_session);
-            drain_remaining_with_failed(&mut write_rx, &target_session);
-            break;
-        }
-
-        while let Ok(request) = snapshot_rx.try_recv() {
-            handle_snapshot(&mut terminal, request);
-        }
-
-        if let Some(raw) = pending_raw.take() {
-            match Delivery::start_raw(
-                raw.content,
-                raw.append_enter,
-                raw.outcome_tx,
-                &writer,
-                &target_session,
-            ) {
-                Ok(d) => {
-                    publish(
-                        &readiness,
-                        mirror_state.as_ref(),
-                        WorkerReadinessState::Busy,
-                    );
-                    delivery = Some(d);
-                    continue;
-                }
-                Err(_) => {
-                    continue;
-                }
-            }
-        }
-
-        if let Some(d) = delivery.as_mut() {
-            match d.step(&target_session) {
-                DeliveryStep::Done {
-                    pending_raw: next_raw,
-                } => {
-                    publish(
-                        &readiness,
-                        mirror_state.as_ref(),
-                        WorkerReadinessState::Available,
-                    );
-                    delivery = None;
-                    pending_raw = next_raw;
-                    continue;
-                }
-            }
-        }
-
-        while let Ok(bytes) = bytes_rx.try_recv() {
-            terminal.vt_write(&bytes);
-        }
-
-        match write_rx.try_recv() {
-            Ok(super::DeliveryCommand::Envelope {
-                envelope,
-                outcome_tx,
-            }) => {
-                let d = Delivery::start_envelope_group(
-                    envelope,
-                    outcome_tx,
-                    &mut write_rx,
-                    &writer,
-                    &target_session,
-                    partition_sink.as_ref(),
-                );
-                publish(
-                    &readiness,
-                    mirror_state.as_ref(),
-                    WorkerReadinessState::Busy,
-                );
-                delivery = Some(d);
-                continue;
-            }
-            Ok(super::DeliveryCommand::Raw {
-                content,
-                append_enter,
-                outcome_tx,
-            }) => {
-                pending_raw = Some(PendingRaw {
-                    content,
-                    append_enter,
-                    outcome_tx,
-                });
-                continue;
-            }
-            Err(_) => {
-                thread::sleep(WORKER_IDLE_POLL);
-            }
-        }
-    }
-
-    drain_remaining(&mut write_rx, &target_session);
-    while let Ok(req) = snapshot_rx.try_recv() {
-        let _ = req.tx.send(SnapshotResponse {
-            tail: String::new(),
-            cursor_x: 0,
-            cursor_y: 0,
-            cursor_visible: false,
-        });
-    }
-}
-
-fn abandon_in_flight(delivery: &mut Option<Delivery>, target_session: &str) {
-    if let Some(mut d) = delivery.take() {
-        d.abandon_into_failed(
-            target_session,
-            "pty_child_exited",
-            "pty child exited before delivery resolved",
-        );
-    }
-}
-
-fn drain_remaining_with_failed(
-    write_rx: &mut mpsc::Receiver<super::DeliveryCommand>,
-    target_session: &str,
-) {
-    while let Ok(cmd) = write_rx.try_recv() {
-        let outcome_tx = match cmd {
-            super::DeliveryCommand::Envelope { outcome_tx, .. } => outcome_tx,
-            super::DeliveryCommand::Raw { outcome_tx, .. } => outcome_tx,
-        };
-        let _ = outcome_tx.send(SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: String::new(),
-            outcome: crate::transports::SendOutcome::Failed,
-            reason_code: Some("pty_child_exited".to_string()),
-            reason: Some(
-                "pty child exited before the queued delivery could be processed".to_string(),
-            ),
-            details: None,
-        });
-    }
-}
-
-fn resolve_pending_raw_failed(pending_raw: &mut Option<PendingRaw>, target_session: &str) {
-    if let Some(raw) = pending_raw.take() {
-        let _ = raw.outcome_tx.send(SingleDeliveryOutcome {
-            target_session: target_session.to_string(),
-            message_id: String::new(),
-            outcome: crate::transports::SendOutcome::Failed,
-            reason_code: Some("pty_child_exited".to_string()),
-            reason: Some("pty child exited before the pending raw could be processed".to_string()),
-            details: None,
-        });
-    }
+    // The executor has returned, so nothing on this side will service the
+    // terminal or take another write. Published here rather than left to
+    // whichever event ended the loop, because the two that can — a shutdown
+    // request and the child departing — would otherwise agree on the state only
+    // by coincidence.
+    publish(
+        &readiness,
+        mirror_state.as_ref(),
+        WorkerReadinessState::Unavailable,
+    );
 }
 
 pub(super) fn publish(
@@ -297,56 +172,6 @@ fn install_handlers(
         .expect("install on_title_changed callback");
 }
 
-fn handle_snapshot(terminal: &mut libghostty_vt::Terminal<'_, '_>, request: SnapshotRequest) {
-    let response = render_snapshot(terminal, request.inspect_lines);
-    let _ = request.tx.send(response);
-}
-
-fn render_snapshot(
-    terminal: &mut libghostty_vt::Terminal<'_, '_>,
-    inspect_lines: Option<usize>,
-) -> SnapshotResponse {
-    let formatter_result = libghostty_vt::fmt::Formatter::new(
-        terminal,
-        libghostty_vt::fmt::FormatterOptions::new()
-            .with_format(libghostty_vt::fmt::Format::Plain)
-            .with_trim(true),
-    );
-    let bytes = match formatter_result {
-        Ok(formatter) => {
-            let mut f = formatter;
-            match f.format_alloc(None) {
-                Ok(bytes) => bytes.as_ref().to_vec(),
-                Err(_) => Vec::new(),
-            }
-        }
-        Err(_) => Vec::new(),
-    };
-    let tail = String::from_utf8_lossy(&bytes).to_string();
-    let lines_to_take = inspect_lines.unwrap_or(crate::pty::state::LOOK_LINES_DEFAULT);
-    let mut collected: Vec<String> = tail
-        .lines()
-        .rev()
-        .take(lines_to_take)
-        .map(str::to_string)
-        .collect();
-    collected.reverse();
-    let trimmed_tail = collected.join("\n");
-    let cursor_x = terminal.cursor_x().unwrap_or(0);
-    let cursor_y = terminal.cursor_y().unwrap_or(0);
-    let cursor_visible = terminal.is_cursor_visible().unwrap_or(false);
-    SnapshotResponse {
-        tail: trimmed_tail,
-        cursor_x,
-        cursor_y,
-        cursor_visible,
-    }
-}
-
-fn drain_remaining(write_rx: &mut mpsc::Receiver<super::DeliveryCommand>, _target_session: &str) {
-    while write_rx.try_recv().is_ok() {}
-}
-
 pub(super) fn run_reader(
     mut reader: Box<dyn std::io::Read + Send>,
     bytes_tx: mpsc::Sender<Vec<u8>>,
@@ -380,11 +205,10 @@ pub(super) fn run_reader(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::transports::SingleDeliveryOutcome;
     use std::io::{self, Read};
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
-    use tokio::sync::{mpsc, oneshot};
+    use tokio::sync::mpsc;
 
     struct FatalErrReader;
 
@@ -394,8 +218,13 @@ mod tests {
         }
     }
 
+    /// A fatal (non-`WouldBlock`) read error is the reader's only way to learn
+    /// the child is gone without an EOF, and latching `child_exited` is what
+    /// carries that finding to the executor's health axis. `run_reader` is
+    /// crate-private and takes its reader by value, so the failing reader can
+    /// only be injected from inside this module.
     #[test]
-    fn reader_fatal_err_sets_child_exited_and_pending_raw_resolves_failed() {
+    fn reader_fatal_err_sets_child_exited() {
         let child_exited = Arc::new(AtomicBool::new(false));
         let (bytes_tx, _bytes_rx) = mpsc::channel::<Vec<u8>>(256);
         let shutdown_flag = Arc::new(AtomicBool::new(false));
@@ -408,30 +237,6 @@ mod tests {
         assert!(
             child_exited.load(Ordering::Acquire),
             "fatal reader Err (non-WouldBlock) should set child_exited",
-        );
-
-        let (tx, rx) = oneshot::channel::<SingleDeliveryOutcome>();
-        let mut pending_raw = Some(crate::pty::delivery::PendingRaw {
-            content: "x".to_string(),
-            append_enter: false,
-            outcome_tx: tx,
-        });
-        resolve_pending_raw_failed(&mut pending_raw, "test-session");
-        assert!(pending_raw.is_none(), "pending_raw slot should be consumed",);
-        let outcome = rx
-            .blocking_recv()
-            .expect("receiver should get the Failed outcome");
-        assert_eq!(outcome.target_session, "test-session");
-        assert!(
-            matches!(outcome.outcome, crate::transports::SendOutcome::Failed),
-            "expected Failed, got {:?}",
-            outcome.outcome,
-        );
-        assert_eq!(
-            outcome.reason_code.as_deref(),
-            Some("pty_child_exited"),
-            "expected reason_code pty_child_exited, got {:?}",
-            outcome.reason_code,
         );
     }
 }

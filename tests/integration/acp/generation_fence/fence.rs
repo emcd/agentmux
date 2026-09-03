@@ -370,7 +370,7 @@ fn an_executor_blocked_past_the_bound_is_fenced_and_its_member_resolved() {
     });
 
     // Comfortably past a pipe's 64 KiB buffer and well under the 256 KiB
-    // handover maximum, so admission accepts it and the write cannot complete.
+    // payload maximum, so admission accepts it and the write cannot complete.
     let result = send_result(
         dispatch_sized_send_result(&config_root, &tmux_socket, 150_000)
             .expect("relay request should parse"),

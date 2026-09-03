@@ -1,21 +1,24 @@
-//! The tmux [`Transport`] implementation with an internal delivery task.
+//! The tmux [`Transport`] implementation and the delivery-loop executor it owns.
 //!
-//! [`TmuxTransport`] owns an internal ordered channel and a background delivery
-//! task. The relay worker submits writes via [`mailw`](Transport::mailw) and
-//! [`raww`](Transport::raww) without blocking; the internal task drains the
-//! channel in FIFO order, accumulates contiguous envelopes into flush groups,
-//! renders each envelope's pane text and combines them into token-budget-bounded
-//! prompts (the same greedy split the ACP transport applies to its turns), and
-//! pastes each combined prompt. Raw writes act as batch barriers: the task
-//! flushes any buffered envelope group before delivering the raw write.
+//! [`TmuxTransport`] owns exactly one serial delivery-loop executor for its
+//! lifetime, spawned during [`startup`](Transport::startup). The relay never
+//! invokes this transport to deliver: the executor peeks its target's mailbox,
+//! renders what it peeked into pane text, combines a prefix of it into one
+//! token-budget-bounded prompt, declares that prompt's entries as a packing unit,
+//! pastes it, and acknowledges what the paste proved. Raw entries reach it the
+//! same way and are written alone, because the mailbox returns one at the head as
+//! a singleton.
 //!
 //! Tmux sessions are created and owned by the [`lifecycle`](super::lifecycle)
 //! primitives (driven by relay bundle reconcile/startup), so the transport owns
-//! no session lifecycle. What [`startup`](Transport::startup) does own is the
-//! internal delivery task, which it establishes eagerly so the transport can
-//! answer [`is_ready_for_handover`](Transport::is_ready_for_handover) before it
-//! has been written to. The internal task resolves the active pane per flush
-//! group against the runtime's tmux socket.
+//! no session lifecycle. What `startup` owns is the executor and the observer
+//! beside it.
+//!
+//! The observer is a separate thread on purpose. The executor spends most of its
+//! time parked on its doorbell, and a readiness reading taken only when it wakes
+//! would be a reading of the pane as it was one poll ago; the observer keeps the
+//! level current without either thread spawning a tmux client the fence cannot
+//! reach.
 
 use std::{
     path::PathBuf,
@@ -27,30 +30,22 @@ use std::{
     time::Duration,
 };
 
-use tokio::sync::{mpsc, oneshot};
-
 use crate::configuration::TargetConfiguration;
 use crate::envelope::PromptBatchSettings;
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::transports::{
-    DeliveryEnvelope, GenerationFence, OutcomeFuture, OutputView, PartitionSink, SendOutcome,
-    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportHealth,
-    TransportReadiness, TransportStatus, UnreachableSince,
+    DeliveryEnvelope, DeliveryExecutorContext, GenerationFence, OutputView, StartupContext,
+    Transport, TransportError, TransportHealth, TransportReadiness, TransportStatus,
+    UnreachableSince, run_delivery_executor,
 };
 
 use super::pane::{TmuxInvocationSlot, publish_tmux_invocations, terminate_published_invocation};
 
 mod delivery;
+mod executor;
 mod observation;
 pub use delivery::coalescing_runs;
 pub use observation::TmuxOutputView;
-
-const TMUX_TARGET_UNAVAILABLE_CODE: &str = "tmux_target_unavailable";
-const TMUX_DELIVERY_THREAD_STOPPED_CODE: &str = "tmux_delivery_thread_stopped";
-
-/// Capacity of the internal write channel. Sized to absorb bursts from the
-/// relay worker without unbounded growth; the delivery task drains continuously.
-const WRITE_CHANNEL_CAPACITY: usize = 256;
 
 /// How often the observer thread re-reads its pane.
 ///
@@ -87,21 +82,7 @@ pub fn render_paste_text(envelope: &DeliveryEnvelope) -> String {
     }
 }
 
-/// Outcome sender half: the delivery task resolves this when the write reaches
-/// a terminal state.
-type OutcomeSender = oneshot::Sender<SingleDeliveryOutcome>;
-
-/// One item on the transport's internal ordered channel.
-enum WriteItem {
-    /// Structured delivery message with its outcome sender. Boxed to keep the
-    /// channel item small (the message carries full attribution), so the `Raw`
-    /// variant does not inflate every queued item.
-    Envelope(Box<DeliveryEnvelope>, OutcomeSender),
-    /// Raw input (content, append_enter) with its outcome sender.
-    Raw(String, bool, OutcomeSender),
-}
-
-/// Context captured at `startup` for the internal delivery task.
+/// Context captured at `startup` for the delivery-loop executor and the observer.
 #[derive(Clone)]
 struct DeliveryTaskContext {
     target_session: String,
@@ -109,21 +90,19 @@ struct DeliveryTaskContext {
     target_member: crate::configuration::BundleMember,
 }
 
-/// Tmux pane delivery transport with an internal delivery task.
+/// Tmux pane delivery transport with one serial delivery-loop executor.
 ///
-/// The transport owns an ordered channel carrying [`WriteItem`]s. The relay
-/// worker submits writes via `mailw`/`raww` without blocking; a background
-/// delivery task drains the channel, groups contiguous envelopes, and pastes.
+/// The executor is spawned at `startup` and lives for the transport instance's
+/// lifetime. Nothing is handed to this transport to deliver; it consumes its
+/// target's mailbox itself.
 pub struct TmuxTransport {
     batch_settings: PromptBatchSettings,
-    /// The relay's guard, for reporting which members share one paste.
-    ///
-    /// Cloned into the delivery thread rather than reached through the relay:
-    /// the partition is decided in `paste_group`, on that thread, between the
-    /// token-budget split and the injection it brackets.
-    partition_sink: Arc<dyn PartitionSink>,
-    sender: Option<mpsc::Sender<WriteItem>>,
-    task_handle: Option<thread::JoinHandle<()>>,
+    /// What the relay injected so the executor can reach its target's mailbox:
+    /// the consumer handle, the doorbell, and the two `[delivery]` durations it
+    /// paces itself by. Consumed at `startup`, which is where the executor that
+    /// drives it is spawned.
+    delivery: DeliveryExecutorContext,
+    executor_handle: Option<thread::JoinHandle<()>>,
     task_context: Option<DeliveryTaskContext>,
     shutdown_flag: Arc<AtomicBool>,
     /// The tmux client invocation the delivery thread is currently waiting on.
@@ -133,7 +112,12 @@ pub struct TmuxTransport {
     /// parked in a tmux client call.
     invocation: TmuxInvocationSlot,
     /// Latch for the health axis: when the pane first stopped being observable.
-    unreachable_since: UnreachableSince,
+    ///
+    /// Shared with the executor rather than duplicated, so the level the
+    /// executor measures its dwell against and the level this transport reports
+    /// cannot disagree about when unreachability began. A second latch would
+    /// give the two different clocks for the same condition.
+    unreachable_since: Arc<UnreachableSince>,
     /// The most recent pane observation, published by the observer thread and
     /// read by the two contract predicates.
     ///
@@ -178,8 +162,8 @@ enum PaneObservation {
         ready: bool,
         /// tmux's window-activity marker at that observation, or `0` when the
         /// format is unavailable. Carried but never classified on here: the
-        /// relay compares consecutive values, because only it knows which two
-        /// observations bracket a handover decision.
+        /// delivery loop compares consecutive values, because only it knows
+        /// which two observations bracket a write decision.
         activity: u64,
     },
 }
@@ -222,11 +206,10 @@ impl std::fmt::Debug for TmuxTransport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TmuxTransport")
             .field("batch_settings", &self.batch_settings)
-            .field("sender", &self.sender.as_ref().map(|_| "..."))
             .field(
-                "task_running",
+                "executor_running",
                 &self
-                    .task_handle
+                    .executor_handle
                     .as_ref()
                     .map(|handle| !handle.is_finished()),
             )
@@ -245,18 +228,17 @@ impl TmuxTransport {
     pub fn new(
         batch_settings: PromptBatchSettings,
         readiness_notifier: Option<ReadinessNotifier>,
-        partition_sink: Arc<dyn PartitionSink>,
+        delivery: DeliveryExecutorContext,
     ) -> Self {
         Self {
             batch_settings,
             readiness_notifier,
-            partition_sink,
-            sender: None,
-            task_handle: None,
+            delivery,
+            executor_handle: None,
             task_context: None,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
             invocation: TmuxInvocationSlot::default(),
-            unreachable_since: UnreachableSince::default(),
+            unreachable_since: Arc::new(UnreachableSince::default()),
             observation: Arc::new(Mutex::new(PaneObservation::Pending)),
             observer_invocation: TmuxInvocationSlot::default(),
             observer_handle: None,
@@ -329,108 +311,46 @@ impl TmuxTransport {
     /// The two readings feed different axes and must not be collapsed: an
     /// unobservable pane is not a busy one, and only the busy one is worth
     /// waiting on.
-    /// The cached observation, plus the liveness facts only the transport holds.
+    /// The cached observation, plus the liveness fact only the transport holds.
     ///
-    /// A stopped delivery task is unreachable however healthy the pane looks:
-    /// there is nothing left to carry a write to it.
+    /// A stopped observer is unreachable however healthy the pane last looked:
+    /// the reading below would be frozen at whatever it said when the thread
+    /// went, and reporting a stale `ready` would hand the executor a level
+    /// nothing is refreshing.
     fn observed(&self) -> PaneObservation {
-        let live = self
-            .sender
+        let observing = self
+            .observer_handle
             .as_ref()
-            .is_some_and(|sender| !sender.is_closed())
-            && self
-                .task_handle
-                .as_ref()
-                .is_some_and(|handle| !handle.is_finished())
-            && self
-                .observer_handle
-                .as_ref()
-                .is_some_and(|handle| !handle.is_finished());
-        if !live {
+            .is_some_and(|handle| !handle.is_finished());
+        if !observing {
             return PaneObservation::Unreachable;
         }
         *self.observation.lock().expect("tmux observation mutex")
     }
 
-    /// Starts the internal delivery task if not already running and `startup()`
-    /// has been called. Returns an error when startup was omitted or the task
-    /// has stopped after startup.
-    fn ensure_task_running(&mut self) -> Result<(), &'static str> {
-        if let Some(handle) = self.task_handle.as_ref()
-            && handle.is_finished()
-        {
-            let handle = self
-                .task_handle
-                .take()
-                .expect("finished task handle must still be present");
-            let _ = handle.join();
-            self.sender = None;
-            return Err(TMUX_DELIVERY_THREAD_STOPPED_CODE);
-        }
-        if let Some(handle) = self.task_handle.as_ref() {
-            if self.sender.is_some() && !handle.is_finished() {
-                return Ok(());
-            }
-            self.sender = None;
-            return Err(TMUX_DELIVERY_THREAD_STOPPED_CODE);
-        }
-        if self.sender.is_some() {
-            self.sender = None;
-            return Err(TMUX_DELIVERY_THREAD_STOPPED_CODE);
-        }
-        let ctx = match self.task_context.clone() {
-            Some(ctx) => ctx,
-            None => return Err("transport_not_started"),
-        };
-        let (sender, receiver) = mpsc::channel(WRITE_CHANNEL_CAPACITY);
-        let shutdown_flag = Arc::clone(&self.shutdown_flag);
-        let batch_settings = self.batch_settings;
+    /// Spawns this transport's one serial delivery-loop executor.
+    ///
+    /// One per transport instance, for its lifetime. It is spawned rather than
+    /// started lazily on a first write because there is no first write to start
+    /// it: nothing is handed to this transport, so an executor that waited to be
+    /// asked would never run at all.
+    fn spawn_executor(&mut self, context: &DeliveryTaskContext) {
+        let delivery = self.delivery.clone();
+        let writer = executor::tmux_delivery_writer(
+            context.runtime_directory.as_path(),
+            context.target_session.clone(),
+            self.batch_settings,
+            Arc::clone(&self.observation),
+            Arc::clone(&self.unreachable_since),
+            Arc::clone(&self.shutdown_flag),
+        );
         let invocation = Arc::clone(&self.invocation);
-        let partition_sink = Arc::clone(&self.partition_sink);
-        let task_handle = thread::spawn(move || {
+        self.executor_handle = Some(thread::spawn(move || {
+            // Published before the first invocation, so every tmux client this
+            // thread spawns is reachable by the fence's forced step.
             publish_tmux_invocations(invocation);
-            delivery::run_delivery_task(
-                receiver,
-                ctx,
-                shutdown_flag,
-                batch_settings,
-                partition_sink,
-            );
-        });
-        self.sender = Some(sender);
-        self.task_handle = Some(task_handle);
-        Ok(())
-    }
-
-    /// Enqueues a write item on the channel. If the channel is full or closed,
-    /// resolves the sender immediately with a failed outcome.
-    fn enqueue(&self, item: WriteItem) {
-        if let Some(ch) = &self.sender
-            && let Err(
-                mpsc::error::TrySendError::Full(item) | mpsc::error::TrySendError::Closed(item),
-            ) = ch.try_send(item)
-        {
-            // An envelope refused here never reached `paste_group`, so no packing
-            // unit was declared for it and nothing was written: `not_submitted` is
-            // provable rather than inferred. Raw keeps `failed` because the relay
-            // declared its singleton unit before calling `raww` — a bound member
-            // cannot claim non-delivery, and the relay's own reconciliation
-            // rewrites its spelling from the unit's evidence.
-            let (outcome_sender, message_id, outcome) = match item {
-                WriteItem::Envelope(env, sender) => {
-                    (sender, env.message_id, SendOutcome::NotSubmitted)
-                }
-                WriteItem::Raw(_, _, sender) => (sender, String::new(), SendOutcome::Failed),
-            };
-            let _ = outcome_sender.send(SingleDeliveryOutcome {
-                target_session: String::new(),
-                message_id,
-                outcome,
-                reason_code: Some("channel_full".to_string()),
-                reason: Some("internal write channel full or closed".to_string()),
-                details: None,
-            });
-        }
+            run_delivery_executor(writer, delivery);
+        }));
     }
 }
 
@@ -442,27 +362,25 @@ impl GenerationFence for TmuxTransport {
     }
 
     fn terminate_generation(&mut self) {
-        // Two effect paths, and the channel only reaches one of them. Dropping
-        // the sender returns a thread parked waiting for its next item; it does
+        // The cooperative flag reaches a thread between its own checks; it does
         // nothing at all for one blocked inside a tmux client call, which is the
-        // case that made the cooperative step fail in the first place. Signalling
-        // the invocation is what unblocks that thread so the observation after
-        // this can succeed.
+        // case that made step 1 fail in the first place. Signalling the
+        // invocation is what unblocks that thread so the observation after this
+        // can succeed.
         //
         // The tmux **server** is deliberately untouched. It is not owned by this
         // generation — it holds the operator's sessions, and terminating it to
         // fence one delivery would destroy work the fence exists to protect.
         terminate_published_invocation(&self.invocation);
         // The observer holds a second slot, and a fence that reached only the
-        // delivery thread would leave a tmux client of this generation running.
+        // executor would leave a tmux client of this generation running.
         terminate_published_invocation(&self.observer_invocation);
-        self.sender = None;
     }
 
     fn generation_ceased(&self) -> bool {
-        // A generation that never started a delivery thread owns no executor and
-        // has trivially ceased.
-        self.task_handle
+        // A generation that never started an executor owns none and has
+        // trivially ceased.
+        self.executor_handle
             .as_ref()
             .is_none_or(thread::JoinHandle::is_finished)
             && self
@@ -474,81 +392,21 @@ impl GenerationFence for TmuxTransport {
 
 impl Transport for TmuxTransport {
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
-        self.task_context = Some(DeliveryTaskContext {
+        let task_context = DeliveryTaskContext {
             target_session: context.target_member.id.clone(),
             runtime_directory: context.runtime_directory,
             target_member: context.target_member,
-        });
-        // Start the delivery task here rather than on the first write. Readiness
-        // is now read before anything is submitted, and a transport whose runtime
-        // only appears when written to cannot answer that question: it would
-        // report unready forever, and the write that would have started the task
-        // is exactly what the readiness gate withholds.
-        self.ensure_task_running().map_err(|code| TransportError {
-            code: code.to_string(),
-            reason: "tmux delivery task could not be established at startup".to_string(),
-            details: None,
-        })?;
+        };
+        self.task_context = Some(task_context.clone());
+        // The observer starts first, so the executor's first readiness reading
+        // has something to read. It would answer `Pending` either way and simply
+        // hold, but starting them the other way round would make the first
+        // delivery to every target wait a poll interval for no reason.
         self.ensure_observer_running();
+        self.spawn_executor(&task_context);
         Ok(TransportStatus {
             readiness: TransportReadiness::Ready,
         })
-    }
-
-    fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
-        let (sender, receiver) = oneshot::channel();
-        if let Err(reason_code) = self.ensure_task_running() {
-            let reason = if reason_code == "transport_not_started" {
-                "mailw called before startup()"
-            } else {
-                "mailw called after the delivery thread stopped"
-            };
-            // Refused before the delivery thread could accept it, so no packing
-            // unit was declared and nothing was written. Both reason codes this
-            // arm produces — `transport_not_started` and
-            // `tmux_delivery_thread_stopped` — are provable non-delivery, so the
-            // outcome is `not_submitted` and the code says which refusal it was.
-            let _ = sender.send(SingleDeliveryOutcome {
-                target_session: String::new(),
-                message_id: envelope.message_id.clone(),
-                outcome: SendOutcome::NotSubmitted,
-                reason_code: Some(reason_code.to_string()),
-                reason: Some(reason.to_string()),
-                details: None,
-            });
-            return receiver;
-        }
-        self.enqueue(WriteItem::Envelope(Box::new(envelope), sender));
-        receiver
-    }
-
-    fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
-        let (sender, receiver) = oneshot::channel();
-        if let Err(reason_code) = self.ensure_task_running() {
-            let reason = if reason_code == "transport_not_started" {
-                "raww called before startup()"
-            } else {
-                "raww called after the delivery thread stopped"
-            };
-            let _ = sender.send(SingleDeliveryOutcome {
-                target_session: String::new(),
-                message_id: String::new(),
-                outcome: SendOutcome::Failed,
-                reason_code: Some(reason_code.to_string()),
-                reason: Some(reason.to_string()),
-                details: None,
-            });
-            return receiver;
-        }
-        self.enqueue(WriteItem::Raw(content, append_enter, sender));
-        receiver
-    }
-
-    async fn is_ready_for_handover(&self) -> bool {
-        matches!(
-            self.observed(),
-            PaneObservation::Observed { ready: true, .. }
-        )
     }
 
     fn activity_generation(&self) -> u64 {
@@ -556,22 +414,25 @@ impl Transport for TmuxTransport {
     }
 
     fn health(&self) -> TransportHealth {
-        // Both predicates now read one cached observation, so they cannot
-        // disagree about reachability and the latch cannot survive a successful
-        // look — the interleaving that needed a defensive fold in each of them.
+        // Reads the same cached observation and the same latch the executor does,
+        // so the two cannot disagree about reachability or about when it began.
         //
         // `Pending` reports healthy. Not having observed yet is ignorance, not
         // evidence, and starting a dwell against a target nobody has examined
-        // would resolve members on the strength of not knowing. It reports
-        // unready through the other axis, so such a member is held.
+        // would resolve members on the strength of not knowing. Such a target
+        // reports unready through the other axis, so its entries are held.
         let reachable = !matches!(self.observed(), PaneObservation::Unreachable);
         self.unreachable_since.fold(reachable)
     }
 
     fn shutdown(&mut self) {
+        // The flag is what ends both threads; they read it between units and
+        // between observations.
         self.shutdown_flag.store(true, Ordering::Release);
-        self.sender = None;
-        self.task_handle = None;
+        // The handles are deliberately kept. A dropped handle reads as ceased,
+        // and reporting cessation while a thread is still between its stop check
+        // and its return is the answer that lets a replacement generation start
+        // alongside a live writer.
         self.task_context = None;
     }
 
@@ -628,78 +489,5 @@ mod observation_edge_tests {
                 );
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::envelope::AddressIdentity;
-    use crate::transports::{PackingUnitId, PartitionError, SubmissionEvidence};
-
-    fn test_envelope() -> DeliveryEnvelope {
-        DeliveryEnvelope {
-            message_id: "stopped-thread-message".to_string(),
-            message: crate::transports::DeliveryMessage {
-                body: "test body".to_string(),
-                created_at: "2026-08-01T00:00:00Z".to_string(),
-                namespace: "test-ns".to_string(),
-                sender: AddressIdentity {
-                    session_name: "sender@test-ns".to_string(),
-                    display_name: None,
-                },
-                target: AddressIdentity {
-                    session_name: "target@test-ns".to_string(),
-                    display_name: None,
-                },
-                cc: Vec::new(),
-                authenticated_identity: None,
-                on_behalf_of: None,
-            },
-            append_enter: true,
-            choice_decider_sessions: Vec::new(),
-            is_receipt: false,
-        }
-    }
-
-    #[test]
-    fn mailw_resolves_when_delivery_thread_has_stopped() {
-        let (sender, _receiver) = mpsc::channel(WRITE_CHANNEL_CAPACITY);
-        let task_handle = thread::spawn(|| {});
-        while !task_handle.is_finished() {
-            thread::yield_now();
-        }
-
-        // No relay-admitted member exists here — the delivery thread is already
-        // stopped, so nothing is ever declared — which is the only situation in
-        // which a sink that records nothing is the right stand-in.
-        struct NoDeclarations;
-        impl PartitionSink for NoDeclarations {
-            fn declare(&self, _member_ids: &[&str]) -> Result<PackingUnitId, PartitionError> {
-                Err(PartitionError::MemberNotBindable)
-            }
-            fn record(&self, _unit: PackingUnitId, _evidence: SubmissionEvidence) {}
-        }
-
-        let mut transport = TmuxTransport::new(
-            PromptBatchSettings::default(),
-            None,
-            Arc::new(NoDeclarations),
-        );
-        transport.sender = Some(sender);
-        transport.task_handle = Some(task_handle);
-
-        let outcome = Transport::mailw(&mut transport, test_envelope())
-            .blocking_recv()
-            .expect("stopped delivery thread must resolve mailw");
-        // The twin of the `transport_not_started` case in
-        // `tests/unit/tmux_transport.rs`: same arm, same reasoning. Refused
-        // before any declaration, so `not_submitted` is provable and the reason
-        // code carries which refusal it was.
-        assert_eq!(outcome.outcome, SendOutcome::NotSubmitted);
-        assert_eq!(
-            outcome.reason_code.as_deref(),
-            Some("tmux_delivery_thread_stopped")
-        );
     }
 }
