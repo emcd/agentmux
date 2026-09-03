@@ -216,11 +216,39 @@
       neutrality is a choice with a successor rather than a limitation. The
       newline rationale is retained without naming the chord, and links to the
       generated section that does.
-- [ ] 6.4 Confirm the `tui-surface` delta matches shipped behavior, and that the
+- [x] 6.4 Confirm the `tui-surface` delta matches shipped behavior, and that the
       five unrelated keyboard-enhancement scenarios remain byte-identical to the
-      live spec. **Blocked on evidence, not deferred.** Confirming shipped
-      behavior requires observing the `KeyboardEnhancement::Active` branch and
-      real modified-`Enter` delivery, and neither is reachable from the test
-      suite or from `pty-debug`, which implements no Kitty keyboard protocol.
-      The operator's terminal pass is the evidence; asserting conformance
-      before it would be asserting the one thing nothing has measured.
+      live spec. Verification only; the comparison justified no edit, which is
+      a result rather than an omission.
+      - **Behavioral half, from the operator's terminal.** Ghostty reported
+        `Kitty keyboard protocol: active` — the branch no test and no
+        `pty-debug` run had ever produced. Under it: bare `Enter` sends,
+        `Shift+Enter` sends, and `Ctrl+J` inserts newlines that survive
+        delivery. The `Shift+Enter` result is the repair itself, measured: the
+        live spec's scenario `Modified Enter reaches no Communication binding
+        when active` describes exactly what no longer happens.
+      - **Scenario retention.** Seven scenarios in the delta, seven in the live
+        requirement. Five carried, two dropped, two added. Four of the five
+        carried are byte-identical; the fifth differs only in that the live
+        file ends with a trailing blank line and the delta does not, which is a
+        property of the file rather than of the scenario. The two dropped are
+        `Modified Enter reaches no Communication binding when active` and
+        `Modified Enter sends when the protocol is unavailable`, both of which
+        describe the behavior this change retires — the first now directly
+        falsified by the terminal evidence, so dropping it is required rather
+        than merely intended.
+      - **A conformance ambiguity, recorded rather than resolved.** The
+        requirement says the probe outcome SHALL be visible to the operator in
+        the help overlay, and two scenarios say the overlay reports the
+        protocol. The capability report is the last block of the reference
+        column, so it is the first thing that column loses to the overflow
+        marker: measured, it survives at 30 rows and above and is replaced by
+        the marker at 24. Under the reading that the requirement governs what
+        the overlay *contains*, shipped behavior conforms and a terminal too
+        short to show the whole overlay now says so. Under the reading that it
+        governs what is *on screen*, it does not conform at 24 rows. This was
+        equally true before the overflow marker, and silently; the marker made
+        it legible rather than introducing it. Resolving which reading binds
+        belongs to the deferred help-overlay layout decision, which is where
+        the fitting problem is owned, so no requirement is weakened here to
+        accommodate a limitation that decision may remove.
