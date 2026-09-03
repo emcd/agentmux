@@ -414,3 +414,49 @@ fn a_character_row_outranks_the_contexts_typing_row() {
         None
     );
 }
+
+#[test]
+fn the_viewport_chords_reach_the_help_overlay_and_nothing_else() {
+    // The overlay presents more than a short terminal shows, so it is drawn
+    // through a viewport. The chords that move it are declared like any other
+    // binding — reachable through the table, and reachable there only. A scroll
+    // action leaking into another context would move a viewport that context
+    // does not have.
+    let viewport = [
+        (KeyCode::Up, Action::ScrollHelpUp),
+        (KeyCode::Down, Action::ScrollHelpDown),
+        (KeyCode::PageUp, Action::ScrollHelpPageUp),
+        (KeyCode::PageDown, Action::ScrollHelpPageDown),
+        (KeyCode::Home, Action::ScrollHelpToStart),
+        (KeyCode::End, Action::ScrollHelpToEnd),
+    ];
+    for (code, action) in viewport {
+        assert_eq!(
+            default_binding(BindingContext::HelpOverlay, code, KeyModifiers::NONE),
+            Some(action),
+            "the help overlay does not bind {code:?}"
+        );
+    }
+    let scroll_actions: Vec<Action> = viewport.iter().map(|(_, action)| *action).collect();
+    for context in BindingContext::ALL {
+        if context == BindingContext::HelpOverlay {
+            continue;
+        }
+        for (code, _) in viewport {
+            let resolved = default_binding(context, code, KeyModifiers::NONE);
+            assert!(
+                resolved.is_none_or(|action| !scroll_actions.contains(&action)),
+                "{context:?} resolves {code:?} to {resolved:?}, a help-overlay viewport action"
+            );
+        }
+    }
+    // Dismissal is not shadowed by the rows added above it.
+    assert_eq!(
+        default_binding(
+            BindingContext::HelpOverlay,
+            KeyCode::Esc,
+            KeyModifiers::NONE
+        ),
+        Some(Action::ToggleHelpOverlay)
+    );
+}

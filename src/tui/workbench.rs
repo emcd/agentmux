@@ -232,6 +232,25 @@ impl Workbench {
         self.state.help_overlay_open
     }
 
+    /// Publishes the help overlay's viewport bounds, as the renderer does each
+    /// frame.
+    ///
+    /// The overlay presents more than a short terminal shows, and how much more
+    /// depends on how its columns wrap at the width they are drawn at. A host
+    /// that draws the overlay itself supplies the same two numbers; a caller
+    /// that only wants to drive the offset can supply them directly, which is
+    /// the same seam `set_chat_history_viewport_height` opens for chat history.
+    pub fn set_help_overlay_viewport(&mut self, page_rows: usize, maximum_scroll: usize) {
+        self.state
+            .set_help_overlay_viewport(page_rows, maximum_scroll);
+    }
+
+    /// Rows the help overlay is scrolled past, counted from the start of its
+    /// content.
+    pub fn help_overlay_scroll(&self) -> usize {
+        self.state.help_overlay_scroll()
+    }
+
     /// Scroll offset into the look snapshot, in lines from the bottom.
     pub fn interaction_snapshot_scroll(&self) -> usize {
         self.state.look_overlay_scroll

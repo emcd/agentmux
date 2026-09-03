@@ -20,6 +20,24 @@ pub enum Action {
     /// Opens the events overlay, or closes it when it is already open. Opening
     /// dismisses the picker and the help overlay.
     ToggleEventsOverlay,
+    /// Moves the help overlay's viewport one row toward the start of its
+    /// content.
+    ///
+    /// The overlay presents more than a short terminal can show, so its columns
+    /// are drawn through a viewport. These six behaviors move it, and are the
+    /// only actions in this vocabulary whose effect is confined to what is on
+    /// screen.
+    ScrollHelpUp,
+    /// Moves the help overlay's viewport one row toward the end of its content.
+    ScrollHelpDown,
+    /// Moves the help overlay's viewport back by the height of its viewport.
+    ScrollHelpPageUp,
+    /// Moves the help overlay's viewport on by the height of its viewport.
+    ScrollHelpPageDown,
+    /// Returns the help overlay's viewport to the start of its content.
+    ScrollHelpToStart,
+    /// Moves the help overlay's viewport to the end of its content.
+    ScrollHelpToEnd,
     /// Switches the active screen mode, dismissing whichever surface is open so
     /// the mode beneath it is the one that changes.
     ToggleMode,
@@ -101,6 +119,16 @@ impl Action {
             Self::Quit => "Quit from anywhere",
             Self::ToggleHelpOverlay => "Toggle help",
             Self::ToggleEventsOverlay => "Toggle events overlay",
+            // Unqualified, because these are presented under a heading that
+            // already names the overlay. Every other description that carries a
+            // qualifier does so because its chord means something else on
+            // another surface; these six chords are bound nowhere but here.
+            Self::ScrollHelpUp => "Scroll up",
+            Self::ScrollHelpDown => "Scroll down",
+            Self::ScrollHelpPageUp => "Scroll up a page",
+            Self::ScrollHelpPageDown => "Scroll down a page",
+            Self::ScrollHelpToStart => "Jump to start",
+            Self::ScrollHelpToEnd => "Jump to end",
             Self::ToggleMode => "Switch Communication / Interaction",
             Self::OpenPicker => "Open picker (sessions)",
             Self::OpenBundlePicker => "Open picker (bundles)",
@@ -169,6 +197,12 @@ impl Action {
             Self::Quit => state.request_quit(),
             Self::ToggleHelpOverlay => state.toggle_help_overlay(),
             Self::ToggleEventsOverlay => state.toggle_events_overlay(),
+            Self::ScrollHelpUp => state.scroll_help_overlay_up(),
+            Self::ScrollHelpDown => state.scroll_help_overlay_down(),
+            Self::ScrollHelpPageUp => state.scroll_help_overlay_page_up(),
+            Self::ScrollHelpPageDown => state.scroll_help_overlay_page_down(),
+            Self::ScrollHelpToStart => state.scroll_help_overlay_to_start(),
+            Self::ScrollHelpToEnd => state.scroll_help_overlay_to_end(),
             Self::ToggleMode => {
                 state.dismiss_surfaces();
                 return state.toggle_mode();

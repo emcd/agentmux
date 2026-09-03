@@ -201,6 +201,10 @@ pub(crate) enum DisplaySection {
     Communication,
     Interaction,
     Picker,
+    /// The overlay's own viewport controls. Filed apart from `Modes` -- which
+    /// holds the chords that reach a surface -- because these reach nothing;
+    /// they move what is drawn of the surface the operator is already on.
+    Help,
 }
 
 /// One chord's binding within its context.
@@ -709,10 +713,25 @@ static EVENTS_OVERLAY: &[ContextRow] = &[
     row(any(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
 ];
 
+/// The overlay presents the whole surface, which is taller than a short
+/// terminal can show, so it is drawn through a viewport. The six rows that move
+/// that viewport are declared here like any other binding rather than authored
+/// into the renderer: they were inert in this context before, so none of them
+/// shadows a behavior, and no other context is touched.
 static HELP_OVERLAY: &[ContextRow] = &[
     row(any(KeyCode::Esc), Act::ToggleHelpOverlay, Section::Modes),
     row(any(KeyCode::F(2)), Act::OpenPicker, Section::Modes),
     row(any(KeyCode::F(3)), Act::ToggleEventsOverlay, Section::Modes),
     row(any(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
     row(any(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
+    row(any(KeyCode::Up), Act::ScrollHelpUp, Section::Help),
+    row(any(KeyCode::Down), Act::ScrollHelpDown, Section::Help),
+    row(any(KeyCode::PageUp), Act::ScrollHelpPageUp, Section::Help),
+    row(
+        any(KeyCode::PageDown),
+        Act::ScrollHelpPageDown,
+        Section::Help,
+    ),
+    row(any(KeyCode::Home), Act::ScrollHelpToStart, Section::Help),
+    row(any(KeyCode::End), Act::ScrollHelpToEnd, Section::Help),
 ];

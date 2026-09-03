@@ -86,7 +86,55 @@ impl AppState {
         if self.help_overlay_open {
             self.close_picker();
             self.events_overlay_open = false;
+            // Help answers the same way wherever it was opened from, and where
+            // a previous viewing had scrolled to is part of that answer.
+            self.help_overlay_scroll = 0;
         }
+    }
+
+    /// Publishes what the renderer measured about the help overlay: how many
+    /// rows one move-by-a-page covers, and the largest offset that still moves
+    /// a column.
+    ///
+    /// The offset is re-clamped here rather than at the point of use, so a
+    /// terminal resized smaller while the overlay is open cannot leave it
+    /// scrolled past its own content.
+    pub fn set_help_overlay_viewport(&mut self, page_rows: usize, maximum_scroll: usize) {
+        self.help_overlay_page_rows = page_rows;
+        self.help_overlay_maximum_scroll = maximum_scroll;
+        self.help_overlay_scroll = self.help_overlay_scroll.min(maximum_scroll);
+    }
+
+    pub fn help_overlay_scroll(&self) -> usize {
+        self.help_overlay_scroll
+    }
+
+    pub fn scroll_help_overlay_up(&mut self) {
+        self.help_overlay_scroll = self.help_overlay_scroll.saturating_sub(1);
+    }
+
+    pub fn scroll_help_overlay_down(&mut self) {
+        self.help_overlay_scroll =
+            (self.help_overlay_scroll + 1).min(self.help_overlay_maximum_scroll);
+    }
+
+    pub fn scroll_help_overlay_page_up(&mut self) {
+        self.help_overlay_scroll = self
+            .help_overlay_scroll
+            .saturating_sub(self.help_overlay_page_rows.max(1));
+    }
+
+    pub fn scroll_help_overlay_page_down(&mut self) {
+        self.help_overlay_scroll = (self.help_overlay_scroll + self.help_overlay_page_rows.max(1))
+            .min(self.help_overlay_maximum_scroll);
+    }
+
+    pub fn scroll_help_overlay_to_start(&mut self) {
+        self.help_overlay_scroll = 0;
+    }
+
+    pub fn scroll_help_overlay_to_end(&mut self) {
+        self.help_overlay_scroll = self.help_overlay_maximum_scroll;
     }
 
     pub fn move_picker_selection(&mut self, delta: isize) {

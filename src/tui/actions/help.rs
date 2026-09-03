@@ -103,16 +103,18 @@ impl DisplaySection {
             Self::Communication => "Communication Mode",
             Self::Interaction => "Interaction Mode",
             Self::Picker => "Picker",
+            Self::Help => "Help Overlay",
         }
     }
 
     /// The sections in the order they are presented, which is the order they
     /// are declared in.
-    const ALL: [DisplaySection; 4] = [
+    const ALL: [DisplaySection; 5] = [
         DisplaySection::Modes,
         DisplaySection::Communication,
         DisplaySection::Interaction,
         DisplaySection::Picker,
+        DisplaySection::Help,
     ];
 }
 

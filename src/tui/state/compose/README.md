@@ -41,6 +41,16 @@ the relevant types from the parent module via `super::{...}`.
     helpers (which enforce the mutual-exclusion invariant), and
     `dismiss_surfaces`, which clears the picker and both overlays so a
     surface-switching behavior lands on the mode beneath.
+  - The help overlay's viewport offset lives here too
+    (`scroll_help_overlay_*`, `set_help_overlay_viewport`). The
+    overlay presents the whole binding surface, which is taller than a
+    short terminal shows, so it is drawn through a viewport the
+    operator moves. The bounds that offset is clamped against come
+    from the renderer, since how many rows a column occupies is a
+    function of wrapping at the width it was drawn at; this is the
+    same direction `set_chat_history_viewport_height` runs in.
+    `toggle_help_overlay` resets the offset on open, so the catalogue
+    answers the same way however it was reached.
 - `interaction.rs`
   - `impl AppState` for Interaction-mode entry
     (`enter_interaction_mode`, `enter_interaction_from_picker`),

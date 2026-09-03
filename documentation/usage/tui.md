@@ -174,7 +174,38 @@ The modified `Enter` forms are folded into the bare one they always match; see
 - `Type` — Filter focused column
 - `Enter` — Session col: insert or open look
 
+#### Help Overlay
+
+- `Up` — Scroll up
+- `Down` — Scroll down
+- `PgUp` — Scroll up a page
+- `PgDn` — Scroll down a page
+- `Home` — Jump to start
+- `End` — Jump to end
+
 <!-- END GENERATED BINDINGS -->
+
+### Reading the help overlay
+
+`F1` opens the same list on screen, laid out in three columns: two of bindings
+and one of reference material, led by the keyboard-capability report.
+
+The whole overlay needs a 48-row terminal to render at once, which is taller
+than most windows open at, so each column is a window onto its content and the
+`Help Overlay` chords above move it. Nothing is dropped at a smaller size — it
+is off screen rather than missing.
+
+A column with more content than it can show ends with a line like:
+
+```
+… 12 above, 7 below (PgUp/PgDn)
+```
+
+Those are rows of that column lying outside the window, and the chords in
+brackets are the ones that reach them. A column without that line is showing
+everything it has, so on a tall enough terminal the line is absent everywhere.
+The columns move together but each stops at its own end, so a short column
+stays put while a long one is still scrolling.
 
 ### What the bindings do not say
 

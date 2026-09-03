@@ -255,7 +255,7 @@
 
 ## 7. Reachable help presentation
 
-- [ ] 7.1 Name the scrolling behaviors in the `Action` vocabulary — by a row, by
+- [x] 7.1 Name the scrolling behaviors in the `Action` vocabulary — by a row, by
       a page, and to either end — and apply them through `AppState` methods like
       every other action. State holds the offset; the renderer publishes the
       bounds, since how many rows a column occupies is a function of wrapping at
@@ -263,20 +263,20 @@
       chat-history scroll already in the tree, including its consequence: the
       bounds are a frame behind, which is harmless only because the overlay is
       drawn on the frame that opens it.
-- [ ] 7.2 Declare their chords in the binding table under the help-overlay
+- [x] 7.2 Declare their chords in the binding table under the help-overlay
       context, in a display section of their own so the generated guide gains
       the section rather than filing them under mode switching. All six chords
       are inert in that context today, so none is shadowed and no other context
       is touched. Reset the offset when the overlay opens: the catalogue answers
       the same way wherever it was opened from, and position is part of that
       answer.
-- [ ] 7.3 Draw each column at the shared offset clamped to its own extent, and
+- [x] 7.3 Draw each column at the shared offset clamped to its own extent, and
       make the scrollable extent the largest of the per-column extents so every
       column reaches its own last row. An unclamped shared offset would blank
       the short reference column — and with it the capability report — while a
       binding column was being scrolled, which is the failure the viewport is
       being added to fix rather than one to introduce.
-- [ ] 7.4 Retarget the overflow marker rather than removing it. It reports what
+- [x] 7.4 Retarget the overflow marker rather than removing it. It reports what
       lies above and below the viewport and names the chords that reach it,
       taking both from the table like every other operator-facing chord. Where
       the table declares no scroll rows it degrades to the resize advice it
@@ -284,12 +284,12 @@
       becomes visible instead of leaving a marker pointing at a chord that does
       nothing. Reserve its row against its widest form, so the number of content
       rows does not change as the operator scrolls.
-- [ ] 7.5 Lead the reference column with the keyboard-capability report. It is
+- [x] 7.5 Lead the reference column with the keyboard-capability report. It is
       the one item another capability requires to be visible rather than merely
       reachable, and it sits last in that column today, which is exactly why it
       was the first thing lost. Ordering it first satisfies `tui-surface`
       without weakening it and without touching the generated sections' order.
-- [ ] 7.6 Test reachability by traversal rather than by fit: at 120x24, walk the
+- [x] 7.6 Test reachability by traversal rather than by fit: at 120x24, walk the
       overlay from top to bottom using only chords dispatched through the table,
       and assert that every entry the table presents reached the buffer at some
       position, along with the reference material. Assert too that the
@@ -297,12 +297,12 @@
       as the regression it was written to be, with its meaning changed: at each
       height nothing is absent that scrolling cannot reach, and at the heights
       where everything fits, nothing scrolls.
-- [ ] 7.7 Test the scroll semantics where they are state rather than geometry,
+- [x] 7.7 Test the scroll semantics where they are state rather than geometry,
       through the public facade: each chord resolves to its action in the
       help-overlay context and in no other, the offset clamps at both ends,
       opening the overlay returns it to the beginning, and the dismissal chords
       still dismiss from a scrolled position.
-- [ ] 7.8 Regenerate the usage guide's binding section for the new rows, and
+- [x] 7.8 Regenerate the usage guide's binding section for the new rows, and
       record in `src/tui/README.md` that the overlay presents more than a short
       terminal shows and that scrolling is bound through the table like any
       other behavior. Say in the guide's own words what the marker means, since

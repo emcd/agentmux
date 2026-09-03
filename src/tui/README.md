@@ -66,6 +66,25 @@ Because the context is a value derived from state alone, it can be asked for
 without dispatching an event — which is what makes the precedence rule
 testable rather than a property of control flow.
 
+### The help overlay presents more than a terminal usually shows
+
+Generated presentation is one line per behavior, so the help overlay is taller
+than the hand-written transcript it replaced: it needs 48 rows to render whole,
+and most terminals do not open that tall. It is therefore drawn through a
+viewport the operator moves, so everything it presents stays reachable at a
+120x24 terminal without resizing one.
+
+The chords that move that viewport are table rows like any other, declared
+under the help-overlay context. Nothing about scrolling is authored in the
+renderer — not the chords, and not the marker's advice about which chord to
+press. That is the same rule the rest of this layer follows, applied to the one
+behavior whose effect is confined to what is on screen.
+
+One item is held to a stricter standard than reachability. The
+keyboard-enhancement probe outcome is required to be *visible* in the overlay,
+so it leads its column rather than closing it; a viewport shows a column from
+its beginning.
+
 ### Two constraints that outlive this module's current shape
 
 **Action application goes through `AppState` methods, never its fields.** The

@@ -169,7 +169,13 @@ fn the_sections_are_presented_in_declaration_order() {
         .collect::<Vec<_>>();
     assert_eq!(
         headings,
-        vec!["Modes", "Communication Mode", "Interaction Mode", "Picker"]
+        vec![
+            "Modes",
+            "Communication Mode",
+            "Interaction Mode",
+            "Picker",
+            "Help Overlay"
+        ]
     );
 }
 

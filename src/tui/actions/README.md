@@ -47,6 +47,12 @@ Two halves, deliberately independent:
     That rule is deliberately separate from `binding_context` and
     takes no state: help answers for every context, so what it shows
     cannot depend on the surface it was opened from.
+  - The help-overlay context contributes rows to two display sections:
+    the mode-switching chords it shares with every surface, and a
+    `Help Overlay` section of its own holding the chords that move the
+    overlay's viewport. They are filed apart because the first group
+    reaches other surfaces while the second moves what is drawn of the
+    surface the operator is already on.
   - Entries group by behavior rather than by chord, so a context's
     several `Enter` rows fold onto one line. Capability-neutral
     defaults make `Shift+Enter` and `Ctrl+Enter` redundant once

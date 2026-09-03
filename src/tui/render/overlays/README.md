@@ -66,17 +66,36 @@ event-overlay visibility).
     deciding which interaction pane is live, the `To` address grammar,
     and the keyboard-capability report — declared beside the section it
     annotates.
-  - A column whose text does not fit renders an explicit marker naming
-    how many entries it could not show. `Paragraph` otherwise draws the
-    rows that fit and discards the rest with nothing on screen to say
-    so, which hid three bindings below 41 rows. The row count comes
-    from `Paragraph::line_count` — the renderer's own measurement at
-    the same width — because a second wrapping implementation could
-    disagree with the drawing about where a line breaks, and a budget
-    computed from a disagreeing measure would misplace the marker it
-    is being computed for. This makes the loss visible, not reachable:
-    the whole overlay still needs 41 rows, and scrolling or a layout
-    change is a deferred product decision.
+  - Each column is drawn through a viewport. The whole overlay needs
+    48 rows, which most terminals do not open at, so the columns share
+    one offset the operator moves — and the chords that move it are
+    ordinary table rows under the help-overlay context, read here and
+    named nowhere else. `Paragraph` otherwise draws the rows that fit
+    and discards the rest with nothing on screen to say so, which hid
+    three bindings below 41 rows before there was a viewport.
+  - Each column clamps the shared offset to its own extent, and the
+    scrollable extent is the longest column's. The columns are
+    unequal; an unclamped shared offset would empty the short
+    reference column, capability report and all, while a binding
+    column was being scrolled — the failure the viewport exists to
+    remove rather than one to introduce.
+  - The marker survives, retargeted: it reports how many rows lie
+    above and below the viewport and names the chords that reach them.
+    Where the table declares no scroll rows it degrades to the resize
+    advice it carried before, so removing those rows leaves a visible
+    consequence rather than a marker pointing at a chord that does
+    nothing. Row counts come from `Paragraph::line_count` — the
+    renderer's own measurement at the same width — because a second
+    wrapping implementation could disagree with the drawing about
+    where a line breaks, and a budget computed from a disagreeing
+    measure would misplace the marker it is computed for. Its row is
+    reserved against the marker's widest form, so the number of
+    content rows does not shift as the operator scrolls.
+  - The keyboard-capability report leads the reference column rather
+    than closing it. `tui-surface` asks for the probe outcome to be
+    *visible* in the overlay rather than merely reachable through it,
+    and a viewport shows a column from its beginning; declared last,
+    it was the first thing a short terminal lost.
   - The report's own subject is delivery: how a key reaches the TUI
     under each probe outcome. The line naming the chord that inserts a
     newline regardless of the outcome is about what a key *does*, so it
@@ -98,12 +117,13 @@ Each overlay's open flag is owned by `AppState` (`help_overlay_open`,
 these flags. Opening an overlay clears the other two open flags
 before flipping its own:
 
-- `open_picker_focused` (`state/compose/pickers.rs:17`) clears
+- `open_picker_focused` (`state/compose/pickers.rs`) clears
   `events_overlay_open` and `help_overlay_open`.
-- `toggle_events_overlay` (`state/compose/pickers.rs:63`) calls
+- `toggle_events_overlay` (`state/compose/pickers.rs`) calls
   `close_picker` and clears `help_overlay_open`.
-- `toggle_help_overlay` (`state/compose/pickers.rs:72`) calls
-  `close_picker` and clears `events_overlay_open`.
+- `toggle_help_overlay` (`state/compose/pickers.rs`) calls
+  `close_picker`, clears `events_overlay_open`, and returns the help
+  viewport to the start of its content.
 
 These three helpers are the only paths that open an overlay.
 
@@ -114,5 +134,7 @@ These three helpers are the only paths that open an overlay.
   overlay paints over an earlier one.
 - Each overlay begins with `frame.render_widget(Clear, popup)` to
   wipe any underlying content within its popup area.
-- The picker overlay is the only overlay that paints scrollable
-  list content; the others render a static layout.
+- The picker overlay is the only overlay that paints a scrollable
+  *list*; the help overlay scrolls its whole content as a viewport
+  over static columns, and the events overlay renders a static
+  layout.
