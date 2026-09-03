@@ -38,6 +38,13 @@ that the terminal answered without offering it, or that the determination could
 not be made. The report SHALL describe the determination, never assert a
 terminal limitation the probe did not establish.
 
+That visibility SHALL hold at a 120-column, 24-row terminal: the report SHALL be
+on screen when the overlay opens there, without the operator scrolling or
+resizing. Unqualified, the requirement was satisfiable at no terminal size in
+particular; the generated overlay does not fit 24 rows, and the report is the
+part a viewport would otherwise leave off. The rest of the overlay is reachable
+by scrolling, which `tui-action-bindings` governs.
+
 The report for `ProbeFailed` SHALL NOT assert that the terminal lacks the
 protocol. An unanswered probe establishes only that the TUI could not
 determine or enable disambiguation.
@@ -101,3 +108,9 @@ a bare `Enter`.
 
 - **WHEN** the operator inserts a newline in `Message` or the write input
 - **THEN** `Ctrl+J` inserts the newline regardless of the probe outcome
+
+#### Scenario: The probe outcome is on screen at a standard terminal size
+
+- **WHEN** the operator opens the help overlay at a 120-column, 24-row terminal
+- **THEN** the keyboard-enhancement report is on screen
+- **AND** reaching it requires no scrolling and no resizing

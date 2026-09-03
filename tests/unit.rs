@@ -43,6 +43,12 @@ mod shutdown_clock;
 mod tmux_transport;
 #[path = "unit/tui.rs"]
 mod tui;
+#[path = "unit/tui_bindings.rs"]
+mod tui_bindings;
+#[path = "unit/tui_dispatch.rs"]
+mod tui_dispatch;
+#[path = "unit/tui_help.rs"]
+mod tui_help;
 #[path = "unit/tui_relay_error_mapping.rs"]
 mod tui_relay_error_mapping;
 #[path = "unit/tui_session.rs"]

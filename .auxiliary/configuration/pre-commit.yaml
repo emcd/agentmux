@@ -155,6 +155,28 @@ repos:
       files: '^(src/pty/|src/bin/agentmux_pty\.rs|Cargo\.toml|Cargo\.lock)'
       fail_fast: false
 
+    - id: lint-tui-binding-documentation
+      name: 'Lint: Generated TUI Binding Documentation'
+      # Asserts agreement between a committed artifact and the declaration it
+      # is generated from, so a lint and not a test -- but not one of the cheap
+      # repository checks above, because the declaration is Rust and the only
+      # honest way to read it is to run it. Placed after the Rust lints, whose
+      # `--all-targets` build already covers the generator, and ahead of the
+      # test hook, whose build the generator's own warms.
+      #
+      # Runs unconditionally rather than scoped by `files` to the binding
+      # sources and the guide. Scoping would be nearly right and quietly wrong:
+      # the block can also break by having its markers edited, and the guide is
+      # a long document that people edit for reasons having nothing to do with
+      # bindings. Being unconditional costs a cached build.
+      language: system
+      entry: 'scripts/lint-tui-binding-documentation.sh'
+      pass_filenames: false
+      always_run: true
+      require_serial: true
+      stages: [ 'pre-commit' ]
+      fail_fast: true
+
     - id: cargo-nextest
       name: 'Test (Rust, cargo-nextest)'
       language: system

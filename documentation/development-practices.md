@@ -481,6 +481,31 @@ being touched, so the hook never fires:
 scripts/verify-openspec-deltas.py <change-id>
 ```
 
+### Generated Binding Documentation
+
+`src/tui/actions/bindings.rs` is the single declaration of what a TUI chord
+does. The help overlay and the pane hint strips read it at render time, so they
+cannot drift. Operator documentation cannot, so `documentation/usage/tui.md`
+carries a generated block between `<!-- BEGIN GENERATED BINDINGS -->` and
+`<!-- END GENERATED BINDINGS -->`, and the `lint-tui-binding-documentation` hook
+regenerates it and fails on mismatch.
+
+Change a binding row and the commit fails until the guide is regenerated:
+
+```shell
+scripts/lint-tui-binding-documentation.sh --fix
+```
+
+Do not hand-edit between the markers, and do not write binding reference prose
+outside them: a chord paired with what it does belongs to the table, and a
+second copy is what the block exists to retire. Naming a chord while explaining
+something else -- what the keyboard-capability probe determined, say -- is not
+that, and the lint does not try to judge it.
+
+Unlike the delta-retention report, this one is a failure rather than a report.
+A guide that disagrees with the table is wrong in every case, where a dropped
+scenario is often correct.
+
 ### Durable Content From a Change
 
 A change's `design.md` is change-scoped. At archive it moves into

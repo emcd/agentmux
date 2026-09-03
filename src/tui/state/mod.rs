@@ -135,6 +135,20 @@ pub(crate) struct AppState {
     pub picker_filter: String,
     pub events_overlay_open: bool,
     pub help_overlay_open: bool,
+    /// Rows the help overlay's columns are drawn past.
+    ///
+    /// Counted from the start of the content, unlike `chat_history_scroll`,
+    /// which counts back from the newest entry. Help is a document read
+    /// downward and has no newest end to anchor to.
+    help_overlay_scroll: usize,
+    /// Viewport bounds for that offset, published by the renderer.
+    ///
+    /// How many rows a column occupies is a function of wrapping at the width
+    /// it was drawn at, which nothing outside the renderer knows. They are
+    /// therefore a frame behind; the overlay is drawn on the frame that opens
+    /// it, so no operator-reachable sequence reads them before they are set.
+    help_overlay_page_rows: usize,
+    help_overlay_maximum_scroll: usize,
     pub picker_session_state: ListState,
     pub picker_bundle_state: ListState,
     pub mode: ScreenMode,
@@ -209,6 +223,9 @@ impl AppState {
             picker_filter: String::new(),
             events_overlay_open: false,
             help_overlay_open: false,
+            help_overlay_scroll: 0,
+            help_overlay_page_rows: 0,
+            help_overlay_maximum_scroll: 0,
             picker_session_state: ListState::default(),
             picker_bundle_state: ListState::default(),
             mode: ScreenMode::Communication,
@@ -230,10 +247,11 @@ impl AppState {
             look_overlay_scroll: 0,
             look_choice_request_index: 0,
             look_choice_option_index: 0,
-            status_history: VecDeque::from([StatusEntry {
-                code: None,
-                message: "Ready. Press F1 for help.".to_string(),
-            }]),
+            // Deliberately empty. The startup line names a chord, and a chord
+            // belongs to the binding table, which this layer does not depend
+            // on -- the dependency runs the other way. The render layer, which
+            // does, composes it as the footer's empty-history fallback.
+            status_history: VecDeque::new(),
             event_history: VecDeque::new(),
             pending_choices: Vec::new(),
             pending_choices_state: ListState::default(),

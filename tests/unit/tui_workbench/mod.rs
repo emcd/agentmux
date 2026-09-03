@@ -10,6 +10,8 @@
 //! - [`bundle_picker`]: the bundle column (F5, bundle switching, and the
 //!   bundle-scoped state it resets).
 //! - [`global_keys`]: keys handled above the overlays.
+//! - [`help_overlay`]: the help overlay's viewport offset, its bounds, and the
+//!   dismissal chords a scrolled overlay must not shadow.
 //! - [`delivery`]: incoming-message dedupe and pending-delivery
 //!   reconciliation against `delivery_outcome` events.
 //! - [`choices`]: pending choice-request ordering, hydration, resolution,
@@ -35,6 +37,7 @@ mod completion;
 mod compose;
 mod delivery;
 mod global_keys;
+mod help_overlay;
 mod modes;
 mod session_picker;
 

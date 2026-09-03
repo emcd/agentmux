@@ -27,6 +27,17 @@ purely for reads, never for writes.
     active cursor is suppressed whenever any overlay flag
     (`help_overlay_open`, `picker_open`, `events_overlay_open`) is
     set, so the terminal cursor never appears while a modal is open.
+  - The footer's two chords are generated. The mode-switch hint reads
+    `actions::binding_context`, not a fixed context: it spans the whole
+    workbench and says what pressing a key would do right now, which is
+    the opposite of what a pane hint does. The startup status line is
+    composed here rather than seeded into `AppState`, because the state
+    layer does not depend on the action layer and reversing that for
+    one string would be a poor trade; it renders as the footer's
+    empty-status fallback. Its one inline `#[cfg(test)]` test is the
+    documented exception, on the same grounds as the overlay
+    renderers, and reads its expected chords from the table rather
+    than from the functions that compose the footer.
 - `communication.rs`
   - `render_communication_mode`, the chat history pane, the compose
     pane (`To` + `Message`), and the per-session `Recipient` rendering
@@ -36,6 +47,25 @@ purely for reads, never for writes.
     pane (tmux line-mode and ACP structured-entry-mode rendering),
     the raww pane, and the choice decisioning pane (which replaces
     the raww pane when an active look target has pending choices).
+    Every chord this module names an operator is generated from the
+    binding table, filtered to the pane's own context: the empty
+    write pane's prompt via `actions::interaction_write_hint`,
+    wrapped rather than truncated; the choice pane's block title via
+    `actions::interaction_choice_hint`; and the target header, the
+    empty-choices prompt, and the cancel-only prompt for a request
+    that arrived with no options, via `actions::binding_for` on the
+    pane's context.
+  - The choice pane advertises only its two decisions. A block title
+    does not wrap, so where the generated wording exceeds the pane
+    width the bindings are dropped whole rather than cut mid-word,
+    and navigation stays discoverable in the help overlay. Its one
+    inline `#[cfg(test)]` test is the documented exception, on the
+    same grounds as the overlay renderers: the renderer is
+    crate-private by design and no public interface reaches it. The
+    test asks whether any *start* of an advertised binding reached
+    the buffer without the rest of it, which is what a cut title
+    looks like, rather than comparing the title against the function
+    that produced it.
 - `cursor.rs`
   - Active cursor placement: compose cursor in Communication mode,
     raww cursor in Interaction mode. Position helpers that depend on

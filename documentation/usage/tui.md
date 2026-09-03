@@ -37,8 +37,8 @@ Relay lifecycle:
 ## Screen Modes
 
 The TUI has two co-equal top-level screen modes. Exactly one is active at a
-time, and the footer shows which. `F4` toggles between them. Per-mode cursor,
-draft, and scroll state is preserved across switches.
+time, and the footer shows which. Per-mode cursor, draft, and scroll state is
+preserved across switches.
 
 - **Communication** (default) — chat history and compose (`To` + `Message`)
   for send/receive workflows.
@@ -46,108 +46,197 @@ draft, and scroll state is preserved across switches.
   input, and choice decisioning for operator-driven session inspection.
 
 When Interaction mode has no target, the header shows a placeholder hint:
-open the picker (`F2`) and press `Enter` to choose a session.
+open the picker and choose a session.
 
 ## Keybindings
 
 ### Terminal keyboard capability
 
-Newline is bound to `Ctrl+J` rather than `Shift+Enter` because a terminal
-without the Kitty keyboard protocol sends the same bytes for `Enter`,
-`Shift+Enter`, and `Ctrl+Enter`, leaving the TUI no way to tell them apart.
+Terminals differ in whether they can report a modified `Enter` as something
+other than a bare `Enter`. Without the Kitty keyboard protocol, `Enter`,
+`Shift+Enter`, and `Ctrl+Enter` arrive as the same bytes, and nothing
+downstream can tell them apart. Inserting a newline therefore has a chord of
+its own rather than a modified `Enter`: it is the one editing action that would
+otherwise be unreachable on a terminal without the protocol.
+[Default bindings](#default-bindings) names it.
 
 At startup the TUI probes for that protocol once and enables key
-disambiguation when the terminal advertises it. The help overlay (`F1`) reports
-the outcome under "Keyboard Capability":
+disambiguation when the terminal advertises it. The help overlay reports the
+outcome under "Keyboard Capability":
 
-- `Kitty keyboard protocol: active` — the terminal advertised the protocol and
-  reports modified keys distinctly.
+- `Kitty keyboard protocol: active` — the terminal advertised the protocol, so
+  modified keys arrive distinctly.
 - `Kitty keyboard protocol: unsupported` — the terminal answered the probe
-  without advertising the protocol.
+  without advertising the protocol, so they arrive collapsed.
 - `Kitty keyboard protocol: probe failed` — the probe could not complete: no
   controlling terminal, an I/O failure, or no reply before the query timeout.
-  This says nothing about the terminal; it may well support the protocol.
+  This says nothing about the terminal; it may well support the protocol, and
+  the TUI simply could not determine it.
 
 Which terminals and multiplexers land in which bucket has not been measured
 yet; that survey is tracked as `todos/tui/62`.
 
-#### What changes between the outcomes
+#### What the outcome tells you
 
-Detection assigns no new binding, but it does change which events reach the
-existing ones, in exactly one place:
+What the TUI determined about your terminal, and nothing more. It is not a
+statement that your terminal is limited, and it does not predict a difference
+in what the TUI will do.
 
-- **Communication mode** binds `Enter` only when no modifier is held. When the
-  protocol is active, `Shift+Enter` and `Ctrl+Enter` arrive as themselves and
-  match nothing — they neither send nor insert a newline. When it is
-  unavailable, the terminal cannot tell them from a bare `Enter`, so they send
-  the message (or accept the completion, in `To`).
-- **Interaction mode and the picker** bind `Enter` without a modifier guard, so
-  a modified `Enter` dispatches the write, resolves the choice, or commits the
-  picker selection under every outcome.
+The default bindings are deliberately arranged so that it cannot. Wherever
+`Enter` does something, the modified forms do the same thing; where `Enter`
+does nothing, none of them do. So whether your terminal reports the three
+distinctly or as one is invisible in the defaults, on every surface.
 
-`Ctrl+J` inserts a newline under every outcome. It is the binding that does not
-depend on your terminal.
+That neutrality is a choice about where terminal differences belong, not a
+verdict that the distinction is worthless. Disambiguation is exactly what makes
+a modified chord bindable at all, and operator-configurable bindings are the
+intended successor to the compiled defaults. When they arrive, a terminal that
+reports the three distinctly will be able to do three different things with
+them — because you asked it to, in a configuration you control, rather than
+because the TUI guessed from a probe.
 
-The mode-dependent inconsistency above is a consequence of how the bindings are
-written today, not a deliberate design; resolving it belongs to the action layer
-tracked as `todos/tui/60`.
+### Default bindings
 
-### Global
+<!-- BEGIN GENERATED BINDINGS -->
+<!-- Generated from the binding table in src/tui/actions/bindings.rs.
+     Regenerate with: scripts/lint-tui-binding-documentation.sh --fix
+     Do not edit between these markers; the pre-commit lint rejects drift. -->
 
-- `Ctrl+C`: quit
-- `F1`: open/close help overlay
-- `F2`: open/close the picker focused on the session column
-- `F3`: open/close delivery events overlay
-- `F4`: toggle between Communication and Interaction modes
-- `F5`: open/close the picker focused on the bundle column
-- `Ctrl+R`: refresh recipients
+The modified `Enter` forms are folded into the bare one they always match; see
+[Terminal keyboard capability](#terminal-keyboard-capability).
 
-### Communication mode
+#### Modes
 
-- `Tab` / `Shift+Tab`: cycle focus (`To` <-> `Message`)
-- `Ctrl+Space`: trigger completion in `To`
-- `Up` / `Down` in `To`: navigate active completion candidate
-- `Left` / `Right` / `Home` / `End` in `To`: move cursor
-- `Ctrl+A` / `Ctrl+E` in `To`: move cursor to field start/end
-- `Ctrl+U` in `To`: clear the field
-- `Up` / `Down` in `Message`: move cursor between message lines
-- `Left` / `Right` / `Home` / `End` in `Message`: move cursor
-- `Ctrl+A` / `Ctrl+E` in `Message`: move cursor to line start/end
-- `Enter` in `To`: accept active completion and commit delimiter (`, `)
-- `Enter` in `Message`: send message
-- `Ctrl+J`: insert newline in `Message`
-- `Esc` in `Message`: snap chat history viewport to latest
-- `PgUp` / `PgDn`: page chat history viewport backward/forward
-- mouse wheel: scroll chat history
+- `Ctrl+C` — Quit from anywhere
+- `F1` / `Esc` — Toggle help
+- `F2` — Open picker (sessions)
+- `F3` / `Esc` — Toggle events overlay
+- `F4` — Switch Communication / Interaction
+- `F5` — Open picker (bundles)
+- `Ctrl+R` — Refresh recipients
 
-### Interaction mode
+#### Communication Mode
 
-Entering Interaction mode without an active session auto-opens the picker on the
-session column so you can choose a target immediately. Dismiss it with `Esc` (or
-choose a session) to reach the Write input.
+- `Ctrl+A` / `Home` — To: field start
+- `Ctrl+E` / `End` — To: field end
+- `Ctrl+U` — To: clear field
+- `Ctrl+Space` — To: trigger completion
+- `Tab` — Focus next field
+- `Shift+Tab` — Focus previous field
+- `Enter` — To: accept completion
+- `Up` — To: previous completion
+- `Down` — To: next completion
+- `Left` — To: cursor left
+- `Right` — To: cursor right
+- `Backspace` — Delete before cursor
+- `PgUp` — Scroll chat history up
+- `PgDn` — Scroll chat history down
+- `Type` — Insert into focused field
+- `Ctrl+A` / `Home` — Message: line start
+- `Ctrl+E` / `End` — Message: line end
+- `Ctrl+J` — Message: insert newline
+- `Enter` — Message: send
+- `Esc` — Message: snap history
+- `Up` — Message: cursor up a line
+- `Down` — Message: cursor down a line
+- `Left` — Message: cursor left
+- `Right` — Message: cursor right
 
-- `PgUp` / `PgDn`: scroll look snapshot
-- Write input (active when write has text, or no pending choice requests):
-  - `Left` / `Right` / `Up` / `Down` / `Home` / `End`: move write cursor
-  - `Enter`: dispatch write to the active interaction target via relay `raww`
-  - `Ctrl+J`: insert newline in write input
-  - `Backspace`: delete the character before the write cursor
-- Choice decisioning (active when write input is empty and the target has
-  pending requests):
-  - `Left` / `Right`: previous/next pending choice request for the target
-  - `Up` / `Down`: previous/next ACP choice option
-  - `Enter`: resolve selected request with selected option
-    (`outcome=selected`)
-  - `c`: resolve selected request as cancelled (`outcome=cancelled`)
-- `Up` / `Down` with an empty write input and no pending requests: scroll the
-  look snapshot
+#### Interaction Mode
 
-### Picker (`F2` / `F5`)
+- `Ctrl+J` — Write: insert newline
+- `Enter` — Write: dispatch to active target
+- `Left` — Write: cursor left
+- `Right` — Write: cursor right
+- `Up` — Write: cursor up / scroll
+- `Down` — Write: cursor down / scroll
+- `Home` — Write: line start
+- `End` — Write: line end
+- `Backspace` — Write: delete before cursor
+- `PgUp` — Scroll look snapshot up
+- `PgDn` — Scroll look snapshot down
+- `Type` — Insert into write input
+- `Enter` — Choice: resolve selected option
+- `Left` — Choice: previous request
+- `Right` — Choice: next request
+- `Up` — Choice: previous ACP option
+- `Down` — Choice: next ACP option
+- `c` / `C` — Choice: resolve as cancelled
+
+#### Picker
+
+- `Esc` / `F2` / `F5` — Close picker
+- `Enter` — Bundle col: switch bundle
+- `Tab` / `Shift+Tab` / `Left` / `Right` — Switch column
+- `Down` — Next entry in column
+- `Up` — Previous entry in column
+- `Backspace` — Delete from column filter
+- `Type` — Filter focused column
+- `Enter` — Session col: insert or open look
+
+#### Help Overlay
+
+- `Up` — Scroll up
+- `Down` — Scroll down
+- `PgUp` — Scroll up a page
+- `PgDn` — Scroll down a page
+- `Home` — Jump to start
+- `End` — Jump to end
+
+<!-- END GENERATED BINDINGS -->
+
+### Reading the help overlay
+
+`F1` opens the same list on screen, laid out in three columns: two of bindings
+and one of reference material, led by the keyboard-capability report.
+
+The whole overlay needs a 48-row terminal to render at once, which is taller
+than most windows open at, so each column is a window onto its content and the
+`Help Overlay` chords above move it. Nothing is dropped at a smaller size — it
+is off screen rather than missing.
+
+A column with more content than it can show ends with a line like:
+
+```
+… 12 above, 7 below (PgUp/PgDn)
+```
+
+Those are rows of that column lying outside the window, and the chords in
+brackets are the ones that reach them. A column without that line is showing
+everything it has, so on a tall enough terminal the line is absent everywhere.
+The columns move together but each stops at its own end, so a short column
+stays put while a long one is still scrolling.
+
+### What the bindings do not say
+
+The section above is the whole of the default chords. These are the surrounding
+facts a binding row cannot carry:
+
+- The mouse wheel scrolls chat history.
+- `To` takes recipients by grammar: `session` routes within the active bundle,
+  `session@bundle` to a named bundle, and `session@GLOBAL` to a relay-wide
+  user. Comma-separate multiple recipients; accepting a completion commits the
+  `, ` delimiter for you.
+- Which Interaction pane a chord reaches depends on state. The Write input is
+  live when it holds text, or when the target has no pending choice requests;
+  the choice pane is live when the Write input is empty and a request is
+  pending. With an empty Write input and nothing pending, the vertical cursor
+  keys scroll the look snapshot rather than moving a cursor.
+- Entering Interaction mode without an active session auto-opens the picker on
+  the session column, so a target can be chosen immediately. Close the picker,
+  or choose a session, to reach the Write input.
+- A resolved choice carries `outcome=selected` with the chosen option, or
+  `outcome=cancelled` with no option.
+- Filtering a picker column narrows it to case-insensitive matches on name or
+  display name and resets the selection to the first match. Switching columns
+  clears the filter.
+
+## The Picker
 
 The picker is a single window with two side-by-side columns: **Bundles** (left)
-and **Sessions** (right, the active bundle's recipients). `F2` opens it focused
-on the session column; `F5` opens it focused on the bundle column. The focused
-column is marked with a `▶` and a highlighted title.
+and **Sessions** (right, the active bundle's recipients). It opens focused on
+one column or the other depending on which chord opened it. The focused column
+is marked with a `▶` and a highlighted title.
 
 The picker header surfaces a one-line bundle status in CLI-style key=value
 format (`bundle=NAME hosted=yes|no state=up|down ...`) and color-codes it:
@@ -164,25 +253,13 @@ Each session row reflects the session's per-session readiness from the relay
 list payload. Sessions that are not yet ready render dimmed and gain a
 trailing `[not ready]` marker so the state is legible even without color.
 
-Keys:
-
-- `Up` / `Down`: move selection within the focused column
-- `Tab` / `Shift+Tab` / `Left` / `Right`: switch focus between columns (clears
-  the filter)
-- printable characters: append to the filter for the focused column; the list
-  narrows to matches (case-insensitive, name or display name) and the selection
-  resets to the first match
-- `Backspace`: erase the last filter character
-- `Enter` on the bundle column: switch the active bundle (a no-op for the
-  already-active bundle), then keep the picker open and hand focus to the
-  re-enumerated session column
-- `Enter` on the session column (Communication mode): insert the selected
-  recipient into `To`
-- `Enter` on the session column (Interaction mode): open the Interaction screen
-  for the selected identity — the relay `Look` runs synchronously so the look
-  pane is populated with recent session history before the Write input takes
-  focus
-- `Esc` / `F2` / `F5`: close the picker
+Committing a bundle selection keeps the picker open and hands focus to the
+re-enumerated session column; committing the already-active bundle is a no-op.
+Committing a session selection means different things per mode: in
+Communication mode it inserts the selected recipient into `To`, and in
+Interaction mode it opens the Interaction screen for the selected identity —
+the relay `Look` runs synchronously, so the look pane is populated with recent
+session history before the Write input takes focus.
 
 The active bundle is highlighted and labeled `[active]`. Switching to a
 different bundle:
@@ -224,8 +301,8 @@ Delivery outcomes:
 ## Usage Notes
 
 - Successful send clears `To` and `Message`.
-- Recipient completion supports both `@`-triggered suggestions and manual
-  trigger (`Ctrl+Space`).
+- Recipient completion supports both `@`-triggered suggestions and the manual
+  completion trigger.
 - Completion candidates span every bundle visible to the operator, not just the
   active one: the active bundle's recipients are offered alongside relay-wide
   `session@bundle` candidates from the other available bundles. These are
@@ -247,7 +324,7 @@ Delivery outcomes:
   `choice_request_id`.
 - Pending choice rows are ordered FIFO by `enqueued_at` (rows without one sort
   last), with ties broken deterministically by `choice_request_id`, so
-  `Left`/`Right` navigation visits a session's requests oldest-first regardless
+  choice-request navigation visits a session's requests oldest-first regardless
   of the order events arrive or replay.
 - Choice decisions are ACP-native and explicit: selected option ids are
   forwarded verbatim via `choices.pick`; cancelled decisions omit

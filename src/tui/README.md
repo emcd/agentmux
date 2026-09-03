@@ -8,7 +8,7 @@ User-facing usage details and keybindings are documented under
 ## Surface Model
 
 The TUI presents two co-equal top-level screen modes. Exactly one is active at
-a time; `F4` toggles between them. The active mode is shown in the footer.
+a time, and the active mode is shown in the footer.
 
 - **Communication** — owns send/receive: chat history, compose (`To` +
   `Message`), pending-delivery indicator, send dispatch. Default startup mode.
@@ -16,11 +16,105 @@ a time; `F4` toggles between them. The active mode is shown in the footer.
   target header, the look snapshot, a Write input (relay `raww`), and
   choice decisioning.
 
-Help (`F1`), the unified picker (`F2`/`F5`), and delivery events (`F3`) are
-overlays available in both modes. The unified picker is a single window with a
-bundle column and a session column; `F2` opens it focused on sessions, `F5`
-focused on bundles. Entering Interaction mode without an active session
-auto-opens it.
+Help, the unified picker, and delivery events are overlays available in both
+modes. The unified picker is a single window with a bundle column and a session
+column, and has two entry points, one focused on each. Entering Interaction mode
+without an active session auto-opens it on the session column.
+
+## Action Layer
+
+Every operator-invocable behavior is a member of one named vocabulary,
+`Action`, declared separately from the chords that invoke it. The layer has two
+independent halves:
+
+- **Resolution** turns a chord plus the current state into an `Action`.
+- **Behavior** applies an `Action` to `AppState`, and needs neither a
+  `KeyEvent` nor a binding context.
+
+The split is what lets a host drive the workbench without synthesizing terminal
+events: a host that owns its event loop and its own bindings skips resolution
+entirely and applies actions directly through `Workbench`. `Action` and the
+application seam are public for that reason, not incidentally.
+
+### The table is the single source of truth
+
+`actions/bindings.rs` holds one row per (binding context, chord), carrying the
+action and the display section that presents it. That table is the only place a
+chord-to-action association is declared, and every consumer reads it: dispatch,
+the help overlay, the pane hint strips, and — through a generated block — the
+operator usage guide. Changing a row changes all of them with no other edit.
+
+Dispatch tests no chord ahead of the table. A chord answered before lookup
+would be a second declaration of what that chord means, which is the
+duplication this layer exists to remove, so even the chords that reach their
+behavior from every surface are ordinary rows under the global context.
+
+The table declares **defaults**. Nothing here requires a chord's action to be
+fixed at compile time; operator-configurable bindings are the intended
+successor, and a configuration is expected to answer the same question
+differently.
+
+### Context precedence
+
+The active binding context is resolved from `AppState` as a single value rather
+than as an ordering of handler early-returns. An open overlay outranks the
+screen mode beneath it; within a mode, the focused field selects the context.
+Resolution consults the global rows first, then that context, so a global chord
+is not shadowed by whatever is open over it.
+
+Because the context is a value derived from state alone, it can be asked for
+without dispatching an event — which is what makes the precedence rule
+testable rather than a property of control flow.
+
+### The help overlay presents more than a terminal usually shows
+
+Generated presentation is one line per behavior, so the help overlay is taller
+than the hand-written transcript it replaced: it needs 48 rows to render whole,
+and most terminals do not open that tall. It is therefore drawn through a
+viewport the operator moves, so everything it presents stays reachable at a
+120x24 terminal without resizing one.
+
+The chords that move that viewport are table rows like any other, declared
+under the help-overlay context. Nothing about scrolling is authored in the
+renderer — not the chords, and not the marker's advice about which chord to
+press. That is the same rule the rest of this layer follows, applied to the one
+behavior whose effect is confined to what is on screen.
+
+One item is held to a stricter standard than reachability. The
+keyboard-enhancement probe outcome is required to be *visible* in the overlay,
+so it leads its column rather than closing it; a viewport shows a column from
+its beginning.
+
+### Two constraints that outlive this module's current shape
+
+**Action application goes through `AppState` methods, never its fields.** The
+state struct is expected to be regrouped, and a layer that reached into fields
+would have to be rewritten each time it moved. Applying through methods also
+keeps a behavior's guards in one place: several of them do nothing unless the
+right field is focused, and that decision belongs to the state, not to the
+action that asks for it.
+
+**Default bindings are capability-neutral, and that is a statement about where
+capability variance belongs rather than about what terminals can do.** In every
+context that binds `Enter`, the `Shift+Enter` and `Ctrl+Enter` rows are
+declared explicitly and reach the same action; a context that binds no `Enter`
+action declares none of the three, leaving all three equally inert. No default
+binding varies with the keyboard-enhancement probe outcome, so the defaults
+produce identical observable behavior on a terminal that disambiguates modified
+keys and one that does not.
+
+The reason is not that the distinction is worthless — detection is what makes
+modified chords bindable at all. It is that a compiled default is the wrong
+place to spend it. Terminal classes are meant to diverge through a binding
+configuration the operator controls, and a default that behaved differently on
+two terminals would put that divergence somewhere they cannot reach. Note that
+neutrality has to cover *every* modified form: leaving one "reserved and
+unbound" would itself be capability-conditioned, since a disambiguating
+terminal would do nothing while a non-disambiguating one collapsed the chord
+onto `Enter` and acted.
+
+See `actions/README.md` for the per-file shape and the reasoning that is local
+to it.
 
 ## Module Map
 
@@ -37,8 +131,9 @@ auto-opens it.
     and dispatch helpers. Split by concern:
     - `mod.rs` — pure hub: submodule decls and re-exports of `AppState` and
       sibling-state items
-    - `pickers.rs` — unified picker open/close (`F2` session focus, `F5`
-      bundle focus), column focus toggle, column-scoped filter, visible
+    - `pickers.rs` — unified picker open/close (separate session-focused
+      and bundle-focused entry points), column focus toggle,
+      column-scoped filter, visible
       (filtered) index resolution, session-insert and bundle-commit
       selection, overlay toggles (`toggle_events_overlay`,
       `toggle_help_overlay`)
@@ -61,15 +156,26 @@ auto-opens it.
     resolution / behavior split. Split by concern:
     - `mod.rs` — pure hub: submodule decls and the `Action` re-export
     - `action.rs` — the public `Action` enum and `Action::apply`
-    - `bindings.rs` — the default chord-to-action table
-    - `context.rs` — `BindingContext` and `binding_context`
+    - `bindings.rs` — the default chord-to-action table, grouped by
+      context, and `default_binding`, which reads it
+    - `context.rs` — `BindingContext`, `binding_context`, and
+      `binding_lookup_order`
+    - `help.rs` — `help_bindings`, the whole table as the help
+      overlay presents it, and `help_contexts`, the presentation
+      rule that answers for every context rather than the active one
 - `input.rs`
-  - mode-aware key handling and command intent updates.
+  - terminal event handling: which events carry a binding, and how a
+    paste or a scroll reaches state. Keys resolve against `actions/`
+    rather than being matched here, so no chord is named in this module.
 - `keyboard.rs`
   - progressive keyboard-enhancement (Kitty keyboard protocol) capability
     detection: the `KeyboardEnhancement` outcome, its operator-facing
     description, and `KeyboardEnhancementSession`, which pushes the
-    disambiguation flag when supported and pops it on drop.
+    disambiguation flag when supported and pops it on drop. The
+    description covers delivery only — how a key reaches the TUI under
+    each outcome. What a key *does* is the binding table's, so this
+    module names no chord-behavior pair; the help renderer generates the
+    one the report used to carry.
 - `render/`
   - per-mode pane rendering, overlays, and key help text. Split by area:
     - `mod.rs` — pure hub: submodule decls and `pub(crate) use frame::render`
@@ -87,7 +193,8 @@ auto-opens it.
         strip
       - `events.rs` — events overlay (pending choices + delivery
         events)
-      - `help.rs` — help overlay (two-column keybinding reference)
+      - `help.rs` — help overlay; bindings generated from the
+        binding table, reference material hand-written
     - `cursor.rs` — active cursor, compose/raww cursor placement, position
       + column helpers, raww pane area
     - `geometry.rs` — shared measure/layout helpers (`centered_rect`,
@@ -100,7 +207,9 @@ auto-opens it.
   - the public `Workbench` facade over the internal `AppState`: launch-option
     plumbing plus the event-driven integration boundary for tests. It exposes
     `dispatch_event`, `apply_action` (the chord-free seam a host with its own
-    bindings uses), focus/field/mode accessors, the relay-event ingestion
+    bindings uses), `binding_context` / `binding_lookup_order` (which surface
+    owns a chord now, and the order it is resolved in),
+    focus/field/mode accessors, the relay-event ingestion
     seams (`record_stream_events`, `record_chat_events`), and read-only
     projections (e.g. `WorkbenchPendingChoice`, `pending_choices`). Callers
     drive it with contract-faithful inputs; the projections are a test/inspection
@@ -109,8 +218,8 @@ auto-opens it.
 ## Behavior
 
 - recipient discovery from relay `list` responses,
-- two co-equal screen modes (Communication, Interaction) toggled with `F4`;
-  per-mode cursor, draft, and scroll state preserved across switches,
+- two co-equal screen modes (Communication, Interaction), with per-mode cursor,
+  draft, and scroll state preserved across switches,
 - explicit `To` recipient field with deterministic target parsing. The relay
   requires fully-qualified targets, so the client fills in the namespace before
   dispatch and always emits `session@bundle`:
@@ -145,26 +254,25 @@ auto-opens it.
   cannot enumerate (`authorization_forbidden`) degrade out silently,
 - overlays:
   - help,
-  - unified picker (`F2`/`F5`): a single window with two side-by-side columns —
-    bundles (left) and the active bundle's sessions (right). `F2` opens it
-    focused on the session column, `F5` on the bundle column; entering
-    Interaction mode with no active session auto-opens it on the session column.
-    A column-scoped filter (typed characters, `Backspace` to erase) narrows the
-    focused column and resets its selection to the first match; `Tab`/arrows
-    switch focus and clear the filter. The foot hint strip shows the
-    context-sensitive `Enter` action — on the session column it reads
-    `session→To` in Communication mode and `session→look` in Interaction mode;
-    on the bundle column `Enter` switches the active bundle.
+  - unified picker: a single window with two side-by-side columns — bundles
+    (left) and the active bundle's sessions (right) — with a separate entry
+    point focused on each; entering Interaction mode with no active session
+    auto-opens it on the session column. A column-scoped filter narrows the
+    focused column and resets its selection to the first match; switching
+    columns clears the filter. The foot hint strip is generated from the
+    binding table, filtered to the two picker contexts, and carries one
+    description covering both modes rather than the mode-sensitive label it
+    replaced.
   - delivery + choice events,
   - bundle column behavior: browses `available_bundles` (sourced from
     `load_bundle_group_memberships` at TUI launch) and highlights the active
-    bundle. `Enter` on a different bundle replaces the active bundle context —
+    bundle. Committing a different bundle replaces the active bundle context —
     rebuilding the bundle-bound `RelayStreamSession`, resetting bundle-scoped
     state (recipients, `last_selected_recipient`, bundle status, look snapshot,
     pending choices, chat history, delivery bookkeeping, write draft), and
     triggering `refresh_recipients` on the new bundle — then keeps the picker
     open and hands focus to the re-enumerated session column so a session can be
-    chosen in the same window. `Enter` on the already-active bundle is a no-op
+    chosen in the same window. Committing the already-active bundle is a no-op
     that just hands focus to the session column. The picker enumerates one
     bundle at a time (the active one); relay-wide cross-bundle enumeration is
     tracked separately (todos/tui/47). Cross-bundle targeting for `Send` and
@@ -182,7 +290,8 @@ auto-opens it.
     enumeration context and the `Look` namespace selector, never as a sender
     binding (so a relay-wide `@GLOBAL` sender shows no `Bundle:` field in the
     header),
-- session-column `Enter` actions (mode-aware, no separate `l` / `w` keys):
+- session-column commit is mode-aware rather than offering separate look and
+  write keys:
   - Communication mode: insert the selected recipient into `To`,
   - Interaction mode: open the Interaction screen for the selected identity,
     running a synchronous relay `Look` so the look pane is populated with
@@ -246,17 +355,15 @@ auto-opens it.
   protocol. The probe writes a query and consumes its reply from the same input
   queue the loop drains, so it cannot run concurrently with the loop. The
   outcome (`Active` / `Unsupported` / `ProbeFailed`) is reported in the help
-  overlay, because it decides whether `Shift+Enter` is distinguishable from a
-  bare `Enter`. Only the disambiguation flag is pushed; the remaining flags
-  change which events are delivered at all and nothing in `input.rs` consumes
-  them. Detection assigns no binding, but it changes which events reach the
-  existing ones: the `Communication` arm at `input.rs` guards `Enter` on
-  `modifiers.is_empty()`, so a modified `Enter` reaches no binding when the
-  protocol is active and takes the send/accept path when it is not. The
-  `Interaction` and picker arms have no modifier guard and are unaffected. That
-  mode-dependent split is incidental to how the arms are written; the action
-  layer tracked as `todos/tui/60` is where it gets resolved. `Ctrl+J` inserts a
-  newline under every outcome.
+  overlay, because it decides whether a modified `Enter` is delivered
+  distinctly from a bare one. Only the disambiguation flag is pushed; the
+  remaining flags change which events are delivered at all and nothing in
+  `input.rs` consumes them. Detection answers a delivery question and nothing
+  else: it assigns no binding and reaches no behavior, so no probe outcome can
+  resolve a chord differently. The outcome reports what the TUI determined
+  about the terminal, not a difference in what the TUI does — see the
+  capability-neutrality constraint under Action Layer for why the defaults are
+  arranged so that it cannot.
 
 ## Stream and State Notes
 

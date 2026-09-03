@@ -45,14 +45,22 @@ fn ctrl_j_inserts_newline_in_message_field() {
 }
 
 #[test]
-fn shift_enter_does_not_send_or_insert_newline() {
-    let mut state = make_state();
-    state.set_focus(WorkbenchField::Message);
-    state.insert_text("hello");
-    state
-        .dispatch_event(key_event(KeyCode::Enter, KeyModifiers::SHIFT))
-        .expect("shift+enter should be handled");
-    assert_eq!(state.message_field(), "hello");
+fn modified_enter_in_message_sends_rather_than_inserting_a_newline() {
+    // Both halves matter. A modified `Enter` now reaches the send path, where it
+    // previously matched nothing on a terminal that reports it distinctly; and
+    // it still does not insert a newline, which is why `Ctrl+J` exists.
+    for modifiers in [KeyModifiers::SHIFT, KeyModifiers::CONTROL] {
+        let mut state = make_state();
+        state.set_focus(WorkbenchField::Message);
+        state.insert_text("hello");
+        match state.dispatch_event(key_event(KeyCode::Enter, modifiers)) {
+            Err(RuntimeError::Validation { code, .. }) => {
+                assert_eq!(code, "validation_empty_targets", "modifiers {modifiers:?}")
+            }
+            other => panic!("unexpected result for {modifiers:?}: {other:?}"),
+        }
+        assert_eq!(state.message_field(), "hello", "modifiers {modifiers:?}");
+    }
 }
 
 #[test]

@@ -6,7 +6,7 @@ use crate::relay::{RelayStreamEvent, SendResult};
 use crate::runtime::error::RuntimeError;
 
 use super::{
-    Action, input,
+    Action, BindingContext, HelpSection, actions, input,
     state::{
         AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField, PendingChoiceEntry,
         PickerColumn, Recipient, ScreenMode, TuiLaunchOptions,
@@ -197,12 +197,58 @@ impl Workbench {
         self.state.picker_filter.as_str()
     }
 
+    /// The binding context the workbench's current state resolves to — the
+    /// surface whose rows own a chord right now. Pair it with
+    /// [`crate::tui::default_binding`] to ask what a chord would do here.
+    pub fn binding_context(&self) -> BindingContext {
+        actions::binding_context(&self.state)
+    }
+
+    /// The contexts a chord is resolved against right now, in precedence order:
+    /// the global rows first, then the surface [`Workbench::binding_context`]
+    /// names. A chord bound globally is therefore not shadowed by whatever
+    /// surface is open over it.
+    pub fn binding_lookup_order(&self) -> [BindingContext; 2] {
+        actions::binding_lookup_order(&self.state)
+    }
+
+    /// The bindings as the help overlay presents them, from this workbench.
+    ///
+    /// Deliberately answers from the whole table rather than from
+    /// [`Workbench::binding_context`]: help is a catalogue of what exists, not
+    /// a report of what the current surface owns. Taking `&self` and ignoring
+    /// it is what makes that assertable from outside the crate -- a later
+    /// change that filtered by the active surface would have to read state
+    /// here, and the callers that compare two workbenches would catch it.
+    pub fn help_bindings(&self) -> Vec<HelpSection> {
+        actions::help_bindings()
+    }
+
     pub fn events_overlay_open(&self) -> bool {
         self.state.events_overlay_open
     }
 
     pub fn help_overlay_open(&self) -> bool {
         self.state.help_overlay_open
+    }
+
+    /// Publishes the help overlay's viewport bounds, as the renderer does each
+    /// frame.
+    ///
+    /// The overlay presents more than a short terminal shows, and how much more
+    /// depends on how its columns wrap at the width they are drawn at. A host
+    /// that draws the overlay itself supplies the same two numbers; a caller
+    /// that only wants to drive the offset can supply them directly, which is
+    /// the same seam `set_chat_history_viewport_height` opens for chat history.
+    pub fn set_help_overlay_viewport(&mut self, page_rows: usize, maximum_scroll: usize) {
+        self.state
+            .set_help_overlay_viewport(page_rows, maximum_scroll);
+    }
+
+    /// Rows the help overlay is scrolled past, counted from the start of its
+    /// content.
+    pub fn help_overlay_scroll(&self) -> usize {
+        self.state.help_overlay_scroll()
     }
 
     /// Scroll offset into the look snapshot, in lines from the bottom.

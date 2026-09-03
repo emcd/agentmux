@@ -6,7 +6,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
 };
 
-use super::super::super::state::{AppState, PickerColumn, ScreenMode};
+use super::super::super::actions;
+use super::super::super::state::{AppState, PickerColumn};
 use super::super::super::status::{
     BundleStatusDisplay, BundleStatusSeverity, RecipientReadiness, bundle_status_severity,
     format_bundle_status_line, format_recipient_picker_label, format_startup_failure_lines,
@@ -18,10 +19,13 @@ use super::super::geometry::centered_rect;
 /// total, so this only bounds how much of the picker the detail can consume.
 const STARTUP_FAILURE_PICKER_MAX_LINES: usize = 6;
 
+/// Space between two bindings on a hint row.
+const HINT_GAP: &str = "   ";
+
 /// Renders the unified bundle+session picker. The bundle column (left) drives
 /// active-bundle switching; the session column (right) lists the active
 /// bundle's recipients. A column-scoped filter narrows whichever column has
-/// focus. Both `F2` (session focus) and `F5` (bundle focus) open this overlay.
+/// focus. Two entry points open this overlay, one focused on each column.
 pub(in crate::tui::render) fn render_picker_overlay(frame: &mut Frame, state: &mut AppState) {
     let popup = centered_rect(72, 72, frame.area());
     frame.render_widget(Clear, popup);
@@ -31,13 +35,22 @@ pub(in crate::tui::render) fn render_picker_overlay(frame: &mut Frame, state: &m
 
     let status_lines = bundle_status_lines(state.bundle_status.as_ref());
     let status_height = u16::try_from(status_lines.len()).unwrap_or(1).max(1);
+    // The hint is laid out before the vertical split so its row count can size
+    // its own section: generated wording needs more than the single row the
+    // hand-written strip fitted in, and how many more depends on the width.
+    //
+    // Every packed row is reserved. A cap here would clip whichever binding
+    // landed last, silently, and the session list below is what should give up
+    // the space -- its `Min(1)` already says so.
+    let hint_lines = picker_hint_lines(inner.width);
+    let hint_height = u16::try_from(hint_lines.len()).unwrap_or(1).max(1);
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(status_height),
             Constraint::Length(1),
             Constraint::Min(1),
-            Constraint::Length(1),
+            Constraint::Length(hint_height),
         ])
         .split(inner);
 
@@ -52,7 +65,14 @@ pub(in crate::tui::render) fn render_picker_overlay(frame: &mut Frame, state: &m
     render_bundle_column(frame, columns[0], state);
     render_session_column(frame, columns[1], state);
 
-    frame.render_widget(Paragraph::new(picker_hint_line(state.mode)), sections[3]);
+    // Reserved height and produced height agree above, so this takes every row
+    // in practice. It is written as a bound rather than assumed because the
+    // solver can still shrink the section on a terminal too short to satisfy
+    // every constraint, and writing rows into a rect that cannot hold them is
+    // the defect this replaced: the strip lost a whole binding with nothing to
+    // show for it.
+    let visible = hint_lines.len().min(usize::from(sections[3].height));
+    frame.render_widget(Paragraph::new(hint_lines[..visible].to_vec()), sections[3]);
 }
 
 fn render_bundle_column(frame: &mut Frame, area: ratatui::layout::Rect, state: &mut AppState) {
@@ -158,24 +178,61 @@ fn picker_filter_line(state: &AppState) -> Line<'static> {
     ])
 }
 
-/// Builds the one-line keybinding hint strip. The `Enter` action is
-/// context-sensitive on the session column: Communication inserts into the To
-/// field, Interaction opens the look+raww view.
-fn picker_hint_line(mode: ScreenMode) -> Line<'static> {
-    let session_action = match mode {
-        ScreenMode::Communication => "session→To",
-        ScreenMode::Interaction => "session→look",
-    };
-    Line::from(vec![
-        picker_hint_key("Tab"),
-        Span::raw(" Bundles/Sessions"),
-        Span::raw("   "),
-        picker_hint_key("Enter"),
-        Span::raw(format!(" bundle→switch / {session_action}")),
-        Span::raw("   "),
-        picker_hint_key("Esc"),
-        Span::raw(" Close"),
-    ])
+/// Builds the one-line keybinding hint strip from the binding table.
+///
+/// The strip advertises a chosen few of the picker's bindings; which few is
+/// declared in `actions::picker_hint`, and their chords and wording come from
+/// the table rather than from labels kept in step by hand. It stays filtered to
+/// the picker's own contexts, which is the asymmetry with the help overlay:
+/// help catalogues every surface, a strip annotates the one it sits on.
+///
+/// The mode-sensitive session label this replaced is gone. Committing a session
+/// inserts into `To` or opens the look target by mode, and the table says so in
+/// one description rather than the strip choosing a phrasing per mode.
+fn picker_hint_lines(width: u16) -> Vec<Line<'static>> {
+    // The scope qualifier is kept here, unlike the write pane's hint. This
+    // strip spans both columns, so "Bundle col" and "Session col" are what
+    // separate two entries that would otherwise both read as `Enter`.
+    //
+    // Entries are packed into as many rows as they need rather than truncated
+    // at one. Generated wording is longer than the shorthand it replaces, and
+    // a strip that silently loses its last binding is worse than one that
+    // takes a second row. Breaking between entries, not inside them, is why
+    // this packs by hand instead of wrapping the finished text.
+    let width = usize::from(width).max(1);
+    let mut lines = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut used = 0usize;
+    for entry in actions::picker_hint() {
+        let chord = entry.primary_chord().to_string();
+        // The qualified description is preferred, because it is what separates
+        // the two entries that both read as `Enter`. Where it cannot fit a row
+        // at all, the unqualified one is used instead: an entry that no longer
+        // says which column is worse than one clipped mid-word, and splitting
+        // an entry across rows is not on offer.
+        let qualified = format!(" {}", entry.description);
+        let text = if chord.chars().count() + qualified.chars().count() > width {
+            format!(" {}", entry.detail())
+        } else {
+            qualified
+        };
+        let cost = chord.chars().count() + text.chars().count();
+        if !spans.is_empty() && used + HINT_GAP.len() + cost > width {
+            lines.push(Line::from(std::mem::take(&mut spans)));
+            used = 0;
+        }
+        if !spans.is_empty() {
+            spans.push(Span::raw(HINT_GAP));
+            used += HINT_GAP.len();
+        }
+        spans.push(picker_hint_key(&chord));
+        spans.push(Span::raw(text));
+        used += cost;
+    }
+    if !spans.is_empty() {
+        lines.push(Line::from(spans));
+    }
+    lines
 }
 
 fn picker_hint_key(label: &str) -> Span<'static> {
@@ -232,5 +289,68 @@ fn bundle_status_severity_style(severity: BundleStatusSeverity) -> Style {
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
         }
         BundleStatusSeverity::Unhosted => Style::default().fg(Color::DarkGray),
+    }
+}
+
+// Inline by exception, under the project's three conditions. The picker
+// renderer is crate-private by design and no public interface reaches it;
+// making it externally testable would mean a render-to-buffer method on
+// `Workbench` existing only for this test. One `#[test]` function, as the
+// policy caps it.
+//
+// It earns the exception by covering what a test of the packing alone cannot:
+// that the rows the strip reserves match the rows it produces. The defect this
+// pins was a mismatch between those two numbers, not a packing error.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    use crate::tui::state::TuiLaunchOptions;
+
+    fn rendered(width: u16, height: u16) -> String {
+        let mut state = AppState::new(TuiLaunchOptions {
+            namespace: "agentmux".to_string(),
+            sender_session: "tui".to_string(),
+            relay_socket: std::path::PathBuf::from("/tmp/agentmux-picker-render.sock"),
+            look_lines: None,
+            available_bundles: vec!["agentmux".to_string()],
+        });
+        state.open_picker();
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        terminal
+            .draw(|frame| render_picker_overlay(frame, &mut state))
+            .expect("draw");
+        let buffer = terminal.backend().buffer().clone();
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn every_advertised_binding_survives_at_widths_that_need_extra_rows() {
+        // 70 columns is the width at which the four entries pack into four
+        // whole rows, one more than the strip used to reserve. The wider and
+        // narrower cases bracket it so a change to the packing shows up as a
+        // failure here rather than as a strip quietly losing its last binding.
+        for (width, height) in [(120, 44), (90, 30), (70, 24), (60, 20), (50, 16)] {
+            let text = rendered(width, height);
+            for entry in actions::picker_hint() {
+                // Either wording is acceptable; losing the entry is not. The
+                // unqualified form is the documented degradation where the
+                // qualified one cannot fit a row.
+                let qualified = format!("{} {}", entry.primary_chord(), entry.description);
+                let plain = format!("{} {}", entry.primary_chord(), entry.detail());
+                assert!(
+                    text.contains(&qualified) || text.contains(&plain),
+                    "{qualified:?} is missing at {width}x{height}:\n{text}"
+                );
+            }
+        }
     }
 }

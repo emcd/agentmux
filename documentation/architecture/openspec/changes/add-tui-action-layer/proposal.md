@@ -35,12 +35,22 @@ deliberately.
   overlays, global).
 - Declare modified `Enter` per context instead of inheriting it, with
   **capability-neutral defaults**: `Shift+Enter` and `Ctrl+Enter` each invoke
-  the same action their context binds to `Enter`. Every context must declare
-  all three rows, so none can acquire a behavior by omitting a modifier guard.
-- **No operator-visible behavior change on any terminal.** The neutral defaults
-  also repair a regression: activating disambiguation made `Shift+Enter` in
-  `Message` stop sending on capable terminals, because the compose handler
-  rejects a modified `Enter`.
+  the same action their context binds to `Enter`. Every context that binds
+  `Enter` must declare all three rows, and a context binding no `Enter` action
+  must declare none of them, so no context can acquire a behavior by omitting a
+  modifier guard.
+- **No chord changes what it does on any terminal.** The neutral defaults also
+  repair a regression: activating disambiguation made `Shift+Enter` in `Message`
+  stop sending on capable terminals, because the compose handler rejects a
+  modified `Enter`.
+- Give the help overlay a viewport. Generated presentation is taller than the
+  transcript it replaces and does not fit a 120x24 terminal — measured there,
+  the picker section shows none of its eight bindings — which contradicts both
+  the requirement that the overlay present every reachable context and
+  `tui-surface`'s requirement that the probe outcome be visible in it. Scroll
+  actions and their chords are declared in the table under the help-overlay
+  context, where those chords were inert; this is the one place a chord gains a
+  behavior it did not have.
 - No binding varies with the keyboard-enhancement probe outcome. Capability-
   conditioned bindings are a **configuration** question — a binding
   configuration with two value columns, one per terminal class — and are
@@ -89,9 +99,16 @@ a public render entry taking a caller-supplied `Rect`, and decomposing
   resolved action; the match arms lose their embedded key conditions.
 - `src/tui/workbench.rs` and the `agentmux::tui` exports — new public surface:
   the `Action` type and an action-application method alongside the existing
-  `dispatch_event`. `BindingContext` stays internal.
+  `dispatch_event`, plus `BindingContext` and the `default_binding` lookup that
+  answers what a chord means on a given surface. The table itself stays
+  internal; its rows are the shape most likely to move, and nothing outside the
+  crate needs them in order to ask what a chord does.
 - `src/tui/render/overlays/help.rs` — 49 hardcoded `Line::from` binding strings
-  are replaced by generation from the table.
+  are replaced by generation from the table, and the overlay gains a viewport
+  over the generated columns.
+- `src/tui/state/` — one scroll offset for the help overlay, with the renderer
+  publishing the bounds it can compute and state clamping against them, as
+  chat-history scrolling already does.
 - `src/tui/render/overlays/picker.rs` (`picker_hint_line`) and
   `src/tui/render/interaction.rs` (the write-pane hint) — both already
   hand-roll context-sensitive action labels; both become table consumers.

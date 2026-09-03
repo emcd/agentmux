@@ -102,9 +102,11 @@ test a chord ahead of the table.
 
 ### Requirement: Capability-Neutral Default Bindings
 
-Every binding context SHALL declare its `Enter`, `Shift+Enter`, and
-`Ctrl+Enter` rows explicitly. A context SHALL NOT acquire a modified-`Enter`
-behavior by omitting a modifier condition.
+Every binding context that binds `Enter` SHALL declare its `Shift+Enter` and
+`Ctrl+Enter` rows explicitly, and a context that binds no `Enter` action SHALL
+declare none of the three, leaving all three forms equally inert there. A
+context SHALL NOT acquire a modified-`Enter` behavior by omitting a modifier
+condition.
 
 In the default table, `Shift+Enter` and `Ctrl+Enter` SHALL each invoke the same
 action their context binds to `Enter`.
@@ -113,14 +115,15 @@ No default binding SHALL vary with the keyboard-enhancement probe outcome. The
 default table SHALL produce identical observable behavior on a terminal that
 disambiguates modified keys and one that does not.
 
-`Enter` SHALL retain its existing action in every context, and `Ctrl+J` SHALL
-retain the insert-newline action in the compose `Message` field and the
-interaction write input.
+`Enter` SHALL retain its existing action in every context that has one, and
+`Ctrl+J` SHALL retain the insert-newline action in the compose `Message` field
+and the interaction write input.
 
 #### Scenario: Modified Enter behaves identically regardless of terminal
 
 - **WHEN** the operator presses `Shift+Enter` or `Ctrl+Enter` in any context
-- **THEN** the action invoked is the same one that context binds to `Enter`
+- **THEN** the action invoked is the one that context binds to `Enter`, and no
+  action is invoked in a context that binds no `Enter` action
 - **AND** the observable result does not depend on whether the terminal
   disambiguates modified keys
 
@@ -159,6 +162,11 @@ table's declaration order. Opening the help overlay SHALL NOT narrow that set:
 the reference the operator consults is the same whichever context it was opened
 from.
 
+The set the overlay presents SHALL NOT be narrowed by the size of the terminal
+either. Where the terminal cannot show the whole presentation at once, the
+remainder SHALL remain reachable, as the `Reachable Help Presentation`
+requirement governs.
+
 The pane hint strips SHALL instead present only the bindings of the context
 they annotate, since a hint strip describes the surface the operator is
 currently acting on.
@@ -190,3 +198,67 @@ the table.
 - **WHEN** a binding row changes and the usage guide's generated section is not
   regenerated
 - **THEN** the repository lint fails
+
+### Requirement: Reachable Help Presentation
+
+The help overlay SHALL keep everything it presents reachable at a 120-column,
+24-row terminal, without the operator resizing it. That covers every binding the
+table presents and every note presented alongside them.
+
+The overlay SHALL therefore scroll. Scrolling SHALL be reached through named
+actions in the action vocabulary, and the chords that invoke them SHALL be
+declared in the binding table under the help-overlay context. No chord for
+scrolling SHALL be authored in the rendering path.
+
+Scrolling SHALL reach the last row of every column the overlay presents. A
+column holding less than the terminal can show SHALL NOT lose its content while
+a longer column is scrolled.
+
+Opening the overlay SHALL present its content from the beginning, so the
+reference is the same however and whenever it was opened.
+
+Dismissing the overlay SHALL remain reachable at every scroll position.
+
+Where the overlay holds more than it can show at once, it SHALL report that
+explicitly, saying what lies outside the viewport and naming the chords that
+reach it, taking those chords from the table. Presented content SHALL NOT leave
+the viewport without that report.
+
+#### Scenario: Every presented binding is reachable at a standard terminal size
+
+- **WHEN** the help overlay is open at a 120-column, 24-row terminal
+- **THEN** every binding the table presents can be brought on screen using only
+  the chords the table declares for the help-overlay context
+- **AND** so can the keyboard-enhancement report and the notes beside it
+
+#### Scenario: A scrolling chord is declared like any other
+
+- **WHEN** a chord scrolls the help overlay
+- **THEN** it resolves to a named action through the binding table in the
+  help-overlay context
+- **AND** changing that row changes which chord scrolls
+
+#### Scenario: The overlay opens at the beginning
+
+- **WHEN** the operator opens the help overlay
+- **THEN** its content is presented from the first row
+- **AND** that does not depend on the context it was opened from, nor on where
+  a previous viewing had scrolled to
+
+#### Scenario: Dismissal survives scrolling
+
+- **WHEN** the overlay has been scrolled away from its first row
+- **THEN** the chords that dismiss it still dismiss it
+
+#### Scenario: A short column keeps its content while a long one scrolls
+
+- **WHEN** the overlay's columns hold unequal amounts of content and the
+  operator scrolls to the end
+- **THEN** the last row of every column has been brought on screen
+- **AND** no column is left blank by a scroll position another column needed
+
+#### Scenario: Content outside the viewport is reported
+
+- **WHEN** the overlay holds more than the terminal can show at once
+- **THEN** it reports what lies outside the viewport
+- **AND** names the chords that reach it

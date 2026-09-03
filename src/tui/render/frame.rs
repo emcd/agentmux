@@ -6,6 +6,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
+use super::super::actions::{self, Action, BindingContext};
 use super::super::sender_bound_bundle;
 use super::super::state::AppState;
 use super::cursor::render_active_cursor;
@@ -85,16 +86,49 @@ pub(super) fn render_main(frame: &mut Frame, area: Rect, state: &mut AppState) {
     }
 }
 
+/// The footer's mode-switch hint, generated from whichever surface owns the
+/// chord at this instant.
+///
+/// The dispatch context rather than a fixed one, which is the opposite of what
+/// a pane hint does. A pane hint annotates the surface it sits on; the footer
+/// spans the whole workbench and says what pressing a key would do right now,
+/// which is the question `binding_context` answers. Where nothing binds the
+/// switch, the destination is still named and no chord is invented.
+fn mode_switch_hint(state: &AppState, destination: &str) -> String {
+    match actions::binding_for(actions::binding_context(state), Action::ToggleMode) {
+        Some(entry) => format!("{} → {destination}", entry.primary_chord()),
+        None => format!("→ {destination}"),
+    }
+}
+
+/// The status line before anything has happened.
+///
+/// It is composed here rather than seeded into `AppState` because the state
+/// layer does not depend on the action layer -- the dependency runs the other
+/// way, with `Action::apply` calling `AppState` methods -- and reversing that
+/// for one string would be a poor trade. Help is a global row, so the global
+/// context is where its chord is declared.
+fn startup_status() -> String {
+    match actions::binding_for(BindingContext::Global, Action::ToggleHelpOverlay) {
+        Some(entry) => format!("Ready. Press {} for help.", entry.primary_chord()),
+        None => "Ready. The help overlay lists every binding.".to_string(),
+    }
+}
+
 fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     let (mode_label, toggle_hint) = match state.mode {
-        super::super::state::ScreenMode::Communication => ("[Communication]", "F4 → Interaction"),
-        super::super::state::ScreenMode::Interaction => ("[Interaction]", "F4 → Communication"),
+        super::super::state::ScreenMode::Communication => {
+            ("[Communication]", mode_switch_hint(state, "Interaction"))
+        }
+        super::super::state::ScreenMode::Interaction => {
+            ("[Interaction]", mode_switch_hint(state, "Communication"))
+        }
     };
     let status_line = state
         .status_history
         .front()
         .map(render_status_line)
-        .unwrap_or_else(|| Line::from("Ready."));
+        .unwrap_or_else(|| Line::from(startup_status()));
     let mut spans = vec![
         Span::styled(
             mode_label,
@@ -123,5 +157,75 @@ fn render_status_line(entry: &super::super::state::StatusEntry) -> Line<'static>
             Span::raw(entry.message.clone()),
         ]),
         None => Line::from(Span::raw(entry.message.clone())),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::{Terminal, backend::TestBackend};
+
+    use crate::tui::state::{ScreenMode, TuiLaunchOptions};
+
+    fn workbench() -> AppState {
+        AppState::new(TuiLaunchOptions {
+            namespace: "agentmux".to_string(),
+            sender_session: "tui".to_string(),
+            relay_socket: std::path::PathBuf::from("/tmp/agentmux-frame-render.sock"),
+            look_lines: None,
+            available_bundles: vec!["agentmux".to_string()],
+        })
+    }
+
+    fn rendered(state: &mut AppState) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(110, 30)).expect("terminal");
+        terminal.draw(|frame| render(frame, state)).expect("draw");
+        let buffer = terminal.backend().buffer().clone();
+        (0..buffer.area.height)
+            .map(|row| {
+                (0..buffer.area.width)
+                    .map(|column| buffer[(column, row)].symbol())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    #[test]
+    fn the_footer_names_the_chords_the_table_declares_rather_than_literals() {
+        // The chords are read from the table here, not from the functions that
+        // compose the footer: asking those to agree with themselves would pass
+        // over any stale literal they happened to return. A row moved to a
+        // different chord fails this without anyone remembering the footer
+        // exists.
+        let help = actions::binding_for(BindingContext::Global, Action::ToggleHelpOverlay)
+            .expect("the global context binds toggling help");
+        let mut state = workbench();
+
+        // Nothing has happened yet, so the startup line is what the footer
+        // falls back to. It is the only place the operator is told how to
+        // reach the catalogue at all.
+        let text = rendered(&mut state);
+        assert!(
+            text.contains(&format!("Press {} for help.", help.primary_chord())),
+            "the startup status does not name {:?}:\n{text}",
+            help.primary_chord()
+        );
+
+        // Both modes, because the destination differs and the chord must not.
+        for (mode, destination) in [
+            (ScreenMode::Communication, "Interaction"),
+            (ScreenMode::Interaction, "Communication"),
+        ] {
+            state.mode = mode;
+            let switch = actions::binding_for(actions::binding_context(&state), Action::ToggleMode)
+                .expect("every surface binds switching modes");
+            let text = rendered(&mut state);
+            assert!(
+                text.contains(&format!("{} → {destination}", switch.primary_chord())),
+                "the footer does not offer {:?} → {destination}:\n{text}",
+                switch.primary_chord()
+            );
+        }
     }
 }

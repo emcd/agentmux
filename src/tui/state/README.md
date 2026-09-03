@@ -28,11 +28,19 @@ lives in `relay.rs`; and the per-mode interaction helpers live in
   - The state-history depth constants (`STATUS_HISTORY_MAXIMUM`,
     `EVENT_HISTORY_MAXIMUM`, `CHAT_HISTORY_MAXIMUM`,
     `SEEN_STREAM_IDS_MAXIMUM`) live here.
-  - Tests live under `tests/unit/` in `tui.rs`, `tui_workbench/`,
-    `tui_session.rs`, and `tui_relay_error_mapping.rs`. The one inline
-    `#[cfg(test)]` block in `src/tui/` covers binding-context
-    resolution in `actions/context.rs`, which is crate-private by
-    design and has no public interface that exercises it.
+  - Tests live under `tests/unit/` in `tui.rs`, `tui_bindings.rs`,
+    `tui_dispatch.rs`, `tui_help.rs`, `tui_workbench/`,
+    `tui_session.rs`, and
+    `tui_relay_error_mapping.rs`. `src/tui/` carries four inline
+    `#[cfg(test)]` blocks, one `#[test]` each, in
+    `render/overlays/help.rs`, `render/overlays/picker.rs`,
+    `render/interaction.rs`, and `render/frame.rs` — all covering
+    crate-private renderers no public interface reaches.
+  - `status_history` starts empty rather than seeded. The startup line
+    names a chord, and a chord belongs to the binding table, which this
+    layer does not depend on: `Action::apply` calls `AppState` methods,
+    not the reverse. The render layer composes that line as the
+    footer's empty-history fallback.
 - `history.rs`
   - `impl AppState` for the chat-history and stream-event domain:
     `send_message`, `record_chat_events`, `record_stream_events`,
