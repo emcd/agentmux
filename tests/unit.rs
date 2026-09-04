@@ -45,6 +45,8 @@ mod stub_mailbox;
 mod tmux_transport;
 #[path = "unit/tui.rs"]
 mod tui;
+#[path = "unit/tui_binding_vocabulary.rs"]
+mod tui_binding_vocabulary;
 #[path = "unit/tui_bindings.rs"]
 mod tui_bindings;
 #[path = "unit/tui_dispatch.rs"]

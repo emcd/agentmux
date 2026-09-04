@@ -1,37 +1,38 @@
 ## 1. Operator vocabulary
 
-- [ ] 1.1 Separate the actions that carry operator input — the variants holding
+- [x] 1.1 Separate the actions that carry operator input — the variants holding
       the typed character — from those that do not, so the configurable subset
       is derived from the vocabulary rather than maintained as a hand-kept list
       that a later variant can fall out of.
-- [ ] 1.2 Give each action in that subset an operator-facing kebab-case name,
+- [x] 1.2 Give each action in that subset an operator-facing kebab-case name,
       and a lookup from that name back to the action.
-- [ ] 1.3 Give each `BindingContext` an operator-facing kebab-case name and its
+- [x] 1.3 Give each `BindingContext` an operator-facing kebab-case name and its
       reverse lookup.
-- [ ] 1.4 Add a test asserting every action in the configurable subset and every
+- [x] 1.4 Add a test asserting every action in the configurable subset and every
       `BindingContext` has a name and that no two share one, so a variant added
       later cannot be silently unnameable.
-- [ ] 1.5 Add a test that every data-carrying action is outside the configurable
+- [x] 1.5 Add a test that every data-carrying action is outside the configurable
       subset, so a variant added later carrying operator input cannot become
       nameable by default.
-- [ ] 1.6 Document the two vocabularies in `src/tui/actions/README.md` as the
+- [x] 1.6 Document the two vocabularies in `src/tui/actions/README.md` as the
       operator-facing surface, distinct from the internal identifiers, including
       why the data-carrying actions are outside it.
 
 ## 2. Chord grammar
 
-- [ ] 2.1 Implement a parser from the written chord form to `Chord::Key`,
+- [x] 2.1 Implement a parser from the written chord form to `Chord::Key`,
       accepting the modifier spellings `Chord::display` emits.
-- [ ] 2.2 Reject the chord shapes that are not operator-facing — the
+- [x] 2.2 Reject the chord shapes that are not operator-facing — the
       handler-reproduction and typing shapes — with an error naming what was
       attempted.
-- [ ] 2.3 Add the round-trip test over the whole default table: every chord the
-      help overlay presents parses back to the chord that was printed.
-- [ ] 2.4 Teeth-check 2.3 by changing one `Chord::display` arm to emit a form
+- [x] 2.3 Add the round-trip test over the whole default table: every chord the
+      help overlay presents that denotes a keystroke parses back to the chord
+      that was printed, and the placeholder standing for typing does not parse.
+- [x] 2.4 Teeth-check 2.3 by changing one `Chord::display` arm to emit a form
       the parser does not accept, and confirm the test fails.
-- [ ] 2.5 Add the symbolic modifier to the grammar, parsing to a modifier that
+- [x] 2.5 Add the symbolic modifier to the grammar, parsing to a modifier that
       is unresolved until the effective table is built.
-- [ ] 2.6 Resolve the symbolic modifier to `Ctrl` off macOS unconditionally, and
+- [x] 2.6 Resolve the symbolic modifier to `Ctrl` off macOS unconditionally, and
       on macOS to the configured selection, defaulting to `Ctrl`. Add a test per
       platform arm so neither resolution can be changed without a failure.
 

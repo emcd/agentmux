@@ -32,10 +32,19 @@ Two halves, deliberately independent:
     repeating it, and within a group declaration order is the tiebreak
     between rows that could both match — so a row for one character
     must precede its context's typing row.
+- `chord.rs`
   - `Chord` mirrors the condition shapes `../input.rs` uses today (an
     exact modifier set, a key whatever its modifiers, one typed
     character, any typed character), so the table reproduces the
     handlers without narrowing them.
+  - The two directions an operator-facing chord travels: `Chord::display`
+    renders one for reading, `parse_chord` reads one an operator wrote.
+    They live together because they are held to agree — see
+    **The operator vocabulary** below.
+  - `PrimaryModifier` and `primary_modifier` resolve the symbolic
+    `primary` modifier for a platform. The platform arrives as an
+    argument rather than through `cfg!`, so both arms are exercisable
+    wherever the tests run.
   - A behavior is declared only where it has an effect. Methods that
     guard on the focused field and do nothing elsewhere are reachable
     from a whole screen mode in the handlers; declaring those inert
@@ -97,7 +106,9 @@ Two halves, deliberately independent:
 `Action`, `BindingContext`, `default_binding`, `help_bindings`,
 `context_bindings`, `binding_for`, `typing_binding`, `picker_hint`,
 `interaction_write_hint`, `interaction_choice_hint`, `HelpSection`,
-`HelpEntry`, and `HelpSource` are exported from `agentmux::tui`, and
+`HelpEntry`, `HelpSource`, `parse_chord`, `ChordPattern`, `ChordError`,
+`PrimaryModifier`, and `primary_modifier` are exported from
+`agentmux::tui`, and
 `Workbench` exposes `apply_action`, `binding_context`,
 `binding_lookup_order`, and `help_bindings`. Together they let a caller
 outside the crate ask what surface is active, what a chord means there,
@@ -113,6 +124,84 @@ same question differently.
 What stays internal is the table itself — the rows, their chord
 patterns, and their display sections. That is the shape most likely to
 move, and nothing outside the crate needs it to ask what a chord does.
+
+## The operator vocabulary
+
+An operator's binding configuration is written by someone who has not
+read this source, so the names it uses are a surface of their own
+rather than an echo of the Rust identifiers. Two vocabularies carry it,
+both kebab-case: `Action::configuration_name` and
+`BindingContext::configuration_name`, each with a reverse lookup
+derived by searching `ALL` rather than by a second match, so forward
+and reverse spellings cannot drift apart.
+
+Both vocabularies are **generated from one declaration** —
+`declare_action_vocabulary!` and `declare_binding_contexts!` — which
+emit the enum, the `ALL` list, and the names together. That is why a
+behavior or context cannot be omitted by oversight: it exists only by
+appearing in the declaration, so there is no separate list to fall out
+of.
+
+An exhaustive `match` alone would not give that. It forces a new
+variant to be *considered*, but nothing forces it into a hand-kept
+list, and a behavior missing from that list would carry a name
+`from_configuration_name` could never find while every test that walks
+the list still passed. The seam is removed rather than policed.
+
+`BindingContext::position` is the deliberate exception: it stays
+hand-written and exhaustive rather than derived from `ALL`, because a
+position derived from the list it is checked against could never
+disagree with it, and the test asserting the two agree is what catches
+a context declared in one order and positioned in another.
+
+**Three behaviors are outside the vocabulary**, and stay outside:
+`InsertComposeCharacter`, `InsertRawwCharacter`, and
+`AppendPickerFilterCharacter` carry the character the operator typed.
+They are constructed from a keystroke rather than named in advance, so
+a configuration row — which supplies a chord and a name, and never a
+character — can neither denote nor build one.
+`Action::carries_operator_input` answers for them, and
+`configuration_name` answers `None` for exactly those. The two are
+separate declarations rather than one derived from the other, and a
+test holds them in agreement, so neither can be quietly widened to let
+a typing behavior become nameable.
+
+This is the action-side counterpart of excluding `Chord::Text` from the
+grammar. The chord side stops an operator from rebinding *how*
+characters are typed; the action side stops them from naming *the act
+of typing one* as a target.
+
+## What generated help shows is what a configuration accepts
+
+`parse_chord` accepts the spellings `Chord::display` emits, and the two
+are held to a round trip: every chord the help overlay presents parses,
+and rendering the result reproduces the text that was presented. An
+operator's first act is copying a chord out of the reference the TUI
+renders, and a grammar that does not accept what help shows fails
+exactly then. The test walks the whole generated surface — the chords
+drawn on a line and the rows folded out of it, since a folded chord is
+one an operator can still press and still wants to rebind.
+
+Two spellings need care, and both are covered:
+
+- `Ctrl+C` is conventionally capitalized, while a terminal reports the
+  character as a lowercase `c` and the table stores it that way. Chords
+  fold to lower case in `ChordPattern::resolve` rather than at parse
+  time, so the rendered text keeps the conventional capital while the
+  resolved chord still matches the key that was pressed. Folding at
+  resolution also waits until the symbolic modifier is known, so
+  `primary+c` folds only where `primary` resolved to `Ctrl`.
+- `Shift+Tab` is the one key spelling carrying a modifier in the key
+  half, because that is how `BackTab` renders. It parses back to
+  `BackTab` bare, not to `Tab` carrying `Shift`: crossterm delivers the
+  keystroke as `BackTab` and the compiled rows match on that, so the
+  other reading would produce a chord no keystroke ever satisfies.
+  `canonical_key` folds the spelling at parse time so one
+  representation flows through resolution and dispatch alike.
+
+`Chord::Text` renders as `Type`, which names no key and does not parse.
+That is deliberate rather than an omission: admitting it would let a
+configuration rebind how characters are typed.
 
 ## Global rows
 
@@ -154,7 +243,8 @@ makes them redundant wherever `Enter` is bound; see `help.rs`.
 - Tests live under `tests/unit/`: `tui_bindings.rs` for what the table
   declares, `tui_dispatch.rs` for dispatch and direct application
   agreeing on what a chord does, `tui_help.rs` for generated
-  presentation, and `tui.rs` for the public seam. `src/tui/` carries
+  presentation, `tui_binding_vocabulary.rs` for the operator-facing
+  names and the chord grammar, and `tui.rs` for the public seam. `src/tui/` carries
   four inline `#[cfg(test)]` blocks, one `#[test]` each, all covering
   crate-private renderers no public interface reaches:
   `../render/overlays/help.rs` for the overlay's geometry and its

@@ -2,48 +2,108 @@
 
 use super::super::state::{AppState, FocusField, PickerColumn, ScreenMode};
 
-/// A key under which binding rows are declared.
+/// Counts the identifiers handed to it, so a generated list can keep its
+/// fixed-size array type rather than decaying to a slice.
+macro_rules! count_identifiers {
+    () => (0usize);
+    ($head:ident $(, $tail:ident)*) => (1usize + count_identifiers!($($tail),*));
+}
+
+/// Declares the binding contexts once, so the enum, the list of every context,
+/// and their operator-facing names cannot disagree.
 ///
-/// All but [`BindingContext::Global`] name a surface the operator can be on.
-/// Overlay surfaces outrank screen-mode surfaces, and within a screen mode the
-/// focused field selects the surface. Holding that as a value rather than as an
-/// ordering of handler early-returns is what makes the precedence assertable
-/// without simulating dispatch.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum BindingContext {
+/// Completeness is the reason this is a macro. An exhaustive `match` forces a
+/// new context to be *considered*, but nothing forces it into a separate list,
+/// and a context missing from that list would carry a name
+/// [`BindingContext::from_configuration_name`] could never find while every
+/// test that walks the list still passed. Generating all three from one place
+/// removes the seam: a context exists only by appearing here.
+///
+/// [`BindingContext::position`] stays hand-written and exhaustive rather than
+/// being derived from `ALL`. Deriving it would make the test that asserts the
+/// two agree tautological, and that test is what catches a context declared in
+/// one order and positioned in another.
+macro_rules! declare_binding_contexts {
+    (
+        $(
+            $(#[$meta:meta])*
+            $variant:ident => $name:expr,
+        )+
+    ) => {
+        /// A key under which binding rows are declared.
+        ///
+        /// All but [`BindingContext::Global`] name a surface the operator can
+        /// be on. Overlay surfaces outrank screen-mode surfaces, and within a
+        /// screen mode the focused field selects the surface. Holding that as a
+        /// value rather than as an ordering of handler early-returns is what
+        /// makes the precedence assertable without simulating dispatch.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub enum BindingContext {
+            $(
+                $(#[$meta])*
+                $variant,
+            )+
+        }
+
+        impl BindingContext {
+            /// Every context, so a caller can ask what the defaults say across
+            /// the whole surface rather than context by context. Complete by
+            /// construction: this and the enum come from one declaration.
+            pub const ALL: [BindingContext; count_identifiers!($($variant),+)] = [
+                $( BindingContext::$variant ),+
+            ];
+
+            /// This context's name in an operator's binding configuration.
+            ///
+            /// Kebab-case, and deliberately not the variant identifier: a
+            /// configuration is written by someone who has not read this
+            /// source, so the spelling is part of the operator-facing surface
+            /// rather than an incidental echo of the internal name.
+            #[must_use]
+            pub const fn configuration_name(self) -> &'static str {
+                match self {
+                    $( Self::$variant => $name, )+
+                }
+            }
+
+        }
+    };
+}
+
+declare_binding_contexts! {
     /// Rows that hold whichever surface is active, because the behavior they
     /// reach is not the surface's to own: quitting, and the help overlay the
     /// operator must be able to summon from anywhere. Resolved ahead of the
     /// contextual rows, so an open surface cannot shadow them.
-    Global,
-    PickerBundles,
-    PickerSessions,
-    EventsOverlay,
-    HelpOverlay,
-    ComposeTo,
-    ComposeMessage,
-    InteractionChoice,
-    InteractionWrite,
+    Global => "global",
+    PickerBundles => "picker-bundles",
+    PickerSessions => "picker-sessions",
+    EventsOverlay => "events-overlay",
+    HelpOverlay => "help-overlay",
+    ComposeTo => "compose-to",
+    ComposeMessage => "compose-message",
+    InteractionChoice => "interaction-choice",
+    InteractionWrite => "interaction-write",
 }
 
 impl BindingContext {
-    /// Every context, so a caller can ask what the defaults say across the
-    /// whole surface rather than context by context. Exhaustive by
-    /// construction: [`BindingContext::position`] matches on every variant, so
-    /// a new one cannot be added without being placed here too.
-    pub const ALL: [BindingContext; 9] = [
-        BindingContext::Global,
-        BindingContext::PickerBundles,
-        BindingContext::PickerSessions,
-        BindingContext::EventsOverlay,
-        BindingContext::HelpOverlay,
-        BindingContext::ComposeTo,
-        BindingContext::ComposeMessage,
-        BindingContext::InteractionChoice,
-        BindingContext::InteractionWrite,
-    ];
+    /// The context a configuration name denotes, if any does.
+    ///
+    /// Derived by searching [`BindingContext::ALL`] rather than by a second
+    /// match, so the forward and reverse spellings cannot drift apart.
+    #[must_use]
+    pub fn from_configuration_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|context| context.configuration_name() == name)
+    }
 
     /// This context's index in [`BindingContext::ALL`].
+    ///
+    /// Hand-written rather than derived by searching `ALL`, so that the test
+    /// asserting the two agree has something to catch: a position derived from
+    /// the list it is checked against could never disagree with it.
+    #[must_use]
     pub const fn position(self) -> usize {
         match self {
             Self::Global => 0,

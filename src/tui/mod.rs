@@ -22,8 +22,9 @@ use crate::runtime::{
 use keyboard::KeyboardEnhancementSession;
 
 pub use actions::{
-    Action, BindingContext, HelpEntry, HelpSection, HelpSource, binding_for, context_bindings,
-    default_binding, help_bindings, interaction_choice_hint, interaction_write_hint, picker_hint,
+    Action, BindingContext, ChordError, ChordPattern, HelpEntry, HelpSection, HelpSource,
+    PrimaryModifier, binding_for, context_bindings, default_binding, help_bindings,
+    interaction_choice_hint, interaction_write_hint, parse_chord, picker_hint, primary_modifier,
     typing_binding,
 };
 pub use keyboard::{KeyboardEnhancement, format_keyboard_enhancement_lines};
