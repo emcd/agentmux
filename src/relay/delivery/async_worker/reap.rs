@@ -140,7 +140,7 @@ mod worker_reap_tests {
         bind_worker_consumer_generation(&key, owner, generation);
         admit("worker-reap-1", admission_key(), SessionType::Tmux, 1).expect("admit");
         enqueue(
-            "worker-reap-1",
+            &Arc::new(queued_task("worker-reap-1")),
             MailboxPayload::Raw {
                 content: "body".to_string(),
                 append_enter: true,
@@ -197,5 +197,44 @@ mod worker_reap_tests {
 
     fn admission_key() -> AdmissionTargetKey {
         AdmissionTargetKey::new(NAMESPACE, runtime_directory().as_path(), TARGET)
+    }
+
+    /// The send this test's entry answers for.
+    ///
+    /// Only its message id and target matter here: the reap is asserted on what
+    /// it leaves in the ledger, not on anything reported to a sender.
+    fn queued_task(message_id: &str) -> crate::relay::AsyncDeliveryTask {
+        crate::relay::AsyncDeliveryTask {
+            admitted: true,
+            bundle: crate::configuration::BundleConfiguration {
+                schema_version: crate::configuration::BUNDLE_SCHEMA_VERSION.to_string(),
+                bundle_name: NAMESPACE.to_string(),
+                autostart: false,
+                groups: Vec::new(),
+                members: Vec::new(),
+            },
+            sender_namespace: NAMESPACE.to_string(),
+            sender: crate::configuration::BundleMember {
+                id: "sender".to_string(),
+                name: None,
+                working_directory: None,
+                target: crate::configuration::TargetConfiguration::Ui,
+                coder_session_id: None,
+                policy_id: None,
+                environment: Vec::new(),
+            },
+            authenticated_identity: None,
+            on_behalf_of: None,
+            all_target_sessions: Vec::new(),
+            target_session: TARGET.to_string(),
+            message: "body".to_string(),
+            message_id: message_id.to_string(),
+            runtime_directory: runtime_directory(),
+            payload_mode: crate::transports::DeliveryPayloadMode::RawInput,
+            append_enter: true,
+            choice_decider_sessions: Vec::new(),
+            is_receipt: false,
+            sender_return_route: None,
+        }
     }
 }

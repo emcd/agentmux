@@ -4,35 +4,44 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 
-use tokio::sync::mpsc;
-
 use crate::acp::client::{AcpGenerationHandle, SharedReplay};
 use crate::acp::persistent_runtime::PersistentAcpWorkerRuntime;
 use crate::envelope::PromptBatchSettings;
-use crate::transports::contract::OutcomeFuture;
+use crate::transports::WorkerReadinessState;
 use crate::transports::{
-    DeliveryEnvelope, GenerationFence, OutputView, StartupContext, Transport, TransportError,
-    TransportHealth, TransportStatus,
+    DeliveryExecutorContext, GenerationFence, OutputView, StartupContext, Transport,
+    TransportError, TransportHealth, TransportStatus, run_delivery_executor,
 };
-use crate::transports::{PartitionSink, WorkerReadinessState};
 
-use super::delivery::{DeliveryChannels, DeliveryTaskIdentity, WriteItem, acp_delivery_task};
-use super::state::{
-    ACP_WRITE_CHANNEL_CAPACITY, AcpSharedState, BootstrapInFlight, BootstrapRecord,
-    BootstrapRegistry, NEXT_BOOTSTRAP_ID, ReadinessMirror, raise_respawn_signal,
+use super::delivery::{
+    AcpDeliveryWriter, AcpReachability, AcpRuntimeSlot, DeliveryChannels, DeliveryTaskIdentity,
+    RuntimeInstall,
 };
-use super::turn::{not_submitted_outcome, set_shared_readiness};
+use super::state::{
+    AcpSharedState, BootstrapInFlight, BootstrapRecord, BootstrapRegistry, NEXT_BOOTSTRAP_ID,
+    ReadinessMirror, raise_respawn_signal,
+};
 
 pub struct AcpTransport {
     runtime: Option<PersistentAcpWorkerRuntime>,
     chooser: Option<crate::transports::Chooser>,
     shared: Arc<AcpSharedState>,
-    /// Sender for the internal delivery task's write queue. `None` before first
-    /// startup or after `release_runtime()`.
-    write_tx: Option<mpsc::Sender<WriteItem>>,
-    /// Shutdown signal to the delivery task. Dropping this signals the task to
-    /// drain pending items and exit. `None` before first startup.
-    shutdown_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    /// What the relay injected so this transport's delivery-loop executor can
+    /// reach its target's mailbox. Held rather than consumed because the executor
+    /// is spawned once and outlives every runtime this transport establishes.
+    delivery: DeliveryExecutorContext,
+    /// Hands established runtimes to the executor, and tells it when one is
+    /// released. `None` before the executor is spawned.
+    runtime_tx: Option<std::sync::mpsc::Sender<RuntimeInstall>>,
+    /// Stop request for the delivery executor, latched by `fence_generation` and
+    /// `shutdown`. A flag rather than a dropped channel because the executor now
+    /// outlives the runtimes: a signal tied to one of them would end the executor
+    /// at the first respawn.
+    executor_stop: Arc<AtomicBool>,
+    /// What the driver knows about permanence, shared into the executor so the
+    /// dwell is carried by the one thing that observes health under the pull
+    /// model.
+    reachability: AcpReachability,
     /// Prompt-batch settings (token budget and tokenizer profile) for envelope
     /// combining.
     batch_settings: PromptBatchSettings,
@@ -65,11 +74,11 @@ pub struct AcpTransport {
     /// monitor sampled its epoch carries a strictly greater one, so it stays
     /// outstanding no matter when the retirement lands.
     respawn_retired: AtomicU64,
-    /// `JoinHandle` for the most recent delivery task thread. Retained so a
-    /// generation supervisor can observe the task's cessation (the binding the
-    /// fence requires) and detach it cleanly on `take`. The handle is replaced
-    /// when `spawn_delivery_task` re-spawns, leaving the previous task's thread
-    /// to exit on its own; only `take` clears the field.
+    /// `JoinHandle` for this transport's one delivery executor. Retained so a
+    /// generation supervisor can observe its cessation (the binding the fence
+    /// requires) and detach it cleanly on `take`. Set once, by `ensure_executor`,
+    /// and never replaced: a respawn installs a runtime into the running
+    /// executor, so there is no second thread for a second handle to name.
     delivery_task_handle: Option<JoinHandle<()>>,
     /// Fencing surface of the generation whose client the delivery task owns.
     ///
@@ -107,7 +116,7 @@ impl std::fmt::Debug for AcpTransport {
         f.debug_struct("AcpTransport")
             .field("has_runtime", &self.runtime.is_some())
             .field("readiness", &self.readiness())
-            .field("has_write_channel", &self.write_tx.is_some())
+            .field("executor_running", &self.delivery_task_handle.is_some())
             .field("batch_settings", &self.batch_settings)
             .finish()
     }
@@ -118,7 +127,8 @@ impl AcpTransport {
     pub fn new(
         batch_settings: PromptBatchSettings,
         mirror_state: Option<ReadinessMirror>,
-        partition_sink: Arc<dyn PartitionSink>,
+        delivery: DeliveryExecutorContext,
+        reachability: AcpReachability,
     ) -> Self {
         Self {
             runtime: None,
@@ -127,11 +137,12 @@ impl AcpTransport {
                 readiness: Mutex::new(WorkerReadinessState::Initializing),
                 replay: Mutex::new(None),
                 mirror_state,
-                partition_sink,
                 permission_executors: Mutex::new(Vec::new()),
             }),
-            write_tx: None,
-            shutdown_tx: None,
+            delivery,
+            runtime_tx: None,
+            executor_stop: Arc::new(AtomicBool::new(false)),
+            reachability,
             batch_settings,
             target_session: String::new(),
             respawn_needed_tx: tokio::sync::watch::channel(0).0,
@@ -221,28 +232,40 @@ impl AcpTransport {
     /// respawn so a concurrent `look` reads a recovering/stale snapshot through
     /// the still-valid handle rather than the dead buffer.
     pub fn release_runtime(&mut self) {
-        // Drop the shutdown signal first, then the write channel. The delivery
-        // task detects the shutdown signal, drains any remaining write items,
-        // and resolves their outcome senders with DroppedOnShutdown before exiting.
-        self.shutdown_tx = None;
-        self.write_tx = None;
+        // The executor is deliberately left running. It belongs to this transport
+        // instance, not to the runtime being released: a respawn installs a
+        // replacement connection into the executor that is already there, so
+        // there is never a second one to race the first. Telling it the runtime
+        // is gone is what makes it withhold writes until one arrives.
+        if let Some(runtime_tx) = self.runtime_tx.as_ref() {
+            let _ = runtime_tx.send(RuntimeInstall::Clear);
+        }
         self.runtime = None;
         self.set_replay(None);
         self.set_readiness(WorkerReadinessState::Recovering);
     }
 
-    /// Spawns the internal delivery task that drains the write channel, combines
-    /// contiguous envelopes respecting the token budget, and submits turns to the
-    /// ACP runtime. Called from [`Transport::startup`] after the runtime is
-    /// established. Takes the client and session_id from the runtime so the task
-    /// owns them exclusively — the transport only needs the shared replay handle
-    /// and readiness state after startup. The task's [`JoinHandle`] is retained
-    /// on the transport so a generation supervisor can join it and observe
-    /// cessation as the fence requires; the previous generation's handle, if
-    /// any, is replaced — its thread is left to exit on its own.
-    fn spawn_delivery_task(&mut self) {
-        let (tx, rx) = mpsc::channel::<WriteItem>(ACP_WRITE_CHANNEL_CAPACITY);
-        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel::<()>();
+    /// Starts this transport's one delivery-loop executor, if it has not already
+    /// been started.
+    ///
+    /// Called before the bootstrap rather than after it, and exactly once for the
+    /// transport's life. Two things follow from that, and both are the point.
+    ///
+    /// A bootstrap that fails permanently still leaves an executor running, so
+    /// the target's unreachability is observed by something and its queued
+    /// entries resolve at the dwell. An executor spawned only alongside a live
+    /// client would leave exactly that target's mailbox with no consumer, and
+    /// nothing else in the pull model looks at a transport's health.
+    ///
+    /// A respawn installs a replacement connection into the executor already
+    /// running rather than starting another beside it, which is what makes "one
+    /// serial executor per transport instance" true by construction instead of by
+    /// hoping the previous one has exited.
+    fn ensure_executor(&mut self) {
+        if self.delivery_task_handle.is_some() {
+            return;
+        }
+        let (runtime_tx, runtime_rx) = std::sync::mpsc::channel::<RuntimeInstall>();
         let respawn_needed_tx = self.respawn_needed_tx.clone();
         let shared = Arc::clone(&self.shared);
         let batch_settings = self.batch_settings;
@@ -250,37 +273,56 @@ impl AcpTransport {
         let identity = DeliveryTaskIdentity {
             target_session: self.target_session.clone(),
         };
-
-        let runtime = self.runtime.take().expect("runtime present at task spawn");
-        // Before the move, not after: this is the last point at which the
-        // transport can still reach the client it is about to hand away.
-        self.generation = Some(runtime.client.generation_handle());
-        let client = runtime.client;
-        let session_id = runtime.session_id;
+        let delivery = self.delivery.clone();
+        let stop = Arc::clone(&self.executor_stop);
+        let reachability = AcpReachability {
+            abandoned: Arc::clone(&self.reachability.abandoned),
+            unreachable_since: Arc::clone(&self.reachability.unreachable_since),
+        };
 
         let handle = thread::Builder::new()
             .name("agentmux-acp-delivery".into())
             .spawn(move || {
-                let channels = DeliveryChannels {
-                    rx,
-                    shutdown_rx,
-                    respawn_needed_tx,
-                };
-                acp_delivery_task(
-                    channels,
-                    client,
-                    session_id,
+                let writer = AcpDeliveryWriter::new(
+                    DeliveryChannels {
+                        runtime_rx,
+                        stop,
+                        respawn_needed_tx,
+                    },
                     shared,
                     chooser,
                     batch_settings,
                     identity,
+                    reachability,
                 );
+                run_delivery_executor(writer, delivery);
             })
-            .expect("spawn ACP delivery task thread");
+            .expect("spawn ACP delivery executor thread");
 
         self.delivery_task_handle = Some(handle);
-        self.write_tx = Some(tx);
-        self.shutdown_tx = Some(shutdown_tx);
+        self.runtime_tx = Some(runtime_tx);
+    }
+
+    /// Hands the established runtime to the executor.
+    ///
+    /// The client is moved rather than shared: one thread issues every framed
+    /// write for this target, which is what makes the executor's seriality reach
+    /// the agent rather than stopping at the relay.
+    fn hand_runtime_to_executor(&mut self) {
+        let runtime = self
+            .runtime
+            .take()
+            .expect("runtime present at executor install");
+        // Before the move, not after: this is the last point at which the
+        // transport can still reach the client it is about to hand away.
+        self.generation = Some(runtime.client.generation_handle());
+        let slot = AcpRuntimeSlot {
+            client: runtime.client,
+            session_id: runtime.session_id,
+        };
+        if let Some(runtime_tx) = self.runtime_tx.as_ref() {
+            let _ = runtime_tx.send(RuntimeInstall::Install(Box::new(slot)));
+        }
     }
 
     /// Sets the chooser/target identity and clears any prior delivery channel
@@ -296,9 +338,16 @@ impl AcpTransport {
     ) {
         self.chooser = Some(chooser);
         self.target_session = target_session;
-        // Close any existing delivery task's channel before creating a new
-        // runtime; the old task drains and exits.
-        self.write_tx = None;
+        // The executor starts here, before the bootstrap it will write through
+        // rather than after it. A bootstrap that fails permanently leaves the
+        // target unreachable, and unreachability is carried by the dwell — which
+        // only a running executor observes. Starting it on success instead would
+        // leave exactly that target's mailbox with no consumer and its entries
+        // with no outcome, which nothing else in the pull model would notice.
+        //
+        // Idempotent across respawns: the executor is per transport instance, and
+        // `prepare_for_startup` runs again before each re-establish.
+        self.ensure_executor();
     }
 
     /// Registers a bootstrap as running until the returned guard drops.
@@ -372,7 +421,10 @@ impl AcpTransport {
         self.set_replay(Some(runtime.client.replay_buffer_handle()));
         self.runtime = Some(runtime);
         self.set_readiness(WorkerReadinessState::Available);
-        self.spawn_delivery_task();
+        // Idempotent, and the executor is usually already running: it is started
+        // when the bootstrap begins, not when one succeeds.
+        self.ensure_executor();
+        self.hand_runtime_to_executor();
     }
 
     /// Marks the transport Unavailable with no live runtime (initial-bootstrap
@@ -382,64 +434,16 @@ impl AcpTransport {
         self.set_replay(None);
         self.set_readiness(WorkerReadinessState::Unavailable);
     }
-
-    /// Installs a write channel for unit tests, so `mailw`/`raww` can reach
-    /// their enqueue-refusal paths without a live delivery task.
-    ///
-    /// Sets the transport `Available` (the precondition `mailw`/`raww` check
-    /// before `try_send`) and points `write_tx` at a fresh single-slot channel
-    /// (the smallest capacity that both refusal classes need). When `prefill`
-    /// is set, one raw item occupies the slot so the next `try_send` returns
-    /// `Full`. Returns a guard owning the channel's receiver: retaining it
-    /// keeps the channel open, dropping it closes the channel (the next
-    /// `try_send` returns `Closed`). The receiver is dropped normally with the
-    /// guard — the test never leaks it.
-    ///
-    /// This mirrors the relay's `_for_testing` export convention
-    /// (e.g. `second_claim_is_live_conflict_for_testing`): a `#[doc(hidden)]`
-    /// public seam so `tests/unit` can drive the public transport interface
-    /// without widening production API surface.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn install_write_channel_for_testing(&mut self, prefill: bool) -> WriteChannelGuard {
-        self.set_readiness(WorkerReadinessState::Available);
-        let (tx, rx) = mpsc::channel::<WriteItem>(1);
-        if prefill {
-            tx.try_send(WriteItem::Raw {
-                content: "filler".to_string(),
-                append_enter: true,
-                outcome_tx: tokio::sync::oneshot::channel().0,
-            })
-            .expect("prefill the single-slot write channel");
-        }
-        self.write_tx = Some(tx);
-        WriteChannelGuard { rx }
-    }
-}
-
-/// Guard owning the write-channel receiver installed by
-/// [`AcpTransport::install_write_channel_for_testing`].
-///
-/// Retaining it keeps the channel open (a `prefill`ed channel stays
-/// saturated, so the next `try_send` returns `Full`); dropping it closes the
-/// channel (the next `try_send` returns `Closed`). Dropping the guard also
-/// drops the receiver it owns, so the test never leaks the channel.
-#[doc(hidden)]
-pub struct WriteChannelGuard {
-    // Intentionally never read: the guard exists so the receiver is dropped
-    // with it, closing the channel at the end of the test's scope.
-    #[expect(dead_code)]
-    rx: mpsc::Receiver<WriteItem>,
 }
 
 impl GenerationFence for AcpTransport {
     fn fence_generation(&mut self) {
-        // Dropping the shutdown sender is the delivery task's cooperative stop
-        // signal: it drains what it holds and exits at its next check. Marking
-        // the generation fenced is the same request to the respawn monitor, and
-        // it is what makes a bootstrap already in flight refuse to install.
+        // Latching the executor's stop flag is its cooperative request: it
+        // finishes what it holds and exits at its next check. Marking the
+        // generation fenced is the same request to the respawn monitor, and it is
+        // what makes a bootstrap already in flight refuse to install.
         self.fenced.store(true, Ordering::Release);
-        self.shutdown_tx = None;
+        self.executor_stop.store(true, Ordering::Release);
     }
 
     fn terminate_generation(&mut self) {
@@ -460,7 +464,6 @@ impl GenerationFence for AcpTransport {
         // record this attempt cannot see, or cannot reach because someone holds
         // the lock, is reached when that holder releases and runs the same pass.
         self.bootstraps.initiate_termination();
-        self.write_tx = None;
     }
 
     fn generation_ceased(&self) -> bool {
@@ -506,130 +509,6 @@ impl Transport for AcpTransport {
         })
     }
 
-    fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
-        let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
-        // An authorized batch starts a supervised submission executor
-        // synchronously or is refused synchronously — it must never wait in the
-        // transport's staging channel behind an in-flight turn. The relay only
-        // authorizes when this transport reports Available, so a not-ready
-        // reading here is the stale-readiness case: refuse before partition with
-        // `not_submitted` (positive evidence nothing was written).
-        // Direct readiness check rather than `is_ready_for_handover().await`
-        // because `mailw` is synchronous and must not block or await.
-        if !self.is_available() {
-            let _ = outcome_tx.send(not_submitted_outcome(
-                self.target_session.clone(),
-                envelope.message_id.clone(),
-                "ACP transport is not ready to start a submission",
-            ));
-            return outcome_rx;
-        }
-        let Some(tx) = self.write_tx.as_ref() else {
-            // No live delivery task: refusal before partition — nothing was
-            // written, so the member resolves `not_submitted`.
-            let _ = outcome_tx.send(not_submitted_outcome(
-                self.target_session.clone(),
-                envelope.message_id.clone(),
-                "ACP transport has no runtime",
-            ));
-            return outcome_rx;
-        };
-        // Accept synchronously: mark Busy so the relay's next authorization
-        // check holds the following batch in `Pending` instead of enqueueing it
-        // behind this turn — the staging queue this contract removes.
-        set_shared_readiness(&self.shared, WorkerReadinessState::Busy);
-        if let Err(error) = tx.try_send(WriteItem::Envelope {
-            envelope: Box::new(envelope),
-            outcome_tx,
-        }) {
-            // The write channel refused the item. Classify the refusal so the
-            // post-refusal readiness is truthful: a Closed channel means the
-            // delivery task has exited (its receiver is gone), so Busy must not
-            // linger masking a dead executor — publish Unavailable. A Full
-            // channel means the delivery task is alive but saturated; Busy
-            // stays truthful until the task drains and settles Available. The
-            // rejected item is the Envelope we just submitted; mailw never
-            // enqueues a Raw.
-            let channel_closed = matches!(&error, mpsc::error::TrySendError::Closed(_));
-            if channel_closed {
-                set_shared_readiness(&self.shared, WorkerReadinessState::Unavailable);
-            }
-            let WriteItem::Envelope {
-                outcome_tx,
-                envelope,
-            } = error.into_inner()
-            else {
-                unreachable!("mailw only enqueues Envelope write items");
-            };
-            let _ = outcome_tx.send(not_submitted_outcome(
-                self.target_session.clone(),
-                envelope.message_id.clone(),
-                if channel_closed {
-                    "ACP write channel closed (delivery task exited)"
-                } else {
-                    "ACP write channel full (delivery task saturated)"
-                },
-            ));
-        }
-        outcome_rx
-    }
-
-    fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
-        let (outcome_tx, outcome_rx) = tokio::sync::oneshot::channel();
-        if !self.is_available() {
-            let _ = outcome_tx.send(not_submitted_outcome(
-                self.target_session.clone(),
-                String::new(),
-                "ACP transport is not ready to start a submission",
-            ));
-            return outcome_rx;
-        }
-        let Some(tx) = self.write_tx.as_ref() else {
-            let _ = outcome_tx.send(not_submitted_outcome(
-                self.target_session.clone(),
-                String::new(),
-                "ACP transport has no runtime",
-            ));
-            return outcome_rx;
-        };
-        // Accept synchronously: mark Busy so the relay holds the next batch
-        // rather than enqueuing it behind this turn.
-        set_shared_readiness(&self.shared, WorkerReadinessState::Busy);
-        if let Err(error) = tx.try_send(WriteItem::Raw {
-            content,
-            append_enter,
-            outcome_tx,
-        }) {
-            // Classify the refusal so the post-refusal readiness is truthful: a
-            // Closed channel means the delivery task has exited, so Busy must
-            // not linger masking a dead executor — publish Unavailable. A Full
-            // channel means the delivery task is alive but saturated; Busy
-            // stays truthful until the task drains. The rejected item is the
-            // Raw we just submitted; raww never enqueues an Envelope.
-            let channel_closed = matches!(&error, mpsc::error::TrySendError::Closed(_));
-            if channel_closed {
-                set_shared_readiness(&self.shared, WorkerReadinessState::Unavailable);
-            }
-            let WriteItem::Raw { outcome_tx, .. } = error.into_inner() else {
-                unreachable!("raww only enqueues Raw write items");
-            };
-            let _ = outcome_tx.send(not_submitted_outcome(
-                self.target_session.clone(),
-                String::new(),
-                if channel_closed {
-                    "ACP write channel closed (delivery task exited)"
-                } else {
-                    "ACP write channel full (delivery task saturated)"
-                },
-            ));
-        }
-        outcome_rx
-    }
-
-    async fn is_ready_for_handover(&self) -> bool {
-        self.is_available()
-    }
-
     fn health(&self) -> TransportHealth {
         // The inner transport cannot answer this one. `Unavailable` is published
         // for a respawn gap and for a permanent give-up alike, so reading it here
@@ -641,9 +520,8 @@ impl Transport for AcpTransport {
     }
 
     fn shutdown(&mut self) {
-        // Signal the delivery task to drain and exit, then drop the runtime.
-        self.shutdown_tx = None;
-        self.write_tx = None;
+        // Signal the executor to finish and exit, then drop the runtime.
+        self.executor_stop.store(true, Ordering::Release);
         self.runtime = None;
         self.set_replay(None);
         self.set_readiness(WorkerReadinessState::Unavailable);
@@ -657,5 +535,162 @@ impl Transport for AcpTransport {
         Some(Arc::new(super::output::AcpOutputView {
             shared: Arc::clone(&self.shared),
         }))
+    }
+}
+
+/// The executor's lifetime is the transport's, not any runtime's.
+///
+/// Inline because the seam is crate-private by design and no public interface
+/// reaches it: `Transport::startup` returns an error for ACP (the driver's
+/// supervised bootstrap establishes runtimes instead), so `prepare_for_startup`
+/// is the only way an executor is ever spawned, and widening it to `pub` would
+/// publish a lifecycle step the driver alone is meant to drive.
+///
+/// One test because the two claims are one property seen from both ends. A
+/// bootstrap that never succeeds and a respawn that replaces a runtime are the
+/// same question — does the executor belong to the transport or to the
+/// connection — and answering it wrongly breaks them in opposite directions: the
+/// first leaves a target's mailbox with no consumer at all, the second leaves it
+/// with two.
+#[cfg(test)]
+mod executor_lifetime_tests {
+    use std::sync::atomic::AtomicUsize;
+    use std::time::{Duration, Instant};
+
+    use super::*;
+    use crate::protocol::mailbox::{CursorPosition, EntryRange};
+    use crate::protocol::operations::{
+        AckRejection, AckResult, DeclareRejection, DeclareResult, MemberAcknowledgment,
+        PeekResponse, PeekResult,
+    };
+    use crate::transports::{DeliveryExecutorContext, MailboxConsumer, PackingUnitId};
+
+    /// A mailbox that is always empty and counts what the executor reports.
+    ///
+    /// Empty deliberately: what is under test is that an executor exists and
+    /// keeps observing, not what it writes. An entry would only add a write path
+    /// against an agent that is not there.
+    #[derive(Default)]
+    struct CountingConsumer {
+        peeks: AtomicUsize,
+        unreachable_resolutions: AtomicUsize,
+    }
+
+    impl MailboxConsumer for CountingConsumer {
+        fn peek(&self, _entry_max: usize, _canonical_bytes_max: u64) -> PeekResult {
+            self.peeks.fetch_add(1, Ordering::Relaxed);
+            Ok(PeekResponse {
+                entries: Vec::new(),
+                cursor: CursorPosition::start(),
+            })
+        }
+
+        fn declare(&self, _range: EntryRange) -> DeclareResult {
+            Err(DeclareRejection::UnknownTarget)
+        }
+
+        fn ack(&self, _unit: PackingUnitId, _members: &[MemberAcknowledgment]) -> AckResult {
+            Err(AckRejection::UnknownTarget)
+        }
+
+        fn resolve_unreachable(&self) {
+            self.unreachable_resolutions.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn wait_for(description: &str, mut condition: impl FnMut() -> bool) {
+        let started = Instant::now();
+        while !condition() {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "timed out waiting for {description}"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn one_executor_is_spawned_before_any_runtime_and_survives_a_released_one() {
+        let consumer = Arc::new(CountingConsumer::default());
+        let abandoned = Arc::new(AtomicBool::new(false));
+        let mut transport = AcpTransport::new(
+            PromptBatchSettings::default(),
+            None,
+            DeliveryExecutorContext {
+                consumer: Arc::clone(&consumer) as Arc<dyn MailboxConsumer>,
+                doorbell: crate::protocol::DeliveryDoorbell::default(),
+                poll_interval: Duration::from_millis(5),
+                unreachable_dwell: Duration::from_millis(100),
+            },
+            AcpReachability::new(
+                Arc::clone(&abandoned),
+                Arc::new(crate::transports::UnreachableSince::default()),
+            ),
+        );
+
+        // No runtime has been established and none ever will be here. An
+        // executor tied to one would not exist at all, and this mailbox would be
+        // consumed by nobody — which is the whole defect: nothing else in the
+        // pull model looks at a transport's health.
+        transport.prepare_for_startup(
+            Arc::new(|_| unreachable!("no choice is raised")),
+            "t".into(),
+        );
+        let first = transport
+            .delivery_task_handle
+            .as_ref()
+            .expect("preparing for startup spawns the executor")
+            .thread()
+            .id();
+
+        // A respawn releases the runtime and prepares again. Neither may start a
+        // second executor: two sharing one consumer generation is the seriality
+        // violation the single-executor rule exists to prevent. Compared by
+        // thread id rather than by the handle merely being present, because a
+        // second spawn would replace the handle and leave a `Some` behind it.
+        transport.release_runtime();
+        transport.prepare_for_startup(
+            Arc::new(|_| unreachable!("no choice is raised")),
+            "t".into(),
+        );
+        let after_respawn = transport
+            .delivery_task_handle
+            .as_ref()
+            .expect("the executor survives a released runtime");
+        assert_eq!(
+            after_respawn.thread().id(),
+            first,
+            "a respawn must install a runtime into the running executor, never start a second",
+        );
+        assert!(
+            !after_respawn.is_finished(),
+            "a released runtime must not end the executor that outlives it",
+        );
+
+        // Abandonment is the only thing that makes an ACP target unreachable, and
+        // the dwell is carried by the executor. Latching it is what a permanent
+        // bootstrap failure does.
+        abandoned.store(true, Ordering::Release);
+        wait_for("the dwell to resolve the target's entries", || {
+            consumer.unreachable_resolutions.load(Ordering::Relaxed) > 0
+        });
+
+        // Nothing was consumed along the way. An executor with no runtime must
+        // withhold rather than peek: a peek it went on to declare would bind
+        // entries it has no connection to write, and the guard would then owe
+        // them `submission_unknown` where it could have proven nothing was sent.
+        assert_eq!(
+            consumer.peeks.load(Ordering::Relaxed),
+            0,
+            "an executor with no runtime must consume nothing",
+        );
+
+        Transport::shutdown(&mut transport);
+        wait_for("the executor to stop on shutdown", || {
+            transport
+                .delivery_task_handle
+                .as_ref()
+                .is_none_or(std::thread::JoinHandle::is_finished)
+        });
     }
 }

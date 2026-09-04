@@ -27,10 +27,9 @@
 use crate::protocol::identity::{ConsumerGenerationId, DeliveryTargetId};
 
 use super::super::super::fence::FenceVerdict;
-use super::super::super::guard::SubmissionEvidence;
 use super::super::ledger::{AdmissionTargetKey, LedgerState, lock_ledger};
-use super::super::terminal::{TerminalTransition, release_entry};
 use super::addressing::target_key;
+use super::resolution::{ResolvedMember, resolve_positions};
 
 /// Why a target's consumer generation was not issued or replaced.
 ///
@@ -58,16 +57,8 @@ pub(in crate::relay) enum GenerationRejection {
     LedgerUnavailable,
 }
 
-/// A member the outgoing generation had declared and not acknowledged, resolved
-/// here through the guard's evidence order.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(in crate::relay) struct ResolvedMember {
-    pub(in crate::relay) message_id: String,
-    pub(in crate::relay) evidence: SubmissionEvidence,
-}
-
 /// A replacement the relay admitted.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub(in crate::relay) struct GenerationReplacement {
     /// The identifier the incoming generation consumes under.
     pub(in crate::relay) generation: ConsumerGenerationId,
@@ -192,31 +183,19 @@ fn resolve_outgoing_declaration(
     else {
         return Vec::new();
     };
-    let member_ids: Vec<String> = outstanding
-        .range
-        .sequences()
-        .filter_map(|sequence| {
-            state
-                .mailboxes
-                .get(key)
-                .and_then(|mailbox| mailbox.slots.get(&sequence))
-                .map(|slot| slot.message_id.clone())
-        })
-        .collect();
-    let mut resolved = Vec::new();
-    for message_id in member_ids {
-        // `release_entry` retires the member's position as it goes, so the
-        // cursor advances over the resolved run rather than parking the incoming
-        // generation behind entries nobody will serve.
-        if let TerminalTransition::Won { evidence, .. } =
-            release_entry(state, message_id.as_str(), None)
-        {
-            resolved.push(ResolvedMember {
-                message_id,
-                evidence,
-            });
-        }
-    }
+    // No supplied evidence: a replacement brings no report of its own, so the
+    // guard's evidence order is the only source. Resolution retires each
+    // member's position as it goes, so the cursor advances over the resolved run
+    // rather than parking the incoming generation behind entries nobody will
+    // serve.
+    let resolved = resolve_positions(
+        state,
+        key,
+        outstanding
+            .range
+            .sequences()
+            .map(|sequence| (sequence, None)),
+    );
     if let Some(mailbox) = state.mailboxes.get_mut(key) {
         mailbox.outstanding = None;
     }
@@ -243,11 +222,12 @@ mod consumer_generation_tests {
         AckAccepted, AckRejection, DeclareRejection, MemberAcknowledgment, PeekRejection,
     };
 
+    use super::super::super::super::guard::SubmissionEvidence;
     use super::super::super::terminal::terminalize;
-    use super::super::ack::ack;
     use super::super::declare::declare;
     use super::super::fixtures::{
-        admission_key, binding, claim, mail, peeked, place, range, request, seq, target,
+        acknowledge, admission_key, binding, claim, mail, peeked, place, range, request, seq,
+        target,
     };
     use super::super::peek::peek;
     use super::super::reap::reap_target;
@@ -275,7 +255,7 @@ mod consumer_generation_tests {
             place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
         }
         let acknowledged = declare(&first, range(1, 1)).expect("declare");
-        ack(
+        acknowledge(
             &first,
             acknowledged.unit,
             &[MemberAcknowledgment {
@@ -285,7 +265,7 @@ mod consumer_generation_tests {
         )
         .expect("the first unit resolves");
         assert_eq!(
-            ack(&first, acknowledged.unit, &[]),
+            acknowledge(&first, acknowledged.unit, &[]),
             Ok(AckAccepted::AlreadyTerminalized { range: range(1, 1) }),
             "the incumbent's own repeat acknowledgment is the no-op it is"
         );
@@ -300,8 +280,9 @@ mod consumer_generation_tests {
                 &target(namespace),
                 first.generation,
                 FenceVerdict::Negative
-            ),
-            Err(GenerationRejection::ExecutionNotCeased),
+            )
+            .err(),
+            Some(GenerationRejection::ExecutionNotCeased),
             "a generation not observed to cease is not replaced"
         );
         assert_eq!(
@@ -320,8 +301,9 @@ mod consumer_generation_tests {
                 &target(namespace),
                 stale.generation,
                 FenceVerdict::Positive
-            ),
-            Err(GenerationRejection::NotActive {
+            )
+            .err(),
+            Some(GenerationRejection::NotActive {
                 active: Some(first.generation)
             }),
             "a verdict for a generation that does not hold the target admits nothing"
@@ -345,18 +327,32 @@ mod consumer_generation_tests {
         // the fence establishes that execution ceased, never whether it took
         // effect first.
         assert_eq!(
-            replacement.resolved,
+            replacement
+                .resolved
+                .iter()
+                .map(|member| (member.message_id.as_str(), member.evidence))
+                .collect::<Vec<_>>(),
             vec![
-                ResolvedMember {
-                    message_id: format!("{namespace}-2"),
-                    evidence: SubmissionEvidence::SubmissionUnknown,
-                },
-                ResolvedMember {
-                    message_id: format!("{namespace}-3"),
-                    evidence: SubmissionEvidence::SubmissionUnknown,
-                },
+                (
+                    format!("{namespace}-2").as_str(),
+                    SubmissionEvidence::SubmissionUnknown
+                ),
+                (
+                    format!("{namespace}-3").as_str(),
+                    SubmissionEvidence::SubmissionUnknown
+                ),
             ],
             "the outgoing generation's declared members are resolved and handed back"
+        );
+        // Each carries the send it answered for, which is the whole reason the
+        // mailbox holds one: the message id names the entry, and only the task
+        // names the sender owed an outcome for it.
+        assert!(
+            replacement
+                .resolved
+                .iter()
+                .all(|member| member.task.message_id == member.message_id),
+            "a resolved member carries the send that answers for it"
         );
         assert_eq!(
             declared.range,
@@ -379,7 +375,7 @@ mod consumer_generation_tests {
             "a superseded generation declares nothing"
         );
         assert_eq!(
-            ack(&first, declared.unit, &[]),
+            acknowledge(&first, declared.unit, &[]),
             Err(AckRejection::GenerationSuperseded),
             "a superseded generation acknowledges nothing"
         );
@@ -389,7 +385,7 @@ mod consumer_generation_tests {
         // it. A unit resolved before the replacement is one this caller never
         // declared, rather than one it is told it already acknowledged.
         assert_eq!(
-            ack(&second, acknowledged.unit, &[]),
+            acknowledge(&second, acknowledged.unit, &[]),
             Err(AckRejection::UnitNotDeclared),
             "the outgoing generation's resolved units are not the incoming one's to see"
         );

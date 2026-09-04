@@ -1,10 +1,18 @@
 //! The transport traits themselves: what a concrete transport must implement.
 //!
 //! [`Transport`] is the delivery contract, [`GenerationFence`] the three-step
-//! fence protocol it builds on, [`OutputView`] the concurrently-readable handle
-//! the `look` path reads, and [`PartitionSink`] the relay-injected seam a
-//! transport declares its chosen partition through. [`TransportHealth`] and its
+//! fence protocol it builds on, and [`OutputView`] the concurrently-readable
+//! handle the `look` path reads. [`TransportHealth`] and its
 //! [`UnreachableSince`] latch carry the reachability axis.
+//!
+//! What a transport declares about the units it writes no longer appears here.
+//! Under the push model a relay-injected `PartitionSink` was how a transport told
+//! the guard which members shared one write, because the relay handed envelopes
+//! over one at a time and could not see what became of them. The pull model has
+//! no such gap: a transport declares the exact range it is about to write
+//! through the [`MailboxConsumer`](super::MailboxConsumer) it already consumes
+//! its mailbox with, which is the same pre-effect binding at the same point in
+//! the sequence, made through the seam that was going to exist anyway.
 //!
 //! The shared delivery types these signatures name live in the parent
 //! [`contract`](super) module, and the [`TransportImpl`](super::TransportImpl)
@@ -14,11 +22,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use crate::protocol::{LookSnapshotPayload, PackingUnitId, PartitionError, SubmissionEvidence};
+use crate::protocol::LookSnapshotPayload;
 
-use super::{
-    DeliveryEnvelope, LookMode, OutcomeFuture, StartupContext, TransportError, TransportStatus,
-};
+use super::{LookMode, StartupContext, TransportError, TransportStatus};
 
 /// The three actions a generation supervisor needs to fence a transport
 /// generation, split out of [`Transport`] so the fence protocol can be driven
@@ -74,7 +80,7 @@ pub trait GenerationFence {
 }
 
 /// Whether a transport can reach its target at all — the health axis, distinct
-/// from handover readiness.
+/// from the readiness its executor checks before a write.
 ///
 /// Two findings were previously collapsed into a single `false` from the
 /// readiness predicate. "Observed, and not ready" means the target is busy,
@@ -128,79 +134,25 @@ impl UnreachableSince {
     }
 }
 
-/// How a transport reports the partition it chose to the relay's guard.
-///
-/// The relay hands over one envelope at a time and cannot see what a transport
-/// does with them: ACP coalesces a budget group into one `session/prompt`, Tmux
-/// splits a batch into token-budgeted pastes, Pty writes each member on its own.
-/// That partition decides which members share a fate, so the guard has to learn
-/// it from the only layer that knows.
-///
-/// The two calls bracket the write:
-///
-/// 1. [`declare`](Self::declare) names the members about to share one submission
-///    and returns the id that binds them, **before** the first target-side
-///    effect. A transport that gets [`Err`] MUST produce no effect for that
-///    proposed unit — the relay has already established, for at least one of
-///    those members, that nothing was written, and writing anyway would make
-///    that a false claim.
-/// 2. [`record`](Self::record) states what the submission proved, once. It is
-///    what every member of the unit resolves from, including members whose own
-///    fan-out never completed.
-///
-/// **What this can and cannot enforce.** Everything after `record` returns is
-/// structural relay state — no transport can make two members of one unit
-/// disagree, because there is one record and they all read it. What it cannot
-/// enforce is the ordering *before* `declare`: nothing here stops a transport
-/// side-effecting first and declaring afterwards, which would report
-/// `not_submitted` for bytes already on the wire. That stays a per-transport
-/// boundary test, not a property of this trait.
-///
-/// Relay-injected as an `Arc<dyn PartitionSink>` for the same reason as ACP's
-/// `MirrorStateFn` and Pty's `PtyMirrorStateFn`: `src/transports` and the
-/// concrete transports may not import `crate::relay`, so the relay closes over
-/// its own ledger and hands down an opaque handle.
-///
-/// Implementations must be usable from a blocking writer thread — `&self`,
-/// `Send + Sync`, and synchronous. Deliberately not a channel send: routing a
-/// declaration through a bounded queue would let a full queue stall the write
-/// path, which is `agentmux:issues/pty/2`.
-pub trait PartitionSink: Send + Sync {
-    /// Declares that `member_ids` will share one submission, returning the id
-    /// that binds them.
-    ///
-    /// All-or-nothing: an [`Err`] means no member was bound and the transport
-    /// owes the unit no effect. A member already terminal, already bound, or no
-    /// longer admitted vetoes the whole proposed unit — its groupmates then
-    /// resolve `not_submitted`, which is true of them, because no effect
-    /// occurred.
-    ///
-    /// `member_ids` must be non-empty and free of duplicates; either is refused.
-    /// Both would leave the unit's record with a member count no sequence of
-    /// terminalizations can bring to zero, so the record would outlive the
-    /// process — a malformed declaration is rejected rather than half-honoured.
-    fn declare(&self, member_ids: &[&str]) -> Result<PackingUnitId, PartitionError>;
-
-    /// Records what the unit's submission proved. Write-once; the first record
-    /// stands, because it is what any already-resolved member reported.
-    fn record(&self, unit: PackingUnitId, evidence: SubmissionEvidence);
-}
-
 /// Delivery contract implemented by each concrete transport.
 ///
-/// The non-blocking write methods ([`mailw`](Transport::mailw),
-/// [`raww`](Transport::raww)) return an [`OutcomeFuture`]; each transport owns
-/// its own internal delivery task and `spawn_blocking`. They are the relay's
-/// only delivery seam — the legacy synchronous `deliver`/`prepare_delivery`/
-/// `raw_write` methods have been removed.
-// `async_fn_in_trait` returns a future whose `Send` is not implied by the trait.
-// Every current impl's `is_ready_for_handover` future is `Send` (Pty's `!Send`
-// `Terminal` never crosses its `probe.observe().await`; the await is on the
-// snapshot channel only), and `run_async_delivery_worker` which awaits it is
-// spawned, so a `!Send` future would fail at the spawn site. The `allow` is
-// justified and documented; adding an explicit `Send` bound would require
-// `return impl Future + Send` once that stabilizes.
-#[allow(async_fn_in_trait)]
+/// **There is no delivery method here.** The relay does not invoke a transport
+/// to deliver and does not read a readiness level from one: each transport owns
+/// a single serial delivery-loop executor, spawned during
+/// [`startup`](Transport::startup), which consumes its target's mailbox through
+/// the [`MailboxConsumer`](super::MailboxConsumer) handle it was constructed
+/// with. `mailw`, `raww` and `is_ready_for_handover` are gone with the push
+/// model, as the legacy synchronous `deliver`/`prepare_delivery`/`raw_write`
+/// were before them.
+///
+/// What remains is what the relay genuinely still asks of a transport: establish
+/// a runtime, tear one down, report whether the target can be reached at all,
+/// publish a handle the `look` path can read, and answer the fence.
+///
+/// A transport MAY still keep an internal readiness predicate — the prompt-
+/// readiness templates still exist and still govern Tmux and Pty — but that
+/// predicate now informs only its own executor's choice of when to write what it
+/// peeked, and appears on no relay-facing call.
 pub trait Transport: GenerationFence {
     /// Establishes (or re-establishes, on respawn) the transport runtime for a
     /// target. On respawn the transport may publish a fresh [`OutputView`]; the
@@ -215,59 +167,6 @@ pub trait Transport: GenerationFence {
     /// [`give_output`]: Transport::give_output
     fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError>;
 
-    /// Submits one relay-framed envelope for delivery WITHOUT blocking, returning
-    /// an [`OutcomeFuture`] that resolves when the transport's internal delivery
-    /// task drives this envelope to a terminal
-    /// [`SingleDeliveryOutcome`](super::SingleDeliveryOutcome). The
-    /// transport buffers the envelope on its own ordered channel, may coalesce
-    /// contiguous envelopes into one target-side write, and resolves the future
-    /// once that write settles.
-    ///
-    /// The relay's sole envelope-delivery seam; see the module-level "Write
-    /// boundary" note. Default body is an additions-only stub; each transport
-    /// overrides it with its internal delivery task.
-    fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
-        let _ = envelope;
-        unimplemented!("mailw lands with the per-transport internal delivery task")
-    }
-
-    /// Submits raw input (no envelope framing) for `raww` WITHOUT blocking,
-    /// returning an [`OutcomeFuture`] that resolves when the write settles. FIFO
-    /// with [`mailw`](Transport::mailw) on the transport's internal channel: a raw
-    /// item flushes any buffered envelope group first, then delivers as its own
-    /// write, acting as a batch barrier.
-    ///
-    /// The relay's sole raw-input delivery seam. Default body is an
-    /// additions-only stub overridden when the internal delivery task lands.
-    fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
-        let _ = (content, append_enter);
-        unimplemented!("raww lands with the per-transport internal delivery task")
-    }
-
-    /// Reports whether the transport can accept a handover now.
-    ///
-    /// This is a level-triggered, advisory observation. A caller must still
-    /// handle a fallible delivery attempt after reading it.
-    ///
-    /// The contract's only readiness predicate, deliberately. An earlier
-    /// `is_ready` answered a weaker question — whether the transport's machinery
-    /// existed — and the two were easy to confuse precisely because "ready" does
-    /// not say what for. Each transport still keeps whatever lifecycle predicate
-    /// it needs privately; what does not belong here is a second contract-level
-    /// answer competing for the same word.
-    ///
-    /// It has no default body, and no surface here could supply one: a default
-    /// of `true` authorizes a busy target straight into the watchdog, and a
-    /// default of `false` strands it permanently, since `Pending` is unbounded. A
-    /// transport answers for itself or does not participate in delivery.
-    ///
-    /// Async because the Pty prompt probe performs its snapshot handshake via
-    /// the worker thread's `mpsc`/`oneshot` channel, which must not block a
-    /// tokio worker thread (`PtyPromptProbe::observe` at `src/pty/state.rs`).
-    /// The gate in `worker.rs` awaits this, so `submit_batch` holds no
-    /// `&mut` borrows across a `spawn_blocking` restructuring.
-    async fn is_ready_for_handover(&self) -> bool;
-
     /// A monotonic marker that advances when bytes reach the target's terminal.
     ///
     /// Unlike readiness this **does** get a default, and the default is sound
@@ -279,17 +178,22 @@ pub trait Transport: GenerationFence {
     /// Its **absence carries no meaning**. A target that is quiet may be hung,
     /// may be waiting on an operator, or may be thinking, and nothing here
     /// distinguishes them — which is why this signal can only ever withhold a
-    /// handover, never resolve an outcome.
+    /// write, never resolve an outcome.
     fn activity_generation(&self) -> u64 {
         0
     }
 
     /// Reports whether this transport can reach its target at all.
     ///
-    /// The second axis beside [`is_ready_for_handover`](Self::is_ready_for_handover),
-    /// and a different question: readiness says *when* a handover is useful,
-    /// health says *whether* one is possible. A busy target and a departed one
-    /// both fail a readiness check, and only the first is a reason to wait.
+    /// The second axis beside the transport's own internal write-readiness, and
+    /// a different question: readiness says *when* writing is useful, health says
+    /// *whether* it is possible. A busy target and a departed one both fail a
+    /// readiness check, and only the first is a reason to wait.
+    ///
+    /// Both are now the transport's own and neither is relay-facing. This one
+    /// stays on the contract because the relay owns the *threshold* — the dwell
+    /// past which a continuously unreachable target's entries resolve — even
+    /// though it owns none of the observing.
     ///
     /// Also no default body, for the same shape of reason. Defaulting to
     /// [`TransportHealth::Healthy`] lets a transport that cannot observe its

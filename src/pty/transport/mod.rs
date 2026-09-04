@@ -5,20 +5,22 @@
 //! transport does NOT own the libghostty-vt terminal directly — the
 //! terminal is constructed and lives entirely on the worker thread.
 //!
+//! Nothing is handed to this transport to deliver. Its worker thread runs the
+//! shared delivery-loop executor, which asks the relay's mailbox what is waiting
+//! for this target and writes it. The transport's own job is bring-up and
+//! teardown of the thread that does so.
+//!
 //! Channels the transport owns:
 //!
-//! - `write_tx`: the relay submits [`DeliveryCommand`]s into this
-//!   channel; the worker drains them.
 //! - `bytes_tx`: the reader thread feeds terminal output bytes into
 //!   this channel; the worker feeds them into the terminal.
 //!
 //! Channels the worker thread owns:
 //!
-//! - `bytes_rx` (terminal -> delivery task): feeds terminal output
-//!   bytes (rendered as snapshots on demand).
-//! - `write_rx` (relay -> delivery task): drains delivery commands.
-//! - `snapshot_rx` (look / probe -> delivery task): routes snapshot
-//!   requests through the delivery task.
+//! - `bytes_rx` (reader -> worker): terminal output bytes, fed to the
+//!   terminal between executor iterations.
+//! - `snapshot_rx` (look -> worker): routes snapshot requests to the thread
+//!   that holds the terminal they read.
 //!
 //! The `libghostty-vt` terminal is `!Send + !Sync` (raw FFI pointers +
 //! `dyn` trait object callbacks), so it must be constructed and live
@@ -27,11 +29,8 @@
 //! snapshot channel; the cross-thread coordination between the reader
 //! thread and the worker goes through the bytes channel.
 //!
-//! Status: the Transport trait surface compiles against the
-//! libghostty-vt binding. Delivery writes are resolved from the PTY master
-//! result after handover admission. Per-coder config parsing
-//! (`[coders.<id>.pty]` → [`PtyTargetConfiguration`]) lands in §6.
-//! The `TransportImpl::pty` cfg-gated wiring lands in §5.
+//! Per-coder config parsing (`[coders.<id>.pty]` → [`PtyTargetConfiguration`])
+//! lands in §6.
 
 use std::{
     sync::{
@@ -43,14 +42,14 @@ use std::{
 };
 
 use regex::Regex;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use crate::configuration::BundleMember;
 use crate::configuration::TermProtocol;
 use crate::transports::{
-    DeliveryEnvelope, GenerationFence, OutcomeFuture, OutputView, PartitionSink,
-    SingleDeliveryOutcome, StartupContext, Transport, TransportError, TransportHealth,
-    TransportReadiness, TransportStatus, UnreachableSince, WorkerReadinessState,
+    DeliveryExecutorContext, GenerationFence, OutputView, StartupContext, Transport,
+    TransportError, TransportHealth, TransportReadiness, TransportStatus, UnreachableSince,
+    WorkerReadinessState,
 };
 
 /// Mirrors the worker readiness state into the relay's global registry.
@@ -64,7 +63,7 @@ use crate::transports::{
 /// Mirrors ACP's `MirrorStateFn` (see `src/acp/worker_driver.rs`).
 pub type PtyMirrorStateFn = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
 
-use super::state::{PtyConfigSnapshot, PtyOutputView, PtyPromptProbe, PtyShared};
+use super::state::{PtyConfigSnapshot, PtyOutputView, PtyShared};
 
 mod lifecycle;
 mod runtime;
@@ -73,22 +72,9 @@ mod runtime;
 pub const DEFAULT_COLS: u16 = 120;
 /// Default pty rows when the per-coder config does not set them.
 pub const DEFAULT_ROWS: u16 = 40;
-/// Capacity of the write-channel the relay submits into.
-const WRITE_CHANNEL_CAPACITY: usize = 256;
-/// Poll interval when the worker has no pending work across any
-/// channel.
-const WORKER_IDLE_POLL: Duration = Duration::from_millis(10);
 /// Poll interval for the reader thread when the master returns
 /// `WouldBlock`.
 const READER_IDLE_POLL: Duration = Duration::from_millis(5);
-/// Bound on the prompt-probe handshake in the handover gate.
-///
-/// The probe does `snapshot_tx.send().await + rx.await` through the worker
-/// thread. If that worker never answers, the gate must not park the delivery
-/// worker forever — the gate's own doc says the reading is advisory and may be
-/// stale, so a timeout answer as not-ready (Hold) is consistent. The poll arm
-/// retries and the health dwell carries to Unreachable if the target is truly gone.
-const PTY_PROBE_TIMEOUT: Duration = Duration::from_millis(500);
 
 /// Bound on how long a partial-startup cleanup may wait for a thread to finish
 /// before giving up on joining it.
@@ -132,27 +118,11 @@ pub struct PtyTargetConfiguration {
     pub term_protocol: TermProtocol,
 }
 
-/// Internal command the relay submits via `mailw` / `raww`.
-#[allow(clippy::large_enum_variant)]
-pub enum DeliveryCommand {
-    Envelope {
-        envelope: Box<DeliveryEnvelope>,
-        outcome_tx: oneshot::Sender<SingleDeliveryOutcome>,
-    },
-    Raw {
-        content: String,
-        append_enter: bool,
-        outcome_tx: oneshot::Sender<SingleDeliveryOutcome>,
-    },
-}
-
-/// Pty pane delivery transport with an internal delivery task.
+/// Pty pane delivery transport, whose worker thread runs this target's one
+/// serial delivery-loop executor.
 ///
-/// The transport owns an ordered channel carrying
-/// [`DeliveryCommand`]s. The relay worker submits writes via
-/// `mailw`/`raww` without blocking; a worker thread drains the
-/// channels, processes PTY output, services snapshot requests, and
-/// executes delivery commands.
+/// That thread also processes PTY output and services snapshot requests, because
+/// the terminal it owns cannot be moved off it.
 pub struct PtyTransport {
     target_member: BundleMember,
     shared: PtyShared,
@@ -175,9 +145,6 @@ pub struct PtyTransport {
     /// Defaults to `xterm-256color` when the per-coder config omits
     /// `term-protocol`.
     configured_term_protocol: TermProtocol,
-    /// Write-command channel the relay submits into. `None` before
-    /// `startup`; `Some` once the worker thread is running.
-    write_tx: Option<mpsc::Sender<DeliveryCommand>>,
     /// Bytes channel the reader thread feeds into the worker.
     /// `None` before `startup`; `Some` once the worker thread is running.
     bytes_tx: Option<mpsc::Sender<Vec<u8>>>,
@@ -189,7 +156,7 @@ pub struct PtyTransport {
     /// Handle to the reader thread. Joined by `shutdown`.
     reader_handle: Option<thread::JoinHandle<()>>,
     /// Latch for the health axis; see [`Transport::health`].
-    unreachable_since: UnreachableSince,
+    unreachable_since: Arc<UnreachableSince>,
     /// Live handle to the spawned child. `shutdown` kills and reaps.
     child: Option<Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>,
     /// Per-transport readiness state.
@@ -197,8 +164,9 @@ pub struct PtyTransport {
     /// Optional relay-provided closure that mirrors per-turn readiness
     /// transitions into the relay's global worker-state registry.
     mirror_state: Option<PtyMirrorStateFn>,
-    /// The relay's guard, for reporting which member each write covers.
-    partition_sink: Arc<dyn PartitionSink>,
+    /// The mailbox handle, doorbell and policy the worker's executor runs
+    /// against. Held here so `startup` can hand it to the thread it spawns.
+    delivery: DeliveryExecutorContext,
 }
 
 impl std::fmt::Debug for PtyTransport {
@@ -232,7 +200,7 @@ impl PtyTransport {
         target_member: BundleMember,
         config: PtyTargetConfiguration,
         mirror_state: Option<PtyMirrorStateFn>,
-        partition_sink: Arc<dyn PartitionSink>,
+        delivery: DeliveryExecutorContext,
     ) -> Self {
         let (prompt_regex, prompt_inspect_lines, prompt_idle_column) =
             match config.prompt_readiness.as_ref() {
@@ -263,15 +231,14 @@ impl PtyTransport {
         Self {
             target_member,
             shared,
-            partition_sink,
+            delivery,
             started: false,
             configured_initial_command: config.initial_command.clone(),
             configured_working_directory: config.working_directory.clone(),
             configured_term_protocol: config.term_protocol,
-            write_tx: None,
             bytes_tx: None,
             shutdown_flag: Arc::new(AtomicBool::new(false)),
-            unreachable_since: UnreachableSince::default(),
+            unreachable_since: Arc::new(UnreachableSince::default()),
             worker_handle: None,
             reader_handle: None,
             child: None,
@@ -302,9 +269,8 @@ impl PtyTransport {
     }
 
     /// Read the current readiness state. Used by
-    /// [`has_live_runtime`](Self::has_live_runtime), by
-    /// [`Transport::is_ready_for_handover`], and by tests asserting lifecycle
-    /// transitions.
+    /// [`has_live_runtime`](Self::has_live_runtime) and by tests asserting
+    /// lifecycle transitions.
     #[must_use]
     pub fn readiness(&self) -> WorkerReadinessState {
         *self.readiness.lock().expect("pty readiness mutex")
@@ -313,10 +279,10 @@ impl PtyTransport {
     /// Whether the worker runtime exists and is usable, which `Busy` satisfies:
     /// a pty mid-turn still has a live master to snapshot.
     ///
-    /// Deliberately not the handover question. [`Transport::is_ready_for_handover`]
-    /// asks whether the target can take a turn *now* and excludes `Busy`; gating
-    /// the output view on that stricter reading would withhold the `look` surface
-    /// from exactly the target most worth looking at.
+    /// Deliberately not the write question. Whether the target can take a turn
+    /// *now* is the executor's own, asked inside it against the terminal and
+    /// excluding `Busy`; gating the output view on that stricter reading would
+    /// withhold the `look` surface from exactly the target most worth looking at.
     fn has_live_runtime(&self) -> bool {
         matches!(
             self.readiness(),
@@ -397,7 +363,6 @@ impl GenerationFence for PtyTransport {
         {
             let _ = child.kill();
         }
-        self.write_tx = None;
         self.bytes_tx = None;
     }
 
@@ -494,84 +459,6 @@ impl Transport for PtyTransport {
         result
     }
 
-    fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
-        let (outcome_tx, outcome_rx) = oneshot::channel();
-        let Some(write_tx) = self.write_tx.clone() else {
-            let _ = outcome_tx.send(SingleDeliveryOutcome {
-                target_session: String::new(),
-                message_id: envelope.message_id.clone(),
-                outcome: crate::transports::SendOutcome::Failed,
-                reason_code: Some("transport_not_started".to_string()),
-                reason: Some("mailw called before startup()".to_string()),
-                details: None,
-            });
-            return outcome_rx;
-        };
-        let cmd = DeliveryCommand::Envelope {
-            envelope: Box::new(envelope),
-            outcome_tx,
-        };
-        // Non-blocking submission: the relay documents this write seam as
-        // non-blocking (src/relay/delivery/dispatch/worker.rs), and the
-        // worker design rests on that holding. A full channel must not park
-        // a delivery-runtime worker thread. On a full or closed channel the
-        // item comes back unchanged; resolve the outcome immediately with a
-        // terminal failure so the relay's collector never waits on it.
-        if let Err(error) = write_tx.try_send(cmd) {
-            let DeliveryCommand::Envelope {
-                envelope,
-                outcome_tx,
-            } = error.into_inner()
-            else {
-                unreachable!("mailw only enqueues Envelope commands");
-            };
-            let _ = outcome_tx.send(SingleDeliveryOutcome {
-                target_session: String::new(),
-                message_id: envelope.message_id.clone(),
-                outcome: crate::transports::SendOutcome::Failed,
-                reason_code: Some("channel_full".to_string()),
-                reason: Some("pty internal write channel full or closed".to_string()),
-                details: None,
-            });
-        }
-        outcome_rx
-    }
-
-    fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
-        let (outcome_tx, outcome_rx) = oneshot::channel();
-        let Some(write_tx) = self.write_tx.clone() else {
-            let _ = outcome_tx.send(SingleDeliveryOutcome {
-                target_session: String::new(),
-                message_id: String::new(),
-                outcome: crate::transports::SendOutcome::Failed,
-                reason_code: Some("transport_not_started".to_string()),
-                reason: Some("raww called before startup()".to_string()),
-                details: None,
-            });
-            return outcome_rx;
-        };
-        let cmd = DeliveryCommand::Raw {
-            content,
-            append_enter,
-            outcome_tx,
-        };
-        // Non-blocking submission; see `mailw` for the contract.
-        if let Err(error) = write_tx.try_send(cmd) {
-            let DeliveryCommand::Raw { outcome_tx, .. } = error.into_inner() else {
-                unreachable!("raww only enqueues Raw commands");
-            };
-            let _ = outcome_tx.send(SingleDeliveryOutcome {
-                target_session: String::new(),
-                message_id: String::new(),
-                outcome: crate::transports::SendOutcome::Failed,
-                reason_code: Some("channel_full".to_string()),
-                reason: Some("pty internal write channel full or closed".to_string()),
-                details: None,
-            });
-        }
-        outcome_rx
-    }
-
     fn health(&self) -> TransportHealth {
         // The child exiting is the unreachable case: a pty whose process is gone
         // has no target left, and unlike ACP there is no respawn monitor that
@@ -585,26 +472,9 @@ impl Transport for PtyTransport {
             .reader_handle
             .as_ref()
             .is_some_and(|handle| !handle.is_finished());
-        let reachable = self.write_tx.is_some()
-            && worker_live
-            && reader_live
-            && !self.shared.child_exited.load(Ordering::Acquire);
+        let reachable =
+            worker_live && reader_live && !self.shared.child_exited.load(Ordering::Acquire);
         self.unreachable_since.fold(reachable)
-    }
-
-    async fn is_ready_for_handover(&self) -> bool {
-        if self.write_tx.is_none()
-            || self.shared.child_exited.load(Ordering::Acquire)
-            || !matches!(self.readiness(), WorkerReadinessState::Available)
-        {
-            return false;
-        }
-        let mut probe = PtyPromptProbe::new(self.shared.clone());
-        match tokio::time::timeout(PTY_PROBE_TIMEOUT, probe.observe()).await {
-            Ok(Ok(ready)) => ready,
-            Ok(Err(_)) => false,
-            Err(_) => false,
-        }
     }
 
     fn shutdown(&mut self) {
@@ -625,7 +495,6 @@ impl Transport for PtyTransport {
         // ordering.
         self.set_readiness(WorkerReadinessState::Unavailable);
         self.shutdown_flag.store(true, Ordering::Release);
-        self.write_tx = None;
         self.bytes_tx = None;
         // Kill the child FIRST so the PTY master closes; this wakes
         // the reader's blocking `read()`. The reader then sees
@@ -652,162 +521,5 @@ impl Transport for PtyTransport {
             return None;
         }
         Some(Arc::new(PtyOutputView::new(self.shared.clone())))
-    }
-}
-
-/// Inline write-seam test. `mailw`/`raww` on a full or closed write channel
-/// must resolve the outcome immediately (`Failed` + `channel_full`) rather
-/// than parking a delivery-runtime worker thread on `blocking_send` — the
-/// relay documents that seam as non-blocking
-/// (`src/relay/delivery/dispatch/worker.rs`), and the worker design rests on
-/// that holding. The channel is a private transport field, so the full/closed
-/// state can only be injected from inside the module; the block contains
-/// exactly one `#[test]` function (per the project rule for inline private
-/// tests), covering both seams against both channel states.
-#[cfg(test)]
-mod write_seam_tests {
-    use super::*;
-    use crate::configuration::{BundleMember, TargetConfiguration};
-    use crate::envelope::AddressIdentity;
-    use crate::transports::{DeliveryEnvelope, DeliveryMessage, SendOutcome};
-
-    fn test_envelope(message_id: &str) -> DeliveryEnvelope {
-        DeliveryEnvelope {
-            message_id: message_id.to_string(),
-            message: DeliveryMessage {
-                body: "test body".to_string(),
-                created_at: "2026-08-01T00:00:00Z".to_string(),
-                namespace: "test-ns".to_string(),
-                sender: AddressIdentity {
-                    session_name: "sender@test-ns".to_string(),
-                    display_name: None,
-                },
-                target: AddressIdentity {
-                    session_name: "target@test-ns".to_string(),
-                    display_name: None,
-                },
-                cc: Vec::new(),
-                authenticated_identity: None,
-                on_behalf_of: None,
-            },
-            append_enter: true,
-            choice_decider_sessions: Vec::new(),
-            is_receipt: false,
-        }
-    }
-
-    fn test_transport() -> PtyTransport {
-        PtyTransport::new(
-            BundleMember {
-                id: "test-session".to_string(),
-                name: None,
-                working_directory: None,
-                target: TargetConfiguration::Ui,
-                coder_session_id: None,
-                policy_id: None,
-                environment: Vec::new(),
-            },
-            PtyTargetConfiguration {
-                initial_command: "/bin/sh".to_string(),
-                resume_command: "/bin/sh".to_string(),
-                prompt_readiness: None,
-                cols: 120,
-                rows: 40,
-                working_directory: None,
-                term_protocol: TermProtocol::default(),
-            },
-            None,
-            // These fixtures never reach a write, so nothing is declared.
-            // Refusing rather than accepting means a fixture that ever did reach
-            // one would produce no effect and fail, where an accepting stub would
-            // write against a unit the ledger never issued.
-            Arc::new(NoDeclarations),
-        )
-    }
-
-    struct NoDeclarations;
-    impl PartitionSink for NoDeclarations {
-        fn declare(
-            &self,
-            _member_ids: &[&str],
-        ) -> Result<crate::transports::PackingUnitId, crate::transports::PartitionError> {
-            Err(crate::transports::PartitionError::MemberNotBindable)
-        }
-        fn record(
-            &self,
-            _unit: crate::transports::PackingUnitId,
-            _evidence: crate::transports::SubmissionEvidence,
-        ) {
-        }
-    }
-
-    /// Fill `capacity` slots of a fresh channel so the next `try_send` sees
-    /// `Full`, then inject it as the transport's write channel.
-    fn transport_with_full_channel() -> PtyTransport {
-        let (write_tx, _write_rx) = mpsc::channel::<DeliveryCommand>(WRITE_CHANNEL_CAPACITY);
-        for _ in 0..WRITE_CHANNEL_CAPACITY {
-            let (outcome_tx, _outcome_rx) = oneshot::channel::<SingleDeliveryOutcome>();
-            write_tx
-                .blocking_send(DeliveryCommand::Raw {
-                    content: String::new(),
-                    append_enter: false,
-                    outcome_tx,
-                })
-                .expect("fill write channel");
-        }
-        let mut transport = test_transport();
-        transport.write_tx = Some(write_tx);
-        transport
-    }
-
-    #[test]
-    fn mailw_and_raww_resolve_immediately_when_the_channel_is_full_or_closed() {
-        // Full channel: every slot is occupied, so `try_send` refuses without
-        // blocking. Both seams must resolve the outcome immediately with
-        // `Failed` + `channel_full`, never parking a delivery-runtime worker.
-        let mut transport = transport_with_full_channel();
-
-        let mailw_outcome = Transport::mailw(&mut transport, test_envelope("msg-1"))
-            .blocking_recv()
-            .expect("mailw must resolve immediately on a full channel");
-        assert_eq!(mailw_outcome.outcome, SendOutcome::Failed);
-        assert_eq!(
-            mailw_outcome.reason_code.as_deref(),
-            Some("channel_full"),
-            "a full write channel must report channel_full, got {:?}",
-            mailw_outcome.reason_code,
-        );
-        assert_eq!(mailw_outcome.message_id, "msg-1");
-
-        let raww_outcome = Transport::raww(&mut transport, "raw text".to_string(), true)
-            .blocking_recv()
-            .expect("raww must resolve immediately on a full channel");
-        assert_eq!(raww_outcome.outcome, SendOutcome::Failed);
-        assert_eq!(raww_outcome.reason_code.as_deref(), Some("channel_full"));
-
-        // Closed channel: the consumer is gone, so `try_send` refuses the item
-        // back unchanged. Same immediate terminal resolution.
-        let (write_tx, write_rx) = mpsc::channel::<DeliveryCommand>(WRITE_CHANNEL_CAPACITY);
-        drop(write_rx);
-        let mut transport = test_transport();
-        transport.write_tx = Some(write_tx);
-
-        let mailw_outcome = Transport::mailw(&mut transport, test_envelope("msg-2"))
-            .blocking_recv()
-            .expect("mailw must resolve immediately on a closed channel");
-        assert_eq!(mailw_outcome.outcome, SendOutcome::Failed);
-        assert_eq!(
-            mailw_outcome.reason_code.as_deref(),
-            Some("channel_full"),
-            "a closed write channel must report channel_full, got {:?}",
-            mailw_outcome.reason_code,
-        );
-        assert_eq!(mailw_outcome.message_id, "msg-2");
-
-        let raww_outcome = Transport::raww(&mut transport, "raw text".to_string(), true)
-            .blocking_recv()
-            .expect("raww must resolve immediately on a closed channel");
-        assert_eq!(raww_outcome.outcome, SendOutcome::Failed);
-        assert_eq!(raww_outcome.reason_code.as_deref(), Some("channel_full"));
     }
 }

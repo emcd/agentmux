@@ -2,9 +2,10 @@
 //!
 //! Delivers a relay-framed message to a target's registered UI subscribers as a
 //! relay stream broadcast. Promoting UI to a transport retires the relay-internal
-//! `Acp/Tmux/Ui/Pubsub` routing fork: the delivery worker now submits `mailw`
-//! against a [`TransportImpl::Ui`](crate::transports::TransportImpl) like any
-//! other target, and this module owns the broadcast.
+//! `Acp/Tmux/Ui/Pubsub` routing fork: the delivery worker fills a UI target's
+//! mailbox exactly as it fills any other, a
+//! [`TransportImpl::Ui`](crate::transports::TransportImpl) consumes it, and this
+//! module owns the broadcast.
 //!
 //! ## Relay touchpoints as injected closures
 //!
@@ -27,22 +28,29 @@
 //! the envelope's structured [`DeliveryMessage`](crate::transports::DeliveryMessage):
 //! it reads the relay-authored attribution as-is and never parses pane-envelope
 //! text.
+//!
+//! ## One executor, not one thread per delivery
+//!
+//! UI used to spawn a thread per write and retain its handle so the fence could
+//! observe it. Under the pull model it owns one serial delivery-loop executor
+//! like every other transport, which peeks its target's mailbox, declares one
+//! entry, broadcasts it, and acknowledges what the broadcast proved. Serial is
+//! not a restriction here: a broadcast surface has no turn to complete, so the
+//! executor never waits on anything between entries.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 
-use tokio::sync::oneshot;
-
+use crate::protocol::mailbox::{MailboxEntry, MailboxPayload};
 use crate::runtime::signals::shutdown_requested;
-use crate::transports::contract::OutcomeFuture;
 use crate::transports::{
-    DeliveryEnvelope, GenerationFence, OutputView, SendOutcome, SingleDeliveryOutcome,
-    StartupContext, Transport, TransportError, TransportHealth, TransportReadiness,
-    TransportStatus, stopped_before_submission_outcome,
+    DeliveryEnvelope, DeliveryExecutorContext, DeliveryWriter, GenerationFence, OutputView,
+    PeekDimensions, PlannedWrite, SendOutcome, SingleDeliveryOutcome, StartupContext,
+    SubmissionEvidence, Transport, TransportError, TransportHealth, TransportReadiness,
+    TransportStatus, run_delivery_executor, stopped_before_submission_outcome,
 };
 
-const UI_RAW_WRITE_UNSUPPORTED_CODE: &str = "ui_raw_write_unsupported";
 const UI_GENERATION_FENCED_CODE: &str = "ui_generation_fenced";
 const UI_NO_ENDPOINT_CODE: &str = "ui_no_endpoint";
 
@@ -111,11 +119,11 @@ impl std::fmt::Debug for UiTransportServices {
 
 /// Delivers relay messages to a target's registered UI subscribers.
 ///
-/// Held by `TransportImpl::Ui`. [`mailw`](Transport::mailw) broadcasts the
-/// message as a stream event on its own thread (so the write stays non-blocking)
-/// and resolves the [`OutcomeFuture`] from what that one attempt proved. The UI
-/// is not raw-writable ([`raww`](Transport::raww) resolves an unsupported
-/// outcome) and not lookable ([`give_output`](Transport::give_output) is `None`).
+/// Held by `TransportImpl::Ui`. Its executor broadcasts each peeked entry as a
+/// stream event and acknowledges it from what that one attempt proved. The UI is
+/// not raw-writable — the `raww` capability gate refuses a non-raw-writable
+/// target at the request boundary, so no raw entry is ever admitted for one — and
+/// not lookable ([`give_output`](Transport::give_output) is `None`).
 ///
 /// **There is no reconnect wait.** A bounded poll for a UI to come back was an
 /// absence timer with a budget only this transport knew, and elapsed time was
@@ -125,31 +133,47 @@ impl std::fmt::Debug for UiTransportServices {
 #[derive(Debug)]
 pub struct UiTransport {
     services: UiTransportServices,
-    /// Shared with every delivery executor this generation spawns, so the
-    /// generation can be asked to stop and then stripped of its ability to emit.
+    /// Shared with the delivery executor, so the generation can be asked to stop
+    /// and then stripped of its ability to emit.
     generation: Arc<UiGeneration>,
-    /// Handles for the delivery executors this generation owns. Retained rather
+    /// What the relay injected so the executor can reach its target's mailbox.
+    /// Consumed at `startup`, which is where the executor that drives it is
+    /// spawned.
+    delivery: DeliveryExecutorContext,
+    /// The handle for this generation's one delivery executor. Retained rather
     /// than detached: an executor whose handle is discarded cannot be observed,
     /// and therefore cannot be fenced.
-    executors: Vec<thread::JoinHandle<()>>,
+    executor: Option<thread::JoinHandle<()>>,
 }
 
-/// The fencing state one UI generation shares with its delivery executors.
+/// The lifecycle state one UI generation shares with its delivery executor.
 ///
-/// Two flags rather than one, because the fence's steps 1 and 3 are genuinely
-/// different actions. `fenced` asks an executor to stop at its next check and
-/// costs nothing when it works. `revoked` is the forced step: it strips the
-/// generation of its ability to emit, so an executor that proceeds anyway
-/// produces no further frame.
+/// Three flags rather than one, because they are genuinely different acts.
+/// `fenced` asks an executor to stop at its next check and costs nothing when it
+/// works. `revoked` is the fence's forced step: it strips the generation of its
+/// ability to emit, so an executor that proceeds anyway produces no further
+/// frame. `stopped` is an ordinary teardown, which is neither — nothing is being
+/// prevented, the transport is simply done.
 #[derive(Debug, Default)]
 struct UiGeneration {
     fenced: AtomicBool,
     revoked: AtomicBool,
+    stopped: AtomicBool,
 }
 
 impl UiGeneration {
     fn is_fenced(&self) -> bool {
         self.fenced.load(Ordering::Acquire)
+    }
+
+    /// Whether this transport has been torn down.
+    ///
+    /// Separate from `fenced` because the two are reported differently: a fenced
+    /// generation refuses a write it was in the middle of and says so, while a
+    /// stopped one simply has no executor any more. Folding them together would
+    /// spell every ordinary shutdown as a fence in whatever it resolved.
+    fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
     }
 
     /// Whether this generation has been stripped of its ability to emit.
@@ -166,11 +190,12 @@ impl UiGeneration {
 
 impl UiTransport {
     #[must_use]
-    pub fn new(services: UiTransportServices) -> Self {
+    pub fn new(services: UiTransportServices, delivery: DeliveryExecutorContext) -> Self {
         Self {
             services,
             generation: Arc::new(UiGeneration::default()),
-            executors: Vec::new(),
+            delivery,
+            executor: None,
         }
     }
 }
@@ -189,71 +214,29 @@ impl GenerationFence for UiTransport {
     }
 
     fn generation_ceased(&self) -> bool {
-        self.executors.iter().all(thread::JoinHandle::is_finished)
+        self.executor
+            .as_ref()
+            .is_none_or(thread::JoinHandle::is_finished)
     }
 }
 
 impl Transport for UiTransport {
     fn startup(&mut self, _context: StartupContext) -> Result<TransportStatus, TransportError> {
         // The UI transport has no runtime to establish; it is always ready and
-        // resolves connectivity per-delivery, from the broadcast itself.
+        // resolves connectivity per-delivery, from the broadcast itself. What
+        // `startup` does own is the executor, which is why this is no longer a
+        // no-op.
+        let writer = UiDeliveryWriter {
+            services: self.services.clone(),
+            generation: Arc::clone(&self.generation),
+        };
+        let delivery = self.delivery.clone();
+        self.executor = Some(thread::spawn(move || {
+            run_delivery_executor(writer, delivery);
+        }));
         Ok(TransportStatus {
             readiness: TransportReadiness::Ready,
         })
-    }
-
-    fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
-        let (sender, receiver) = oneshot::channel();
-        let services = self.services.clone();
-        let message_id = envelope.message_id.clone();
-        let message = envelope.message;
-        let incoming = UiIncomingMessage {
-            message_id: envelope.message_id,
-            // Machine-consumed event fields carry the bare canonical id via the
-            // non-decorating accessor — never render_address (which decorates to
-            // "Display Name <session:session_name>" for the pane header).
-            sender_session: message.sender.canonical_session_id().to_string(),
-            body: message.body,
-            cc_sessions: message
-                .cc
-                .iter()
-                .map(|party| party.canonical_session_id().to_string())
-                .collect(),
-            authenticated_identity: message.authenticated_identity,
-            on_behalf_of: message.on_behalf_of,
-        };
-        // Still on its own thread even though the delivery no longer waits: the
-        // broadcast writes to a socket, and `mailw` is contractually
-        // non-blocking at the relay boundary.
-        let generation = Arc::clone(&self.generation);
-        let handle = thread::spawn(move || {
-            let outcome = run_ui_delivery(&services, message_id, &incoming, generation.as_ref());
-            let _ = sender.send(outcome);
-        });
-        // Drop the handles of executors that have already finished, so a
-        // long-lived transport does not accumulate one per delivery it ever
-        // made. Only live executors need observing.
-        self.executors.retain(|handle| !handle.is_finished());
-        self.executors.push(handle);
-        receiver
-    }
-
-    fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
-        let _ = (content, append_enter);
-        let (sender, receiver) = oneshot::channel();
-        let _ = sender.send(SingleDeliveryOutcome {
-            target_session: String::new(),
-            message_id: String::new(),
-            outcome: SendOutcome::Failed,
-            reason_code: Some(UI_RAW_WRITE_UNSUPPORTED_CODE.to_string()),
-            reason: Some("UI transport does not support raw input".to_string()),
-            details: None,
-        });
-        receiver
-    }
-
-    async fn is_ready_for_handover(&self) -> bool {
-        true
     }
 
     fn health(&self) -> TransportHealth {
@@ -272,10 +255,128 @@ impl Transport for UiTransport {
         TransportHealth::Healthy
     }
 
-    fn shutdown(&mut self) {}
+    fn shutdown(&mut self) {
+        // The executor is this transport's only thread, and nothing else will
+        // ever end it: it has no child to lose, no channel to be closed, and its
+        // mailbox handle stays answerable for as long as its generation holds the
+        // target. A shutdown that left the flag alone would leave one thread per
+        // generation polling the ledger for the life of the process.
+        //
+        // The handle is deliberately kept rather than dropped. A dropped handle
+        // reads as ceased, and reporting cessation while the executor is still
+        // between its stop check and its return is the answer that lets a
+        // replacement generation start alongside a live writer.
+        self.generation.stopped.store(true, Ordering::Release);
+    }
 
     fn give_output(&self) -> Option<Arc<dyn OutputView>> {
         None
+    }
+}
+
+/// The UI transport's contribution to the shared delivery loop.
+struct UiDeliveryWriter {
+    services: UiTransportServices,
+    generation: Arc<UiGeneration>,
+}
+
+/// What one iteration decided to emit.
+enum UiWrite {
+    /// One envelope, rendered into the fields the stream event carries.
+    Message(Box<UiIncomingMessage>),
+    /// A raw entry, which this transport cannot write at all.
+    UnsupportedRaw,
+}
+
+impl DeliveryWriter for UiDeliveryWriter {
+    type Plan = UiWrite;
+
+    fn peek_dimensions(&self) -> PeekDimensions {
+        PeekDimensions::for_session_type(crate::configuration::SessionType::Ui)
+            .expect("ui declares peek dimensions")
+    }
+
+    fn health(&self) -> TransportHealth {
+        // A UI target is a broadcast surface, not a process the transport can
+        // lose track of, so nothing here can fail to be observed and nothing can
+        // start a dwell. See the note on `Transport::health` below.
+        TransportHealth::Healthy
+    }
+
+    fn is_ready(&mut self) -> bool {
+        // Unconditionally. A broadcast surface has no turn to complete and no
+        // pane to inspect; whether anyone is listening is discovered at the
+        // broadcast and reported there, not anticipated here.
+        true
+    }
+
+    fn plan(&mut self, entries: &[MailboxEntry]) -> Option<PlannedWrite<Self::Plan>> {
+        // One entry per iteration. UI emits one stream event per envelope and
+        // coalesces nothing, which its declared peek dimensions already say; this
+        // is the same fact stated where the decision is made.
+        let head = entries.first()?;
+        let rendered = match &head.payload {
+            MailboxPayload::Mail(envelope) => {
+                UiWrite::Message(Box::new(incoming_message(envelope)))
+            }
+            MailboxPayload::Raw { .. } => UiWrite::UnsupportedRaw,
+        };
+        Some(PlannedWrite {
+            entry_count: 1,
+            rendered,
+        })
+    }
+
+    fn write(&mut self, planned: PlannedWrite<Self::Plan>) -> Vec<SubmissionEvidence> {
+        let incoming = match planned.rendered {
+            UiWrite::Message(incoming) => incoming,
+            // A raw entry is declared like any other and then acknowledged as
+            // written by nothing, which is what keeps it from parking the mailbox
+            // behind it forever. `NotSubmitted` is provable: this arm emits no
+            // frame at all.
+            UiWrite::UnsupportedRaw => return vec![SubmissionEvidence::NotSubmitted],
+        };
+        let outcome = run_ui_delivery(
+            &self.services,
+            incoming.message_id.clone(),
+            incoming.as_ref(),
+            self.generation.as_ref(),
+        );
+        vec![match outcome.outcome {
+            SendOutcome::Delivered => SubmissionEvidence::Submitted,
+            // Every non-delivered spelling this transport produces is reached
+            // from a broadcast that positively did not emit — fenced, revoked,
+            // shut down, or no endpoint registered — so non-delivery is provable
+            // rather than inferred. `Failed` is the exception: it is the relay's
+            // own stream write erroring after the attempt began, which cannot
+            // exclude a frame having reached a subscriber.
+            SendOutcome::Failed => SubmissionEvidence::SubmissionUnknown,
+            _ => SubmissionEvidence::NotSubmitted,
+        }]
+    }
+
+    fn stop_requested(&mut self) -> bool {
+        self.generation.is_fenced() || self.generation.is_revoked() || self.generation.is_stopped()
+    }
+}
+
+/// Renders one envelope into the fields the `incoming_message` event carries.
+fn incoming_message(envelope: &DeliveryEnvelope) -> UiIncomingMessage {
+    let message = &envelope.message;
+    UiIncomingMessage {
+        message_id: envelope.message_id.clone(),
+        // Machine-consumed event fields carry the bare canonical id via the
+        // non-decorating accessor — never render_address (which decorates to
+        // "Display Name <session:session_name>" for the pane header).
+        sender_session: message.sender.canonical_session_id().to_string(),
+        body: message.body.clone(),
+        cc_sessions: message
+            .cc
+            .iter()
+            .map(|party| party.canonical_session_id().to_string())
+            .collect(),
+        authenticated_identity: message.authenticated_identity.clone(),
+        on_behalf_of: message.on_behalf_of.clone(),
     }
 }
 

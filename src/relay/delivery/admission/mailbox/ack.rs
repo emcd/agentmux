@@ -5,11 +5,29 @@ use crate::protocol::identity::ConsumerBinding;
 use crate::protocol::mailbox::EntrySequence;
 use crate::protocol::operations::{AckAccepted, AckRejection, AckResult, MemberAcknowledgment};
 
-use super::super::super::guard::{PackingUnitId, SubmissionEvidence};
+use super::super::super::guard::PackingUnitId;
 use super::super::ledger::lock_ledger;
-use super::super::terminal::release_entry;
 use super::addressing::target_key;
 use super::generation::active_generation;
+use super::resolution::{ResolvedMember, resolve_positions};
+
+/// What an acknowledgment did, and what its caller must now report.
+///
+/// The two travel together because they are produced under one acquisition of
+/// the ledger lock and consumed on opposite sides of its release: the result is
+/// the executor's answer, and the resolved members are the senders' — each owed
+/// a terminal outcome, and for a non-delivered one a receipt, neither of which
+/// may be emitted from inside the lock.
+///
+/// Handed back rather than published here for the same reason a replacement
+/// hands back what it resolved: the ledger resolves and the caller reports, so
+/// swallowing these would turn a loud outcome into a silent one for exactly the
+/// members whose writes were most likely to have gone wrong.
+#[derive(Debug)]
+pub(in crate::relay) struct Acknowledgment {
+    pub(in crate::relay) result: AckResult,
+    pub(in crate::relay) resolved: Vec<ResolvedMember>,
+}
 
 /// Terminalizes exactly the entries a prior declaration bound, from what the
 /// executor observed writing them.
@@ -22,6 +40,19 @@ pub(in crate::relay) fn ack(
     binding: &ConsumerBinding,
     unit: PackingUnitId,
     members: &[MemberAcknowledgment],
+) -> Acknowledgment {
+    let mut resolved = Vec::new();
+    let result = apply(binding, unit, members, &mut resolved);
+    Acknowledgment { result, resolved }
+}
+
+/// The acknowledgment itself, with everything it resolves collected into
+/// `resolved` for the caller to report once the lock is gone.
+fn apply(
+    binding: &ConsumerBinding,
+    unit: PackingUnitId,
+    members: &[MemberAcknowledgment],
+    resolved: &mut Vec<ResolvedMember>,
 ) -> AckResult {
     let Ok(mut state) = lock_ledger() else {
         return Err(AckRejection::UnknownTarget);
@@ -82,20 +113,16 @@ pub(in crate::relay) fn ack(
         record.evidence = Some(first.evidence);
     }
 
-    let acknowledged: Vec<(String, SubmissionEvidence)> = members
-        .iter()
-        .filter_map(|member| {
-            let message_id = state
-                .mailboxes
-                .get(&target)
-                .and_then(|mailbox| mailbox.slots.get(&member.sequence))
-                .map(|slot| slot.message_id.clone())?;
-            Some((message_id, member.evidence))
-        })
-        .collect();
-    for (message_id, evidence) in &acknowledged {
-        release_entry(&mut state, message_id.as_str(), Some(*evidence));
-    }
+    // Each member resolves from its own report rather than from the unit's
+    // shared record: a write can submit some members of a unit and fail on
+    // others, and the record cannot express that.
+    resolved.extend(resolve_positions(
+        &mut state,
+        &target,
+        members
+            .iter()
+            .map(|member| (member.sequence, Some(member.evidence))),
+    ));
 
     // Each member's position was retired as it terminalized, which already
     // carried the cursor over the range. It is read back rather than assigned so
@@ -124,11 +151,9 @@ pub(in crate::relay) fn ack(
 /// sibling's instead.
 #[cfg(test)]
 mod mailbox_evidence_tests {
-    use super::super::super::authorize::record_unit_evidence;
-    use super::super::super::ledger::lock_ledger;
-    use super::super::super::terminal::{TerminalTransition, release_entry};
+    use super::super::super::super::guard::SubmissionEvidence;
     use super::super::declare::declare;
-    use super::super::fixtures::{claim, mail, peeked, place, range, seq};
+    use super::super::fixtures::{acknowledge, claim, mail, peeked, place, range, seq};
     use super::*;
 
     #[test]
@@ -154,7 +179,7 @@ mod mailbox_evidence_tests {
         // are present precisely because leaking it onto member 3 would claim a
         // write that may never have happened.
         assert_eq!(
-            ack(
+            acknowledge(
                 &bound,
                 accepted.unit,
                 &[
@@ -166,7 +191,7 @@ mod mailbox_evidence_tests {
             "an acknowledgment missing a member is refused rather than filled in"
         );
         assert_eq!(
-            ack(
+            acknowledge(
                 &bound,
                 accepted.unit,
                 &[
@@ -179,7 +204,7 @@ mod mailbox_evidence_tests {
             "a repeated member is refused, since it leaves another unreported"
         );
         assert_eq!(
-            ack(
+            acknowledge(
                 &bound,
                 accepted.unit,
                 &[
@@ -203,47 +228,36 @@ mod mailbox_evidence_tests {
 
         // Mixed reports across one unit are ordinary: a write can submit some
         // members and fail on others, and the unit's shared record cannot express
-        // that.
+        // that. The reports are ordered so the record — written from the first
+        // member's — disagrees with both of the others: a member resolved from
+        // the record rather than from its own report would come back `Submitted`
+        // here, which is the substitution this asserts against.
+        let acknowledgment = ack(
+            &bound,
+            accepted.unit,
+            &[
+                report(1, SubmissionEvidence::Submitted),
+                report(2, SubmissionEvidence::NotSubmitted),
+                report(3, SubmissionEvidence::SubmissionUnknown),
+            ],
+        );
         assert!(
-            ack(
-                &bound,
-                accepted.unit,
-                &[
-                    report(1, SubmissionEvidence::Submitted),
-                    report(2, SubmissionEvidence::NotSubmitted),
-                    report(3, SubmissionEvidence::SubmissionUnknown),
-                ],
-            )
-            .is_ok(),
+            acknowledgment.result.is_ok(),
             "a complete set of reports is accepted whatever the reports say"
         );
-
-        // That each member resolves from its own report is asserted at the seam
-        // where the value is observable. The acknowledgment above consumes its
-        // members, so the outcome it derived for each is not readable from
-        // outside; what is readable is that the transition carries the supplied
-        // report rather than the unit's shared record, which is the step the
-        // acknowledgment relies on.
-        let plumbing = "mbx-evidence-plumbing";
-        place(plumbing, "mbx-evidence-plumbing-1", 1, mail("body"));
-        let plumbing_bound = claim(plumbing);
-        let unit = declare(&plumbing_bound, range(1, 1)).expect("declare").unit;
-        record_unit_evidence(unit, SubmissionEvidence::Submitted);
-        let mut state = lock_ledger().expect("ledger");
-        let transition = release_entry(
-            &mut state,
-            "mbx-evidence-plumbing-1",
-            Some(SubmissionEvidence::NotSubmitted),
-        );
-        assert!(
-            matches!(
-                transition,
-                TerminalTransition::Won {
-                    evidence: SubmissionEvidence::NotSubmitted,
-                    ..
-                }
-            ),
-            "a member resolves from its own report, not from its unit's record: {transition:?}"
+        let resolved: Vec<_> = acknowledgment
+            .resolved
+            .iter()
+            .map(|member| member.evidence)
+            .collect();
+        assert_eq!(
+            resolved,
+            vec![
+                SubmissionEvidence::Submitted,
+                SubmissionEvidence::NotSubmitted,
+                SubmissionEvidence::SubmissionUnknown,
+            ],
+            "each member resolves from its own report, not from its unit's record"
         );
     }
 }
@@ -259,9 +273,11 @@ mod mailbox_evidence_tests {
 mod mailbox_acknowledgment_tests {
     use crate::protocol::mailbox::CursorPosition;
 
+    use super::super::super::super::guard::SubmissionEvidence;
+
     use super::super::super::terminal::{TerminalTransition, terminalize};
     use super::super::declare::declare;
-    use super::super::fixtures::{claim, mail, peeked, place, range, seq};
+    use super::super::fixtures::{acknowledge, claim, mail, peeked, place, range, seq};
     use super::*;
 
     #[test]
@@ -281,7 +297,7 @@ mod mailbox_acknowledgment_tests {
             })
             .collect();
         assert_eq!(
-            ack(&bound, accepted.unit, &members),
+            acknowledge(&bound, accepted.unit, &members),
             Ok(AckAccepted::Terminalized {
                 range: range(1, 3),
                 cursor: CursorPosition::advanced_through(seq(3)),
@@ -303,7 +319,7 @@ mod mailbox_acknowledgment_tests {
         // no-op rather than a rejection — and it must not advance the cursor a
         // second time.
         assert_eq!(
-            ack(&bound, accepted.unit, &members),
+            acknowledge(&bound, accepted.unit, &members),
             Ok(AckAccepted::AlreadyTerminalized { range: range(1, 3) }),
             "acknowledging a resolved unit again is a no-op"
         );
@@ -312,7 +328,7 @@ mod mailbox_acknowledgment_tests {
         // than invented, so the identifier is well-formed and only its binding is
         // missing.
         assert_eq!(
-            ack(&bound, PackingUnitId::mint(), &members),
+            acknowledge(&bound, PackingUnitId::mint(), &members),
             Err(AckRejection::UnitNotDeclared),
             "an acknowledgment without a matching declaration is refused"
         );
@@ -342,7 +358,7 @@ mod mailbox_acknowledgment_tests {
         // most recent unit is what produces that answer, so this is the assertion
         // that rules it out.
         let later = declare(&bound, range(5, 5)).expect("declare the remaining entry");
-        ack(
+        acknowledge(
             &bound,
             later.unit,
             &[MemberAcknowledgment {
@@ -352,7 +368,7 @@ mod mailbox_acknowledgment_tests {
         )
         .expect("the later unit resolves");
         assert_eq!(
-            ack(&bound, accepted.unit, &members),
+            acknowledge(&bound, accepted.unit, &members),
             Ok(AckAccepted::AlreadyTerminalized { range: range(1, 3) }),
             "an earlier resolved unit is still remembered once a later one resolves"
         );

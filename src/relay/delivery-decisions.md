@@ -273,6 +273,20 @@ following from what `generation_ceased` requires per transport:
   nothing is recoverable by operator action, and a target that two generations may
   be writing to concurrently is not.
 
+**Re-anchored by the pull-model cutover.** The bound above was described as
+running from "the point a packing unit's write begins", and the arming note
+checked its precondition against the transports' outcome futures. Neither survives
+literally: the relay no longer invokes a transport, so it cannot observe a write
+beginning, and there is no outcome future to resolve at the write boundary. The
+bound now runs from the moment the relay **accepted a declaration** — the last
+instant before any target-side effect, and the one end of the interval the relay
+can still see. What the precondition becomes is that each transport's `write`
+returns at its write boundary rather than at the end of a turn, which is why ACP
+splits its turn observation out into the next iteration's readiness check. ACP's
+respawn gap needs no exemption for the same reason as before, differently
+realised: with no live runtime its executor's readiness check withholds every
+write, so entries stay queued and undeclared and nothing is bound across the gap.
+
 ---
 
 ## D8 — ACP is excluded from emergency raw, on protocol grounds

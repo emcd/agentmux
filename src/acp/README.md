@@ -147,9 +147,9 @@ submission-timeout watchdog bounds the supervised code's runtime
 instead. It can do so because `submit_envelope_turn` resolves every
 member at the framed write rather than at the end of the turn, so the
 bound covers the relay's execution and not the agent's inference. A
-respawn gap needs no exemption either: with no live runtime `mailw`
-refuses synchronously with `not_submitted`, so no member sits
-authorized across one.
+respawn gap needs no exemption either: with no live runtime the
+executor's readiness check withholds every write, so entries stay
+queued and undeclared across one and nothing is bound while it lasts.
 
 ## Terminal-outcome receipt rendering
 
@@ -161,26 +161,20 @@ carries a per-envelope `is_receipt: bool` marker on `DeliveryEnvelope`
 and is rendered by the ACP transport as its own turn with three
 shape-specific behaviors:
 
-- **Flush barrier.** A receipt is never absorbed into a peer-traffic
-  flush group, and it never coalesces with surrounding peer envelopes.
-  When a receipt is the head of the internal write channel the
-  transport submits it as a singleton turn (no inner absorb loop runs);
-  when a receipt arrives mid-batch the transport flushes the pending
-  peer batch first and then submits the receipt alone on its own turn.
-  The agent always observes a receipt on a turn by itself, separated
-  from any peer message that may be queued beside it.
-- **No packing unit.** A receipt bypassed relay admission, so it holds
-  no ledger entry and belongs to no unit. `submit_singleton_envelope`
-  routes it with `TurnUnit::Untracked`, so `submit_envelope_turn`
-  declares nothing and records nothing for it, and the receipt resolves
-  through its own outcome sender. Declaring one would be *refused* — the
-  ledger cannot tell a member it never had from one that already
-  terminalized — and under the delivery contract a refused declaration
-  obliges the transport to produce no effect, which would silently drop
-  the receipt. `Untracked` is deliberately distinct from
-  `TurnUnit::RelayDeclared` (used for raw, which *is* bound and resolves
-  through the guard). See `src/relay/delivery-architecture.md`,
-  "Members no unit covers".
+- **Flush barrier.** A receipt is never packed into a turn with peer
+  traffic, and it never coalesces with surrounding peer envelopes. The
+  shared `receipt_runs` split is applied to every peeked run before the
+  token budget, so a receipt at the head of a run is planned as a
+  singleton and a receipt behind peers ends the run before it. The agent
+  always observes a receipt on a turn by itself, separated from any peer
+  message that may be waiting beside it in the mailbox.
+- **No reservation, but a position.** A receipt bypassed relay admission,
+  so it holds no quota reservation — but it does take a mailbox position,
+  because an executor writes only what it peeks and a positionless entry
+  is one nothing delivers. It is declared and acknowledged like any other
+  entry; what follows from the missing reservation is only that its
+  acknowledgment releases none. See `src/relay/delivery-architecture.md`,
+  "Members no reservation covers".
 - **No quiet window to bypass.** The "receipt bypasses quiescence"
   invariant needs no envelope field to carry it: no transport waits on
   target readiness at all, so a receipt cannot be held behind one. The

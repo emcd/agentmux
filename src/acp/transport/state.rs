@@ -6,7 +6,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use crate::acp::client::{AcpGenerationHandle, SharedReplay};
-use crate::transports::{PartitionSink, WorkerReadinessState};
+use crate::transports::WorkerReadinessState;
 
 /// Slice length for the single-flight ACP prompt-completion wait. Bounds how
 /// long the blocking thread parks before re-checking the shutdown gate.
@@ -19,9 +19,6 @@ pub(crate) const ACP_LOOK_PRIME_POLL_INTERVAL: Duration = Duration::from_millis(
 /// limit while still showing recent context.
 pub(crate) const ACP_LOOK_ENTRIES_DEFAULT: usize = 50;
 
-/// Channel capacity for the internal ACP delivery task's write queue.
-pub(crate) const ACP_WRITE_CHANNEL_CAPACITY: usize = 256;
-
 /// State shared between an [`crate::acp::transport::AcpTransport`] and the
 /// [`crate::transports::OutputView`] handle it publishes. Held behind an `Arc`
 /// so the handle stays valid across the transport's whole life — including the
@@ -31,8 +28,6 @@ pub(crate) struct AcpSharedState {
     pub(crate) replay: Mutex<Option<SharedReplay>>,
     /// Mirrors per-turn readiness transitions into the relay global registry.
     pub(crate) mirror_state: Option<ReadinessMirror>,
-    /// The relay's guard, for reporting which members share one `session/prompt`.
-    pub(crate) partition_sink: Arc<dyn PartitionSink>,
     /// Handles for the permission resolver threads this generation has spawned.
     pub(crate) permission_executors: Mutex<Vec<JoinHandle<()>>>,
 }

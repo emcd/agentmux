@@ -1,4 +1,3 @@
-mod batch;
 mod orchestration;
 mod payload;
 mod worker;

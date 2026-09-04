@@ -128,7 +128,7 @@ fn a_declared_partition_names_its_unit_and_members() {
             .get("member_count")
             .and_then(serde_json::Value::as_u64),
         Some(1),
-        "a UI handover is one envelope, so its unit has one member: {declared}"
+        "a UI transport peeks one entry, so its unit has one member: {declared}"
     );
     // The member ids are the point: a count alone would not say *which* members
     // were bound, which is the only thing that makes a shared outcome auditable.
@@ -143,28 +143,29 @@ fn a_declared_partition_names_its_unit_and_members() {
     );
 }
 
-/// The batch reaches the log ahead of the partition, naming the members the relay
-/// committed to at one instant.
+/// The enqueue reaches the log ahead of the partition, naming the position the
+/// relay committed the member to before anything bound it.
 ///
-/// Two claims, and the second is the one worth the test. Naming the batch closes
-/// the antecedent of every per-member attribution downstream: the partition says
-/// which members shared a *submission*, and only the batch says which the relay
-/// *authorized together* — a reader with just the partition cannot tell a batch
-/// that was split by a transport from two batches that happened to be adjacent.
+/// Two claims, and the second is the one worth the test. Naming the enqueue
+/// closes the antecedent of every per-member attribution downstream: the
+/// partition says which members shared a *submission*, and only the enqueue says
+/// which position each of them occupied — a reader with just the partition cannot
+/// tell a run an executor peeked together from entries that merely happened to be
+/// adjacent.
 ///
 /// The ordering is the contract, not an artifact of how the code happens to run
-/// today. Authorization is the linearization point, so a partition recorded ahead
-/// of it would mean a member had been bound to a unit — the point past which
-/// non-delivery can no longer be proven — before the relay had committed to
-/// delivering it at all. Asserting the order here is what makes that
-/// falsifiable from outside the relay.
+/// today. Admission into the mailbox is the linearization point, so a partition
+/// recorded ahead of it would mean a member had been bound to a unit — the point
+/// past which non-delivery can no longer be proven — before the relay had given
+/// it a position to be delivered from at all. Asserting the order here is what
+/// makes that falsifiable from outside the relay.
 ///
-/// A singleton, and for a sharper reason than the partition test's: the batch is
-/// bounded by what one invocation of the delivery seam carries, and `mailw`
-/// carries one envelope. Multi-member batches wait on that seam, so there is no
-/// load this test could apply that would produce one.
+/// A singleton, and for a sharper reason than the partition test's: what an
+/// executor may peek together is bounded by its declared peek dimensions, and a
+/// UI transport declares one envelope. Multi-member runs wait on a transport that
+/// coalesces, so there is no load this test could apply that would produce one.
 #[test]
-fn an_authorized_batch_precedes_the_partition_it_covers() {
+fn an_enqueued_entry_precedes_the_partition_that_binds_it() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
@@ -187,9 +188,9 @@ fn an_authorized_batch_precedes_the_partition_it_covers() {
     )
     .expect("send response");
 
-    let authorized = await_inscription_within(
+    let enqueued = await_inscription_within(
         &inscriptions,
-        "relay.delivery.batch.authorized",
+        "relay.delivery.mailbox.enqueued",
         std::time::Duration::from_secs(45),
     );
     // Awaited separately so the ordering read below is against a log that has
@@ -201,36 +202,25 @@ fn an_authorized_batch_precedes_the_partition_it_covers() {
     );
 
     let record: serde_json::Value =
-        serde_json::from_str(authorized.as_str()).expect("batch inscription is json");
+        serde_json::from_str(enqueued.as_str()).expect("enqueue inscription is json");
     let payload = record
         .get("details")
-        .expect("the batch carries a details object");
+        .expect("the enqueue carries a details object");
 
     assert!(
         payload
-            .get("batch_id")
+            .get("sequence")
             .and_then(serde_json::Value::as_u64)
-            .is_some(),
-        "an authorization names the batch it minted: {authorized}"
+            .is_some_and(|sequence| sequence > 0),
+        "an enqueue names the position it issued: {enqueued}"
     );
-    let members = payload
-        .get("member_ids")
-        .and_then(serde_json::Value::as_array)
-        .expect("an authorization names its members");
-    assert_eq!(
-        payload
-            .get("member_count")
-            .and_then(serde_json::Value::as_u64),
-        Some(members.len() as u64),
-        "member_count agrees with member_ids: {authorized}"
-    );
-    let member = members
-        .first()
+    let member = payload
+        .get("message_id")
         .and_then(serde_json::Value::as_str)
-        .expect("the authorized member is named");
-    assert!(!member.is_empty(), "the authorized member is named");
+        .expect("the enqueued member is named");
+    assert!(!member.is_empty(), "the enqueued member is named");
 
-    // The same member, and the batch first. Read the whole log rather than
+    // The same member, and the enqueue first. Read the whole log rather than
     // relying on the two awaits above, because each returns as soon as its own
     // event appears and neither says which was written first.
     let log = std::fs::read_to_string(&inscriptions).expect("inscriptions readable");
@@ -240,8 +230,8 @@ fn an_authorized_batch_precedes_the_partition_it_covers() {
             .unwrap_or_else(|| panic!("no {event} in the log: {log}"))
     };
     assert!(
-        position("relay.delivery.batch.authorized") < position("relay.delivery.partition.declared"),
-        "the batch is authorized before its partition is declared: {log}"
+        position("relay.delivery.mailbox.enqueued") < position("relay.delivery.partition.declared"),
+        "the entry is enqueued before its partition is declared: {log}"
     );
     let partition = log
         .lines()
@@ -249,7 +239,7 @@ fn an_authorized_batch_precedes_the_partition_it_covers() {
         .expect("the partition is in the log");
     assert!(
         partition.contains(member),
-        "the partition covers the member the batch authorized: {partition}"
+        "the partition covers the member the enqueue named: {partition}"
     );
 }
 

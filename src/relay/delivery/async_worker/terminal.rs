@@ -11,7 +11,7 @@
 //! while the guard's evidence order contributes the outcome. Publishing the
 //! result is [`super::reporting`]'s job, not this module's.
 
-use crate::relay::delivery::admission::TerminalTransition;
+use crate::relay::delivery::admission::{ResolvedMember, TerminalTransition};
 use crate::relay::delivery::guard::{GuardKey, GuardTrigger, SubmissionEvidence};
 use crate::relay::{AsyncDeliveryTask, RelayError, SendOutcome, SendResult};
 
@@ -76,7 +76,8 @@ fn resolve_terminal_transition(task: &AsyncDeliveryTask) -> Option<TerminalResol
 /// that turn it into a reported outcome.
 struct TerminalResolution {
     /// `None` for a member that was never admitted — a terminal-outcome receipt,
-    /// which has no ledger entry and so no evidence recorded against it.
+    /// which holds no admission reservation and so no evidence recorded against
+    /// it.
     evidence: Option<SubmissionEvidence>,
     /// Whether the member was bound to a packing unit, which is what decides
     /// whether its evidence may override a producer's own outcome.
@@ -88,9 +89,10 @@ struct TerminalResolution {
 /// its own to report.
 ///
 /// The trigger does not choose the outcome — the guard's evidence order does.
-/// That separation is the point: a collector panic on a member that was never
-/// handed to a transport resolves `not_submitted`, because the relay can prove
-/// it, while the same panic after handover resolves `submission_unknown`.
+/// That separation is the point: a shutdown reaching a member no declaration had
+/// bound resolves `not_submitted`, because the relay can prove nothing was
+/// written for it, while the same shutdown reaching one already bound to a
+/// packing unit resolves `submission_unknown`.
 pub(in crate::relay::delivery) fn complete_task_outcome_from_trigger(
     task: &AsyncDeliveryTask,
     trigger: GuardTrigger,
@@ -173,6 +175,78 @@ pub(in crate::relay::delivery) fn complete_task_refusal(
         }),
         guard,
     );
+}
+
+/// Reports a member the ledger already terminalized, without attempting the
+/// transition a second time.
+///
+/// Every other function here begins by contesting the transition, because every
+/// other caller holds only a task and has to find out whether it won. A
+/// [`ResolvedMember`] is the transition's own output: it exists only for a member
+/// this caller won, produced under the ledger lock by an operation that resolved
+/// several members as one act. Routing it back through
+/// [`complete_task_outcome`] would find the reservation already gone and stay
+/// silent, which is exactly the duplicate-suppression working correctly against
+/// the one caller that is not a duplicate.
+///
+/// The outcome comes from the evidence, as it does everywhere: the acknowledgment
+/// that produced it reported what its write observed for this member, and a
+/// lifecycle trigger that produced it brought none and took the guard's order.
+/// The *cause* is what the evidence cannot carry — "the target has been
+/// unreachable past the dwell" and "the generation was replaced" resolve to the
+/// same spellings and are not the same thing to a sender — so each caller names
+/// its own. Both parts default to the evidence: omitting the reason code leaves
+/// the evidence's own to speak for itself, which is what an ordinary
+/// acknowledgment wants, since the write is the whole story.
+pub(in crate::relay::delivery) fn report_resolved_member(
+    member: &ResolvedMember,
+    reason_code: Option<&str>,
+    reason: Option<&str>,
+) {
+    let reason_code = reason_code
+        .map(str::to_string)
+        .unwrap_or_else(|| member.evidence.reason_code().to_string());
+    // A session observed serving is a session whose recorded startup failures no
+    // longer describe it. This is the only place that observation is made now:
+    // under the push model the collect site made it, and the collect site is what
+    // the pull model retires. A relay-wide target is excluded because it has no
+    // startup history to clear — it is served by the UI stream and never started.
+    if member.evidence == SubmissionEvidence::Submitted
+        && !crate::relay::delivery::admission::target_is_relay_wide(
+            member.task.bundle.bundle_name.as_str(),
+            member.task.target_session.as_str(),
+        )
+    {
+        let _ = crate::relay::startup_state::note_session_served_successfully(
+            member.task.runtime_directory.as_path(),
+            member.task.target_session.as_str(),
+        );
+    }
+    report_resolved_outcome(
+        member,
+        SendResult {
+            target_session: member.task.target_session.clone(),
+            message_id: member.message_id.clone(),
+            outcome: member.evidence.outcome(),
+            reason_code: Some(reason_code),
+            reason: reason.map(str::to_string),
+            details: None,
+        },
+    );
+}
+
+/// Publishes an outcome for a member the ledger already terminalized.
+///
+/// Split from [`report_resolved_member`] for the one caller that names its own
+/// outcome rather than deriving it from the evidence: graceful shutdown spells an
+/// undeclared entry `dropped_on_shutdown`, which no evidence value can express.
+/// Everything downstream — the observability floor, the receipt routing, the
+/// non-recursion marker — is identical, and identical is the point.
+pub(in crate::relay::delivery) fn report_resolved_outcome(
+    member: &ResolvedMember,
+    result: SendResult,
+) {
+    report_terminal_outcome(&member.task, Ok(result), member.guard);
 }
 
 pub(in crate::relay::delivery) fn complete_task_outcome(
@@ -407,118 +481,6 @@ mod evidence_authority_tests {
     }
 }
 
-/// A generation replacement cannot downgrade evidence a unit already recorded.
-///
-/// Its own block rather than an addition to the one above, which already carries
-/// a test. Inline because the cut is relay-internal —
-/// `complete_task_outcome_from_trigger` resolves against the delivery ledger, and
-/// reaching it from an integration test would mean publishing the guard, the
-/// ledger, or both.
-///
-/// No public interface covers this pair. The two fence tests each hold one half
-/// and neither holds both: `an_executor_blocked_past_the_bound_is_fenced_and_its_
-/// member_resolved` drives a real `ExecutionBound` cut but over a member with
-/// *no* recorded evidence, and `a_long_agent_turn_never_arms_the_execution_
-/// watchdog` has a member recorded `Submitted` while no watchdog ever arms. The
-/// combination — recorded evidence meeting the bound — is what a replacement
-/// would downgrade, and it is exactly what falls between them.
-#[cfg(test)]
-mod generation_replacement_tests {
-    use std::path::{Path, PathBuf};
-
-    use super::*;
-    use crate::configuration::{BundleConfiguration, SessionType};
-    use crate::relay::delivery::admission::{
-        AdmissionTargetKey, admit, authorize_batch, declare_packing_unit, record_unit_evidence,
-    };
-    use crate::relay::{DeliveryPayloadMode, SCHEMA_VERSION};
-
-    /// A member whose unit recorded `Submitted` reports `delivered` when the
-    /// generation fence's terminal cut reaches it, not the bound's own spelling.
-    ///
-    /// This drives the cut's body rather than timing a real fence: the fence's
-    /// arming and verdict are already covered end-to-end against a live ACP
-    /// executor, and re-timing them here would buy nothing while making the
-    /// property depend on a race. What is asserted is the half those tests cannot
-    /// isolate — that the trigger contributes the *reason* and the evidence order
-    /// contributes the *outcome*, so a member that provably wrote is not smeared
-    /// into an unknown merely because the relay replaced the generation under it.
-    ///
-    /// The reason is asserted alongside the outcome deliberately. `delivered` on
-    /// its own would also be produced by a path that never ran this cut at all;
-    /// the trigger's own reason string is what pins the record to the replacement
-    /// cut rather than to some other resolution that happened to agree.
-    #[test]
-    fn a_recorded_submission_survives_the_execution_bound_cut() {
-        let temporary = tempfile::TempDir::new().expect("temporary");
-        let inscriptions = temporary.path().join("inscriptions.log");
-        let _ = crate::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
-
-        let message_id = "replacement-survivor";
-        let target = AdmissionTargetKey::new(
-            "replacement-test",
-            Path::new("/nonexistent/replacement-test"),
-            "target",
-        );
-        admit(message_id, target, SessionType::Tmux, 1).expect("admit");
-        authorize_batch(&[message_id]).expect("authorize");
-        let unit = declare_packing_unit(&[message_id]).expect("an authorized member binds");
-        // The write happened and the transport said so. Everything after this is
-        // the relay losing patience with its own executor, which changes nothing
-        // about what reached the target.
-        record_unit_evidence(unit, SubmissionEvidence::Submitted);
-
-        let task = AsyncDeliveryTask {
-            admitted: true,
-            bundle: BundleConfiguration {
-                schema_version: SCHEMA_VERSION.to_string(),
-                bundle_name: "replacement-test".to_string(),
-                autostart: false,
-                groups: Vec::new(),
-                members: Vec::new(),
-            },
-            sender_namespace: "replacement-test".to_string(),
-            sender: super::super::reporting::relay_system_sender_member(),
-            authenticated_identity: None,
-            on_behalf_of: None,
-            all_target_sessions: Vec::new(),
-            target_session: "target".to_string(),
-            message: "body".to_string(),
-            message_id: message_id.to_string(),
-            runtime_directory: PathBuf::from("/nonexistent/replacement-test"),
-            payload_mode: DeliveryPayloadMode::EnvelopeMessage,
-            append_enter: true,
-            choice_decider_sessions: Vec::new(),
-            is_receipt: false,
-            sender_return_route: None,
-        };
-
-        // The cut a positive fence verdict runs over every still-unresolved
-        // member, invoked with the trigger that path supplies.
-        complete_task_outcome_from_trigger(&task, GuardTrigger::ExecutionBound);
-
-        let completed = std::fs::read_to_string(&inscriptions)
-            .expect("inscriptions file")
-            .lines()
-            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
-            .find(|record| {
-                record["event"] == "relay.send.async.completed"
-                    && record["details"]["message_id"] == message_id
-            })
-            .expect("the cut reports one terminal outcome for the member");
-
-        assert_eq!(
-            completed["details"]["outcome"], "delivered",
-            "a recorded submission was downgraded by the generation replacement",
-        );
-        assert_eq!(
-            completed["details"]["reason"],
-            GuardTrigger::ExecutionBound.reason(),
-            "the reported outcome did not come from the execution-bound cut",
-        );
-    }
-}
-
 /// The evidence order's second rung, held at the helper every trigger reaches.
 ///
 /// Its own block on the same terms as the others, and the count is deliberate
@@ -541,18 +503,18 @@ mod unbound_resolution_tests {
 
     use super::*;
     use crate::configuration::{BundleConfiguration, SessionType};
-    use crate::relay::delivery::admission::{AdmissionTargetKey, admit, authorize_batch};
+    use crate::relay::delivery::admission::{AdmissionTargetKey, admit};
     use crate::relay::{DeliveryPayloadMode, SCHEMA_VERSION};
 
     /// A member never bound to a packing unit resolves `not_submitted` at the
     /// trigger helper, whichever trigger fired.
     ///
     /// This is the guard's inference from absence, and it is sound because the
-    /// partition is recorded before the first target-side effect: an unbound
+    /// declaration is recorded before the first target-side effect: an unbound
     /// member provably could not have been submitted. The claim worth pinning is
-    /// that the *trigger does not enter into it* — a collector panic and a
-    /// graceful shutdown resolve the same member the same way, because only the
-    /// evidence order is consulted.
+    /// that the *trigger does not enter into it* — a bundle stop and a graceful
+    /// shutdown resolve the same member the same way, because only the evidence
+    /// order is consulted.
     ///
     /// `GracefulShutdown` is the sharp one and is included deliberately. Reaching
     /// this helper it resolves `not_submitted`, while `complete_task_on_shutdown`
@@ -572,15 +534,11 @@ mod unbound_resolution_tests {
         let _ = crate::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
 
         for trigger in [
-            GuardTrigger::CollectorPanic,
-            GuardTrigger::ChannelClosed,
             GuardTrigger::GracefulShutdown,
             GuardTrigger::ExecutionBound,
             GuardTrigger::BundleStop,
         ] {
             let message_id = match trigger {
-                GuardTrigger::CollectorPanic => "unbound-collector-panic",
-                GuardTrigger::ChannelClosed => "unbound-channel-closed",
                 GuardTrigger::GracefulShutdown => "unbound-graceful-shutdown",
                 GuardTrigger::ExecutionBound => "unbound-execution-bound",
                 GuardTrigger::BundleStop => "unbound-bundle-stop",
@@ -590,12 +548,11 @@ mod unbound_resolution_tests {
                 Path::new("/nonexistent/unbound-test"),
                 "target",
             );
-            // Authorized, so the member has been carried toward a transport and is
-            // the case a trigger realistically finds. No unit is ever declared,
-            // which is the whole fixture: nothing was written and the ledger can
-            // prove it.
+            // Admitted and queued, which is the case a trigger realistically
+            // finds: an entry waiting in its target's mailbox for an executor to
+            // peek. No unit is ever declared, which is the whole fixture —
+            // nothing was written and the ledger can prove it.
             admit(message_id, target, SessionType::Tmux, 1).expect("admit");
-            authorize_batch(&[message_id]).expect("authorize");
 
             let task = AsyncDeliveryTask {
                 admitted: true,

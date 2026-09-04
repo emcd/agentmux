@@ -100,8 +100,6 @@ impl PtyTransport {
             Arc::new(std::sync::Mutex::new(writer));
 
         let (bytes_tx, bytes_rx) = mpsc::channel::<Vec<u8>>(256);
-        let (write_tx, write_rx) =
-            mpsc::channel::<super::DeliveryCommand>(super::WRITE_CHANNEL_CAPACITY);
         let (snapshot_tx, snapshot_rx) = mpsc::channel::<crate::pty::state::SnapshotRequest>(64);
 
         self.shared.snapshot_tx = snapshot_tx.clone();
@@ -117,8 +115,12 @@ impl PtyTransport {
         let child_for_worker = child_arc.clone();
         let shutdown_flag_for_worker = self.shutdown_flag.clone();
         let mirror_state_for_worker = self.mirror_state.clone();
-        let partition_sink_for_worker = Arc::clone(&self.partition_sink);
+        let delivery_for_worker = self.delivery.clone();
         let readiness_for_worker = self.readiness.clone();
+        // The same latch the transport's own `health` folds into. One latch and
+        // one clock: a writer with its own would restart `since` on every poll,
+        // and a dwell measured from a `since` that keeps moving never elapses.
+        let unreachable_for_worker = Arc::clone(&self.unreachable_since);
 
         let bytes_tx_for_reader = bytes_tx.clone();
         let reader_shutdown_flag = self.shutdown_flag.clone();
@@ -131,7 +133,6 @@ impl PtyTransport {
                     cols,
                     rows,
                     bytes_rx,
-                    write_rx,
                     snapshot_rx,
                     shared_for_worker,
                     writer_for_worker,
@@ -140,7 +141,8 @@ impl PtyTransport {
                     shutdown_flag_for_worker,
                     mirror_state_for_worker,
                     readiness_for_worker,
-                    partition_sink_for_worker,
+                    unreachable_for_worker,
+                    delivery_for_worker,
                 );
             })
             .map_err(|e| TransportError {
@@ -168,7 +170,6 @@ impl PtyTransport {
         guard.note_reader(reader_handle);
 
         let (child, worker, reader) = guard.finish();
-        self.write_tx = Some(write_tx);
         self.bytes_tx = Some(bytes_tx);
         self.child = Some(child);
         self.worker_handle = Some(worker);

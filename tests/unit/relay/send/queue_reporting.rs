@@ -7,21 +7,22 @@ use super::*;
 
 /// Undelivered means *waiting*, not merely reserved.
 ///
-/// An `Authorized` member has been handed to its transport and is executing
-/// under the watchdog's bound. Counting it would report work in progress as a
-/// backlog, and would age it toward a warning that says a target is not draining
-/// while it is in fact being written to.
+/// A declared member has been bound to a packing unit its transport's executor
+/// is writing, under the watchdog's bound. Counting it would report work in
+/// progress as a backlog, and would age it toward a warning that says a target
+/// is not draining while it is in fact being written to. The guard rather than
+/// the entry's state is what separates the two: a declared entry is still
+/// `Queued`, so a report reading the state alone would count both.
 ///
 /// Both halves are asserted against one report, so the counts and the exclusion
 /// cannot be satisfied by different states of the queue. `bravo@party` is a tmux
 /// target with no server behind its socket: it is unreachable from the first
-/// observation, and under a long dwell its members are held rather than
-/// resolved, which is a `Pending` that lasts as long as the test needs.
-/// `user@GLOBAL` is the UI target, which is always ready and always healthy, so
-/// its member authorizes immediately and stays in flight for the reconnect
-/// timeout.
+/// observation, and under a long dwell its entries stay queued and undeclared
+/// for as long as the test needs. `user@GLOBAL` is the UI target, which is
+/// always ready and always healthy, so its entry is declared immediately and
+/// stays in flight.
 #[test]
-fn undelivered_reporting_counts_pending_entries_and_not_authorized_ones() {
+fn undelivered_reporting_counts_waiting_entries_and_not_declared_ones() {
     use agentmux::relay::{UndeliveredReporting, report_undelivered_queue};
 
     let temporary = TempDir::new().expect("temporary");
@@ -105,7 +106,7 @@ fn undelivered_reporting_counts_pending_entries_and_not_authorized_ones() {
             .get("target_total")
             .and_then(serde_json::Value::as_u64),
         Some(1),
-        "the authorized member's target is not a backlogged target: {}",
+        "the declared member's target is not a backlogged target: {}",
         aggregates[0]
     );
     let targets = details
@@ -128,11 +129,11 @@ fn undelivered_reporting_counts_pending_entries_and_not_authorized_ones() {
         "all three held members are counted against their target: {}",
         aggregates[0]
     );
-    // An `Authorized` member is executing, not backlogged. A report that counted
+    // A declared member is being written, not backlogged. A report that counted
     // reservations rather than waiting would name it here.
     assert!(
         !aggregates[0].contains("\"target_session\":\"user@GLOBAL\""),
-        "an authorized member is not reported as undelivered: {}",
+        "a declared member is not reported as undelivered: {}",
         aggregates[0]
     );
 }
@@ -180,7 +181,7 @@ fn a_backlogged_target_warns_once_while_the_aggregate_repeats() {
     send("user@GLOBAL");
     std::thread::sleep(std::time::Duration::from_millis(600));
 
-    // A zero threshold makes any `Pending` entry already past it, so every
+    // A zero threshold makes any waiting entry already past it, so every
     // warning this run withholds is withheld by the dedup rather than by the
     // clock.
     let reporting = UndeliveredReporting {
@@ -215,12 +216,13 @@ fn a_backlogged_target_warns_once_while_the_aggregate_repeats() {
         "the warning carries the full waiting count, not one entry's worth: {}",
         warnings[0]
     );
-    // A warning names a target that is not draining. The UI member was handed
-    // over and is executing, so its target has nothing waiting to warn about —
-    // and with the threshold at zero, nothing but the scoping rule suppresses it.
+    // A warning names a target that is not draining. The UI member has been
+    // declared and is being written, so its target has nothing waiting to warn
+    // about — and with the threshold at zero, nothing but the scoping rule
+    // suppresses it.
     assert!(
         !warnings[0].contains("\"target_session\":\"user@GLOBAL\""),
-        "an authorized member produces no warning: {}",
+        "a declared member produces no warning: {}",
         warnings[0]
     );
 
@@ -234,20 +236,21 @@ fn a_backlogged_target_warns_once_while_the_aggregate_repeats() {
 /// A warning counts what is *waiting* and ages from the oldest of those, not
 /// from the reservation ledger.
 ///
-/// The two disagree on exactly one shape: a target holding an `Authorized`
-/// member and `Pending` members at the same time. `per_target` is incremented at
-/// admission and decremented at release, so it counts the member being written
-/// to right now; the waiting tally does not. Every other test in this cluster
-/// leaves them equal, which is why the fix they cover passes with either reading.
+/// The two disagree on exactly one shape: a target holding a declared member and
+/// undeclared ones at the same time. `per_target` is incremented at admission and
+/// decremented at release, so it counts the member being written to right now;
+/// the waiting tally does not. Every other test in this cluster leaves them
+/// equal, which is why the fix they cover passes with either reading.
 ///
 /// The fixture builds that shape deliberately. Member one meets a prompt-ready
-/// pane, is authorized, and is handed a paste that never returns — so it holds
-/// its reservation without ever leaving flight. The pane is then reported busy,
+/// pane, is declared by the executor, and is handed a paste that never returns —
+/// so it holds its reservation without ever leaving the write. The pane is then
+/// reported busy, so the executor's readiness check withholds every later write,
 /// and members two and three are admitted behind it: reachable target, no
-/// prompt, so the gate holds them and they wait.
+/// prompt, so they stay queued and undeclared.
 ///
 /// Both halves are read off one report, and the aging half is separated by
-/// construction rather than by coincidence — the authorized member is aged past
+/// construction rather than by coincidence — the declared member is aged past
 /// the bound the assertion uses before the waiting ones are even sent, so a
 /// report measuring from it cannot land under that bound however the machine is
 /// scheduled.
@@ -256,8 +259,8 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
     use agentmux::relay::{UndeliveredReporting, report_undelivered_queue};
     use std::time::{Duration, Instant};
 
-    /// How far the authorized member is aged past the waiting ones. Also the
-    /// bound the age assertion uses: a report reading the authorized member is
+    /// How far the declared member is aged past the waiting ones. Also the
+    /// bound the age assertion uses: a report reading the declared member is
     /// at least this old by construction, and one reading the waiting members
     /// is younger than the settle below.
     const AGE_GAP_MS: u64 = 2_000;
@@ -309,20 +312,21 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
 
     let first_admitted = Instant::now();
     send();
-    // The paste marker is the fixture's own proof: the relay authorized this
-    // member and handed it to a write that will not return, so it holds an
-    // `Authorized` reservation for the rest of the test.
+    // The paste marker is the fixture's own proof: the executor declared this
+    // member and began a write that will not return, so it holds a declared
+    // reservation for the rest of the test.
     let deadline = Instant::now() + Duration::from_secs(10);
     while !pasted_file.exists() {
         assert!(
             Instant::now() < deadline,
-            "the first member never reached a paste, so no member is authorized"
+            "the first member never reached a paste, so no member is declared"
         );
         std::thread::sleep(Duration::from_millis(20));
     }
 
-    // From here the pane is reachable but not at a prompt, so every later member
-    // is held at the gate instead of being authorized behind the first.
+    // From here the pane is reachable but not at a prompt, so the executor's
+    // readiness check withholds every later write instead of declaring behind
+    // the first.
     std::fs::write(&busy_file, b"1").expect("write busy marker");
     while first_admitted.elapsed() < Duration::from_millis(AGE_GAP_MS) {
         std::thread::sleep(Duration::from_millis(25));
@@ -344,8 +348,8 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
 
     // The ledger state the assertions below rest on, established rather than
     // assumed: three members admitted against one target, none of them resolved,
-    // and exactly one of them authorized. Three live entries, one `Authorized`
-    // and two `Pending`.
+    // and exactly one of them declared. Three live entries, one bound to a
+    // packing unit and two still waiting to be peeked.
     assert_eq!(
         count_bravo_queued_inscriptions(&inscriptions),
         3,
@@ -356,11 +360,11 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
         completions.is_empty(),
         "no member may resolve while the paste is still in flight: {completions:?}"
     );
-    let authorizations = read_inscriptions(&inscriptions, "relay.delivery.batch.authorized");
+    let declarations = read_inscriptions(&inscriptions, "relay.delivery.partition.declared");
     assert_eq!(
-        authorizations.len(),
+        declarations.len(),
         1,
-        "only the member that met a prompt may be authorized: {authorizations:?}"
+        "only the member that met a prompt may be declared: {declarations:?}"
     );
 
     let warnings = read_inscriptions(&inscriptions, "relay.delivery.undelivered.warning");
@@ -374,7 +378,7 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
             .and_then(serde_json::Value::as_str),
         Some("bravo"),
     );
-    // Reading `per_target` here would say three, because the authorized member
+    // Reading `per_target` here would say three, because the declared member
     // still holds its reservation. It is being written to, not backlogged.
     assert_eq!(
         details
@@ -384,7 +388,7 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
         "the warning carries the waiting count, not the reserved one: {}",
         warnings[0]
     );
-    // The same exclusion on the aging axis. The authorized member is the oldest
+    // The same exclusion on the aging axis. The declared member is the oldest
     // entry this target has, so a report that aged from it would announce a
     // target as backlogged since before either waiting member existed.
     let oldest_age_ms = details
@@ -393,7 +397,7 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
         .expect("warning carries oldest_age_ms");
     assert!(
         oldest_age_ms < AGE_GAP_MS,
-        "the warning ages from the oldest waiting entry, not from the authorized one: {}",
+        "the warning ages from the oldest waiting entry, not from the declared one: {}",
         warnings[0]
     );
 

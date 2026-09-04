@@ -35,9 +35,14 @@
 //! - [`peek`] — reading the head run without advancing anything.
 //! - [`declare`] — recording the run about to be submitted as one packing unit.
 //! - [`ack`] — terminalizing exactly that run from the executor's evidence.
+//! - [`abandonment`] — resolving what a target holds once nothing will serve it:
+//!   a sustained unreachability, a fail-stopped generation, or shutdown.
+//! - [`resolution`] — the shared terminalization every resolving path runs, and
+//!   what they hand their caller to report.
 //! - [`reap`] — giving the target up and reclaiming its mailbox when its
 //!   registration goes away.
 
+mod abandonment;
 mod ack;
 mod addressing;
 mod declare;
@@ -48,14 +53,18 @@ mod fixtures;
 mod generation;
 mod peek;
 mod reap;
+mod resolution;
 
-pub(in crate::relay) use self::ack::ack;
-pub(in crate::relay) use self::declare::declare;
+pub(in crate::relay) use self::abandonment::resolve_target_entries;
+pub(in crate::relay) use self::ack::{Acknowledgment, ack};
+pub(in crate::relay) use self::declare::{declaration_age, declare};
 pub(in crate::relay) use self::doorbell::{Doorbell, register_doorbell};
 pub(in crate::relay) use self::enqueue::{EnqueueRejection, enqueue};
 pub(in crate::relay) use self::generation::{
-    GenerationRejection, GenerationReplacement, ResolvedMember, claim_consumer_generation,
-    replace_consumer_generation,
+    GenerationRejection, claim_consumer_generation, replace_consumer_generation,
 };
 pub(in crate::relay) use self::peek::peek;
-pub(in crate::relay) use self::reap::{TargetReap, reap_target};
+#[cfg(test)]
+pub(in crate::relay) use self::reap::TargetReap;
+pub(in crate::relay) use self::reap::reap_target;
+pub(in crate::relay) use self::resolution::ResolvedMember;

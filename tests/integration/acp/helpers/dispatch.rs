@@ -69,7 +69,7 @@ pub(in crate::acp) fn dispatch_send_result(
 /// The size is the point rather than the content: a body larger than the pipe
 /// buffer between the relay and an agent that has stopped reading is what parks
 /// the relay's own executor inside its framed write, which is the only state the
-/// execution watchdog exists to bound. Well under the 256 KiB handover maximum,
+/// execution watchdog exists to bound. Well under the 256 KiB payload maximum,
 /// so admission accepts it.
 pub(in crate::acp) fn dispatch_sized_send_result(
     config_root: &ConfigurationRoots,

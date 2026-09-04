@@ -1,29 +1,48 @@
 //! Ending a worker: the pre-generation exit, the fence-bounded drain, and the
 //! records both leave behind.
 
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 
-use tokio::{sync::mpsc::UnboundedReceiver, task::JoinSet};
+use tokio::sync::mpsc::UnboundedReceiver;
 
-use crate::protocol::identity::DeliveryTargetId;
-use crate::relay::delivery::admission::reap_target;
-use crate::relay::{AsyncDeliveryTask, RelayError};
+use crate::protocol::identity::{ConsumerBinding, DeliveryTargetId};
+use crate::relay::delivery::admission::{ResolvedMember, reap_target, resolve_target_entries};
+use crate::relay::{AsyncDeliveryTask, RelayError, SendOutcome, SendResult};
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::signals::budget_within_shutdown;
 use crate::transports::TransportImpl;
 
-use super::super::super::async_worker::{AsyncWorkerKey, WorkerOwner};
+use super::super::super::async_worker::{
+    AsyncWorkerKey, WorkerOwner, report_resolved_member, report_resolved_outcome,
+};
 use super::super::super::fence::{FenceInProgress, FenceOutcome, FenceResolution, FenceVerdict};
 use super::super::super::guard::GuardTrigger;
-use super::super::outcomes::collect_outcome;
-use super::spawn::{
-    ASYNC_WORKER_POLL_INTERVAL_MS, InflightMember, InflightOutcome, SHUTDOWN_FENCE_RESERVE_MS,
-};
+use super::spawn::{ASYNC_WORKER_POLL_INTERVAL_MS, SHUTDOWN_FENCE_RESERVE_MS};
+
+const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
+const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
+
+/// Reports an undeclared entry the relay shut down before anything wrote it.
+///
+/// The one place a lifecycle event names its own outcome rather than taking the
+/// guard's, and the contract admits it for exactly this shape: an undeclared
+/// entry is provably unwritten, so `dropped_on_shutdown` is both true and more
+/// informative than the `not_submitted` the evidence order would otherwise give.
+fn complete_resolved_on_shutdown(member: &ResolvedMember) {
+    report_resolved_outcome(
+        member,
+        SendResult {
+            target_session: member.task.target_session.clone(),
+            message_id: member.message_id.clone(),
+            outcome: SendOutcome::DroppedOnShutdown,
+            reason_code: Some(DROPPED_ON_SHUTDOWN_REASON_CODE.to_string()),
+            reason: Some(DROPPED_ON_SHUTDOWN_REASON.to_string()),
+            details: None,
+        },
+    );
+}
 
 /// Ends a worker that was elected before a shutdown it observed before building
 /// anything.
@@ -99,12 +118,7 @@ pub(super) fn resolve_queued_tasks_and_reclaim(
 /// Shared by graceful shutdown and the execution watchdog because the fence is
 /// one protocol with one vocabulary: an operator reading these should be able to
 /// compare a shutdown verdict against a watchdog verdict without translating.
-pub(super) fn emit_fence_verdict(
-    key: &AsyncWorkerKey,
-    trigger: &str,
-    outcome: FenceOutcome,
-    unresolved_members: usize,
-) {
+pub(super) fn emit_fence_verdict(key: &AsyncWorkerKey, trigger: &str, outcome: FenceOutcome) {
     emit_inscription(
         "relay.delivery.fence.verdict",
         &json!({
@@ -120,46 +134,45 @@ pub(super) fn emit_fence_verdict(
                 FenceResolution::Forced => "forced",
                 FenceResolution::Unobserved => "unobserved",
             },
-            "unresolved_members": unresolved_members,
         }),
     );
 }
 
-/// Terminalizes every member still unresolved at a fence verdict, and abandons
-/// the collectors that were carrying them.
+/// Resolves everything a target's mailbox still holds, because nothing will ever
+/// peek it again.
 ///
-/// The trigger says when the owning path gave up; the outcome comes from the
-/// guard's evidence order, so a member whose unit was never recorded still
-/// resolves `not_submitted` rather than being smeared into an unknown by the
-/// bound. Collectors are aborted rather than awaited because their futures are
-/// held by executors the fence has just finished establishing cannot be waited
-/// on. Each abort still yields one join, and that join is what releases the
-/// member's pending slot — exactly once, through the collect arm, whether or not
-/// the member's identity was still in the table.
-pub(super) fn terminalize_unresolved_members(
-    inflight: &mut JoinSet<InflightOutcome>,
-    inflight_members: &mut HashMap<tokio::task::Id, InflightMember>,
-) {
-    for (_, member) in inflight_members.drain() {
-        super::super::super::async_worker::complete_task_outcome_from_trigger(
-            &member.task,
-            GuardTrigger::ExecutionBound,
-        );
+/// The two callers are the two findings that mean exactly that: a fail-stopped
+/// generation, for which no replacement may be elected, and a worker ending
+/// without one. Each entry resolves by the route its declaration state calls for
+/// — the ledger decides that, not this — and `trigger` supplies only the reason a
+/// sender is told.
+///
+/// Members already resolved are not reported twice: the terminal transition is
+/// contested, and only what this call wins comes back.
+pub(super) fn abandon_target(binding: &ConsumerBinding, trigger: GuardTrigger) {
+    for member in &resolve_target_entries(binding) {
+        report_resolved_member(member, None, Some(trigger.reason()));
     }
-    inflight.abort_all();
 }
 
-/// What a worker is still holding when it is told to end.
+/// Resolves everything a target's mailbox holds at graceful shutdown or a bundle
+/// stop, spelling each member's outcome by whether it had been declared.
 ///
-/// Grouped because they are one thing — the work this worker owns — and are only
-/// ever passed together. The drain has to reach all four: the writes still in
-/// flight, the members they belong to, the queue nothing will poll again, and the
-/// counter those members reserved against.
-pub(super) struct WorkerHoldings<'a> {
-    pub(super) inflight: &'a mut JoinSet<InflightOutcome>,
-    pub(super) inflight_members: &'a mut HashMap<tokio::task::Id, InflightMember>,
-    pub(super) receiver: &'a mut UnboundedReceiver<AsyncDeliveryTask>,
-    pub(super) pending: &'a std::sync::atomic::AtomicUsize,
+/// **An undeclared entry resolves `dropped_on_shutdown` and a declared one must
+/// not.** Nothing was ever about to write the first, so naming the process
+/// exiting is both true and more use to its sender than the generic
+/// non-delivery; a write may already have reached the target for the second, so
+/// it takes the guard's evidence order — `submission_unknown` where no
+/// acknowledgment arrived. Collapsing the two would let a lifecycle event choose
+/// an outcome, which is precisely what the evidence order exists to prevent.
+fn resolve_mailbox_at_stop(binding: &ConsumerBinding, cause: StopCause) {
+    for member in &resolve_target_entries(binding) {
+        if member.declared || cause != StopCause::Shutdown {
+            report_resolved_member(member, None, Some(cause.guard_trigger().reason()));
+        } else {
+            complete_resolved_on_shutdown(member);
+        }
+    }
 }
 
 /// Why a worker is ending: the relay is exiting, or this worker's bundle is being
@@ -231,24 +244,20 @@ impl StopCause {
 /// waiting, and the process is exiting anyway.
 pub(super) async fn stop_drain(
     key: &AsyncWorkerKey,
+    binding: &ConsumerBinding,
     transport: &mut TransportImpl,
-    holdings: WorkerHoldings<'_>,
+    receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
+    pending: &std::sync::atomic::AtomicUsize,
     fence_observation: Duration,
     cause: StopCause,
 ) {
-    let WorkerHoldings {
-        inflight,
-        inflight_members,
-        receiver,
-        pending,
-    } = holdings;
     let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
-    // Members still in the receiver were never authorized and never handed to a
-    // transport, so nothing about resolving them depends on whether the old
-    // generation ceased. Resolving them first makes the specified
-    // `dropped_on_shutdown` guarantee independent of how long the fence takes —
-    // which is the whole of the defect this ordering fixes, since a fence that
-    // outlived the process budget used to take these members down with it.
+    // Tasks still in the receiver never reached a mailbox, so nothing about
+    // resolving them depends on whether the old generation ceased. Resolving them
+    // first makes the specified `dropped_on_shutdown` guarantee independent of how
+    // long the fence takes — which is the whole of the defect this ordering fixes,
+    // since a fence that outlived the process budget used to take these members
+    // down with it.
     //
     // Nothing can arrive after this point: `close_worker` has already returned,
     // and `try_existing_worker` holds the registry lock across its send, so a
@@ -262,8 +271,8 @@ pub(super) async fn stop_drain(
     // One window, not the whole remaining grace: the fence spends *two* of these
     // back to back, so a window sized at everything left would overrun the
     // deadline by almost that much again. The reserve covers what still has to
-    // happen after the verdict — terminalizing whatever the collectors did not
-    // resolve, unregistering, and the caller's own teardown.
+    // happen after the verdict — resolving whatever the executor did not
+    // acknowledge, unregistering, and the caller's own teardown.
     let fence_observation = budget_within_shutdown(
         fence_observation,
         Duration::from_millis(SHUTDOWN_FENCE_RESERVE_MS),
@@ -273,29 +282,23 @@ pub(super) async fn stop_drain(
         if let Some(outcome) = fence.advance(transport, Instant::now()) {
             break outcome;
         }
-        tokio::select! {
-            joined = inflight.join_next_with_id(), if !inflight.is_empty() => {
-                if let Some(joined) = joined {
-                    collect_outcome(joined, inflight_members, pending);
-                }
-            }
-            _ = tokio::time::sleep(poll_interval) => {}
-        }
+        // The executor keeps acknowledging through both windows. That is the
+        // whole reason the fence is stepped rather than awaited: a unit that
+        // settles in time reports its own evidence, and a caller that blocked
+        // here would stop collecting exactly the outcomes the fence exists to let
+        // it keep collecting.
+        tokio::time::sleep(poll_interval).await;
     };
-    emit_fence_verdict(key, cause.fence_trigger(), outcome, inflight_members.len());
+    emit_fence_verdict(key, cause.fence_trigger(), outcome);
     if outcome.verdict == FenceVerdict::Positive {
         transport.shutdown();
     }
-    // Any member still in the table was never joined — its collector neither
-    // resolved nor panicked, so the drain left it unresolved. Terminalize it
-    // through the guard rather than dropping it: an ending is a trigger like any
-    // other, and the evidence order still knows whether it reached a transport.
-    for (_, member) in inflight_members.drain() {
-        super::super::super::async_worker::complete_task_outcome_from_trigger(
-            &member.task,
-            cause.guard_trigger(),
-        );
-    }
+    // The verdict is the resolution cut. Whatever the executor left in the
+    // mailbox is resolved here, by the route each entry's declaration state calls
+    // for — and after the teardown above, so an acknowledgment that arrived
+    // during the observation windows has already taken its own members and this
+    // finds only what genuinely went unresolved.
+    resolve_mailbox_at_stop(binding, cause);
     // Defensive only. Nothing can have arrived since the pre-fence drain above,
     // for the reason given there; this costs one `try_recv` and means a future
     // change that reopens a producer during shutdown loses nothing silently.
@@ -323,6 +326,7 @@ pub(super) async fn stop_drain(
 #[cfg(test)]
 mod reclaim_after_drain_tests {
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
 
     use crate::configuration::{
         BUNDLE_SCHEMA_VERSION, BundleConfiguration, BundleMember, SessionType, TargetConfiguration,
@@ -353,7 +357,14 @@ mod reclaim_after_drain_tests {
             1,
         )
         .expect("admit");
-        enqueue("reclaim-after-drain-1", raw()).expect("enqueue");
+        enqueue(
+            &Arc::new(queued_task(
+                runtime_directory.as_path(),
+                "reclaim-after-drain-1",
+            )),
+            raw(),
+        )
+        .expect("enqueue");
 
         // The reap that rides the unregister, which on these paths runs before
         // the drain. It finds the queued task still admitted and keeps the
@@ -366,7 +377,10 @@ mod reclaim_after_drain_tests {
 
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
         sender
-            .send(queued_task(runtime_directory.as_path()))
+            .send(queued_task(
+                runtime_directory.as_path(),
+                "reclaim-after-drain-1",
+            ))
             .expect("the receiver is live");
         drop(sender);
         let pending = std::sync::atomic::AtomicUsize::new(1);
@@ -387,15 +401,21 @@ mod reclaim_after_drain_tests {
         // mailbox belonging to a target that no longer has a worker.
         admit("reclaim-after-drain-2", admission, SessionType::Tmux, 1).expect("admit");
         assert_eq!(
-            enqueue("reclaim-after-drain-2", raw())
-                .expect("enqueue")
-                .value(),
+            enqueue(
+                &Arc::new(queued_task(
+                    runtime_directory.as_path(),
+                    "reclaim-after-drain-2",
+                )),
+                raw(),
+            )
+            .expect("enqueue")
+            .value(),
             1,
             "the retry after the drain reclaimed the mailbox, so numbering starts over"
         );
     }
 
-    fn queued_task(runtime_directory: &Path) -> AsyncDeliveryTask {
+    fn queued_task(runtime_directory: &Path, message_id: &str) -> AsyncDeliveryTask {
         AsyncDeliveryTask {
             admitted: true,
             bundle: BundleConfiguration {
@@ -420,7 +440,7 @@ mod reclaim_after_drain_tests {
             all_target_sessions: Vec::new(),
             target_session: TARGET.to_string(),
             message: "body".to_string(),
-            message_id: "reclaim-after-drain-1".to_string(),
+            message_id: message_id.to_string(),
             runtime_directory: runtime_directory.to_path_buf(),
             payload_mode: DeliveryPayloadMode::EnvelopeMessage,
             append_enter: true,

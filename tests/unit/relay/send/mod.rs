@@ -109,19 +109,19 @@ esac
 /// Three behaviours, each load-bearing:
 ///
 /// - **`capture-pane` reports a prompt until `busy_file` exists.** That is the
-///   readiness axis, and flipping it is what holds later members `Pending`. It is
-///   used rather than the activity marker because readiness is read from a cached
-///   observation the transport refreshes on its own clock: an advancing marker
-///   would only suppress a handover when two gate reads happened to straddle an
-///   observer poll, which is a race, while an unready pane suppresses every read
-///   after the flip.
-/// - **`paste-buffer` never returns.** The relay hands one member over and then
-///   waits, so that member stays `Authorized` for as long as the test needs. The
-///   sleep is bounded rather than infinite so the orphan it leaves reaps itself;
-///   nothing in the test outlives it.
+///   readiness axis, and flipping it is what leaves later entries queued and
+///   undeclared. It is used rather than the activity marker because readiness is
+///   read from a cached observation the transport refreshes on its own clock: an
+///   advancing marker would only suppress a write when two executor reads
+///   happened to straddle an observer poll, which is a race, while an unready
+///   pane suppresses every read after the flip.
+/// - **`paste-buffer` never returns.** The executor declares one entry and then
+///   parks inside its write, so that entry stays declared for as long as the test
+///   needs. The sleep is bounded rather than infinite so the orphan it leaves
+///   reaps itself; nothing in the test outlives it.
 /// - **`display-message` answers a fixed pane and a constant activity marker.**
-///   A constant can never advance, so the activity axis never suppresses a
-///   handover and the readiness flip above is the only thing that does.
+///   A constant can never advance, so the activity axis never suppresses a write
+///   and the readiness flip above is the only thing that does.
 fn write_stateful_fake_tmux(
     script_path: &std::path::Path,
     busy_file: &std::path::Path,

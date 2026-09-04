@@ -2,7 +2,7 @@
 //!
 //! [`TransportImpl`] delegates every [`Transport`] method to the concrete
 //! transport it holds, by `match` and with no dynamic allocation.
-//! [`HandoverDimensions`] sits here too: the maxima are declared per session
+//! [`PeekDimensions`] sits here too: the maxima are declared per session
 //! type, which is the same fixed set this enum dispatches over.
 //!
 //! The traits being dispatched live in [`transport`](super::transport) and the
@@ -18,29 +18,30 @@ use crate::tmux::TmuxTransport;
 use crate::transports::ui::{UiTransport, UiTransportServices};
 
 use super::{
-    DeliveryEnvelope, GenerationFence, OutcomeFuture, OutputView, PartitionSink, StartupContext,
-    Transport, TransportError, TransportHealth, TransportStatus,
+    DeliveryExecutorContext, GenerationFence, OutputView, StartupContext, Transport,
+    TransportError, TransportHealth, TransportStatus,
 };
 
-/// The largest handover a transport will accept, declared statically per
-/// transport and expressed in the two units the relay can evaluate without
-/// packing: envelope count and canonical payload bytes.
+/// The largest run one `peek` may return, declared statically per transport and
+/// expressed in the two units the relay can evaluate without rendering: entry
+/// count and canonical payload bytes.
 ///
 /// "Canonical payload bytes" means the serialized envelope payload the relay
 /// already holds, not the text a transport would render for its target.
 /// Declaring the maxima in tokens would be circular, since only the transport can
-/// render and count those.
+/// render and count those — a token budget is applied when the transport plans
+/// its write, against what the peek actually returned.
 ///
 /// These are distinct from admission quota (relay-owned, how much may be queued)
-/// and from acceptance capacity (dynamic, whether the transport can accept right
-/// now). The relay uses them for two things: rejecting at admission an envelope
-/// no partition could ever carry, and stopping batch formation at whichever
-/// component binds first.
+/// and from readiness (dynamic, whether the transport can write right now). The
+/// relay uses them for two things: rejecting at admission an entry no unit could
+/// ever carry, and bounding the run a peek returns at whichever component binds
+/// first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HandoverDimensions {
-    /// Most envelopes one handover may carry.
+pub struct PeekDimensions {
+    /// Most entries one peek may return.
     pub envelopes_max: usize,
-    /// Most canonical payload bytes one handover may carry.
+    /// Most canonical payload bytes one peek may return.
     pub canonical_bytes_max: u64,
 }
 
@@ -53,36 +54,35 @@ pub struct HandoverDimensions {
 /// tmux and pty against the rendered prompt's token budget, ACP against its
 /// framing. What this value is for is the line past which an envelope is not a
 /// large message but a mistake, so that admission rejects it at the request
-/// boundary instead of queueing something no partition could carry.
+/// boundary instead of queueing something no unit could carry.
 ///
-const HANDOVER_CANONICAL_BYTES_MAX: u64 = 262_144;
+const PEEK_CANONICAL_BYTES_MAX: u64 = 262_144;
 
-/// Most envelopes one handover may carry on a transport that coalesces a group
-/// into a single turn (tmux, ACP, pty). Matches the ACP worker's existing pending
-/// bound so batch formation admits nothing looser than what that queue already
-/// allowed.
-const HANDOVER_ENVELOPES_MAX_COALESCING: usize = 64;
+/// Most entries one peek may return for a transport that coalesces a run into a
+/// single turn (tmux, ACP, pty). Matches the ACP worker's existing pending bound
+/// so a peek returns nothing looser than what that queue already allowed.
+const PEEK_ENTRIES_MAX_COALESCING: usize = 64;
 
-impl HandoverDimensions {
+impl PeekDimensions {
     /// The maxima declared by the transport implementing `session_type`, or
     /// `None` for a session type with no delivery path.
     ///
     /// `Pubsub` returns `None`: it is a forward-declared stub rejected
-    /// synchronously at admission, so it never reaches batch formation and has no
-    /// dimensions to declare. `None` therefore means "cannot accept a handover at
+    /// synchronously at admission, so it never reaches a mailbox and has no
+    /// dimensions to declare. `None` therefore means "cannot be delivered to at
     /// all", not "unbounded".
     #[must_use]
     pub fn for_session_type(session_type: SessionType) -> Option<Self> {
         match session_type {
             SessionType::Tmux | SessionType::Acp | SessionType::Pty => Some(Self {
-                envelopes_max: HANDOVER_ENVELOPES_MAX_COALESCING,
-                canonical_bytes_max: HANDOVER_CANONICAL_BYTES_MAX,
+                envelopes_max: PEEK_ENTRIES_MAX_COALESCING,
+                canonical_bytes_max: PEEK_CANONICAL_BYTES_MAX,
             }),
             // UI broadcasts one stream event per envelope and coalesces nothing,
-            // so a handover is exactly one envelope.
+            // so it peeks exactly one entry.
             SessionType::Ui => Some(Self {
                 envelopes_max: 1,
-                canonical_bytes_max: HANDOVER_CANONICAL_BYTES_MAX,
+                canonical_bytes_max: PEEK_CANONICAL_BYTES_MAX,
             }),
             SessionType::Pubsub => None,
         }
@@ -106,8 +106,8 @@ pub enum TransportImpl {
     Acp(Box<AcpWorkerDriver>),
     /// Tmux pane delivery transport (implemented in Slice 3).
     Tmux(TmuxTransport),
-    /// UI stream-broadcast transport. Delivers via `mailw` (a single broadcast
-    /// with a bounded reconnect wait); not lookable, not raw-writable, not
+    /// UI stream-broadcast transport. Its executor writes one peeked entry per
+    /// broadcast, with no reconnect wait; not lookable, not raw-writable, not
     /// batchable. Promoting UI to a first-class transport retires the relay's
     /// `Acp/Tmux/Ui/Pubsub` routing fork.
     Ui(UiTransport),
@@ -139,6 +139,7 @@ impl TransportImpl {
         namespace: String,
         services: AcpDriverServices,
         batch_settings: PromptBatchSettings,
+        delivery: DeliveryExecutorContext,
     ) -> Self {
         Self::Acp(Box::new(AcpWorkerDriver::new(
             target_member,
@@ -146,6 +147,7 @@ impl TransportImpl {
             namespace,
             services,
             batch_settings,
+            delivery,
         )))
     }
 
@@ -156,24 +158,22 @@ impl TransportImpl {
     /// `readiness_notifier` is the relay's wakeup closure, taken here because the
     /// observer captures it during `startup`. It is optional rather than required:
     /// the delivery contract does not oblige a transport to have a notification
-    /// path, and correctness never depends on one — the level the relay reads is
-    /// authoritative, and a missing wakeup only defers a delivery to the next
-    /// poll.
+    /// path, and correctness never depends on one — a missing wakeup only defers
+    /// an observation to the next poll.
     ///
-    /// `partition_sink` is required for the opposite reason. Tmux pastes a whole
-    /// budget group in one injection, so its members share a fate; without a sink
-    /// there would be no way to say so, and each member would be resolved from
-    /// evidence about a write that was never its own.
+    /// `delivery` is required for the opposite reason. It is how this transport's
+    /// executor reaches its target's mailbox at all; without it the transport
+    /// would have a pane and nothing to write to it.
     #[must_use]
     pub fn tmux(
         batch_settings: PromptBatchSettings,
         readiness_notifier: Option<crate::tmux::ReadinessNotifier>,
-        partition_sink: Arc<dyn PartitionSink>,
+        delivery: DeliveryExecutorContext,
     ) -> Self {
         Self::Tmux(TmuxTransport::new(
             batch_settings,
             readiness_notifier,
-            partition_sink,
+            delivery,
         ))
     }
 
@@ -181,8 +181,8 @@ impl TransportImpl {
     /// constructs `services` closing over its own stream registry; the transport
     /// imports nothing from `crate::relay`.
     #[must_use]
-    pub fn ui(services: UiTransportServices) -> Self {
-        Self::Ui(UiTransport::new(services))
+    pub fn ui(services: UiTransportServices, delivery: DeliveryExecutorContext) -> Self {
+        Self::Ui(UiTransport::new(services, delivery))
     }
 
     /// Builds a Pty transport for one target. Only available when the
@@ -205,45 +205,14 @@ impl TransportImpl {
         target_member: crate::configuration::BundleMember,
         config: crate::pty::PtyTargetConfiguration,
         mirror_state: Option<crate::pty::PtyMirrorStateFn>,
-        partition_sink: Arc<dyn PartitionSink>,
+        delivery: DeliveryExecutorContext,
     ) -> Self {
         Self::Pty(crate::pty::PtyTransport::new(
             target_member,
             config,
             mirror_state,
-            partition_sink,
+            delivery,
         ))
-    }
-
-    /// The transport declares its own packing units through its
-    /// [`PartitionSink`], so the relay must not declare a singleton unit for a
-    /// member it hands over.
-    ///
-    /// A member has exactly one write-once binding. A relay declaration would
-    /// consume it and the transport's declaration for the group it actually
-    /// writes would be refused, which under the contract means the transport
-    /// produces no effect at all.
-    ///
-    /// Every coder transport now reports its own, so this separates them from UI,
-    /// whose single member the relay declares because there is no coalescing to
-    /// report. It began as scaffolding for adopting the sink one transport at a
-    /// time and outlived that purpose: the distinction it draws is real.
-    ///
-    /// Two things it does not govern. Raw stays relay-declared whatever this
-    /// says, because no transport can name the member at its raw write. And an
-    /// un-admitted member — a terminal-outcome receipt — is declared by nobody;
-    /// the relay skips it before consulting this, and each transport excludes it
-    /// from its own declaration.
-    #[must_use]
-    pub fn reports_own_partition(&self) -> bool {
-        match self {
-            Self::Acp(_) | Self::Tmux(_) => true,
-            Self::Ui(_) | Self::Pubsub => false,
-            #[cfg(feature = "pty")]
-            Self::Pty(_) => true,
-            #[cfg(not(feature = "pty"))]
-            Self::Pty => false,
-        }
     }
 
     /// The target can be captured by `look`.
@@ -298,14 +267,15 @@ impl TransportImpl {
         }
     }
 
-    /// The largest handover this transport accepts; see [`HandoverDimensions`].
+    /// The largest run this transport's executor may peek; see
+    /// [`PeekDimensions`].
     ///
     /// Delegates to the session-type function so the live-instance answer and the
     /// one the relay reads at admission — where no transport exists yet — cannot
     /// diverge.
     #[must_use]
-    pub fn maximum_handover_dimensions(&self) -> Option<HandoverDimensions> {
-        HandoverDimensions::for_session_type(self.session_type())
+    pub fn maximum_peek_dimensions(&self) -> Option<PeekDimensions> {
+        PeekDimensions::for_session_type(self.session_type())
     }
 
     /// The session type this transport implements.
@@ -332,40 +302,6 @@ impl TransportImpl {
             Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
             #[cfg(feature = "pty")]
             Self::Pty(transport) => transport.startup(context),
-            #[cfg(not(feature = "pty"))]
-            Self::Pty => {
-                unimplemented!("PTY transport is feature-gated; rebuild with --features pty")
-            }
-        }
-    }
-
-    /// Submits one envelope via the non-blocking write seam; see
-    /// [`Transport::mailw`].
-    pub fn mailw(&mut self, envelope: DeliveryEnvelope) -> OutcomeFuture {
-        match self {
-            Self::Acp(transport) => transport.mailw(envelope),
-            Self::Tmux(transport) => transport.mailw(envelope),
-            Self::Ui(transport) => transport.mailw(envelope),
-            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
-            #[cfg(feature = "pty")]
-            Self::Pty(transport) => transport.mailw(envelope),
-            #[cfg(not(feature = "pty"))]
-            Self::Pty => {
-                unimplemented!("PTY transport is feature-gated; rebuild with --features pty")
-            }
-        }
-    }
-
-    /// Submits raw input via the non-blocking write seam; see
-    /// [`Transport::raww`].
-    pub fn raww(&mut self, content: String, append_enter: bool) -> OutcomeFuture {
-        match self {
-            Self::Acp(transport) => transport.raww(content, append_enter),
-            Self::Tmux(transport) => transport.raww(content, append_enter),
-            Self::Ui(transport) => transport.raww(content, append_enter),
-            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
-            #[cfg(feature = "pty")]
-            Self::Pty(transport) => transport.raww(content, append_enter),
             #[cfg(not(feature = "pty"))]
             Self::Pty => {
                 unimplemented!("PTY transport is feature-gated; rebuild with --features pty")
@@ -405,26 +341,6 @@ impl TransportImpl {
             Self::Pty(_) => 0,
             #[cfg(not(feature = "pty"))]
             Self::Pty => 0,
-        }
-    }
-
-    /// Reports whether the selected transport can accept a handover now; see
-    /// [`Transport::is_ready_for_handover`].
-    #[must_use]
-    pub async fn is_ready_for_handover(&self) -> bool {
-        match self {
-            Self::Acp(transport) => transport.is_ready_for_handover().await,
-            Self::Tmux(transport) => transport.is_ready_for_handover().await,
-            Self::Ui(transport) => transport.is_ready_for_handover().await,
-            // The delivery worker latches a `Pubsub` stub for a configured Pubsub
-            // target (delivery is guarded and answered with a not-implemented
-            // outcome), so its query/lifecycle delegates must not panic. It is
-            // never ready to deliver.
-            Self::Pubsub => false,
-            #[cfg(feature = "pty")]
-            Self::Pty(transport) => transport.is_ready_for_handover().await,
-            #[cfg(not(feature = "pty"))]
-            Self::Pty => false,
         }
     }
 

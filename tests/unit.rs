@@ -39,6 +39,8 @@ mod runtime_sockets;
 mod runtime_starter;
 #[path = "unit/shutdown_clock.rs"]
 mod shutdown_clock;
+#[path = "support/mailbox.rs"]
+mod stub_mailbox;
 #[path = "unit/tmux_transport.rs"]
 mod tmux_transport;
 #[path = "unit/tui.rs"]

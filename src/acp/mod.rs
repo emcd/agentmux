@@ -20,7 +20,7 @@ pub use persistent_runtime::{
 };
 pub use render::{replay_entries_to_snapshot_entries, snapshot_entries_to_plain_lines};
 pub use replay::REPLAY_BUFFER_MAX_ENTRIES;
-pub use transport::AcpTransport;
+pub use transport::{AcpReachability, AcpTransport};
 pub use worker_driver::{AcpDriverServices, AcpWorkerDriver};
 
 use crate::transports::ToolCallStatus;

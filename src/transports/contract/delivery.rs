@@ -1,15 +1,13 @@
-//! The envelope a transport is handed and the outcome it reports back.
+//! The envelope a transport writes and the outcome vocabulary it reports in.
 //!
-//! [`SingleDeliveryOutcome`] is the terminal result an [`OutcomeFuture`]
-//! resolves to. Nothing here imports `crate::relay` — the relay maps the
-//! resolved outcome onto its own `SendResult` at the collect site.
+//! Nothing here imports `crate::relay` — the relay maps a transport-side outcome
+//! onto its own `SendResult` where it reports one.
 //!
 //! [`DeliveryEnvelope`] and [`DeliveryMessage`] are re-exported rather than
 //! defined here. Both call directions name them, so they live in
 //! [`crate::protocol`] and neither side owns them.
 
 use serde_json::Value;
-use tokio::sync::oneshot;
 
 use crate::runtime::signals::shutdown_requested;
 // Delivery/look wire vocabulary. Canonical home is `crate::protocol` (below both
@@ -17,18 +15,6 @@ use crate::runtime::signals::shutdown_requested;
 // never depends on relay. The relay re-exports these from its own contract.
 use crate::protocol::SendOutcome;
 pub use crate::protocol::{DeliveryEnvelope, DeliveryMessage};
-
-/// A pending delivery outcome handed back by the non-blocking write methods
-/// ([`Transport::mailw`](super::Transport::mailw),
-/// [`Transport::raww`](super::Transport::raww)). It resolves to the terminal
-/// [`SingleDeliveryOutcome`] once the transport's internal delivery task settles
-/// the write; the sender half lives inside the transport's ordered channel item.
-///
-/// Carries the transport-side [`SingleDeliveryOutcome`], not the relay
-/// `SendResult`: the transport contract never depends on `crate::relay`, so the
-/// relay worker maps the resolved outcome onto its own `SendResult` at the
-/// collect site.
-pub type OutcomeFuture = oneshot::Receiver<SingleDeliveryOutcome>;
 
 /// The transport-level outcome for one delivered envelope. Structurally mirrors
 /// the relay `SendResult`; kept distinct so the transport vocabulary can evolve

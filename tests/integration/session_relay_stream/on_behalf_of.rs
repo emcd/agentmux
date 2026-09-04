@@ -71,7 +71,12 @@ fn ingress_send_to_ui_display(
     let payload = events
         .iter()
         .find(|value| value["event"]["event_type"] == "incoming_message")
-        .expect("delivered incoming_message envelope")["event"]["payload"]
+        .unwrap_or_else(|| {
+            panic!(
+                "no incoming_message for {display_target} within the collection \
+                 window; send response: {response:#?}; events seen: {events:#?}"
+            )
+        })["event"]["payload"]
         .clone();
 
     ui_client.shutdown(std::net::Shutdown::Both).ok();
@@ -126,7 +131,12 @@ fn local_send_to_ui_display_payload(
     let payload = events
         .iter()
         .find(|value| value["event"]["event_type"] == "incoming_message")
-        .expect("delivered incoming_message envelope")["event"]["payload"]
+        .unwrap_or_else(|| {
+            panic!(
+                "no incoming_message for {display_target} within the collection \
+                 window; events seen: {events:#?}"
+            )
+        })["event"]["payload"]
         .clone();
 
     ui_client.shutdown(std::net::Shutdown::Both).ok();

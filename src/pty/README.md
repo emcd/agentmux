@@ -24,16 +24,19 @@ are documented in `documentation/development/README.md` Zig-free Pty Builds.
 ## Module layout
 
 - `command` — tokenization helpers for the per-coder `initial_command`.
-- `delivery` — worker-thread target writes and outcome resolution. The Pty
-  worker is the only thread that can apply bytes to the libghostty-vt
-  terminal (the terminal is `!Send + !Sync`); handover readiness is observed
-  on demand through `PtyTransport::is_ready_for_handover` before authorization.
-  A batch is partitioned into per-member packing units before the first write,
-  each unit's bytes are buffered and written as one primitive, and each member
-  resolves from its own unit's write result — no group-wide outcome is applied.
+- `delivery` — `PtyDeliveryWriter`, this transport's half of the shared
+  delivery-loop executor. The worker thread is the only one that can apply
+  bytes to the libghostty-vt terminal (the terminal is `!Send + !Sync`), so the
+  terminal lives there and the loop comes to it. Readiness is evaluated against
+  that terminal directly rather than through the snapshot channel, because this
+  thread is the one that would answer such a request. Every entry is its own
+  packing unit — one entry per plan, buffered and written as one primitive — so
+  each member's evidence is its own write's result and no group-wide outcome is
+  applied. `wait_for_work` is overridden so the terminal keeps being fed and
+  keeps answering snapshot requests while the executor is idle.
 - `state` — cross-thread shared state (`PtyShared`, `PtyConfigSnapshot`,
-  `SnapshotRequest`/`SnapshotResponse`) plus the look and prompt observer
-  consumers (`PtyOutputView`, `PtyPromptProbe`).
+  `SnapshotRequest`/`SnapshotResponse`) plus the look consumer
+  (`PtyOutputView`) and the prompt-readiness predicate (`prompt_satisfied`).
 - `transport` — `PtyTransport` facade (struct, `Transport`/`GenerationFence` impls, `PtyTargetConfiguration`); `transport::lifecycle` owns bring-up (`startup_inner`, `StartupGuard`, bounded `observe_thread_finished`); `transport::runtime` owns the `!Send` terminal worker/reader threads (`run_worker`, `run_reader`, handlers, snapshot render, `publish`). `delivery` remains `src/pty/delivery.rs` (worker-thread `Delivery` state machine).
 
 ## Terminal-outcome receipt rendering
@@ -50,15 +53,14 @@ receipt builder — see `build_coder_envelope` in
 at the relay's terminal-resolution chokepoint; the Pty transport does
 not enforce or check that invariant.
 
-A receipt is also written **without declaring a packing unit**. It
-bypassed relay admission, so it holds no ledger entry and belongs to no
-unit; asking the ledger about one returns the same refusal it gives for a
-member that already terminalized, and under the delivery contract a
-refused declaration obliges the transport to write nothing — so declaring
-a receipt would silently drop it. `start_envelope_group` therefore checks
-`is_receipt` before declaring and writes such a member with no unit,
-resolving it through its own outcome sender. See
-`src/relay/delivery-architecture.md`, "Members no unit covers".
+A receipt is **declared and acknowledged like any other entry**. It
+bypassed relay admission, so it holds no quota reservation — but it does
+take a mailbox position, and under the pull model that is what makes it
+deliverable at all: an executor writes only what it peeks, so an entry
+with no position is one nothing would ever write. The only thing that
+follows from the missing reservation is that its acknowledgment releases
+none. Pty needs no special case for it beyond the marker line below. See
+`src/relay/delivery-architecture.md`, "Members no reservation covers".
 
 The marker line and the rendered pane envelope are written
 contiguously under the same `writer.lock()` so the marker and the

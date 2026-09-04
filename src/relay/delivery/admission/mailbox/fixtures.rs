@@ -13,8 +13,9 @@ use crate::envelope::AddressIdentity;
 use crate::protocol::identity::{ConsumerBinding, ConsumerGenerationId, DeliveryTargetId};
 use crate::protocol::mailbox::{EntryRange, EntrySequence, MailboxPayload};
 use crate::protocol::message::{DeliveryEnvelope, DeliveryMessage};
-use crate::protocol::operations::PeekRequest;
+use crate::protocol::operations::{AckResult, MemberAcknowledgment, PeekRequest};
 
+use super::super::super::guard::PackingUnitId;
 use super::super::admit::admit;
 use super::super::ledger::AdmissionTargetKey;
 use super::enqueue::enqueue;
@@ -105,6 +106,47 @@ pub(super) fn raw(content: &str) -> MailboxPayload {
     }
 }
 
+/// The send a fixture entry answers for.
+///
+/// Only the fields a resolution reads are meaningful — the message id it is
+/// reported under, the target it names, and the `admitted` flag that tells the
+/// terminal transition this entry held a reservation. The rest is the minimum a
+/// task will construct with.
+pub(super) fn task(namespace: &str, message_id: &str) -> Arc<crate::relay::AsyncDeliveryTask> {
+    Arc::new(crate::relay::AsyncDeliveryTask {
+        admitted: true,
+        bundle: crate::configuration::BundleConfiguration {
+            schema_version: crate::configuration::BUNDLE_SCHEMA_VERSION.to_string(),
+            bundle_name: namespace.to_string(),
+            autostart: false,
+            groups: Vec::new(),
+            members: Vec::new(),
+        },
+        sender_namespace: namespace.to_string(),
+        sender: crate::configuration::BundleMember {
+            id: "sender".to_string(),
+            name: None,
+            working_directory: None,
+            target: crate::configuration::TargetConfiguration::Ui,
+            coder_session_id: None,
+            policy_id: None,
+            environment: Vec::new(),
+        },
+        authenticated_identity: None,
+        on_behalf_of: None,
+        all_target_sessions: Vec::new(),
+        target_session: TARGET_SESSION.to_string(),
+        message: "body".to_string(),
+        message_id: message_id.to_string(),
+        runtime_directory: runtime_directory(namespace),
+        payload_mode: crate::relay::DeliveryPayloadMode::EnvelopeMessage,
+        append_enter: true,
+        choice_decider_sessions: Vec::new(),
+        is_receipt: false,
+        sender_return_route: None,
+    })
+}
+
 /// Admits an entry and makes it peekable, returning its message id.
 pub(super) fn place(namespace: &str, message_id: &str, bytes: u64, payload: MailboxPayload) {
     admit(
@@ -114,7 +156,7 @@ pub(super) fn place(namespace: &str, message_id: &str, bytes: u64, payload: Mail
         bytes,
     )
     .expect("admit");
-    enqueue(message_id, payload).expect("enqueue");
+    enqueue(&task(namespace, message_id), payload).expect("enqueue");
 }
 
 /// Admits an entry without making it peekable, leaving a hole at the
@@ -152,4 +194,19 @@ pub(super) fn peeked(binding: &ConsumerBinding, entry_max: usize, bytes_max: u64
         .iter()
         .map(|entry| entry.sequence.value())
         .collect()
+}
+
+/// Acknowledges a unit and reports only the executor-facing answer.
+///
+/// What an acknowledgment resolves is handed back for its caller to report, and
+/// no test block below is that caller: the reporting is the relay consumer's,
+/// and asserting on it here would pin the ledger against a decision made a layer
+/// up. The one test that does care about the resolved members reads them
+/// directly, where they are the subject rather than a by-product.
+pub(super) fn acknowledge(
+    binding: &ConsumerBinding,
+    unit: PackingUnitId,
+    members: &[MemberAcknowledgment],
+) -> AckResult {
+    super::ack::ack(binding, unit, members).result
 }

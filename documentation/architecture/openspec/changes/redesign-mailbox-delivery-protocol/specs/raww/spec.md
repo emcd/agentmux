@@ -19,9 +19,14 @@ follows:
   via `session/prompt`
 - pty target: write `text` to the PTY master; if `no_enter=false`, write the
   terminating newline after it
-- ui target: unsupported. `UiTransport`'s delivery-loop executor treats a raw
-  entry it peeks as `Failed` with `reason_code = ui_raw_write_unsupported`
-  and writes nothing
+- ui target: unsupported, and refused before a mailbox entry exists. The `raww`
+  capability gate rejects a target whose transport is not raw-writable at the
+  request boundary, so no raw entry is ever admitted for a `Ui` target and none
+  can reach its executor. Should one nonetheless arrive, the executor SHALL
+  declare it, write nothing, and acknowledge it `NotSubmitted` — the strongest
+  claim it can make, since that arm emits no frame at all — rather than leave it
+  at the mailbox head where it would park every entry behind it for the life of
+  the target
 
 The transport SHALL treat raww `text` as opaque input and SHALL NOT evaluate
 shell expansion or command substitution.

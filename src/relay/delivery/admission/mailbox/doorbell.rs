@@ -106,7 +106,7 @@ mod doorbell_tests {
 
     use super::super::super::terminal::terminalize;
     use super::super::enqueue::enqueue;
-    use super::super::fixtures::{admit_only, mail, place, target};
+    use super::super::fixtures::{admit_only, mail, place, target, task};
     use super::super::reap::reap_target;
     use super::*;
 
@@ -159,13 +159,13 @@ mod doorbell_tests {
         terminalize("mbx-doorbell-3");
         admit_only(namespace, "mbx-doorbell-4", 1);
         admit_only(namespace, "mbx-doorbell-5", 1);
-        enqueue("mbx-doorbell-5", mail("body")).expect("enqueue");
+        enqueue(&task(namespace, "mbx-doorbell-5"), mail("body")).expect("enqueue");
         assert_eq!(
             rings.load(Ordering::SeqCst),
             1,
             "an entry that fills a position behind an unfilled one rings nothing"
         );
-        enqueue("mbx-doorbell-4", mail("body")).expect("enqueue");
+        enqueue(&task(namespace, "mbx-doorbell-4"), mail("body")).expect("enqueue");
         assert_eq!(
             rings.load(Ordering::SeqCst),
             2,

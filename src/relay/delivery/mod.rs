@@ -1,11 +1,11 @@
 pub(crate) mod admission;
 pub(crate) mod async_worker;
 mod choice_state;
+mod consumer;
 mod dispatch;
 pub(in crate::relay) mod fence;
 pub(in crate::relay) mod guard;
 pub(in crate::relay) mod observability;
-mod partition;
 
 pub(in crate::relay) use self::async_worker::{
     acp_session_is_ready, get_output_view, get_worker_readiness, stop_workers_for_bundle,
@@ -17,6 +17,7 @@ pub(in crate::relay) use self::choice_state::{
     PendingChoiceRequest, emit_choices_snapshot_then_replay, list_pending_choice_requests,
     resolve_choice_request,
 };
+pub(in crate::relay) use self::consumer::LedgerMailboxConsumer;
 pub(in crate::relay) use self::dispatch::{
     enqueue_async_delivery, initialize_acp_target_for_startup, wait_for_async_delivery_shutdown,
 };

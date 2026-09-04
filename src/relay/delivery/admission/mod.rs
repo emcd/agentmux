@@ -13,9 +13,9 @@
 //!   against both a per-target and a relay-global limit. The reservation is
 //!   atomic across both: a single lock covers the check and the increment, so two
 //!   concurrent sends cannot both observe headroom that only one of them can have.
-//! - **Handover dimensions** — an envelope whose canonical payload alone exceeds
+//! - **Peek dimensions** — an envelope whose canonical payload alone exceeds
 //!   what its transport will ever accept is rejected, because queueing it would
-//!   park a message no partition could carry.
+//!   park a message no packing unit could carry.
 //! - **Pubsub** — a forward-declared stub with no delivery path is refused
 //!   synchronously, so no work is authorized merely to discover it.
 //!
@@ -49,17 +49,8 @@
 //! the operation. No module below may add a locking helper of its own.
 
 mod admit;
-mod authorize;
 mod config;
 mod ledger;
-// The pull model's relay side lands before the transports that drive it. The
-// enqueue seam is live — the delivery worker's task intake fills each admitted
-// entry's position — but the three operations an executor calls against what it
-// fills (peek, declare, acknowledge) are wired only when the push-model handover
-// is removed, so until then nothing outside this module's own tests calls them.
-// Scoped to this module rather than to each operation, so that removing it is one
-// edit at the point the executors arrive.
-#[allow(dead_code, unused_imports)]
 mod mailbox;
 mod reporting;
 mod terminal;
@@ -73,19 +64,16 @@ pub(in crate::relay) use self::admit::{
     admit, canonical_payload_bytes, resolve_target_session_type, rollback_admission,
     target_is_relay_wide,
 };
-pub(in crate::relay) use self::authorize::{
-    authorize_batch, declare_packing_unit, record_evidence_for_member, record_unit_evidence,
-};
 pub(in crate::relay) use self::config::delivery_configuration;
 pub(in crate::relay) use self::ledger::AdmissionTargetKey;
-// `reap_target`, `enqueue` and `register_doorbell` have live callers; the rest
-// are the ledger side of the pull model, reached today only from the tests that
-// hold the reap to its contract. Scoped to this line rather than to the module
-// for the same reason the `mailbox` allow is scoped to the module: removing it
-// should be one edit at the point the executors arrive.
-#[allow(unused_imports)]
+// `TargetReap` names a reap's answer, which only the test that holds the reap
+// to its contract inspects: production reads the reap for its effect, and names
+// the type through `reap_target`'s own signature rather than importing it.
+#[cfg(test)]
+pub(in crate::relay) use self::mailbox::TargetReap;
 pub(in crate::relay) use self::mailbox::{
-    Doorbell, GenerationRejection, TargetReap, claim_consumer_generation, enqueue, reap_target,
-    register_doorbell,
+    Acknowledgment, EnqueueRejection, GenerationRejection, ResolvedMember, ack,
+    claim_consumer_generation, declaration_age, declare, enqueue, peek, reap_target,
+    register_doorbell, replace_consumer_generation, resolve_target_entries,
 };
 pub(in crate::relay) use self::terminal::{TerminalTransition, terminalize};

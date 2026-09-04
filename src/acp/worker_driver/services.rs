@@ -2,9 +2,7 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::transports::{
-    Chooser, OutputView, PartitionSink, WorkerFailureReason, WorkerReadinessState,
-};
+use crate::transports::{Chooser, OutputView, WorkerFailureReason, WorkerReadinessState};
 
 /// Mirrors the worker readiness state into the relay's global registry.
 pub type MirrorStateFn = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
@@ -48,10 +46,6 @@ pub struct AcpDriverServices {
     pub invalidate_choices: InvalidateChoicesFn,
     /// Re-entrant operator-choice resolver threaded into every [`StartupContext`].
     pub chooser: Chooser,
-    /// The relay's guard, for reporting which members share one `session/prompt`.
-    /// Handed to the transport at construction; see
-    /// [`PartitionSink`](crate::transports::PartitionSink).
-    pub partition_sink: Arc<dyn PartitionSink>,
 }
 
 impl std::fmt::Debug for AcpDriverServices {

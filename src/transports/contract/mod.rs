@@ -1,28 +1,26 @@
 //! Transport interface contract for the relay delivery subsystem.
 //!
-//! The relay delivery worker dispatches every agent delivery operation through
-//! the [`Transport`] trait. Concrete transports (ACP, Tmux, UI) each implement
-//! the trait in their own module; the relay selects between them via the
-//! [`TransportImpl`] enum, which delegates by `match` with no dynamic
-//! allocation. Promoting UI (and the forward-declared Pubsub) to first-class
-//! transports retires the relay's former `Acp/Tmux/Ui/Pubsub` routing fork.
+//! The relay manages every transport's lifecycle through the [`Transport`]
+//! trait. Concrete transports (ACP, Tmux, UI) each implement it in their own
+//! module; the relay selects between them via the [`TransportImpl`] enum, which
+//! delegates by `match` with no dynamic allocation. Promoting UI (and the
+//! forward-declared Pubsub) to first-class transports retires the relay's former
+//! `Acp/Tmux/Ui/Pubsub` routing fork.
 //!
-//! ## Write boundary: non-blocking, future-resolved
+//! ## The trait carries no write
 //!
-//! The write methods ([`Transport::mailw`] for relay-framed envelopes,
-//! [`Transport::raww`] for raw input) do not block. Each enqueues the write onto
-//! the transport's own internal ordered channel and returns an [`OutcomeFuture`]
-//! that resolves when the transport's internal delivery task drives that write
-//! to a terminal [`SingleDeliveryOutcome`]. The transport owns that task, its
-//! `spawn_blocking`, and any transport-local batching; the relay worker
-//! concurrently submits new writes and collects resolved futures without
-//! blocking on any single one.
+//! Nothing is handed to a transport to deliver. Each transport owns one serial
+//! [`DeliveryWriter`] driven by [`run_delivery_executor`], spawned during
+//! [`Transport::startup`], which asks the relay's mailbox what is waiting for its
+//! target and reports back what it did with it. The trait is therefore about
+//! lifecycle — start, health, teardown, and the `look` handle — and the delivery
+//! seam is [`MailboxConsumer`] plus [`DeliveryWriter`], not a method here.
 //!
-//! This retires the earlier "the sync core never crosses `.await`; the worker
-//! owns `spawn_blocking`" invariant: ownership of the blocking delivery moves
-//! into each transport. The legacy synchronous `deliver`/`prepare_delivery`/
-//! `raw_write` seam has been removed now that every relay callsite delivers
-//! through the write methods.
+//! That is what retired the earlier "the sync core never crosses `.await`; the
+//! worker owns `spawn_blocking`" invariant, and then the non-blocking
+//! write-and-collect seam that replaced it. Ownership of the blocking delivery
+//! moved into each transport, and then the decision of *when* to write moved with
+//! it.
 //!
 //! ## Transport <-> relay interactions
 //!
@@ -34,10 +32,9 @@
 //!   [`StartupContext`], which the transport invokes inline and blocks on until
 //!   the operator decides. No transport->relay back-edge: the transport holds an
 //!   opaque `Arc<dyn Fn>` typed here in `transports`.
-//! - **Completion** resolves through the [`OutcomeFuture`] returned by
-//!   [`Transport::mailw`]/[`Transport::raww`]: the transport's internal delivery
-//!   task drives each write to a terminal [`SingleDeliveryOutcome`], and the
-//!   worker fans out from the resolved future.
+//! - **Completion** is reported through [`MailboxConsumer::ack`]: the executor
+//!   that wrote a declared unit reports one evidence per member, and the relay
+//!   terminalizes each of them from its own report.
 //! - **Output for `look`** is a concurrent read via [`Transport::give_output`],
 //!   which hands the relay an [`OutputView`] handle the look request path can
 //!   read without borrowing the worker-owned transport.
@@ -68,6 +65,7 @@
 mod choices;
 mod delivery;
 mod dispatch;
+mod executor;
 mod status;
 mod transport;
 
@@ -79,9 +77,11 @@ pub use crate::configuration::PromptReadinessTemplate;
 
 pub use choices::{ChoiceMade, ChoiceToMake, Chooser, StartupContext, ThingToChoose};
 pub(crate) use delivery::stopped_before_submission_outcome;
-pub use delivery::{DeliveryEnvelope, DeliveryMessage, OutcomeFuture, SingleDeliveryOutcome};
-pub use dispatch::{HandoverDimensions, TransportImpl};
-pub use status::{LookMode, TransportError, TransportReadiness, TransportStatus};
-pub use transport::{
-    GenerationFence, OutputView, PartitionSink, Transport, TransportHealth, UnreachableSince,
+pub use delivery::{DeliveryEnvelope, DeliveryMessage, SingleDeliveryOutcome};
+pub use dispatch::{PeekDimensions, TransportImpl};
+pub use executor::{
+    DeliveryExecutorContext, DeliveryWriter, MailboxConsumer, PlannedWrite, receipt_runs,
+    run_delivery_executor,
 };
+pub use status::{LookMode, TransportError, TransportReadiness, TransportStatus};
+pub use transport::{GenerationFence, OutputView, Transport, TransportHealth, UnreachableSince};
