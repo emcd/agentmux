@@ -744,38 +744,54 @@ handler consumes them.
 Pushed flags SHALL be popped before the terminal is restored, so the terminal
 is left in the key-reporting mode it had before launch.
 
-The probe outcome SHALL be visible to the operator in the help overlay,
-because it determines whether `Shift+Enter` is distinguishable from `Enter`.
+The TUI SHALL activate disambiguation where the terminal offers it so that
+modified chords are deliverable and therefore bindable, widening the space of
+chords the binding table can name. Activation SHALL NOT by itself change what
+any chord does.
+
+The probe outcome SHALL be visible to the operator in the help overlay, because
+it reports what the TUI was able to determine: that disambiguation is active,
+that the terminal answered without offering it, or that the determination could
+not be made. The report SHALL describe the determination, never assert a
+terminal limitation the probe did not establish.
+
+That visibility SHALL hold at a 120-column, 24-row terminal: the report SHALL be
+on screen when the overlay opens there, without the operator scrolling or
+resizing. Unqualified, the requirement was satisfiable at no terminal size in
+particular; the generated overlay does not fit 24 rows, and the report is the
+part a viewport would otherwise leave off. The rest of the overlay is reachable
+by scrolling, which `tui-action-bindings` governs.
 
 The report for `ProbeFailed` SHALL NOT assert that the terminal lacks the
 protocol. An unanswered probe establishes only that the TUI could not
 determine or enable disambiguation.
 
-Detection SHALL NOT introduce, remove, or reassign any key binding. It does,
-however, change which events reach the existing bindings: `Communication` mode
-binds `Enter` only with no modifiers, so under `Active` a modified `Enter` is
-reported distinctly and reaches no binding, while under `Unsupported` and
-`ProbeFailed` it is indistinguishable from a bare `Enter` and takes the
-send/accept path. `Interaction` mode and the picker bind `Enter` without a
-modifier guard and are therefore unaffected by the probe outcome.
+Detection SHALL NOT itself introduce, remove, or reassign any key binding; it
+bears only on whether a chord is deliverable, never on what a delivered chord
+does. Which action a delivered chord invokes SHALL be declared per context in
+the binding table, so no context acquires a modified-`Enter` behavior by
+omitting a modifier condition.
 
-`Ctrl+J` SHALL insert a newline under every outcome; it is the binding that
-does not depend on terminal capability.
+The default bindings SHALL be capability-neutral: the observable result of any
+chord SHALL NOT depend on the probe outcome. A modified `Enter` delivered
+distinctly under `Active` SHALL invoke the same action it invokes under
+`Unsupported` and `ProbeFailed`, where it is physically indistinguishable from
+a bare `Enter`.
 
-#### Scenario: Modified Enter reaches no Communication binding when active
+`Ctrl+J` SHALL insert a newline under every outcome.
 
-- **WHEN** the protocol is active and the operator presses `Shift+Enter` or
-  `Ctrl+Enter` in the `To` or `Message` field
-- **THEN** the event is reported with its modifier
-- **AND** it matches no `Communication` mode binding, so no message is sent and
-  no completion is accepted
+#### Scenario: Modified Enter behaves the same under every probe outcome
 
-#### Scenario: Modified Enter sends when the protocol is unavailable
+- **WHEN** the operator presses `Shift+Enter` in the `Message` field
+- **THEN** the message is sent
+- **AND** the result is the same whether the protocol is active, unsupported, or
+  the probe failed
 
-- **WHEN** the protocol is unsupported or the probe failed, and the operator
-  presses `Shift+Enter` in the `Message` field
-- **THEN** the event is indistinguishable from a bare `Enter`
-- **AND** it takes the same send path a bare `Enter` takes
+#### Scenario: Activation alone changes no behavior
+
+- **WHEN** the protocol is active and disambiguation flags are pushed
+- **THEN** every chord invokes the action it invokes without disambiguation
+- **AND** the operator observes no behavior difference attributable to the probe
 
 #### Scenario: Probe failure claims nothing about the terminal
 
@@ -810,3 +826,8 @@ does not depend on terminal capability.
 - **WHEN** the operator inserts a newline in `Message` or the write input
 - **THEN** `Ctrl+J` inserts the newline regardless of the probe outcome
 
+#### Scenario: The probe outcome is on screen at a standard terminal size
+
+- **WHEN** the operator opens the help overlay at a 120-column, 24-row terminal
+- **THEN** the keyboard-enhancement report is on screen
+- **AND** reaching it requires no scrolling and no resizing
