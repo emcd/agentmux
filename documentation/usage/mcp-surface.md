@@ -34,12 +34,15 @@ layout.
 
 ## Delivery behavior
 
-- No elapsed-time bound applies to a delivery's wait on a target that is
-  reachable but not ready, on any transport, and there is no per-call
-  operator override. What is bounded there is the queue rather than the
-  wait: per-target admission quota in the `relay.toml` `[delivery]` table.
-  A continuously unreachable target is bounded separately — its messages
-  resolve `not_submitted` after `[delivery].unreachable-dwell-ms`.
+- No elapsed-time bound applies to how long an entry waits for a
+  reachable target to peek and write it, on any transport, and there is
+  no per-call operator override. Readiness is judged inside the owning
+  transport, not by the relay, so what is bounded there is the mailbox
+  rather than the wait: per-target admission quota in the `relay.toml`
+  `[delivery]` table. A continuously unreachable target is bounded
+  separately — its messages resolve `not_submitted` after
+  `[delivery].unreachable-dwell-ms`. See [How long a delivery can
+  wait](maintainer-configuration-guide.md#how-long-a-delivery-can-wait).
 - Pty sessions use the same look bounds as Tmux (the relay truncates
   to `mode.lines` rows). Pty grid dimensions are configured per-coder
   under `[coders.<id>.pty]` (`cols`, `rows`).

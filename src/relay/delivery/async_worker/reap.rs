@@ -20,11 +20,12 @@ use super::registry::{AsyncWorkerKey, WorkerOwner, async_delivery_registry};
 /// successor's entry, which would make the successor's reap give up a generation
 /// it never held.
 ///
-/// No worker calls this yet, because no worker claims a generation yet — that
-/// arrives with the delivery-loop executors. It is here rather than with them
-/// because the reap below is meaningless without it: a reap that can only ever
-/// name `None` is not naming anything, and the check it passes would be a
-/// formality rather than the guard the stale-reap ordering needs.
+/// **Nothing calls this, and the reap below cannot work until something does.**
+/// Every worker claims a consumer generation as it builds one, so the ledger
+/// records each live target as held; an entry that never carries what its worker
+/// claimed makes the reap name `None` against that record, which the ledger
+/// refuses. The generation is then never given up and no successor can claim the
+/// target.
 #[allow(dead_code)]
 pub(in crate::relay::delivery) fn bind_worker_consumer_generation(
     key: &AsyncWorkerKey,
@@ -79,8 +80,7 @@ pub(in crate::relay::delivery) fn unregister_worker(key: &AsyncWorkerKey, owner:
 /// carried.
 ///
 /// The two-level option is flattened deliberately: the outer `Some` means "this
-/// caller's entry was removed", and the inner value is what it held, which is
-/// `None` for every worker until the delivery-loop executors claim one. Reported
+/// caller's entry was removed", and the inner value is what it held. Reported
 /// as one value so no caller can mistake "nothing was removed" for "an entry
 /// holding no generation was removed" — the first must reap nothing, and the
 /// second must reap a target nobody claimed.

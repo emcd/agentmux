@@ -14,17 +14,13 @@
 //! ordering rather than a defensive hypothetical. Naming is what makes that case
 //! a refusal instead of the silent theft of a live consumer's mailbox.
 //!
-//! **The naming does not protect anything yet, and nothing added here may lean
-//! on it until it does.** No worker claims a consumer generation before the
-//! delivery-loop executors arrive, so every target answers `None`, every reap
-//! names `None`, and the check above matches for a late reap exactly as it does
-//! for a timely one. What the window currently costs is nothing, because the
-//! only state the reap takes is the successor's not-yet-used mailbox — recreated
-//! on its first enqueue, from a sequence the reap deliberately leaves behind.
-//! That is a property of what is reaped, not of the check, and it stops holding
-//! the moment something the successor cannot rebuild is reaped alongside it.
-//! Whatever is added here has to survive a reap arriving behind a live
-//! successor on its own terms.
+//! **What a refusal costs is deliberate, and it runs in the safe direction.** A
+//! reap that does not name the incumbent gives up nothing and reclaims nothing,
+//! so the target keeps both its generation and its mailbox. That is the right
+//! way round — the alternative is taking a mailbox another consumer is already
+//! serving — but it does mean a caller unable to name what it holds cannot
+//! release a target at all. Whatever is added here has to survive a reap
+//! arriving behind a live successor on its own terms.
 
 use serde_json::json;
 
@@ -92,12 +88,11 @@ pub(in crate::relay) fn reap_target(
     // A reap runs *behind* the target it reaps — the registration is removed
     // first and the ledger is reached afterwards — so a successor can be elected,
     // spawned, and have registered its own doorbell before this call acquires the
-    // lock. The naming above does not cover that: it compares consumer
-    // generations, and until the delivery-loop executors claim one every target
-    // answers `None`, so a late reap matches and proceeds. Removing here would
-    // therefore take the successor's registration, and nothing would put one
-    // back — the successor registers once, as it is built. It would be poll-only
-    // for the rest of its life.
+    // lock. The naming above already refuses a reap arriving behind a live
+    // successor, but the doorbell rule deliberately does not lean on that: only a
+    // registration ever displaces a registration, so a clear here would be a
+    // removal nothing puts back — the successor registers once, as it is built.
+    // It would be poll-only for the rest of its life.
     //
     // Leaving it costs one small closure per target identity the process has
     // served, which is the same bound `generations` already carries and for a

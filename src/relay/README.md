@@ -323,9 +323,9 @@ exported from `src/relay/mod.rs`.
     to.
     Its `mailbox` module holds the pull model's relay side. `enqueue` fills the
     position admission fixed, with the relay-built payload the target is to be
-    written; that is the one operation here with a live caller today, the delivery
-    worker's task intake. The other three are what a delivery-loop executor calls
-    against what it fills —
+    written; its caller is the delivery worker's task intake, and it is the only
+    one of the four the relay side calls at all. The other three are the target
+    transport's own delivery-loop executor calling against what that intake fills —
     `peek`, which reports the head run and advances nothing; `declare`, which
     records the exact range about to be written as one packing unit; and `ack`,
     which terminalizes exactly that range from the executor's evidence. Of the
@@ -406,16 +406,16 @@ exported from `src/relay/mod.rs`.
     successor can already have registered by the time either reaches the ledger,
     and a clear would take the successor's doorbell with nothing left to put one
     back — it registers once, as it is built, and would be poll-only for the rest
-    of its life. The consumer-generation naming that protects the mailbox does
-    not cover this and cannot yet: until the executors claim a generation every
-    target answers `None`, so a late reap matches and proceeds. Leaving them
-    costs one small closure per target identity the process has served — the
+    of its life. The rule therefore stands on the registration ordering alone
+    rather than on the consumer-generation naming that guards the mailbox, which
+    is a different question asked at a different moment. Leaving them costs one
+    small closure per target identity the process has served — the
     bound `generations` already carries — and nothing rings a stale one, because
     an entry reaches a mailbox only through a worker's own intake, so a target
-    with no worker has nothing to enqueue. What the closure rings in production
-    is `protocol::DeliveryDoorbell`, the neutral handle the delivery-loop
-    executor waits on once the cutover gives it one. The relay rings it when a
-    `peek` that would have come back empty would now come back with something —
+    with no worker has nothing to enqueue. What the closure rings is
+    `protocol::DeliveryDoorbell`, the neutral handle the target's delivery-loop
+    executor waits on. The relay rings it when a `peek` that would have come
+    back empty would now come back with something —
     narrower than "the mailbox gained an entry", because an entry filling a
     position behind one that is admitted and still unfilled leaves every peek
     returning nothing, and narrower than "the mailbox was empty", which is that
@@ -423,9 +423,9 @@ exported from `src/relay/mod.rs`.
     than for the one that finally exposes it. Ringing happens after the ledger
     lock is released, the one place in this subsystem where a lock is dropped
     before the operation finishes: a doorbell is foreign code and the lock is
-    not reentrant. Nothing waits on one yet, so a ring's only trace today is the
-    `doorbell_rung` field on the enqueue inscription; correctness never depends
-    on a ring arriving either way, and each executor pairs the doorbell with its
+    not reentrant. A ring leaves its trace on the enqueue inscription's
+    `doorbell_rung` field; correctness never depends on a ring arriving either
+    way, and each executor pairs the doorbell with its
     own bounded poll (`ASYNC_WORKER_POLL_INTERVAL_MS`), which is what makes a
     missed notification cost a delay and nothing else.
   - `guard.rs`: the queue entry state model (`Queued`/`Terminal`), the guard
@@ -1005,8 +1005,10 @@ operational details that do not fit a diagram.
   send API. With the field removed, an internally tagged request silently
   ignores it like any other unrecognised field.
 - The send API carries no caller-supplied delivery timeout, and no per-coder
-  configuration bounds a delivery's wait on a target that is reachable but not
-  ready — such a member stays `Queued` indefinitely. Per-target admission
+  configuration bounds how long an entry waits for a reachable target to peek
+  and write it — such a member stays `Queued` indefinitely. The relay does not
+  wait on the target's behalf and holds no bound it could apply: waiting happens
+  inside the owning transport's executor. Per-target admission
   quota bounds the consequence, and the undelivered-queue inscriptions are how
   the backlog is observed.
 - Reachability is the other axis and is bounded. A target continuously
@@ -1046,11 +1048,14 @@ operational details that do not fit a diagram.
   back to a process-wide multi-thread runtime created on demand. Worker
   shutdown is observed via `shutdown_requested()` polled between receives,
   the same signal the registry-empty drain in
-  `wait_for_async_delivery_shutdown` waits on. The single-flight ACP
-  prompt-completion wait also polls that gate: it is a bounded, resumable
-  `wait_for_prompt_complete(timeout)` rather than an unbounded `recv()`, so an
-  agent whose turn never completes cannot pin the worker's blocking thread
-  across shutdown (which would block clean teardown until SIGKILL). On a
+  `wait_for_async_delivery_shutdown` waits on. The ACP turn observation polls
+  that gate too, on the executor thread where it now runs: it is a bounded,
+  resumable `wait_for_prompt_complete(timeout)` rather than an unbounded
+  `recv()`, so an agent whose turn never completes cannot pin that thread
+  across shutdown (which would block clean teardown until SIGKILL). Nothing is
+  in flight for the relay while it waits — every member of the turn resolved at
+  the framed write — so what the wait drives is readiness and the respawn
+  signal, and abandoning it costs no member its outcome. On a
   shutdown abandon the worker returns and drops its ACP runtime, whose `Drop`
   kills the child. As a final guarantee the relay binary tears its runtime down
   with `Runtime::shutdown_timeout` instead of an implicit drop, so any residual
@@ -1066,11 +1071,17 @@ operational details that do not fit a diagram.
   serial executor per transport instance issues every write, and `peek`'s own
   contract makes a raw entry a barrier — it is returned alone, and mail behind
   it is unreachable until it is acknowledged.
-- On shutdown the worker signals its transport(s) to resolve every in-flight
-  write with `DroppedOnShutdown`, collects those resolutions, then drops any
-  not-yet-submitted queued tasks (`complete_task_on_shutdown`). The transport
-  contract guarantees prompt terminal resolution on shutdown, so the drain is
-  bounded; the relay binary additionally tears its runtime down with
+- On shutdown the worker drains before it fences, and the order is the
+  guarantee. Tasks still in its receiver never reached a mailbox, so nothing
+  about their outcome depends on whether the old generation ceased: they resolve
+  `dropped_on_shutdown` (`complete_task_on_shutdown`) first, which is what makes
+  that promise independent of how long the fence takes. The generation is fenced
+  next, within a budget taken from what remains of the process-wide shutdown
+  deadline, and the verdict is the resolution cut for whatever the executor left
+  in the mailbox: an undeclared entry is provably unwritten and resolves
+  `dropped_on_shutdown` too, while a declared one goes through the guard's
+  evidence order, because a write it was declared for may have half-performed.
+  The relay binary additionally tears its runtime down with
   `Runtime::shutdown_timeout` as a final guarantee.
 
 ### Connection lifecycle and shutdown
