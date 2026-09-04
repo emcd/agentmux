@@ -430,12 +430,42 @@ def citing_change(path, home):
     return parts[0] if parts and parts[0] != ARCHIVE_SEGMENT else None
 
 
-def classify_citation(name, owner, live, inflight, archived):
+DATED_PREFIX = re.compile(r"^\d{4}-\d{2}-\d{2}-")
+
+
+def cites_its_archive(document, sources):
+    """Whether the citing document names an archived change it points into.
+
+    A dangling citation is a defect because the reader is sent to a requirement
+    that no longer exists and given nowhere to look. A document that names the
+    archive alongside the requirement has already answered that: it is
+    discussing a requirement's absence rather than depending on its presence,
+    which is what a design note explaining a superseded rule does.
+
+    The dated directory name and the bare change id both count, since a prose
+    reference to a change does not always carry its archive date.
+
+    Matching is bounded on both sides rather than by substring: change ids
+    routinely extend one another, so a plain `in` test would let a mention of
+    `add-relay-stream-hello-transport-mvp` excuse a citation stranded by
+    `add-relay`.
+    """
+    for source in sources:
+        for candidate in (source, DATED_PREFIX.sub("", source)):
+            if re.search(rf"(?<![\w-]){re.escape(candidate)}(?![\w-])", document):
+                return True
+    return False
+
+
+def classify_citation(name, owner, live, inflight, archived, document=""):
     """Return (verdict, sources) for one cited name, or None when it resolves.
 
     `owner` is the change whose directory holds the citing file, if any. A
     change citing a requirement it introduces itself is self-consistent and
     reports nothing; only a citation from outside is waiting on somebody else.
+
+    `document` is the full text of the citing file, consulted only to let a
+    document that names its own archive discuss a departed requirement.
     """
     if name in live:
         return None
@@ -443,7 +473,8 @@ def classify_citation(name, owner, live, inflight, archived):
         sources = sourcing_changes(inflight[name])
         return None if owner in sources else ("PENDING", sources)
     if name in archived:
-        return "DANGLING", sourcing_changes(archived[name])
+        sources = sourcing_changes(archived[name])
+        return None if cites_its_archive(document, sources) else ("DANGLING", sources)
     return None
 
 
@@ -472,7 +503,7 @@ def check_citations(quiet, only_changes=None):
         text = path.read_text()
         for match in CITATION.finditer(text):
             name = match.group(1).strip()
-            verdict = classify_citation(name, owner, live, inflight, archived)
+            verdict = classify_citation(name, owner, live, inflight, archived, text)
             if verdict is None:
                 continue
             kind, sources = verdict
@@ -981,23 +1012,34 @@ CITATION_UNIVERSE = (
     },
 )
 
+# Each case is `(name, cited, owner, document, expected_verdict)`.
 CITATION_CASES = [
-    ("a live requirement", "Live Requirement", None, None),
-    ("a name nobody has ever used", "Invented Requirement", None, None),
+    ("a live requirement", "Live Requirement", None, "", None),
+    ("a name nobody has ever used", "Invented Requirement", None, "", None),
     ("a live requirement an in-flight change also modifies",
-     "Amended Requirement", None, None),
+     "Amended Requirement", None, "", None),
     ("a live requirement an archived change introduced",
-     "Restored Requirement", None, None),
+     "Restored Requirement", None, "", None),
     ("an in-flight requirement cited from outside", "Arriving Requirement",
-     None, "PENDING"),
+     None, "", "PENDING"),
     ("an in-flight requirement cited by another change", "Arriving Requirement",
-     "other-change", "PENDING"),
+     "other-change", "", "PENDING"),
     ("an in-flight requirement cited by the change adding it",
-     "Arriving Requirement", "some-change", None),
+     "Arriving Requirement", "some-change", "", None),
     ("a requirement no change will restore", "Departed Requirement",
-     None, "DANGLING"),
+     None, "", "DANGLING"),
     ("a departed requirement cited from within a change",
-     "Departed Requirement", "some-change", "DANGLING"),
+     "Departed Requirement", "some-change", "", "DANGLING"),
+    ("a departed requirement whose document names the dated archive",
+     "Departed Requirement", None, "superseded by 2026-01-01-archived-change",
+     None),
+    ("a departed requirement whose document names the archive undated",
+     "Departed Requirement", None, "superseded by archived-change", None),
+    ("a departed requirement whose document names a different archive",
+     "Departed Requirement", None, "superseded by 2026-01-01-other-change",
+     "DANGLING"),
+    ("a departed requirement whose document names a longer id sharing a prefix",
+     "Departed Requirement", None, "see archived-change-two", "DANGLING"),
 ]
 
 
@@ -1049,8 +1091,8 @@ def run_selftest():
             failures.append(
                 f"applied-state case {name!r} classified {state}, expected {expected}"
             )
-    for name, cited, owner, expected in CITATION_CASES:
-        verdict = classify_citation(cited, owner, *CITATION_UNIVERSE)
+    for name, cited, owner, document, expected in CITATION_CASES:
+        verdict = classify_citation(cited, owner, *CITATION_UNIVERSE, document)
         actual = verdict[0] if verdict else None
         if actual != expected:
             failures.append(
