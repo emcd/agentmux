@@ -179,6 +179,33 @@ pub fn binding_for(context: BindingContext, action: Action) -> Option<HelpEntry>
     one(context, BoundAction::Fixed(action))
 }
 
+/// Every behavior this context's compiled rows declare, without duplicates.
+///
+/// The table declares a behavior only in the contexts where it has an effect,
+/// so this is exactly the set that does something on that surface. A
+/// configuration is held to it: binding anything else would produce a row
+/// generated help advertises and that does nothing when pressed.
+///
+/// Typing rows contribute nothing here. They carry the operator's own
+/// character rather than a behavior named in advance, and are outside the
+/// configurable vocabulary for the same reason.
+///
+/// Crate-internal: this answers a question the configuration loader asks while
+/// validating a binding group, not one a host outside the crate has reason to
+/// ask. Exporting it would commit the public surface to returning a `Vec` of
+/// behaviors for a caller that does not exist.
+pub(crate) fn context_actions(context: BindingContext) -> Vec<Action> {
+    let mut actions = Vec::new();
+    for row in rows_of(context) {
+        if let BoundAction::Fixed(action) = row.action
+            && !actions.contains(&action)
+        {
+            actions.push(action);
+        }
+    }
+    actions
+}
+
 /// The presented binding for typing an ordinary character into this context's
 /// draft, or `None` where the context takes no typed text.
 pub fn typing_binding(context: BindingContext) -> Option<HelpEntry> {

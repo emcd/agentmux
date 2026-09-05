@@ -38,30 +38,44 @@
 
 ## 3. Configuration loading
 
-- [ ] 3.1 Add the raw TOML shapes for the `[bindings]` group to
+- [x] 3.1 Add the raw TOML shapes for the `[bindings]` group to
       `src/configuration/raw.rs`, keeping them private to the module.
-- [ ] 3.2 Extend `UiConfiguration` with the validated binding group, the preset
+- [x] 3.2 Extend `UiConfiguration` with the validated binding group, the preset
       selection, and the macOS primary-modifier selection.
-- [ ] 3.3 Parse and validate the group in the `ui.toml` loader, leaving the
+- [x] 3.3 Parse and validate the group in the `ui.toml` loader, leaving the
       file's existing resolution, absence, and malformed-file behavior
       untouched.
-- [ ] 3.4 Add tests for an absent group, an absent `ui.toml`, a group naming an
+- [x] 3.4 Add tests for an absent group, an absent `ui.toml`, a group naming an
       unknown action, an unknown context, an unknown preset, and an unparseable
-      chord.
-- [ ] 3.5 Add a test that an invalid binding group applies no binding from that
+      chord. The shipped-preset registry is intentionally empty until task 6.2
+      populates it, so every named preset is unknown and is refused; accepting
+      names provisionally would be a check with nothing behind it.
+- [x] 3.5 Add a test that an invalid binding group applies no binding from that
       configuration, rather than the rows preceding the invalid one.
-- [ ] 3.6 Reject an unrecognized key at any level of the group, and a value
+- [x] 3.6 Reject an unrecognized key at any level of the group, and a value
       outside the permitted set for `primary-modifier-on-macos`, rather than
       ignoring either.
-- [ ] 3.8 Derive each context's permitted action set from its compiled rows, and
+- [x] 3.7 Add a fixture test carrying the configuration shape the specification
+      documents, character for character, so the published shape cannot drift
+      from what the loader accepts. The documented example names a binding set
+      and none ships yet, so the whole text is held under test by asserting that
+      the unshipped preset is the sole reason it is refused; a second fixture,
+      derived from the first by dropping that line rather than written out
+      again, asserts the parsed configuration row by row. Task 6.2 collapses the
+      two into one successful load. Asserting what the shape produces in an
+      effective table belongs with task 4.1, where the table exists.
+
+      The fixture is a copy of the specification's example, so it catches the
+      loader drifting away from the published shape but not the specification
+      being edited without it. Extracting the example from the specification at
+      test time would close that, at the cost of binding the test to a path that
+      moves when the change is archived.
+- [x] 3.8 Derive each context's permitted action set from its compiled rows, and
       reject a configured or preset row binding an action the context does not
       declare, with an error naming the action and the context.
-- [ ] 3.9 Add a test that binding a contextually inert action is rejected, using
+- [x] 3.9 Add a test that binding a contextually inert action is rejected, using
       an action whose effect is guarded on another focused field, and a test
       that a new chord for an action the context already declares is accepted.
-- [ ] 3.7 Add a fixture test that loads the configuration shape the specification
-      documents verbatim and asserts the effective table it produces, so the
-      published shape cannot drift from what the loader accepts.
 
 ## 4. Effective binding table
 

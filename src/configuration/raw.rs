@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use serde::Deserialize;
@@ -156,6 +157,35 @@ pub(super) struct RawUsersFile {
 pub(super) struct RawUiFile {
     #[serde(default)]
     pub(super) default_bundle: Option<String>,
+    #[serde(default)]
+    pub(super) bindings: Option<RawBindings>,
+}
+
+/// The `[bindings]` group, before any of it has been validated.
+///
+/// The two options are named fields; every other key is a binding context name
+/// whose value is that context's chord table. `deny_unknown_fields` cannot
+/// express that, since the context names are not known to serde, so the
+/// remainder is flattened here and the loader rejects a key that names no
+/// context. That rejection is what keeps a misspelled context from being
+/// silently skipped, which would leave an operator believing a configuration is
+/// in force that does nothing.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) struct RawBindings {
+    #[serde(default)]
+    pub(super) presets: Vec<String>,
+    #[serde(default)]
+    pub(super) primary_modifier_on_macos: Option<String>,
+    /// Each context's chord table, left as raw values.
+    ///
+    /// A chord maps either to one action name or to a class-qualified table,
+    /// which serde expresses as an untagged enum — but an untagged enum reports
+    /// only that a value "did not match any variant", naming neither the chord
+    /// nor the key at fault. The loader interprets these itself so an operator
+    /// is told which key was wrong rather than that something was.
+    #[serde(flatten)]
+    pub(super) contexts: BTreeMap<String, BTreeMap<String, toml::Value>>,
 }
 
 #[derive(Debug, Deserialize)]

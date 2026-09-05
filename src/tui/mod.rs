@@ -21,6 +21,7 @@ use crate::runtime::{
 
 use keyboard::KeyboardEnhancementSession;
 
+pub(crate) use actions::context_actions;
 pub use actions::{
     Action, BindingContext, ChordError, ChordPattern, HelpEntry, HelpSection, HelpSource,
     PrimaryModifier, binding_for, context_bindings, default_binding, help_bindings,
