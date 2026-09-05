@@ -12,8 +12,8 @@ use super::raw::{RawBindings, RawUiFile};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::tui::{
-    Action, BindingConfiguration, BindingContext, ChordPattern, ConfiguredAction,
-    ConfiguredBinding, PrimaryModifier, context_actions, parse_chord,
+    Action, BindingConfiguration, BindingContext, CapabilityClass, ChordPattern, ConfiguredAction,
+    ConfiguredBinding, PrimaryModifier, context_actions, parse_chord, quit_unreachable,
 };
 
 /// One binding set this build ships: the name an operator writes under
@@ -196,12 +196,27 @@ pub(super) fn validate_binding_group(
         }
     }
 
-    Ok(BindingConfiguration {
+    let configuration = BindingConfiguration {
         presets: raw.presets.clone(),
         preset_rows,
         primary_modifier_on_macos,
         rows,
-    })
+    };
+
+    // Refused rather than reported, and refused on either capability class
+    // rather than on the running terminal's. An operator whose configuration
+    // cannot quit has no way to fix it from inside the TUI, and the class their
+    // terminal falls into is not knowable when they write the file — so the
+    // answer has to be the same here, where a probe has happened, and at
+    // pre-flight, where none has.
+    if let Some(classes) = quit_unreachable(Some(&configuration), cfg!(target_os = "macos")) {
+        return Err(invalid(format!(
+            "no chord quits the TUI under {}",
+            classes.describe()
+        )));
+    }
+
+    Ok(configuration)
 }
 
 /// One keystroke as a terminal reports it.
@@ -245,8 +260,12 @@ fn capability_columns(
             Ok((Some(action), Some(action)))
         }
         toml::Value::Table(columns) => {
+            // Keyed off the classes themselves rather than off written-out
+            // names, so the columns a file may declare and the classes a report
+            // may name stay the same vocabulary.
             let mut resolved = [None, None];
-            for (class, slot) in [("enhanced", 0), ("standard", 1)] {
+            for (slot, class) in CapabilityClass::ALL.into_iter().enumerate() {
+                let class = class.name();
                 if let Some(entry) = columns.get(class) {
                     let name = entry.as_str().ok_or_else(|| {
                         invalid(format!(
@@ -261,10 +280,11 @@ fn capability_columns(
                     )?);
                 }
             }
-            if let Some(unknown) = columns
-                .keys()
-                .find(|key| key.as_str() != "enhanced" && key.as_str() != "standard")
-            {
+            if let Some(unknown) = columns.keys().find(|key| {
+                !CapabilityClass::ALL
+                    .iter()
+                    .any(|class| class.name() == key.as_str())
+            }) {
                 return Err(invalid(format!(
                     "in {context_name}: {chord_text} names an unknown terminal class: {unknown}"
                 )));

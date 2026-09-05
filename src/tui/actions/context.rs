@@ -127,7 +127,23 @@ impl BindingContext {
 /// chord keeps its action with any surface open and stays declared in exactly
 /// one place.
 pub(crate) fn binding_lookup_order(state: &AppState) -> [BindingContext; 2] {
-    [BindingContext::Global, binding_context(state)]
+    lookup_order(binding_context(state))
+}
+
+/// The same order, for a caller that has a context rather than a state.
+///
+/// Dispatch resolves the surface from state; asking what a configuration leaves
+/// reachable means asking about every surface, with no state to resolve one
+/// from. Both read this, because a caller that restated the order and asked one
+/// context alone would count a chord a global row has taken as still reaching
+/// the surface's row.
+///
+/// [`BindingContext::Global`] passed here yields itself twice, which answers
+/// exactly as consulting it once does. Left to fall out rather than special
+/// cased: the global rows are consulted first whatever the surface, and that is
+/// as true when they are the surface.
+pub(crate) const fn lookup_order(context: BindingContext) -> [BindingContext; 2] {
+    [BindingContext::Global, context]
 }
 
 /// Resolves the contextual owner — the surface whose rows are consulted after
