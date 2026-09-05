@@ -68,6 +68,20 @@ pub(super) fn target_generation(namespace: &str) -> u64 {
         .map_or(0, ConsumerGenerationId::value)
 }
 
+/// How many envelopes the target still has reserved.
+///
+/// Read from the ledger because quota release is not otherwise visible from
+/// inside this module, and the mailbox emptying does not imply it: depth and
+/// reservation are separate state released by one transition, so one can return
+/// while the other leaks.
+pub(super) fn reserved_envelopes(namespace: &str) -> usize {
+    let state = super::super::ledger::lock_ledger().expect("ledger");
+    state
+        .per_target
+        .get(&admission_key(namespace))
+        .map_or(0, |usage| usage.envelopes)
+}
+
 pub(super) fn admission_key(namespace: &str) -> AdmissionTargetKey {
     AdmissionTargetKey::new(
         namespace,

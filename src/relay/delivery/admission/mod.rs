@@ -51,6 +51,12 @@
 mod admit;
 mod config;
 mod ledger;
+// The one interleaving this subsystem's serialization rests on is unobservable
+// from outside the lock, so the boundary reports it from inside. Test-only and
+// absent from the shipped binary; see the module for why a seam is warranted
+// here and why it is not the production-shaped kind this project declines.
+#[cfg(test)]
+mod lock_boundary;
 mod mailbox;
 mod reporting;
 mod terminal;
