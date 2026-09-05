@@ -20,6 +20,7 @@ fn binding_workbench() -> Workbench {
         relay_socket: PathBuf::from("/tmp/agentmux-binding-test-relay.sock"),
         look_lines: None,
         available_bundles: vec!["agentmux".to_string()],
+        bindings: None,
     })
 }
 

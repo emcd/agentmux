@@ -95,7 +95,11 @@ pub(super) fn render_main(frame: &mut Frame, area: Rect, state: &mut AppState) {
 /// which is the question `binding_context` answers. Where nothing binds the
 /// switch, the destination is still named and no chord is invented.
 fn mode_switch_hint(state: &AppState, destination: &str) -> String {
-    match actions::binding_for(actions::binding_context(state), Action::ToggleMode) {
+    match actions::binding_for(
+        &state.bindings,
+        actions::binding_context(state),
+        Action::ToggleMode,
+    ) {
         Some(entry) => format!("{} → {destination}", entry.primary_chord()),
         None => format!("→ {destination}"),
     }
@@ -103,13 +107,17 @@ fn mode_switch_hint(state: &AppState, destination: &str) -> String {
 
 /// The status line before anything has happened.
 ///
-/// It is composed here rather than seeded into `AppState` because the state
-/// layer does not depend on the action layer -- the dependency runs the other
-/// way, with `Action::apply` calling `AppState` methods -- and reversing that
-/// for one string would be a poor trade. Help is a global row, so the global
-/// context is where its chord is declared.
-fn startup_status() -> String {
-    match actions::binding_for(BindingContext::Global, Action::ToggleHelpOverlay) {
+/// It is composed here rather than seeded into `AppState` because a seeded
+/// string is fixed at construction, and the chord it names is not known until
+/// the probe outcome has settled the effective table. Reading the table at
+/// render time is what keeps the line naming the chord actually in force. Help
+/// is a global row, so the global context is where its chord is declared.
+fn startup_status(state: &AppState) -> String {
+    match actions::binding_for(
+        &state.bindings,
+        BindingContext::Global,
+        Action::ToggleHelpOverlay,
+    ) {
         Some(entry) => format!("Ready. Press {} for help.", entry.primary_chord()),
         None => "Ready. The help overlay lists every binding.".to_string(),
     }
@@ -128,7 +136,7 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
         .status_history
         .front()
         .map(render_status_line)
-        .unwrap_or_else(|| Line::from(startup_status()));
+        .unwrap_or_else(|| Line::from(startup_status(state)));
     let mut spans = vec![
         Span::styled(
             mode_label,
@@ -174,6 +182,7 @@ mod tests {
             relay_socket: std::path::PathBuf::from("/tmp/agentmux-frame-render.sock"),
             look_lines: None,
             available_bundles: vec!["agentmux".to_string()],
+            bindings: None,
         })
     }
 
@@ -198,9 +207,13 @@ mod tests {
         // over any stale literal they happened to return. A row moved to a
         // different chord fails this without anyone remembering the footer
         // exists.
-        let help = actions::binding_for(BindingContext::Global, Action::ToggleHelpOverlay)
-            .expect("the global context binds toggling help");
         let mut state = workbench();
+        let help = actions::binding_for(
+            &state.bindings,
+            BindingContext::Global,
+            Action::ToggleHelpOverlay,
+        )
+        .expect("the global context binds toggling help");
 
         // Nothing has happened yet, so the startup line is what the footer
         // falls back to. It is the only place the operator is told how to
@@ -218,8 +231,12 @@ mod tests {
             (ScreenMode::Interaction, "Communication"),
         ] {
             state.mode = mode;
-            let switch = actions::binding_for(actions::binding_context(&state), Action::ToggleMode)
-                .expect("every surface binds switching modes");
+            let switch = actions::binding_for(
+                &state.bindings,
+                actions::binding_context(&state),
+                Action::ToggleMode,
+            )
+            .expect("every surface binds switching modes");
             let text = rendered(&mut state);
             assert!(
                 text.contains(&format!("{} → {destination}", switch.primary_chord())),

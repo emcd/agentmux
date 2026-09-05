@@ -9,11 +9,18 @@
 //! This is an example rather than a module of the crate because the crate does
 //! not otherwise emit documentation, and because building it from the public
 //! surface alone is a claim worth compiling: a caller outside the crate can
-//! render its own binding reference from `help_bindings` without reaching into
+//! render its own binding reference from the catalogue without reaching into
 //! the table. Nothing here decides what a chord is or what it does -- the
 //! whole of that is `src/tui/actions/`.
+//!
+//! It reads `default_help_bindings`, which answers from the compiled defaults
+//! and takes no effective table. That is not a convenience: the guide this
+//! emits is committed to the repository and read by operators who have written
+//! no configuration, so a reference generated from whichever configuration the
+//! generating machine happened to carry would document one operator's TUI as
+//! everyone's. Having no table to pass is what makes that unwritable here.
 
-use agentmux::tui::help_bindings;
+use agentmux::tui::default_help_bindings;
 
 /// Delimiters of the generated block, emitted here rather than assumed by the
 /// lint so the marker text has one definition.
@@ -32,6 +39,9 @@ const PREAMBLE: &str = "\
      Regenerate with: scripts/lint-tui-binding-documentation.sh --fix
      Do not edit between these markers; the pre-commit lint rejects drift. -->
 
+These are the defaults. A `[bindings]` group in `ui.toml` supersedes them, and
+the help overlay inside a running TUI presents whatever is in force there.
+
 The modified `Enter` forms are folded into the bare one they always match; see
 [Terminal keyboard capability](#terminal-keyboard-capability).
 ";
@@ -45,7 +55,7 @@ fn binding_reference() -> String {
     rendered.push_str(BEGIN_MARKER);
     rendered.push('\n');
     rendered.push_str(PREAMBLE);
-    for section in help_bindings() {
+    for section in default_help_bindings() {
         rendered.push_str(&format!("\n#### {}\n\n", section.heading));
         for entry in section.entries {
             rendered.push_str(&format!(

@@ -40,19 +40,21 @@ application seam are public for that reason, not incidentally.
 
 `actions/bindings.rs` holds one row per (binding context, chord), carrying the
 action and the display section that presents it. That table is the only place a
-chord-to-action association is declared, and every consumer reads it: dispatch,
-the help overlay, the pane hint strips, and — through a generated block — the
-operator usage guide. Changing a row changes all of them with no other edit.
+chord-to-action association is declared in this crate, and it is what every
+consumer resolves against — through the effective table at run time, and
+directly for the generated block in the operator usage guide. Changing a row
+changes all of them with no other edit.
 
 Dispatch tests no chord ahead of the table. A chord answered before lookup
 would be a second declaration of what that chord means, which is the
 duplication this layer exists to remove, so even the chords that reach their
 behavior from every surface are ordinary rows under the global context.
 
-The table declares **defaults**. Nothing here requires a chord's action to be
-fixed at compile time; operator-configurable bindings are the intended
-successor, and a configuration is expected to answer the same question
-differently.
+The table declares **defaults**. An operator's `ui.toml` binding group is
+resolved over it into the effective table `actions/effective.rs` builds, which
+is what dispatch, the help overlay, and the pane hint strips read. The compiled
+table alone is what the generated usage guide documents, because the guide is
+committed to the repository and has no operator's configuration to speak for.
 
 ### Context precedence
 
@@ -158,11 +160,17 @@ to it.
     - `action.rs` — the public `Action` enum and `Action::apply`
     - `bindings.rs` — the default chord-to-action table, grouped by
       context, and `default_binding`, which reads it
+    - `chord.rs` — the chord shapes a row matches, and the two
+      directions an operator-facing chord travels
     - `context.rs` — `BindingContext`, `binding_context`, and
       `binding_lookup_order`
-    - `help.rs` — `help_bindings`, the whole table as the help
-      overlay presents it, and `help_contexts`, the presentation
-      rule that answers for every context rather than the active one
+    - `effective.rs` — what an operator configured, and
+      `EffectiveBindings`, the table it produces over the defaults
+    - `help.rs` — `help_bindings`, the effective table as the help
+      overlay presents it; `default_help_bindings`, the defaults-only
+      projection the usage guide is generated from; and
+      `help_contexts`, the presentation rule that answers for every
+      context rather than the active one
 - `input.rs`
   - terminal event handling: which events carry a binding, and how a
     paste or a scroll reaches state. Keys resolve against `actions/`

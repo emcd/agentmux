@@ -31,7 +31,7 @@ use ratatui::{
 };
 
 use super::super::super::actions::{
-    Action, BindingContext, HelpSection, binding_for, help_bindings,
+    Action, BindingContext, EffectiveBindings, HelpSection, binding_for, help_bindings,
 };
 use super::super::super::keyboard::format_keyboard_enhancement_lines;
 use super::super::super::state::AppState;
@@ -53,7 +53,7 @@ pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, state: &mut
     // the old overlay fitted, and the keyboard-capability report was the part
     // pushed off the bottom.
     let mut binding_columns: [Vec<Line<'static>>; 2] = [Vec::new(), Vec::new()];
-    for section in &help_bindings() {
+    for section in &help_bindings(&state.bindings) {
         let column = match section.heading {
             "Modes" | "Communication Mode" => 0,
             _ => 1,
@@ -70,7 +70,7 @@ pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, state: &mut
 
     let viewports: Vec<Viewport> = panes
         .iter()
-        .map(|(lines, area)| Viewport::measure(lines, *area))
+        .map(|(lines, area)| Viewport::measure(&state.bindings, lines, *area))
         .collect();
     // A page is the shortest column's content height, so paging cannot skip
     // past a row in any of them.
@@ -90,7 +90,7 @@ pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, state: &mut
     let offset = state.help_overlay_scroll();
 
     for ((lines, area), viewport) in panes.into_iter().zip(viewports) {
-        viewport.draw(frame, lines, area, offset);
+        viewport.draw(frame, &state.bindings, lines, area, offset);
     }
 }
 
@@ -103,14 +103,14 @@ pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, state: &mut
 fn reference_column(state: &AppState) -> Vec<Line<'static>> {
     let mut lines = vec![help_section_heading("Keyboard Capability")];
     lines.extend(
-        format_keyboard_enhancement_lines(state.keyboard_enhancement)
+        format_keyboard_enhancement_lines(state.keyboard_enhancement())
             .into_iter()
             .map(Line::from),
     );
     // The probe report says how keys arrive; this says what one of them does,
     // which is the table's to answer and not the probe's. It is the same line
     // under every outcome, which is the whole of its point.
-    if let Some(note) = portable_newline_note() {
+    if let Some(note) = portable_newline_note(&state.bindings) {
         lines.push(Line::from(note));
     }
     lines.push(Line::from(""));
@@ -162,7 +162,7 @@ struct Viewport {
 }
 
 impl Viewport {
-    fn measure(lines: &[Line<'static>], area: Rect) -> Self {
+    fn measure(bindings: &EffectiveBindings, lines: &[Line<'static>], area: Rect) -> Self {
         let available = usize::from(area.height);
         if area.width == 0 || available == 0 {
             return Self {
@@ -183,7 +183,10 @@ impl Viewport {
         // the whole column's row count in each -- so the number of content rows
         // does not change as the operator scrolls. A reservation that moved
         // would shift the content under the row they were reading.
-        let reserved = row_cost(&overflow_marker(total_rows, total_rows), area.width);
+        let reserved = row_cost(
+            &overflow_marker(bindings, total_rows, total_rows),
+            area.width,
+        );
         let content_rows = available.saturating_sub(reserved);
         Self {
             total_rows,
@@ -192,7 +195,14 @@ impl Viewport {
         }
     }
 
-    fn draw(self, frame: &mut Frame, lines: Vec<Line<'static>>, area: Rect, offset: usize) {
+    fn draw(
+        self,
+        frame: &mut Frame,
+        bindings: &EffectiveBindings,
+        lines: Vec<Line<'static>>,
+        area: Rect,
+        offset: usize,
+    ) {
         if area.width == 0 || area.height == 0 {
             return;
         }
@@ -217,7 +227,7 @@ impl Viewport {
         }
         let below = self.total_rows.saturating_sub(offset + self.content_rows);
         frame.render_widget(
-            wrapped(vec![overflow_marker(offset, below)]),
+            wrapped(vec![overflow_marker(bindings, offset, below)]),
             Rect {
                 y: area.y + content_rows,
                 height: area.height - content_rows,
@@ -239,8 +249,8 @@ impl Viewport {
 /// marker carried before there was a viewport. That is what keeps it a safety
 /// net: rows removed from the table leave a visible consequence rather than a
 /// marker pointing at a chord that does nothing.
-fn overflow_marker(above: usize, below: usize) -> Line<'static> {
-    let text = match scroll_chords() {
+fn overflow_marker(bindings: &EffectiveBindings, above: usize, below: usize) -> Line<'static> {
+    let text = match scroll_chords(bindings) {
         None => format!("… {} more (resize taller)", above + below),
         Some((up, down)) => match (above, below) {
             (0, _) => format!("… {below} below ({down})"),
@@ -255,9 +265,17 @@ fn overflow_marker(above: usize, below: usize) -> Line<'static> {
 }
 
 /// The chords that move the viewport, from the table rather than from here.
-fn scroll_chords() -> Option<(String, String)> {
-    let up = binding_for(BindingContext::HelpOverlay, Action::ScrollHelpPageUp)?;
-    let down = binding_for(BindingContext::HelpOverlay, Action::ScrollHelpPageDown)?;
+fn scroll_chords(bindings: &EffectiveBindings) -> Option<(String, String)> {
+    let up = binding_for(
+        bindings,
+        BindingContext::HelpOverlay,
+        Action::ScrollHelpPageUp,
+    )?;
+    let down = binding_for(
+        bindings,
+        BindingContext::HelpOverlay,
+        Action::ScrollHelpPageDown,
+    )?;
     Some((
         up.primary_chord().to_string(),
         down.primary_chord().to_string(),
@@ -301,11 +319,23 @@ fn notes_for(heading: &str) -> &'static [&'static str] {
 /// chord; where they diverge the note disappears rather than narrowing to one
 /// surface without saying so, since a line reading "in every case" beside a
 /// chord that reaches one pane is worse than no line.
-fn portable_newline_note() -> Option<String> {
+fn portable_newline_note(bindings: &EffectiveBindings) -> Option<String> {
     let mut chords = [
-        binding_for(BindingContext::ComposeMessage, Action::InsertMessageNewline),
-        binding_for(BindingContext::InteractionWrite, Action::InsertRawwNewline),
-        binding_for(BindingContext::InteractionChoice, Action::InsertRawwNewline),
+        binding_for(
+            bindings,
+            BindingContext::ComposeMessage,
+            Action::InsertMessageNewline,
+        ),
+        binding_for(
+            bindings,
+            BindingContext::InteractionWrite,
+            Action::InsertRawwNewline,
+        ),
+        binding_for(
+            bindings,
+            BindingContext::InteractionChoice,
+            Action::InsertRawwNewline,
+        ),
     ]
     .into_iter()
     .map(|entry| entry.map(|entry| entry.primary_chord().to_string()));
@@ -413,8 +443,9 @@ mod tests {
                 relay_socket: std::path::PathBuf::from("/tmp/agentmux-help-render.sock"),
                 look_lines: None,
                 available_bundles: vec!["agentmux".to_string()],
+                bindings: None,
             });
-            state.keyboard_enhancement = enhancement;
+            state.set_keyboard_enhancement(enhancement);
             state.help_overlay_open = true;
             Self {
                 state,
@@ -545,7 +576,12 @@ mod tests {
 
     #[test]
     fn the_overlay_reaches_every_binding_at_every_height() {
-        let expected: Vec<String> = help_bindings()
+        // No configuration is in play in this module's fixtures, so the
+        // effective table is the compiled defaults and the two agree by
+        // construction. The configured case is asserted through the workbench,
+        // in `tests/unit`.
+        let defaults = EffectiveBindings::default();
+        let expected: Vec<String> = help_bindings(&defaults)
             .iter()
             .flat_map(|section| section.entries.iter())
             .map(|entry| format!("{}: {}", entry.chords, entry.description))
@@ -631,7 +667,8 @@ mod tests {
             );
         }
 
-        // Task 4.5, where the buffer is available to assert it. The generated
+        // Asserted here rather than against the catalogue, because the rendered
+        // buffer is where a difference would actually show. The generated
         // bindings must be byte-identical under every probe outcome, so no
         // capability conditioning can re-enter through the rendering path. The
         // capability report is the deliberate exception -- it reports what the
@@ -673,8 +710,12 @@ mod tests {
         // outcome-dependent. Both halves are asserted, and the chord comes from
         // the table rather than from the function that prints it, which would
         // only ask that function to agree with itself.
-        let newline = binding_for(BindingContext::ComposeMessage, Action::InsertMessageNewline)
-            .expect("the message field binds inserting a newline");
+        let newline = binding_for(
+            &defaults,
+            BindingContext::ComposeMessage,
+            Action::InsertMessageNewline,
+        )
+        .expect("the message field binds inserting a newline");
         let portable = format!(
             "{} inserts a newline in every case",
             newline.primary_chord()

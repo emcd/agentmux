@@ -122,6 +122,7 @@ fn bundle_picker_enter_with_no_available_bundles_returns_validation_error() {
         relay_socket: PathBuf::from("/tmp/agentmux-test-relay.sock"),
         look_lines: None,
         available_bundles: Vec::new(),
+        bindings: None,
     });
     state
         .dispatch_event(key_event(KeyCode::F(5), KeyModifiers::NONE))

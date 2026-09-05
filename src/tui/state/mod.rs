@@ -21,6 +21,7 @@ mod compose;
 mod history;
 mod relay;
 
+use super::actions::{BindingConfiguration, CapabilityClass, EffectiveBindings};
 use super::keyboard::KeyboardEnhancement;
 use super::status::BundleStatusDisplay;
 
@@ -55,6 +56,14 @@ pub struct TuiLaunchOptions {
     pub relay_socket: PathBuf,
     pub look_lines: Option<u64>,
     pub available_bundles: Vec<String>,
+    /// The operator's validated binding group, absent where their `ui.toml`
+    /// declares none or does not exist.
+    ///
+    /// A launch option rather than something set afterwards, because the
+    /// effective table is built once and never changes for the life of a run.
+    /// Handing it in here is what makes it impossible to start a workbench that
+    /// silently ignored a configuration the operator wrote.
+    pub bindings: Option<BindingConfiguration>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -156,7 +165,17 @@ pub(crate) struct AppState {
     /// Startup keyboard-enhancement probe outcome. Defaults to `Unsupported` —
     /// the same reporting a terminal without the protocol gives — and `run`
     /// overwrites it with the real probe result before the event loop starts.
-    pub keyboard_enhancement: KeyboardEnhancement,
+    ///
+    /// Written through [`AppState::set_keyboard_enhancement`], because the
+    /// effective table is built from it and a bare assignment would leave the
+    /// two disagreeing.
+    keyboard_enhancement: KeyboardEnhancement,
+    /// What the operator configured, kept so the effective table can be rebuilt
+    /// once the probe outcome is known.
+    binding_configuration: Option<BindingConfiguration>,
+    /// The bindings in force: what the operator configured over what ships.
+    /// Dispatch resolves against this, and generated presentation reads it.
+    pub bindings: EffectiveBindings,
     pub to_field: String,
     to_cursor_index: usize,
     pub message_field: String,
@@ -201,13 +220,14 @@ impl AppState {
             relay_socket,
             look_lines,
             available_bundles,
+            bindings,
         } = options;
         let relay_stream = RelayStreamSession::new(
             relay_socket.clone(),
             namespace.clone(),
             sender_session.clone(),
         );
-        Self {
+        let mut state = Self {
             namespace,
             sender_session,
             relay_socket,
@@ -231,6 +251,10 @@ impl AppState {
             mode: ScreenMode::Communication,
             focus: FocusField::To,
             keyboard_enhancement: KeyboardEnhancement::default(),
+            binding_configuration: bindings,
+            // Replaced immediately below, once `self` exists to read the two
+            // halves the table is built from.
+            bindings: EffectiveBindings::default(),
             to_field: String::new(),
             to_cursor_index: 0,
             message_field: String::new(),
@@ -247,10 +271,10 @@ impl AppState {
             look_overlay_scroll: 0,
             look_choice_request_index: 0,
             look_choice_option_index: 0,
-            // Deliberately empty. The startup line names a chord, and a chord
-            // belongs to the binding table, which this layer does not depend
-            // on -- the dependency runs the other way. The render layer, which
-            // does, composes it as the footer's empty-history fallback.
+            // Deliberately empty. The startup line names a chord, and which
+            // chord that is depends on the probe outcome, which has not
+            // arrived yet. The render layer composes it against the effective
+            // table as the footer's empty-history fallback.
             status_history: VecDeque::new(),
             event_history: VecDeque::new(),
             pending_choices: Vec::new(),
@@ -269,7 +293,37 @@ impl AppState {
             relay_stream_poll_error_reported: false,
             to_completion: None,
             should_quit: false,
-        }
+        };
+        state.rebuild_bindings();
+        state
+    }
+
+    /// Records the startup probe outcome and rebuilds the effective table for
+    /// the capability class it puts this terminal in.
+    pub(crate) fn set_keyboard_enhancement(&mut self, enhancement: KeyboardEnhancement) {
+        self.keyboard_enhancement = enhancement;
+        self.rebuild_bindings();
+    }
+
+    /// The startup probe outcome, as the help overlay reports it.
+    pub(crate) fn keyboard_enhancement(&self) -> KeyboardEnhancement {
+        self.keyboard_enhancement
+    }
+
+    /// Builds the bindings in force from the operator's configuration and the
+    /// probe outcome now in hand.
+    ///
+    /// The platform is committed to here rather than passed in: this is the one
+    /// caller that has to answer for the machine the TUI is actually running
+    /// on, and every other caller of `EffectiveBindings::build` supplies it as
+    /// an argument precisely so both arms stay reachable from a test.
+    fn rebuild_bindings(&mut self) {
+        self.bindings = EffectiveBindings::build(
+            self.binding_configuration.as_ref(),
+            &[],
+            CapabilityClass::of(self.keyboard_enhancement.disambiguates_modified_keys()),
+            cfg!(target_os = "macos"),
+        );
     }
 
     /// Asks the event loop to shut down after the current iteration.

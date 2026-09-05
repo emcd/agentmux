@@ -25,9 +25,9 @@ pub(crate) use actions::context_actions;
 pub use actions::{
     Action, BindingConfiguration, BindingContext, CapabilityClass, ChordError, ChordPattern,
     ConfiguredAction, ConfiguredBinding, EffectiveBindings, HelpEntry, HelpSection, HelpSource,
-    PrimaryModifier, binding_for, context_bindings, default_binding, help_bindings,
-    interaction_choice_hint, interaction_write_hint, parse_chord, picker_hint, primary_modifier,
-    typing_binding,
+    PrimaryModifier, binding_for, context_bindings, default_binding, default_help_bindings,
+    help_bindings, interaction_choice_hint, interaction_write_hint, parse_chord, picker_hint,
+    primary_modifier, typing_binding,
 };
 pub use keyboard::{KeyboardEnhancement, format_keyboard_enhancement_lines};
 pub use state::TuiLaunchOptions;
@@ -71,7 +71,7 @@ fn run_loop(
     keyboard_enhancement: KeyboardEnhancement,
 ) -> Result<(), RuntimeError> {
     let mut state = state::AppState::new(options);
-    state.keyboard_enhancement = keyboard_enhancement;
+    state.set_keyboard_enhancement(keyboard_enhancement);
     if let Err(error) = state.refresh_recipients() {
         state.push_runtime_error(error);
     }

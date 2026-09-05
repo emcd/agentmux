@@ -90,14 +90,18 @@ pub enum ConfiguredAction {
 }
 
 /// One resolved row: a chord as a terminal will report it, and what it reaches.
+///
+/// Crate-visible because presentation reads these rows as well as resolution
+/// does: the help overlay and the pane hint strips show what an operator
+/// configured, and the only place that is written down is here.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ResolvedRow {
-    context: BindingContext,
-    code: KeyCode,
-    modifiers: KeyModifiers,
+pub(crate) struct ResolvedRow {
+    pub context: BindingContext,
+    pub code: KeyCode,
+    pub modifiers: KeyModifiers,
     /// `None` is an explicit unbinding, which answers "nothing" rather than
     /// deferring to a lower tier.
-    action: Option<Action>,
+    pub action: Option<Action>,
 }
 
 impl ResolvedRow {
@@ -208,6 +212,40 @@ impl EffectiveBindings {
         default_binding(context, code, modifiers)
     }
 
+    /// The rows above the compiled defaults that a lookup in this context could
+    /// actually reach, in the order presentation reads them: the operator's own
+    /// first, then any binding set's.
+    ///
+    /// Only the rows that *win*. A row a lookup can never return is a row
+    /// presentation must not advertise, or the overlay names a chord under a
+    /// behavior it does not reach — which is the same defect as advertising a
+    /// compiled row a configuration took over, arriving from the other
+    /// direction. Two rows can lose that way: one superseded later in its own
+    /// tier, since binding sets are applied in the order they are named, and a
+    /// binding set's row whose chord the operator bound themselves.
+    ///
+    /// The operator's own rows cannot contain the same chord twice — a
+    /// configuration declaring one is refused — so within that tier the filter
+    /// removes nothing today. It is not written for that tier: `build` is
+    /// public and takes binding-set rows that never passed the loader, and
+    /// filtering the tiers uniformly is what keeps the rule a property of the
+    /// projection rather than of which caller supplied the rows.
+    ///
+    /// Presentation's order is not resolution's. A lookup takes the last
+    /// matching row in a tier; a reader wants the chord they wrote themselves
+    /// at the head of the line, since that is the one a one-line hint strip has
+    /// room for. The orders differ, but the *set* does not, and that is the
+    /// half this method exists to keep true.
+    ///
+    /// Explicit unbindings are included. What they reach is `None`, and it is
+    /// presentation's business rather than this method's that a chord reaching
+    /// nothing is shown as nothing.
+    pub(crate) fn rows_for(&self, context: BindingContext) -> Vec<ResolvedRow> {
+        let mut rows = winning_rows(&self.configured, context, &[]);
+        rows.extend(winning_rows(&self.preset, context, &self.configured));
+        rows
+    }
+
     /// Whether any tier above the compiled defaults speaks for this chord.
     ///
     /// Distinguishes a chord answering `None` because an operator emptied it
@@ -223,4 +261,27 @@ impl EffectiveBindings {
             .into_iter()
             .any(|tier| tier.iter().any(|row| row.matches(context, code, modifiers)))
     }
+}
+
+/// The rows of one tier that a lookup in this context could return.
+///
+/// A row loses to a later row in its own tier binding the same chord, since
+/// that is the row [`EffectiveBindings::action_for`] selects, and to any row in
+/// `above`, which is the tier consulted first. Written as one rule over both
+/// tiers so the projection cannot disagree with resolution about one of them.
+fn winning_rows(
+    tier: &[ResolvedRow],
+    context: BindingContext,
+    above: &[ResolvedRow],
+) -> Vec<ResolvedRow> {
+    tier.iter()
+        .enumerate()
+        .filter(|(_, row)| row.context == context)
+        .filter(|(index, row)| {
+            let claims = |other: &&ResolvedRow| other.matches(context, row.code, row.modifiers);
+            !tier[index + 1..].iter().any(|later| claims(&later))
+                && !above.iter().any(|higher| claims(&higher))
+        })
+        .map(|(_, row)| *row)
+        .collect()
 }

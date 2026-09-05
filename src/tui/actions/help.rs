@@ -12,13 +12,22 @@
 //! of printing three times. That folding is why the wording of a behavior has
 //! to say which pane it belongs to: the chord alone cannot separate `Enter` in
 //! the write pane from `Enter` in the choice pane.
+//!
+//! What is presented is the **effective** table -- what an operator configured
+//! over what ships -- rather than the compiled rows alone. An operator's first
+//! move after rebinding a chord is to open the overlay and check it took, so a
+//! catalogue that could only describe the defaults would be wrong for exactly
+//! the reader most likely to consult it. [`default_help_bindings`] is the one
+//! projection that stays on the compiled rows, for generated documentation,
+//! which has no operator's configuration to speak for.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::action::Action;
-use super::bindings::{BINDINGS, BoundAction, ContextRow, DisplaySection};
+use super::bindings::{BoundAction, ContextRow, DisplaySection, default_rows, default_section};
 use super::chord::Chord;
 use super::context::BindingContext;
+use super::effective::EffectiveBindings;
 
 /// One row that contributed to a presented binding.
 ///
@@ -146,21 +155,31 @@ pub(crate) fn help_contexts() -> [BindingContext; 9] {
     ]
 }
 
-/// The whole binding table as the help overlay presents it: sections in
+/// The whole effective table as the help overlay presents it: sections in
 /// declaration order, and within each, one entry per behavior in the order the
 /// table first reaches it.
-///
-/// This reports the compiled defaults, the same as
-/// [`super::default_binding`] does, and carries no capability conditioning --
-/// nothing here reads the keyboard-enhancement probe outcome.
-pub fn help_bindings() -> Vec<HelpSection> {
+pub fn help_bindings(bindings: &EffectiveBindings) -> Vec<HelpSection> {
     DisplaySection::ALL
         .into_iter()
         .map(|section| HelpSection {
             heading: section.heading(),
-            entries: entries_for(section),
+            entries: entries_for(bindings, section),
         })
         .collect()
+}
+
+/// The catalogue the compiled defaults alone produce.
+///
+/// This is what generated operator documentation reads, and it takes no
+/// effective table for that reason rather than by omission. The guide is
+/// committed to the repository and read by operators who have not written a
+/// configuration; a reference generated from whichever configuration the
+/// generating machine happened to carry would document one operator's TUI as
+/// though it were everyone's, and nothing about the emitted text would say so.
+/// Having no parameter to pass is what makes that unwritable.
+#[must_use]
+pub fn default_help_bindings() -> Vec<HelpSection> {
+    help_bindings(&EffectiveBindings::default())
 }
 
 /// Every binding one context declares, as presented.
@@ -169,14 +188,22 @@ pub fn help_bindings() -> Vec<HelpSection> {
 /// single context. That asymmetry is deliberate and is the difference between
 /// the help overlay and a pane hint strip: help is a catalogue of everything,
 /// a strip annotates the one surface it sits on.
-pub fn context_bindings(context: BindingContext) -> Vec<HelpEntry> {
-    finish(fold_rows(rows_of(context).map(|row| (context, row))))
+pub fn context_bindings(bindings: &EffectiveBindings, context: BindingContext) -> Vec<HelpEntry> {
+    finish(fold_rows(
+        rows_of(bindings, context)
+            .into_iter()
+            .map(|row| (context, row)),
+    ))
 }
 
 /// The presented binding for one behavior in one context, or `None` where that
 /// context does not bind it.
-pub fn binding_for(context: BindingContext, action: Action) -> Option<HelpEntry> {
-    one(context, BoundAction::Fixed(action))
+pub fn binding_for(
+    bindings: &EffectiveBindings,
+    context: BindingContext,
+    action: Action,
+) -> Option<HelpEntry> {
+    one(bindings, context, BoundAction::Fixed(action))
 }
 
 /// Every behavior this context's compiled rows declare, without duplicates.
@@ -190,13 +217,19 @@ pub fn binding_for(context: BindingContext, action: Action) -> Option<HelpEntry>
 /// character rather than a behavior named in advance, and are outside the
 /// configurable vocabulary for the same reason.
 ///
+/// The compiled rows and not the effective table, which is not an oversight in
+/// the one function here that still reads them. The question is what a context
+/// is *capable* of, which the shipped table decides; answering it from a table
+/// an operator's own rows contributed to would let a configuration widen the
+/// set it is being checked against.
+///
 /// Crate-internal: this answers a question the configuration loader asks while
 /// validating a binding group, not one a host outside the crate has reason to
 /// ask. Exporting it would commit the public surface to returning a `Vec` of
 /// behaviors for a caller that does not exist.
 pub(crate) fn context_actions(context: BindingContext) -> Vec<Action> {
     let mut actions = Vec::new();
-    for row in rows_of(context) {
+    for row in default_rows(context) {
         if let BoundAction::Fixed(action) = row.action
             && !actions.contains(&action)
         {
@@ -208,27 +241,55 @@ pub(crate) fn context_actions(context: BindingContext) -> Vec<Action> {
 
 /// The presented binding for typing an ordinary character into this context's
 /// draft, or `None` where the context takes no typed text.
-pub fn typing_binding(context: BindingContext) -> Option<HelpEntry> {
-    fold_rows(rows_of(context).map(|row| (context, row)))
-        .into_iter()
-        .find(|(action, _)| matches!(action, BoundAction::Typed(_)))
-        .map(entry_of)
+pub fn typing_binding(bindings: &EffectiveBindings, context: BindingContext) -> Option<HelpEntry> {
+    fold_rows(
+        rows_of(bindings, context)
+            .into_iter()
+            .map(|row| (context, row)),
+    )
+    .into_iter()
+    .find(|(action, _)| matches!(action, BoundAction::Typed(_)))
+    .map(entry_of)
 }
 
-/// The bindings the picker's hint strip advertises.
+/// The bindings the picker's hint strip advertises, for the column that
+/// currently holds focus.
 ///
 /// Which few behaviors are worth a one-line strip is an editorial judgment and
 /// stays declared here; their chords and their wording are not, and come from
-/// the table. Both picker columns contribute, because the strip annotates the
-/// picker rather than whichever column currently holds focus -- and because
-/// `Enter` means something different in each, which is the fact the strip
-/// exists to convey.
-pub fn picker_hint() -> Vec<HelpEntry> {
+/// the table.
+///
+/// Both columns contribute their own `Enter`, because `Enter` means something
+/// different in each and conveying that is why the strip exists. The behaviors
+/// that belong to the picker as a whole -- switching column, closing it -- are
+/// read from `focused` instead, and that distinction is load-bearing rather
+/// than tidiness.
+///
+/// A binding is scoped to the context that declares it. The compiled table
+/// declares the same rows in both columns, so reading either answered for both
+/// and the difference was invisible; a configuration can bind a chord in one
+/// column alone, and then a strip that answered from the other would print a
+/// chord that does nothing where the operator is standing. Reading from the
+/// focused column is what keeps the strip's claim true of the surface it is
+/// drawn on.
+///
+/// `focused` is expected to be a picker column. Anything else has no picker
+/// rows to answer with, so the strip comes back empty rather than borrowing
+/// another surface's chords.
+pub fn picker_hint(bindings: &EffectiveBindings, focused: BindingContext) -> Vec<HelpEntry> {
     [
-        binding_for(BindingContext::PickerBundles, Action::TogglePickerFocus),
-        binding_for(BindingContext::PickerBundles, Action::CommitPickerBundle),
-        binding_for(BindingContext::PickerSessions, Action::CommitPickerSession),
-        binding_for(BindingContext::PickerBundles, Action::ClosePicker),
+        binding_for(bindings, focused, Action::TogglePickerFocus),
+        binding_for(
+            bindings,
+            BindingContext::PickerBundles,
+            Action::CommitPickerBundle,
+        ),
+        binding_for(
+            bindings,
+            BindingContext::PickerSessions,
+            Action::CommitPickerSession,
+        ),
+        binding_for(bindings, focused, Action::ClosePicker),
     ]
     .into_iter()
     .flatten()
@@ -242,13 +303,15 @@ pub fn picker_hint() -> Vec<HelpEntry> {
 /// navigation rows would take it past the width of an ordinary terminal --
 /// where a title does not wrap, it is cut. Navigation stays discoverable in the
 /// help overlay, which has room to present a surface in full.
-pub fn interaction_choice_hint() -> Vec<HelpEntry> {
+pub fn interaction_choice_hint(bindings: &EffectiveBindings) -> Vec<HelpEntry> {
     [
         binding_for(
+            bindings,
             BindingContext::InteractionChoice,
             Action::ResolveChoiceSelected,
         ),
         binding_for(
+            bindings,
             BindingContext::InteractionChoice,
             Action::ResolveChoiceCancelled,
         ),
@@ -259,36 +322,116 @@ pub fn interaction_choice_hint() -> Vec<HelpEntry> {
 }
 
 /// The bindings the interaction write pane's hint advertises.
-pub fn interaction_write_hint() -> Vec<HelpEntry> {
+pub fn interaction_write_hint(bindings: &EffectiveBindings) -> Vec<HelpEntry> {
     [
-        typing_binding(BindingContext::InteractionWrite),
-        binding_for(BindingContext::InteractionWrite, Action::DispatchRaww),
-        binding_for(BindingContext::InteractionWrite, Action::InsertRawwNewline),
+        typing_binding(bindings, BindingContext::InteractionWrite),
+        binding_for(
+            bindings,
+            BindingContext::InteractionWrite,
+            Action::DispatchRaww,
+        ),
+        binding_for(
+            bindings,
+            BindingContext::InteractionWrite,
+            Action::InsertRawwNewline,
+        ),
     ]
     .into_iter()
     .flatten()
     .collect()
 }
 
-fn rows_of(context: BindingContext) -> impl Iterator<Item = &'static ContextRow> {
-    BINDINGS
-        .iter()
-        .find(move |group| group.context == context)
-        .map(|group| group.rows.iter())
-        .unwrap_or_default()
+/// One row of the table in force in a context, as presentation reads it.
+///
+/// A compiled row already carries all three fields. A configured row carries
+/// only the first two, and takes its heading from the context's compiled rows
+/// for the same behavior -- which exist, because a configuration may bind only
+/// a behavior the context already declares.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct PresentedRow {
+    chord: Chord,
+    action: BoundAction,
+    section: DisplaySection,
 }
 
-fn one(context: BindingContext, wanted: BoundAction) -> Option<HelpEntry> {
-    fold_rows(rows_of(context).map(|row| (context, row)))
+/// The rows one context presents: what the operator configured, then whatever
+/// of the compiled table their configuration left standing.
+///
+/// Configured rows lead, because that is the order a reader wants. The chords
+/// reaching one behavior fold onto a single line and a one-line hint strip
+/// prints the first of them, so a rebinding that trailed its compiled
+/// predecessor would be catalogued correctly and still leave every strip
+/// advertising the chord it replaced.
+///
+/// A compiled row drops out where a higher tier has claimed the keystroke that
+/// row is *written* as, which for every chord shape is exactly the keystroke
+/// its display spells. That is the whole test, and it is what makes a presented
+/// chord one that still reaches the behavior printed beside it.
+///
+/// The keystrokes a row *matches* can outlast the one it is written as, and
+/// those go unadvertised rather than being spelled out. A row matching a key
+/// under any modifier still answers for `Shift+Up` and `Alt+Up` once a
+/// configuration takes plain `Up`, and nothing here says so — because
+/// "any modifier" has no finite spelling to print, and the alternative of
+/// keeping the row would print `Up` beside a behavior `Up` no longer reaches.
+/// Silence about a residual is a smaller fault than a false line, and those
+/// modified forms were never separately advertised: the bare display always
+/// stood for all of them.
+fn rows_of(bindings: &EffectiveBindings, context: BindingContext) -> Vec<PresentedRow> {
+    let mut rows: Vec<PresentedRow> = bindings
+        .rows_for(context)
         .into_iter()
-        .find(|(action, _)| *action == wanted)
-        .map(entry_of)
+        .filter_map(|row| {
+            // An explicit unbinding reaches nothing, so there is nothing to
+            // present. It is not silent: the compiled row it emptied is dropped
+            // below, which is the whole of what the operator asked for.
+            let action = row.action?;
+            Some(PresentedRow {
+                chord: Chord::Key(row.code, row.modifiers),
+                action: BoundAction::Fixed(action),
+                section: default_section(context, action)?,
+            })
+        })
+        .collect();
+    rows.extend(
+        default_rows(context)
+            .filter(|row| !superseded(bindings, context, row))
+            .map(|row| PresentedRow {
+                chord: row.chord,
+                action: row.action,
+                section: row.section,
+            }),
+    );
+    rows
 }
 
-fn entries_for(section: DisplaySection) -> Vec<HelpEntry> {
+/// Whether a higher tier has taken the keystroke a compiled row is written as.
+fn superseded(bindings: &EffectiveBindings, context: BindingContext, row: &ContextRow) -> bool {
+    row.chord
+        .denoted_keystroke()
+        .is_some_and(|(code, modifiers)| bindings.is_configured(context, code, modifiers))
+}
+
+fn one(
+    bindings: &EffectiveBindings,
+    context: BindingContext,
+    wanted: BoundAction,
+) -> Option<HelpEntry> {
+    fold_rows(
+        rows_of(bindings, context)
+            .into_iter()
+            .map(|row| (context, row)),
+    )
+    .into_iter()
+    .find(|(action, _)| *action == wanted)
+    .map(entry_of)
+}
+
+fn entries_for(bindings: &EffectiveBindings, section: DisplaySection) -> Vec<HelpEntry> {
     finish(fold_rows(help_contexts().into_iter().flat_map(
         move |context| {
-            rows_of(context)
+            rows_of(bindings, context)
+                .into_iter()
                 .filter(move |row| row.section == section)
                 .map(move |row| (context, row))
         },
@@ -300,8 +443,8 @@ fn entries_for(section: DisplaySection) -> Vec<HelpEntry> {
 ///
 /// A `Vec` rather than a map: the order rows are declared in is the order they
 /// are presented in, and a hash map would discard it.
-fn fold_rows<'a>(
-    rows: impl Iterator<Item = (BindingContext, &'a ContextRow)>,
+fn fold_rows(
+    rows: impl Iterator<Item = (BindingContext, PresentedRow)>,
 ) -> Vec<(BoundAction, Vec<HelpSource>)> {
     let mut entries: Vec<(BoundAction, Vec<HelpSource>)> = Vec::new();
     for (context, row) in rows {
@@ -370,11 +513,16 @@ fn already_shown(chord: &str, sources: &[HelpSource]) -> bool {
 /// is stated once, as a standing note beside the generated bindings, rather
 /// than eight times inside them.
 ///
+/// The rule survives a configuration without being conditioned on one, because
+/// what it folds into is the line rather than the defaults: an entry holds one
+/// behavior, so a shown `Enter` on it is an `Enter` that reaches the same
+/// behavior as the chord being folded. Where a configuration moves `Enter` to
+/// something else, the modified forms it left alone form an entry of their own
+/// with no bare `Enter` on it, and print in full.
+///
 /// This is presentation only. Both chords remain declared rows and both
-/// resolve through [`super::default_binding`], and the folded row is still
-/// recorded in [`HelpEntry::sources`] with `shown` false. A context that bound
-/// them differently would show them, because the bare `Enter` would then belong
-/// to a different behavior and never share this line.
+/// resolve through the effective table, and the folded row is still recorded in
+/// [`HelpEntry::sources`] with `shown` false.
 fn is_redundant_modified_enter(chord: &str, sources: &[HelpSource]) -> bool {
     matches!(chord, "Shift+Enter" | "Ctrl+Enter") && already_shown("Enter", sources)
 }

@@ -9,7 +9,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use agentmux::tui::{
-    Action, BindingContext, ChordError, PrimaryModifier, default_binding, help_bindings,
+    Action, BindingContext, ChordError, PrimaryModifier, default_binding, default_help_bindings,
     parse_chord, primary_modifier,
 };
 
@@ -103,7 +103,10 @@ fn no_action_carrying_operator_input_is_nameable() {
 /// so this walks the whole generated surface rather than sampling it.
 #[test]
 fn every_chord_help_presents_parses_back_to_itself() {
-    let sections = help_bindings();
+    // The compiled defaults, which are what the grammar has to accept
+    // unconditionally: a chord an operator configured parses by construction,
+    // since it reached the table by being parsed.
+    let sections = default_help_bindings();
     assert!(!sections.is_empty(), "the generated help surface is empty");
 
     // Both the text drawn on a line and the rows folded out of it: a folded

@@ -13,7 +13,7 @@ use crate::{
         error::RuntimeError,
         paths::{RelayRuntimePaths, RuntimeRoots},
         starter::ensure_starter_configuration_layout,
-        tui_session::resolve_tui_launch_identity,
+        tui_session::{load_ui_binding_configuration, resolve_tui_launch_identity},
     },
 };
 
@@ -33,7 +33,7 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
     ensure_starter_configuration_layout(&roots)?;
     // The interactive TUI does not require a default bundle to launch: a fresh
     // install ships no `default-bundle` (and the example bundle is empty), so an
-    // eager bundle load here would crash startup (issues/tui/11, issues/runtime/3).
+    // eager bundle load here would crash startup.
     // Resolve available bundles first and seed the browsing context from the
     // first one when no bundle is configured; the operator picks from there.
     let available_bundles = load_bundle_group_memberships(&roots.configuration_roots)
@@ -47,6 +47,11 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
         parsed.session_selector.as_deref(),
         available_bundles.first().map(String::as_str),
     )?;
+    // Read before the relay is brought up, so a binding group that does not
+    // validate fails the launch without a relay having been spawned to tear
+    // down again. A missing `ui.toml`, or one declaring no bindings, resolves
+    // to no configuration and the compiled defaults stand.
+    let bindings = load_ui_binding_configuration(&roots.configuration_roots)?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     let owned_relay = ensure_tui_relay_available(&roots, &relay_paths)?;
     let run_result = crate::tui::run(crate::tui::TuiLaunchOptions {
@@ -55,6 +60,7 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
         relay_socket: relay_paths.relay_socket,
         look_lines: parsed.lines,
         available_bundles,
+        bindings,
     });
     // Stop the relay this TUI auto-spawned, regardless of how the TUI exited
     // (quit key, terminal signal, or a run error). A relay that was already

@@ -51,11 +51,29 @@ Two halves, deliberately independent:
     rows would preserve no behavior and would make generated help
     offer bindings that do nothing.
 - `help.rs`
-  - `help_bindings`, which renders the whole table the way the help
+  - `help_bindings`, which renders the effective table the way the help
     overlay presents it, and `help_contexts`, the presentation rule.
     That rule is deliberately separate from `binding_context` and
     takes no state: help answers for every context, so what it shows
-    cannot depend on the surface it was opened from.
+    cannot depend on the surface it was opened from. The effective
+    table it renders is a property of the run rather than of the
+    surface, so that stays true once a configuration is in play.
+  - What a context presents is its configured rows first, then whatever
+    of its compiled rows the configuration left standing. Configured
+    first because a line's chords fold together and a one-line hint
+    strip prints the first of them, so a rebinding that trailed its
+    compiled predecessor would be catalogued correctly and still leave
+    every strip advertising the chord it replaced. A compiled row drops
+    out where a higher tier claimed the keystroke that row is *written*
+    as — narrower than the keystrokes it matches, so a row matching a
+    key under any modifier keeps answering for the modified forms after
+    a configuration takes the bare one.
+  - `default_help_bindings` is the one projection that stays on the
+    compiled rows, and it takes no effective table rather than
+    defaulting one. The usage guide generated from it is committed to
+    the repository and read by operators who have written no
+    configuration; having nothing to pass is what stops a
+    runtime-specific table being documented as everyone's defaults.
   - The help-overlay context contributes rows to two display sections:
     the mode-switching chords it shares with every surface, and a
     `Help Overlay` section of its own holding the chords that move the
@@ -66,8 +84,10 @@ Two halves, deliberately independent:
     several `Enter` rows fold onto one line. Capability-neutral
     defaults make `Shift+Enter` and `Ctrl+Enter` redundant once
     `Enter` is on that line, so they are stated once beside the
-    bindings instead of on each. Both remain resolvable through
-    `default_binding`; only the printing folds.
+    bindings instead of on each. Both remain resolvable; only the
+    printing folds. The rule is not conditioned on the defaults: an
+    entry holds one behavior, so a shown `Enter` on it is one reaching
+    the same behavior as the chord being folded into it.
   - Every row is recorded in `HelpEntry::sources`, folded or not, with
     the context that declared it and `HelpSource::matches`, which
     answers whether that row is one that answers a given key. That
@@ -122,22 +142,29 @@ Two halves, deliberately independent:
 ## Public surface
 
 `Action`, `BindingContext`, `default_binding`, `help_bindings`,
-`context_bindings`, `binding_for`, `typing_binding`, `picker_hint`,
-`interaction_write_hint`, `interaction_choice_hint`, `HelpSection`,
-`HelpEntry`, `HelpSource`, `parse_chord`, `ChordPattern`, `ChordError`,
-`PrimaryModifier`, and `primary_modifier` are exported from
-`agentmux::tui`, and
+`default_help_bindings`, `context_bindings`, `binding_for`,
+`typing_binding`, `picker_hint`, `interaction_write_hint`,
+`interaction_choice_hint`, `HelpSection`, `HelpEntry`, `HelpSource`,
+`parse_chord`, `ChordPattern`, `ChordError`, `PrimaryModifier`,
+`primary_modifier`, `BindingConfiguration`, `ConfiguredBinding`,
+`ConfiguredAction`, `CapabilityClass`, and `EffectiveBindings` are
+exported from `agentmux::tui`, and
 `Workbench` exposes `apply_action`, `binding_context`,
-`binding_lookup_order`, and `help_bindings`. Together they let a caller
-outside the crate ask what surface is active, what a chord means there,
-and then invoke it — without naming a chord the TUI compiled in, and
-without a `KeyEvent` — or render its own binding reference from
-`help_bindings` and `Action::describe`.
+`binding_lookup_order`, `bindings`, and `help_bindings`. Together they
+let a caller outside the crate ask what surface is active, what a chord
+means there, and then invoke it — without naming a chord the TUI
+compiled in, and without a `KeyEvent` — or compose the same catalogue
+and hint strips the TUI draws, from the table `Workbench::bindings`
+hands them.
 
-`default_binding` reports the compiled **defaults**. It is not a claim
-that a chord is fixed: operator-configured bindings are the intended
-successor to this table, and a configuration is expected to answer the
-same question differently.
+The presentation functions take an `EffectiveBindings` for that reason:
+what they answer is a property of a run, and a caller that has one
+should not have to be told which of its rows the TUI would have
+honoured. `default_binding` and `default_help_bindings` are the two
+that stay on the compiled **defaults**, and neither is a claim that a
+chord is fixed — a configuration answers the same question differently,
+which is precisely what makes the distinction worth keeping in the
+signatures.
 
 What stays internal is the table itself — the rows, their chord
 patterns, and their display sections. That is the shape most likely to

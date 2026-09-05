@@ -42,7 +42,7 @@ pub(in crate::tui::render) fn render_picker_overlay(frame: &mut Frame, state: &m
     // Every packed row is reserved. A cap here would clip whichever binding
     // landed last, silently, and the session list below is what should give up
     // the space -- its `Min(1)` already says so.
-    let hint_lines = picker_hint_lines(inner.width);
+    let hint_lines = picker_hint_lines(state, inner.width);
     let hint_height = u16::try_from(hint_lines.len()).unwrap_or(1).max(1);
     let sections = Layout::default()
         .direction(Direction::Vertical)
@@ -189,7 +189,7 @@ fn picker_filter_line(state: &AppState) -> Line<'static> {
 /// The mode-sensitive session label this replaced is gone. Committing a session
 /// inserts into `To` or opens the look target by mode, and the table says so in
 /// one description rather than the strip choosing a phrasing per mode.
-fn picker_hint_lines(width: u16) -> Vec<Line<'static>> {
+fn picker_hint_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
     // The scope qualifier is kept here, unlike the write pane's hint. This
     // strip spans both columns, so "Bundle col" and "Session col" are what
     // separate two entries that would otherwise both read as `Enter`.
@@ -203,7 +203,7 @@ fn picker_hint_lines(width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut used = 0usize;
-    for entry in actions::picker_hint() {
+    for entry in actions::picker_hint(&state.bindings, actions::binding_context(state)) {
         let chord = entry.primary_chord().to_string();
         // The qualified description is preferred, because it is what separates
         // the two entries that both read as `Enter`. Where it cannot fit a row
@@ -306,6 +306,7 @@ mod tests {
     use super::*;
     use ratatui::{Terminal, backend::TestBackend};
 
+    use crate::tui::actions::{BindingContext, EffectiveBindings};
     use crate::tui::state::TuiLaunchOptions;
 
     fn rendered(width: u16, height: u16) -> String {
@@ -315,6 +316,7 @@ mod tests {
             relay_socket: std::path::PathBuf::from("/tmp/agentmux-picker-render.sock"),
             look_lines: None,
             available_bundles: vec!["agentmux".to_string()],
+            bindings: None,
         });
         state.open_picker();
         let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
@@ -338,9 +340,12 @@ mod tests {
         // whole rows, one more than the strip used to reserve. The wider and
         // narrower cases bracket it so a change to the packing shows up as a
         // failure here rather than as a strip quietly losing its last binding.
+        let defaults = EffectiveBindings::default();
         for (width, height) in [(120, 44), (90, 30), (70, 24), (60, 20), (50, 16)] {
             let text = rendered(width, height);
-            for entry in actions::picker_hint() {
+            // The sessions column, which is where `open_picker` leaves focus
+            // and therefore what the rendered strip above was drawn for.
+            for entry in actions::picker_hint(&defaults, BindingContext::PickerSessions) {
                 // Either wording is acceptable; losing the entry is not. The
                 // unqualified form is the documented degradation where the
                 // qualified one cannot fit a row.

@@ -5,25 +5,79 @@
 //! dispatch already has a function answering "which context owns a chord right
 //! now" and reusing it here would compile and look right from whichever
 //! surface the author happened to test from.
+//!
+//! - [`effective`]: what a configuration does to the catalogue and the strips,
+//!   which is the other way presentation can go wrong — agreeing with no
+//!   lookup rather than covering no surface.
+//!
+//! Helpers both modules need live in this hub.
 
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use agentmux::tui::{
-    Action, BindingContext, HelpSection, KeyboardEnhancement, TuiLaunchOptions, default_binding,
-    help_bindings, interaction_choice_hint, interaction_write_hint, picker_hint,
+    Action, BindingConfiguration, BindingContext, ConfiguredAction, ConfiguredBinding,
+    EffectiveBindings, HelpSection, TuiLaunchOptions, default_binding, help_bindings,
+    interaction_choice_hint, interaction_write_hint, parse_chord, picker_hint,
     workbench::{Workbench, WorkbenchField},
 };
 
+mod effective;
+
 fn help_workbench() -> Workbench {
+    workbench_with(None)
+}
+
+fn workbench_with(bindings: Option<BindingConfiguration>) -> Workbench {
     Workbench::new(TuiLaunchOptions {
         namespace: "agentmux".to_string(),
         sender_session: "tui".to_string(),
         relay_socket: PathBuf::from("/tmp/agentmux-help-test-relay.sock"),
         look_lines: None,
         available_bundles: vec!["agentmux".to_string()],
+        bindings,
     })
+}
+
+/// The table an unconfigured run produces: the compiled defaults alone.
+fn defaults() -> EffectiveBindings {
+    EffectiveBindings::default()
+}
+
+/// One row, speaking for both capability classes as an unqualified row in a
+/// file does.
+fn row(context: BindingContext, chord: &str, action: Action) -> ConfiguredBinding {
+    let configured = ConfiguredAction::Invoke(action);
+    ConfiguredBinding {
+        context,
+        chord: parse_chord(chord).expect("the fixture chord parses"),
+        enhanced: Some(configured),
+        standard: Some(configured),
+    }
+}
+
+/// A binding group holding one row, for the cases that ask what a
+/// configuration does to presentation.
+fn one_row(context: BindingContext, chord: &str, action: Action) -> BindingConfiguration {
+    BindingConfiguration {
+        presets: Vec::new(),
+        primary_modifier_on_macos: None,
+        rows: vec![row(context, chord, action)],
+    }
+}
+
+/// Every behavior the catalogue presents the given chord under.
+///
+/// A list rather than an `Option`, because the defect these cases guard is a
+/// chord advertised under *two* behaviors when it reaches one.
+fn presented_under(sections: &[HelpSection], chord: &str) -> Vec<&'static str> {
+    sections
+        .iter()
+        .flat_map(|section| section.entries.iter())
+        .filter(|entry| entry.chords.split(" / ").any(|shown| shown == chord))
+        .map(|entry| entry.description)
+        .collect()
 }
 
 /// Every line the overlay would print, as `chords: description`.
@@ -80,9 +134,9 @@ fn arrange_help_overlay(workbench: &mut Workbench) {
 
 #[test]
 fn the_help_catalogue_is_identical_whichever_surface_it_is_opened_from() {
-    // The assertion task 4.2 names, made where it can fail: through the
-    // workbench, whose state a context-filtered implementation would have to
-    // read. Comparing the catalogue against itself would prove nothing.
+    // Made where it can fail: through the workbench, whose state a
+    // context-filtered implementation would have to read. Comparing the
+    // catalogue against itself would prove nothing.
     let surfaces = [
         Surface {
             name: "compose to",
@@ -135,14 +189,14 @@ fn the_help_catalogue_is_identical_whichever_surface_it_is_opened_from() {
 
     // And the same catalogue the overlay renders is what a host reads without
     // a workbench at all.
-    assert_eq!(help_bindings(), baseline);
+    assert_eq!(help_bindings(&defaults()), baseline);
 }
 
 #[test]
 fn the_help_catalogue_carries_the_compose_interaction_and_picker_bindings() {
     // One binding from each of the three surfaces a context-filtered help would
     // have dropped, named concretely rather than counted.
-    let lines = presented_lines(&help_bindings());
+    let lines = presented_lines(&help_bindings(&defaults()));
     for expected in [
         "Enter: Message: send",
         "Ctrl+J: Message: insert newline",
@@ -163,7 +217,7 @@ fn the_help_catalogue_carries_the_compose_interaction_and_picker_bindings() {
 
 #[test]
 fn the_sections_are_presented_in_declaration_order() {
-    let headings = help_bindings()
+    let headings = help_bindings(&defaults())
         .into_iter()
         .map(|section| section.heading)
         .collect::<Vec<_>>();
@@ -230,7 +284,7 @@ fn every_context_that_binds_anything_contributes_to_the_help() {
     // behaviors that some other context also binds, so dropping one from
     // `help_contexts` loses its chords while every description still appears.
     // Provenance is what makes the loss visible.
-    let sections = help_bindings();
+    let sections = help_bindings(&defaults());
     let entries = entries(&sections);
 
     for context in BindingContext::ALL {
@@ -258,7 +312,7 @@ fn every_binding_the_table_resolves_is_presented_by_the_row_that_answers_it() {
     // binds both Esc and F3 to toggling itself -- so a check satisfied by
     // "some source from this context describes this action" is satisfied by
     // the surviving sibling when one of them is dropped.
-    let sections = help_bindings();
+    let sections = help_bindings(&defaults());
     let entries = entries(&sections);
 
     for context in BindingContext::ALL {
@@ -286,7 +340,7 @@ fn every_folded_chord_is_covered_by_one_that_is_shown() {
     // A chord may be dropped from the printing only because the line already
     // says it, or because it is a modified `Enter` matching the bare one. Any
     // other omission is a binding the operator cannot discover.
-    for entry in entries(&help_bindings()) {
+    for entry in entries(&help_bindings(&defaults())) {
         let shown = entry
             .sources
             .iter()
@@ -348,7 +402,7 @@ fn a_modified_enter_is_folded_into_the_bare_one_it_matches() {
     // Capability-neutral defaults make the modified forms redundant on any line
     // that already shows Enter, and spelling all three out tripled the width of
     // the lines carrying them. They stay resolvable; they are just not printed.
-    let lines = presented_lines(&help_bindings());
+    let lines = presented_lines(&help_bindings(&defaults()));
     for line in &lines {
         assert!(
             !line.contains("Shift+Enter") && !line.contains("Ctrl+Enter"),
@@ -372,7 +426,10 @@ fn a_hint_strip_presents_only_the_context_it_annotates() {
     // reviewer's memory: help catalogues every surface, a strip annotates the
     // one it sits on. Composing a strip from `help_bindings` would compile and
     // look plausible, and would advertise compose bindings on the write pane.
-    for source in picker_hint().iter().flat_map(|entry| entry.sources.iter()) {
+    for source in picker_hint(&defaults(), BindingContext::PickerSessions)
+        .iter()
+        .flat_map(|entry| entry.sources.iter())
+    {
         assert!(
             matches!(
                 source.context,
@@ -383,7 +440,7 @@ fn a_hint_strip_presents_only_the_context_it_annotates() {
             source.context
         );
     }
-    for source in interaction_write_hint()
+    for source in interaction_write_hint(&defaults())
         .iter()
         .flat_map(|entry| entry.sources.iter())
     {
@@ -396,7 +453,7 @@ fn a_hint_strip_presents_only_the_context_it_annotates() {
         );
     }
 
-    for source in interaction_choice_hint()
+    for source in interaction_choice_hint(&defaults())
         .iter()
         .flat_map(|entry| entry.sources.iter())
     {
@@ -413,9 +470,9 @@ fn a_hint_strip_presents_only_the_context_it_annotates() {
     // satisfied by an empty strip. The choice pane advertises fewer: it prints
     // its bindings in a block title, which does not wrap, so it carries the two
     // decisions and leaves navigation to the help overlay.
-    assert!(picker_hint().len() >= 3);
-    assert!(interaction_write_hint().len() >= 3);
-    assert!(interaction_choice_hint().len() >= 2);
+    assert!(picker_hint(&defaults(), BindingContext::PickerSessions).len() >= 3);
+    assert!(interaction_write_hint(&defaults()).len() >= 3);
+    assert!(interaction_choice_hint(&defaults()).len() >= 2);
 }
 
 #[test]
@@ -425,10 +482,10 @@ fn the_chord_a_hint_prints_resolves_to_the_behavior_it_names() {
     // shadowed by an earlier one in the same context would still appear as a
     // source while its chord reached something else, and the strip would then
     // advertise a key that does the wrong thing.
-    for entry in picker_hint()
+    for entry in picker_hint(&defaults(), BindingContext::PickerSessions)
         .into_iter()
-        .chain(interaction_write_hint())
-        .chain(interaction_choice_hint())
+        .chain(interaction_write_hint(&defaults()))
+        .chain(interaction_choice_hint(&defaults()))
     {
         let printed = entry.primary_chord();
         let source = entry
@@ -448,47 +505,6 @@ fn the_chord_a_hint_prints_resolves_to_the_behavior_it_names() {
             "{:?} advertises {printed:?} as {:?}, but that chord resolves to {resolved:?}",
             source.context,
             entry.description
-        );
-    }
-}
-
-#[test]
-fn generated_presentation_does_not_read_the_keyboard_enhancement_probe() {
-    // Capability conditioning must not re-enter through the rendering path.
-    // The generated presentation functions take no probe outcome -- they take
-    // no state at all -- so the property is structural, and this pins the
-    // signatures against a later change that threads one in.
-    //
-    // The help overlay does still report the probe outcome, but as a report of
-    // what the TUI determined, not as a binding. That separation is asserted
-    // in the renderer's own test, where the rendered buffer is available.
-    let catalogue = help_bindings();
-    let picker = picker_hint();
-    let write = interaction_write_hint();
-    let choice = interaction_choice_hint();
-    for enhancement in [
-        KeyboardEnhancement::Active,
-        KeyboardEnhancement::Unsupported,
-        KeyboardEnhancement::ProbeFailed,
-    ] {
-        // Nothing to thread the outcome through: the calls take no argument.
-        // Constructing it here is the point -- if a capability parameter is
-        // ever added to any of the three, this stops compiling.
-        let _ = enhancement;
-        assert_eq!(help_bindings(), catalogue);
-        assert_eq!(picker_hint(), picker);
-        assert_eq!(interaction_write_hint(), write);
-        assert_eq!(interaction_choice_hint(), choice);
-    }
-
-    // No presented chord names a modified Enter, which is the only chord the
-    // probe outcome changes the delivery of. If presentation ever became
-    // capability-conditioned, this is the shape it would take.
-    for entry in entries(&catalogue) {
-        assert!(
-            !entry.chords.contains("Shift+Enter") && !entry.chords.contains("Ctrl+Enter"),
-            "presentation names a modified Enter in {:?}",
-            entry.chords
         );
     }
 }
