@@ -99,20 +99,10 @@ resolving its own configuration root independently.
 
 `AGENTMUX_STATE_DIRECTORY` is the one exception, and it SHALL be injected at
 spawn time by the relay, authoritatively, overwriting any operator-declared
-value at any level.
-
-The exception is narrow and follows from what the variable addresses rather than
-from a preference about precedence. Every other stamped variable describes an
-identity a member may legitimately want to assert; this one names the relay the
-member is a child of. An operator-declared value would not override a
-preference, it would break the rendezvous — the child would address a relay that
-did not spawn it, while the relay that did waits for a client that never arrives.
-There is no legitimate case for the override, because a member of one relay
-reaching another is expressed by configured peers rather than by re-pointing a
-child.
-
-The value is also unavailable at configuration load: it belongs to the relay
-performing the spawn, not to the configuration being loaded.
+value at any level. The two grounds for the exception — that the value is not
+known at configuration load, and that upsert-if-absent would break the
+rendezvous rather than express a preference — are specified by
+`Bring-Up Association Environment Injection` rather than restated here.
 
 `AGENTMUX_CONFIGURATION_DIRECTORY` SHALL NOT be admitted to that exception, and
 the distinction SHALL NOT be described as a rendezvous concern. The socket,

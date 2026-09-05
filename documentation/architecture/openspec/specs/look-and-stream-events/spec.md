@@ -419,11 +419,11 @@ Freshness predicate order SHALL be:
 Freshness vocabulary semantics under continuous-reader model:
 
 - `LiveBuffer` means "background reader thread is alive and feeding updates"
-  (previously: "served from in-memory after request-scoped drain")
 - `acp_stream_stalled` means "reader alive but observed N seconds of silence
-  on the ACP stream" (previously: "drain window saw nothing")
+  on the ACP stream"
 
-Wire tokens (`Fresh`/`Stale`, `LiveBuffer`/`None`) are unchanged.
+The wire tokens are `Fresh`/`Stale` for freshness and `LiveBuffer`/`None` for
+the source.
 
 Relay SHALL treat machine freshness status as response-visible state for ACP
 look.
