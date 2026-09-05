@@ -20,12 +20,19 @@ End-user workflows are documented under `documentation/usage/`.
   - See [src/runtime/README.md](runtime/README.md).
 - `configuration/`
   - Bundle/coder/policy parsing and validation, plus session identity helpers.
+  - Reads `tui/` to validate that a declared chord or behavior name exists,
+    since the TUI owns those names. This is the one edge in the crate running
+    from a foundational layer up into a surface layer; the layer order below it
+    is otherwise the dependency order.
   - See [src/configuration/README.md](configuration/README.md).
 - `protocol/`
   - The delivery protocol boundary: the mailbox, look, and submission-evidence
     vocabulary both delivery call directions name, so neither imports the other.
-  - Depends on no sibling layer. `scripts/lint-delivery-protocol-boundary.py`
-    fails a commit that gives it one.
+  - Imports nothing from `relay/`, `acp/`, `tmux/`, `pty/`, or `transports/`.
+    `scripts/lint-delivery-protocol-boundary.py` fails a commit that gives it
+    such an import, and checks that each of those directories still exists so
+    the rule cannot pass vacuously after a rename. It does depend on
+    `envelope.rs`.
 - `relay/`
   - Relay IPC contracts, socket/client entrypoints, authorization checks,
     lifecycle actions, delivery engine, and stream registration/event routing.

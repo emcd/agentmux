@@ -23,6 +23,72 @@ exported from `src/relay/mod.rs`.
   (`session@namespace`), holding every known principal — bundle sessions,
   `users.toml`-declared relay-wide principals, and dynamic stream connections.
 
+## How this tree relates to the specifications
+
+**This directory is decomposed by stage in the request path. The specifications
+are decomposed by observable contract. The two are orthogonal, not merely
+misaligned, and a reader should not expect a capability to correspond to a
+directory.**
+
+The stages, in order, are `connection/` (frame), `routing.rs` (resolve),
+`authorization/` (permit), `handlers/` (verb), and `delivery/` (execute),
+alongside state that no single stage owns: `catalog.rs`, `identity.rs`,
+`configuration/`, `stream/`, and the bundle-lifecycle trio of `watcher.rs`,
+`lifecycle.rs` and `startup_state.rs`. Every target-addressed operation passes
+through every stage.
+
+**Assume a capability is spread across stages unless its specification requires
+otherwise.** Exactly one currently requires otherwise. `relay-routing-layer`
+defines itself as the shared resolution and authorization stages *and* obliges
+operation bodies to contain neither, handing them a fully-resolved and
+authorized route instead. That obligation is what forces its implementation into
+`routing.rs` plus `authorization/`; the correspondence is mandated, not
+incidental, which is why it can be relied on.
+
+No other capability carries such a requirement, so no other should be expected
+to have a home. `authorization-scope` is a reasonable near-miss: relay genuinely
+owns every authorization decision, and its rules concentrate in
+`authorization/`. But its purpose enumerates subjects — policy presets,
+vocabulary and evaluation, scope controls, cross-bundle authorization, UI sender
+validation — and nothing in its spec obliges that concentration to hold. It
+describes what is true today rather than what must remain true.
+
+**Read the capability's purpose, not its name.** A capability named after a
+directory is not thereby a stage. `delivery-quiescence` is the trap:
+`delivery/` holds its relay-owned policy, but its purpose enumerates subjects —
+send envelope, queue lifecycle, terminal outcomes, ack semantics — and its
+implementation reaches well past this module. The readiness a target is gated on
+is configured through `PromptReadinessTemplate` in `crate::configuration` and
+observed by the transports, in `crate::tmux`'s prompt probe and the Pty
+transport. A reader sent to `delivery/` alone would find the policy and miss
+where its inputs come from.
+
+A capability defined by its subject rather than by a stage is a *column* through
+the pipeline, and a column has no name in this tree. `raww` is the sharpest
+example: `handlers/raww.rs` holds only the verb body, while its routing is in
+`routing.rs`, its permission in `authorization/`, its execution in `delivery/`
+and `crate::transports`, and its wire shape in `contract.rs`. Capabilities
+covering identity, bundle lifecycle, cross-relay behavior, and quiescence are
+spread the same way, each across three or more stages, and several reach outside
+`src/relay` entirely.
+
+Two consequences are worth stating rather than rediscovering:
+
+- **A rule belonging to a column tends to get written down once per stage that
+  touches it.** When editing a rule that spans stages, check whether it is
+  already stated elsewhere before restating it here; a citation is preferable to
+  a second copy that can drift.
+- **Two capabilities addressing the same file is not necessarily duplication.**
+  Routing is specified both as a stage and as an addressing vocabulary, and both
+  legitimately reach `routing.rs`. One governs when resolution happens; the
+  other governs what a resolved name means.
+
+Finally, note that **`capability` means two different things in this codebase.**
+`routing.rs`'s `OperationProfile` names the *authorization* capability an
+operation reads — `send`, `look`, `raww` — which is unrelated to an OpenSpec
+capability, the unit a specification directory corresponds to. The senses are
+one directory apart; prefer `control` when the authorization sense is meant.
+
 ## File Map
 
 - `mod.rs`
@@ -107,7 +173,7 @@ exported from `src/relay/mod.rs`.
     rather than an authorization decision — no consumer of it authorizes
     anything — so it rides the context only because the context is what is
     already threaded from load down to the handlers.
-- `authorization.rs`
+- `authorization/`
   - policy loading plus the uniform, data-driven authorization stage
     (`authorize_route`): the requester's controls are always resolved in the
     dispatch (home) bundle and the maximum required tier across the route's
@@ -116,7 +182,11 @@ exported from `src/relay/mod.rs`.
     (`requester_list_reaches_all` / `authorize_discovery_origin`): the requester's
     `list` control must reach `all` before any cross-relay discovery lookup or
     peer dial.
-- `handlers.rs`
+  - `mod.rs` is an import-only hub over `loading.rs` (policy parsing),
+    `checks.rs` (the authorization stage itself), `resolution.rs` (control
+    resolution), and `context.rs` (the `AuthorizationContext` threaded from load
+    to the handlers).
+- `handlers/`
   - request dispatcher plus chat/look/raww handlers. `Send` and `Look` build a
     `ResolvedRoute` and authorize through the shared spine: a peer-bundle target
     raises the required tier to `all` while same-bundle access needs only
@@ -216,7 +286,7 @@ exported from `src/relay/mod.rs`.
     while the list projection accepted only `Available`, which reported a bundle
     whose ACP member was mid-turn as `degraded` — or as `down` if it was the only
     member — for the whole turn. Both now read `acp_readiness_is_ready`.
-- `stream.rs`
+- `stream/`
   - hello-frame parser, the unified session registry, identity collision
     handling, and event writer routing. The registry is one
     `HashMap<principal_id, RegistryEntry>` keyed by canonical `principal_id`; an
@@ -287,8 +357,16 @@ exported from `src/relay/mod.rs`.
     here despite the relay using none of `notify-debouncer-full`'s other
     intelligence: mini collapses every event to `Any`, leaving no way to tell a
     read from a write.
-- `tmux.rs`
-  - tmux/process adapters used by delivery and look paths.
+- `peer_connection.rs`
+  - outbound peer relay connections, established lazily on the first
+    cross-relay `Send`/`Raww` to a given peer rather than eagerly at startup, so
+    an unreachable peer surfaces as a typed delivery outcome on the affected
+    request instead of blocking relay boot. Dials the peer's configured socket
+    presenting the `<connect_as>@RELAY` principal that peer issued this relay,
+    with the PSK at `<state-root>/peers/<alias>.psk`.
+- `startup_state.rs`
+  - persistence for startup-failure history (`startup_failures.json`, versioned),
+    so failure visibility survives a relay restart.
 - `delivery/`
   - transport-specific delivery decomposition:
   - `admission/`: the request-boundary admission gate, its quota ledger, and the

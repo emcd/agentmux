@@ -34,6 +34,18 @@ A requirement in one of these domains is authored in the capability that matches
 it. The remaining capabilities in this directory were never part of that
 partition and stand on their own.
 
+## Finding the code for a capability
+
+There is no directory-per-capability in `src/`, and looking for one will mislead.
+The source tree is decomposed by stage in the request path; these specifications
+are decomposed by observable contract. Those are orthogonal axes, so a capability
+defined as a stage lands in one module while a capability defined by its subject
+is spread across every stage it touches.
+
+`src/relay/README.md` explains this under "How this tree relates to the
+specifications", including which shape a given capability has and why two
+capabilities may legitimately reach the same file.
+
 ## Delta paths
 
 A change's delta for a requirement is authored at
