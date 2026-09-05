@@ -40,7 +40,6 @@ struct RawPolicyPreset {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 struct RawPolicyControls {
-    find: String,
     list: String,
     look: String,
     send: String,
@@ -50,8 +49,6 @@ struct RawPolicyControls {
     choose: String,
     #[serde(default = "default_updown_policy_scope")]
     updown: String,
-    #[serde(default, rename = "do")]
-    do_controls: HashMap<String, String>,
     #[serde(default, rename = "new")]
     new_controls: HashMap<String, String>,
     #[serde(default, rename = "change")]
@@ -249,14 +246,6 @@ fn parse_policy_controls(
     policies_path: &Path,
     policy_id: &str,
 ) -> Result<PolicyControls, RelayError> {
-    let find = parse_scope_for_control(
-        controls.find.as_str(),
-        policies_path,
-        policy_id,
-        "find",
-        "validation_invalid_arguments",
-        "authorization policy control uses unknown scope value",
-    )?;
     let list = parse_scope_for_control(
         controls.list.as_str(),
         policies_path,
@@ -305,7 +294,6 @@ fn parse_policy_controls(
         "validation_invalid_policy_scope",
         "authorization policy updown control uses unknown scope value",
     )?;
-    let do_controls = parse_action_scope_map(controls.do_controls, "do", policies_path, policy_id)?;
     let new_controls =
         parse_action_scope_map(controls.new_controls, "new", policies_path, policy_id)?;
     let change_controls =
@@ -313,14 +301,12 @@ fn parse_policy_controls(
     let drop_controls =
         parse_action_scope_map(controls.drop_controls, "drop", policies_path, policy_id)?;
     Ok(PolicyControls {
-        find,
         list,
         look,
         send,
         raww,
         choose,
         updown,
-        do_controls,
         new_controls,
         change_controls,
         drop_controls,

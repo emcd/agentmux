@@ -61,7 +61,6 @@ default = "default"
 id = "default"
 
 [policies.controls]
-find = "self"
 list = "home"
 look = "self"
 send = "home"
@@ -70,7 +69,6 @@ send = "home"
 id = "operator"
 
 [policies.controls]
-find = "self"
 list = "home"
 look = "home"
 send = "home"

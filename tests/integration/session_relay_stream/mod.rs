@@ -82,7 +82,6 @@ default = "default"
 id = "default"
 
 [policies.controls]
-find = "self"
 list = "home"
 look = "self"
 send = "home"
@@ -93,7 +92,6 @@ send = "home"
 id = "operator"
 
 [policies.controls]
-find = "self"
 list = "all"
 look = "all"
 send = "all"
@@ -352,7 +350,6 @@ default = "default"
 id = "default"
 
 [policies.controls]
-find = "self"
 list = "home"
 look = "self"
 send = "home"
@@ -362,7 +359,6 @@ choose = "none"
 id = "operator"
 
 [policies.controls]
-find = "self"
 list = "home"
 look = "home"
 send = "home"
@@ -426,7 +422,6 @@ default = "peer_sender"
 id = "peer_sender"
 
 [policies.controls]
-find = "self"
 list = "home"
 look = "self"
 send = "all"

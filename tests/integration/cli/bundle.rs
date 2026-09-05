@@ -647,7 +647,6 @@ default = "default"
 id = "default"
 
 [policies.controls]
-find = "self"
 list = "all"
 look = "self"
 send = "home"
@@ -656,7 +655,6 @@ send = "home"
 id = "operator"
 
 [policies.controls]
-find = "self"
 choose = "home"
 list = "all"
 look = "all"

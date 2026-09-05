@@ -38,14 +38,12 @@ impl PolicyScope {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) struct PolicyControls {
-    pub(super) find: PolicyScope,
     pub(super) list: PolicyScope,
     pub(super) look: PolicyScope,
     pub(super) send: PolicyScope,
     pub(super) raww: PolicyScope,
     pub(super) choose: PolicyScope,
     pub(super) updown: PolicyScope,
-    pub(super) do_controls: HashMap<String, PolicyScope>,
     pub(super) new_controls: HashMap<String, PolicyScope>,
     pub(super) change_controls: HashMap<String, PolicyScope>,
     pub(super) drop_controls: HashMap<String, PolicyScope>,
@@ -59,7 +57,6 @@ pub(super) struct UiSessionAuthorization {
 impl PolicyControls {
     pub(super) fn conservative_default() -> Self {
         Self {
-            find: PolicyScope::SelfOnly,
             list: PolicyScope::Home,
             look: PolicyScope::Home,
             send: PolicyScope::Home,
@@ -69,7 +66,6 @@ impl PolicyControls {
             raww: PolicyScope::None,
             choose: PolicyScope::None,
             updown: PolicyScope::None,
-            do_controls: HashMap::new(),
             new_controls: HashMap::new(),
             change_controls: HashMap::new(),
             drop_controls: HashMap::new(),
