@@ -179,8 +179,6 @@ pub(super) fn controls_for_requester<'a>(
                 })),
             )
         })?;
-    let _ = controls.find;
-    let _ = controls.do_controls.len();
     Ok(controls)
 }
 

@@ -142,7 +142,6 @@ format-version = 1
 id = "default"
 
 [policies.controls]
-find = "self"
 list = "home"
 look = "home"
 send = "home"
@@ -151,7 +150,6 @@ send = "home"
 id = "restricted"
 
 [policies.controls]
-find = "self"
 list = "home"
 look = "self"
 send = "none"

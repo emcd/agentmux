@@ -49,7 +49,6 @@ default = "default"
 id = "default"
 
 [policies.controls]
-find = "self"
 # The CLI lists this bundle as the relay-wide `user@GLOBAL` operator, whose home
 # namespace is GLOBAL; reaching into a bundle is cross-namespace and requires
 # all.
@@ -113,7 +112,6 @@ default = "default"
 id = "default"
 
 [policies.controls]
-find = "self"
 list = "all"
 look = "self"
 send = "home"
@@ -165,7 +163,6 @@ default = "default"
 id = "default"
 
 [policies.controls]
-find = "self"
 list = "home"
 look = "self"
 send = "home"

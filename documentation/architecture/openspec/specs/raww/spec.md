@@ -41,24 +41,21 @@ Validation behavior:
   `validation_unsupported_operation` (see Transport Capability Contract)
 - cross-bundle raww with insufficient scope → `authorization_forbidden`
 
-Relay-wide (`@GLOBAL`) targets are no longer rejected at the routing stage;
-rejection occurs at the capability check using `validation_unsupported_operation`
-when the resolved session carries `can_be_written = false`. This separates namespace
-routing from operation-capability concerns.
+Relay-wide (`@GLOBAL`) targets SHALL NOT be rejected at the routing stage.
+Rejection occurs after it, against the target's unified registry entry: an
+unregistered principal SHALL be rejected with `validation_unknown_target`, and a
+registered one whose transport carries `can_be_written = false` with
+`validation_unsupported_operation`. This separates namespace routing from
+operation-capability concerns.
 
 Validation precedence SHALL evaluate target qualification (at the resolution
 stage), then target existence, then capability, then authorization policy checks.
 
 Raww and Look are complementary single-target operations and SHALL share one
 config-free resolution stage; their reserved namespace target rejection is
-uniform.
-
-After this change, the routing stage for look and raww SHALL resolve `@GLOBAL`
-targets as relay-wide rather than rejecting them at the routing stage; the
-handler then derives the resolved target's session type and applies the
-capability check. The `RelayWideTargets` enum and `resolve_target`'s
-relay-wide-targets parameter are removed in this change — dead code once the
-single `Rejected` call site is gone.
+uniform. That stage SHALL resolve `@GLOBAL` targets as relay-wide for both
+operations rather than rejecting them, and each operation's handler SHALL then
+derive the resolved target's session type and apply its own capability check.
 
 #### Scenario: Reject unqualified raww target
 
@@ -70,12 +67,19 @@ single `Rejected` call site is gone.
 - **WHEN** caller invokes `raww` with an `@EXTERNAL` or `@RELAY` target
 - **THEN** relay returns `validation_unsupported_namespace`
 
-#### Scenario: Reject relay-wide raww target via capability check
+#### Scenario: Reject registered relay-wide raww target via capability check
 
-- **WHEN** caller invokes `raww` with an `@GLOBAL` (relay-wide) target
+- **WHEN** caller invokes `raww` with a registered `@GLOBAL` (relay-wide) target
+  whose transport carries `can_be_written = false`
 - **THEN** relay returns `validation_unsupported_operation`
 - **AND** the rejection is uniform with the look capability check for the
   same target
+
+#### Scenario: Reject unregistered relay-wide raww target
+
+- **WHEN** caller invokes `raww` with an `@GLOBAL` (relay-wide) target that is
+  not a registered principal
+- **THEN** relay returns `validation_unknown_target`
 
 ### Requirement: Relay raww authorization mapping
 

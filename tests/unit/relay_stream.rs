@@ -76,7 +76,6 @@ default = "default"
 id = "default"
 
 [policies.controls]
-find = "self"
 list = "home"
 look = "self"
 send = "home"
@@ -154,7 +153,6 @@ default = "default"
 id = "default"
 
 [policies.controls]
-find = "self"
 choose = "{choose}"
 list = "home"
 look = "self"
@@ -180,7 +178,6 @@ default = "default"
 id = "default"
 
 [policies.controls]
-find = "self"
 list = "home"
 look = "self"
 send = "{send}"
@@ -206,7 +203,6 @@ default = "default"
 id = "default"
 
 [policies.controls]
-find = "self"
 list = "home"
 look = "self"
 raww = "{raww}"
@@ -232,7 +228,6 @@ default = "default"
 id = "default"
 
 [policies.controls]
-find = "self"
 list = "{list}"
 look = "self"
 send = "home"

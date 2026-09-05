@@ -42,11 +42,9 @@ Relay SHALL fail fast when this artifact is missing or invalid.
 - **AND** a session omits explicit `policy`
 - **THEN** relay applies built-in conservative default policy
 - **AND** built-in controls are:
-  - `find = self`
   - `list = home`
-  - `look = self`
+  - `look = home`
   - `send = home`
-  - `do` defaults to `none` for unspecified actions
 
 ### Requirement: Session Policy Binding
 
@@ -78,40 +76,24 @@ policy id.
 
 Relay SHALL evaluate authorization using canonical controls and scope values:
 
-- `find`: `none` | `self` | `home` | `all`
 - `list`: `none` | `self` | `home` | `all`
 - `look`: `none` | `self` | `home` | `all`
 - `send`: `none` | `self` | `home` | `all`
-- `do`: map `action_id -> (none | self | home | all)`
 
 The policies file is authoritative: every control accepts the full scope
 ladder at parse time, and the consuming authorization checks give each value
 its effect via scope rank order.
 
-For current self-target-only `do` behavior:
-
-- `none` and `self` are operative
-- `home` and `all` are reserved/non-operative until non-self `do`
-  targeting is introduced
+A control SHALL NOT appear in this vocabulary before an authorization check
+consumes it. Naming a control here obliges `policies.toml` to carry it, and a
+key that every deployment must supply while nothing reads it is a cost with no
+corresponding guarantee.
 
 #### Scenario: Evaluate look request using configured look scope
 
 - **WHEN** relay evaluates a `look` request
 - **THEN** it uses the session policy control `look`
 - **AND** applies one of the canonical scope values
-
-#### Scenario: Treat missing do action entry as none
-
-- **WHEN** relay evaluates `do` authorization
-- **AND** requested action id is not present in `do` control map
-- **THEN** relay treats authorization scope as `none`
-
-#### Scenario: Treat do all-home/all-all scopes as reserved
-
-- **WHEN** relay evaluates `do` authorization
-- **AND** action scope is `home` or `all`
-- **THEN** relay treats scope as reserved/non-operative
-- **AND** non-self `do` execution remains unsupported by runtime contract
 
 ### Requirement: Centralized Authorization Decision Point
 
@@ -211,27 +193,6 @@ Cross-bundle send SHALL require `all`; a cross-bundle send issued under
 - **WHEN** requester issues cross-bundle send
 - **AND** requester policy has `send = "all"`
 - **THEN** relay routes and delivers to the cross-bundle target(s)
-
-### Requirement: Authorization Hooks for Do and Find
-
-Relay SHALL reserve authorization hooks for:
-
-- `do` action-id scoped controls
-- `find` scope controls
-
-These hooks SHALL use the same evaluation order and denial schema as `list`,
-`send`, and `look`.
-
-#### Scenario: Deny do action run with canonical schema
-
-- **WHEN** relay denies action execution by `do` control map
-- **THEN** relay returns `authorization_forbidden`
-- **AND** details include canonical required fields
-
-#### Scenario: Deny do action run when do map sets none
-
-- **WHEN** requested action id maps to `none` in `do` control map
-- **THEN** relay returns `authorization_forbidden`
 
 ### Requirement: Uniform Cross-Bundle Authorization Model
 

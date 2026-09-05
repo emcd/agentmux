@@ -576,7 +576,6 @@ default = "default"
 id = "default"
 
 [policies.controls]
-find = "self"
 list = "home"
 look = "self"
 send = "home"
