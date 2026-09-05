@@ -56,6 +56,12 @@ End-user workflows are documented under `documentation/usage/`.
 
 - Relay is the authorization decision point; CLI/MCP/TUI perform request-shape
   validation and pass relay denial details through.
-- Runtime starter files are hydrated only when absent from config root.
-- Delivery supports `async` and `sync`; ACP sync acknowledges at dispatch/first
-  activity boundaries and correlates completion by `message_id`.
+- Starter configuration is scaffolded only into a configuration root resolved
+  from the default tier, and never overwrites an existing file. A layer list the
+  operator supplied by flag or environment is never scaffolded even when a layer
+  is missing: answering "you named a layer that is not there" with a fresh empty
+  deployment makes the mistake look like success.
+- Delivery is asynchronous. There is no synchronous mode and no per-request mode
+  selector: a `send` is accepted before its outcome is known. The relay
+  guarantees an accepted message resolves at most once, not that it eventually
+  resolves — see `delivery-quiescence`.
