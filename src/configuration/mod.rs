@@ -24,14 +24,13 @@ pub use paths::{
 };
 pub use roots::{ConfigurationRoots, ConfigurationRootsError, LAYER_SEPARATOR};
 pub use types::{
-    AcpChannel, AcpTargetConfiguration, BUNDLE_ENVIRONMENT_VARIABLE, BindingConfiguration,
-    BringUpContext, BundleConfiguration, BundleGroupMembership, BundleMember,
-    CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, ConfiguredAction, ConfiguredBinding,
-    ContextValue, INHERITED_CONTEXT_VARIABLE_NAMES, LayerRepresentationFault, NameValueEntry,
-    PromptReadinessTemplate, PtyTargetConfiguration, RESERVED_GROUP_ALL,
-    SESSION_ENVIRONMENT_VARIABLE, STATE_DIRECTORY_ENVIRONMENT_VARIABLE, SessionType,
-    TargetConfiguration, TermProtocol, TmuxTargetConfiguration, TuiConfiguration, TuiSession,
-    UiConfiguration, UnrepresentableLayer,
+    AcpChannel, AcpTargetConfiguration, BUNDLE_ENVIRONMENT_VARIABLE, BringUpContext,
+    BundleConfiguration, BundleGroupMembership, BundleMember,
+    CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, ContextValue, INHERITED_CONTEXT_VARIABLE_NAMES,
+    LayerRepresentationFault, NameValueEntry, PromptReadinessTemplate, PtyTargetConfiguration,
+    RESERVED_GROUP_ALL, SESSION_ENVIRONMENT_VARIABLE, STATE_DIRECTORY_ENVIRONMENT_VARIABLE,
+    SessionType, TargetConfiguration, TermProtocol, TmuxTargetConfiguration, TuiConfiguration,
+    TuiSession, UiConfiguration, UnrepresentableLayer,
 };
 
 pub(super) const BUNDLE_SCHEMA_VERSION: u32 = 1;

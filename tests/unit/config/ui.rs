@@ -3,10 +3,8 @@ use std::fs;
 
 use tempfile::TempDir;
 
-use agentmux::configuration::{
-    ConfigurationError, ConfiguredAction, UiConfiguration, load_ui_configuration,
-};
-use agentmux::tui::{Action, BindingContext, PrimaryModifier, parse_chord};
+use agentmux::configuration::{ConfigurationError, UiConfiguration, load_ui_configuration};
+use agentmux::tui::{Action, BindingContext, ConfiguredAction, PrimaryModifier, parse_chord};
 
 #[test]
 fn loads_default_bundle_from_ui_configuration() {
@@ -275,6 +273,53 @@ fn an_unrecognized_key_is_refused_whatever_its_shape() {
         load_bindings("[bindings]\nnot-a-context = { a = \"b\" }\n").is_err(),
         "a table under an unknown key was accepted"
     );
+}
+
+/// Two spellings can denote one keystroke. Left accepted, which of them took
+/// effect would fall to the order the file's keys happen to sort in, which is a
+/// precedence rule nobody declared — so a configuration naming a chord twice is
+/// refused rather than silently resolved.
+#[test]
+fn two_spellings_of_one_chord_in_a_context_are_refused() {
+    for (body, expected) in [
+        // Modifier aliases.
+        (
+            "[bindings.compose-message]\n\"ctrl+j\" = \"send-message\"\n\"control+j\" = \"toggle-mode\"\n",
+            "denote the same chord",
+        ),
+        // A control chord written in either case: both fold to the character a
+        // terminal reports.
+        (
+            "[bindings.compose-message]\n\"ctrl+j\" = \"send-message\"\n\"Ctrl+J\" = \"toggle-mode\"\n",
+            "denote the same chord",
+        ),
+        // The symbolic modifier landing on a literal chord the file also names.
+        // Refused everywhere rather than only where it resolves onto it, so one
+        // file is read the same way on every machine.
+        (
+            "[bindings.picker-sessions]\n\"ctrl+enter\" = \"commit-picker-session\"\n\"primary+enter\" = \"toggle-picker-focus\"\n",
+            "denote the same chord",
+        ),
+    ] {
+        let error = load_bindings(body).expect_err(&format!("expected refusal for {body:?}"));
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains(expected),
+            "{body:?} reported {rendered:?}, which does not mention {expected:?}"
+        );
+    }
+}
+
+/// The same chord in two different contexts is not a duplicate: contexts are
+/// separate surfaces and a chord means what each of them says it means.
+#[test]
+fn one_chord_may_appear_in_two_contexts() {
+    let loaded = load_bindings(
+        "[bindings.compose-message]\n\"ctrl+w\" = \"send-message\"\n\n[bindings.compose-to]\n\"ctrl+w\" = \"clear-to-field\"\n",
+    )
+    .expect("distinct contexts are not a collision")
+    .expect("existing config");
+    assert_eq!(loaded.bindings.expect("a binding group").rows.len(), 2);
 }
 
 /// A configuration is applied whole or not at all. The rows before a mistake

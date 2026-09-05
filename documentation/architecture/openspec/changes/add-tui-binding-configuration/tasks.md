@@ -79,22 +79,27 @@
 
 ## 4. Effective binding table
 
-- [ ] 4.1 Build the effective table from the compiled default rows, the applied
+- [x] 4.1 Build the effective table from the compiled default rows, the applied
       presets, the configured rows, and the probe outcome, resolving the
-      symbolic modifier for the running platform as it builds.
-- [ ] 4.2 Order configured rows ahead of preset rows and preset rows ahead of
+      symbolic modifier for the running platform as it builds. The capability
+      class and the platform arrive as arguments rather than being probed, so
+      the table is buildable for either without a terminal.
+- [x] 4.2 Order configured rows ahead of preset rows and preset rows ahead of
       compiled rows within a context, and leave `binding_lookup_order`
-      unchanged.
-- [ ] 4.3 Implement explicit unbinding, so a chord configured against no action
+      unchanged. The preset tier is a build parameter rather than a hole, so no
+      named set exists to fill it yet and every caller passes an empty slice,
+      but the tier resolves like any other and populating it changes nothing
+      about how a lookup answers.
+- [x] 4.3 Implement explicit unbinding, so a chord configured against no action
       is inert rather than falling through to its preset or compiled default.
-- [ ] 4.4 Add tests for row-level merge: an unnamed default survives, a
+- [x] 4.4 Add tests for row-level merge: an unnamed default survives, a
       configured row wins over the compiled row it shadows, a configured row
       wins over a preset row, and a configured contextual row does not shadow a
       compiled global row.
-- [ ] 4.5 Add tests for the capability columns: a single value applies to both
+- [x] 4.5 Add tests for the capability columns: a single value applies to both
       classes, a class-qualified value applies to its class, and an omitted
       class keeps its compiled default.
-- [ ] 4.6 Teeth-check 4.2 by ordering configured rows after compiled rows and
+- [x] 4.6 Teeth-check 4.2 by ordering configured rows after compiled rows and
       confirming the test that covers a configured chord shadowed by a broader
       compiled row fails.
 

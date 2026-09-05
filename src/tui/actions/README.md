@@ -92,6 +92,24 @@ Two halves, deliberately independent:
     completeness it loses to the pane edge. Where a strip's own
     medium constrains it, the constraint is declared here rather than
     solved by trimming the wording every consumer shares.
+- `effective.rs`
+  - What an operator configured — `BindingConfiguration`,
+    `ConfiguredBinding`, `ConfiguredAction` — and `EffectiveBindings`,
+    the table those produce over the compiled defaults.
+  - The configured types live here rather than with the file format
+    that parses them because they are described in this vocabulary: a
+    configured row holds a behavior and a chord, not the strings a file
+    spelled them with. That also keeps the dependency between the two
+    modules one way. `src/configuration` reads this vocabulary to
+    validate a binding group; nothing here reads `src/configuration`.
+  - Three tiers answer a lookup, in order: the operator's own rows, the
+    rows any named binding set contributed, then the compiled table. The
+    first tier holding the chord answers, which is what makes an
+    explicit unbinding mean "nothing" rather than deferring downward.
+  - The capability class and the platform are arguments to `build`
+    rather than probed inside it, so a caller can construct the table
+    for either class on either platform without a terminal — and so the
+    tests do.
 - `context.rs`
   - `BindingContext`, `binding_context`, and `binding_lookup_order`.
     `binding_context` resolves the surface that owns a chord from

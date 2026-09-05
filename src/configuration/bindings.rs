@@ -9,8 +9,12 @@ use std::path::Path;
 
 use super::ConfigurationError;
 use super::raw::RawBindings;
-use super::types::{BindingConfiguration, ConfiguredAction, ConfiguredBinding};
-use crate::tui::{Action, BindingContext, PrimaryModifier, context_actions, parse_chord};
+use crossterm::event::{KeyCode, KeyModifiers};
+
+use crate::tui::{
+    Action, BindingConfiguration, BindingContext, ChordPattern, ConfiguredAction,
+    ConfiguredBinding, PrimaryModifier, context_actions, parse_chord,
+};
 
 /// Names of the binding sets this build ships.
 ///
@@ -54,9 +58,23 @@ pub(super) fn validate_binding_group(
     for (context_name, chords) in &raw.contexts {
         let context = BindingContext::from_configuration_name(context_name)
             .ok_or_else(|| invalid(format!("unknown binding context: {context_name}")))?;
+        // Two spellings can denote one keystroke -- "ctrl+j" and "control+j",
+        // or a control chord written in either case -- and a symbolic chord can
+        // land on a literal one once resolved. Left alone, which of them takes
+        // effect would fall to the order the file's keys happen to sort in,
+        // which is an accidental precedence rule rather than a declared one.
+        let mut claimed: Vec<(ResolvedChord, &str)> = Vec::new();
         for (chord_text, value) in chords {
             let chord = parse_chord(chord_text)
                 .map_err(|error| invalid(format!("in {context_name}: {error}")))?;
+            for resolved in resolutions_of(chord) {
+                if let Some((_, earlier)) = claimed.iter().find(|(seen, _)| *seen == resolved) {
+                    return Err(invalid(format!(
+                        "in {context_name}: {chord_text} and {earlier} denote the same chord"
+                    )));
+                }
+                claimed.push((resolved, chord_text));
+            }
             let (enhanced, standard) =
                 capability_columns(value, chord_text, context, context_name, &invalid)?;
             if enhanced.is_none() && standard.is_none() {
@@ -78,6 +96,27 @@ pub(super) fn validate_binding_group(
         primary_modifier_on_macos,
         rows,
     })
+}
+
+/// One keystroke as a terminal reports it.
+type ResolvedChord = (KeyCode, KeyModifiers);
+
+/// Every keystroke a written chord could denote, across the platforms it may be
+/// read on.
+///
+/// A literal chord denotes one. A chord using the symbolic modifier denotes two,
+/// since that modifier resolves differently per platform and per operator
+/// selection. Both are claimed, so a file is accepted or refused the same way
+/// wherever it is read rather than colliding only on the machine that resolves
+/// the symbol onto a literal chord the file also names.
+fn resolutions_of(chord: ChordPattern) -> Vec<ResolvedChord> {
+    let with_control = chord.resolve(KeyModifiers::CONTROL);
+    let with_command = chord.resolve(KeyModifiers::SUPER);
+    if with_control == with_command {
+        vec![with_control]
+    } else {
+        vec![with_control, with_command]
+    }
 }
 
 /// Reads what one chord entry maps to, per terminal capability class.
