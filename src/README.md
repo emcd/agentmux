@@ -20,12 +20,19 @@ End-user workflows are documented under `documentation/usage/`.
   - See [src/runtime/README.md](runtime/README.md).
 - `configuration/`
   - Bundle/coder/policy parsing and validation, plus session identity helpers.
+  - Reads `tui/` to validate that a declared chord or behavior name exists,
+    since the TUI owns those names. This is the one edge in the crate running
+    from a foundational layer up into a surface layer; the layer order below it
+    is otherwise the dependency order.
   - See [src/configuration/README.md](configuration/README.md).
 - `protocol/`
   - The delivery protocol boundary: the mailbox, look, and submission-evidence
     vocabulary both delivery call directions name, so neither imports the other.
-  - Depends on no sibling layer. `scripts/lint-delivery-protocol-boundary.py`
-    fails a commit that gives it one.
+  - Imports nothing from `relay/`, `acp/`, `tmux/`, `pty/`, or `transports/`.
+    `scripts/lint-delivery-protocol-boundary.py` fails a commit that gives it
+    such an import, and checks that each of those directories still exists so
+    the rule cannot pass vacuously after a rename. It does depend on
+    `envelope.rs`.
 - `relay/`
   - Relay IPC contracts, socket/client entrypoints, authorization checks,
     lifecycle actions, delivery engine, and stream registration/event routing.
@@ -49,6 +56,12 @@ End-user workflows are documented under `documentation/usage/`.
 
 - Relay is the authorization decision point; CLI/MCP/TUI perform request-shape
   validation and pass relay denial details through.
-- Runtime starter files are hydrated only when absent from config root.
-- Delivery supports `async` and `sync`; ACP sync acknowledges at dispatch/first
-  activity boundaries and correlates completion by `message_id`.
+- Starter configuration is scaffolded only into a configuration root resolved
+  from the default tier, and never overwrites an existing file. A layer list the
+  operator supplied by flag or environment is never scaffolded even when a layer
+  is missing: answering "you named a layer that is not there" with a fresh empty
+  deployment makes the mistake look like success.
+- Delivery is asynchronous. There is no synchronous mode and no per-request mode
+  selector: a `send` is accepted before its outcome is known. The relay
+  guarantees an accepted message resolves at most once, not that it eventually
+  resolves — see `delivery-quiescence`.
