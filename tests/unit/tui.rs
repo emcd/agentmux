@@ -137,15 +137,15 @@ fn sender_bound_bundle_exposes_active_bundle_for_session_principal() {
 #[test]
 fn sender_bound_bundle_is_none_for_relay_wide_principal() {
     // A relay-wide sender (`@GLOBAL`) has no bound bundle; target suffixes must
-    // be preserved so the relay can route the send (todos/tui/46).
+    // be preserved so the relay can route the send.
     assert_eq!(sender_bound_bundle("operator@GLOBAL", "agentmux"), None);
 }
 
 #[test]
 fn merge_relay_wide_sender_preserves_cross_bundle_target() {
-    // Regression for todos/tui/46: a relay-wide TUI principal sending to a peer
-    // bundle must keep the `@bundle` suffix so the relay can resolve routing,
-    // even when the target bundle equals the displayed active bundle.
+    // A relay-wide TUI principal sending to a peer bundle must keep the
+    // `@bundle` suffix so the relay can resolve routing, even when the target
+    // bundle equals the displayed active bundle.
     let targets = merge_tui_targets("qa-partner@agentmux-qa", None).expect("targets");
     assert_eq!(targets, vec!["qa-partner@agentmux-qa"]);
 }

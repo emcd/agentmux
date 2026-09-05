@@ -667,7 +667,8 @@ mod tests {
             );
         }
 
-        // Task 4.5, where the buffer is available to assert it. The generated
+        // Asserted here rather than against the catalogue, because the rendered
+        // buffer is where a difference would actually show. The generated
         // bindings must be byte-identical under every probe outcome, so no
         // capability conditioning can re-enter through the rendering path. The
         // capability report is the deliberate exception -- it reports what the

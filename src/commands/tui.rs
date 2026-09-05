@@ -33,7 +33,7 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
     ensure_starter_configuration_layout(&roots)?;
     // The interactive TUI does not require a default bundle to launch: a fresh
     // install ships no `default-bundle` (and the example bundle is empty), so an
-    // eager bundle load here would crash startup (issues/tui/11, issues/runtime/3).
+    // eager bundle load here would crash startup.
     // Resolve available bundles first and seed the browsing context from the
     // first one when no bundle is configured; the operator picks from there.
     let available_bundles = load_bundle_group_memberships(&roots.configuration_roots)

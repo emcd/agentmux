@@ -4,9 +4,9 @@ use tempfile::TempDir;
 
 use super::helpers::{write_bundle_configuration, write_tui_configuration};
 
-// The interactive TUI no longer rejects a missing default bundle at startup
-// (issues/tui/11, issues/runtime/3): a fresh install ships none and the operator
-// picks a bundle in the picker. The lenient launch resolution is covered by
+// The interactive TUI no longer rejects a missing default bundle at startup: a
+// fresh install ships none and the operator picks a bundle in the picker. The
+// lenient launch resolution is covered by
 // tests/unit/tui_session.rs (resolve_tui_launch_identity); a full headless launch
 // cannot be asserted here because terminal initialization requires a TTY.
 

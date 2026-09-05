@@ -134,9 +134,9 @@ fn arrange_help_overlay(workbench: &mut Workbench) {
 
 #[test]
 fn the_help_catalogue_is_identical_whichever_surface_it_is_opened_from() {
-    // The assertion task 4.2 names, made where it can fail: through the
-    // workbench, whose state a context-filtered implementation would have to
-    // read. Comparing the catalogue against itself would prove nothing.
+    // Made where it can fail: through the workbench, whose state a
+    // context-filtered implementation would have to read. Comparing the
+    // catalogue against itself would prove nothing.
     let surfaces = [
         Surface {
             name: "compose to",
