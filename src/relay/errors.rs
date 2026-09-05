@@ -44,6 +44,14 @@ pub(super) fn map_config(error: ConfigurationError) -> RelayError {
             "bundle configuration could not be loaded",
             Some(json!({"context": context, "cause": source.to_string()})),
         ),
+        // Not a validation fault: the malformed text ships with this binary, so
+        // nothing the caller supplied is at issue and nothing they can edit
+        // will change the outcome.
+        ConfigurationError::MalformedEmbeddedArtifact { artifact, message } => relay_error(
+            "internal_unexpected_failure",
+            "an artifact built into this binary is malformed",
+            Some(json!({"artifact": artifact, "cause": message})),
+        ),
     }
 }
 

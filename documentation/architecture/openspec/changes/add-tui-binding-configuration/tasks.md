@@ -57,12 +57,12 @@
       ignoring either.
 - [x] 3.7 Add a fixture test carrying the configuration shape the specification
       documents, character for character, so the published shape cannot drift
-      from what the loader accepts. The documented example names a binding set
-      and none ships yet, so the whole text is held under test by asserting that
-      the unshipped preset is the sole reason it is refused; a second fixture,
-      derived from the first by dropping that line rather than written out
-      again, asserts the parsed configuration row by row. Task 6.2 collapses the
-      two into one successful load. Asserting what the shape produces in an
+      from what the loader accepts. While no binding set shipped, the whole text
+      was held under test by asserting that the unshipped preset was the sole
+      reason it was refused, with a second fixture derived from the first by
+      dropping that line asserting the parsed configuration row by row. Task 6.2
+      shipped the set the example names and collapsed the two into one
+      successful load of the whole text. Asserting what the shape produces in an
       effective table belongs with task 4.1, where the table exists.
 
       The fixture is a copy of the specification's example, so it catches the
@@ -141,35 +141,81 @@
 
 ## 6. Presets
 
-- [ ] 6.1 Declare the preset mechanism: a named set of rows carrying the
+- [x] 6.1 Declare the preset mechanism: a named set of rows carrying the
       capability class its rows apply to, contributing nothing under any other,
-      and applied in the order the configuration names them.
-- [ ] 6.1a Express shipped presets as configuration files embedded in the
+      and applied in the order the configuration names them. The class is
+      carried by the rows, in the format an operator writes: a set for the
+      disambiguating class states the `enhanced` column and no other, so
+      `ConfiguredBinding::for_class` drops every row under the other. That is
+      what makes the restriction structural rather than a separate class field
+      a set could contradict its own rows with. Rows are concatenated in the
+      order the configuration names the sets, which the tier's existing
+      last-row-wins rule turns into later-supersedes-earlier.
+- [x] 6.1a Express shipped presets as configuration files embedded in the
       binary, and obtain their rows by parsing that embedded text through the
       same parser an operator's configuration goes through, rather than
-      constructing the rows in code.
-- [ ] 6.1b Add a test that parses every shipped preset, so a preset that does
+      constructing the rows in code. Text lives in `data/bindings/`, embedded
+      with `include_str!`, read by `embedded_binding_preset` through
+      `validate_binding_group`. A set may name neither presets nor the macOS
+      primary modifier: the first would recurse, and the second is the
+      operator's selection rather than a set's to make.
+- [x] 6.1b Add a test that parses every shipped preset, so a preset that does
       not parse fails the repository's checks rather than reaching a release.
-- [ ] 6.1c Treat a run-time parse failure of a shipped preset as an internal
+      `config::ui::every_shipped_binding_set_parses`, which also refuses a set
+      that parses to no rows.
+- [x] 6.1c Treat a run-time parse failure of a shipped preset as an internal
       invariant violation, and add a test that it is not reported as a fault in
       the operator's configuration file — the text is a compile-time constant,
       so failure implicates our artifact rather than anything they wrote.
-- [ ] 6.2 Ship the two presets, both for the disambiguating class — `Enter`
+      `ConfigurationError::MalformedEmbeddedArtifact` carries no path, so no
+      consumer downstream can name their file from it; the four sites that map
+      configuration faults outward each classify it as internal rather than as
+      validation. The TUI startup mapping needed an explicit arm: its catch-all
+      would have called it `validation_invalid_arguments`.
+- [x] 6.2 Ship the two presets, both for the disambiguating class — `Enter`
       inserts a newline with `Shift+Enter` sending, and `Enter` inserts a
-      newline with the primary-modified `Enter` sending.
-- [ ] 6.3 Add a test that a preset declaring the disambiguating class
+      newline with the primary-modified `Enter` sending. Named
+      `enter-newline-shift-enter-sends` and
+      `enter-newline-primary-enter-sends`; the second name is the one the
+      published configuration shape already used. Their arrival collapses task
+      3.7's two fixtures into one successful load of the documented shape.
+- [x] 6.3 Add a test that a preset declaring the disambiguating class
       contributes nothing when the probe reports the other, leaving the compiled
-      defaults in force.
-- [ ] 6.4 Add a test that each shipped preset leaves sending reachable in every
+      defaults in force. Swept over the whole keystroke space rather than over
+      the chords the set names, since a set leaking into the other class could
+      displace a chord it does not name. Carries a clause asserting the set does
+      change something under the class it declares, without which a set that
+      parsed to a no-op would satisfy the sweep by doing nothing anywhere.
+- [x] 6.4 Add a test that each shipped preset leaves sending reachable in every
       context it touches, so a preset cannot ship in the state its class
-      declaration exists to prevent.
-- [ ] 6.5 Add a test that the compiled defaults are identical across both
+      declaration exists to prevent. Reachability is asked only over the
+      keystrokes a terminal in that class can deliver: under the standard class
+      a modified `Enter` arrives as a bare `Enter`, so counting a `Shift+Enter`
+      row as an answer there would have missed exactly the state in question.
+      What "sending" means is read from the context's compiled bare-`Enter` row
+      rather than named in the test. A sibling test asserts each set does move
+      sending off that chord, without which the check could not fail.
+- [x] 6.5 Add a test that the compiled defaults are identical across both
       capability classes when no preset is applied and no row is configured, so
       the claim that this change alters nothing out of the box is asserted
-      rather than assumed.
+      rather than assumed. Asserted between the two classes directly, rather
+      than against a table each was separately compared to.
 - [ ] 6.6 Verify a preset end to end under a real capable terminal with the
       pty-debug procedure, including that the help overlay shows the moved send
-      chord.
+      chord. **Half done, and the remaining half is not reachable from here.**
+      `pty-debug` reports `Kitty keyboard protocol: unsupported` on every run,
+      so it resolves the standard class and both shipped sets are inert in it by
+      construction. Verified there: the set loads through the real binary,
+      pre-flight accepts its name and refuses an unknown one, and under the
+      standard class `Enter` still sends at dispatch rather than inserting a
+      newline. The presentation half was verified with an operator configuration
+      carrying the set's two rows for both classes, which is the only way to
+      make those rows apply in a standard-class terminal: the overlay then reads
+      `Enter / Ctrl+J: Message: insert newline` and
+      `Shift+Enter / Ctrl+Enter: Message: send`, with the moved chord leading
+      its line, and the portable-newline note correctly disappears. What remains
+      is one run under a terminal that reports the protocol active, with a
+      shipped set named, which needs the operator.
 
 ## 7. Validation and pre-flight
 

@@ -29,6 +29,8 @@ normalizes them into runtime structures used by CLI, MCP, relay, and TUI code.
   - Validation of the `[bindings]` group in `ui.toml`: resolving action and
     context names against the TUI vocabulary, parsing chords, and refusing a
     binding a context cannot perform.
+  - The binding sets this build ships, and the reader that turns one into rows.
+    Their text lives in `data/bindings/` and is embedded with `include_str!`.
 
 ## Layer Resolution
 
@@ -114,6 +116,31 @@ Chord values are read as `toml::Value` and interpreted by hand. The natural
 serde spelling is an untagged enum, but an untagged enum reports only that a
 value matched no variant, naming neither the chord nor the key at fault, which
 is not a diagnosis an operator can act on.
+
+### Shipped binding sets
+
+A set an operator adopts by name is a configuration file embedded in the binary,
+read by the same parser that reads their own — not rows constructed in code.
+Each set is therefore a conformance test of the grammar, and a worked example
+that cannot drift from what the parser accepts.
+
+Its rows are parsed when a configuration names the set, and its names resolve
+alongside every other name in the group, so a set naming a behavior this build
+does not have is reported where the operator's own faults are.
+
+A set that fails to parse is reported as `MalformedEmbeddedArtifact`, never as a
+fault in `ui.toml`. The text is fixed at compile time and the parser is the one
+the repository's checks exercise, so the fault is in our artifact and no edit to
+their file changes it; that variant carries no path, so no consumer downstream
+can name their file from it either.
+
+Which capability class a set applies to is carried by its rows, in the format an
+operator writes: a set for terminals that report modified keys distinctly states
+the `enhanced` column and no other, so it contributes nothing where the probe
+reports the other class. Saying it that way rather than with a separate class
+field is what makes the restriction structural — a set cannot be brought into
+force where the keystrokes it moves behavior onto cannot arrive, because there
+is no arrangement of a configuration that would do so.
 
 ## Invariants
 

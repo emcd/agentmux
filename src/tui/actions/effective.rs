@@ -48,6 +48,14 @@ impl CapabilityClass {
 pub struct BindingConfiguration {
     /// Named binding sets to apply, in the order given.
     pub presets: Vec<String>,
+    /// The rows those named sets contribute, concatenated in the order the sets
+    /// are named.
+    ///
+    /// Resolved as the group is validated, alongside every other name, rather
+    /// than carried as names for a later reader to look up: a set naming a
+    /// behavior this build does not have is a fault in the configuration, and
+    /// it is reported where the operator's other faults are.
+    pub preset_rows: Vec<ConfiguredBinding>,
     /// Which literal modifier the symbolic `primary` modifier resolves to on
     /// macOS. Absent leaves the default, which is `Ctrl`.
     pub primary_modifier_on_macos: Option<PrimaryModifier>,
@@ -119,9 +127,8 @@ impl ResolvedRow {
 #[derive(Clone, Debug, Default)]
 pub struct EffectiveBindings {
     configured: Vec<ResolvedRow>,
-    /// Rows contributed by named binding sets. No set ships yet, so this is
-    /// empty — but the tier exists and is consulted, so shipping one populates
-    /// this rather than changing how a lookup resolves.
+    /// Rows contributed by the named binding sets, in the order the
+    /// configuration named them.
     preset: Vec<ResolvedRow>,
 }
 
@@ -132,14 +139,12 @@ impl EffectiveBindings {
     /// here, so a caller can build the table for either class and either
     /// platform without a terminal.
     ///
-    /// `preset_rows` are the rows the named binding sets contribute, already
-    /// selected. No set ships yet, so every caller passes an empty slice today
-    /// — but the tier is a parameter rather than a hole, so shipping one fills
-    /// it without touching how a lookup resolves.
+    /// Both tiers above the compiled defaults come from the one configuration:
+    /// the rows it declares itself, and the rows the sets it names contribute,
+    /// which were resolved when it was validated.
     #[must_use]
     pub fn build(
         configuration: Option<&BindingConfiguration>,
-        preset_rows: &[ConfiguredBinding],
         class: CapabilityClass,
         on_macos: bool,
     ) -> Self {
@@ -166,7 +171,9 @@ impl EffectiveBindings {
         Self {
             configured: configuration
                 .map_or_else(Vec::new, |configuration| resolve(&configuration.rows)),
-            preset: resolve(preset_rows),
+            preset: configuration.map_or_else(Vec::new, |configuration| {
+                resolve(&configuration.preset_rows)
+            }),
         }
     }
 

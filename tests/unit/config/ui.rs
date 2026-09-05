@@ -3,7 +3,10 @@ use std::fs;
 
 use tempfile::TempDir;
 
-use agentmux::configuration::{ConfigurationError, UiConfiguration, load_ui_configuration};
+use agentmux::configuration::{
+    ConfigurationError, UiConfiguration, embedded_binding_preset, load_ui_configuration,
+    shipped_binding_presets,
+};
 use agentmux::tui::{Action, BindingContext, ConfiguredAction, PrimaryModifier, parse_chord};
 
 #[test]
@@ -76,8 +79,8 @@ fn load_bindings(body: &str) -> Result<Option<UiConfiguration>, ConfigurationErr
 ///
 /// Its purpose is that the published shape cannot drift from what the loader
 /// accepts: an edit to either that the other does not follow shows up here.
-/// That only holds if this is the whole published text, including the preset
-/// line, so it is reproduced complete even though no binding set ships yet.
+/// That only holds if this is the whole published text, so it is reproduced
+/// complete, preset line included.
 const DOCUMENTED_SHAPE: &str = r#"[bindings]
 # Binding sets applied before individually configured rows, in the order named.
 presets = ["enter-newline-primary-enter-sends"]
@@ -98,44 +101,10 @@ primary-modifier-on-macos = "control"
 "primary+enter" = "commit-picker-session"
 "#;
 
-/// The documented shape without its preset line, which is the part of it this
-/// build can accept.
-///
-/// Derived from [`DOCUMENTED_SHAPE`] rather than written out again, so drift in
-/// any other line reaches both tests rather than only the first.
-fn documented_shape_without_presets() -> String {
-    DOCUMENTED_SHAPE
-        .lines()
-        .filter(|line| !line.starts_with("presets =") && !line.starts_with("# Binding sets"))
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// The published example names a binding set, and no binding set ships yet, so
-/// the documented shape is currently refused — for that reason and no other.
-///
-/// This is what holds the whole published text under test while the registry is
-/// empty. Asserting the sole reason means a drift anywhere else in the example
-/// surfaces here as a different error rather than passing unnoticed, which
-/// dropping the preset line from the fixture would have allowed.
-///
-/// Once the named set ships, this expectation becomes a successful load and the
-/// two fixtures can become one.
-#[test]
-fn the_documented_shape_is_refused_only_for_its_unshipped_preset() {
-    let error = load_bindings(DOCUMENTED_SHAPE).expect_err("no binding set ships yet");
-    let rendered = error.to_string();
-    assert!(
-        rendered.contains("unknown binding preset: enter-newline-primary-enter-sends"),
-        "the documented shape was refused for something other than its preset: {rendered}"
-    );
-}
-
-/// Everything in the documented shape that this build supports, loaded and
-/// asserted row by row.
+/// The documented shape, loaded whole and asserted row by row.
 #[test]
 fn the_documented_configuration_shape_loads_as_written() {
-    let loaded = load_bindings(&documented_shape_without_presets())
+    let loaded = load_bindings(DOCUMENTED_SHAPE)
         .expect("the documented shape loads")
         .expect("existing config");
     let bindings = loaded.bindings.expect("a binding group");
@@ -144,7 +113,11 @@ fn the_documented_configuration_shape_loads_as_written() {
         bindings.primary_modifier_on_macos,
         Some(PrimaryModifier::Control)
     );
-    assert!(bindings.presets.is_empty());
+    assert_eq!(bindings.presets, vec!["enter-newline-primary-enter-sends"]);
+    assert!(
+        !bindings.preset_rows.is_empty(),
+        "the named binding set contributed no rows"
+    );
     assert_eq!(bindings.rows.len(), 4, "{:?}", bindings.rows);
 
     let row = |context, chord: &str| {
@@ -228,7 +201,7 @@ fn an_invalid_binding_group_is_refused_with_its_reason() {
             "unknown modifier",
         ),
         (
-            "[bindings]\npresets = [\"enter-newline-primary-enter-sends\"]\n",
+            "[bindings]\npresets = [\"no-such-binding-set\"]\n",
             "unknown binding preset",
         ),
         (
@@ -372,4 +345,66 @@ fn a_new_chord_for_a_declared_behavior_is_accepted() {
         rows[0].enhanced,
         Some(ConfiguredAction::Invoke(Action::ClearToField))
     );
+}
+
+/// Every binding set built into this binary is read by the parser that reads an
+/// operator's file, so a set that does not parse fails here rather than
+/// reaching a release.
+#[test]
+fn every_shipped_binding_set_parses() {
+    let shipped = shipped_binding_presets();
+    assert!(!shipped.is_empty(), "this build ships no binding set");
+    for preset in shipped {
+        let rows = embedded_binding_preset(preset.name, preset.text)
+            .unwrap_or_else(|error| panic!("{} does not parse: {error}", preset.name));
+        assert!(
+            !rows.is_empty(),
+            "{} parses but declares no binding",
+            preset.name
+        );
+    }
+}
+
+/// A malformed binding set is a defect in our own artifact, and must not be
+/// reported as a fault in a file the operator wrote.
+///
+/// The text is fixed at compile time and the parser is the one the check above
+/// exercises, so nothing they can edit changes the outcome; naming their file
+/// would send them auditing one that is fine. Exercised by handing the reader
+/// text that does not parse rather than by shipping a set that does not, which
+/// is the thing the check above exists to prevent.
+#[test]
+fn a_malformed_binding_set_is_not_reported_against_the_operators_file() {
+    for (description, text) in [
+        ("not TOML at all", "this is not ["),
+        (
+            "an unknown action",
+            "[bindings.compose-message]\n\"ctrl+w\" = \"fly-to-the-moon\"\n",
+        ),
+        (
+            "an unparseable chord",
+            "[bindings.compose-message]\n\"Hyper+w\" = \"send-message\"\n",
+        ),
+        ("no binding group at all", "default-bundle = \"agentmux\"\n"),
+        (
+            "a set naming a set",
+            "[bindings]\npresets = [\"enter-newline-shift-enter-sends\"]\n",
+        ),
+    ] {
+        let error = embedded_binding_preset("binding set under test", text)
+            .expect_err(&format!("{description} should be refused"));
+        assert!(
+            matches!(error, ConfigurationError::MalformedEmbeddedArtifact { .. }),
+            "{description}: classified as {error:?} rather than as a defect in our artifact"
+        );
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("built into this binary"),
+            "{description}: the message does not say where the fault is: {rendered}"
+        );
+        assert!(
+            !rendered.contains("ui.toml"),
+            "{description}: the message points at the operator's file: {rendered}"
+        );
+    }
 }

@@ -288,6 +288,14 @@ fn map_configuration_error(source: ConfigurationError, context: &str) -> Runtime
             format!("{context} {}: {}", path.display(), message),
         ),
         ConfigurationError::Io { context, source } => RuntimeError::io(context, source),
+        // Named ahead of the catch-all below, which would classify this as a
+        // fault in what the operator supplied. It is not one: the malformed
+        // text ships with this binary, their file is uninvolved, and no edit to
+        // it will change the outcome.
+        malformed @ ConfigurationError::MalformedEmbeddedArtifact { .. } => RuntimeError::io(
+            context.to_string(),
+            std::io::Error::other(malformed.to_string()),
+        ),
         unreadable @ ConfigurationError::UnreadableConfigurationLayer { .. } => {
             RuntimeError::validation(
                 "validation_unreadable_configuration_layer",

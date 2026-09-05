@@ -443,6 +443,7 @@ fn workbench_with_configured_newline() -> Workbench {
         available_bundles: vec!["agentmux".to_string()],
         bindings: Some(BindingConfiguration {
             presets: Vec::new(),
+            preset_rows: Vec::new(),
             primary_modifier_on_macos: None,
             rows: vec![ConfiguredBinding {
                 context: BindingContext::ComposeMessage,

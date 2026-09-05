@@ -62,6 +62,7 @@ fn row(context: BindingContext, chord: &str, action: Action) -> ConfiguredBindin
 fn one_row(context: BindingContext, chord: &str, action: Action) -> BindingConfiguration {
     BindingConfiguration {
         presets: Vec::new(),
+        preset_rows: Vec::new(),
         primary_modifier_on_macos: None,
         rows: vec![row(context, chord, action)],
     }

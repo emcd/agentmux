@@ -1,0 +1,16 @@
+# Enter inserts a newline in the message field, and the primary modifier with
+# Enter sends. The primary modifier is Ctrl everywhere but macOS, where
+# `primary-modifier-on-macos` decides between Ctrl and Command.
+#
+# Every row here states the `enhanced` terminal class and no other. That is what
+# confines this set to terminals reporting modified keys distinctly: where they
+# are not reported distinctly, a modified Enter arrives as a bare Enter, so
+# applying these rows would move sending onto a keystroke that cannot arrive and
+# leave nothing that sends.
+#
+# Shift+Enter still sends, and Ctrl+J still inserts a newline, because this set
+# does not name them and every default it does not name stays in force.
+
+[bindings.compose-message]
+"enter" = { enhanced = "insert-message-newline" }
+"primary+enter" = { enhanced = "send-message" }

@@ -320,7 +320,6 @@ impl AppState {
     fn rebuild_bindings(&mut self) {
         self.bindings = EffectiveBindings::build(
             self.binding_configuration.as_ref(),
-            &[],
             CapabilityClass::of(self.keyboard_enhancement.disambiguates_modified_keys()),
             cfg!(target_os = "macos"),
         );

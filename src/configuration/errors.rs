@@ -43,6 +43,19 @@ pub enum ConfigurationError {
         context: String,
         source: io::Error,
     },
+    /// A configuration artifact embedded in this binary is malformed.
+    ///
+    /// Distinct from [`InvalidConfiguration`](Self::InvalidConfiguration), which
+    /// names an operator's file, because the two send a reader to different
+    /// places. The embedded text is fixed at compile time and is read by the
+    /// same parser the repository's checks exercise, so a fault in it
+    /// implicates our own artifact rather than anything the operator wrote —
+    /// and reporting it against their file would send them auditing one that is
+    /// fine. This variant therefore carries no path.
+    MalformedEmbeddedArtifact {
+        artifact: String,
+        message: String,
+    },
 }
 
 impl ConfigurationError {
@@ -76,6 +89,16 @@ impl ConfigurationError {
     pub(super) fn invalid(path: &Path, message: impl Into<String>) -> Self {
         Self::InvalidConfiguration {
             path: path.to_path_buf(),
+            message: message.into(),
+        }
+    }
+
+    pub(super) fn malformed_embedded(
+        artifact: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::MalformedEmbeddedArtifact {
+            artifact: artifact.into(),
             message: message.into(),
         }
     }
@@ -126,6 +149,10 @@ impl Display for ConfigurationError {
                 source
             ),
             Self::Io { context, source } => write!(formatter, "{context}: {source}"),
+            Self::MalformedEmbeddedArtifact { artifact, message } => write!(
+                formatter,
+                "internal defect: the {artifact} built into this binary is malformed: {message}"
+            ),
         }
     }
 }
