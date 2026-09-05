@@ -475,8 +475,29 @@ letting a tranche boundary fall somewhere convenient.
       spec into delta, but a citation going stale is found only delta prose
       into what the change deletes, and that backwards sweep is what caught
       the single real loss in the early audit while both gates were green.
+      **The recorded baseline is short by the renamed requirements.**
+      `verify-openspec-deltas.py` matches a delta's requirement to the live
+      spec by name, so the three in this change's `RENAMED` block are
+      compared against nothing and every scenario they drop is unreported —
+      **18** of them, against the script's own **44**. Audit those by hand,
+      or with `.auxiliary/scribbles/renamed-drops.py`, and reconcile both
+      figures before checking this box. The corrected baseline is recorded on
+      `agentmux:todos/backend/8`; the script defect is
+      `agentmux:issues/openspec/1`.
+- [x] 5.16 Settle the guard evidence order's unreachable first rung, per
+      `agentmux:todos/backend/9`. The rung deriving a member's outcome from
+      its packing unit's recorded evidence was live under the push model,
+      where the relay recorded unit evidence before fanning out to members;
+      the pull model's acknowledgment records and resolves under one ledger
+      acquisition, leaving no state for it to read. Deleted, along with the
+      unit record it read and the map holding it, which had no other
+      consumer. The two-phase acknowledgment that would reintroduce the
+      window is rejected in
+      `documentation/decisions/0005-no-two-phase-acknowledgment.md`, and the
+      `Guard resolution order` section now states that the order takes no
+      rung above its two and points at that record.
 
-Tasks 5.12 through 5.15 are archive preconditions rather than testing work,
+Tasks 5.12 through 5.16 are archive preconditions rather than testing work,
 and they are recorded here rather than only in the notebook for one reason:
 `opsx-archive` reads this file and warns on an unchecked box, which puts the
 warning at the moment the mistake would be made. Nothing reads the notebook

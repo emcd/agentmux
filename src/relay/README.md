@@ -519,8 +519,8 @@ one directory apart; prefer `control` when the authorization sense is meant.
     acknowledgment. A guard is keyed by the entry's own mailbox position, which is
     its stable identity; there is no separate attempt identifier, because
     acknowledging an already-terminal entry is idempotent rather than a distinct
-    attempt to tell apart from the first. Every lifecycle trigger — collector
-    panic, closed channel, graceful
+    attempt to tell apart from the first. Every lifecycle trigger — delivery-loop
+    panic, closed channel, generation replacement, graceful
     shutdown — terminalizes through the same evidence order rather than choosing
     an outcome, so a member the relay can prove was never handed to a transport
     resolves `not_submitted` instead of being smeared into `submission_unknown`

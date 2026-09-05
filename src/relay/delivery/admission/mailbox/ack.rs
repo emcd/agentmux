@@ -102,20 +102,11 @@ fn apply(
         return Err(AckRejection::EvidenceDoesNotCoverUnit { expected: range });
     }
 
-    // The unit's shared record still carries a value, because a sibling resolved
-    // by a concurrent lifecycle trigger reads it rather than the caller's list.
-    // Every member below resolves from its own report regardless, so this decides
-    // nothing that the evidence supplied here answers for.
-    if let Some(first) = members.first()
-        && let Some(record) = state.units.get_mut(&unit)
-        && record.evidence.is_none()
-    {
-        record.evidence = Some(first.evidence);
-    }
-
-    // Each member resolves from its own report rather than from the unit's
-    // shared record: a write can submit some members of a unit and fail on
-    // others, and the record cannot express that.
+    // Each member resolves from its own report, and every member of the unit is
+    // resolved here under the acquisition this acknowledgment already holds. A
+    // write can submit some members and fail on others, so there is no unit-wide
+    // answer to record; and because no member survives this section unresolved,
+    // no lifecycle trigger can find one beside a known outcome.
     resolved.extend(resolve_positions(
         &mut state,
         &target,
@@ -227,11 +218,11 @@ mod mailbox_evidence_tests {
         );
 
         // Mixed reports across one unit are ordinary: a write can submit some
-        // members and fail on others, and the unit's shared record cannot express
-        // that. The reports are ordered so the record — written from the first
-        // member's — disagrees with both of the others: a member resolved from
-        // the record rather than from its own report would come back `Submitted`
-        // here, which is the substitution this asserts against.
+        // members and fail on others, and no unit-wide answer can express that.
+        // The reports are ordered so the first member's disagrees with both of
+        // the others: a member resolved from a sibling's report rather than its
+        // own would come back `Submitted` here, which is the substitution this
+        // asserts against.
         let acknowledgment = ack(
             &bound,
             accepted.unit,

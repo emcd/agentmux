@@ -7,7 +7,7 @@
 //! completions converge here rather than racing: exactly one caller can observe
 //! [`TerminalTransition::Won`].
 
-use super::super::guard::{GuardKey, QueueEntryState, SubmissionEvidence, resolve_from_evidence};
+use super::super::guard::{GuardKey, QueueEntryState, SubmissionEvidence, resolve_from_binding};
 use super::ledger::{LedgerState, lock_ledger};
 
 /// The outcome of attempting the single terminal transition for one member.
@@ -119,17 +119,6 @@ pub(in crate::relay) fn release_entry(
             state.per_target.remove(&entry.target);
         }
     }
-    // The unit record is read before it is released, so the last member of a unit
-    // still resolves from the same evidence its groupmates did.
-    let unit_evidence = entry.unit.and_then(|unit| {
-        let record = state.units.get_mut(&unit)?;
-        let evidence = record.evidence;
-        record.unresolved_members = record.unresolved_members.saturating_sub(1);
-        if record.unresolved_members == 0 {
-            state.units.remove(&unit);
-        }
-        evidence
-    });
     // The entry's position leaves the mailbox with it. Retiring rather than
     // merely removing is what lets the cursor advance over it: a position left
     // absent is indistinguishable from one still waiting for its payload, and
@@ -138,7 +127,7 @@ pub(in crate::relay) fn release_entry(
         mailbox.retire(entry.sequence);
     }
     TerminalTransition::Won {
-        evidence: supplied.unwrap_or_else(|| resolve_from_evidence(unit_evidence, entry.unit)),
+        evidence: supplied.unwrap_or_else(|| resolve_from_binding(entry.unit)),
         bound: entry.unit.is_some(),
         guard: entry.guard,
     }

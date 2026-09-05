@@ -94,8 +94,8 @@ where
 /// A fence acknowledgment in progress, advanced by its owner rather than
 /// awaited.
 ///
-/// The step-driven shape exists because unit evidence stays admissible through
-/// both observation windows: a caller that awaited the fence as one future would
+/// The step-driven shape exists because an acknowledgment stays admissible
+/// through both observation windows: a caller that awaited the fence as one future would
 /// stop collecting the very outcomes the fence is supposed to let it keep
 /// collecting. [`acknowledge_fence`] is the thin awaiting driver over this, so
 /// there is exactly one implementation of the protocol.
