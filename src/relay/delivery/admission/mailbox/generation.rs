@@ -226,7 +226,7 @@ mod consumer_generation_tests {
     use super::super::super::terminal::terminalize;
     use super::super::declare::declare;
     use super::super::fixtures::{
-        acknowledge, admission_key, binding, claim, mail, peeked, place, range, request, seq,
+        acknowledge, binding, claim, mail, peeked, place, range, request, reserved_envelopes, seq,
         target,
     };
     use super::super::peek::peek;
@@ -436,18 +436,186 @@ mod consumer_generation_tests {
             "an unclaimed target refuses the caller that guessed the first identifier"
         );
     }
+}
 
-    /// How many envelopes the target still has reserved.
-    ///
-    /// Read from the ledger because quota release is not otherwise visible from
-    /// inside this module, and the mailbox emptying does not imply it: depth and
-    /// reservation are separate state released by one transition, so one can
-    /// return while the other leaks.
-    fn reserved_envelopes(namespace: &str) -> usize {
-        let state = lock_ledger().expect("ledger");
-        state
-            .per_target
-            .get(&admission_key(namespace))
-            .map_or(0, |usage| usage.envelopes)
+/// A generation whose executor dies mid-unit answers each member it declared
+/// exactly once, and gives back untouched what it never declared.
+///
+/// Its own block for the reason the one above has its own: each already carries
+/// a test, and the property here is about what survives an executor rather than
+/// about how a target changes hands.
+///
+/// One test because the two halves are one boundary. The declared members and
+/// the undeclared one go through the same recovery in the same call, and the
+/// only thing separating them is whether a declaration had bound them — so
+/// asserting them apart would let a recovery that resolved everything the same
+/// way still pass one of the two.
+///
+/// A real thread that really panics, rather than a fixture that stops calling.
+/// What a dead executor leaves behind is not only an unacknowledged declaration
+/// but a ledger that has to still work: the lock is a non-reentrant
+/// `std::sync::Mutex`, so an executor that died holding it would poison it, and
+/// every operation below would answer with the silent refusal each of them maps
+/// a lock failure to rather than with the state being asserted. Only an actual
+/// unwind establishes that.
+#[cfg(test)]
+mod executor_death_tests {
+    use crate::protocol::identity::ConsumerBinding;
+    use crate::protocol::operations::AckRejection;
+
+    use super::super::super::super::guard::SubmissionEvidence;
+    use super::super::super::terminal::{TerminalTransition, terminalize};
+    use super::super::abandonment::resolve_target_entries;
+    use super::super::declare::declare;
+    use super::super::fixtures::{
+        acknowledge, claim, mail, peeked, place, range, request, reserved_envelopes, target,
+    };
+    use super::super::peek::peek;
+    use super::*;
+
+    #[test]
+    fn a_dead_executor_leaves_one_answer_per_declared_member_and_the_rest_peekable() {
+        let namespace = "mbx-executor-death";
+        let bound = claim(namespace);
+        for index in 1..=3 {
+            place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
+        }
+
+        // The delivery loop's own work, on its own thread, ending where a
+        // panicking executor ends: the declaration is recorded, the write has
+        // been attempted, and no acknowledgment will ever arrive for it. It
+        // reports what it reached before dying, so the panic below is
+        // unambiguously the deliberate one rather than a failed expectation.
+        let (report, reported) = std::sync::mpsc::channel();
+        let executor = {
+            let bound = bound.clone();
+            std::thread::spawn(move || {
+                let response =
+                    peek(&request(&bound, 10, 1_000)).expect("the executor's generation");
+                let accepted = declare(&bound, range(1, 2)).expect("a well-formed range binds");
+                report
+                    .send((response.entries.len(), accepted.unit))
+                    .expect("the relay is still listening");
+                panic!("the delivery-loop executor died between the write and the acknowledgment");
+            })
+        };
+        let (peeked_entries, unit) = reported.recv().expect("the executor reported before dying");
+        assert!(
+            executor.join().is_err(),
+            "the executor thread ended by panicking, which is the condition under test"
+        );
+
+        assert_eq!(
+            peeked_entries, 3,
+            "the executor saw the whole run before it declared a prefix of it"
+        );
+        assert_eq!(
+            peeked(&bound, 10, 1_000),
+            vec![1, 2, 3],
+            "a declaration moves no cursor, so the run the dead executor peeked is still there"
+        );
+
+        // Recovery is the supervisor's, and it brings no report of its own: the
+        // fence establishes that execution ceased, never whether the write took
+        // effect first.
+        let replacement = replace_consumer_generation(
+            &target(namespace),
+            bound.generation,
+            FenceVerdict::Positive,
+        )
+        .expect("a fenced generation is replaced");
+        let second = ConsumerBinding::new(target(namespace), replacement.generation);
+        assert_eq!(
+            replacement
+                .resolved
+                .iter()
+                .map(|member| (
+                    member.message_id.as_str(),
+                    member.evidence,
+                    member.declared,
+                    member.guard.is_some()
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    format!("{namespace}-1").as_str(),
+                    SubmissionEvidence::SubmissionUnknown,
+                    true,
+                    true
+                ),
+                (
+                    format!("{namespace}-2").as_str(),
+                    SubmissionEvidence::SubmissionUnknown,
+                    true,
+                    true
+                ),
+            ],
+            "the unit the dead executor declared resolves through the guard, once per member"
+        );
+
+        // Exactly once, and the reservation is where that is observable: the
+        // winning transition released it, so a second resolver reaching either
+        // member finds nothing left to win. A member resolved twice would look
+        // identical from its outcome alone.
+        assert_eq!(
+            terminalize(&format!("{namespace}-1")),
+            TerminalTransition::NoReservation,
+            "a member the recovery resolved has no reservation left for a second resolver"
+        );
+        assert_eq!(
+            terminalize(&format!("{namespace}-2")),
+            TerminalTransition::NoReservation,
+            "and neither does its groupmate"
+        );
+        // A zombie. Had the executor survived long enough to acknowledge, it
+        // would be answering for members another path has already resolved — so
+        // it is refused on its generation, before the unit is looked up at all.
+        assert_eq!(
+            acknowledge(&bound, unit, &[]),
+            Err(AckRejection::GenerationSuperseded),
+            "the dead executor's late acknowledgment produces no second answer"
+        );
+
+        // What it never declared is not the guard's to resolve. The executor
+        // peeked all three — peeking binds nothing — so the third comes back to
+        // the incoming generation intact rather than being swept up with the
+        // unit that died beside it.
+        assert_eq!(
+            peeked(&second, 10, 1_000),
+            vec![3],
+            "the entry the dead executor peeked and never declared is the replacement's to serve"
+        );
+        assert_eq!(
+            reserved_envelopes(namespace),
+            1,
+            "the resolved members released their reservations, and only the unserved entry holds one"
+        );
+
+        // And when that one does resolve, it resolves as a member that never
+        // reached the guard: no unit bound it, so it carries no guard identity
+        // and the stronger spelling is available to it.
+        assert_eq!(
+            resolve_target_entries(&second)
+                .iter()
+                .map(|member| (
+                    member.message_id.as_str(),
+                    member.evidence,
+                    member.declared,
+                    member.guard.is_some()
+                ))
+                .collect::<Vec<_>>(),
+            vec![(
+                format!("{namespace}-3").as_str(),
+                SubmissionEvidence::NotSubmitted,
+                false,
+                false
+            )],
+            "an undeclared member never reached the guard, and resolves saying so"
+        );
+        assert_eq!(
+            reserved_envelopes(namespace),
+            0,
+            "and the last reservation went with it"
+        );
     }
 }

@@ -375,29 +375,29 @@ letting a tranche boundary fall somewhere convenient.
 
 ## 5. Testing
 
-- [ ] 5.1 Port or rewrite the exactly-once/guard tests from
+- [x] 5.1 Port or rewrite the exactly-once/guard tests from
       `establish-delivery-commit-contract` against the two-state model:
       resolve-exactly-once under a delivery-loop-executor panic, duplicate
       acknowledgment convergence, declared-but-no-evidence member resolves
       `submission_unknown` regardless of trigger, undeclared member never
       reaches the guard at all.
-- [ ] 5.2 Add a test that genuinely races two `ack` calls for overlapping
+- [x] 5.2 Add a test that genuinely races two `ack` calls for overlapping
       entries under different generations, per the project's existing
       finding that uniqueness assertions which never contest the gate are
       tripwires, not demonstrations (see `agentmux:issues/relay/69`'s
       carried-forward finding).
-- [ ] 5.3 Add a test proving the revocation/in-flight serialization for
+- [x] 5.3 Add a test proving the revocation/in-flight serialization for
       **both** `declare` and `ack`: a call already inside the lock for the
       outgoing generation completes before a concurrently-requested
       replacement can flip `active_generation_id`, and a genuinely late
       `declare` or `ack` for a superseded generation is rejected without
       effect.
-- [ ] 5.4 Add a test proving `declare` range validation is enforced, not
+- [x] 5.4 Add a test proving `declare` range validation is enforced, not
       trusted: a `declare` call naming a non-contiguous range, a range not
       starting at cursor + 1, or a range past the mailbox's actual contents
       is rejected without binding anything — closing the "arbitrary
       `through_seq`" hole a free-form `ack` would otherwise leave.
-- [ ] 5.4a Pin the at-most-one-outstanding-declaration invariant (RG
+- [x] 5.4a Pin the at-most-one-outstanding-declaration invariant (RG
       round-2 finding): `declare(1..5)` followed by a second
       `declare(1..5)` before the first is acked — same generation, same
       target — MUST reject the second call without minting a second
@@ -405,15 +405,15 @@ letting a tranche boundary fall somewhere convenient.
       `declare(6..8)` while `1..5` is still outstanding) to confirm the
       rule is a total order, not a narrower overlap check. Confirm
       `declare(6..10)` succeeds once `1..5` has been acked.
-- [ ] 5.5 Add a test proving `ack` cannot reference an undeclared or
+- [x] 5.5 Add a test proving `ack` cannot reference an undeclared or
       already-terminalized-elsewhere `packing_unit_id`: a caller with a
       valid generation binding but no matching `declare` record cannot
       advance the cursor or release quota for any entry.
-- [ ] 5.6 Add a test for the raw-singleton peek rule: `peek` never returns
+- [x] 5.6 Add a test for the raw-singleton peek rule: `peek` never returns
       mail past an unpeeked raw entry, and returns a raw head entry alone
       even when it would fit inside `entry_max`/`canonical_bytes_max`
       alongside following mail.
-- [ ] 5.7 Add a test for partial acknowledgment: peek N, declare and ack a
+- [x] 5.7 Add a test for partial acknowledgment: peek N, declare and ack a
       unit covering M < N, confirm the remainder is still peekable,
       undeclared, and unaffected.
 - [ ] 5.8 Add a doorbell-miss test: suppress the notify, confirm the poll

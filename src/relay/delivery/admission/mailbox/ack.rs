@@ -288,6 +288,14 @@ mod mailbox_acknowledgment_tests {
             place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
         }
 
+        // The whole run is peekable first, so what follows is a *partial*
+        // acknowledgment rather than a complete one: the executor could see all
+        // five and chose to bind three.
+        assert_eq!(
+            peeked(&bound, 10, 1_000),
+            vec![1, 2, 3, 4, 5],
+            "the executor peeks the whole run before deciding how much of it to declare"
+        );
         let accepted = declare(&bound, range(1, 3)).expect("a well-formed range binds");
         let members: Vec<MemberAcknowledgment> = range(1, 3)
             .sequences()
@@ -346,9 +354,19 @@ mod mailbox_acknowledgment_tests {
             TerminalTransition::NoReservation,
             "an acknowledged member's reservation was released"
         );
-        assert!(
-            matches!(terminalize("mbx-ack-4"), TerminalTransition::Won { .. }),
-            "a member outside the acknowledged range still holds its reservation"
+        // Still reserved, and still *undeclared* — which is the half of the
+        // partial-acknowledgment rule the peek above cannot show. A remainder
+        // the acknowledgment had bound to its unit would peek exactly the same
+        // way, and would then carry a guard identity and the weaker spelling
+        // into whatever resolved it.
+        assert_eq!(
+            terminalize("mbx-ack-4"),
+            TerminalTransition::Won {
+                evidence: SubmissionEvidence::NotSubmitted,
+                bound: false,
+                guard: None,
+            },
+            "a member outside the acknowledged range still holds its reservation, unbound"
         );
 
         // A second unit, resolved after the first. Re-acknowledging the *earlier*
@@ -372,5 +390,217 @@ mod mailbox_acknowledgment_tests {
             Ok(AckAccepted::AlreadyTerminalized { range: range(1, 3) }),
             "an earlier resolved unit is still remembered once a later one resolves"
         );
+    }
+}
+
+/// Two acknowledgments for one run, under different generations, with the
+/// interleaving between them established rather than arranged.
+///
+/// Its own block for the reason the two above have theirs. One test because the
+/// claim is about an interleaving rather than about a call: neither
+/// acknowledgment's answer means anything on its own, and what has to hold is a
+/// property of the pair.
+///
+/// **Why this needs the lock boundary's reports.** The project has been here
+/// before: a probe across this arc's exactly-once tests recorded exactly one
+/// attempt per message, so their uniqueness assertions were tripwires against a
+/// future second resolver rather than demonstrations that the gate adjudicates
+/// one. Releasing two threads together does not fix that, and neither does
+/// measuring the winners — a scheduler may run either thread to completion
+/// before the other starts, and an even split of winners is precisely what that
+/// produces. Nor does announcing "about to call" from the test's own code, which
+/// establishes only that a thread reached a line in the test.
+///
+/// So the boundary reports from inside `lock_ledger`, on both sides of the
+/// acquisition, and the two phases below use it to pin each of the rule's two
+/// directions:
+///
+/// - the incumbent's acknowledgment is held *inside* the critical section with
+///   the guard in hand, which is the requirement's premise as a fact; the
+///   replacement then reaches the boundary, is watched failing to enter, and
+///   only afterwards is the incumbent let go;
+/// - the second phase runs the flip first, so the acknowledgment that follows is
+///   genuinely late rather than merely unlucky.
+///
+/// Neither phase depends on which thread the scheduler favours, so there is no
+/// winner to pin and no distribution to measure. What is asserted throughout is
+/// the property the pair owes: each entry is answered exactly once, by exactly
+/// one of the two paths.
+#[cfg(test)]
+mod cross_generation_contention_tests {
+    use crate::protocol::identity::ConsumerBinding;
+    use crate::protocol::mailbox::CursorPosition;
+
+    use super::super::super::super::fence::FenceVerdict;
+    use super::super::super::super::guard::SubmissionEvidence;
+    use super::super::super::lock_boundary;
+    use super::super::declare::declare;
+    use super::super::fixtures::{claim, mail, place, range, reserved_envelopes, seq, target};
+    use super::super::generation::replace_consumer_generation;
+    use super::*;
+
+    /// A target holding three entries, all bound to one declared unit, and the
+    /// reports that acknowledge them.
+    fn three_declared(
+        namespace: &str,
+    ) -> (ConsumerBinding, PackingUnitId, Vec<MemberAcknowledgment>) {
+        let outgoing = claim(namespace);
+        for index in 1..=3 {
+            place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
+        }
+        let declared = declare(&outgoing, range(1, 3)).expect("a well-formed range binds");
+        let members = range(1, 3)
+            .sequences()
+            .map(|sequence| MemberAcknowledgment {
+                sequence,
+                evidence: SubmissionEvidence::Submitted,
+            })
+            .collect();
+        (outgoing, declared.unit, members)
+    }
+
+    #[test]
+    fn two_acknowledgments_under_different_generations_answer_each_entry_once() {
+        let namespace = "mbx-ack-inflight";
+        let (outgoing, unit, members) = three_declared(namespace);
+
+        let boundary = lock_boundary::watch();
+        let incumbent = {
+            let binding = outgoing.clone();
+            let members = members.clone();
+            boundary.spawn(move || ack(&binding, unit, &members))
+        };
+        // Inside the critical section, holding the guard, and staying there.
+        // Everything below happens while an acknowledgment is genuinely in
+        // flight rather than merely dispatched.
+        boundary.await_holder();
+
+        let successor = {
+            let target = target(namespace);
+            let generation = outgoing.generation;
+            let members = members.clone();
+            boundary.spawn(move || {
+                let replacement =
+                    replace_consumer_generation(&target, generation, FenceVerdict::Positive)
+                        .expect("a fenced incumbent is replaced");
+                let binding = ConsumerBinding::new(target, replacement.generation);
+                let inherited = ack(&binding, unit, &members).result;
+                (replacement, inherited)
+            })
+        };
+        // The replacement is inside `lock_ledger` with nothing left but the
+        // acquisition, and it does not get in. That is the whole serialization
+        // rule: the flip cannot overtake an acknowledgment already inside.
+        boundary.await_arrival();
+        boundary.assert_none_entered();
+
+        boundary.release();
+        let incumbent = incumbent.join().expect("the incumbent's acknowledgment");
+        let (replacement, inherited) = successor.join().expect("the successor's replacement");
+
+        assert_eq!(
+            incumbent.result,
+            Ok(AckAccepted::Terminalized {
+                range: range(1, 3),
+                cursor: CursorPosition::advanced_through(seq(3)),
+            }),
+            "the acknowledgment that was inside the lock commits its whole range"
+        );
+        assert!(
+            incumbent
+                .resolved
+                .iter()
+                .all(|member| member.evidence == SubmissionEvidence::Submitted),
+            "and resolves its members from the evidence it supplied"
+        );
+        assert!(
+            replacement.resolved.is_empty(),
+            "so the replacement that followed found no outstanding declaration to resolve"
+        );
+        // The incoming generation does not inherit the outgoing one's unit: its
+        // acknowledgment history went with the consumer that made it. A
+        // successor told it had already acknowledged a run it never declared
+        // would have licence to advance a cursor twice.
+        assert_eq!(
+            inherited,
+            Err(AckRejection::UnitNotDeclared),
+            "the outgoing generation's unit is not the incoming one's to acknowledge"
+        );
+        assert_eq!(
+            answered(&incumbent.resolved, &replacement.resolved),
+            vec![
+                format!("{namespace}-1"),
+                format!("{namespace}-2"),
+                format!("{namespace}-3"),
+            ],
+            "each entry is answered exactly once, by exactly one of the two paths"
+        );
+        assert_eq!(
+            reserved_envelopes(namespace),
+            0,
+            "every reservation was released, and each of them exactly once"
+        );
+
+        // The same rule from the other direction, and deterministic for a
+        // different reason: the flip has already happened, so the
+        // acknowledgment behind it is late by construction rather than by
+        // scheduling. It must resolve nothing at all — a rejection that had
+        // terminalized part of its range could not be taken back.
+        let namespace = "mbx-ack-late";
+        let (outgoing, unit, members) = three_declared(namespace);
+        let replacement = replace_consumer_generation(
+            &target(namespace),
+            outgoing.generation,
+            FenceVerdict::Positive,
+        )
+        .expect("a fenced incumbent is replaced");
+        let late = ack(&outgoing, unit, &members);
+
+        assert_eq!(
+            late.result,
+            Err(AckRejection::GenerationSuperseded),
+            "an acknowledgment reaching the relay after the flip is refused on its generation"
+        );
+        assert!(
+            late.resolved.is_empty(),
+            "and terminalizes nothing on its way out"
+        );
+        assert!(
+            replacement
+                .resolved
+                .iter()
+                .all(|member| member.evidence == SubmissionEvidence::SubmissionUnknown),
+            "the replacement resolved the declaration it superseded through the guard, which \
+             cannot exclude a write that half-happened"
+        );
+        assert_eq!(
+            answered(&late.resolved, &replacement.resolved),
+            vec![
+                format!("{namespace}-1"),
+                format!("{namespace}-2"),
+                format!("{namespace}-3"),
+            ],
+            "and each entry is still answered exactly once"
+        );
+        assert_eq!(
+            reserved_envelopes(namespace),
+            0,
+            "with every reservation released exactly once"
+        );
+    }
+
+    /// Every message id the two paths between them resolved, in order.
+    ///
+    /// Counted across both because they are the only resolvers in play: an id
+    /// appearing twice is one send told its fate twice, and one appearing in
+    /// neither is a send owed an answer that never came.
+    fn answered(one: &[ResolvedMember], other: &[ResolvedMember]) -> Vec<String> {
+        let mut answered: Vec<String> = one
+            .iter()
+            .chain(other.iter())
+            .map(|member| member.message_id.clone())
+            .collect();
+        answered.sort();
+        answered
     }
 }

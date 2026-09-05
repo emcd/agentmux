@@ -381,11 +381,21 @@ fn ledger() -> &'static AdmissionLedger {
 }
 
 pub(super) fn lock_ledger() -> Result<std::sync::MutexGuard<'static, LedgerState>, RelayError> {
-    ledger().state.lock().map_err(|_| {
+    // The two reports sit on opposite sides of the acquisition deliberately, and
+    // they are the only way an interleaving at this boundary is observable at
+    // all: from outside, a caller inside the critical section and a caller that
+    // has not started look identical. Both compile to nothing outside the
+    // crate's own tests.
+    #[cfg(test)]
+    super::lock_boundary::reaching();
+    let guard = ledger().state.lock().map_err(|_| {
         relay_error(
             "internal_unexpected_failure",
             "failed to lock the delivery admission ledger",
             None,
         )
-    })
+    })?;
+    #[cfg(test)]
+    super::lock_boundary::inside();
+    Ok(guard)
 }

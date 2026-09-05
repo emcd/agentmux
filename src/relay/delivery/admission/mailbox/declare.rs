@@ -268,5 +268,156 @@ mod mailbox_declaration_tests {
             Err(DeclareRejection::NotContiguous { absent: seq(2) }),
             "a range spanning a position the mailbox does not hold is refused"
         );
+        // And bound nothing on its way out, which is what makes every refusal
+        // above recoverable rather than terminal for the target. A rejection
+        // that had already recorded an outstanding unit would answer this with
+        // `UnitAlreadyOutstanding`, leaving the mailbox holding a unit no
+        // executor ever declared and none can acknowledge.
+        assert!(
+            declare(&gapped_bound, range(1, 1)).is_ok(),
+            "a refused declaration binds nothing, so the head is still declarable"
+        );
+    }
+}
+
+/// A declaration and a replacement of the generation that made it cannot both
+/// take effect.
+///
+/// Its own block for the reason the one above has its own. One test because
+/// there is one property, seen from whichever side reached the lock first: a
+/// declaration is a state mutation, so it needs the same serialization against a
+/// generation flip that an acknowledgment does, and a generation check alone
+/// would not give it one.
+///
+/// **The interleaving is established, not arranged.** Releasing two threads
+/// together proves nothing about either reaching the lock, and measuring which
+/// one won proves nothing either — an even split is exactly what running one
+/// thread to completion in random order produces. So this uses the same lock
+/// boundary the acknowledgment's contention block does, and for the same reason;
+/// the full argument is there. Here the declaration is held inside the critical
+/// section while the replacement is watched reaching the boundary and failing to
+/// enter, and the second phase runs the flip first so the declaration behind it
+/// is late by construction.
+#[cfg(test)]
+mod declaration_serialization_tests {
+    use crate::protocol::identity::ConsumerBinding;
+
+    use super::super::super::super::fence::FenceVerdict;
+    use super::super::super::super::guard::SubmissionEvidence;
+    use super::super::super::lock_boundary;
+    use super::super::fixtures::{claim, mail, peeked, place, range, reserved_envelopes, target};
+    use super::super::generation::replace_consumer_generation;
+    use super::*;
+
+    /// A claimed target holding three undeclared entries.
+    fn three_queued(namespace: &str) -> ConsumerBinding {
+        let outgoing = claim(namespace);
+        for index in 1..=3 {
+            place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
+        }
+        outgoing
+    }
+
+    #[test]
+    fn a_declaration_and_a_replacement_never_both_take_effect() {
+        let namespace = "mbx-declare-inflight";
+        let outgoing = three_queued(namespace);
+
+        let boundary = lock_boundary::watch();
+        let declaring = {
+            let binding = outgoing.clone();
+            boundary.spawn(move || declare(&binding, range(1, 3)))
+        };
+        // Inside the critical section with the guard in hand: a declaration
+        // genuinely in flight, not merely dispatched.
+        boundary.await_holder();
+
+        let replacing = {
+            let target = target(namespace);
+            let generation = outgoing.generation;
+            boundary.spawn(move || {
+                replace_consumer_generation(&target, generation, FenceVerdict::Positive)
+                    .expect("a fenced incumbent is replaced")
+            })
+        };
+        // The replacement has reached the boundary and cannot cross it. A flip
+        // that could overtake a declaration already inside would leave a packing
+        // unit owned by a generation that no longer holds the target.
+        boundary.await_arrival();
+        boundary.assert_none_entered();
+
+        boundary.release();
+        let declared = declaring.join().expect("the declaring thread");
+        let replacement = replacing.join().expect("the replacing thread");
+        let incoming = ConsumerBinding::new(target(namespace), replacement.generation);
+
+        assert_eq!(
+            declared
+                .expect("the declaration that was inside the lock binds")
+                .range,
+            range(1, 3),
+            "a declaration inside the critical section binds the whole run it named"
+        );
+        // And the replacement behind it inherits that declaration rather than an
+        // empty mailbox. It has to resolve it: the record says a write was about
+        // to begin, and re-serving those entries to the incoming generation
+        // could write them a second time.
+        assert_eq!(
+            replacement
+                .resolved
+                .iter()
+                .map(|member| (member.evidence, member.declared))
+                .collect::<Vec<_>>(),
+            vec![(SubmissionEvidence::SubmissionUnknown, true); 3],
+            "and the replacement resolves what it bound, through the guard"
+        );
+        assert_eq!(
+            peeked(&incoming, 10, 1_000),
+            Vec::<u64>::new(),
+            "so the incoming generation is handed nothing that was about to be written"
+        );
+        assert_eq!(
+            reserved_envelopes(namespace),
+            0,
+            "and every resolved member released its reservation"
+        );
+
+        // The other direction, late by construction rather than by scheduling:
+        // the flip has already happened when the declaration arrives. It must
+        // bind nothing, and the entries it named must survive undisturbed for
+        // the generation that now owns them.
+        let namespace = "mbx-declare-late";
+        let outgoing = three_queued(namespace);
+        let replacement = replace_consumer_generation(
+            &target(namespace),
+            outgoing.generation,
+            FenceVerdict::Positive,
+        )
+        .expect("a fenced incumbent is replaced");
+        let incoming = ConsumerBinding::new(target(namespace), replacement.generation);
+
+        assert_eq!(
+            declare(&outgoing, range(1, 3)),
+            Err(DeclareRejection::GenerationSuperseded),
+            "a declaration reaching the relay after the flip is refused on its generation"
+        );
+        assert!(
+            replacement.resolved.is_empty(),
+            "the replacement had no declaration to resolve, so it resolved nothing"
+        );
+        assert_eq!(
+            peeked(&incoming, 10, 1_000),
+            vec![1, 2, 3],
+            "the entries the refused declaration named stay queued for the current generation"
+        );
+        assert!(
+            declare(&incoming, range(1, 3)).is_ok(),
+            "and undeclared, so the incoming generation may bind them itself"
+        );
+        assert_eq!(
+            reserved_envelopes(namespace),
+            3,
+            "the refusal resolved nothing, so it released no reservation"
+        );
     }
 }
