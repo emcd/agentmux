@@ -25,6 +25,10 @@ normalizes them into runtime structures used by CLI, MCP, relay, and TUI code.
   - Session-shape selection and coder target validation/resolution.
 - `loaders.rs`
   - Public load APIs and per-file parsing/validation orchestration.
+- `bindings.rs`
+  - Validation of the `[bindings]` group in `ui.toml`: resolving action and
+    context names against the TUI vocabulary, parsing chords, and refusing a
+    binding a context cannot perform.
 
 ## Layer Resolution
 
@@ -84,6 +88,32 @@ means shadowing each member individually.
 Relative paths inside a configuration file resolve against the same base
 regardless of which layer supplied the file, so moving a file between layers
 does not rebase what it points at.
+
+## Binding Configuration
+
+The `[bindings]` group in `ui.toml` is validated here rather than by its
+consumer, which is why this module reads the TUI's binding vocabulary
+(`crate::tui`). A configuration naming a behavior, context, or chord that does
+not exist is a fault in the file, and an operator should hear about it from the
+loader that read the file rather than from whatever later failed to find the
+name — including `agentmux check configuration`, which already loads `ui.toml`
+and so gets the diagnosis for free.
+
+That direction is one-way: `src/tui` imports nothing from here, and the two are
+wired together a layer up, in `runtime/tui_session.rs` and `commands/check.rs`.
+Returning validated structures rather than raw ones is also what keeps the
+raw-structs-private invariant below intact; handing a consumer the parsed TOML
+to interpret would have broken it.
+
+Which actions a context may bind is derived from that context's compiled rows
+rather than from a list kept here. The table declares a behavior only where it
+has an effect, so its rows already are the answer, and a second list could
+disagree with them.
+
+Chord values are read as `toml::Value` and interpreted by hand. The natural
+serde spelling is an untagged enum, but an untagged enum reports only that a
+value matched no variant, naming neither the chord nor the key at fault, which
+is not a diagnosis an operator can act on.
 
 ## Invariants
 

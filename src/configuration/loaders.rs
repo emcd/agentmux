@@ -30,6 +30,8 @@ use super::{
     },
 };
 
+use super::bindings::validate_binding_group;
+
 /// Loads bundle-group membership metadata for configured bundles.
 ///
 /// # Errors
@@ -199,7 +201,15 @@ pub fn load_ui_configuration(
         .filter(|value| !value.is_empty())
         .map(ToString::to_string);
 
-    Ok(Some(UiConfiguration { default_bundle }))
+    let bindings = parsed
+        .bindings
+        .map(|raw| validate_binding_group(&raw, &path))
+        .transpose()?;
+
+    Ok(Some(UiConfiguration {
+        default_bundle,
+        bindings,
+    }))
 }
 
 /// Loads known policy preset identifiers from `<config-root>/policies.toml`.
