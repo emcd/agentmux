@@ -910,9 +910,11 @@ sessions, applied as the `cols` and `rows` TOML keys under the per-coder
 
 The Pty transport SHALL spawn the child under a `portable_pty` master sized to
 these dimensions and construct `libghostty_vt::Terminal::new(TerminalOptions
-{ cols, rows, max_scrollback: 10_000 })` with the same dimensions. Runtime
-resize (via a future `agentmux resize <session> <cols> <rows>` command) is
-out of scope for `add-pty-transport` and deferred to a follow-up proposal.
+{ cols, rows, max_scrollback: 10_000 })` with the same dimensions. The
+transport SHALL NOT call `Terminal::resize`: the terminal is constructed at the
+configured dimensions and keeps them. Runtime resize (via a future
+`agentmux resize <session> <cols> <rows>` command) is out of scope for
+`add-pty-transport` and deferred to a follow-up proposal.
 
 `look()` SHALL return `LookSnapshotPayload::Lines { snapshot_lines }` from
 `Formatter::format_alloc(Format::Plain)` truncated to the consumer's
@@ -921,14 +923,6 @@ post-reflow); the consumer asks for what it wants. There is no requirement
 that the relay-tui consumer's viewport match the Pty-backed session's grid
 dimensions; multi-viewer dimension reconciliation is out of scope for
 `add-pty-transport` and deferred to a follow-up proposal.
-
-> **Spec-alignment note (2026-07-16, Pty archive):** the prior wording
-> "SHALL call `Terminal::resize(cols, rows, 0, 0)` once at startup" is
-> removed; the shipped Pty transport constructs the terminal at the
-> configured dimensions and never calls `Terminal::resize`. The
-> `cols` / `rows` keys continue to drive the `portable_pty` master size
-> + the initial `TerminalOptions`. A future proposal may add a runtime
-> resize path if needed.
 
 #### Scenario: Pty spawns at per-coder default dims
 
