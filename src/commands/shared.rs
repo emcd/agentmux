@@ -220,6 +220,15 @@ pub(super) fn map_bundle_load_error(source: ConfigurationError) -> RuntimeError 
             ),
         ),
         ConfigurationError::Io { context, source } => RuntimeError::io(context, source),
+        // Not a validation fault: the malformed text ships with this binary, so
+        // nothing the operator supplied is at issue and no edit to their
+        // configuration will change the outcome.
+        ref malformed @ ConfigurationError::MalformedEmbeddedArtifact { ref artifact, .. } => {
+            RuntimeError::io(
+                format!("read the {artifact} built into this binary"),
+                std::io::Error::other(malformed.to_string()),
+            )
+        }
     }
 }
 

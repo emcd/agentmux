@@ -84,6 +84,17 @@ pub(super) fn map_configuration_error(source: ConfigurationError) -> McpError {
                 "cause": source.to_string(),
             })),
         ),
+        // Not a validation fault: the malformed text ships with this binary, so
+        // nothing the caller supplied is at issue and nothing they can edit
+        // will change the outcome.
+        ConfigurationError::MalformedEmbeddedArtifact { artifact, message } => internal_tool_error(
+            "internal_unexpected_failure",
+            "an artifact built into this binary is malformed",
+            Some(json!({
+                "artifact": artifact,
+                "cause": message,
+            })),
+        ),
     }
 }
 

@@ -10,6 +10,7 @@ mod roots;
 mod targets;
 mod types;
 
+pub use bindings::{ShippedPreset, embedded_binding_preset, shipped_binding_presets};
 pub use errors::ConfigurationError;
 pub use loaders::{
     infer_sender_from_working_directory, inject_spawn_state_directory, load_bundle_configuration,

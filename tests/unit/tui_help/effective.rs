@@ -8,9 +8,9 @@
 //! surface missing from the catalogue.
 
 use agentmux::tui::{
-    Action, BindingConfiguration, BindingContext, CapabilityClass, EffectiveBindings, HelpSection,
-    default_binding, default_help_bindings, help_bindings, interaction_choice_hint,
-    interaction_write_hint, picker_hint,
+    Action, BindingConfiguration, BindingContext, CapabilityClass, ConfiguredBinding,
+    EffectiveBindings, HelpSection, default_binding, default_help_bindings, help_bindings,
+    interaction_choice_hint, interaction_write_hint, picker_hint,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 
@@ -35,7 +35,7 @@ fn an_unconfigured_run_presents_the_same_bindings_under_either_capability_class(
     let mut presented = None;
     for class in [CapabilityClass::Enhanced, CapabilityClass::Standard] {
         for on_macos in [false, true] {
-            let bindings = EffectiveBindings::build(None, &[], class, on_macos);
+            let bindings = EffectiveBindings::build(None, class, on_macos);
             let current = (
                 help_bindings(&bindings),
                 picker_hint(&bindings, BindingContext::PickerSessions),
@@ -198,35 +198,39 @@ fn the_catalogue_presents_a_contended_chord_only_under_the_row_that_wins_it() {
     // it does not reach -- the same defect as advertising a compiled row a
     // configuration took over, arriving from the other direction.
     //
-    // Neither arrangement is reachable through the loader today: it refuses a
-    // configuration binding one chord twice, and no binding set ships. Both are
-    // reachable through `EffectiveBindings::build`, which is public and takes
-    // binding-set rows from any caller, so the precedence rule is a property of
-    // the table rather than something the loader's own checks stand in for.
+    // Neither arrangement is reachable through a shipped set: the loader
+    // refuses a configuration binding one chord twice, and the sets that ship
+    // bind one context that neither of these touches. Both are reachable
+    // through a `BindingConfiguration` carrying binding-set rows directly, so
+    // the precedence rule is a property of the table rather than something the
+    // shipped sets stand in for.
     let write = BindingContext::InteractionWrite;
-    let overridden = BindingConfiguration {
-        presets: Vec::new(),
-        primary_modifier_on_macos: None,
-        rows: vec![row(write, "ctrl+g", WINNER)],
+    let build = |preset_rows: Vec<ConfiguredBinding>, rows: Vec<ConfiguredBinding>| {
+        EffectiveBindings::build(
+            Some(&BindingConfiguration {
+                presets: Vec::new(),
+                preset_rows,
+                primary_modifier_on_macos: None,
+                rows,
+            }),
+            CapabilityClass::Standard,
+            false,
+        )
     };
 
     for (arrangement, bindings) in [
         (
             "a later binding-set row supersedes an earlier one",
-            EffectiveBindings::build(
-                None,
-                &[row(write, "ctrl+g", LOSER), row(write, "ctrl+g", WINNER)],
-                CapabilityClass::Standard,
-                false,
+            build(
+                vec![row(write, "ctrl+g", LOSER), row(write, "ctrl+g", WINNER)],
+                Vec::new(),
             ),
         ),
         (
             "a configured row supersedes a binding-set row",
-            EffectiveBindings::build(
-                Some(&overridden),
-                &[row(write, "ctrl+g", LOSER)],
-                CapabilityClass::Standard,
-                false,
+            build(
+                vec![row(write, "ctrl+g", LOSER)],
+                vec![row(write, "ctrl+g", WINNER)],
             ),
         ),
     ] {
@@ -252,7 +256,6 @@ fn a_chord_no_tier_contends_is_presented_once_under_the_row_that_binds_it() {
     // nothing at all.
     let bindings = EffectiveBindings::build(
         Some(&one_row(BindingContext::InteractionWrite, "ctrl+g", WINNER)),
-        &[],
         CapabilityClass::Standard,
         false,
     );
@@ -285,7 +288,6 @@ fn a_compiled_row_a_configuration_took_over_is_not_advertised_under_its_old_beha
 
     let bindings = EffectiveBindings::build(
         Some(&one_row(write, "up", Action::MoveRawwCursorLeft)),
-        &[],
         CapabilityClass::Standard,
         false,
     );

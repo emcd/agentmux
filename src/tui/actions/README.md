@@ -126,6 +126,11 @@ Two halves, deliberately independent:
     rows any named binding set contributed, then the compiled table. The
     first tier holding the chord answers, which is what makes an
     explicit unbinding mean "nothing" rather than deferring downward.
+  - Both upper tiers arrive on the one `BindingConfiguration`: the rows
+    it declares itself, and the rows the sets it names contributed,
+    which `src/configuration` resolved when it validated the group. A
+    set names behaviors like any other row does, so the names all
+    resolve in one place rather than some of them later.
   - The capability class and the platform are arguments to `build`
     rather than probed inside it, so a caller can construct the table
     for either class on either platform without a terminal — and so the

@@ -8,7 +8,7 @@
 use std::path::Path;
 
 use super::ConfigurationError;
-use super::raw::RawBindings;
+use super::raw::{RawBindings, RawUiFile};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::tui::{
@@ -16,13 +16,122 @@ use crate::tui::{
     ConfiguredBinding, PrimaryModifier, context_actions, parse_chord,
 };
 
-/// Names of the binding sets this build ships.
+/// One binding set this build ships: the name an operator writes under
+/// `presets`, and the configuration text built into the binary that supplies
+/// its rows.
 ///
-/// Deliberately empty: the sets themselves are later work, and until they exist
-/// every preset an operator names is unknown and is refused. Accepting names
-/// provisionally would be a check with nothing behind it, and would quietly
-/// pass a configuration that does nothing.
-const SHIPPED_PRESETS: &[&str] = &[];
+/// The rows are not written in code. The text is the format an operator writes
+/// and is read by the parser that reads their file, which makes each shipped
+/// set a conformance test of the grammar — if the grammar cannot say what we
+/// want to ship, our own checks report it — and a worked example that cannot
+/// drift from what the parser accepts.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ShippedPreset {
+    pub name: &'static str,
+    pub text: &'static str,
+}
+
+/// The binding sets this build ships, in no significant order; a configuration
+/// decides the order its own presets apply in by the order it names them.
+///
+/// Both sets confine themselves to terminals that report modified keys
+/// distinctly, and each says so the only way the format has of saying it: every
+/// row states the `enhanced` class and no other, so the rows contribute nothing
+/// where the probe reports the other class. That makes the restriction
+/// structural — there is no arrangement of a configuration that applies these
+/// rows where the keystrokes they move sending onto cannot arrive.
+static SHIPPED_PRESETS: &[ShippedPreset] = &[
+    ShippedPreset {
+        name: "enter-newline-shift-enter-sends",
+        text: include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/bindings/enter-newline-shift-enter-sends.toml"
+        )),
+    },
+    ShippedPreset {
+        name: "enter-newline-primary-enter-sends",
+        text: include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/bindings/enter-newline-primary-enter-sends.toml"
+        )),
+    },
+];
+
+/// Every binding set this build ships.
+#[must_use]
+pub fn shipped_binding_presets() -> &'static [ShippedPreset] {
+    SHIPPED_PRESETS
+}
+
+/// Reads one binding set from configuration text built into this binary.
+///
+/// `artifact` names what is being read, and appears in the fault rather than a
+/// path, because there is no operator file to name.
+///
+/// Public, and taking the text rather than only a preset name, so the
+/// repository's checks can exercise both halves of the contract: that every
+/// shipped set parses, and that a set which does not is reported as a defect in
+/// our artifact rather than in the operator's file. The second cannot be
+/// checked through a name alone without shipping the malformed set it exists to
+/// keep from shipping.
+///
+/// # Errors
+///
+/// Returns [`ConfigurationError::MalformedEmbeddedArtifact`] — never a fault
+/// against an operator's file — when the text is not a binding group this
+/// build's own parser accepts.
+pub fn embedded_binding_preset(
+    artifact: &str,
+    text: &str,
+) -> Result<Vec<ConfiguredBinding>, ConfigurationError> {
+    let internal = |message: String| ConfigurationError::malformed_embedded(artifact, message);
+    let parsed =
+        toml::from_str::<RawUiFile>(text).map_err(|source| internal(source.to_string()))?;
+    let raw = parsed
+        .bindings
+        .ok_or_else(|| internal("it declares no bindings group".to_owned()))?;
+    if !raw.presets.is_empty() {
+        return Err(internal(
+            "a binding set may not name binding sets".to_owned(),
+        ));
+    }
+    if raw.primary_modifier_on_macos.is_some() {
+        return Err(internal(
+            "a binding set may not select the macOS primary modifier, which is the operator's"
+                .to_owned(),
+        ));
+    }
+    // The group is validated by the same code an operator's file goes through.
+    // Its faults name a path, which this has none of, so the message is lifted
+    // out and re-reported against the artifact instead.
+    match validate_binding_group(&raw, Path::new(artifact)) {
+        Ok(group) => Ok(group.rows),
+        Err(ConfigurationError::InvalidConfiguration { message, .. }) => Err(internal(message)),
+        Err(other) => Err(internal(other.to_string())),
+    }
+}
+
+/// The rows the named binding sets contribute, concatenated in the order named
+/// so that a later set supersedes an earlier one binding the same chord.
+fn resolve_presets(
+    names: &[String],
+    path: &Path,
+) -> Result<Vec<ConfiguredBinding>, ConfigurationError> {
+    let mut rows = Vec::new();
+    for name in names {
+        let preset = SHIPPED_PRESETS
+            .iter()
+            .find(|preset| preset.name == name)
+            .ok_or_else(|| {
+                ConfigurationError::invalid(path, format!("unknown binding preset: {name}"))
+            })?;
+        rows.extend(embedded_binding_preset(
+            &format!("binding set {}", preset.name),
+            preset.text,
+        )?);
+    }
+    Ok(rows)
+}
 
 /// Validates the `[bindings]` group, resolving every name against the TUI's
 /// vocabulary and parsing every chord.
@@ -37,11 +146,7 @@ pub(super) fn validate_binding_group(
 ) -> Result<BindingConfiguration, ConfigurationError> {
     let invalid = |message: String| ConfigurationError::invalid(path, message);
 
-    for preset in &raw.presets {
-        if !SHIPPED_PRESETS.contains(&preset.as_str()) {
-            return Err(invalid(format!("unknown binding preset: {preset}")));
-        }
-    }
+    let preset_rows = resolve_presets(&raw.presets, path)?;
 
     let primary_modifier_on_macos = match raw.primary_modifier_on_macos.as_deref() {
         None => None,
@@ -93,6 +198,7 @@ pub(super) fn validate_binding_group(
 
     Ok(BindingConfiguration {
         presets: raw.presets.clone(),
+        preset_rows,
         primary_modifier_on_macos,
         rows,
     })
