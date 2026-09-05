@@ -53,7 +53,7 @@ mod tui_bindings;
 mod tui_dispatch;
 #[path = "unit/tui_effective_bindings.rs"]
 mod tui_effective_bindings;
-#[path = "unit/tui_help.rs"]
+#[path = "unit/tui_help/mod.rs"]
 mod tui_help;
 #[path = "unit/tui_relay_error_mapping.rs"]
 mod tui_relay_error_mapping;

@@ -48,6 +48,7 @@ fn make_state() -> Workbench {
         relay_socket: PathBuf::from("/tmp/agentmux-test-relay.sock"),
         look_lines: None,
         available_bundles: vec!["agentmux".to_string(), "secondary".to_string()],
+        bindings: None,
     })
 }
 

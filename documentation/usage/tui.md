@@ -102,6 +102,9 @@ because the TUI guessed from a probe.
      Regenerate with: scripts/lint-tui-binding-documentation.sh --fix
      Do not edit between these markers; the pre-commit lint rejects drift. -->
 
+These are the defaults. A `[bindings]` group in `ui.toml` supersedes them, and
+the help overlay inside a running TUI presents whatever is in force there.
+
 The modified `Enter` forms are folded into the bare one they always match; see
 [Terminal keyboard capability](#terminal-keyboard-capability).
 

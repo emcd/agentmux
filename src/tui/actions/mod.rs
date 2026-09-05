@@ -15,6 +15,6 @@ pub use effective::{
 };
 pub(crate) use help::context_actions;
 pub use help::{
-    HelpEntry, HelpSection, HelpSource, binding_for, context_bindings, help_bindings,
-    interaction_choice_hint, interaction_write_hint, picker_hint, typing_binding,
+    HelpEntry, HelpSection, HelpSource, binding_for, context_bindings, default_help_bindings,
+    help_bindings, interaction_choice_hint, interaction_write_hint, picker_hint, typing_binding,
 };

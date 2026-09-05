@@ -466,6 +466,7 @@ fn action_workbench() -> Workbench {
         relay_socket: PathBuf::from("/tmp/agentmux-action-test-relay.sock"),
         look_lines: None,
         available_bundles: vec!["agentmux".to_string()],
+        bindings: None,
     })
 }
 

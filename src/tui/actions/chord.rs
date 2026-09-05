@@ -58,6 +58,28 @@ impl Chord {
         }
     }
 
+    /// The single keystroke this chord's written form stands for, or `None`
+    /// where it stands for no one keystroke.
+    ///
+    /// Several shapes match more keystrokes than they are written as.
+    /// [`Chord::AnyModifiers`] renders as the bare key and matches it under any
+    /// modifier; [`Chord::Control`] renders one character and matches it under
+    /// any superset of `Ctrl`. What this answers is the narrower question
+    /// presentation asks: which keystroke does a reader who copies this chord
+    /// out of the overlay actually press.
+    ///
+    /// [`Chord::Text`] answers `None`. It stands for typing rather than for a
+    /// key, which is the same reason it is outside the configuration grammar.
+    pub(crate) fn denoted_keystroke(self) -> Option<(KeyCode, KeyModifiers)> {
+        match self {
+            Self::Key(code, modifiers) => Some((code, modifiers)),
+            Self::AnyModifiers(code) => Some((code, KeyModifiers::NONE)),
+            Self::Control(character) => Some((KeyCode::Char(character), KeyModifiers::CONTROL)),
+            Self::Char(character) => Some((KeyCode::Char(character), KeyModifiers::NONE)),
+            Self::Text => None,
+        }
+    }
+
     pub(super) fn matches(self, code: KeyCode, modifiers: KeyModifiers) -> bool {
         match self {
             Self::Key(row_code, row_modifiers) => code == row_code && modifiers == row_modifiers,

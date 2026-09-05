@@ -18,7 +18,8 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use agentmux::runtime::error::RuntimeError;
 use agentmux::tui::{
-    Action, BindingContext, TuiLaunchOptions, default_binding,
+    Action, BindingConfiguration, BindingContext, ConfiguredAction, ConfiguredBinding,
+    TuiLaunchOptions, default_binding, parse_chord,
     workbench::{Workbench, WorkbenchField, WorkbenchMode, WorkbenchPickerColumn},
 };
 
@@ -32,6 +33,7 @@ fn dispatch_workbench() -> Workbench {
         relay_socket: PathBuf::from("/tmp/agentmux-dispatch-test-relay.sock"),
         look_lines: None,
         available_bundles: vec!["agentmux".to_string()],
+        bindings: None,
     })
 }
 
@@ -427,4 +429,71 @@ fn dispatching_a_chord_and_applying_its_bound_action_leave_the_same_state() {
             "state differs between dispatch and application for {label}"
         );
     }
+}
+
+/// A workbench whose message field binds one extra chord to inserting a
+/// newline, as an operator's `ui.toml` would.
+fn workbench_with_configured_newline() -> Workbench {
+    let inserts = ConfiguredAction::Invoke(Action::InsertMessageNewline);
+    Workbench::new(TuiLaunchOptions {
+        namespace: "agentmux".to_string(),
+        sender_session: "tui".to_string(),
+        relay_socket: PathBuf::from("/tmp/agentmux-dispatch-configured-relay.sock"),
+        look_lines: None,
+        available_bundles: vec!["agentmux".to_string()],
+        bindings: Some(BindingConfiguration {
+            presets: Vec::new(),
+            primary_modifier_on_macos: None,
+            rows: vec![ConfiguredBinding {
+                context: BindingContext::ComposeMessage,
+                chord: parse_chord("ctrl+n").expect("the fixture chord parses"),
+                enhanced: Some(inserts),
+                standard: Some(inserts),
+            }],
+        }),
+    })
+}
+
+#[test]
+fn dispatch_resolves_against_the_configured_table_rather_than_the_compiled_one() {
+    const CONFIGURED: KeyEvent = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+
+    // The compiled table binds nothing to this chord in the message field, and
+    // that is the premise the rest of the test rests on: without it, the chord
+    // could reach the behavior through a row that was always there.
+    assert_eq!(
+        default_binding(
+            BindingContext::ComposeMessage,
+            CONFIGURED.code,
+            CONFIGURED.modifiers
+        ),
+        None
+    );
+
+    // An unconfigured workbench is unmoved by it, so what follows is the
+    // configuration's doing and not the keystroke's.
+    let mut unconfigured = dispatch_workbench();
+    compose_message(&mut unconfigured);
+    unconfigured
+        .dispatch_event(Event::Key(CONFIGURED))
+        .expect("an unbound chord reaches no relay");
+    assert_eq!(unconfigured.message_field(), "hello");
+
+    let mut configured = workbench_with_configured_newline();
+    compose_message(&mut configured);
+    configured
+        .dispatch_event(Event::Key(CONFIGURED))
+        .expect("inserting a newline reaches no relay");
+    assert_eq!(configured.message_field(), "hello\n");
+
+    // The chord the compiled row already declared still reaches the behavior:
+    // a configured row adds to the context rather than replacing what it did
+    // not name.
+    configured
+        .dispatch_event(Event::Key(KeyEvent::new(
+            KeyCode::Char('j'),
+            KeyModifiers::CONTROL,
+        )))
+        .expect("inserting a newline reaches no relay");
+    assert_eq!(configured.message_field(), "hello\n\n");
 }

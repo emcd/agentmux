@@ -6,6 +6,7 @@ use crate::configuration::{
 };
 
 use super::error::RuntimeError;
+use crate::tui::BindingConfiguration;
 
 const GLOBAL_SESSION_SUFFIX: &str = "@GLOBAL";
 
@@ -136,6 +137,26 @@ fn load_ui_default_bundle(
     Ok(load_ui_configuration(configuration_roots)
         .map_err(|source| map_configuration_error(source, "load UI configuration"))?
         .and_then(|configuration| configuration.default_bundle))
+}
+
+/// Loads the operator's `ui.toml` binding group from the configuration layers.
+///
+/// A sibling of [`load_ui_default_bundle`] rather than part of it: both read
+/// the same file, and both are here so that the mapping from a configuration
+/// fault to an operator-facing error has one definition. A missing file, or one
+/// declaring no bindings, resolves to `None` and leaves the compiled defaults
+/// in force.
+///
+/// # Errors
+///
+/// Returns `RuntimeError` when `ui.toml` is malformed or its binding group does
+/// not validate.
+pub fn load_ui_binding_configuration(
+    configuration_roots: &ConfigurationRoots,
+) -> Result<Option<BindingConfiguration>, RuntimeError> {
+    Ok(load_ui_configuration(configuration_roots)
+        .map_err(|source| map_configuration_error(source, "load UI configuration"))?
+        .and_then(|configuration| configuration.bindings))
 }
 
 fn resolve_bundle_name(

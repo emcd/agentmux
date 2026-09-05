@@ -6,7 +6,7 @@ use crate::relay::{RelayStreamEvent, SendResult};
 use crate::runtime::error::RuntimeError;
 
 use super::{
-    Action, BindingContext, HelpSection, actions, input,
+    Action, BindingContext, EffectiveBindings, HelpSection, actions, input,
     state::{
         AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField, PendingChoiceEntry,
         PickerColumn, Recipient, ScreenMode, TuiLaunchOptions,
@@ -198,8 +198,13 @@ impl Workbench {
     }
 
     /// The binding context the workbench's current state resolves to — the
-    /// surface whose rows own a chord right now. Pair it with
-    /// [`crate::tui::default_binding`] to ask what a chord would do here.
+    /// surface whose rows own a chord right now.
+    ///
+    /// To ask what a chord would actually do here, resolve it against
+    /// [`Workbench::bindings`] over [`Workbench::binding_lookup_order`], which
+    /// is what dispatch itself does. [`crate::tui::default_binding`] answers the
+    /// narrower question of what the chord does *before* any configuration, and
+    /// a host that used it would silently ignore the operator's own bindings.
     pub fn binding_context(&self) -> BindingContext {
         actions::binding_context(&self.state)
     }
@@ -212,16 +217,27 @@ impl Workbench {
         actions::binding_lookup_order(&self.state)
     }
 
+    /// The bindings in force: what the operator configured over what ships.
+    ///
+    /// The seam a host renders its own surfaces from.
+    /// [`crate::tui::picker_hint`] and its siblings take one of these, so a
+    /// caller outside the crate can compose the same hint strips the TUI draws
+    /// without reaching into the table.
+    pub fn bindings(&self) -> &EffectiveBindings {
+        &self.state.bindings
+    }
+
     /// The bindings as the help overlay presents them, from this workbench.
     ///
     /// Deliberately answers from the whole table rather than from
     /// [`Workbench::binding_context`]: help is a catalogue of what exists, not
-    /// a report of what the current surface owns. Taking `&self` and ignoring
-    /// it is what makes that assertable from outside the crate -- a later
-    /// change that filtered by the active surface would have to read state
-    /// here, and the callers that compare two workbenches would catch it.
+    /// a report of what the current surface owns. What it reads is the
+    /// effective table, which is a property of the run and not of the surface,
+    /// so the catalogue is still the same wherever it was opened from -- and
+    /// the callers that compare two workbenches on different surfaces are what
+    /// hold that.
     pub fn help_bindings(&self) -> Vec<HelpSection> {
-        actions::help_bindings()
+        actions::help_bindings(&self.state.bindings)
     }
 
     pub fn events_overlay_open(&self) -> bool {

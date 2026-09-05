@@ -48,8 +48,9 @@ pub(super) fn render_interaction_mode(frame: &mut Frame, area: Rect, state: &mut
 /// naming the behavior instead. Naming a chord the table does not declare is
 /// the transcription this module no longer does, and a prompt to press nothing
 /// is worse than one that says what to reach for.
-fn pane_chord(context: BindingContext, action: Action) -> Option<String> {
-    actions::binding_for(context, action).map(|entry| entry.primary_chord().to_string())
+fn pane_chord(state: &AppState, context: BindingContext, action: Action) -> Option<String> {
+    actions::binding_for(&state.bindings, context, action)
+        .map(|entry| entry.primary_chord().to_string())
 }
 
 fn render_interaction_target_header(frame: &mut Frame, area: Rect, state: &AppState) {
@@ -57,7 +58,7 @@ fn render_interaction_target_header(frame: &mut Frame, area: Rect, state: &AppSt
         Some(target) => format!("  Interaction target: {target}  "),
         // With no target there are no pending choices, so the write pane is the
         // one this header sits above and the one whose binding it quotes.
-        None => match pane_chord(BindingContext::InteractionWrite, Action::OpenPicker) {
+        None => match pane_chord(state, BindingContext::InteractionWrite, Action::OpenPicker) {
             Some(chord) => {
                 format!("  Interaction target: (none) — press {chord} to choose a session  ")
             }
@@ -81,10 +82,10 @@ fn render_interaction_target_header(frame: &mut Frame, area: Rect, state: &AppSt
 /// help overlay: help catalogues every surface, a hint annotates the one it
 /// sits on. Which behaviors are worth advertising is declared in
 /// `actions::interaction_write_hint`; their chords and wording are the table's.
-fn write_pane_hint() -> String {
+fn write_pane_hint(state: &AppState) -> String {
     // The scope qualifier is dropped: every one of these is a write-pane
     // binding and the pane it is printed in has already said so.
-    let advertised = actions::interaction_write_hint()
+    let advertised = actions::interaction_write_hint(&state.bindings)
         .into_iter()
         .map(|entry| {
             format!(
@@ -105,7 +106,7 @@ fn render_interaction_raww_pane(frame: &mut Frame, area: Rect, state: &AppState)
         // Wrapped rather than truncated: the generated wording is longer than
         // the sentence it replaces, and a prompt that loses its last binding
         // to the pane edge is worse than one that takes a second row.
-        wrap_text(&write_pane_hint(), inner.width as usize)
+        wrap_text(&write_pane_hint(state), inner.width as usize)
             .into_iter()
             .map(|line| Line::from(Span::styled(line, Style::default().fg(Color::DarkGray))))
             .collect()
@@ -198,10 +199,10 @@ const CHOICE_PANE_TITLE: &str = "  Session Choices  ";
 /// picker strip drops a qualifier rather than splitting an entry. The
 /// hand-written title this replaces was cut the same way and said nothing about
 /// it; generated wording is only the reason the width came up.
-fn choice_pane_title(width: u16) -> String {
+fn choice_pane_title(state: &AppState, width: u16) -> String {
     // The scope qualifier is dropped: every one of these is a choice-pane
     // binding and the pane it is printed on has already said so.
-    let advertised = actions::interaction_choice_hint()
+    let advertised = actions::interaction_choice_hint(&state.bindings)
         .into_iter()
         .map(|entry| {
             format!(
@@ -229,7 +230,7 @@ fn render_look_choice_section(frame: &mut Frame, area: Rect, state: &AppState) {
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(choice_pane_title(inner_width)),
+            .title(choice_pane_title(state, inner_width)),
     );
     frame.render_widget(paragraph, area);
 }
@@ -318,8 +319,9 @@ fn push_labeled_lines(
 /// The pane's title advertises this behavior too, but the title is dropped
 /// whole at narrow widths, and this is the one place the operator is told that
 /// cancelling is not merely available but the only move.
-fn no_options_prompt() -> String {
+fn no_options_prompt(state: &AppState) -> String {
     match pane_chord(
+        state,
         BindingContext::InteractionChoice,
         Action::ResolveChoiceCancelled,
     ) {
@@ -330,15 +332,17 @@ fn no_options_prompt() -> String {
 
 /// Where the operator goes when a session has nothing to decide, generated from
 /// the choice pane's own bindings.
-fn empty_choice_prompt() -> String {
-    let choose = pane_chord(BindingContext::InteractionChoice, Action::OpenPicker).map_or_else(
-        || "Open the picker".to_string(),
-        |chord| format!("Press {chord}"),
-    );
-    let switch = pane_chord(BindingContext::InteractionChoice, Action::ToggleMode).map_or_else(
-        || "switch modes".to_string(),
-        |chord| format!("press {chord}"),
-    );
+fn empty_choice_prompt(state: &AppState) -> String {
+    let choose = pane_chord(state, BindingContext::InteractionChoice, Action::OpenPicker)
+        .map_or_else(
+            || "Open the picker".to_string(),
+            |chord| format!("Press {chord}"),
+        );
+    let switch = pane_chord(state, BindingContext::InteractionChoice, Action::ToggleMode)
+        .map_or_else(
+            || "switch modes".to_string(),
+            |chord| format!("press {chord}"),
+        );
     format!("{choose} to choose another session, or {switch} for Communication.")
 }
 
@@ -347,7 +351,7 @@ fn render_look_choice_lines(state: &AppState, width: u16) -> Vec<Line<'static>> 
     if pending.is_empty() {
         return vec![
             Line::from("(no pending choice requests for this session)"),
-            Line::from(empty_choice_prompt()),
+            Line::from(empty_choice_prompt(state)),
         ];
     }
 
@@ -376,7 +380,7 @@ fn render_look_choice_lines(state: &AppState, width: u16) -> Vec<Line<'static>> 
     )));
 
     if options.is_empty() {
-        lines.push(Line::from(no_options_prompt()));
+        lines.push(Line::from(no_options_prompt(state)));
         return lines;
     }
 
@@ -417,6 +421,7 @@ mod tests {
             relay_socket: std::path::PathBuf::from("/tmp/agentmux-choice-render.sock"),
             look_lines: None,
             available_bundles: vec!["agentmux".to_string()],
+            bindings: None,
         })
     }
 
@@ -483,7 +488,8 @@ mod tests {
         // rendered title against what `choice_pane_title` returns would only ask
         // the function to agree with itself; this asks whether any *start* of an
         // advertised binding reached the buffer without the rest of it.
-        let advertised: Vec<String> = actions::interaction_choice_hint()
+        let idle = workbench();
+        let advertised: Vec<String> = actions::interaction_choice_hint(&idle.bindings)
             .into_iter()
             .map(|entry| {
                 format!(
@@ -495,7 +501,6 @@ mod tests {
             .collect();
         assert!(!advertised.is_empty(), "the choice pane advertises nothing");
 
-        let idle = workbench();
         for (width, height) in [(120, 20), (90, 18), (80, 16), (70, 14), (60, 12), (50, 10)] {
             let text = flowed(&draw(&idle, width, height));
             for phrase in &advertised {
@@ -511,9 +516,12 @@ mod tests {
             // The prompt names the chord the table declares for this context,
             // not one written here. Without this the pane could advertise
             // nothing at every width and the equality above would still hold.
-            let opens_picker =
-                actions::binding_for(BindingContext::InteractionChoice, Action::OpenPicker)
-                    .expect("the choice pane binds opening the picker");
+            let opens_picker = actions::binding_for(
+                &idle.bindings,
+                BindingContext::InteractionChoice,
+                Action::OpenPicker,
+            )
+            .expect("the choice pane binds opening the picker");
             assert!(
                 text.contains(opens_picker.primary_chord()),
                 "the empty-choices prompt does not name {:?} at {width}x{height}:\n{text}",
@@ -535,12 +543,13 @@ mod tests {
         // tells the operator that cancelling is the only move. The title drops
         // its bindings whole at narrow widths, so this line is what carries the
         // chord there, and it must be the chord the table declares.
+        let optionless = awaiting_an_optionless_request();
         let cancels = actions::binding_for(
+            &optionless.bindings,
             BindingContext::InteractionChoice,
             Action::ResolveChoiceCancelled,
         )
         .expect("the choice pane binds resolving as cancelled");
-        let optionless = awaiting_an_optionless_request();
         for (width, height) in [(120, 20), (70, 14), (50, 10)] {
             let text = flowed(&draw(&optionless, width, height));
             assert!(

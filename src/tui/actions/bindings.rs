@@ -123,22 +123,43 @@ pub(crate) struct ContextBindings {
 /// character must precede its context's [`Chord::Text`] row, or typing that
 /// character would reach the draft instead of its binding.
 ///
-/// This reports the compiled **defaults**. It is the read side of the table for
-/// dispatch, presentation, and any host asking what a chord means on a surface;
-/// it is not a claim that the chord is fixed, since operator-configured
-/// bindings are the intended successor to this table.
+/// This reports the compiled **defaults**, and is the bottom tier of
+/// [`super::EffectiveBindings`] rather than what dispatch or the help overlay
+/// call directly: an operator's configuration resolves ahead of it, and answers
+/// this question differently where it speaks. It remains the answer for a host
+/// asking what a chord means before any configuration, and for the generated
+/// usage guide, which has none to read.
 pub fn default_binding(
     context: BindingContext,
     code: KeyCode,
     modifiers: KeyModifiers,
 ) -> Option<Action> {
-    BINDINGS
-        .iter()
-        .find(|group| group.context == context)?
-        .rows
-        .iter()
+    default_rows(context)
         .find(|row| row.chord.matches(code, modifiers))
         .and_then(|row| row.action.action_for(code))
+}
+
+/// Every row one context declares, in the order they are consulted.
+pub(crate) fn default_rows(context: BindingContext) -> impl Iterator<Item = &'static ContextRow> {
+    BINDINGS
+        .iter()
+        .find(move |group| group.context == context)
+        .map(|group| group.rows.iter())
+        .unwrap_or_default()
+}
+
+/// The heading one context's compiled rows file a behavior under.
+///
+/// A configured row carries a chord and a behavior and says nothing about where
+/// to present it. It does not have to: a configuration may only bind a behavior
+/// the context's compiled rows already declare, so the heading that behavior is
+/// filed under in that context is always already decided. Reading it from here
+/// is what keeps an operator's row in the section its behavior belongs to
+/// rather than in one a configuration would otherwise have to name.
+pub(crate) fn default_section(context: BindingContext, action: Action) -> Option<DisplaySection> {
+    default_rows(context)
+        .find(|row| row.action == BoundAction::Fixed(action))
+        .map(|row| row.section)
 }
 
 const fn row(chord: Chord, action: Action, section: DisplaySection) -> ContextRow {

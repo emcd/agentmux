@@ -127,6 +127,7 @@ fn workbench_for(socket: PathBuf) -> Workbench {
         // A single available bundle keeps refresh from fanning out cross-bundle
         // list requests; the error path returns before that fan-out anyway.
         available_bundles: vec!["agentmux".to_string()],
+        bindings: None,
     })
 }
 

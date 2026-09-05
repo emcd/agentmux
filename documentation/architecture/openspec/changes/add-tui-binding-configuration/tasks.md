@@ -105,21 +105,39 @@
 
 ## 5. Wiring the consumers
 
-- [ ] 5.1 Hold the effective table on the workbench, built where the loaded
-      configuration and the probe outcome are both in hand.
-- [ ] 5.2 Resolve dispatch against the effective table.
-- [ ] 5.3 Generate the help overlay and the pane hint strips from the effective
-      table.
-- [ ] 5.4 Keep `examples/tui-binding-reference.rs` and the usage guide reading
+- [x] 5.1 Hold the effective table on the workbench, built where the loaded
+      configuration and the probe outcome are both in hand. The configuration
+      arrives as a launch option and the table is rebuilt when the probe
+      outcome is recorded, so a run cannot start having silently ignored a
+      binding group the operator wrote.
+- [x] 5.2 Resolve dispatch against the effective table. Precedence between
+      contexts stays in the dispatch layer, since the table answers for one
+      context at a time.
+- [x] 5.3 Generate the help overlay and the pane hint strips from the effective
+      table. A context presents its configured rows ahead of whatever of its
+      compiled rows the configuration left standing; a compiled row drops out
+      where a higher tier claimed the keystroke that row is written as.
+- [x] 5.4 Keep `examples/tui-binding-reference.rs` and the usage guide reading
       the default table, and state in the generated section that it documents
-      defaults an operator configuration supersedes.
-- [ ] 5.5 Add a test that a configured rebinding appears in the help overlay,
+      defaults an operator configuration supersedes. The example reads
+      `default_help_bindings`, which takes no effective table rather than
+      defaulting one, so a runtime-specific table is not passable there.
+- [x] 5.5 Add a test that a configured rebinding appears in the help overlay,
       and that it appears in a pane hint strip that advertises the rebound
       action — the picker and interaction strips carry such bindings; the
-      compose surface has no strip today.
-- [ ] 5.6 Confirm `scripts/lint-tui-binding-documentation.sh` still passes and
+      compose surface has no strip today. A second test covers the half that
+      leaves open: the compiled row a configured chord took over stops being
+      advertised.
+
+      The displacement test is sited on the message field rather than the
+      picker. The picker's two columns declare the same rows, so configuring
+      one column leaves the other's chord standing and the catalogue rightly
+      keeps presenting it — which is behavior, not a defect, and would have
+      made the assertion a false alarm.
+- [x] 5.6 Confirm `scripts/lint-tui-binding-documentation.sh` still passes and
       still fails on drift, given the generated section now carries the
-      defaults statement.
+      defaults statement. Checked in both directions: an edit to the committed
+      block and a changed compiled row each fail it.
 
 ## 6. Presets
 
