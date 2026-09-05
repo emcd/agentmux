@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use super::roots::{ConfigurationRoots, LAYER_SEPARATOR};
-use crate::tui::{Action, BindingContext, ChordPattern, PrimaryModifier};
+use crate::tui::BindingConfiguration;
 
 pub const RESERVED_GROUP_ALL: &str = "ALL";
 
@@ -466,48 +466,6 @@ pub struct UiConfiguration {
     pub default_bundle: Option<String>,
     /// The operator's key bindings, absent when the file declares none.
     pub bindings: Option<BindingConfiguration>,
-}
-
-/// An operator's validated `[bindings]` group.
-///
-/// Every name here has already been resolved against the TUI's vocabulary and
-/// every chord already parsed, so a consumer receives behaviors and chords
-/// rather than strings to interpret. Validation belongs at load because a
-/// configuration naming something that does not exist is a fault in the file,
-/// and the operator wants to hear about it from the loader that read the file
-/// rather than from whatever later failed to find the name.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct BindingConfiguration {
-    /// Named binding sets to apply, in the order given.
-    pub presets: Vec<String>,
-    /// Which literal modifier the symbolic `primary` modifier resolves to on
-    /// macOS. Absent leaves the default, which is `Ctrl`.
-    pub primary_modifier_on_macos: Option<PrimaryModifier>,
-    /// One entry per configured chord, in the order the file declares them.
-    pub rows: Vec<ConfiguredBinding>,
-}
-
-/// One configured chord and what it invokes, per terminal capability class.
-///
-/// A class left `None` is one the configuration did not speak for, and keeps
-/// whatever the compiled default says. That is distinct from a class bound to
-/// [`ConfiguredAction::Unbound`], which the operator deliberately emptied.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ConfiguredBinding {
-    pub context: BindingContext,
-    pub chord: ChordPattern,
-    pub enhanced: Option<ConfiguredAction>,
-    pub standard: Option<ConfiguredAction>,
-}
-
-/// What a configured chord invokes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ConfiguredAction {
-    /// The named behavior.
-    Invoke(Action),
-    /// Nothing: the chord is inert here, and does not fall through to the
-    /// compiled default.
-    Unbound,
 }
 
 impl TuiConfiguration {

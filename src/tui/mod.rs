@@ -23,7 +23,8 @@ use keyboard::KeyboardEnhancementSession;
 
 pub(crate) use actions::context_actions;
 pub use actions::{
-    Action, BindingContext, ChordError, ChordPattern, HelpEntry, HelpSection, HelpSource,
+    Action, BindingConfiguration, BindingContext, CapabilityClass, ChordError, ChordPattern,
+    ConfiguredAction, ConfiguredBinding, EffectiveBindings, HelpEntry, HelpSection, HelpSource,
     PrimaryModifier, binding_for, context_bindings, default_binding, help_bindings,
     interaction_choice_hint, interaction_write_hint, parse_chord, picker_hint, primary_modifier,
     typing_binding,
