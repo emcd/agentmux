@@ -4,22 +4,94 @@ use crate::runtime::error::RuntimeError;
 
 use super::super::state::AppState;
 
-/// Every operator-invocable workbench behavior, named independently of the key
-/// chord that reaches it.
+/// Stands in for the typed character in [`Action::ALL`]'s data-carrying
+/// entries. Never read: those entries exist so the list covers every variant,
+/// and what distinguishes them is the variant rather than this value.
+const PLACEHOLDER_CHARACTER: char = '\0';
+
+/// Declares the behavior vocabulary once, so the enum, the list of every
+/// behavior, and the operator-facing names cannot disagree.
 ///
-/// Resolving a chord to an `Action` is separable from applying one: applying
-/// requires no `KeyEvent`, so a host that owns its own event loop and its own
-/// bindings can drive the workbench by action alone.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Action {
+/// Completeness is the reason this is a macro rather than three hand-kept
+/// declarations. An exhaustive `match` forces a new variant to be *considered*,
+/// but nothing forces it into a separate list, and a behavior missing from that
+/// list would carry a name no lookup could find while every test that walks the
+/// list still passed. Generating all three from one place removes the seam
+/// entirely: a behavior exists only by appearing here.
+///
+/// A variant naming `None` carries the operator's typed character and is
+/// therefore outside the configurable vocabulary; see
+/// [`Action::carries_operator_input`].
+macro_rules! declare_action_vocabulary {
+    (
+        $(
+            $(#[$meta:meta])*
+            $variant:ident $(($payload:ty))? => $name:expr,
+        )+
+    ) => {
+        /// Every operator-invocable workbench behavior, named independently of
+        /// the key chord that reaches it.
+        ///
+        /// Resolving a chord to an `Action` is separable from applying one:
+        /// applying requires no `KeyEvent`, so a host that owns its own event
+        /// loop and its own bindings can drive the workbench by action alone.
+        #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+        pub enum Action {
+            $(
+                $(#[$meta])*
+                $variant $(($payload))?,
+            )+
+        }
+
+        impl Action {
+            /// Every behavior in the vocabulary, so a caller can ask what the
+            /// whole set contains rather than discovering members one binding
+            /// at a time.
+            ///
+            /// Complete by construction: this and the enum are generated from
+            /// one declaration, so a behavior cannot exist without appearing
+            /// here. The variants carrying a typed character appear with a
+            /// placeholder, since what distinguishes them is the variant rather
+            /// than the character an operator happened to press.
+            pub const ALL: &'static [Action] = &[
+                $( Action::$variant $((declare_action_vocabulary!(@placeholder $payload)))? ),+
+            ];
+
+            /// This behavior's name in an operator's binding configuration,
+            /// where it has one.
+            ///
+            /// Kebab-case, and deliberately not the variant identifier: a
+            /// configuration is written by someone who has not read this
+            /// source.
+            ///
+            /// Answers `None` for exactly the behaviors
+            /// [`Action::carries_operator_input`] answers `true` for. The two
+            /// are separate declarations that a test holds in agreement, rather
+            /// than one derived from the other, so neither can be quietly
+            /// widened.
+            #[must_use]
+            pub const fn configuration_name(self) -> Option<&'static str> {
+                match self {
+                    // A braced pattern matches a unit variant and a
+                    // payload-carrying one alike, so the arm does not have to
+                    // vary with the shape of the entry.
+                    $( Self::$variant { .. } => $name, )+
+                }
+            }
+        }
+    };
+    (@placeholder $payload:ty) => { PLACEHOLDER_CHARACTER };
+}
+
+declare_action_vocabulary! {
     /// Asks the event loop to shut down.
-    Quit,
+    Quit => Some("quit"),
     /// Opens the help overlay, or closes it when it is already open. Opening
     /// dismisses the picker and the events overlay.
-    ToggleHelpOverlay,
+    ToggleHelpOverlay => Some("toggle-help-overlay"),
     /// Opens the events overlay, or closes it when it is already open. Opening
     /// dismisses the picker and the help overlay.
-    ToggleEventsOverlay,
+    ToggleEventsOverlay => Some("toggle-events-overlay"),
     /// Moves the help overlay's viewport one row toward the start of its
     /// content.
     ///
@@ -27,85 +99,113 @@ pub enum Action {
     /// are drawn through a viewport. These six behaviors move it, and are the
     /// only actions in this vocabulary whose effect is confined to what is on
     /// screen.
-    ScrollHelpUp,
+    ScrollHelpUp => Some("scroll-help-up"),
     /// Moves the help overlay's viewport one row toward the end of its content.
-    ScrollHelpDown,
+    ScrollHelpDown => Some("scroll-help-down"),
     /// Moves the help overlay's viewport back by the height of its viewport.
-    ScrollHelpPageUp,
+    ScrollHelpPageUp => Some("scroll-help-page-up"),
     /// Moves the help overlay's viewport on by the height of its viewport.
-    ScrollHelpPageDown,
+    ScrollHelpPageDown => Some("scroll-help-page-down"),
     /// Returns the help overlay's viewport to the start of its content.
-    ScrollHelpToStart,
+    ScrollHelpToStart => Some("scroll-help-to-start"),
     /// Moves the help overlay's viewport to the end of its content.
-    ScrollHelpToEnd,
+    ScrollHelpToEnd => Some("scroll-help-to-end"),
     /// Switches the active screen mode, dismissing whichever surface is open so
     /// the mode beneath it is the one that changes.
-    ToggleMode,
+    ToggleMode => Some("toggle-mode"),
     /// Opens the unified picker on its session column.
-    OpenPicker,
+    OpenPicker => Some("open-picker"),
     /// Opens the unified picker on its bundle column.
-    OpenBundlePicker,
-    ClosePicker,
+    OpenBundlePicker => Some("open-bundle-picker"),
+    ClosePicker => Some("close-picker"),
     /// Re-enumerates recipients and cross-bundle completion candidates.
-    RefreshRecipients,
-    CycleNextFocus,
-    CyclePreviousFocus,
-    AcceptToCompletion,
-    SendMessage,
-    InsertMessageNewline,
-    AutocompleteRecipient,
-    ClearToField,
-    MoveNextToCompletion,
-    MovePreviousToCompletion,
-    MoveMessageCursorUp,
-    MoveMessageCursorDown,
-    MoveMessageCursorLeft,
-    MoveMessageCursorRight,
-    MoveMessageCursorHome,
-    MoveMessageCursorEnd,
-    MoveToFieldCursorLeft,
-    MoveToFieldCursorRight,
-    MoveToFieldCursorHome,
-    MoveToFieldCursorEnd,
-    DeleteComposeCharacter,
-    InsertComposeCharacter(char),
-    SnapChatHistoryToLatest,
-    ScrollChatHistoryPageUp,
-    ScrollChatHistoryPageDown,
-    DispatchRaww,
-    InsertRawwNewline,
-    DeleteRawwCharacter,
-    InsertRawwCharacter(char),
-    MoveRawwCursorLeft,
-    MoveRawwCursorRight,
-    MoveRawwCursorHome,
-    MoveRawwCursorEnd,
+    RefreshRecipients => Some("refresh-recipients"),
+    CycleNextFocus => Some("cycle-next-focus"),
+    CyclePreviousFocus => Some("cycle-previous-focus"),
+    AcceptToCompletion => Some("accept-to-completion"),
+    SendMessage => Some("send-message"),
+    InsertMessageNewline => Some("insert-message-newline"),
+    AutocompleteRecipient => Some("autocomplete-recipient"),
+    ClearToField => Some("clear-to-field"),
+    MoveNextToCompletion => Some("move-next-to-completion"),
+    MovePreviousToCompletion => Some("move-previous-to-completion"),
+    MoveMessageCursorUp => Some("move-message-cursor-up"),
+    MoveMessageCursorDown => Some("move-message-cursor-down"),
+    MoveMessageCursorLeft => Some("move-message-cursor-left"),
+    MoveMessageCursorRight => Some("move-message-cursor-right"),
+    MoveMessageCursorHome => Some("move-message-cursor-home"),
+    MoveMessageCursorEnd => Some("move-message-cursor-end"),
+    MoveToFieldCursorLeft => Some("move-to-field-cursor-left"),
+    MoveToFieldCursorRight => Some("move-to-field-cursor-right"),
+    MoveToFieldCursorHome => Some("move-to-field-cursor-home"),
+    MoveToFieldCursorEnd => Some("move-to-field-cursor-end"),
+    DeleteComposeCharacter => Some("delete-compose-character"),
+    InsertComposeCharacter(char) => None,
+    SnapChatHistoryToLatest => Some("snap-chat-history-to-latest"),
+    ScrollChatHistoryPageUp => Some("scroll-chat-history-page-up"),
+    ScrollChatHistoryPageDown => Some("scroll-chat-history-page-down"),
+    DispatchRaww => Some("dispatch-raww"),
+    InsertRawwNewline => Some("insert-raww-newline"),
+    DeleteRawwCharacter => Some("delete-raww-character"),
+    InsertRawwCharacter(char) => None,
+    MoveRawwCursorLeft => Some("move-raww-cursor-left"),
+    MoveRawwCursorRight => Some("move-raww-cursor-right"),
+    MoveRawwCursorHome => Some("move-raww-cursor-home"),
+    MoveRawwCursorEnd => Some("move-raww-cursor-end"),
     /// Moves up within the interaction pane: through the write draft when one
     /// is present, through the look snapshot when it is not.
-    NavigateInteractionUp,
+    NavigateInteractionUp => Some("navigate-interaction-up"),
     /// Moves down within the interaction pane, mirroring
     /// [`Action::NavigateInteractionUp`].
-    NavigateInteractionDown,
-    ScrollInteractionSnapshotPageUp,
-    ScrollInteractionSnapshotPageDown,
-    MoveNextChoiceRequest,
-    MovePreviousChoiceRequest,
-    MoveNextChoiceOption,
-    MovePreviousChoiceOption,
-    ResolveChoiceSelected,
-    ResolveChoiceCancelled,
-    TogglePickerFocus,
-    MoveNextPickerSelection,
-    MovePreviousPickerSelection,
-    CommitPickerBundle,
+    NavigateInteractionDown => Some("navigate-interaction-down"),
+    ScrollInteractionSnapshotPageUp => Some("scroll-interaction-snapshot-page-up"),
+    ScrollInteractionSnapshotPageDown => Some("scroll-interaction-snapshot-page-down"),
+    MoveNextChoiceRequest => Some("move-next-choice-request"),
+    MovePreviousChoiceRequest => Some("move-previous-choice-request"),
+    MoveNextChoiceOption => Some("move-next-choice-option"),
+    MovePreviousChoiceOption => Some("move-previous-choice-option"),
+    ResolveChoiceSelected => Some("resolve-choice-selected"),
+    ResolveChoiceCancelled => Some("resolve-choice-cancelled"),
+    TogglePickerFocus => Some("toggle-picker-focus"),
+    MoveNextPickerSelection => Some("move-next-picker-selection"),
+    MovePreviousPickerSelection => Some("move-previous-picker-selection"),
+    CommitPickerBundle => Some("commit-picker-bundle"),
     /// Commits the selected session: inserted into the `To` field in
     /// Communication mode, opened as the interaction target in Interaction mode.
-    CommitPickerSession,
-    DeletePickerFilterCharacter,
-    AppendPickerFilterCharacter(char),
+    CommitPickerSession => Some("commit-picker-session"),
+    DeletePickerFilterCharacter => Some("delete-picker-filter-character"),
+    AppendPickerFilterCharacter(char) => None,
 }
 
 impl Action {
+    /// Whether performing this behavior needs the character the operator typed.
+    ///
+    /// These behaviors are constructed from a keystroke rather than named in
+    /// advance, so a configuration row -- which supplies a chord and a name,
+    /// never a character -- can neither denote nor build one. That is what puts
+    /// them outside the configurable vocabulary.
+    #[must_use]
+    pub const fn carries_operator_input(self) -> bool {
+        matches!(
+            self,
+            Self::InsertComposeCharacter(_)
+                | Self::InsertRawwCharacter(_)
+                | Self::AppendPickerFilterCharacter(_)
+        )
+    }
+
+    /// The behavior a configuration name denotes, if any does.
+    ///
+    /// Derived by searching [`Action::ALL`] rather than by a second match, so
+    /// the forward and reverse spellings cannot drift apart.
+    #[must_use]
+    pub fn from_configuration_name(name: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|action| action.configuration_name() == Some(name))
+    }
+
     /// One line naming this behavior for an operator.
     ///
     /// Generated presentation groups rows by the behavior they reach, so this

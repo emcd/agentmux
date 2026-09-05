@@ -16,7 +16,8 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::action::Action;
-use super::bindings::{BINDINGS, BoundAction, Chord, ContextRow, DisplaySection};
+use super::bindings::{BINDINGS, BoundAction, ContextRow, DisplaySection};
+use super::chord::Chord;
 use super::context::BindingContext;
 
 /// One row that contributed to a presented binding.

@@ -204,9 +204,15 @@ reach that action, so an action reachable by two chords is expressible.
 
 ### Requirement: Operator Chord Grammar Round-Trips With Presentation
 
-Every chord the help overlay presents SHALL parse as a configuration chord
-denoting the chord that was presented, so an operator can configure a binding by
-copying the chord out of the reference the TUI itself renders.
+Every chord the help overlay presents that denotes a keystroke SHALL parse as a
+configuration chord denoting the chord that was presented, so an operator can
+configure a binding by copying the chord out of the reference the TUI itself
+renders.
+
+The overlay also presents a placeholder standing for typing rather than for a
+keystroke. That placeholder SHALL NOT parse, since accepting it would let a
+configuration rebind the rows through which characters are typed, and it is
+therefore outside this requirement rather than an exception to it.
 
 The grammar SHALL express a key with an exact modifier set, and SHALL NOT
 express the chord shapes that exist to reproduce handler conditions or to carry
@@ -217,9 +223,15 @@ A chord that does not parse SHALL fail validation rather than being ignored.
 
 #### Scenario: A chord copied from help is accepted
 
-- **WHEN** a chord is rendered in the help overlay
+- **WHEN** a chord denoting a keystroke is rendered in the help overlay
 - **THEN** that written form parses
 - **AND** it denotes the same key and modifier set that was rendered
+
+#### Scenario: The typing placeholder does not parse
+
+- **WHEN** the placeholder the overlay renders for a typing row is offered as a
+  configuration chord
+- **THEN** parsing fails
 
 #### Scenario: Typing rows are not configurable
 
