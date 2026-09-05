@@ -457,7 +457,7 @@ def cites_its_archive(document, sources):
     return False
 
 
-def classify_citation(name, owner, live, inflight, archived, document=""):
+def classify_citation(name, owner, live, inflight, archived, document):
     """Return (verdict, sources) for one cited name, or None when it resolves.
 
     `owner` is the change whose directory holds the citing file, if any. A
@@ -465,7 +465,12 @@ def classify_citation(name, owner, live, inflight, archived, document=""):
     reports nothing; only a citation from outside is waiting on somebody else.
 
     `document` is the full text of the citing file, consulted only to let a
-    document that names its own archive discuss a departed requirement.
+    document that names its own archive discuss a departed requirement. It is
+    deliberately required rather than defaulted: a caller that forgets it would
+    otherwise silently disable the archive-naming exemption, and no self-test
+    could see that, because the tests call this function directly and so cannot
+    observe the call site. Without a default, forgetting it is a TypeError on
+    the first citation.
     """
     if name in live:
         return None

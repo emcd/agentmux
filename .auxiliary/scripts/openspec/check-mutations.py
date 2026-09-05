@@ -97,17 +97,22 @@ MUTATIONS = [
      'if re.search(rf"(?<![\\w-]){re.escape(candidate)}(?![\\w-])", document):',
      'if candidate in document:',
      '--citations', 'citation case'),
-    # The wiring mutation, unlike the others, cannot be caught by a self-test:
-    # the cases call `classify_citation` directly, so dropping the argument at
-    # the one call site leaves them passing and the exemption inert. It is
-    # caught instead by the live corpus, where a design note naming its own
-    # archive starts failing again. That makes its fixture the corpus rather
-    # than a table -- if no document in the tree names its archive, this
-    # mutation goes quiet and proves nothing.
+    # The wiring mutation cannot be caught by a self-test: the cases call
+    # `classify_citation` directly, so dropping the argument at the one call
+    # site leaves them passing. It was originally caught by the live corpus --
+    # a design note naming its own archive would start failing again -- which
+    # made its fixture whichever document happened to carry that shape. That
+    # fixture evaporated the moment the change carrying the note was archived,
+    # and the mutation went quiet exactly when the corpus it depended on moved.
+    #
+    # So the wiring is no longer defended by a fixture at all: `document` is a
+    # required parameter, and dropping it is a TypeError rather than a silent
+    # behavior change. The mutation now asserts that crash, which depends on
+    # nothing outside the two files involved.
     ('citation: citing document not consulted',
      'verdict = classify_citation(name, owner, live, inflight, archived, text)',
      'verdict = classify_citation(name, owner, live, inflight, archived)',
-     '--citations', 'resolves to no live requirement'),
+     '--citations', "missing 1 required positional argument: 'document'"),
     ('citation: pending branch never fires',
      '        return None if owner in sources else ("PENDING", sources)',
      '        return None',
