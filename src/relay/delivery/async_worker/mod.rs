@@ -20,7 +20,9 @@ pub(crate) mod registry;
 mod reporting;
 mod terminal;
 
-pub(in crate::relay::delivery) use self::reap::unregister_worker;
+pub(in crate::relay::delivery) use self::reap::{
+    bind_worker_consumer_generation, unregister_worker,
+};
 pub(in crate::relay::delivery) use self::registry::{
     AsyncWorkerKey, WorkerDispatch, WorkerOwner, build_worker_key, close_worker,
     drop_pending_async_tasks_on_stop, mark_worker_fail_stopped, register_worker_if_absent,

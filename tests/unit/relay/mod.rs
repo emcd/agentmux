@@ -30,6 +30,8 @@ mod peer_alias_invariant;
 mod peer_connection;
 mod preflight;
 mod principal_store;
+#[cfg(feature = "pty")]
+mod pty_generation_release;
 mod raww;
 mod relay_configuration;
 mod request_validation;

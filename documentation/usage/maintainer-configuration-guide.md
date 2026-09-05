@@ -92,53 +92,134 @@ What lives in a coder entry:
 
 ### How long a delivery can wait
 
-Chat delivery is async: `send` returns `queued`, and a per-target worker
-waits for the target to become ready before injecting.
+Chat delivery is async: `send` returns `queued` and the relay puts the
+message in that target's mailbox. Nothing on the relay side waits for the
+target after that. Each transport owns one serial delivery loop that
+peeks its target's mailbox, decides what a single write can carry, writes
+it, and acknowledges what the write proved.
 
-**No setting bounds that wait for a target that is reachable but simply
-not ready.** Such a message waits indefinitely. The per-coder prime and
-readiness timeout keys that used to appear here have been removed: they
-bounded the wait by declaring a non-delivery, which only Tmux could do
-soundly, and which reported a busy target as a failed message rather
-than as a busy target.
+**Quiescence observation is transport-owned.** The relay applies no
+readiness gate of its own and reads no readiness level from any
+transport, so an entry sitting unpeeked is a statement about the target
+rather than evidence of a relay-side problem. There is no relay-side
+waiting behavior to configure, tune, or look for. One relay-side
+condition is the exception: when the relay gives up a target's delivery
+generation, it resolves that target's mail even though the target is
+perfectly reachable. There are two ways that happens and they differ in
+what follows; both are described under `submission-timeout-ms` below.
+Short of them, waiting is the target's business rather than the relay's.
+
+**No setting bounds how long an entry waits for a reachable target to
+peek and write it**, on any transport. Such a message waits without a
+bound, and the only thing that ends that wait on the relay's initiative
+is the relay giving up the target's delivery generation, below.
+The per-coder prime and readiness timeout keys that used to appear here
+have been removed: they bounded the wait by declaring a non-delivery,
+which only Tmux could do soundly, and which reported a busy target as a
+failed message rather than as a busy target.
+
+**Continuously changing output can stop a transport's own quiescence
+detection from ever succeeding.** A clock-style statusline, a progress
+spinner, or any other source that redraws on its own gives a
+prompt-matching transport no settled screen to match against. Such a
+target is reachable and healthy; its messages simply wait, and they wait
+without a duration bound rather than resolving on elapsed time. The
+undelivered-mailbox inscriptions below are how an operator notices, and
+the remedy is the coder's `prompt-regex`, `prompt-inspect-lines`, and
+`prompt-idle-column` settings — or the offending output itself — rather
+than a timeout, because there is no timeout to raise.
 
 Reachability is a separate question from readiness, and it *is* bounded.
-A target the relay cannot reach at all — no tmux server, a dead ACP
-child — is not merely slow, and waiting will not fix it. Once a target
-has been continuously unreachable for `[delivery].unreachable-dwell-ms`
-(default `30000`), its waiting messages resolve as `not_submitted` with
-reason code `delivery_target_unreachable`, and a terminal-outcome receipt
-is sent to the sender if that sender is still routable — see below. An
-unreachability that ends inside the dwell costs nothing.
+A target that cannot be reached at all — no tmux server, a dead ACP
+child, a departed PTY — is not merely slow, and waiting will not fix it.
+Once a target's own transport has observed it **continuously**
+unreachable for `[delivery].unreachable-dwell-ms` (default `30000`), its
+waiting messages resolve as `not_submitted` with reason code
+`delivery_target_unreachable`, and a terminal-outcome receipt is sent to
+the sender if that sender is still routable — see below. An
+unreachability that ends inside the dwell costs nothing and starts the
+dwell over. This key bounds continuous unreachability and nothing else:
+it does not rescue a target that stays reachable and never consumes.
 
-So: unreachable is bounded by the dwell; reachable-but-unready is not
-bounded at all. For the latter, what is bounded is the queue rather than
-the wait. A message queued for a target that stays reachable but never
-becomes ready keeps its admission quota for as long as it waits, which
-may be forever — per-target admission quota caps how many such envelopes
-one target can hold, and once that cap is reached further sends to it are
-rejected at the request boundary rather than queued. The undelivered-queue
-inscriptions report the depth and age of what is waiting. All of these
-live in the `relay.toml` `[delivery]` table.
+So: unreachable is bounded by the dwell; reachable-but-unconsumed is not
+bounded at all. For the latter, what is bounded is the mailbox rather
+than the wait. An entry leaves its target's mailbox on four ordinary
+events — acknowledgment, a positively observed teardown of its
+transport, continuous unreachability past the dwell, or graceful
+shutdown — plus one deliberate exception: when the relay gives up a
+target's delivery generation, everything that target's mailbox holds is
+resolved, reachable or not, because nothing under that generation will
+peek the mailbox again and the alternative is stranding those messages.
+Short of that exception, a message queued for a target that stays
+reachable but never peeks it or never writes it holds its admission
+quota for as long as it waits, which may be forever. Per-target
+admission quota caps how many such envelopes one target can hold, and
+once that cap is reached further sends to it are rejected at the request
+boundary rather than queued; that cap is what bounds the consequence.
+The undelivered-mailbox
+inscriptions — `relay.delivery.undelivered` on an interval, plus a
+first-crossing `relay.delivery.undelivered.warning` per target — report
+the depth and age of what is waiting, and are how both cases are
+observed. All of these live in the `relay.toml` `[delivery]` table.
 
 `submission-timeout-ms` is in that table too and is **not** a bound on
-either wait. It bounds the relay's own supervised execution *after* a
-batch is authorized — how long the relay's own code may spend handing
-bytes to a transport — and says nothing about target health. Note that it
-does not yet fire: the execution watchdog it configures is not
-implemented, so setting the key today changes nothing. It is documented
-here because the distinction it draws is the one operators most often get
-wrong, not because it is currently in force.
+either wait. It bounds the relay's own supervised execution once a
+submission is already underway: the clock starts when the relay accepts
+a transport's declaration of the range it is about to write, so a unit
+still outstanding past the bound means the executor supervising it has
+run longer than it is allowed to. It says nothing about target health,
+and it does not measure the wait to be peeked. The distinction it draws
+is the one operators most often get wrong.
+
+What elapsing does is start the generation fence rather than resolve
+anything. No member is terminalized at that moment, and an
+acknowledgment arriving during the fence's bounded observation windows
+still settles its own members from what the write proved. Whatever is
+still unresolved at the verdict resolves there, and a declared unit with
+no acknowledgment behind it reports `submission_unknown` — meaning the
+relay stopped supervising without learning the outcome, not that the
+target failed and not that the message was refused.
+
+A **positive** verdict established that the old generation had ceased,
+so the relay tears it down and builds a replacement in place; only what
+that generation had declared and left unacknowledged is resolved, and
+delivery carries on under the replacement. If the replacement cannot be
+built, the relay gives the target up instead: everything the mailbox
+holds is resolved, and the worker's registration is released rather than
+held — so the target is **not** fail-stopped, and a later send is
+dispatched to a freshly elected worker rather than refused outright.
+
+A **negative** verdict is the fail-stop case. The relay could not
+establish that the old generation had ceased, so it must never elect a
+replacement for that target: everything the mailbox holds is resolved,
+the worker's registration is deliberately kept — that is what makes a
+replacement unelectable — and every further send to it, chat and raw
+alike, is refused rather than queued, with reason code
+`delivery_target_fail_stopped`. Recovery is by operator action.
+
+Both are cases where a reachable target's mail resolves without the
+target having done anything, so the reason code is what tells them apart
+and it is worth checking before acting. A fail-stopped target refuses
+everything until an operator intervenes; a target given up because its
+replacement could not be built is simply free to be tried again.
 
 ### What survives a relay crash
 
-Nothing in the queue does. The pending queue is in-memory and
-non-durable, so a relay that dies unexpectedly takes its queued messages
-with it: they are not recovered on restart, and their senders receive no
-terminal-outcome receipt, because the process that would have issued one
-is gone.
+Nothing in the mailboxes does. They are in-memory and non-durable, so a
+relay that dies unexpectedly takes its queued messages with it: they are
+not recovered on restart, and their senders receive no terminal-outcome
+receipt, because the process that would have issued one is gone.
 
-Every guarantee above — that an authorized batch reaches a terminal
+Two bounds genuinely do not exist, and they are worth naming together.
+The first is durability across a relay crash, which is this section. The
+second is completeness of resolution for `queued` entries, which is the
+section above restated: a `queued` entry carries no promise of ever
+resolving while its target stays reachable and never consumes. Only the
+four ordinary events listed there, or the relay giving up that target's
+delivery generation, take one out of a mailbox, and none of those is
+something a waiting sender can count on happening.
+
+Every guarantee above — that a declared unit reaches a terminal
 outcome, that a non-delivered outcome is resolved and recorded, that
 admission quota is released when a member resolves — holds for a
 **surviving relay process** and for **graceful shutdown**. Graceful
@@ -216,6 +297,16 @@ What lives in the file when present:
   attribution.
 - `[choices].pending-max` — bounded depth of the per-bundle choices
   queue. Default `256`, range `1..=4096`. No CLI or env override.
+- `[delivery]` — the relay's own delivery quotas, supervision bounds, and
+  undelivered-mailbox reporting intervals: `submission-timeout-ms`,
+  `fence-observation-timeout-ms`, `unreachable-dwell-ms`, the four
+  admission quotas (`queued-envelopes-max`, `queued-bytes-max`,
+  `queued-envelopes-per-target-max`, and `queued-bytes-per-target-max`),
+  `undelivered-warning-ms`, and
+  `undelivered-report-interval-ms`. What each does and does not bound is
+  [How long a delivery can wait](#how-long-a-delivery-can-wait); read
+  that before changing any of them, because none of these is the
+  readiness timeout it is most often mistaken for.
 - `[[peers]]` — outbound peer relay endpoints, each with `alias`,
   `address` (the peer's absolute Unix socket path), and `connect-as`.
   Raw peer PSKs are never stored here — they live owner-only under

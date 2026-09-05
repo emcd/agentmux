@@ -141,15 +141,18 @@ pub(super) struct RawRelayDeliverySection {
     undelivered_report_interval_ms: Option<u64>,
 }
 
-/// Resolved `[delivery]` settings: the two post-authorization bounds, the
-/// unreachable dwell, the four admission quotas, and the two undelivered-queue
-/// reporting intervals.
+/// Resolved `[delivery]` settings: the two supervision bounds, the unreachable
+/// dwell, the four admission quotas, and the two undelivered-queue reporting
+/// intervals.
 ///
-/// No field here bounds how long the relay waits for a *reachable* target to
-/// become ready. Such an entry waits indefinitely by design, and the per-target
-/// quota — not a clock — is what bounds the consequence. `submission_timeout_ms`
-/// bounds ingestion, not readiness: it covers the transport consuming bytes
-/// after the relay has already observed the target ready. `unreachable_dwell_ms`
+/// No field here bounds how long an entry waits for a *reachable* target to peek
+/// and write it. The relay never waits on a target's behalf — waiting happens
+/// inside the owning transport's delivery-loop executor — so such an entry waits
+/// indefinitely by design, and the per-target quota, not a clock, is what bounds
+/// the consequence. `submission_timeout_ms` bounds the relay's own supervised
+/// execution rather than readiness: it runs from the declaration the relay
+/// accepted, so a unit still outstanding past it means the executor supervising
+/// that unit has run longer than it is allowed to. `unreachable_dwell_ms`
 /// is the one field that does resolve a waiting entry, and only on sustained
 /// unreachability — an observation repeatedly made, not a guess standing in for
 /// one never made.

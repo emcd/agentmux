@@ -365,10 +365,10 @@ letting a tranche boundary fall somewhere convenient.
 
 ## 4. Documentation
 
-- [ ] 4.1 Update `src/relay/README.md` (or the nearest subsystem README) to
+- [x] 4.1 Update `src/relay/README.md` (or the nearest subsystem README) to
       describe the pull-model mailbox in place of the push-model
       handover/authorization description.
-- [ ] 4.2 Update operator-facing documentation per `delivery-quiescence`'s
+- [x] 4.2 Update operator-facing documentation per `delivery-quiescence`'s
       `Quiescence Documentation` and `Async Queue Growth Risk Disclosure`
       requirements: quiescence is transport-owned, no bound governs waiting
       to be peeked/written, admission quota bounds mailbox growth.

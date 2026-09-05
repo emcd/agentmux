@@ -177,11 +177,11 @@ mod doorbell_tests {
         // worker unregisters, releasing the registry lock before it reaches the
         // ledger, and a successor can be elected and have registered its own
         // doorbell inside that window — so the reap below runs *after* the
-        // registration it must not disturb. The consumer-generation naming does
-        // not cover this case and cannot be made to: until the executors claim a
-        // generation every target answers `None`, so the reap matches and
-        // proceeds. What covers it is that nothing but a registration ever
-        // displaces a registration.
+        // registration it must not disturb. The fixture target is unclaimed, so
+        // the reap below names `None`, matches, and proceeds — which is the case
+        // worth pinning, because it is the one where the consumer-generation
+        // naming refuses nothing and the successor's doorbell survives on the
+        // registration rule alone.
         terminalize("mbx-doorbell-4");
         terminalize("mbx-doorbell-5");
         let successor_rings = Arc::new(AtomicUsize::new(0));
