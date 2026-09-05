@@ -22,7 +22,9 @@ use crate::relay::{AsyncDeliveryTask, RelayError, relay_error};
 use crate::transports::{DeliveryExecutorContext, TransportImpl};
 use crate::{configuration::BundleMember, envelope::PromptBatchSettings};
 
-use super::super::super::async_worker::{AsyncWorkerKey, WorkerOwner};
+use super::super::super::async_worker::{
+    AsyncWorkerKey, WorkerOwner, bind_worker_consumer_generation,
+};
 use super::super::envelope::{build_acp_driver_services, build_worker_transport};
 use super::super::payload::resolve_target_member;
 use super::run::run_async_delivery_worker;
@@ -179,7 +181,11 @@ pub(super) struct BuiltGeneration {
 /// construction that had not yet been given an identity would have nothing to
 /// bind to. A construction that then fails leaves the generation issued and the
 /// target held, which is the worker's failure path's business — it unregisters,
-/// and the reap that rides the unregister is what gives the target up.
+/// and the reap that rides the unregister is what gives the target up. That is
+/// why the generation is recorded on the registry entry here rather than on the
+/// worker's success path: the reap names what the entry carries, so an entry
+/// that only learned of a generation once its transport was built could never
+/// release one whose transport was not.
 ///
 /// **The doorbell is registered before the transport too**, which reverses the
 /// order this had while nothing waited on one. The executor is spawned inside
@@ -191,6 +197,7 @@ pub(super) struct BuiltGeneration {
 /// only through a worker's own intake, and this worker is about to end.
 pub(super) async fn build_generation(
     key: &AsyncWorkerKey,
+    owner: WorkerOwner,
     source: &WorkerTransportSource,
     batch_settings: PromptBatchSettings,
     readiness_changed: &std::sync::Arc<tokio::sync::Notify>,
@@ -198,6 +205,16 @@ pub(super) async fn build_generation(
 ) -> Result<BuiltGeneration, RelayError> {
     let target = consumer_target(key);
     let generation = issue_consumer_generation(&target, step)?;
+    // Recorded on the registry entry in the same breath as it is issued, because
+    // the entry is what the reap reads to name this generation and the reap is
+    // the only thing that gives a target up. Binding here rather than on the
+    // worker's success path is what covers a construction that fails after this
+    // point: the generation is already held, and the failure path's unregister
+    // has to be able to name it or the target is held for the life of the
+    // process. A replacement rebinds for the same reason — it issues a new
+    // identifier, and an entry still naming the outgoing one would leave the
+    // incoming generation just as unreleasable.
+    bind_worker_consumer_generation(key, owner, generation);
     let binding = ConsumerBinding::new(target.clone(), generation);
     let doorbell = register_generation_doorbell(&target);
     let delivery = executor_context(&binding, doorbell);

@@ -20,13 +20,14 @@ use super::registry::{AsyncWorkerKey, WorkerOwner, async_delivery_registry};
 /// successor's entry, which would make the successor's reap give up a generation
 /// it never held.
 ///
-/// **Nothing calls this, and the reap below cannot work until something does.**
-/// Every worker claims a consumer generation as it builds one, so the ledger
-/// records each live target as held; an entry that never carries what its worker
-/// claimed makes the reap name `None` against that record, which the ledger
-/// refuses. The generation is then never given up and no successor can claim the
-/// target.
-#[allow(dead_code)]
+/// **The reap below does nothing useful without this, so the two are wired at
+/// the same point.** Every worker claims a consumer generation as it builds one,
+/// which the ledger records as the target being held; an entry that did not
+/// carry what its worker claimed would make the reap name `None` against that
+/// record, the ledger would refuse it, and the generation would never be given
+/// up — leaving a target no successor could ever claim. `build_generation` calls
+/// this as it issues, before the transport is built, so a construction that
+/// fails afterwards still leaves the entry naming what is held.
 pub(in crate::relay::delivery) fn bind_worker_consumer_generation(
     key: &AsyncWorkerKey,
     owner: WorkerOwner,

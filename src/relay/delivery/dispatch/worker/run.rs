@@ -83,6 +83,7 @@ pub(super) async fn run_async_delivery_worker(
         ..
     } = match build_generation(
         &key,
+        owner,
         &source,
         batch_settings,
         &readiness_changed,
@@ -209,6 +210,7 @@ pub(super) async fn run_async_delivery_worker(
                     // part of taking the target over, and reported there.
                     match build_generation(
                         &key,
+                        owner,
                         &source,
                         batch_settings,
                         &readiness_changed,
