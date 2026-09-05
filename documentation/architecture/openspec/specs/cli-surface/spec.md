@@ -754,7 +754,7 @@ CLI machine-readable successful output for single-bundle mode SHALL include:
 Each `recent_startup_failures[]` entry SHALL include:
 
 - `session_id`
-- `transport` (`tmux`|`acp`)
+- `transport` (a session type as specified by `Session Type Taxonomy`)
 - `code`
 - `reason`
 - `timestamp`

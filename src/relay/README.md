@@ -18,7 +18,7 @@ exported from `src/relay/mod.rs`.
 - Serve relay socket requests and stream-framed requests.
 - Enforce authorization policy for list/send/look operations.
 - Execute lifecycle transitions (`up`, `down`) per bundle.
-- Route delivery across tmux and ACP transports.
+- Route delivery across the configured session transports.
 - Maintain one unified session registry keyed by canonical `principal_id`
   (`session@namespace`), holding every known principal — bundle sessions,
   `users.toml`-declared relay-wide principals, and dynamic stream connections.

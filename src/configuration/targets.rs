@@ -18,8 +18,8 @@ use super::{
 /// Resolves a bundle member's validated delivery target.
 ///
 /// A session is coder-backed when it carries a `coder` reference; its transport
-/// (tmux or ACP) is derived from that coder's descriptor. Coder-less sessions
-/// declare exactly one of the `[sessions.ui]` or `[sessions.pubsub]` markers.
+/// is derived from that coder's descriptor. Coder-less sessions declare exactly
+/// one of the `[sessions.ui]` or `[sessions.pubsub]` markers.
 pub(super) fn build_session_target(
     session: &RawSession,
     coders: &HashMap<String, Coder>,

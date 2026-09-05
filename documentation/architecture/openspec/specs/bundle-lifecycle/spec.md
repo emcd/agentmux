@@ -397,7 +397,7 @@ Each startup-failure record SHALL include:
 
 - `bundle_name`
 - `session_id`
-- `transport` (`tmux`|`acp`)
+- `transport` (a session type as specified by `Session Type Taxonomy`)
 - `code`
 - `reason`
 - `timestamp`

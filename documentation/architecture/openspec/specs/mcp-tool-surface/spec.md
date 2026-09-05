@@ -158,12 +158,12 @@ Each `principals[]` entry SHALL include:
 
 - `id`
 - `name` (optional)
-- `transport` (`tmux`|`acp`)
+- `transport` (a session type as specified by `Session Type Taxonomy`)
 
 Each `recent_startup_failures[]` entry SHALL include:
 
 - `session_id`
-- `transport` (`tmux`|`acp`)
+- `transport` (a session type as specified by `Session Type Taxonomy`)
 - `code`
 - `reason`
 - `timestamp`

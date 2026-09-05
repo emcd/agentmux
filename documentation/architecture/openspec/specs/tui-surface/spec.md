@@ -492,9 +492,12 @@ TUI-facing terminal vocabulary SHOULD align to:
 `agentmux tui --as-session X` SHALL fail fast when session `X` is not
 configured with session type `ui`.
 
-If the resolved session has any other type (`tmux`, `acp`, `pubsub`), the TUI
-SHALL reject startup with a structured validation error rather than proceeding
-with an incompatible delivery model.
+If the resolved session has any type other than `ui`, the TUI SHALL reject
+startup with a structured validation error rather than proceeding with an
+incompatible delivery model. The rejection SHALL follow from the resolved type
+not being `ui`, not from membership in a list of rejected types, so a session
+type added to `Session Type Taxonomy` later is rejected without amending this
+requirement.
 
 #### Scenario: Reject --as-session with non-ui session type
 
