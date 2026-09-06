@@ -89,11 +89,37 @@ distinctly or as one is invisible in the defaults, on every surface.
 
 That neutrality is a choice about where terminal differences belong, not a
 verdict that the distinction is worthless. Disambiguation is exactly what makes
-a modified chord bindable at all, and operator-configurable bindings are the
-intended successor to the compiled defaults. When they arrive, a terminal that
-reports the three distinctly will be able to do three different things with
-them — because you asked it to, in a configuration you control, rather than
-because the TUI guessed from a probe.
+a modified chord bindable at all, and it is what a configuration can act on: a
+terminal reporting the three distinctly can do three different things with
+them, because you asked it to in a configuration you control rather than
+because the TUI guessed from a probe. [Configuring bindings](#configuring-bindings)
+is where that is written, and the capability columns are how a row says which
+terminals it speaks for.
+
+#### The macOS delivery question
+
+Unmeasured, and worth knowing before you write `primary+enter` into a
+configuration. macOS terminals vary in whether `Cmd`-modified keys reach the
+process at all, rather than being consumed by the terminal or the window
+manager, and no survey has been run. Which terminals and multiplexers land in
+which capability bucket is tracked as `todos/tui/62`; this question is a
+separate one about `Cmd` specifically.
+
+The symbolic `primary` modifier therefore resolves to `Ctrl` on macOS by
+default, the same as everywhere else, and `primary-modifier-on-macos =
+"command"` is opt-in. That default stands on the absence of evidence rather
+than on evidence of absence: it is the resolution that is reachable whatever a
+given macOS terminal does with `Cmd`, so it cannot strand a chord. If a survey
+later shows `Cmd` chords arriving reliably, the default is worth revisiting;
+until one exists, flipping it would move every symbolic chord onto a modifier
+we have not confirmed can be delivered.
+
+A related caution that applies on every platform: a terminal may bind a chord
+for itself and never forward it. Ghostty, for instance, takes `Ctrl+Shift+C`
+for copy and `Ctrl+Shift+J` for its screen-file action, so those never reach the
+TUI regardless of what a configuration says about them. If a chord you
+configured appears to do nothing, check your terminal's own keybindings before
+concluding the TUI ignored it.
 
 ### Default bindings
 
@@ -187,6 +213,137 @@ The modified `Enter` forms are folded into the bare one they always match; see
 - `End` — Jump to end
 
 <!-- END GENERATED BINDINGS -->
+
+### Configuring bindings
+
+The defaults above are superseded row by row from a `[bindings]` group in
+`ui.toml`. Nothing is replaced wholesale: a row you do not mention keeps
+whatever the build ships, so a configuration is a list of departures rather
+than a table you have to maintain.
+
+The whole group is accepted or refused together. A single unreadable chord or
+unknown action name refuses the file, rather than applying the rows that
+happened to parse — a configuration half in force is one you cannot reason
+about, since which half survived would depend on where the mistake sat.
+
+#### The shape
+
+```toml
+[bindings]
+# Binding sets applied before individually configured rows, in the order named.
+presets = ["enter-newline-primary-enter-sends"]
+# Which literal modifier the symbolic `primary` resolves to on macOS.
+primary-modifier-on-macos = "control"
+
+# One sub-table per binding context, keyed by the context's operator name.
+[bindings.compose-message]
+# A chord mapped to one action applies on both terminal capability classes.
+"ctrl+w" = "send-message"
+# A chord mapped to a class-qualified table applies only where stated; the
+# omitted class keeps its compiled default.
+"shift+enter" = { enhanced = "insert-message-newline" }
+# An explicitly unbound chord is inert, and does not fall through.
+"ctrl+j" = "none"
+
+[bindings.picker-sessions]
+"primary+enter" = "commit-picker-session"
+```
+
+#### Contexts
+
+A sub-table is keyed by the surface its rows apply to: `global`,
+`compose-to`, `compose-message`, `interaction-write`, `interaction-choice`,
+`picker-bundles`, `picker-sessions`, `events-overlay`, `help-overlay`.
+
+`global` rows are consulted before the active surface's, so a chord bound there
+holds wherever you are. Every other context binds only while that surface is
+what you are acting on.
+
+A context accepts only the actions it can actually perform. Binding a compose
+action under `interaction-write` is refused by name rather than accepted and
+left inert, since a row that does nothing is one the help overlay would still
+advertise.
+
+#### Chords
+
+A chord is zero or more modifiers and then a key, joined by `+`:
+`ctrl+w`, `shift+enter`, `alt+f4`, `esc`, `c`. Modifier names are read without
+regard to case and accept the spellings `ctrl`/`control`, `alt`/`option`,
+`shift`, `cmd`/`command`/`super`, and the symbolic `primary`. A key naming a
+single character *is* case-sensitive: `c` and `C` are different bindings.
+
+Every chord matches exactly the keystrokes it is written as, and no others.
+`ctrl+j` is `Ctrl+J` alone — `Ctrl+Shift+J` is a different keystroke and
+reaches it no longer. If you want a modified variant to do something, bind it.
+
+The one exception is a bare single character, which matches that character both
+bare and carrying `Shift`. A terminal's report of a typed character is not a
+function of the key alone — `Shift` and `Caps Lock` each alter both which
+character arrives and which modifiers come with it — so admitting only the bare
+arrival would refuse a keystroke you produced by typing. Between them, `c` and
+`C` cover every way either letter can arrive, and binding `c` claims both of its
+forms rather than leaving the shifted one behind.
+
+Chords are written the way the help overlay prints them, so a chord read off the
+overlay can be pasted into a configuration and mean what it showed.
+
+#### Capability columns
+
+A chord mapped to a bare action name applies on every terminal. A chord mapped
+to a table applies only on the classes it names:
+
+```toml
+"shift+enter" = { enhanced = "insert-message-newline" }
+```
+
+`enhanced` is a terminal that reports modified keys distinctly; `standard` is
+one that does not, where a modified `Enter` arrives as a bare `Enter`. An
+omitted class keeps its compiled default rather than being emptied. Use this
+when a chord is only deliverable on one kind of terminal — which, today, means
+the modified `Enter` forms and nothing else. See
+[Terminal keyboard capability](#terminal-keyboard-capability) for which class
+you are in.
+
+#### Presets
+
+A preset is a binding set built into the binary, applied before your own rows
+and in the order you name it, so a later preset supersedes an earlier one and
+your own rows supersede both.
+
+- `enter-newline-shift-enter-sends` — `Enter` inserts a newline in the compose
+  `Message` field, `Shift+Enter` sends.
+- `enter-newline-primary-enter-sends` — `Enter` inserts a newline, and the
+  symbolic `primary` modifier with `Enter` sends.
+
+Both speak only for the `enhanced` class, because the chords they move sending
+onto cannot arrive on a terminal that collapses a modified `Enter`. On a
+standard terminal they contribute nothing rather than stranding your send.
+
+#### The symbolic modifier
+
+`primary` resolves to `Ctrl` everywhere except macOS, where
+`primary-modifier-on-macos` selects between `control` and `command` and
+defaults to `control`. Writing `primary+enter` therefore gives you one chord
+that is reachable on every platform, with the macOS meaning left to the
+operator reading it. See
+[The macOS delivery question](#the-macos-delivery-question) before choosing
+`command`.
+
+#### Unbinding
+
+`"ctrl+j" = "none"` makes the chord inert in that context. It does not fall
+through to the compiled default — that is the difference between emptying a
+chord and never having mentioned it — and it does not silence the key
+everywhere: a global chord you empty uncovers whatever the surface binds.
+
+Losing a behavior does not require unbinding it. Binding a chord that already
+carried something displaces it, so `agentmux check configuration` reports what
+your file leaves unreachable, per capability class, and the run still succeeds
+because you may well have meant it.
+
+The one exception is quitting. A configuration that leaves no chord quitting is
+refused rather than reported, because it is the one loss you cannot recover
+from inside a running TUI.
 
 ### Reading the help overlay
 

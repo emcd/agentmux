@@ -455,9 +455,11 @@ fn fold_rows(
             Some((_, sources)) => {
                 // Every row is recorded; only some are printed. A chord whose
                 // text is already on the line is folded -- which is what
-                // absorbs the modifier-agnostic `Enter` fallback, since it
-                // renders as plain "Enter", and the same chord declared again
-                // by a second context.
+                // absorbs the same chord declared again by a second context.
+                // It once also absorbed a modifier-agnostic `Enter` fallback
+                // row, which rendered as plain "Enter"; no such row survives
+                // exact matching, so the modified `Enter` forms are the only
+                // remaining fold and they go through the test below.
                 let shown = !already_shown(&chord, sources)
                     && !is_redundant_modified_enter(&chord, sources);
                 sources.push(HelpSource {

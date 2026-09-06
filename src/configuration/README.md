@@ -117,6 +117,49 @@ serde spelling is an untagged enum, but an untagged enum reports only that a
 value matched no variant, naming neither the chord nor the key at fault, which
 is not a diagnosis an operator can act on.
 
+A group is accepted or refused whole. The first fault rejects it rather than
+applying the rows that happened to parse, because a configuration half in force
+is one an operator cannot reason about: which half survived would depend on
+where in the file the mistake sat.
+
+### Why bindings merge while files replace
+
+Layer resolution above selects one `ui.toml` and reads it; a file in a nearer
+layer replaces the one it shadows rather than merging with it. Binding rows
+inside the selected file then merge *over* the compiled defaults, row by row.
+The two rules look inconsistent and are not, because they answer different
+questions.
+
+A file is a unit an operator wrote and can read end to end. Merging two of them
+would produce a configuration existing in no file, whose effective content an
+operator could only derive by simulating the merge — and layer resolution exists
+precisely so they can tell which copy is in force.
+
+The compiled defaults are not a file, are not authored by the operator, and
+change between releases. Replacing them wholesale would mean every operator who
+wanted one different chord had to restate the entire table, and would freeze
+that release's table into their configuration — so a later release's new or
+corrected bindings could never reach them. Merging row by row is what keeps a
+configuration a list of departures rather than a fork.
+
+That is also why nothing here scaffolds a defaults file to disk. Writing one
+would convert the defaults from something a build supplies into something an
+operator owns, with the same freezing effect and no way back.
+
+### Chord collisions
+
+Two written chords can denote the same keystroke — `ctrl+j` and `control+J`, a
+symbolic chord that resolves onto a literal one, or a bare character and its
+shifted form, since a bare character denotes that character both bare and
+carrying `Shift`. A group naming both is refused rather than resolved by file
+order, which would make precedence an accident of how TOML keys happened to
+sort.
+
+The check reads every keystroke a chord's resolved shape denotes, under both
+resolutions of the symbolic modifier, so a file is accepted or refused the same
+way wherever it is read rather than colliding only on the platform that resolves
+the symbol onto a chord the file also names.
+
 ### Shipped binding sets
 
 A set an operator adopts by name is a configuration file embedded in the binary,
