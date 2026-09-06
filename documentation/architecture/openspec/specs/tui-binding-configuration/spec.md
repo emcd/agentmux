@@ -1,7 +1,12 @@
 # tui-binding-configuration Specification
 
 ## Purpose
-TBD - created by archiving change add-tui-binding-configuration. Update Purpose after archive.
+
+Operator configuration of TUI key bindings through the `[bindings]` group in
+`ui.toml`. The specification governs the operator vocabulary and chord grammar,
+capability-scoped presets, construction and validation of the effective binding
+table, and the pre-flight reporting of unreachable configured behavior.
+
 ## Requirements
 ### Requirement: Operator Binding Configuration
 
@@ -558,4 +563,3 @@ configuration layer is at fault.
 - **AND** more than one configuration layer supplies a `ui.toml`
 - **THEN** the reported path is the copy in effect rather than any copy it
   shadows
-
