@@ -231,3 +231,174 @@ fn an_entry_whose_ring_is_never_made_is_still_delivered_by_the_poll() {
         "and it was reported as written rather than resolved some other way"
     );
 }
+
+/// A writer that takes one entry per write and refuses to be ready again until
+/// the test says so.
+///
+/// This is the shape of an ACP worker mid-turn. `AcpDeliveryWriter::is_ready`
+/// admits only `Available`, so a worker that accepted a turn and published `Busy`
+/// fails the same gate this stub fails — and the gate, not anything ACP-specific,
+/// is what decides the fate of the entries behind the one it took.
+struct BusyAfterOneTurn {
+    stop: Arc<AtomicBool>,
+    available: Arc<AtomicBool>,
+    writes: Arc<AtomicUsize>,
+}
+
+impl DeliveryWriter for BusyAfterOneTurn {
+    type Plan = usize;
+
+    fn peek_dimensions(&self) -> PeekDimensions {
+        PeekDimensions {
+            envelopes_max: 8,
+            canonical_bytes_max: 1_000_000,
+        }
+    }
+
+    fn health(&self) -> TransportHealth {
+        TransportHealth::Healthy
+    }
+
+    /// The Busy gate. Nothing else about the transport changes while it is mid
+    /// turn: it is reachable, its channel is open, and it will be ready again.
+    fn is_ready(&mut self) -> bool {
+        self.available.load(Ordering::SeqCst)
+    }
+
+    /// One entry per write, which is what makes members two onward the subjects
+    /// of this test rather than groupmates of member one.
+    fn plan(&mut self, entries: &[MailboxEntry]) -> Option<PlannedWrite<Self::Plan>> {
+        entries.first().map(|_| PlannedWrite {
+            entry_count: 1,
+            rendered: 1,
+        })
+    }
+
+    /// Accepting the turn is what makes the worker busy, so the flip happens
+    /// here rather than on a timer — the same ordering ACP has, where the
+    /// transport publishes `Busy` on accepting a prompt.
+    fn write(&mut self, planned: PlannedWrite<Self::Plan>) -> Vec<SubmissionEvidence> {
+        self.writes.fetch_add(1, Ordering::SeqCst);
+        self.available.store(false, Ordering::SeqCst);
+        vec![SubmissionEvidence::Submitted; planned.rendered]
+    }
+
+    fn stop_requested(&mut self) -> bool {
+        self.stop.load(Ordering::SeqCst)
+    }
+}
+
+/// A target that goes busy after its first envelope leaves the rest queued and
+/// undeclared, and delivers them when it is ready again.
+///
+/// This is the scenario that motivated the pull model. Under the push model the
+/// relay sized a batch, handed the whole of it to the transport, and a transport
+/// that could take only the first envelope left the relay holding members it had
+/// already committed — which surfaced to their senders as `not_submitted`, a
+/// positive claim of non-delivery for messages that were simply never attempted.
+///
+/// The pull model's answer is not a better spelling for those members. It is that
+/// nothing resolves them at all: the executor peeks, writes what it planned, and
+/// the entries behind it stay exactly where they were, unbound and unread, until
+/// a later pass finds the target ready. So the assertion worth making is an
+/// absence — no outcome of any kind for members two and three while the target is
+/// busy — with delivery afterwards as the positive control that the absence is
+/// suspension rather than loss.
+#[test]
+fn a_target_that_goes_busy_leaves_the_rest_queued_rather_than_resolving_them() {
+    let mailbox = Arc::new(StubMailbox::with_entries(vec![
+        entry(1, "busy-1"),
+        entry(2, "busy-2"),
+        entry(3, "busy-3"),
+    ]));
+    let stop = Arc::new(AtomicBool::new(false));
+    let available = Arc::new(AtomicBool::new(true));
+    let writes = Arc::new(AtomicUsize::new(0));
+
+    let writer = BusyAfterOneTurn {
+        stop: Arc::clone(&stop),
+        available: Arc::clone(&available),
+        writes: Arc::clone(&writes),
+    };
+    let context = DeliveryExecutorContext {
+        consumer: Arc::clone(&mailbox) as Arc<_>,
+        doorbell: DeliveryDoorbell::new(),
+        poll_interval: POLL_INTERVAL,
+        unreachable_dwell: Duration::from_secs(3_600),
+    };
+    let executor = std::thread::spawn(move || run_delivery_executor(writer, context));
+
+    within_the_window(
+        || !mailbox.acked().is_empty(),
+        "the first envelope was never written",
+    );
+
+    // Let the executor take several further passes while the target is busy. Each
+    // one is an opportunity to resolve the remaining members wrongly, and the
+    // whole claim is that none of them does. Without this the test would assert
+    // only that nothing had happened *yet*.
+    let passes_before = writes.load(Ordering::SeqCst);
+    std::thread::sleep(POLL_INTERVAL * 5);
+    assert_eq!(
+        writes.load(Ordering::SeqCst),
+        passes_before,
+        "a busy target is not written to, however many passes the executor makes"
+    );
+
+    let during_busy = mailbox.acked();
+    assert_eq!(
+        during_busy.len(),
+        1,
+        "only the envelope that was actually written has an outcome: {during_busy:?}"
+    );
+    assert_eq!(during_busy[0].message_id, "busy-1");
+
+    // The regression itself. Members two and three carry no outcome at all, and
+    // in particular not the `not_submitted` the push model produced for them.
+    assert!(
+        !during_busy
+            .iter()
+            .any(|member| member.evidence == SubmissionEvidence::NotSubmitted),
+        "no member is reported not_submitted for a write that was never attempted: {during_busy:?}"
+    );
+    assert_eq!(
+        mailbox.outstanding_range(),
+        None,
+        "and nothing behind the busy target is left declared, so no guard holds them"
+    );
+
+    // Ready again, and then ready again after that. The stub goes busy on every
+    // write because an ACP worker publishes `Busy` on accepting every turn, so
+    // becoming available once releases exactly one more envelope; what stands in
+    // here for the turn-completion observer is a loop that re-arms it. The
+    // absence above has to be suspension rather than loss, or it is a worse
+    // defect than the one being fixed.
+    let started = Instant::now();
+    while mailbox.acked().len() < 3 {
+        assert!(
+            started.elapsed() < DELIVERY_WINDOW,
+            "the queued envelopes were never delivered once the target was ready again"
+        );
+        available.store(true, Ordering::SeqCst);
+        std::thread::sleep(Duration::from_millis(2));
+    }
+
+    stop.store(true, Ordering::SeqCst);
+    executor.join().expect("the executor thread ends");
+
+    let delivered = mailbox.acked();
+    assert_eq!(
+        delivered
+            .iter()
+            .map(|member| member.message_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["busy-1", "busy-2", "busy-3"],
+        "every envelope is delivered exactly once, in mailbox order"
+    );
+    assert!(
+        delivered
+            .iter()
+            .all(|member| member.evidence == SubmissionEvidence::Submitted),
+        "and each reports the write that actually carried it: {delivered:?}"
+    );
+}

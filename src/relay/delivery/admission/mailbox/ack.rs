@@ -248,7 +248,7 @@ mod mailbox_evidence_tests {
                 SubmissionEvidence::NotSubmitted,
                 SubmissionEvidence::SubmissionUnknown,
             ],
-            "each member resolves from its own report, not from its unit's record"
+            "each member resolves from its own report, not from a sibling's"
         );
     }
 }

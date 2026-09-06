@@ -125,6 +125,22 @@ impl StubMailbox {
         self.state.lock().expect("stub mailbox").queued.is_empty()
     }
 
+    /// The range a declaration currently binds, if one is outstanding.
+    ///
+    /// "Undeclared" is otherwise not observable from outside: an entry that was
+    /// never declared and one that was declared and acknowledged both leave no
+    /// trace in `acked`, and only this tells them apart. A test asserting that a
+    /// transport left entries alone needs to say they were never bound, not
+    /// merely that they were never acknowledged.
+    #[must_use]
+    pub fn outstanding_range(&self) -> Option<EntryRange> {
+        self.state
+            .lock()
+            .expect("stub mailbox")
+            .outstanding
+            .map(|(_, range)| range)
+    }
+
     #[must_use]
     pub fn unreachable_resolutions(&self) -> usize {
         self.state

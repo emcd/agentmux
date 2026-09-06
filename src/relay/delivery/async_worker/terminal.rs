@@ -373,7 +373,7 @@ mod evidence_authority_tests {
         }
     }
 
-    /// Binding, not the evidence value, decides whether a unit's record may
+    /// Binding, not the evidence value, decides whether the ledger's evidence may
     /// override the outcome its producer computed.
     ///
     /// The discrimination is the whole point and it cannot be driven from any
@@ -381,7 +381,7 @@ mod evidence_authority_tests {
     /// violations and shutdown interleavings that no harness can arrange, which is
     /// why this is pinned against the mapping directly.
     #[test]
-    fn only_a_bound_members_unit_record_may_override_its_producer() {
+    fn only_a_bound_members_evidence_may_override_its_producer() {
         // THE HAZARD. An unbound member's `NotSubmitted` is the guard's inference
         // from absence, not a report of a write. A transport that wrote before
         // declaring would otherwise have `delivered` replaced by a provable claim
@@ -394,9 +394,11 @@ mod evidence_authority_tests {
         );
         assert_eq!(untouched.outcome, SendOutcome::Delivered);
 
-        // Bound: the record answers, and the producer's value is discarded even
-        // where the two would have agreed. Agreement was never the property worth
-        // having — one record read by every member of the unit is.
+        // Bound: the ledger's evidence answers, and the producer's value is
+        // discarded even where the two would have agreed. Agreement was never the
+        // property worth having — resolving from what the write itself observed
+        // for this member is, because a producer's spelling is computed before the
+        // write and so cannot describe it.
         let overridden = reconcile_with_evidence(
             result(SendOutcome::Delivered, "delivered"),
             SubmissionEvidence::SubmissionUnknown,
@@ -436,7 +438,7 @@ mod evidence_authority_tests {
         );
 
         // A causal code does survive, because it says something no verdict can.
-        // The record holds evidence, not causes.
+        // The ledger holds evidence, not causes.
         let diagnosed = reconcile_with_evidence(
             result(SendOutcome::Failed, "pty_write_failed"),
             SubmissionEvidence::SubmissionUnknown,
