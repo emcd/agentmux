@@ -364,19 +364,21 @@ struct PresentedRow {
 /// advertising the chord it replaced.
 ///
 /// A compiled row drops out where a higher tier has claimed the keystroke that
-/// row is *written* as, which for every chord shape is exactly the keystroke
-/// its display spells. That is the whole test, and it is what makes a presented
+/// row is written as, which for every chord shape is exactly the keystroke its
+/// display spells. That is the whole test, and it is what makes a presented
 /// chord one that still reaches the behavior printed beside it.
 ///
-/// The keystrokes a row *matches* can outlast the one it is written as, and
-/// those go unadvertised rather than being spelled out. A row matching a key
-/// under any modifier still answers for `Shift+Up` and `Alt+Up` once a
-/// configuration takes plain `Up`, and nothing here says so — because
-/// "any modifier" has no finite spelling to print, and the alternative of
-/// keeping the row would print `Up` beside a behavior `Up` no longer reaches.
-/// Silence about a residual is a smaller fault than a false line, and those
-/// modified forms were never separately advertised: the bare display always
-/// stood for all of them.
+/// It is the whole test because a row no longer matches more than it spells.
+/// This once had a second half: a row matching a key under any modifier kept
+/// answering for `Shift+Up` and `Alt+Up` after a configuration took plain `Up`,
+/// so the row was dropped while those residuals went on reaching it
+/// unadvertised — silence about a residual being a smaller fault than a false
+/// line. Exact matching removed the residuals, so there is nothing left to be
+/// silent about, and the test above is sufficient rather than merely the best
+/// available.
+///
+/// The bare character is the one shape denoting two keystrokes, and both sides
+/// denote the same two, so claiming it claims all of what the row answered.
 fn rows_of(bindings: &EffectiveBindings, context: BindingContext) -> Vec<PresentedRow> {
     let mut rows: Vec<PresentedRow> = bindings
         .rows_for(context)
@@ -387,7 +389,7 @@ fn rows_of(bindings: &EffectiveBindings, context: BindingContext) -> Vec<Present
             // below, which is the whole of what the operator asked for.
             let action = row.action?;
             Some(PresentedRow {
-                chord: Chord::Key(row.code, row.modifiers),
+                chord: row.chord,
                 action: BoundAction::Fixed(action),
                 section: default_section(context, action)?,
             })

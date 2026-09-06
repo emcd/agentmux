@@ -14,8 +14,7 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::action::Action;
-use super::bindings::{ContextRow, default_rows};
-use super::chord::Chord;
+use super::bindings::default_rows;
 use super::context::{BindingContext, lookup_order};
 use super::effective::{BindingConfiguration, CapabilityClass, EffectiveBindings};
 use super::help::context_actions;
@@ -220,72 +219,15 @@ fn candidate_keystrokes(
     };
     for consulted in lookup_order(context) {
         for row in bindings.rows_for(consulted) {
-            push(row.code, row.modifiers);
+            for (code, modifiers) in row.chord.denoted_keystrokes() {
+                push(code, modifiers);
+            }
         }
         for row in default_rows(consulted) {
-            for (code, modifiers) in witnesses(row) {
+            for (code, modifiers) in row.chord.denoted_keystrokes() {
                 push(code, modifiers);
             }
         }
     }
     keystrokes
-}
-
-/// Every modifier set a terminal can report.
-///
-/// Derived from the flag type rather than from the chord grammar, because this
-/// answers a question about dispatch and dispatch matches whatever arrives. A
-/// row matching on a key code alone keeps answering under `Hyper` and `Meta`,
-/// which the grammar cannot spell and a configuration therefore cannot claim;
-/// bounding the domain to what an operator can write would report such a row's
-/// behavior lost while it still answers.
-///
-/// Enumerated from `KeyModifiers::all()` so a flag added to crossterm is
-/// covered without an edit here — an enumeration written out by hand would go
-/// stale silently, still passing while no longer covering what it names.
-fn modifier_combinations() -> Vec<KeyModifiers> {
-    (0..=KeyModifiers::all().bits())
-        .filter_map(KeyModifiers::from_bits)
-        .collect()
-}
-
-/// The keystrokes one compiled row matches.
-///
-/// Not a sample of them, and not the keystroke the row is written as: a row
-/// matching more than it spells keeps answering under keystrokes a
-/// configuration did not claim, and taking fewer would report a behavior lost
-/// that an operator can still reach. Since this decides whether a configuration
-/// is refused, reporting a behavior lost that dispatch still delivers is the
-/// expensive direction — it refuses a file that works.
-fn witnesses(row: &ContextRow) -> Vec<(KeyCode, KeyModifiers)> {
-    match row.chord {
-        // Matches on the key code alone, so every modifier set reaches it —
-        // including the two the grammar cannot spell, which a configuration
-        // therefore can never claim.
-        Chord::AnyModifiers(code) => modifier_combinations()
-            .into_iter()
-            .map(|modifiers| (code, modifiers))
-            .collect(),
-        // Matches any set containing `Ctrl`, mirroring the handler blocks that
-        // test `modifiers.contains(CONTROL)`. So claiming `Ctrl+C` leaves
-        // `Ctrl+Shift+C` reaching the same behavior — which is exactly the case
-        // that decides whether a configuration rebinding the quit chord is
-        // refused, and dispatch says it still quits.
-        Chord::Control(character) => modifier_combinations()
-            .into_iter()
-            .filter(|modifiers| modifiers.contains(KeyModifiers::CONTROL))
-            .map(|modifiers| (KeyCode::Char(character), modifiers))
-            .collect(),
-        // Ordinary typing of one character, which is the bare key or the key
-        // with `Shift`; any other modifier makes it a chord rather than typing.
-        Chord::Char(character) => vec![
-            (KeyCode::Char(character), KeyModifiers::NONE),
-            (KeyCode::Char(character), KeyModifiers::SHIFT),
-        ],
-        // The one shape that denotes exactly the keystroke it is written as.
-        Chord::Key(..) => row.chord.denoted_keystroke().into_iter().collect(),
-        // Typing carries the operator's own character into the behavior rather
-        // than reaching a fixed one, so it answers no question asked here.
-        Chord::Text => Vec::new(),
-    }
 }

@@ -5,14 +5,18 @@
 //! Built directly rather than through a loader so both capability classes and
 //! both platforms are exercisable without a terminal.
 //!
-//! The fixtures are shaped by which compiled chord shape a behavior sits on,
-//! and that is not incidental. A row written as one exact keystroke is lost
-//! when that keystroke is claimed. A row matching a key under any modifier, or
-//! a character under any set containing `Ctrl`, is lost only when every such
-//! set is claimed — and since two of the six modifier flags a terminal can
-//! report cannot be spelled in the configuration grammar, that never happens.
-//! Behaviors on those shapes are therefore permanently reachable, which is why
-//! every fixture below that produces a finding sits on the `Enter` family.
+//! Every row denotes exactly the keystrokes its written form names, so claiming
+//! that form is the whole of what it takes to displace the behavior behind it.
+//! The fixtures are correspondingly plain: one configured chord per compiled
+//! chord, with no need to reach for a behavior sitting on a shape that could be
+//! claimed in full.
+//!
+//! This file previously argued the opposite, and the change is the point. Rows
+//! that matched a key under any modifier, or a character under any set
+//! containing `Ctrl`, could not be claimed at all — two of the six modifier
+//! flags a terminal reports have no spelling in the grammar — so behaviors on
+//! those shapes were permanently reachable and the quit refusal was a guard no
+//! configuration could trip. Both facts are now gone.
 
 use agentmux::tui::{
     Action, AffectedClasses, BindingConfiguration, BindingContext, CapabilityClass,
@@ -50,64 +54,6 @@ fn configuration(rows: Vec<ConfiguredBinding>) -> BindingConfiguration {
         rows,
         ..BindingConfiguration::default()
     }
-}
-
-/// Every modifier set the grammar can spell that contains `Ctrl`.
-///
-/// Eight of them, and a compiled control chord matches all eight. Claiming
-/// fewer leaves the behavior reachable through whichever set was left, which is
-/// what dispatch does and therefore what this has to agree with.
-fn control_spellings(character: char) -> Vec<String> {
-    [
-        vec![],
-        vec!["cmd"],
-        vec!["alt"],
-        vec!["shift"],
-        vec!["cmd", "alt"],
-        vec!["cmd", "shift"],
-        vec!["alt", "shift"],
-        vec!["cmd", "alt", "shift"],
-    ]
-    .into_iter()
-    .map(|extras| {
-        let mut parts = vec!["ctrl"];
-        parts.extend(extras);
-        format!("{}+{character}", parts.join("+"))
-    })
-    .collect()
-}
-
-/// Every modifier set the grammar can spell, applied to one key.
-///
-/// Sixteen: the four literal modifiers in every combination. The point of the
-/// list is what it leaves out — a terminal can report `Hyper` and `Meta` too,
-/// and no configuration can name them.
-fn grammar_spellings(key: &str) -> Vec<String> {
-    ["ctrl", "alt", "shift", "cmd"]
-        .iter()
-        .fold(vec![String::new()], |spellings, modifier| {
-            spellings
-                .iter()
-                .flat_map(|prefix| [prefix.clone(), format!("{prefix}{modifier}+")])
-                .collect()
-        })
-        .into_iter()
-        .map(|prefix| format!("{prefix}{key}"))
-        .collect()
-}
-
-/// Rows claiming every one of those spellings, which is as far as a
-/// configuration can go against a compiled control chord.
-fn claim_every_control_spelling(
-    context: BindingContext,
-    character: char,
-    action: ConfiguredAction,
-    classes: &[CapabilityClass],
-) -> Vec<ConfiguredBinding> {
-    control_spellings(character)
-        .iter()
-        .map(|chord| row(context, chord, action, classes))
-        .collect()
 }
 
 /// The three chords compose binds sending to, each written as one exact
@@ -257,11 +203,15 @@ fn a_chord_the_class_cannot_deliver_does_not_count_as_reachable() {
     );
 }
 
-/// A compiled row matching a key under any modifier keeps answering under every
-/// combination a configuration did not claim, combinations of two included.
-/// Claiming the five single-modifier states leaves eleven others.
+/// Claiming a bare key is the whole of what it takes to displace the behavior
+/// behind it, because the bare key is the whole of what its compiled row
+/// denotes.
+///
+/// The inverse of what this file asserted before exactness: one configured
+/// chord now does what claiming five could not, and the modified forms it does
+/// not name reach nothing rather than keeping the displaced behavior alive.
 #[test]
-fn a_row_matching_any_modifier_survives_the_single_modifier_states_being_claimed() {
+fn claiming_a_bare_key_displaces_the_behavior_behind_it() {
     let compose = BindingContext::ComposeMessage;
     assert_eq!(
         default_binding(compose, KeyCode::Esc, KeyModifiers::NONE),
@@ -269,23 +219,16 @@ fn a_row_matching_any_modifier_survives_the_single_modifier_states_being_claimed
         "the compiled row this test claims is not the one it assumes"
     );
 
-    let configuration = configuration(
-        ["esc", "shift+esc", "ctrl+esc", "alt+esc", "cmd+esc"]
-            .iter()
-            .map(|chord| {
-                row(
-                    compose,
-                    chord,
-                    ConfiguredAction::Invoke(Action::MoveMessageCursorUp),
-                    BOTH,
-                )
-            })
-            .collect(),
-    );
+    let configuration = configuration(vec![row(
+        compose,
+        "esc",
+        ConfiguredAction::Invoke(Action::MoveMessageCursorUp),
+        BOTH,
+    )]);
     assert_eq!(
         finding_for(&configuration, compose, Action::SnapChatHistoryToLatest),
-        None,
-        "a row matching any modifier was reported lost while Ctrl+Shift+Esc still reaches it"
+        Some(AffectedClasses::Both),
+        "one configured chord should displace a behavior sitting on one bare key"
     );
 }
 
@@ -296,92 +239,138 @@ fn quit_stays_reachable_under_the_shipped_defaults() {
     }
 }
 
-/// Rebinding the bare quit chord does not lose quit: the compiled row matches
-/// any set containing `Ctrl`, so `Ctrl+Shift+C` still quits, and dispatch says
-/// so. Refusing the file here would refuse one that works.
+/// Rebinding the quit chord loses quit, and the refusal fires.
+///
+/// The guard the arc wired and could not trip. `Ctrl+C` denotes one keystroke,
+/// so binding it elsewhere leaves nothing quitting — no `Ctrl+Shift+C` survives
+/// to make the file work by accident, which is what made this a report of
+/// reachability rather than a real refusal before.
 #[test]
-fn rebinding_the_bare_quit_chord_leaves_quit_reachable() {
+fn rebinding_the_quit_chord_now_loses_quit() {
     let configuration = configuration(vec![row(
         BindingContext::Global,
         "ctrl+c",
         ConfiguredAction::Invoke(Action::ToggleHelpOverlay),
         BOTH,
     )]);
-    assert_eq!(quit_unreachable(Some(&configuration), false), None);
+    for on_macos in [false, true] {
+        assert_eq!(
+            quit_unreachable(Some(&configuration), on_macos),
+            Some(AffectedClasses::Both),
+            "on_macos={on_macos}: the one chord that quits was taken and nothing replaced it"
+        );
+    }
 }
 
-/// No configuration the grammar can express takes quit away.
-///
-/// The compiled quit row matches every set containing `Ctrl`, and two of the
-/// six modifier flags are ones the grammar cannot spell, so `Ctrl+Hyper+C` is
-/// unclaimable and still quits however much of the rest is claimed.
-///
-/// So the refusal is a guard this table cannot trip. It is kept because the
-/// requirement asks for it and because a quit row written as one exact
-/// keystroke would trip it — but that is a fact about the compiled table rather
-/// than about this code, and it is asserted here rather than left to be
-/// rediscovered.
+/// Emptying the quit chord is refused under whichever classes it was emptied
+/// for, so a class-qualified removal is caught as precisely as a total one.
 #[test]
-fn no_configuration_the_grammar_can_express_takes_quit_away() {
-    for classes in [
-        BOTH,
-        &[CapabilityClass::Standard][..],
-        &[CapabilityClass::Enhanced][..],
+fn unbinding_quit_is_refused_per_capability_class() {
+    for (classes, expected) in [
+        (BOTH, AffectedClasses::Both),
+        (
+            &[CapabilityClass::Standard][..],
+            AffectedClasses::Only(CapabilityClass::Standard),
+        ),
+        (
+            &[CapabilityClass::Enhanced][..],
+            AffectedClasses::Only(CapabilityClass::Enhanced),
+        ),
     ] {
-        let configuration = configuration(claim_every_control_spelling(
+        let configuration = configuration(vec![row(
             BindingContext::Global,
-            'c',
+            "ctrl+c",
             ConfiguredAction::Unbound,
             classes,
-        ));
+        )]);
         for on_macos in [false, true] {
             assert_eq!(
                 quit_unreachable(Some(&configuration), on_macos),
-                None,
-                "{classes:?} on_macos={on_macos}: Ctrl+Hyper+C is unclaimable and still quits"
+                Some(expected),
+                "{classes:?} on_macos={on_macos}: emptying the quit chord must be refused"
             );
         }
     }
 }
 
-/// A modifier the grammar cannot spell still reaches a compiled row matching on
-/// the key alone, so claiming every spelling an operator can write does not
-/// take the behavior away.
-///
-/// A statement about dispatch rather than about ergonomics: `Hyper+Esc` is a
-/// keystroke almost no keyboard produces, and the table answers it all the
-/// same. Reachability has to agree with the table, because what it decides is
-/// whether a configuration is refused.
+/// Rebinding quit and giving it another chord in the same context is accepted,
+/// which is what keeps the refusal a statement about reachability rather than
+/// about one privileged keystroke.
 #[test]
-fn a_modifier_the_grammar_cannot_spell_keeps_a_compiled_row_reachable() {
-    let compose = BindingContext::ComposeMessage;
-    let claimed: Vec<ConfiguredBinding> = grammar_spellings("esc")
-        .iter()
-        .map(|chord| {
-            row(
-                compose,
-                chord,
-                ConfiguredAction::Invoke(Action::MoveMessageCursorUp),
-                BOTH,
-            )
-        })
-        .collect();
-    assert_eq!(
-        claimed.len(),
-        16,
-        "the grammar spells sixteen modifier sets, and all of them are claimed here"
-    );
-
-    assert_eq!(
-        finding_for(
-            &configuration(claimed),
-            compose,
-            Action::SnapChatHistoryToLatest
+fn quit_moved_to_another_chord_is_accepted() {
+    let configuration = configuration(vec![
+        row(
+            BindingContext::Global,
+            "ctrl+c",
+            ConfiguredAction::Invoke(Action::ToggleHelpOverlay),
+            BOTH,
         ),
-        None,
-        "every spelling the grammar has was claimed, and Hyper+Esc still reaches \
-         the compiled row"
-    );
+        row(
+            BindingContext::Global,
+            "ctrl+q",
+            ConfiguredAction::Invoke(Action::Quit),
+            BOTH,
+        ),
+    ]);
+    for on_macos in [false, true] {
+        assert_eq!(
+            quit_unreachable(Some(&configuration), on_macos),
+            None,
+            "on_macos={on_macos}: quit moved rather than vanished"
+        );
+    }
+}
+
+/// A keystroke outside a row's denoted form reaches nothing through it, swept
+/// over every modifier set a terminal can report rather than over a sample.
+///
+/// The general statement the fixtures above are instances of. Written against
+/// the *denoted* set rather than the modifiers a row names, because for a bare
+/// character those differ: `Shift` is denoted without being named, and phrasing
+/// it the other way would demand the opposite of the character rule.
+#[test]
+fn no_keystroke_outside_a_rows_denotation_reaches_it() {
+    let compose = BindingContext::ComposeMessage;
+    let cases: [(KeyCode, Vec<KeyModifiers>); 3] = [
+        // A bare key: one keystroke.
+        (KeyCode::Esc, vec![KeyModifiers::NONE]),
+        // A control chord: one keystroke, the further modifiers withdrawn.
+        (KeyCode::Char('j'), vec![KeyModifiers::CONTROL]),
+        // A bare character: two, since Shift alters how a terminal reports it.
+        (
+            KeyCode::Char('q'),
+            vec![KeyModifiers::NONE, KeyModifiers::SHIFT],
+        ),
+    ];
+
+    for (code, denoted) in cases {
+        // The row's own action, taken from a keystroke it denotes. Asserted
+        // against rather than asserting nothing answers, because a character
+        // key also reaches the typing row, and typing is not this row.
+        let reached = default_binding(compose, code, denoted[0])
+            .expect("the premise fails -- the denoted keystroke reaches nothing to begin with");
+        for modifiers in denoted.iter() {
+            assert_eq!(
+                default_binding(compose, code, *modifiers),
+                Some(reached),
+                "{code:?} under {modifiers:?} is denoted and must reach the row"
+            );
+        }
+        for bits in 0..=KeyModifiers::all().bits() {
+            let Some(modifiers) = KeyModifiers::from_bits(bits) else {
+                continue;
+            };
+            if denoted.contains(&modifiers) {
+                continue;
+            }
+            assert_ne!(
+                default_binding(compose, code, modifiers),
+                Some(reached),
+                "{code:?} still reaches its row under {modifiers:?}, which its written \
+                 form does not denote"
+            );
+        }
+    }
 }
 
 /// The symbolic modifier resolves as the tables are built, so which compiled

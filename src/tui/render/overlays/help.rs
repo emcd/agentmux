@@ -356,16 +356,19 @@ const TO_FIELD_GRAMMAR: &[&str] = &[
 /// make the modified forms redundant wherever `Enter` is bound, and repeating
 /// them inline tripled the width of the lines that carry them.
 ///
-/// Two facts, not one. The neutrality contract governs `Shift+Enter` and
-/// `Ctrl+Enter` everywhere; the interaction panes and the picker additionally
-/// carry a modifier-agnostic fallback row, so `Alt+Enter` reaches their `Enter`
-/// action too, and compose deliberately does not. Saying only the first would
-/// understate what the table binds.
-const MODIFIED_ENTER_NOTES: &[&str] = &[
-    "Shift+Enter and Ctrl+Enter match Enter wherever it is bound.",
-    "In the write and choice panes and the picker, any modifier on Enter matches.",
-    "Compose binds only the three.",
-];
+/// One fact now, where there were two. The note used to add that the
+/// interaction panes and the picker carried a modifier-agnostic fallback row,
+/// so `Alt+Enter` reached their `Enter` action while compose refused it. That
+/// asymmetry is gone: every context binds the three declared chords and no
+/// other modifier set, so the second sentence would now be false and the third
+/// would imply a distinction that no longer exists.
+///
+/// Hand-written rather than generated, which is why an edit was needed here at
+/// all. The lines below name chords outside the binding table, so nothing makes
+/// them follow it — a gap recorded for the documentation group rather than
+/// closed here.
+const MODIFIED_ENTER_NOTES: &[&str] =
+    &["Shift+Enter and Ctrl+Enter match Enter wherever it is bound."];
 
 /// The three column areas, laid out with a gutter so they do not run together
 /// when the terminal is narrow enough to wrap their lines.
@@ -597,8 +600,6 @@ mod tests {
             "Auto-opens entering Interaction w/o target",
             "session@GLOBAL",
             "Shift+Enter and Ctrl+Enter match Enter wherever it is bound.",
-            "any modifier on Enter matches",
-            "Compose binds only the three.",
         ];
 
         let mut opening_counts = Vec::new();

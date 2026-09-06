@@ -592,3 +592,104 @@ fn every_shipped_binding_set_moves_sending_off_the_chord_that_reaches_it_by_defa
         );
     }
 }
+
+/// A compiled row naming a bare character accepts that character carrying
+/// `Shift`, whether the row invokes a fixed action or carries the character
+/// into one.
+///
+/// The one place exactness would break something a terminal actually does. A
+/// terminal's report of a typed character is not a function of the key alone:
+/// `Shift` and `Caps Lock` each alter both which character arrives and which
+/// modifiers accompany it, so a form admitting only the bare arrival would
+/// refuse a keystroke an operator produced by typing.
+#[test]
+fn a_shifted_character_reaches_the_row_that_names_it() {
+    let choice = BindingContext::InteractionChoice;
+    // A fixed-action character row.
+    for character in ['c', 'C'] {
+        for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+            assert_eq!(
+                default_binding(choice, KeyCode::Char(character), modifiers),
+                Some(Action::ResolveChoiceCancelled),
+                "{character:?} under {modifiers:?} must resolve the choice as cancelled"
+            );
+        }
+    }
+    // A typing row, which carries the character rather than reaching a fixed
+    // action.
+    let compose = BindingContext::ComposeMessage;
+    for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+        assert_eq!(
+            default_binding(compose, KeyCode::Char('q'), modifiers),
+            Some(Action::InsertComposeCharacter('q')),
+            "typing must accept a character under {modifiers:?}"
+        );
+    }
+}
+
+/// An operator's bare single-character chord denotes the same two keystrokes
+/// the compiled row does, so claiming the character claims all of what that row
+/// answered.
+///
+/// Symmetry is the requirement, not the pair. Were a configured `c` to resolve
+/// to the bare form alone, the configured row would claim one of the two while
+/// the compiled row kept answering for the other — the exact condition exactness
+/// exists to remove, reappearing in the one shape exempted from it.
+#[test]
+fn configuring_a_character_claims_both_of_its_forms() {
+    let choice = BindingContext::InteractionChoice;
+    assert_eq!(
+        default_binding(choice, KeyCode::Char('c'), KeyModifiers::SHIFT),
+        Some(Action::ResolveChoiceCancelled),
+        "the premise fails -- the compiled row does not answer the shifted form"
+    );
+
+    let configuration = BindingConfiguration {
+        rows: vec![row(choice, "c", Action::MoveNextChoiceOption)],
+        ..BindingConfiguration::default()
+    };
+    let bindings = EffectiveBindings::build(Some(&configuration), CapabilityClass::Standard, false);
+
+    for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+        assert_eq!(
+            bindings.action_for(choice, KeyCode::Char('c'), modifiers),
+            Some(Action::MoveNextChoiceOption),
+            "the configured character must intercept its {modifiers:?} arrival"
+        );
+    }
+    // The displaced compiled row reaches nothing through the character it named.
+    // 'C' is a different row and is deliberately left alone.
+    assert_eq!(
+        bindings.action_for(choice, KeyCode::Char('C'), KeyModifiers::NONE),
+        Some(Action::ResolveChoiceCancelled),
+        "configuring 'c' must not disturb the row naming 'C'"
+    );
+}
+
+/// A configured character written with a modifier is a chord rather than
+/// typing, so it denotes that one keystroke and leaves the bare forms alone.
+///
+/// The boundary of the rule above: without this, resolving every configured
+/// character to a two-keystroke shape would look identical in the test that
+/// matters.
+#[test]
+fn a_configured_character_carrying_a_modifier_denotes_one_keystroke() {
+    let choice = BindingContext::InteractionChoice;
+    let configuration = BindingConfiguration {
+        rows: vec![row(choice, "ctrl+c", Action::MoveNextChoiceOption)],
+        ..BindingConfiguration::default()
+    };
+    let bindings = EffectiveBindings::build(Some(&configuration), CapabilityClass::Standard, false);
+
+    assert_eq!(
+        bindings.action_for(choice, KeyCode::Char('c'), KeyModifiers::CONTROL),
+        Some(Action::MoveNextChoiceOption)
+    );
+    for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
+        assert_eq!(
+            bindings.action_for(choice, KeyCode::Char('c'), modifiers),
+            Some(Action::ResolveChoiceCancelled),
+            "a modified configured chord must leave the bare character alone"
+        );
+    }
+}

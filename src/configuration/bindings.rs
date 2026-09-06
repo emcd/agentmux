@@ -225,19 +225,29 @@ type ResolvedChord = (KeyCode, KeyModifiers);
 /// Every keystroke a written chord could denote, across the platforms it may be
 /// read on.
 ///
-/// A literal chord denotes one. A chord using the symbolic modifier denotes two,
-/// since that modifier resolves differently per platform and per operator
-/// selection. Both are claimed, so a file is accepted or refused the same way
-/// wherever it is read rather than colliding only on the machine that resolves
-/// the symbol onto a literal chord the file also names.
+/// Read through the row shape the chord resolves to rather than through the one
+/// keystroke it resolves as, because the two differ for a bare character: that
+/// shape denotes the character bare *and* carrying `Shift`. Asking only for the
+/// resolved keystroke would let a group name a character and its shifted form
+/// as separate rows, which each claim `Shift+<character>` — accepted at load,
+/// and then disagreed about downstream, since dispatch would give the shifted
+/// form to one row while presentation dropped the other for having lost it.
+///
+/// A chord using the symbolic modifier resolves differently per platform and per
+/// operator selection, so both resolutions are claimed. That way a file is
+/// accepted or refused the same way wherever it is read, rather than colliding
+/// only on the machine that resolves the symbol onto a literal chord the file
+/// also names.
 fn resolutions_of(chord: ChordPattern) -> Vec<ResolvedChord> {
-    let with_control = chord.resolve(KeyModifiers::CONTROL);
-    let with_command = chord.resolve(KeyModifiers::SUPER);
-    if with_control == with_command {
-        vec![with_control]
-    } else {
-        vec![with_control, with_command]
+    let mut resolved = Vec::new();
+    for primary in [KeyModifiers::CONTROL, KeyModifiers::SUPER] {
+        for keystroke in chord.resolve_to_chord(primary).denoted_keystrokes() {
+            if !resolved.contains(&keystroke) {
+                resolved.push(keystroke);
+            }
+        }
     }
+    resolved
 }
 
 /// Reads what one chord entry maps to, per terminal capability class.

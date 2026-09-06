@@ -1,29 +1,35 @@
 //! The chord shapes a binding row matches, and the two directions an
 //! operator-facing chord travels: rendered for reading, parsed from writing.
 //!
-//! Only [`Chord::Key`] is operator-facing. The other shapes exist to reproduce
-//! handler conditions or to carry typed text, and a configuration expresses
-//! none of them; see `parse_chord`.
+//! Every shape here matches exactly the keystrokes its written form denotes.
+//! That is what lets dispatch, presentation and reachability agree without
+//! coordinating: a row matching more than it spells is one a configuration
+//! cannot fully claim, so its behavior survives being rebound and the overlay
+//! and dispatch disagree about whether it is still there.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-/// The pattern a row matches an incoming key against. Each variant mirrors a
-/// condition shape the handlers in `../input.rs` use today, so the table can
-/// reproduce them without narrowing.
+/// The pattern a row matches an incoming key against.
+///
+/// Three shapes, because there are three things a row can denote: one
+/// keystroke, one character however a terminal reports its case, or typing.
+/// Shapes that existed only to reproduce a handler condition -- one key under
+/// any modifier, one character under any superset of `Ctrl` -- are gone rather
+/// than narrowed, since a condition is not a chord and reproducing one is what
+/// put keystrokes beyond an operator's reach.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Chord {
-    /// One key with an exact modifier set. Used where a modifier is part of the
-    /// chord's identity, so `Enter`, `Shift+Enter`, and `Ctrl+Enter` stay
-    /// distinguishable rows.
+    /// One key with an exact modifier set, matching that keystroke and no
+    /// other.
     Key(KeyCode, KeyModifiers),
-    /// One key whatever modifiers accompany it, mirroring the handler arms that
-    /// test only the key code.
-    AnyModifiers(KeyCode),
-    /// One character carrying `Ctrl`, whatever else accompanies it. The control
-    /// blocks in `../input.rs` test `modifiers.contains(CONTROL)`, so
-    /// `Ctrl+Shift+J` reaches the same behavior as `Ctrl+J` today.
-    Control(char),
-    /// One character typed bare or with `Shift`.
+    /// One character, bare or carrying `Shift`.
+    ///
+    /// The one shape denoting two keystrokes, and it denotes them because a
+    /// terminal's report of a typed character is not a function of the key
+    /// alone: `Shift` and `Caps Lock` each alter both which character arrives
+    /// and which modifiers accompany it. Admitting only one of the two would
+    /// refuse a keystroke an operator produced by typing. Between them, `c` and
+    /// `C` so defined cover every way either letter can arrive.
     Char(char),
     /// Any character typed bare or with `Shift`. The character is carried into
     /// the action rather than into the row, since a row per character is not a
@@ -45,48 +51,51 @@ impl Chord {
                     rendered_key(code, modifiers)
                 )
             }
-            Self::AnyModifiers(code) => key_code_display(code),
-            // Control chords are conventionally written with a capital, and
-            // the table stores them lowercase because that is the character
-            // the terminal reports. A literal typed character is not
-            // capitalised: `c` and `C` are separate rows on purpose.
-            Self::Control(character) => {
-                format!("Ctrl+{}", character_display(character.to_ascii_uppercase()))
-            }
             Self::Char(character) => character_display(character),
             Self::Text => "Type".to_string(),
         }
     }
 
-    /// The single keystroke this chord's written form stands for, or `None`
-    /// where it stands for no one keystroke.
+    /// The keystroke a reader who copies this chord out of the overlay presses,
+    /// or `None` where it stands for no one keystroke.
     ///
-    /// Several shapes match more keystrokes than they are written as.
-    /// [`Chord::AnyModifiers`] renders as the bare key and matches it under any
-    /// modifier; [`Chord::Control`] renders one character and matches it under
-    /// any superset of `Ctrl`. What this answers is the narrower question
-    /// presentation asks: which keystroke does a reader who copies this chord
-    /// out of the overlay actually press.
+    /// The bare form for a character, since that is what its written form shows
+    /// and what a reader will type; [`Chord::denoted_keystrokes`] answers the
+    /// wider question of everything the row accepts.
     ///
     /// [`Chord::Text`] answers `None`. It stands for typing rather than for a
     /// key, which is the same reason it is outside the configuration grammar.
     pub(crate) fn denoted_keystroke(self) -> Option<(KeyCode, KeyModifiers)> {
         match self {
             Self::Key(code, modifiers) => Some((code, modifiers)),
-            Self::AnyModifiers(code) => Some((code, KeyModifiers::NONE)),
-            Self::Control(character) => Some((KeyCode::Char(character), KeyModifiers::CONTROL)),
             Self::Char(character) => Some((KeyCode::Char(character), KeyModifiers::NONE)),
             Self::Text => None,
+        }
+    }
+
+    /// Every keystroke this chord's written form denotes.
+    ///
+    /// Exactly the set [`Chord::matches`] accepts, and the two are written to
+    /// be read together: a shape whose match rule outgrew this list would be
+    /// one a configuration could not fully claim, which is the condition
+    /// exactness exists to remove.
+    ///
+    /// One entry for a key with a modifier set, two for a bare character, none
+    /// for typing.
+    pub(crate) fn denoted_keystrokes(self) -> Vec<(KeyCode, KeyModifiers)> {
+        match self {
+            Self::Key(code, modifiers) => vec![(code, modifiers)],
+            Self::Char(character) => vec![
+                (KeyCode::Char(character), KeyModifiers::NONE),
+                (KeyCode::Char(character), KeyModifiers::SHIFT),
+            ],
+            Self::Text => Vec::new(),
         }
     }
 
     pub(super) fn matches(self, code: KeyCode, modifiers: KeyModifiers) -> bool {
         match self {
             Self::Key(row_code, row_modifiers) => code == row_code && modifiers == row_modifiers,
-            Self::AnyModifiers(row_code) => code == row_code,
-            Self::Control(character) => {
-                code == KeyCode::Char(character) && modifiers.contains(KeyModifiers::CONTROL)
-            }
             Self::Char(character) => code == KeyCode::Char(character) && is_typed(modifiers),
             Self::Text => matches!(code, KeyCode::Char(_)) && is_typed(modifiers),
         }
@@ -246,6 +255,29 @@ impl ChordPattern {
             other => other,
         };
         (code, modifiers)
+    }
+
+    /// The row shape this written chord denotes, once the symbolic modifier has
+    /// been resolved.
+    ///
+    /// This is where the two sides are made to denote the same thing. An
+    /// operator writing a bare single character gets [`Chord::Char`] — the same
+    /// shape a compiled row naming that character carries, denoting the
+    /// character bare and carrying `Shift`. Resolving to the bare keystroke
+    /// alone would leave the configured row claiming one of the two while the
+    /// compiled row kept answering for the other, which is the exact condition
+    /// exactness exists to remove, reappearing in the one shape exempted from
+    /// it.
+    ///
+    /// A character written with any modifier, symbolic included, is a chord
+    /// rather than typing, so it denotes that one keystroke.
+    #[must_use]
+    pub(crate) fn resolve_to_chord(self, primary: KeyModifiers) -> Chord {
+        let (code, modifiers) = self.resolve(primary);
+        match code {
+            KeyCode::Char(character) if modifiers.is_empty() => Chord::Char(character),
+            _ => Chord::Key(code, modifiers),
+        }
     }
 
     /// This chord written as an operator would write it.

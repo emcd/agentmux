@@ -369,31 +369,27 @@ fn every_folded_chord_is_covered_by_one_that_is_shown() {
 }
 
 #[test]
-fn a_modifier_agnostic_enter_is_bound_only_where_the_handlers_had_one() {
-    // The reference note distinguishes two behaviors, so both are pinned. The
-    // interaction panes and the picker carry a modifier-agnostic fallback row,
-    // so Alt+Enter reaches their Enter action; compose guards on an empty
-    // modifier set and deliberately does not.
+fn no_context_binds_an_undeclared_modifier_on_enter() {
+    // The interaction panes and the picker used to carry a modifier-agnostic
+    // fallback row, so Alt+Enter reached their Enter action while compose
+    // refused it. That asymmetry is gone: every context now binds the three
+    // declared chords and nothing else, so the reference note has one behavior
+    // to describe rather than two.
     for context in [
         BindingContext::InteractionWrite,
         BindingContext::InteractionChoice,
         BindingContext::PickerBundles,
         BindingContext::PickerSessions,
+        BindingContext::ComposeTo,
+        BindingContext::ComposeMessage,
     ] {
-        assert_eq!(
-            default_binding(context, KeyCode::Enter, KeyModifiers::ALT),
-            default_binding(context, KeyCode::Enter, KeyModifiers::NONE),
-            "{context:?} should reach its Enter action under any modifier"
-        );
-    }
-    for context in [BindingContext::ComposeTo, BindingContext::ComposeMessage] {
         assert!(
             default_binding(context, KeyCode::Enter, KeyModifiers::ALT).is_none(),
-            "{context:?} binds no modifier-agnostic Enter fallback"
+            "{context:?} still binds an Enter chord no row declares"
         );
         assert!(
             default_binding(context, KeyCode::Enter, KeyModifiers::SHIFT).is_some(),
-            "{context:?} still binds the three explicit Enter chords"
+            "{context:?} lost one of the three declared Enter chords"
         );
     }
 }

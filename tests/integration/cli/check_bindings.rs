@@ -121,38 +121,54 @@ fn check_configuration_reports_no_binding_finding_for_the_shipped_defaults() {
 }
 
 /// Pre-flight refuses whatever startup refuses, because both go through the
-/// same loader — and a group claiming every `Ctrl` spelling of the quit chord
-/// is not among them.
+/// same loader, and losing quit is the one thing either refuses.
 ///
-/// The compiled quit row matches every modifier set containing `Ctrl`, and two
-/// of the six flags a terminal can report cannot be spelled in the grammar, so
-/// `Ctrl+Hyper+C` still quits. Refusing this would refuse a configuration that
-/// works. The refusal path is asserted where it can be reached, against the
-/// loader directly.
+/// Reachable through the CLI now that `Ctrl+C` denotes one keystroke. It was
+/// not before: the compiled quit row matched every set containing `Ctrl`, two
+/// of the six flags have no spelling, and `Ctrl+Hyper+C` kept quitting whatever
+/// an operator claimed — so this test asserted the refusal could *not* be
+/// triggered, and the refusal path was reachable only against the loader.
 #[test]
-fn check_configuration_accepts_a_group_that_claims_every_spellable_quit_chord() {
+fn check_configuration_refuses_a_group_that_takes_the_quit_chord() {
     let temporary = TempDir::new().expect("temporary");
     let (config_root, state_root) = config_and_state(&temporary);
     write_bundle_configuration(&config_root, "alpha", None, &["a"]);
-    let mut body = String::from("[bindings.global]\n");
-    for spelling in [
-        "ctrl",
-        "ctrl+cmd",
-        "ctrl+alt",
-        "ctrl+shift",
-        "ctrl+cmd+alt",
-        "ctrl+cmd+shift",
-        "ctrl+alt+shift",
-        "ctrl+cmd+alt+shift",
-    ] {
-        body.push_str(&format!("\"{spelling}+c\" = \"none\"\n"));
-    }
-    fs::write(config_root.join("ui.toml"), body).expect("write ui.toml");
+    fs::write(
+        config_root.join("ui.toml"),
+        "[bindings.global]\n\"ctrl+c\" = \"none\"\n",
+    )
+    .expect("write ui.toml");
+
+    let output = check(&[&config_root], &state_root);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !output.status.success(),
+        "a configuration that cannot quit must be refused, not reported"
+    );
+    assert!(
+        stderr.contains("no chord quits the TUI"),
+        "pre-flight refused for the wrong reason: {stderr}"
+    );
+}
+
+/// The control for that refusal: taking a modified variant of the quit chord
+/// leaves quit alone, so the run succeeds. Without this, a refusal that fired
+/// on any mention of the quit character would satisfy the test above.
+#[test]
+fn check_configuration_accepts_a_group_that_takes_only_a_modified_quit_variant() {
+    let temporary = TempDir::new().expect("temporary");
+    let (config_root, state_root) = config_and_state(&temporary);
+    write_bundle_configuration(&config_root, "alpha", None, &["a"]);
+    fs::write(
+        config_root.join("ui.toml"),
+        "[bindings.global]\n\"ctrl+shift+c\" = \"none\"\n",
+    )
+    .expect("write ui.toml");
 
     let output = check(&[&config_root], &state_root);
     assert!(
         output.status.success(),
-        "quit is still reachable, so pre-flight must not refuse: {}",
+        "Ctrl+Shift+C is not the quit chord: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 }
