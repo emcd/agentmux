@@ -16,120 +16,152 @@ target-type-dependent step is transport construction.
 ## Requirements
 ### Requirement: Transport Interface Contract
 
-The relay delivery subsystem SHALL dispatch all agent delivery operations
-through two non-blocking write methods defined on the `Transport` trait:
+The relay delivery subsystem SHALL NOT dispatch delivery by invoking a
+transport method per envelope. Instead, each transport implementation of the
+`Transport` trait SHALL own one
+**serial delivery-loop executor**, spawned during `startup` and living for the
+transport instance's lifetime, which calls the relay's `peek`, `declare`,
+and `ack` entry points (`delivery-quiescence`'s `Mailbox Peek Operation`,
+`Mailbox Submission Declaration`, and `Mailbox Acknowledgment and Partial
+Acknowledgment` requirements) directly.
 
-- `mailw` — structured relay message write. The relay SHALL populate routing,
-  attribution, message body, timestamp, choice-decider, and quiescence fields
-  before calling the transport. **The relay invokes per envelope**, and a
-  transport MAY coalesce consecutively received envelopes into one packing unit;
-  it SHALL NOT wait for target readiness before submitting. The transport SHALL
-  render any transport-specific representation internally and resolve each member
-  with a terminal `SingleDeliveryOutcome` derived from that member's packing-unit
-  evidence.
+`mailw`, `raww`, and `is_ready_for_handover` are **removed from the `Transport`
+trait**. The relay no longer invokes a transport to deliver mail, and no
+longer reads a readiness level from it to gate anything. A transport MAY
+still keep an internal readiness predicate — the `transport-contracts`
+capability's prompt-readiness templates still exist and still govern
+Tmux/Pty readiness determination — but that predicate now informs only the
+transport's own choice of when to write what it peeked, not any relay-facing
+call.
 
-  Coalescing is permitted **because the partition is declared rather than
-  inferred**. An earlier draft of this requirement forbade a transport from
-  buffering or coalescing, on the grounds that a group formed inside a transport
-  made its membership unknowable to the relay — which is what allowed one outcome
-  to be reported for members with different fates. `PartitionSink` removed that
-  premise: a coalescing transport declares its unit's exact membership through the
-  relay before any target-side effect, so the group is recorded even though it is
-  timing-derived. The prohibition was guarding a hazard the declaration mechanism
-  now excludes, and a rule that forbids what all three coder transports do is a
-  rule that is not being enforced.
-- `raww(content: String, append_enter: bool)` — raw input write. The `raww`
-  capability's `Relay raww operation contract` governs its request shape.
+The delivery-loop executor's contract:
 
-**The invocation is fallible.** The relay's admission quota reserves count and
-bytes in the relay's own queue and nothing about a transport's channel, its live
-worker generation, UI subscriber capacity, or any target resource. A transport
-SHALL be permitted to refuse an invocation, and a refusal SHALL be treated as a
-terminal evidence result rather than as a reclaim:
+- it calls `peek(target, entry_max, canonical_bytes_max)` when notified by
+  the delivery doorbell or when its bounded poll fires, per
+  `delivery-quiescence`'s `Delivery Doorbell Notification` requirement;
+- it decides what it will attempt to write: rendering what it peeked using
+  its own transport-specific representation, measuring the result against
+  its own token budget, and MAY coalesce consecutively peeked mail entries
+  into one packing unit exactly as `mailw` invocations were previously
+  coalesced;
+- it calls `declare(target, generation_id, range)` for exactly that
+  decided prefix — possibly all of what it peeked — naming both ends of the
+  range, **before** attempting to write any of it, per
+  `delivery-quiescence`'s `Mailbox Submission Declaration` requirement;
+- only then does it attempt the write;
+- it calls `ack(target, generation_id, packing_unit_id, evidence)` naming
+  the `PackingUnitId` `declare` returned, supplying per-member
+  `SubmissionEvidence` derived from the write attempt — `Submitted` on
+  success, `NotSubmitted` if it can positively establish nothing happened,
+  `SubmissionUnknown` otherwise;
+- it does not wait on prompt readiness, target turn completion, target
+  output, or an operator decision before writing once it has decided to
+  write; a submission primitive that can block SHALL be supervised and
+  fenced/interruptible per the `Transport Generation Fencing and
+  Termination Authority` requirement, unchanged by this proposal.
 
-- the transport returns the envelope **unchanged**, before partition → every
-  member it would have covered resolves `not_submitted`;
-- side effects **cannot be excluded** → the affected unit's members resolve
-  `submission_unknown`.
+Coalescing remains permitted for the same reason it was permitted under the
+push model: the partition is declared before any target-side effect via
+`declare`, so the group is recorded even though its membership is
+timing-derived. `declare` is the pull-model's relocation of what
+`PartitionSink` did under the push model — the same pre-effect binding
+discipline, called from the transport's own delivery loop instead of from
+a relay-invoked submission path.
 
-The relay SHALL NOT reclaim or retry in either case.
+**The write path remains fallible**, and a refusal remains a terminal
+evidence result rather than a reclaim: a transport that decides, after
+peeking, not to write anything simply does not call `declare` for those
+entries, leaving them `queued` and undeclared for the next attempt, which
+MAY be made by the same generation or a replacement. A transport that has
+already declared but then fails to write MUST still resolve that
+declaration — by acking with `NotSubmitted` or `SubmissionUnknown` evidence
+as appropriate — rather than leaving it to time out against
+`[delivery].submission-timeout-ms`, though the watchdog remains the
+backstop if the executor cannot do even that (for example because it has
+panicked).
 
-**A transport SHALL NOT wait.** Post-authorization execution SHALL NOT wait on
-prompt readiness, target turn completion, target output, or an operator decision.
-No authorized batch SHALL sit in a transport staging queue behind an in-flight
-turn. A submission primitive that can block SHALL be supervised and
-fenced/interruptible per the `Transport Generation Fencing and Termination
-Authority` requirement.
+Each transport type SHALL implement its delivery-loop executor in its own
+module. `TransportImpl` retains its five variants — `Acp`, `Tmux`, `Pty`,
+`Ui`, and `Pubsub` — and this contract applies to all of them.
 
-Each transport type SHALL implement these methods in its own module. The relay
-SHALL dispatch via a `TransportImpl` enum that delegates without dynamic
-allocation, and SHALL submit uniformly for every target with no transport-type
-routing fork in the delivery loop. `TransportImpl` has **five** variants — `Acp`,
-`Tmux`, `Pty`, `Ui`, and `Pubsub` — and this contract applies to all of them.
+The legacy synchronous methods — `deliver`, `prepare_delivery`, and
+`raw_write` — remain not retained, as under the prior contract.
 
-`mailw` and `raww` SHALL be the relay's only delivery seam. The relay worker
-SHALL NOT pre-render pane-envelope text before calling `mailw`; representation
-rendering belongs to the receiving transport. The legacy synchronous methods —
-`deliver`, `prepare_delivery`, and `raw_write` — and the types that existed
-solely to serve them SHALL NOT be retained.
+`raww` as a **relay-inbound** operation name is unaffected by this
+requirement: a caller still invokes `raww` to submit raw input, and the
+relay still admits it, but as a raw-kind mailbox entry rather than as a
+direct push into a transport. The `raww` capability's `Relay raww transport
+behavior` requirement specifies how a transport's delivery-loop executor
+discovers and writes it.
 
-The trait methods SHALL be non-blocking at the relay boundary. On relay shutdown,
-still-pending relay-owned members resolve `dropped_on_shutdown`; authorized
-members resolve from evidence.
+#### Scenario: ACP delivery via its own delivery-loop executor
 
-#### Scenario: ACP delivery via TransportImpl
+- **WHEN** an ACP target's mailbox gains entries
+- **THEN** the ACP transport's delivery-loop executor peeks them, having
+  coalesced consecutive entries or not, declares the resulting packing
+  unit, renders pane-envelope text internally, submits each unit as its own
+  `session/prompt` request, and acks what it wrote
+- **AND** it does not park an unwritten peek behind an in-flight turn
 
-- **WHEN** the relay authorizes a batch for an ACP target
-- **THEN** it invokes `TransportImpl::Acp(t)` with each authorized envelope
-- **AND** the ACP transport partitions what it holds, having coalesced
-  consecutive invocations or not, renders pane-envelope text internally, and
-  submits each unit as its own `session/prompt` request
-- **AND** it does not park an invocation behind an in-flight turn
+#### Scenario: Tmux delivery via its own delivery-loop executor
 
-#### Scenario: Tmux delivery via TransportImpl
+- **WHEN** a Tmux target's mailbox gains entries
+- **THEN** the Tmux transport's delivery-loop executor peeks them, having
+  coalesced consecutive entries or not, into token-budget prompts, declares
+  each resulting packing unit, injects each separately, and acks what it
+  wrote
+- **AND** it does not wait for pane quiescence beyond its own readiness
+  check before writing
 
-- **WHEN** the relay authorizes a batch for a Tmux target
-- **THEN** it invokes `TransportImpl::Tmux(t)` with each authorized envelope
-- **AND** the Tmux transport partitions what it holds, having coalesced
-  consecutive invocations or not, into token-budget prompts and injects each
-  separately
-- **AND** it does not wait for pane quiescence, which the relay has already done
+#### Scenario: UI delivery via its own delivery-loop executor
 
-#### Scenario: UI delivery via TransportImpl
+- **WHEN** a `Ui` target's mailbox gains entries
+- **THEN** the UI transport's delivery-loop executor peeks them, declares
+  the packing unit, and emits the messages as relay stream events through
+  its injected broadcaster closure, then acks what it emitted
+- **AND** no `Ui`/`Pubsub` delivery short-circuit appears in the mailbox
+  path
 
-- **WHEN** the relay authorizes a batch for a `Ui` target
-- **THEN** it invokes `TransportImpl::Ui(t)` with the same structured message
-  data used for coder transports
-- **AND** the UI transport emits the messages as relay stream events through its
-  injected broadcaster closure
-- **AND** no `Ui`/`Pubsub` delivery short-circuit appears in the dispatch path
+#### Scenario: A peeked-but-undeclared entry leaves the mailbox untouched
 
-#### Scenario: A transport refuses an invocation before partition
+- **WHEN** a transport's delivery-loop executor peeks entries but decides
+  not to write them — because its own readiness check fails, or its write
+  channel is full or closed
+- **THEN** it does not call `declare` for those entries
+- **AND** they remain `queued` and undeclared for the next `peek`, by the
+  same generation or a replacement
+- **AND** the relay does not treat the un-declared peek as a refusal
+  requiring its own terminal outcome
 
-- **WHEN** a transport's write channel is full or closed, or its worker
-  generation is dead
-- **THEN** it returns the envelope unchanged without partitioning it
-- **AND** every member it would have covered resolves `not_submitted`
-- **AND** the relay does not return them to `Pending`
+#### Scenario: A declared-but-failed write resolves through acknowledgment
 
-#### Scenario: Shutdown resolves pending members
+- **WHEN** a transport's delivery-loop executor has declared a packing unit
+  and its write attempt then fails in a way it can observe (the write
+  channel closes, or the target refuses it)
+- **THEN** the executor calls `ack` for that unit with `NotSubmitted` or
+  `SubmissionUnknown` evidence, whichever it can positively establish
+- **AND** it does not leave the declaration to expire against
+  `[delivery].submission-timeout-ms` when it is still able to report
+
+#### Scenario: Shutdown resolves undeclared members
 
 - **WHEN** relay shutdown is requested
-- **THEN** still-`Pending` relay-owned members resolve `dropped_on_shutdown`
-- **AND** `Authorized` members resolve from evidence
+- **THEN** still-`queued` relay-owned members that no delivery-loop executor
+  has declared resolve `dropped_on_shutdown`
+- **AND** declared members resolve from evidence per the
+  `delivery-quiescence` capability's guard
 
 #### Scenario: Startup never runs on an async runtime thread
 
 - **WHEN** the relay invokes `Transport::startup` for any session type
-- **THEN** it runs the call on a blocking thread rather than on a runtime worker
-  thread, because `startup` is synchronous on the trait and every implementation
-  of it is therefore permitted to block
-- **AND** the relay SHALL NOT make that choice per session type, so that a
-  transport acquiring a blocking startup step later inherits the guarantee
-  rather than an assumption about what it used to do
+- **THEN** it runs the call on a blocking thread rather than on a runtime
+  worker thread, because `startup` is synchronous on the trait and every
+  implementation of it is therefore permitted to block, including spawning
+  its own delivery-loop executor
+- **AND** the relay SHALL NOT make that choice per session type
 - **AND** because such a call cannot be aborted, each transport's `startup`
-  SHALL own the cleanup of anything it created, reaching its own conclusion even
-  when the caller awaiting it has gone away
+  SHALL own the cleanup of anything it created, reaching its own
+  conclusion even when the caller awaiting it has gone away
 
 ### Requirement: Transport Module Boundaries
 
@@ -138,31 +170,33 @@ code SHALL reside in `src/tmux/`. Pty-specific delivery code SHALL reside in
 `src/pty/`. UI stream-broadcast delivery code SHALL reside in its own transport
 module (`UiTransport`), not in the relay delivery subsystem.
 
-The boundary SHALL distinguish four concerns that were previously conflated:
+The boundary SHALL distinguish three concerns that were previously four:
 
 | Concern | Owner |
 |---|---|
-| **Queueing** — what is pending for a target, in what order, and for how long | **relay** |
-| **Readiness scheduling** — which target to visit, in what order, and when to authorize | **relay** |
-| **Readiness determination** — observing the target and deciding whether a handover can be taken now | **transport** |
+| **Mailbox custody** — what is queued for a target, in what order, and for how long | **relay** |
+| **Consumption timing** — when to peek, declare, write, and ack | **transport** |
 | **Rendering and packing** — target representation and partition into packing units | **transport** |
 
-Queueing and readiness scheduling SHALL move relay-side. Readiness determination,
-rendering, and packing SHALL remain transport-owned.
+**"Readiness scheduling" is retired as a distinct relay-owned concern, not
+relocated.** Under the push model, the relay decided *when* to authorize a
+target's next handover, informed by a readiness level the transport
+reported. Under the pull model there is no relay-side scheduling decision
+left to make: the relay holds custody and answers `peek`/`declare`/`ack`;
+the transport decides entirely on its own when those calls are worth
+making. What survives from the old "readiness determination" concern is
+unchanged — a prompt regex over a pane tail is meaningless for ACP, whose
+readiness is an earlier turn completing on the wire protocol with no
+snapshot to inspect, and meaningless again for UI, whose readiness is
+subscriber connectivity — but it is now folded entirely into "consumption
+timing," transport-owned end to end, because there is no relay-side
+counterpart to split it against.
 
-**Readiness scheduling and readiness determination are different concerns and are
-owned by different sides.** Scheduling is transport-agnostic: it reasons about
-queues, order, and quota. Determination is transport-specific by nature and does
-not generalise — a prompt regex over a pane tail is meaningless for ACP, whose
-readiness is an earlier turn completing on the wire protocol with no snapshot to
-inspect, and meaningless again for UI, whose readiness is subscriber
-connectivity. Conflating them is what would put pane semantics inside the relay.
-
-The relay SHALL learn readiness only as the level it reads through
-`is_ready_for_handover`, refreshed by the transport-invoked notification closure
-described in the `Transport Handover Capacity and Readiness` requirement. Only
-the transport can render target text and count its tokens, so `prompt_tokens_max`
-likewise remains an internal packing-unit limit invisible to the relay.
+**The relay reads no readiness level from any transport.**
+`is_ready_for_handover` does not exist on the `Transport` trait; there is
+nothing for the relay to learn "as a level" any more. Only the transport
+can render target text and count its tokens, so `prompt_tokens_max` remains
+an internal packing-unit limit invisible to the relay, exactly as before.
 
 The relay delivery subsystem SHALL NOT contain transport-specific logic; all
 transport dispatch SHALL go through `TransportImpl`. Specifically, the relay
@@ -205,26 +239,27 @@ transport construction.
 
 #### Scenario: UI target delivered through its transport, not a relay path
 
-- **WHEN** the relay receives a delivery task for a `Ui` target
-- **THEN** it dispatches through `TransportImpl::Ui` uniformly, with no
-  transport-type routing fork
+- **WHEN** the relay's mailbox holds entries for a `Ui` target
+- **THEN** its delivery-loop executor is dispatched through `TransportImpl::Ui`
+  uniformly, with no transport-type routing fork
 - **AND** no `TargetConfiguration::Ui | Pubsub` delivery arm or UI delivery
-  short-circuit appears in the dispatch path
+  short-circuit appears anywhere in the relay
 
-#### Scenario: Queueing lives relay-side
+#### Scenario: Mailbox custody lives relay-side
 
-- **WHEN** a developer looks for the pending queue for a target
-- **THEN** they find one relay-owned queue rather than a per-transport buffer
-- **AND** no transport retains envelopes awaiting a readiness condition
+- **WHEN** a developer looks for the queued entries for a target
+- **THEN** they find one relay-owned mailbox rather than a per-transport buffer
+- **AND** no transport retains envelopes awaiting its own readiness condition
+  outside that mailbox
 
-#### Scenario: Readiness determination stays with the transport
+#### Scenario: Consumption timing stays with the transport
 
-- **WHEN** a developer looks for the logic that decides whether a target can take
-  a handover now
-- **THEN** they find it in the owning transport module
+- **WHEN** a developer looks for the logic that decides when a target's
+  delivery-loop executor peeks, declares, and writes
+- **THEN** they find it entirely in the owning transport module
 - **AND** `src/relay/delivery/` contains no prompt-regex matching, pane
   inspection, or cursor-column comparison
-- **AND** the relay reads only the `is_ready_for_handover` level
+- **AND** the relay reads no readiness level from the transport at all
 
 ### Requirement: Choice Resolution via Injected Resolver
 
@@ -253,49 +288,53 @@ the `DeliveryContext`. There SHALL be no inbound event channel and no
 
 ### Requirement: Synchronous Delivery Completion
 
-Each member of an authorized batch SHALL resolve with a terminal
+Each member of a declared packing unit SHALL resolve with a terminal
 `SingleDeliveryOutcome`; the relay worker maps that outcome onto its `SendResult`
 (the outcome carries the transport-side type, not the relay `SendResult`,
 preserving the no-relay-dependency invariant).
 
 **Outcomes are per packing unit, not per batch.** If one unit submits and another
 fails, their members SHALL receive different outcomes. A transport SHALL NOT
-apply one outcome to every member of a batch.
+apply one outcome to every member of a declared unit's neighbors.
 
-Every member's outcome SHALL be **derived from its unit's immutable evidence
-record**, never from live re-inspection at fan-out time.
+Every member's outcome SHALL be **carried by the acknowledgment that resolves
+it**, never derived from live re-inspection afterwards. A unit's acknowledgment
+reports each member separately, because a write can submit some members and fail
+on others.
 
-The transport SHALL NOT drop a member without resolving it, and the relay-owned
-guard SHALL terminalize any member the transport fails to resolve, selecting the
-outcome by the guard resolution order defined in the `delivery-quiescence`
-capability's `Delivery Authorization and Terminal Guard` requirement. This does
-not block the relay request path: the send RPC returns `queued` at admission.
+The transport SHALL NOT drop a declared member without resolving it (via `ack`),
+and the relay-owned guard SHALL terminalize any declared member the transport
+fails to resolve, selecting the outcome by the guard resolution order defined in
+the `delivery-quiescence` capability's `Delivery Guard and Acknowledgment
+Terminalization` requirement. This does not block the relay request path: the
+send RPC returns `queued` at admission, well before any declaration exists.
 
 #### Scenario: Member outcome resolves through the relay worker
 
-- **WHEN** the relay invokes a transport with an authorized envelope
+- **WHEN** a transport's delivery-loop executor acks a declared packing unit
 - **THEN** each member resolves with a terminal `SingleDeliveryOutcome`
 - **AND** the relay worker maps that outcome onto its `SendResult` at the collect
   site, without the transport referencing any `crate::relay` type
 
 #### Scenario: Differing outcomes across packing units
 
-- **WHEN** one packing unit submits successfully and another fails
+- **WHEN** one packing unit is acked `Submitted` and another `NotSubmitted`
 - **THEN** unit 1's members resolve `delivered`
-- **AND** unit 2's members resolve `not_submitted` or `submission_unknown`
+- **AND** unit 2's members resolve `not_submitted`
 - **AND** neither result is applied to the other unit's members
 
 #### Scenario: An earlier unit's success is not retracted
 
-- **WHEN** a transport fails or panics while submitting a later unit
-- **THEN** the members of already-submitted units keep their `delivered` outcome
+- **WHEN** a transport's delivery-loop executor fails or panics while
+  writing a later declared unit
+- **THEN** the members of already-acked units keep their `delivered` outcome
 
 #### Scenario: The guard resolves what the transport does not
 
-- **WHEN** a transport returns without resolving some members
-- **THEN** the relay-owned guard terminalizes them by its evidence order — the
-  unit's record if one exists, `not_submitted` if the member was never bound to a
-  unit, `submission_unknown` otherwise
+- **WHEN** a transport's delivery-loop executor exits without acking some
+  declared members
+- **THEN** the relay-owned guard terminalizes them `submission_unknown`, by the
+  resolution order defined in the `delivery-quiescence` capability
 - **AND** each member's admission quota is released exactly once
 
 ### Requirement: Concurrent Look via Output View Handle
@@ -370,27 +409,35 @@ SHALL map validation-class transport error codes to relay validation errors. A
 
 ### Requirement: Transport-Neutral Look Snapshot Vocabulary
 
-The look-snapshot vocabulary SHALL live in the acp-free transport vocabulary
-layer (the `src/transports/vocabulary` module), which SHALL NOT import any
-concrete transport module. This vocabulary comprises the structured entry type
-(`StructuredEntry`), `ToolCallStatus`, the freshness/source enums (`LookFreshness`,
-`LookSnapshotSource`), and the transport-level `LookSnapshotPayload`
-(`Lines` | `StructuredEntries`). Concrete transports SHALL produce this
-vocabulary rather than define it: `src/acp` SHALL map its `ReplayEntry`
-intermediate into `transports::StructuredEntry`, with `ReplayEntry` remaining
-ACP-local. No `transports → relay` edge SHALL be introduced.
+The look-snapshot vocabulary SHALL live in the neutral delivery protocol
+boundary (the `src/protocol` module), which SHALL NOT import any concrete
+transport module, `crate::relay`, or `crate::transports`. This vocabulary
+comprises the structured entry type (`StructuredEntry`), `ToolCallStatus`, the
+freshness/source enums (`LookFreshness`, `LookSnapshotSource`), and the
+transport-level `LookSnapshotPayload` (`Lines` | `StructuredEntries`).
+Concrete transports SHALL produce this vocabulary rather than define it:
+`src/acp` SHALL map its `ReplayEntry` intermediate into the neutral
+`StructuredEntry`, with `ReplayEntry` remaining ACP-local. No
+`transports → relay` edge SHALL be introduced.
+
+It lives in that boundary rather than beneath `src/transports` because `look`
+is the relay-to-transport call direction while the mailbox operations are the
+transport-to-relay one, and a vocabulary owned by one of the two sides is not
+shared. `Neutral Delivery Protocol Crate Boundary` states the placement rule
+once; this requirement names the look half of what it holds.
 
 #### Scenario: Vocabulary layer is concrete-transport-free
 
-- **WHEN** a developer reads the `src/transports/vocabulary` module
+- **WHEN** a developer reads the `src/protocol` module
 - **THEN** the structured entry type, `ToolCallStatus`, freshness/source enums,
   and transport-level `LookSnapshotPayload` are defined there
-- **AND** the module imports no `crate::acp` or `crate::tmux` item
+- **AND** the module imports no `crate::acp`, `crate::tmux`, `crate::pty`,
+  `crate::relay`, or `crate::transports` item
 
 #### Scenario: ACP produces the neutral entry type
 
 - **WHEN** the ACP worker renders a look snapshot
-- **THEN** it maps `ReplayEntry` values into `transports::StructuredEntry`
+- **THEN** it maps `ReplayEntry` values into the neutral `StructuredEntry`
 - **AND** the `StructuredEntry` kinds are `user`/`agent`/`cognition`/`invocation`/`update`
 
 ### Requirement: Structured Delivery Message Payload
@@ -470,6 +517,17 @@ readiness lifecycle SHALL populate the same surface:
   and continues to receive transitions after the worker unregisters;
 - a public read `read_worker_readiness` returning `Option<&'static str>`.
 
+**This interface's consumers changed with the pull model; the interface
+itself did not.** It previously backed both `is_ready_for_handover`'s ACP
+implementation and `look`-freshness/`OutputView` prime-wait. The first
+consumer no longer exists: `is_ready_for_handover` is not on the `Transport`
+trait, so nothing relay-facing reads this state to gate delivery. Its
+remaining consumers are the owning transport's own delivery-loop executor
+(deciding internally whether to declare and write, exactly where prompt-
+readiness determination already lived) and `look`-freshness/prime-wait,
+unchanged. The mutator/observer/reader surface itself is unaffected — what
+changed is that no external, relay-facing gate reads it any more.
+
 A transport SHALL NOT latch readiness to `Unavailable` on the basis of an
 absence-derived delivery failure, because no such failure exists under this
 contract. Readiness transitions SHALL be driven by positively observed lifecycle
@@ -514,6 +572,13 @@ type.
 - **THEN** the transport does not latch readiness to `Unavailable` on that basis
 - **AND** readiness continues to reflect positively observed lifecycle state
 
+#### Scenario: No relay-facing consumer reads worker readiness
+
+- **WHEN** a developer searches the relay delivery subsystem for a reader of
+  `WorkerReadinessState`
+- **THEN** they find none — its only consumers are the owning transport's own
+  delivery-loop executor and the `look`-freshness/prime-wait path
+
 ### Requirement: Transport-Internal Probe Seam for Testability
 
 Each transport whose target can be observed SHALL expose an internal probe trait
@@ -548,10 +613,13 @@ cross-transport activity signal from a transport-native
 that advances when bytes flow to the target's terminal, independently of whether
 captured content visibly changed.
 
-**The relay consumes this signal**; no transport classifies on it. An advance
-between two consecutive observations SHALL be treated by the relay as a positive
-indication that the target is active, and SHALL suppress handover for that
-iteration.
+**The transport's own delivery-loop executor consumes this signal**; no
+transport classifies on it as a delivery failure. An advance between two
+consecutive observations SHALL be treated as a positive indication that the
+target is active, and SHALL cause the executor to defer its own decision to
+write for that iteration — leaving any peeked-but-undeclared entries queued.
+This is entirely transport-internal now: there is no relay-side handover
+decision left for the signal to suppress.
 
 **Scope (terminal-output-write, not process-busy):** the field carries a marker
 of bytes being written to the target's terminal. Its **absence SHALL NOT be
@@ -560,7 +628,8 @@ awaiting an operator, or may be working silently, and nothing distinguishes them
 
 A transport that does not track activity, or whose primitive is unavailable,
 SHALL populate the field with the constant `0`. A constantly-`0` signal can never
-advance, so such a target is never suppressed on this basis.
+advance, so such a target's delivery-loop executor is never deferred on this
+basis.
 
 **Tmux is the only transport required to track one.** ACP has no terminal to
 write to, and Pty — whose terminal writes would supply an obvious primitive —
@@ -581,49 +650,52 @@ advance, and both are conformant.
 - **WHEN** the Tmux probe observes and `#{window_activity}` is unavailable on the
   running tmux version
 - **THEN** the resulting activity generation is `0`
-- **AND** no advance is possible, so handover is never suppressed on this basis
-  for that target
+- **AND** no advance is possible, so its delivery-loop executor is never
+  deferred on this basis for that target
 
-#### Scenario: Activity advance suppresses handover
+#### Scenario: Activity advance defers the executor's own write decision
 
-- **WHEN** a target's activity generation advances between two consecutive relay
-  observations
-- **THEN** the relay does not authorize a batch for that target in that iteration
-- **AND** the entry remains `Pending`
+- **WHEN** a target's activity generation advances between two consecutive
+  observations by its own transport's delivery-loop executor
+- **THEN** the executor does not declare or write for that iteration
+- **AND** any peeked entries remain `queued` and undeclared
 
 #### Scenario: Absence of activity produces no outcome
 
 - **WHEN** a target's activity generation does not advance across any number of
   observations
 - **THEN** no terminal outcome is produced on that basis
-- **AND** the entry remains `Pending`, resolving only if it is later authorized,
-  if its transport is positively observed torn down, if that transport is
-  continuously observed `Unreachable` past `[delivery].unreachable-dwell-ms`, or
-  at relay shutdown
+- **AND** its entries remain `queued`, resolving only if later declared and
+  acked, if the transport is positively observed torn down, if it is
+  continuously observed `Unreachable` past `[delivery].unreachable-dwell-ms`,
+  or at relay shutdown
 - **BECAUSE** the absence of an activity advance is not evidence; sustained
   unreachability is, which is why the dwell resolves an entry and a quiet screen
   never does
 
 ### Requirement: Pty Transport Implementation
 
-The system SHALL provide a `PtyTransport` that implements the `Transport` trait
-and is wired into `TransportImpl::Pty`. The transport SHALL own one
-`libghostty_vt::Terminal<'static, 'static>`, one `portable_pty` master, one
-reader thread, and one delivery task. Because all `libghostty_vt` types are
-`!Send + !Sync`, the terminal SHALL live on the delivery thread and be reached
-from other threads through a `SnapshotRequest` channel.
+The system SHALL provide a `PtyTransport` that implements the
+`Transport` trait and is wired into `TransportImpl::Pty`. The
+transport SHALL own one `libghostty_vt::Terminal<'static, 'static>`, one
+`portable_pty` master, one reader thread, and one delivery-loop executor.
+Because all `libghostty_vt` types are `!Send + !Sync`, the terminal SHALL live
+on the delivery-loop thread and be reached from other threads through a
+`SnapshotRequest` channel.
 
-**Pty SHALL buffer, then write** — the ordering Tmux already uses. The transport
-SHALL NOT write any member to the PTY master before that member's partition is
-recorded. Writing before the wait is what made a flush group's membership mutable
-after its write, which is the defect behind `agentmux:issues/relay/62`.
+**Pty SHALL declare, then write** — the ordering Tmux already uses. The
+transport SHALL NOT write any member to the PTY master before that member's
+declaration is recorded via `declare`. Writing before declaration is what
+made a flush group's membership mutable after its write, which is the defect
+behind `agentmux:issues/relay/62`; declaration is the pull model's relocation
+of the same discipline, at the same point in the sequence.
 
 **Pty members SHALL be singleton packing units** unless a future change genuinely
 combines them into one write, because the transport writes each member with its
 own `write_all` pair. Each unit's outcome SHALL be derived from its own
 evidence, and one outcome SHALL NOT be applied to every member of a group.
 
-No envelope SHALL be absorbed into a batch after that batch is authorized.
+No envelope SHALL be absorbed into a packing unit after that unit is declared.
 
 #### Scenario: Pty startup spawns the child PTY and installs effect handlers
 
@@ -635,7 +707,7 @@ No envelope SHALL be absorbed into a batch after that batch is authorized.
   `TERM` env-var value derived from the per-coder `term-protocol` field
 - **AND** constructs a `libghostty_vt::Terminal` with the same dimensions and
   installs the canonical effect handlers
-- **AND** spawns the reader thread and the delivery task
+- **AND** spawns the reader thread and the delivery-loop executor
 - **AND** the worker thread publishes `WorkerReadinessState::Available` AFTER
   successful `Terminal::new` + handler installation
 
@@ -646,11 +718,13 @@ No envelope SHALL be absorbed into a batch after that batch is authorized.
 - **THEN** it returns `TransportReadiness::Pending` immediately rather than
   waiting for the worker to report that it initialized
 - **AND** the worker publishes `WorkerReadinessState::Available` when it has
-  genuinely initialized, so `is_ready_for_handover` is what gates the handover
-  and the return value carries no readiness answer
+  genuinely initialized; this gates only the delivery-loop executor's own
+  decision to declare and write, and the `startup` return value carries no
+  readiness answer
 - **AND** a worker that never arrives is treated as a target that is never
-  ready — the entry stays `Pending`, bounded in consequence by per-target
-  admission quota rather than by a clock, exactly as for every other transport
+  ready — its entries stay `queued` and undeclared, bounded in consequence by
+  per-target admission quota rather than by a clock, exactly as for every
+  other transport
 
 **Reason:** the wait could not be made safe in either direction. Unbounded it
 never reached a verdict. Bounded, its cleanup joined the worker thread, so a
@@ -678,21 +752,23 @@ has not observed, and a bound that cannot be made true is worse than none.
   leaving as the unobserved window only what precedes its first check: the
   uninterruptible terminal construction and the handler installation beside it
 
-#### Scenario: Pty submits an authorized envelope immediately
+#### Scenario: Pty declares and writes a peeked entry immediately
 
-- **WHEN** the relay invokes the Pty transport with an authorized envelope
-- **THEN** the transport partitions each received envelope into its own singleton
-  unit and records the partition before writing any bytes
+- **WHEN** the Pty transport's delivery-loop executor peeks an entry it is
+  ready to write
+- **THEN** it declares each received envelope as its own singleton unit before
+  writing any bytes
 - **AND** writes each unit to the PTY master without waiting for quiescence
-- **AND** resolves each member from its own unit's evidence
+  beyond its own readiness check
+- **AND** acks each member from its own unit's evidence
 
-#### Scenario: No envelope is absorbed into an authorized batch
+#### Scenario: No envelope is absorbed into a declared packing unit
 
-- **WHEN** a new envelope is admitted while a batch for the same target is
-  authorized
-- **THEN** it forms part of a later batch
-- **AND** it is not added to the in-flight batch
-- **BECAUSE** a mutable batch membership is what allowed one outcome to be
+- **WHEN** a new envelope is admitted while a packing unit for the same
+  target is declared and outstanding
+- **THEN** it forms part of a later declaration
+- **AND** it is not added to the already-declared unit
+- **BECAUSE** a mutable unit membership is what allowed one outcome to be
   reported for members that were written and members that were not
 
 #### Scenario: Pty look renders formatter text + cursor via snapshot channel
@@ -710,32 +786,35 @@ has not observed, and a bound that cannot be made true is worse than none.
 - **AND** sets `shutdown_flag = true`
 - **AND** calls `child.kill()` followed by `child.wait()` BEFORE joining the
   reader thread or the worker thread
-- **AND** joins the reader thread handle and the worker thread handle
+- **AND** joins the reader thread handle and the delivery-loop executor handle
 
 ### Requirement: Packing Units and Typed Submission Evidence
 
-Transports SHALL partition an authorized batch into packing units before
-producing any target-side effect, and SHALL resolve every member from typed,
-per-unit evidence.
+A packing unit SHALL be established by **declaration** before any target-side
+effect, and every member SHALL resolve from typed, per-member evidence carried by
+the acknowledgment that covers it.
 
-A **batch** is the unit of authorization. A **packing unit** is the unit of
-target-side submission. They are not the same, and a batch SHALL NOT be treated
-as one atomic target write.
+A **packing unit** is the unit of target-side submission. A delivery-loop
+executor peeks its target's mailbox, decides how much of the peeked prefix it can
+pack, and declares that contiguous range; the relay mints the unit's identifier
+at declaration and binds the range's members to it. Admission, not declaration,
+is where a message is authorized — a declared range is a start record, not a
+permission grant.
 
-**Partition SHALL be fixed and exact before the first target-side effect.** Every
-member belongs to exactly one unit, order is preserved, and no member is added to
-a batch after authorization. The transport SHALL assign `PackingUnit ID`s at
-partition and record the partition to the relay-owned guard before producing any
-effect. There SHALL be no absorption across batches.
+**Binding SHALL precede the first target-side effect.** Every declared member
+belongs to exactly one unit, order is preserved, and no member is added to a unit
+after it is declared. A transport SHALL NOT write for a member it has not
+declared.
 
 An envelope whose rendered size alone exceeds the packing budget SHALL form its
 own unit.
 
-**Identities are explicit and immutable.** A `Batch ID` and `Member ID` are
-assigned at authorization, a `PackingUnit ID` at partition, and none is ever
-reassigned. Each authorization additionally carries a stable attempt ID. The full
-partition SHALL be retained for the batch's lifetime so resolution can attribute
-every member to the unit that carried it.
+**Identities are explicit and immutable.** A member's identity is its entry's
+sequence in its target's mailbox, assigned at admission; a unit's identifier is
+minted at declaration. Neither is ever reassigned. There SHALL be no attempt
+identifier: acknowledgment is idempotent per entry, so a second acknowledgment of
+an already-terminal entry is a no-op rather than a distinct attempt to be told
+apart from the first.
 
 **Submission evidence SHALL be typed**, not inferred from an error string:
 
@@ -750,24 +829,32 @@ An undifferentiated error SHALL map to `SubmissionUnknown`, never
 `NotSubmitted`. A Tmux paste is a body write followed by Enter and a Pty unit is
 multiple `write_all` calls, so both can fail after partial effect.
 
-**A member that was never bound to a packing unit SHALL resolve `not_submitted`.**
-Because the partition is recorded before the first target-side effect, an unbound
-member provably could not have been submitted, whatever ended the attempt —
-refusal, panic, or cancellation. The discriminator is unit binding, not the manner
-of failure.
+**`not_submitted` SHALL be available only for a member that was never declared
+into a packing unit.** Because binding precedes the first target-side effect, an
+undeclared member provably could not have been submitted, whatever ended the
+attempt — refusal, panic, or cancellation. A declared one carries no such proof.
+The discriminator is unit binding, not the manner of the failure.
 
-**Unit evidence SHALL be recorded atomically before any member fan-out.**
-Evidence is established per unit but guards terminalize per member, and resolving
-members one at a time from live state is not safe: a resolver that panics halfway
-through fan-out would leave some members `delivered` while their siblings were
-terminalized `submission_unknown` from identical target-side evidence. The
-sequence SHALL therefore be:
+This governs *which* outcome an undeclared member may receive, never *whether* it
+receives one now. An executor that peeked without declaring and then panicked or
+was replaced leaves those entries queued and re-peekable rather than resolving
+them; only a definitive teardown resolves an undeclared entry directly. The
+`delivery-quiescence` capability's `In-Process Delivery Recovery Scope` governs
+that, and this requirement SHALL NOT be read as overriding it.
 
-1. the unit's submission produces one **immutable unit evidence record**, written
-   before any member outcome is derived;
-2. every member's terminal outcome is **derived from that record**;
-3. a panic during fan-out **resumes from the recorded unit result** rather than
-   inventing `submission_unknown` for the remainder.
+**Evidence SHALL be reported per member, in one acknowledgment covering the whole
+declared range.** A write can submit some members of a unit and fail on others,
+which a single unit-wide result cannot express. The acknowledgment SHALL report
+each member of the range exactly once, and SHALL be refused if its reports do not
+cover the declared range exactly.
+
+**Acknowledgment SHALL be one phase.** A transport SHALL NOT report a unit-level
+result ahead of the per-member outcomes, and the relay SHALL NOT retain a
+unit-level result for members to be resolved from afterwards. A transport that
+cannot yet attribute an outcome per member declares a smaller range — down to a
+single member — rather than reporting in two stages. The rejected two-phase
+design and the state it would create are recorded in
+`documentation/decisions/0005-no-two-phase-acknowledgment.md`.
 
 **Per-transport terminal evidence and observation windows:**
 
@@ -783,46 +870,57 @@ positively observed exit or close SHALL be recorded as target health, not as a
 second delivery outcome for an already-resolved member. There is no `target
 failed` delivery outcome.
 
-A partially-succeeded write within one packing unit SHALL yield
-`submission_unknown` for that unit's members: the bytes may be on the target in
+A partially-succeeded write SHALL yield `submission_unknown` for every member
+whose bytes the transport cannot exclude from the target: they may be present in
 truncated form, which is neither delivery nor absence.
 
-#### Scenario: Record the partition before any effect
+#### Scenario: Declare before any effect
 
-- **WHEN** a transport receives an authorized envelope
-- **THEN** it partitions what it holds and records the partition to the guard
-- **AND** it produces no target-side effect before that record exists
+- **WHEN** a delivery-loop executor has peeked a prefix of its target's mailbox
+- **THEN** it declares the contiguous range it intends to write
+- **AND** it produces no target-side effect before that declaration is accepted
 
-#### Scenario: An unbound member resolves not_submitted
+#### Scenario: A panic before declaring resolves nothing
 
-- **WHEN** a transport fails, refuses, or panics before binding any member to a
-  packing unit
-- **THEN** every member resolves `not_submitted`
-- **BECAUSE** the partition precedes the first effect, so nothing could have been
-  submitted
+- **WHEN** a transport fails, refuses, or panics before declaring any range
+- **THEN** the members it peeked are not resolved by that failure
+- **AND** they remain queued and re-peekable, per `In-Process Delivery Recovery
+  Scope`
+- **BECAUSE** binding precedes the first effect, so nothing was in flight for the
+  failure to have decided
 
 #### Scenario: An undifferentiated error is not evidence of absence
 
 - **WHEN** a submission primitive returns an error that cannot prove zero bytes
   left
-- **THEN** the unit's members resolve `submission_unknown`
+- **THEN** the members it covers resolve `submission_unknown`
 - **AND** they do not resolve `not_submitted`
 
 #### Scenario: A partial write within a unit is unknown
 
 - **WHEN** a unit's body write succeeds and its terminating write fails
-- **THEN** that unit's members resolve `submission_unknown`
+- **THEN** every member whose bytes cannot be excluded resolves
+  `submission_unknown`
 
-#### Scenario: Siblings share one outcome from one record
+#### Scenario: Members of one unit may resolve differently
 
-- **WHEN** a resolver panics partway through the member fan-out of a unit
-- **THEN** the remaining members resolve from the recorded unit evidence
-- **AND** every member of that unit carries the same outcome
+- **WHEN** a write submits some members of a declared range and fails on others
+- **THEN** the acknowledgment reports each member's own evidence
+- **AND** the members resolve to different outcomes accordingly
+
+#### Scenario: An acknowledgment that does not cover its range is refused
+
+- **WHEN** an acknowledgment omits a member of the declared range, repeats one,
+  or reports one outside it
+- **THEN** the relay refuses it
+- **AND** no member of the range is resolved by it
+- **BECAUSE** the alternatives are to invent an outcome for the missing member or
+  to borrow a sibling's, and both state something nothing observed
 
 #### Scenario: An oversized envelope forms its own unit
 
 - **WHEN** a single envelope's rendered size exceeds the packing budget
-- **THEN** it is partitioned into a unit of its own
+- **THEN** it is declared as a unit of its own
 - **AND** its outcome is not shared with any other member
 
 #### Scenario: A post-submission exit does not resolve a member twice
@@ -834,7 +932,7 @@ truncated form, which is neither delivery nor absence.
 ### Requirement: Transport Generation Fencing and Termination Authority
 
 A transport generation SHALL be **torn down and fenced before its replacement
-begins**, so an old generation cannot submit after its `Authorized` entries were
+begins**, so an old generation cannot submit after its `declared` entries were
 resolved against it. Without fencing, "resolved unknown" and "still able to act"
 coexist, which is a target-side ordering hazard.
 
@@ -1033,88 +1131,76 @@ A submission stopped by the fence before producing its effect SHALL resolve
 
 ### Requirement: Transport Handover Capacity and Readiness
 
-Three quantities that were previously conflated under "capacity" SHALL be
-separate:
+The system SHALL recognize two relay-facing quantities, where three were
+previously conflated:
 
 | Quantity | Owner | Purpose |
 |---|---|---|
 | **Admission quota** | relay | how much may be queued per target and relay-global; enforced at admission |
-| **Maximum handover dimensions** | transport, static | the most work the relay may have handed over at once |
-| **Acceptance capacity** | transport, dynamic | whether it can accept right now; surfaced as `is_ready_for_handover` |
+| **Maximum peek dimensions** | transport, static | the most a `peek` call may return at once |
 
-All relay-facing quantities SHALL be expressed in units the relay can evaluate
-without packing: **envelope count and canonical payload bytes**, where canonical
-bytes means the serialized envelope payload the relay already holds, not rendered
-target text. Declaring them in tokens would be circular, since only the transport
-can render and count those.
+**Acceptance capacity is no longer a relay-facing quantity.** Under the push
+model a transport surfaced "can I accept right now" as `is_ready_for_
+handover`, which the relay read to decide whether to authorize. Under the
+pull model there is nothing to authorize: a transport that cannot currently
+write simply does not peek, or peeks and writes nothing. Whether a transport
+is momentarily busy is therefore entirely its own internal state, consulted
+by its own delivery-loop executor, and is not part of this contract.
 
-`is_ready_for_handover` SHALL be **level-triggered**, readable on demand, and the
-transport contract's **only** readiness predicate. It SHALL have no default
-implementation: a default of `true` would authorize a busy target, and a default
-of `false` would strand it permanently, so a transport answers for itself or does
-not participate in delivery.
+All relay-facing quantities SHALL be expressed in units the relay can
+evaluate without packing: **envelope count and canonical payload bytes**,
+where canonical bytes means the serialized envelope payload the relay
+already holds, not rendered target text. Declaring them in tokens would be
+circular, since only the transport can render and count those.
 
-An earlier `is_ready` answered the weaker question of whether a transport's
-machinery existed — Tmux answered it unconditionally true, and ACP and Pty
-counted `Busy` as ready — which is why it could not serve handover readiness. It
-has been **removed from the contract rather than redefined**, because two
-readiness predicates were confusable precisely under a name that does not say
-what it is ready *for*. A transport MAY keep an equivalent lifecycle predicate
-privately, and Pty does, gating its `OutputView` on the runtime existing so that
-`look` still reaches a target that is mid-turn.
+**No transport → relay back-edge for readiness.** The relay does not read a
+readiness level from a transport at all under this contract; readiness is
+purely internal to the transport's own delivery-loop executor. Where a
+transport needs to prompt the relay that its target's own state changed in a
+way worth reporting (for example, to drive `look` freshness), it SHALL do so
+through an opaque closure the relay provided at construction, unrelated to
+mailbox consumption.
 
-`is_ready_for_handover` is **advisory** — a stale reading yields a fallible
-invocation, not a guarantee.
+#### Scenario: Maximum peek dimensions are declared in relay-evaluable units
 
-**No transport → relay back-edge.** The relay calls transports; transports SHALL
-NOT know relay interfaces. Where a transport signals upward it SHALL invoke an
-opaque closure the relay provided at construction, the pattern `PtyTransport`
-already uses for `mirror_state`. Correctness SHALL NOT depend on that
-notification: it is an edge hint, the authoritative state is the level the relay
-reads, and authorization is a relay-local transition. A lost wakeup delays a
-delivery until the next poll; it cannot lose one or resolve it without evidence.
-
-#### Scenario: Readiness is readable as a level
-
-- **WHEN** the relay needs to decide whether handover is useful
-- **THEN** it reads `is_ready_for_handover` directly
-- **AND** does not rely on having observed a transition
-
-#### Scenario: A lost notification only delays
-
-- **WHEN** a transport's readiness notification is not observed by the relay
-- **THEN** the relay discovers the change on its next poll
-- **AND** no message is lost or resolved without evidence
-
-#### Scenario: A transport signals upward through an injected closure
-
-- **WHEN** a transport needs to notify the relay of a readiness change
-- **THEN** it invokes a closure the relay supplied at construction
-- **AND** it does not reference any `crate::relay` type
-
-#### Scenario: Handover dimensions are declared in relay-evaluable units
-
-- **WHEN** a transport declares its maximum handover dimensions
+- **WHEN** a transport declares its maximum peek dimensions
 - **THEN** they are expressed in envelope count and canonical payload bytes
 - **AND** not in rendered tokens
 
+#### Scenario: A busy transport is not a relay-visible state
+
+- **WHEN** a transport's delivery-loop executor is not ready to write
+- **THEN** it does not call `peek`, or calls `peek` and writes nothing
+- **AND** the relay observes no readiness signal from the transport and
+  makes no decision on the basis of one
+
+#### Scenario: A transport signals upward through an injected closure
+
+- **WHEN** a transport needs to prompt the relay that its target's own state
+  changed in a way worth reporting
+- **THEN** it invokes a closure the relay supplied at construction
+- **AND** it does not reference any `crate::relay` type
+
 ### Requirement: Transport Health as a Separate Axis
 
-A transport SHALL report **health** as a level distinct from handover readiness,
-carrying the instant it was first observed unreachable:
+A transport SHALL report **health** as a level distinct from its own internal
+write-readiness, carrying the instant it was first observed unreachable:
 
 | State | Meaning |
 |---|---|
 | `Healthy` | the transport can reach its target |
 | `Unreachable { since }` | the transport cannot observe or reach its target at all, first seen at `since` |
 
-Readiness and health answer different questions. Readiness says *when* a handover
-is useful; health says *whether* one is possible. A target that is busy and a
-target whose transport cannot reach it both fail a readiness check, and only the
-first is a reason to wait.
+Health and internal write-readiness answer different questions. Readiness says
+*when* declaring and writing is useful; health says *whether* it is possible at
+all. A target that is busy and a target whose transport cannot reach it both
+fail the transport's own readiness check, and only the first is a reason to
+keep waiting rather than to eventually resolve the entry.
 
-A delivery attempt SHALL require both: the transport reports `Healthy` **and**
-reports `is_ready_for_handover`. Healthy-but-unready leaves the member `Pending`.
+**A transport SHALL declare and write only when it is both `Healthy` and
+internally ready.** Both checks are now entirely the transport's own —
+neither is relay-facing. Healthy-but-unready leaves entries `queued` and
+undeclared.
 
 The transport SHALL determine health and report when it began; the relay SHALL
 own the dwell threshold as `[delivery]` policy. A transport SHALL NOT reference a
@@ -1133,7 +1219,7 @@ made repeatedly, and sustained unreachability is itself evidence in a way that
 sustained busyness is not.
 
 Health SHALL gate write paths and SHALL NOT gate `look`. `raww` shares the
-ordered delivery channel and inherits the gate. A `look` SHALL NOT be rejected on
+ordered mailbox and inherits the gate. A `look` SHALL NOT be rejected on
 account of its target's health: a target is inspected precisely when something is
 wrong with it, so refusing to even attempt the snapshot removes the diagnostic
 exactly when it is needed.
@@ -1147,16 +1233,18 @@ the diagnostic difference this requirement exists to preserve.
 
 #### Scenario: A busy target keeps waiting
 
-- **WHEN** a transport reports `Healthy` and does not report
-  `is_ready_for_handover`
-- **THEN** its member stays `Pending`
-- **AND** no elapsed duration resolves it
+- **WHEN** a transport reports `Healthy` to itself but its own internal
+  readiness check does not pass
+- **THEN** its peeked entries stay `queued` and undeclared
+- **AND** no elapsed duration resolves them
 
 #### Scenario: A sustained-unreachable target resolves its members
 
 - **WHEN** a transport reports `Unreachable` continuously past the configured
   threshold
-- **THEN** its still-`Pending` members resolve through the guard's evidence order
+- **THEN** its still-`queued` undeclared members resolve `not_submitted`
+  directly, and its declared members resolve through the guard's evidence
+  order, per `delivery-quiescence`'s `Mailbox Ordering and Cursor Lifecycle`
 - **AND** their admission quota is released on that terminal transition
 
 #### Scenario: A transient unreachability does not resolve anything
@@ -1164,8 +1252,8 @@ the diagnostic difference this requirement exists to preserve.
 - **WHEN** a transport reports `Unreachable` and reports `Healthy` again before
   the threshold elapses
 - **THEN** no member was resolved
-- **AND** the members that were waiting are authorized normally once readiness
-  allows
+- **AND** the members that were waiting are peeked, declared, and written
+  normally once the transport's own readiness allows
 
 #### Scenario: Health does not reject a look
 
@@ -1178,4 +1266,43 @@ the diagnostic difference this requirement exists to preserve.
 
 - **WHEN** a transport determines its own health
 - **THEN** it references no `crate::relay` type
-- **AND** the relay supplies the dwell threshold rather than the transport
+
+### Requirement: Neutral Delivery Protocol Crate Boundary
+
+The system SHALL hold the vocabulary shared by both delivery call
+directions — relay-to-transport for `look`, transport-to-relay for
+`peek`/`declare`/`ack` — in a crate (or crate-internal module boundary) that
+both sides depend on. This crate SHALL be the single definition of that
+vocabulary; no parallel or duplicate definition of these types SHALL remain in
+`src/transports`, `src/relay`, or any concrete transport module.
+
+This crate SHALL hold: mailbox entry and entry-kind representations, target
+and consumer identity, consumer-generation binding, cursor position,
+`PackingUnitId`, and the `peek`/`declare`/`ack` request and response
+shapes, and doorbell subscription handles. It SHALL NOT hold `AsyncDeliveryTask`, `BundleMember`,
+`TransportImpl`, or any `crate::relay` error type. `look`, startup, transport
+generation fencing, concrete transport constructors, and `TransportImpl`
+itself remain outside it.
+
+**If either call direction still needs the other's concrete type to express
+its contract, the inversion has not happened.** This requirement exists
+specifically so the module-dependency direction the `Transport Module
+Boundaries` requirement already forbids in one direction (transport
+importing relay internals) does not silently re-appear in the other
+direction as `peek`/`ack` are introduced (relay importing transport
+internals to call them).
+
+#### Scenario: The protocol crate compiles without relay or concrete-transport imports
+
+- **WHEN** the neutral delivery protocol crate is built in isolation
+- **THEN** it does not import `crate::relay`, `crate::acp`, `crate::tmux`,
+  `crate::pty`, or `crate::transports::ui`
+- **AND** it exposes the `peek`/`declare`/`ack` request/response types and
+  mailbox vocabulary needed by both call directions
+
+#### Scenario: Neither call direction needs the other's domain type
+
+- **WHEN** the relay's `look` handler and a transport's delivery-loop
+  executor are each implemented against the neutral crate
+- **THEN** neither imports a concrete type owned by the other side to
+  express its own request or response shape

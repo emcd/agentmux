@@ -422,8 +422,8 @@ a Tokio Worker Thread`.
   requirement.
 - Also restored: the live cross-target contention rationale (tmux socket
   sharing, ACP's shared blocking pool, write-seam occupancy) that the first
-  revision's rewrite of `Async Queue Lifecycle and Ordering` dropped when
-  renaming it to `Mailbox Ordering and Cursor Lifecycle`. EG flagged this
+  revision's rewrite dropped while renaming the queue-lifecycle requirement
+  to `Mailbox Ordering and Cursor Lifecycle`. EG flagged this
   as "polish but load-bearing" — it is the actual argument against
   reintroducing cross-target scheduling, not decoration, so trimming it
   silently would have weakened the requirement's own reasoning.

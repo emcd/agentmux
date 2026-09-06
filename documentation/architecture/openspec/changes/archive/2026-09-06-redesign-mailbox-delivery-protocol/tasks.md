@@ -465,14 +465,55 @@ letting a tranche boundary fall somewhere convenient.
       three carry no outcome at all while the target is busy, and nothing
       behind it is left declared — with delivery after readiness returns as
       the positive control that the absence is suspension rather than loss.
-- [ ] 5.12 Confirm `agentmux:issues/relay/69` and `agentmux:todos/relay/134`
+- [x] 5.12 Confirm `agentmux:issues/relay/69` and `agentmux:todos/relay/134`
       (carried-forward `establish-delivery-commit-contract` residue) are
       each either resolved by this design or explicitly re-derived against
       the pull model, per that residue's own "do not port these verbatim"
       instruction, before this change is archived.
-- [ ] 5.13 Confirm `Mailbox Payload Custody` has reached the live
+      **Re-derived, and the answer splits three ways rather than two.**
+      `issues/relay/69`'s revisit trigger was this change landing, so it has
+      fired. What it asked for was "an executor that survives forced
+      termination", and that phrase covers three different seams which this
+      change moves independently:
+      - **The executor seam is now open.** The delivery loop left the worker
+        for `DeliveryWriter`, a public trait, driven by the public
+        `run_delivery_executor`. A test supplies a writer whose
+        `stop_requested` never returns true and gets exactly the surviving
+        executor the note wanted — no fake `TransportImpl`, no new enum arm,
+        no widened visibility. Tasks 5.8 and 5.11 are written against it and
+        could not have been written before.
+      - **The fence-protocol seam was already open**, independently of this
+        change: `FenceInProgress::advance` is generic over the public
+        `GenerationFence` trait rather than over `TransportImpl`, and
+        `tests/unit/delivery_fence.rs` already drives a
+        `ControllableGeneration` to a negative verdict.
+      - **The worker seam remains closed, and this change did not open it.**
+        The fence observes cessation through `TransportImpl`, a closed enum
+        over Acp/Tmux/Ui/Pty with no test arm, so anything needing the
+        *worker* to hold a non-ceasing generation is still out of reach: the
+        fail-stopped registry entry, the refusal of later sends, raw
+        inheriting that gate, and the post-fence guard drain.
+      So `issues/relay/69` is **partly discharged and stays open** for its
+      worker half. `todos/relay/134`'s stated expectation — "a fake consumer
+      under the pull-model redesign is the expected route" — is **answered
+      no**: the redesign produced a writer seam, not a worker one. Its
+      `InflightRegister` design, which makes the undrained read
+      unrepresentable rather than merely tested, is independent of any seam
+      and still stands on its own merits.
+- [x] 5.13 Confirm `Mailbox Payload Custody` has reached the live
       `delivery-quiescence` spec before this change is archived, and not
-      merely that a sync was offered. The requirement is delta-only until
+      merely that a sync was offered.
+      Verified after the sync by reading the live spec, together with the
+      other nine requirements this change ADDs — all ten present, none
+      missing. Decision record 0004's `Specs:` citation now resolves.
+      The sync also broke five citations of the three RENAMED requirements
+      and all five are repaired: the former queue-lifecycle name was still
+      carried by this change's own `design.md`, by the live
+      `runtime-bootstrap` spec, and three times by `documentation/decisions`
+      — twice in record 0001, once in the README's own example. The
+      citation gate caught three of the five; the other two sit on
+      unbackticked `Specs:` lines it does not resolve, which is worth
+      knowing before trusting it alone. The requirement is delta-only until
       then, and decision record 0004 in `documentation/decisions/` names it
       as where its standing rule lives — a citation that resolves against
       nothing until the sync happens.
@@ -499,7 +540,7 @@ letting a tranche boundary fall somewhere convenient.
       `src/transports/contract/executor.rs` with it. `Mailbox Submission
       Declaration` is ADDED by this change rather than MODIFIED, so no live
       requirement had to be reconciled.
-- [ ] 5.15 Run the retention audit against this change at its **pre-archive**
+- [x] 5.15 Run the retention audit against this change at its **pre-archive**
       state and confirm every dropped scenario, per
       `agentmux:todos/backend/8`, which holds the recorded baseline, the
       extraction command, and the per-scenario classification. The count is
@@ -523,6 +564,37 @@ letting a tranche boundary fall somewhere convenient.
       figures before checking this box. The corrected baseline is recorded on
       `agentmux:todos/backend/8`; the script defect is
       `agentmux:issues/openspec/1`.
+      **Audited pre-archive: 44 tool-reported plus 18 unreported, all 62
+      accounted for.** The overwhelming majority are the push-to-pull
+      vocabulary shift — authorize becomes peek/declare/write, pending
+      becomes queued, handover becomes peek — carried by a renamed successor
+      in the same requirement. Two further groups needed judgement and are
+      recorded so a later reader need not re-derive them:
+      **Relocated rather than dropped.** `A lost notification only delays`
+      leaves `Transport Handover Capacity and Readiness` and lands as
+      `A missed doorbell only delays` under the ADDED `Delivery Doorbell
+      Notification`, which is the requirement task 5.8 now pins.
+      `An active target is not authorized on a momentary match` becomes
+      `Positive Activity Signal`'s `Activity advance defers the executor's
+      own write decision`; the code carries it as `!advanced &&
+      writer.is_ready()`. `A long-waiting entry is still authorized when its
+      target returns` and `An unready target is not authorized` move to
+      `Quiescence-Gated Delivery`. `Create the owner atomically with
+      authorization` becomes `Mailbox Submission Declaration`'s
+      `A well-formed declaration is accepted and bound`, guard creation
+      having moved to `declare`.
+      **Genuinely retired, premise removed by this change.** `Stale readiness
+      yields an evidence-based outcome` and `A refused invocation is
+      terminal, not a reclaim` both describe a relay-side check-then-
+      authorize window that no longer exists — the executor now reads its own
+      readiness and decides in one place, and an executor that declines to
+      write resolves nothing at all, which is the opposite of terminal and is
+      what task 5.11 pins. `An authorized batch never waits in a staging
+      queue` loses both its batch and its staging queue; the mailbox is the
+      queue. `Resolve exactly once under a collector panic` goes with the
+      evidence collector itself, succeeded by `Resolve exactly once under a
+      delivery-loop panic`, that executor being the only panic the pull model
+      can reach.
 - [x] 5.16 Settle the guard evidence order's unreachable first rung, per
       `agentmux:todos/backend/9`. The rung deriving a member's outcome from
       its packing unit's recorded evidence was live under the push model,

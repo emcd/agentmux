@@ -4,7 +4,7 @@
 - Status: accepted
 - Supersedes: —
 - Superseded by: —
-- Specs: delivery-quiescence / Async Queue Lifecycle and Ordering
+- Specs: delivery-quiescence / Mailbox Ordering and Cursor Lifecycle
 
 ## Decision
 
@@ -14,8 +14,8 @@ place.
 
 The standing rule this left behind — what a later proposal has to establish
 before adding one — is normative, and lives in the `delivery-quiescence`
-capability's `Async Queue Lifecycle and Ordering` requirement rather than in this
-record.
+capability's `Mailbox Ordering and Cursor Lifecycle` requirement rather than in
+this record.
 
 ## What we rejected, and why
 
