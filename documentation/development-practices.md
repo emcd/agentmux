@@ -444,6 +444,98 @@ Merge earlier only for an explicit integration checkpoint: a prerequisite
 unblocks another lane, a security fix needs release, or the operator directs
 separate integration. State that reason in the merge handoff.
 
+### Producing Patch-Identity Evidence
+
+Equivalent Rebase Assessment above requires patch-identity evidence. Produce it
+by comparing what the stack *introduces* before and after, not by re-reading the
+diff and not by diffing the two heads:
+
+```shell
+git range-diff <old-base>..<old-head> <new-base>..<new-head>
+```
+
+An all-`=` result is the evidence. Diffing the heads directly does not answer the
+question, because it mixes in everything the base gained. Where `range-diff` is
+unavailable, `git diff <base>..<head>` into two patch files and diff those;
+what survives is either a real change or a rebase artifact.
+
+This evidence supports the assessment; it does not perform it. The integrator
+still decides whether the intervening base changes create a material conflict,
+and an author does not self-authorize a rebased merge handoff by producing a
+clean `range-diff`.
+
+### Review Traffic Is Peer-to-Peer
+
+Send a review request directly to the reviewer who must sign off, and signal the
+integrator merge-ready only once that sign-off is in hand. Routing the request
+through the integrator parks the work with someone who is blocked until the
+review lands.
+
+The inverse holds: answer a peer's review request directly to that peer. An
+instruction to route coordination through the integrator governs dispatch and
+scheduling, not review content. An integrator dispatching reviewers should
+likewise instruct them to send findings straight to the author.
+
+### Commit Before Requesting Review
+
+Commit the artifact first and request review by sharing the commit hash.
+Reviewers work from the shared object store and should not need filesystem
+access to an author's worktree. This applies to OpenSpec proposals as well as
+code.
+
+**A shared hash is a promise.** Once sent, the reviewer is reading that
+snapshot; rebasing, amending, or squashing it before they reply wastes the round
+on a tree the author has abandoned. Sequence any rebase *before* the review
+request. If one becomes unavoidable mid-review, send the new hash proactively
+rather than waiting for the review to return.
+
+### Hold the Branch After a Merge Request
+
+A merge request names a hash, but a `--no-ff` merge takes the branch head
+whatever it is at merge time. **After sending a merge handoff, do not commit to
+that branch until the merge lands.** The hold is absolute: announcing that more
+work is coming does not protect the integrator, because an announcement pins
+nothing — the merge still takes the head, and a head named later is neither a
+review packet nor a branch pin.
+
+When further work is expected, send a preliminary coordination notice instead,
+and send the actual merge handoff only once the stack is cleaned, approved, and
+its final head is known.
+
+### Reviewer Signoff Batching
+
+For a sequential stack dispatched as one unit, default to a single reviewer
+signoff covering the whole stack rather than a round after each commit.
+Sequencing still applies to the commits themselves — do not begin task N+1
+before task N is committed — but hold the signoff until the stack is ready.
+
+Call out an individual commit for its own round only when it carries risk the
+rest of the stack does not: a material change to behavior others depend on, a
+cross-lane contract touch, or a security-sensitive path. Ordinary implementation
+commits change behavior — that alone is not the criterion, or the batching
+default would never apply.
+
+### Bounded Review Rounds
+
+A review request states its own exit condition. The concern is not round count —
+multiple rounds routinely surface real defects — but the pattern where fresh
+findings appear each time the previous set is addressed, so the cycle never
+terminates. Name what would end it.
+
+### Holds Carry a Dissolve Condition
+
+A task, review, or dispatch placed on hold records a concrete, checkable trigger
+for lifting it, written in the same place the hold is recorded. "Held" or "no
+dispatch" without a trigger becomes an unbounded commitment that resurfaces
+unresolved in every later triage.
+
+### Lanes Without an Aux Counterpart
+
+A lane whose work normally goes through a dedicated Aux review counterpart
+routes through that counterpart before reaching the integrator. Lanes with no
+such counterpart route through the cross-cutting reviewer instead, rather than
+going from author straight to merge on self-verification alone.
+
 ## Pre-Commit Validation
 
 Run validation before committing to avoid hook failures:
