@@ -296,16 +296,23 @@
 
 ## 8. Exact chord matching
 
-Lands before Group 7 is finalized rather than after. Group 7's reachability
-question is what surfaced the problem, and exact matching shrinks the answer:
-the keystroke expansion over modifier combinations collapses to the keystroke a
-row is written as, so the held Group 7 stack gets simpler rather than larger.
+Group 7's reachability question is what surfaced the problem, and exact matching
+shrinks the answer: the keystroke expansion over modifier combinations collapses
+to the keystroke a row is written as.
 
-- [ ] 8.1 Enumerate what the compiled table over-matches today — every row whose
+- [x] 8.1 Enumerate what the compiled table over-matches today — every row whose
       chord shape accepts a keystroke the row is not written as — and record the
       list, so the decision below is made against what is there rather than
       against what is remembered.
-- [ ] 8.2 Confirm against that list that no modifier variant is declared back.
+
+      Recorded at `agentmux:artifacts/51`. 114 rows over-match, withdrawing
+      6,734 keystrokes: 100 rows matching a key under any modifier at 63 each,
+      and 14 matching a character under any superset of `Ctrl` at 31 each. The
+      finding that shaped the rest of the group: the table had almost no
+      exactly-written rows, the only ones being the six `Enter` rows in
+      `compose-to` and `compose-message`. Exactness therefore changes the
+      matching shape of all but six rows rather than trimming edges.
+- [x] 8.2 Confirm against that list that no modifier variant is declared back.
       The operator decided this on 2026-09-06, before the enumeration rather
       than after it: so long as the chords the table is written as keep working,
       which variants stop working is not something they want to adjudicate row
@@ -316,37 +323,53 @@ row is written as, so the held Group 7 stack gets simpler rather than larger.
       A variant is declared back only if 8.1 turns up one whose loss breaks a
       chord the table declares, which would mean exactness had been applied
       wrongly rather than that the variant was wanted.
-- [ ] 8.3 Make every non-typing chord shape match exactly the keystrokes its
+
+      None was. Every over-matching shape keeps its written form — an
+      any-modifier row keeps the bare key, a control row keeps `Ctrl+<key>`, a
+      character row keeps bare and `Shift` — so nothing a row is written as was
+      lost. No withdrawn keystroke is the written form of another row either;
+      had one been, dispatch would already have been returning that other row's
+      action.
+
+      All 6,734 withdrawn keystrokes are observable to an operator who happens
+      to press one, and the enumeration is the list of them — `Alt+Enter` in the
+      interaction and picker contexts, `Ctrl+Shift+R`, modified `F2` through
+      `F5`, and the modifier variants of every navigation and escape key among
+      them. Release notes are written from the enumeration rather than from this
+      task. `Ctrl+Shift+C` and `Ctrl+Shift+J` are singled out only as task 8.8's
+      targeted real-terminal cases, being the ones a habitual operator is most
+      likely to have in their fingers; they are not the extent of the change.
+- [x] 8.3 Make every non-typing chord shape match exactly the keystrokes its
       written form denotes — one for a key with a modifier set, two for a bare
       character. The shapes that exist only to reproduce a handler condition go
       away rather than gaining a narrower condition.
-- [ ] 8.4 Keep a bare single character denoting that character both bare and
+- [x] 8.4 Keep a bare single character denoting that character both bare and
       carrying `Shift`, covering the fixed-action character rows as well as the
       typing rows, and add a test that a shifted character still reaches its row
       in both. This is the one place exactness would break something a terminal
       actually does.
-- [ ] 8.4a Resolve an operator's bare single-character chord to the same two
+- [x] 8.4a Resolve an operator's bare single-character chord to the same two
       keystrokes the compiled row denotes, rather than to the bare form alone.
       Without this the configured row claims one of the two and the compiled row
       keeps answering for the other — the very condition Group 8 exists to
       remove, reappearing in the one shape exempted from it. Add a test that
       configuring a character intercepts its shifted arrival and that the
       compiled row it displaced reaches nothing.
-- [ ] 8.4b Teeth-check 8.4a by resolving the configured chord to the bare form
+- [x] 8.4b Teeth-check 8.4a by resolving the configured chord to the bare form
       only, and confirm the test fails. The two sides denoting the same set is
       the whole of the guarantee here, and a symmetry that is never exercised
       asymmetrically is not known to hold.
-- [ ] 8.5 Add a test that a row's action is unreachable through that row under
+- [x] 8.5 Add a test that a row's action is unreachable through that row under
       any modifier set outside what its written form denotes, swept over the
       modifier domain rather than over a chosen sample. Written against the
       denoted set rather than against the modifiers a row names, since for a bare
       character those differ: `Shift` is denoted without being named, and a test
       phrased the other way would demand the opposite of task 8.4.
-- [ ] 8.6 Add a test that the help overlay and dispatch agree about a rebound
+- [x] 8.6 Add a test that the help overlay and dispatch agree about a rebound
       chord: where presentation drops a compiled row, no keystroke reaches that
       row's action through it. This is the contradiction that motivated the
       change, so it is asserted rather than assumed to have gone.
-- [ ] 8.7 Simplify the Group 7 reachability keystroke expansion to the keystroke
+- [x] 8.7 Simplify the Group 7 reachability keystroke expansion to the keystroke
       each row denotes, and rework the fixtures that were written against broad
       matching. The quit refusal and the displacement findings become reachable
       conditions again; assert them where they were previously asserted to be
