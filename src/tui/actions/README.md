@@ -33,10 +33,12 @@ Two halves, deliberately independent:
     between rows that could both match — so a row for one character
     must precede its context's typing row.
 - `chord.rs`
-  - `Chord` mirrors the condition shapes `../input.rs` uses today (an
-    exact modifier set, a key whatever its modifiers, one typed
-    character, any typed character), so the table reproduces the
-    handlers without narrowing them.
+  - `Chord` denotes keystrokes rather than mirroring handler
+    conditions: a key with an exact modifier set, one character bare or
+    carrying `Shift`, and typing. Each matches exactly what its written
+    form denotes, which is what lets a configuration claim a row in
+    full — see **Denoting keystrokes rather than reproducing handler
+    conditions** below.
   - The two directions an operator-facing chord travels: `Chord::display`
     renders one for reading, `parse_chord` reads one an operator wrote.
     They live together because they are held to agree — see
@@ -64,10 +66,13 @@ Two halves, deliberately independent:
     strip prints the first of them, so a rebinding that trailed its
     compiled predecessor would be catalogued correctly and still leave
     every strip advertising the chord it replaced. A compiled row drops
-    out where a higher tier claimed the keystroke that row is *written*
-    as — narrower than the keystrokes it matches, so a row matching a
-    key under any modifier keeps answering for the modified forms after
-    a configuration takes the bare one.
+    out where a higher tier claimed the keystroke that row is written
+    as, which is now the whole of what that row matches — so nothing
+    outlasts a rebinding, and the overlay and dispatch cannot disagree
+    about whether a displaced behavior is still there. A row a higher
+    tier only partly claims keeps being presented, because it keeps
+    answering; that arises for a bare character, the one form denoting
+    two keystrokes.
   - `default_help_bindings` is the one projection that stays on the
     compiled rows, and it takes no effective table rather than
     defaulting one. The usage guide generated from it is committed to
@@ -263,25 +268,37 @@ which is the duplication this directory exists to remove. They are
 rows under the global context instead, and dispatch walks
 `binding_lookup_order` rather than special-casing them.
 
-## Reproducing the handlers rather than tidying them
+## Denoting keystrokes rather than reproducing handler conditions
 
-The handlers are not uniform about modifiers, and the table matches
-them as they are:
+This section once read "reproducing the handlers rather than tidying
+them", and described a table that matched the handlers' modifier
+conditions as it found them. That is no longer what the table does, and
+the change is the point rather than a tidy-up: a row that matched more
+than it spelled was a row a configuration could not fully claim, so the
+behavior behind it survived being rebound and the overlay and dispatch
+disagreed about whether it was still there.
 
-- The interaction and picker arms test `KeyCode::Enter` whatever the
-  modifiers, so those contexts carry a fallback row after their three
-  explicit `Enter` rows. Without it `Alt+Enter` would go inert. Compose
-  carries no fallback, because its arm guards on `modifiers.is_empty()`.
-- The control blocks test `modifiers.contains(CONTROL)`, so a control
-  chord matches however the modifiers are combined. `Ctrl+Shift+J`
-  reaches the same behavior as `Ctrl+J`.
+Every row matches exactly the keystrokes its written form denotes: one
+for a key with a modifier set, two for a bare character. The shapes
+that once reproduced a handler condition are gone rather than
+narrowed — a condition is not a chord, and reproducing one put
+keystrokes beyond an operator's reach.
+
+- The interaction and picker contexts once carried a fallback row after
+  their three explicit `Enter` rows, so `Alt+Enter` reached the action
+  a handler arm testing only `KeyCode::Enter` accepted. It is gone, and
+  every context now binds the three declared chords and no other
+  modifier set. Compose never carried the fallback, so this is uniform
+  across contexts rather than a distinction between them.
+- A control chord is one keystroke. `Ctrl+Shift+J` is a different
+  keystroke from `Ctrl+J` and reaches nothing unless a row declares it.
 
 The three explicit `Enter` rows own the modifier sets the
-capability-neutrality contract governs. The fallback exists so the
-other sets keep their current behavior, not to weaken that contract.
-Presentation folds a context's several `Enter` rows onto one line and
-then folds the modified forms out of it entirely, since neutrality
-makes them redundant wherever `Enter` is bound; see `help.rs`.
+capability-neutrality contract governs, and they are now the only sets
+any context binds on `Enter`. Presentation folds a context's several
+`Enter` rows onto one line and then folds the modified forms out of it
+entirely, since neutrality makes them redundant wherever `Enter` is
+bound; see `help.rs`.
 
 ## Notes
 

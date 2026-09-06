@@ -40,8 +40,10 @@ pub(crate) enum Chord {
 impl Chord {
     /// How this chord is written for an operator. Presentation folds several
     /// rows onto one line, so a chord that renders the same as one already on
-    /// the line disappears into it -- which is what keeps the `Enter` fallback
-    /// row from printing a second, identical "Enter".
+    /// the line disappears into it. Two rows reaching one action from
+    /// `Ctrl+J` and from `Ctrl+Shift+J` would print both, since they are
+    /// different keystrokes and render differently; what folds is a repeat of
+    /// the same written form.
     pub(crate) fn display(self) -> String {
         match self {
             Self::Key(code, modifiers) => {

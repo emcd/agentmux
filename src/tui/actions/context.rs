@@ -122,10 +122,15 @@ impl BindingContext {
 /// The contexts a chord is resolved against, in precedence order: the global
 /// rows first, then the one contextual owner.
 ///
-/// Resolution stops at the first context declaring the chord. Dispatch reads
-/// this rather than testing chords ahead of the table, so a globally bound
-/// chord keeps its action with any surface open and stays declared in exactly
-/// one place.
+/// Resolution stops at the first context binding the chord to an action, which
+/// is narrower than the first that declares it: a context binding the chord to
+/// no action empties it there and lets the next be consulted, so an explicit
+/// unbinding uncovers the surface row a global row was shadowing rather than
+/// silencing the key everywhere.
+///
+/// Dispatch reads this rather than testing chords ahead of the table, so a
+/// globally bound chord keeps its action with any surface open and stays
+/// declared in exactly one place.
 pub(crate) fn binding_lookup_order(state: &AppState) -> [BindingContext; 2] {
     lookup_order(binding_context(state))
 }
