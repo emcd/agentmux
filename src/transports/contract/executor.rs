@@ -27,7 +27,7 @@
 //!
 //! **The handle closes over the target and the consumer generation rather than
 //! taking them per call.** The requirement names the operations
-//! `declare(target, generation_id, through_seq)`, and the check that a call
+//! `declare(target, generation_id, range)`, and the check that a call
 //! belongs to the target's active generation is exactly as it specifies — the
 //! relay still compares the binding under its own lock. What changes is only
 //! where the binding is held: a transport that cannot name a target cannot name

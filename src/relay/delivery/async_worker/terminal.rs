@@ -278,37 +278,39 @@ pub(in crate::relay::delivery) fn complete_task_outcome(
     report_terminal_outcome(task, outcome, guard);
 }
 
-/// Resolves a member's reported outcome against its packing unit's record.
+/// Resolves a member's reported outcome against the evidence the ledger holds
+/// for it.
 ///
-/// For a **bound** member the record answers, and every producer spelling gives
-/// way to it — `delivered`, `not_submitted` and `dropped_on_shutdown` included.
-/// The record is what its siblings resolved from, so a member disagreeing with it
-/// is the split outcome the unit-owned record exists to make impossible.
+/// For a **bound** member that evidence answers, and every producer spelling
+/// gives way to it — `delivered`, `not_submitted` and `dropped_on_shutdown`
+/// included. It is what the acknowledgment observed for this member, or what the
+/// guard resolved when no acknowledgment arrived; either way it describes the
+/// write, which a value computed before the write cannot.
 ///
 /// For an **unbound** member the producer's spelling stands, because there is no
-/// record to be authoritative with: its evidence is the guard's inference from
-/// absence rather than a report of what a write proved.
+/// such evidence to be authoritative with: the guard's outcome there is an
+/// inference from absence rather than a report of what a write proved.
 fn reconcile_with_evidence(
     result: SendResult,
     evidence: SubmissionEvidence,
     bound: bool,
 ) -> SendResult {
-    // An unbound member has no unit record to be authoritative *with*: its
-    // evidence is the guard's inference from absence, not a report of what a
-    // write proved. Its producer's spelling stands — safe now in a way it was not
+    // An unbound member has no recorded evidence to be authoritative *with*: the
+    // guard's outcome is an inference from absence, not a report of what a write
+    // proved. Its producer's spelling stands — safe now in a way it was not
     // before the refusal sites were routed through the guard, because those
-    // spellings are already what the evidence order would derive.
+    // spellings are already what the resolution order would derive.
     if !bound {
         return result;
     }
-    // Bound: the unit's record is the answer, and the value the producer computed
-    // for itself is discarded even when the two agree. Agreement was never the
-    // property worth having — one record read by every member of the unit is,
-    // because it makes disagreement between siblings unrepresentable rather than
-    // merely absent.
+    // Bound: the ledger's evidence is the answer, and the value the producer
+    // computed for itself is discarded even when the two agree. Agreement was
+    // never the property worth having — resolving from what the write actually
+    // observed for this member is, because a producer's spelling is computed
+    // before the write and so cannot describe it.
     //
-    // Causal metadata survives, because the record holds submission evidence and
-    // not causes: `pty_write_failed` with an EPIPE behind it is worth more to a
+    // Causal metadata survives, because that evidence states submission and not
+    // cause: `pty_write_failed` with an EPIPE behind it is worth more to a
     // sender than the generic code for whatever outcome it resolved to.
     //
     // A code that merely *labels* an outcome does not survive, because it no
@@ -481,7 +483,8 @@ mod evidence_authority_tests {
     }
 }
 
-/// The evidence order's second rung, held at the helper every trigger reaches.
+/// The resolution order's `not_submitted` rung, held at the helper every trigger
+/// reaches.
 ///
 /// Its own block on the same terms as the others, and the count is deliberate
 /// rather than debt: each block has to argue its own exception, and that friction

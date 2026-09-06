@@ -18,7 +18,7 @@ use crate::protocol::{
 };
 use crate::relay::{RelayError, relay_error};
 
-use super::super::guard::{GuardKey, PackingUnitId, QueueEntryState, SubmissionEvidence};
+use super::super::guard::{GuardKey, PackingUnitId, QueueEntryState};
 
 /// Identifies the target a queue entry is admitted against. Same three
 /// components as the delivery worker's key, kept as its own type so the ledger
@@ -76,9 +76,9 @@ pub(super) struct AdmittedEntry {
     /// responsibility for delivering it and never reassigned; `None` while the
     /// entry is merely waiting.
     pub(super) guard: Option<GuardKey>,
-    /// The packing unit this member was partitioned into, recorded before the
+    /// The packing unit this member was declared into, recorded before the
     /// unit's first target-side effect and never reassigned. It is the
-    /// discriminator in the guard's evidence order between a provable
+    /// discriminator in the guard's resolution order between a provable
     /// `not_submitted` and an honest `submission_unknown` — binding, rather than
     /// the manner of the failure that ended the attempt.
     ///
@@ -102,25 +102,6 @@ pub(super) struct TargetUsage {
     /// record is dropped when the target's last entry terminalizes, so a target
     /// that drains and re-accumulates warns again because its flag went with it.
     pub(super) warned: bool,
-}
-
-/// One packing unit's shared record.
-///
-/// The evidence is unit-owned rather than copied into each member: a transport
-/// submits a unit, not a member, so one submission produces exactly one result
-/// and every member bound to that unit must resolve from the same one. Copying
-/// it per member would make disagreement representable, which is the split
-/// outcome the guard exists to prevent.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct UnitRecord {
-    /// Written once, before any member outcome is derived from it. A later record
-    /// is ignored, because the first one is what any resumed fan-out must agree
-    /// with.
-    pub(super) evidence: Option<SubmissionEvidence>,
-    /// How many bound members have yet to terminalize. The record is dropped when
-    /// this reaches zero, so the map tracks live units rather than growing by one
-    /// entry per unit the relay ever submitted.
-    pub(super) unresolved_members: usize,
 }
 
 /// One peekable position in a target's mailbox.
@@ -349,8 +330,6 @@ pub(super) struct LedgerState {
     /// reserved: the counters below are maintained in the same locked section, so
     /// they cannot drift from it.
     pub(super) entries: HashMap<String, AdmittedEntry>,
-    /// Live packing units by id, holding the evidence their members resolve from.
-    pub(super) units: HashMap<PackingUnitId, UnitRecord>,
     /// Per-target ordered mailboxes, keyed the same way usage is.
     pub(super) mailboxes: HashMap<AdmissionTargetKey, TargetMailbox>,
     /// Per-target consumer-generation sequences, keyed the same way, and

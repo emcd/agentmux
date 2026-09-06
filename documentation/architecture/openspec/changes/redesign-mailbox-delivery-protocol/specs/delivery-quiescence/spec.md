@@ -656,8 +656,7 @@ once":
 
 - **Uniqueness** — any member that reaches a terminal state SHALL do so
   **exactly once**, in a surviving relay process, including when a
-  transport's delivery-loop executor, or the relay's own evidence collector,
-  panics.
+  transport's delivery-loop executor panics.
 - **Bounded completeness once submission has begun** — once a packing unit
   has produced a target-side effect, its members SHALL reach a terminal
   state within `[delivery].submission-timeout-ms` plus twice
@@ -670,8 +669,7 @@ once":
 Uniqueness SHALL be enforced by a **relay-owned guard** owned outside every
 transport delivery-loop executor. A keyed map plus a compare-and-set is not
 sufficient on its own, because it cannot observe a detached executor, a
-delivery-loop panic, an evidence-collector panic, or a generation
-replacement.
+delivery-loop panic, or a generation replacement.
 
 Guard identity SHALL be established at **Declaration**, bound to the minted
 `PackingUnitId`, exactly as `Mailbox Submission Declaration` specifies —
@@ -695,15 +693,20 @@ The guard SHALL:
 #### Guard resolution order
 
 Whenever the guard terminalizes a **declared** member that has not already
-reached a terminal outcome, it SHALL select that outcome by the following
-order, first match winning:
+reached a terminal outcome, that member's packing unit was declared but
+never acknowledged before the trigger fired, and the member SHALL resolve
+`submission_unknown` — declaration alone does not prove a write was
+attempted, only that one was about to be.
 
-1. the member's packing unit has an **immutable evidence record** → derive
-   the outcome from that record (`Submitted` → `delivered`, `NotSubmitted` →
-   `not_submitted`, `SubmissionUnknown` → `submission_unknown`);
-2. the member's packing unit was declared but never received evidence
-   before the trigger → `submission_unknown`, because declaration alone
-   does not prove a write was attempted, only that one was about to be.
+**The order has no rung above that one, and SHALL NOT acquire one.** A
+member whose unit has already produced a result cannot reach the guard:
+acknowledgment resolves every member it covers in the same indivisible act
+that establishes the unit's result, so no trigger can find a member
+unresolved beside a known outcome. A rung deriving the outcome from a
+unit-level evidence record would answer a state this protocol does not
+have, and the design that would create that state — reporting a unit's
+result and its members' outcomes in separate phases — is rejected in
+`documentation/decisions/0005-no-two-phase-acknowledgment.md`.
 
 An **undeclared** member is never routed through this order at all: it was
 never bound to a guard, so it resolves through `In-Process Delivery
@@ -760,13 +763,15 @@ path that attempts termination twice.
 - **BECAUSE** the single resolution cut is the verdict, so evidence the
   fence produces is still admissible
 
-#### Scenario: The execution bound does not override stronger evidence
+#### Scenario: The execution bound does not revisit an acknowledged unit
 
-- **WHEN** the execution bound elapses while one declared packing unit has
-  already recorded `Submitted`
-- **THEN** that unit's members resolve `delivered`
-- **AND** only declared members lacking stronger evidence at the cut
-  resolve `submission_unknown`
+- **WHEN** the execution bound elapses for a target whose earlier declared
+  unit was already acknowledged `Submitted`
+- **THEN** that unit's members remain `delivered`
+- **AND** the bound resolves only members still declared and unacknowledged
+  at the cut, which resolve `submission_unknown`
+- **BECAUSE** terminalization is write-once, so members an acknowledgment
+  already resolved are not candidates at the verdict
 
 #### Scenario: The execution bound asserts nothing about the target
 
@@ -806,7 +811,7 @@ path that attempts termination twice.
 #### Scenario: A declared-but-no-evidence member resolves submission_unknown
 
 - **WHEN** the guard terminalizes a declared member whose packing unit
-  never recorded any evidence before the trigger fired
+  was never acknowledged before the trigger fired
 - **AND** the trigger is a panic, a channel closure, a generation
   replacement, or graceful shutdown
 - **THEN** the member resolves `submission_unknown` in every case
@@ -824,20 +829,16 @@ path that attempts termination twice.
   Scope`'s never-declared path: `dropped_on_shutdown` on shutdown, or
   re-peekable by a replacement generation otherwise
 
-#### Scenario: A recorded unit outcome outranks the lifecycle trigger
+#### Scenario: A generation replacement does not revisit an acknowledged unit
 
-- **WHEN** a generation is replaced while one of its units has already
-  recorded `Submitted`
-- **THEN** that unit's members resolve `delivered`
+- **WHEN** a generation is replaced after one of its units was acknowledged
+  `Submitted`
+- **THEN** that unit's members remain `delivered`
+- **AND** the replacement resolves no member of that unit
 - **AND** they are not downgraded to `submission_unknown` because a
   replacement occurred
-
-#### Scenario: Resolve exactly once under an evidence-collector panic
-
-- **WHEN** the relay's evidence collector panics after a unit's evidence is
-  recorded but before the members it covers are terminalized
-- **THEN** every member of that unit resolves from the recorded evidence
-- **AND** no member is left without a terminal outcome
+- **BECAUSE** the acknowledgment resolved every member it covered, so the
+  replacement finds none of them outstanding
 
 #### Scenario: A receipt is not refused for want of a reservation it holds none of
 
@@ -1109,13 +1110,22 @@ SHALL be refused without returning any entries.
 ### Requirement: Mailbox Submission Declaration
 
 Before writing any peeked entry, a transport's delivery-loop executor SHALL
-call `declare(target, generation_id, through_seq)`, naming the exact
-contiguous range of entries — starting at the target's current cursor
+call `declare(target, generation_id, range)`, naming the exact contiguous
+range of entries — both ends, starting at the target's current cursor
 position plus one — that it is about to submit as one packing unit. This is
 a relay-visible **start record**, not a permission grant: `declare` never
 refuses a well-formed request from the active generation, gates nothing, and
 grants no exclusivity beyond what `Consumer Generation Ownership and
 Replacement`'s single-active-generation rule already provides.
+
+**The range names its start rather than deriving it, and the relay validates
+that start rather than assuming it.** A caller that could name only the run's
+last position could not express a wrong start, which would make the
+out-of-position rejection below unrepresentable and the rule that declarations
+begin at the cursor a convention no code enforces. The caller is not inventing
+the value: `peek` returns the cursor it read at, so a well-formed declaration
+echoes back the position the relay just served, and the check compares the
+caller's view of the target's position against the relay's own.
 
 `declare` SHALL be rejected, without effect, when: `generation_id` does not
 match the target's `active_generation_id`; the named range does not begin
@@ -1228,9 +1238,10 @@ a prior, still-outstanding `declare` call, from the supplied per-member
 Generation Ownership and Replacement`.
 
 **`ack` SHALL NOT accept a free-form cursor position.** It names a
-previously declared unit, not an arbitrary `through_seq`; the relay looks
+previously declared unit, not a range of its own; the relay looks
 up that unit's bound range from its own ledger rather than trusting a
-caller-supplied endpoint. This is what makes the acknowledged range exactly
+caller-supplied one. A range is named once, at `declare`, where it can still
+be refused before any bytes move. This is what makes the acknowledged range exactly
 the range that was declared before any write was attempted, closing the
 gap a free-form cursor would otherwise leave: a caller with a valid
 generation binding but no corresponding `declare` record cannot advance the

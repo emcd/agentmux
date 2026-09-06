@@ -12,9 +12,9 @@
 //!
 //! A keyed map plus a compare-and-swap is not, on its own, enough to make
 //! exactly-once resolution a property: it cannot observe a detached thread, a
-//! panicked worker or collector task, or a generation replacement. Those are
+//! panicked delivery-loop executor, or a generation replacement. Those are
 //! *triggers*. What makes them safe is that none of them chooses an outcome —
-//! they all route through one evidence order, so a member the relay can
+//! they all route through one resolution order, so a member the relay can
 //! positively prove was never handed to a transport resolves `not_submitted`
 //! rather than being smeared into `submission_unknown` by whichever lifecycle
 //! event happened to fire.
@@ -78,7 +78,7 @@ impl SubmissionEvidence {
 ///
 /// Every variant here is a *trigger*: it says the member can no longer be
 /// resolved by the path that owned it, not what happened to the member. The
-/// outcome comes from [`resolve_from_evidence`] in every case, which is what
+/// outcome comes from [`resolve_from_binding`] in every case, which is what
 /// keeps a positively-provable `not_submitted` from being reported as
 /// `submission_unknown` merely because a task panicked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -113,30 +113,33 @@ impl GuardTrigger {
     }
 }
 
-/// The guard's single evidence order, applied whenever a trigger fires with no
+/// The guard's single resolution order, applied whenever a trigger fires with no
 /// outcome of its own.
 ///
 /// The order is deliberate and is the whole reason lifecycle events are not
 /// allowed to pick a spelling:
 ///
-/// 1. a recorded unit result, if the member's packing unit produced one;
-/// 2. otherwise `not_submitted`, when the member was never bound to a packing
-///    unit — the partition is recorded before the first target-side effect, so
-///    an unbound member provably could not have been submitted;
-/// 3. otherwise `submission_unknown`, because the member's unit was in a
+/// 1. a member never bound to a packing unit resolves `not_submitted` — the
+///    binding is recorded before the unit's first target-side effect, so an
+///    unbound member provably could not have been submitted;
+/// 2. otherwise `submission_unknown`, because the member's unit was in a
 ///    transport's hands and partial effect cannot be excluded.
 ///
 /// **The discriminator is unit binding, not the manner of failure.** Refusal,
 /// panic and cancellation all arrive here identically; what separates a provable
 /// `not_submitted` from an honest `submission_unknown` is whether a unit had
-/// been recorded for the member when the trigger fired.
-pub(in crate::relay) fn resolve_from_evidence(
-    unit_evidence: Option<SubmissionEvidence>,
-    unit: Option<PackingUnitId>,
-) -> SubmissionEvidence {
-    match unit_evidence {
-        Some(recorded) => recorded,
-        None if unit.is_some() => SubmissionEvidence::SubmissionUnknown,
+/// been declared over the member when the trigger fired.
+///
+/// **A member whose unit already produced a result never arrives here.** An
+/// acknowledgment reports what a write did and resolves every member it covers
+/// from that report, under the one ledger acquisition that records it — so a
+/// trigger cannot find a member still unresolved beside a known outcome. There
+/// is deliberately no rung above these two for such a member to take; see
+/// `documentation/decisions/0005-no-two-phase-acknowledgment.md` for the shape
+/// that would reintroduce one and why it is rejected.
+pub(in crate::relay) fn resolve_from_binding(unit: Option<PackingUnitId>) -> SubmissionEvidence {
+    match unit {
+        Some(_) => SubmissionEvidence::SubmissionUnknown,
         None => SubmissionEvidence::NotSubmitted,
     }
 }
@@ -172,44 +175,22 @@ impl GuardKey {
 mod tests {
     use super::*;
 
-    /// The evidence order is relay-private, and the lifecycle triggers that drive
-    /// it — shutdown, a collector panic, the execution bound — each reach only one
-    /// or two of its arms from any single public path. Pinning it directly is what
-    /// exercises the three-way discrimination as a whole: the ordering is what
-    /// keeps a lifecycle event from choosing an outcome, and each arm asserts
-    /// something the others cannot.
+    /// The resolution order is relay-private, and the lifecycle triggers that
+    /// drive it — shutdown, a delivery-loop panic, the execution bound — each
+    /// reach only one of its arms from any single public path. Pinning it
+    /// directly is what exercises the discrimination as a whole: the order is
+    /// what keeps a lifecycle event from choosing an outcome, and each arm
+    /// asserts something the other cannot.
     #[test]
-    fn the_evidence_order_prefers_a_record_then_proof_then_honesty() {
-        // A recorded unit result wins outright, even for a member that reached a
-        // transport — the record is what the member's siblings resolved from, and
-        // disagreeing with it is the split-outcome hazard it exists to prevent.
-        assert_eq!(
-            resolve_from_evidence(
-                Some(SubmissionEvidence::Submitted),
-                Some(PackingUnitId::mint())
-            ),
-            SubmissionEvidence::Submitted,
-        );
-        assert_eq!(
-            resolve_from_evidence(
-                Some(SubmissionEvidence::NotSubmitted),
-                Some(PackingUnitId::mint())
-            ),
-            SubmissionEvidence::NotSubmitted,
-        );
+    fn the_resolution_order_prefers_proof_then_honesty() {
+        // Never bound to a unit: the binding is recorded before the unit's first
+        // target-side effect, so non-delivery is provable rather than inferred.
+        assert_eq!(resolve_from_binding(None), SubmissionEvidence::NotSubmitted);
 
-        // No record, never bound to a unit: the partition is recorded before the
-        // first target-side effect, so non-delivery is provable rather than
-        // inferred.
+        // Bound, so the member's unit was in a transport's hands: partial effect
+        // cannot be excluded, and the honest answer is that we do not know.
         assert_eq!(
-            resolve_from_evidence(None, None),
-            SubmissionEvidence::NotSubmitted,
-        );
-
-        // No record, but the member's unit was in a transport's hands: partial
-        // effect cannot be excluded, so the honest answer is that we do not know.
-        assert_eq!(
-            resolve_from_evidence(None, Some(PackingUnitId::mint())),
+            resolve_from_binding(Some(PackingUnitId::mint())),
             SubmissionEvidence::SubmissionUnknown,
         );
     }

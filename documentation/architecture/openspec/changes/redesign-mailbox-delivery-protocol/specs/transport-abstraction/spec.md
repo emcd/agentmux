@@ -30,10 +30,10 @@ The delivery-loop executor's contract:
   its own token budget, and MAY coalesce consecutively peeked mail entries
   into one packing unit exactly as `mailw` invocations were previously
   coalesced;
-- it calls `declare(target, generation_id, through_seq)` for exactly that
-  decided prefix — possibly all of what it peeked — **before** attempting
-  to write any of it, per `delivery-quiescence`'s `Mailbox Submission
-  Declaration` requirement;
+- it calls `declare(target, generation_id, range)` for exactly that
+  decided prefix — possibly all of what it peeked — naming both ends of the
+  range, **before** attempting to write any of it, per
+  `delivery-quiescence`'s `Mailbox Submission Declaration` requirement;
 - only then does it attempt the write;
 - it calls `ack(target, generation_id, packing_unit_id, evidence)` naming
   the `PackingUnitId` `declare` returned, supplying per-member
@@ -310,8 +310,10 @@ preserving the no-relay-dependency invariant).
 fails, their members SHALL receive different outcomes. A transport SHALL NOT
 apply one outcome to every member of a declared unit's neighbors.
 
-Every member's outcome SHALL be **derived from its unit's immutable evidence
-record**, never from live re-inspection at fan-out time.
+Every member's outcome SHALL be **carried by the acknowledgment that resolves
+it**, never derived from live re-inspection afterwards. A unit's acknowledgment
+reports each member separately, because a write can submit some members and fail
+on others.
 
 The transport SHALL NOT drop a declared member without resolving it (via `ack`),
 and the relay-owned guard SHALL terminalize any declared member the transport
@@ -344,9 +346,8 @@ send RPC returns `queued` at admission, well before any declaration exists.
 
 - **WHEN** a transport's delivery-loop executor exits without acking some
   declared members
-- **THEN** the relay-owned guard terminalizes them by its evidence order — the
-  unit's record if one exists, `submission_unknown` if declared with no
-  evidence
+- **THEN** the relay-owned guard terminalizes them `submission_unknown`, by the
+  resolution order defined in the `delivery-quiescence` capability
 - **AND** each member's admission quota is released exactly once
 
 ### Requirement: Worker Readiness Interface
@@ -610,6 +611,147 @@ has not observed, and a bound that cannot be made true is worse than none.
 - **AND** calls `child.kill()` followed by `child.wait()` BEFORE joining the
   reader thread or the worker thread
 - **AND** joins the reader thread handle and the delivery-loop executor handle
+
+### Requirement: Packing Units and Typed Submission Evidence
+
+A packing unit SHALL be established by **declaration** before any target-side
+effect, and every member SHALL resolve from typed, per-member evidence carried by
+the acknowledgment that covers it.
+
+A **packing unit** is the unit of target-side submission. A delivery-loop
+executor peeks its target's mailbox, decides how much of the peeked prefix it can
+pack, and declares that contiguous range; the relay mints the unit's identifier
+at declaration and binds the range's members to it. Admission, not declaration,
+is where a message is authorized — a declared range is a start record, not a
+permission grant.
+
+**Binding SHALL precede the first target-side effect.** Every declared member
+belongs to exactly one unit, order is preserved, and no member is added to a unit
+after it is declared. A transport SHALL NOT write for a member it has not
+declared.
+
+An envelope whose rendered size alone exceeds the packing budget SHALL form its
+own unit.
+
+**Identities are explicit and immutable.** A member's identity is its entry's
+sequence in its target's mailbox, assigned at admission; a unit's identifier is
+minted at declaration. Neither is ever reassigned. There SHALL be no attempt
+identifier: acknowledgment is idempotent per entry, so a second acknowledgment of
+an already-terminal entry is a no-op rather than a distinct attempt to be told
+apart from the first.
+
+**Submission evidence SHALL be typed**, not inferred from an error string:
+
+| Evidence | Meaning |
+|---|---|
+| `Submitted` | the target-side primitive positively reported success |
+| `NotSubmitted` | positive evidence that no side effect occurred |
+| `SubmissionUnknown` | side effects cannot be excluded |
+
+An undifferentiated error SHALL map to `SubmissionUnknown`, never
+`NotSubmitted`. Only a primitive that can prove nothing was written may report
+`NotSubmitted`. A Tmux paste is a body write followed by Enter and a Pty unit is
+multiple `write_all` calls, so both can fail after partial effect.
+
+**`not_submitted` SHALL be available only for a member that was never declared
+into a packing unit.** Because binding precedes the first target-side effect, an
+undeclared member provably could not have been submitted, whatever ended the
+attempt — refusal, panic, or cancellation. A declared one carries no such proof.
+The discriminator is unit binding, not the manner of the failure.
+
+This governs *which* outcome an undeclared member may receive, never *whether* it
+receives one now. An executor that peeked without declaring and then panicked or
+was replaced leaves those entries queued and re-peekable rather than resolving
+them; only a definitive teardown resolves an undeclared entry directly. The
+`delivery-quiescence` capability's `In-Process Delivery Recovery Scope` governs
+that, and this requirement SHALL NOT be read as overriding it.
+
+**Evidence SHALL be reported per member, in one acknowledgment covering the whole
+declared range.** A write can submit some members of a unit and fail on others,
+which a single unit-wide result cannot express. The acknowledgment SHALL report
+each member of the range exactly once, and SHALL be refused if its reports do not
+cover the declared range exactly.
+
+**Acknowledgment SHALL be one phase.** A transport SHALL NOT report a unit-level
+result ahead of the per-member outcomes, and the relay SHALL NOT retain a
+unit-level result for members to be resolved from afterwards. A transport that
+cannot yet attribute an outcome per member declares a smaller range — down to a
+single member — rather than reporting in two stages. The rejected two-phase
+design and the state it would create are recorded in
+`documentation/decisions/0005-no-two-phase-acknowledgment.md`.
+
+**Per-transport terminal evidence and observation windows:**
+
+| Transport | `delivered` evidence | Window closes at |
+|---|---|---|
+| Tmux | `inject_literal_text` returns `Ok` | submission; a later pane death is target-health observability |
+| Pty | the unit's `write_all` pair to the master succeeds | submission; a later child exit is target-health observability |
+| ACP | write and flush of the complete newline-delimited `session/prompt` JSON-RPC request succeeds | that framed write; the turn's later completion, permission requests, or connection close are target-health observability |
+| UI | the broadcast is accepted by at least one live subscriber | submission |
+
+**Submission success terminalizes `delivered` on every transport.** A later
+positively observed exit or close SHALL be recorded as target health, not as a
+second delivery outcome for an already-resolved member. There is no `target
+failed` delivery outcome.
+
+A partially-succeeded write SHALL yield `submission_unknown` for every member
+whose bytes the transport cannot exclude from the target: they may be present in
+truncated form, which is neither delivery nor absence.
+
+#### Scenario: Declare before any effect
+
+- **WHEN** a delivery-loop executor has peeked a prefix of its target's mailbox
+- **THEN** it declares the contiguous range it intends to write
+- **AND** it produces no target-side effect before that declaration is accepted
+
+#### Scenario: A panic before declaring resolves nothing
+
+- **WHEN** a transport fails, refuses, or panics before declaring any range
+- **THEN** the members it peeked are not resolved by that failure
+- **AND** they remain queued and re-peekable, per `In-Process Delivery Recovery
+  Scope`
+- **BECAUSE** binding precedes the first effect, so nothing was in flight for the
+  failure to have decided
+
+#### Scenario: An undifferentiated error is not evidence of absence
+
+- **WHEN** a submission primitive returns an error that cannot prove zero bytes
+  left
+- **THEN** the members it covers resolve `submission_unknown`
+- **AND** they do not resolve `not_submitted`
+
+#### Scenario: A partial write within a unit is unknown
+
+- **WHEN** a unit's body write succeeds and its terminating write fails
+- **THEN** every member whose bytes cannot be excluded resolves
+  `submission_unknown`
+
+#### Scenario: Members of one unit may resolve differently
+
+- **WHEN** a write submits some members of a declared range and fails on others
+- **THEN** the acknowledgment reports each member's own evidence
+- **AND** the members resolve to different outcomes accordingly
+
+#### Scenario: An acknowledgment that does not cover its range is refused
+
+- **WHEN** an acknowledgment omits a member of the declared range, repeats one,
+  or reports one outside it
+- **THEN** the relay refuses it
+- **AND** no member of the range is resolved by it
+- **BECAUSE** the alternatives are to invent an outcome for the missing member or
+  to borrow a sibling's, and both state something nothing observed
+
+#### Scenario: An oversized envelope forms its own unit
+
+- **WHEN** a single envelope's rendered size exceeds the packing budget
+- **THEN** it is declared as a unit of its own
+- **AND** its outcome is not shared with any other member
+
+#### Scenario: A post-submission exit does not resolve a member twice
+
+- **WHEN** a unit's submission succeeds and the target process later exits
+- **THEN** the unit's members remain `delivered`
+- **AND** the exit is recorded as target-health observability
 
 ### Requirement: Transport Generation Fencing and Termination Authority
 

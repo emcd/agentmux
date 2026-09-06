@@ -118,9 +118,13 @@ guard-evidence-order resolution (something may have); and a replacement
 generation cannot tell whether re-serving an unacked entry risks a genuine
 double-write race or is simply re-serving something truly untouched.
 
-- Decision: reinstate a `declare(target, generation_id, through_seq)` call,
+- Decision: reinstate a `declare(target, generation_id, range)` call,
   made before any write is attempted, that binds a `PackingUnitId` to an
-  exact contiguous range starting at the cursor. This is the pull model's
+  exact contiguous range starting at the cursor. The range names both ends
+  rather than only its last position: a call that cannot state a wrong start
+  cannot be rejected for having one, which would leave the start-at-cursor
+  rule a convention no code enforces. `peek` returns the cursor it read at,
+  so the caller echoes back the position the relay just served. This is the pull model's
   relocation of `PartitionSink`'s pre-effect declaration — the same
   bookkeeping, moved to the new call boundary, not new bookkeeping.
 - Why this is not the rejected `claim`/lease step: the rejected step's
@@ -193,12 +197,15 @@ arbitrary cursor position it never peeked, wrote, or declared, silently
 dropping real messages and releasing their quota. The mechanism below
 closes both at once, because they share the same root fix.
 
-- `declare(target, generation_id, through_seq)` and
+- `declare(target, generation_id, range)` and
   `ack(target, generation_id, packing_unit_id, evidence)` both carry the
   `generation_id` the calling consumer bound to.
 - **`declare` is validated, not trusted.** The relay rejects a `declare`
   whose named range does not start exactly at the current cursor plus one,
-  is not contiguous, or extends past the mailbox's actual contents. Only a
+  is not contiguous, or extends past the mailbox's actual contents. The
+  first of those is a check the caller can fail only because the range
+  states its start; a call naming just the run's end would have that
+  property by construction rather than by validation. Only a
   validated `declare` mints a `PackingUnitId` and binds it. This is what
   makes `ack` safe despite naming only an ID rather than a range: the range
   an `ack` can ever affect was already constrained, contiguously and from

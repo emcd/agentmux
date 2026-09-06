@@ -60,9 +60,11 @@ proposal's approval.
   operation returning the head contiguous run of mailbox entries within the
   given bounds, advancing nothing. A raw-kind entry at the head is always
   returned alone.
-- Add `declare(target, generation_id, through_seq)`: a relay-visible,
+- Add `declare(target, generation_id, range)`: a relay-visible,
   pre-write **start record** that binds a `PackingUnitId` to an exact
   contiguous range beginning at the cursor, before any write is attempted.
+  The range names both ends, so the relay validates the start it was given
+  rather than deriving one the caller could not have got wrong.
   This is not authorization and grants no exclusivity — it never refuses a
   well-formed call from the active generation — it is the pull model's
   relocation of the push model's pre-effect partition declaration, and is

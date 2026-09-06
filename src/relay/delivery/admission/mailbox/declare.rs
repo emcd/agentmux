@@ -10,7 +10,7 @@ use crate::protocol::operations::{DeclareAccepted, DeclareRejection, DeclareResu
 use crate::runtime::inscriptions::emit_inscription;
 
 use super::super::super::guard::{GuardKey, PackingUnitId};
-use super::super::ledger::{OutstandingDeclaration, UnitRecord, lock_ledger};
+use super::super::ledger::{OutstandingDeclaration, lock_ledger};
 use super::addressing::target_key;
 use super::generation::active_generation;
 
@@ -100,19 +100,12 @@ pub(in crate::relay) fn declare(binding: &ConsumerBinding, range: EntryRange) ->
             entry.guard = Some(GuardKey::new(entry.sequence));
         }
     }
-    state.units.insert(
-        unit,
-        UnitRecord {
-            evidence: None,
-            unresolved_members: member_ids.len(),
-        },
-    );
     // The partition is otherwise invisible. Every other step of a delivery leaves
-    // a record, but which members shared a fate — the thing that decides whose
-    // outcome is derived from whose evidence — could not be answered from the log
-    // at all. That is a gap in an arc whose subject is per-member attribution: a
-    // reader could see two members resolve identically without being able to tell
-    // whether that was one record answering for both or two records agreeing.
+    // a record, but which members shared a write — and so which of them a single
+    // target-side failure could have taken down together — could not be answered
+    // from the log at all. That is a gap in an arc whose subject is per-member
+    // attribution: a reader could see two members resolve identically without
+    // being able to tell whether they shared a unit or merely agreed.
     //
     // Emitted with the ledger lock still held, which is deliberate here where
     // resolutions are deliberately handed back to be reported after release. A

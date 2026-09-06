@@ -156,10 +156,9 @@ written is therefore the guard, not the state.
   |                                                              |
   |  An acknowledgment reports what the write observed for each  |
   |  member, and each member resolves from its own report. The   |
-  |  guard's evidence order runs only for a lifecycle trigger    |
+  |  guard's resolution order runs only for a lifecycle trigger  |
   |  that brings no outcome of its own:                          |
-  |    unit record if present                                    |
-  |    else not_submitted   (member never bound to a unit)       |
+  |    not_submitted        (member never declared into a unit)  |
   |    else submission_unknown                                   |
   +--------------------------------------------------------------+
 ```
