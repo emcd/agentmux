@@ -236,3 +236,60 @@ the default table.
 - **WHEN** a binding row changes and the usage guide's generated section is not
   regenerated
 - **THEN** the repository lint fails
+
+### Requirement: Explicit Binding Context Precedence
+
+The TUI SHALL resolve the active binding context from application state as a
+single value, rather than as an ordering of handler early-returns.
+
+Overlay contexts SHALL take precedence over screen-mode contexts. Within a
+screen mode, the focused field SHALL select the context.
+
+Bindings that hold whichever surface is active SHALL be declared as global rows
+in the same table and resolved before the contextual row. Dispatch SHALL NOT
+test a chord ahead of the table.
+
+The order the contexts are consulted in SHALL be declared once and read by
+every consumer of it. Dispatch is not the only consumer: asking what a
+configuration leaves reachable asks the same question of every surface, and a
+consumer that restated the order could answer differently from the one that
+resolves keystrokes.
+
+Resolution SHALL take the first consulted context that binds the chord to an
+action. A context that binds the chord to no action SHALL NOT halt resolution:
+an explicit unbinding empties the chord in the context that named it and
+uncovers whatever the next consulted context binds, which is the same scoping
+every row has. Emptying a global chord therefore reveals a surface row it was
+shadowing rather than silencing the key everywhere.
+
+#### Scenario: A global chord is not shadowed by an open surface
+
+- **WHEN** a chord bound to an action in the global rows is pressed while the
+  picker or an overlay is open
+- **THEN** it invokes the action its global row names
+- **AND** no contextual row is consulted for that chord
+
+#### Scenario: An emptied global chord uncovers the surface beneath it
+
+- **WHEN** a configuration binds a global chord to no action
+- **AND** the active surface binds that chord
+- **THEN** the surface's action is invoked
+- **AND** the chord is not silenced on surfaces that do not bind it
+
+#### Scenario: An overlay outranks the mode beneath it
+
+- **WHEN** an overlay is open over a screen mode
+- **THEN** the resolved binding context is the overlay's
+- **AND** chords bound only in the underlying mode do not invoke their actions
+
+#### Scenario: Context resolution is inspectable
+
+- **WHEN** application state is given
+- **THEN** the active binding context is obtainable from that state alone,
+  without dispatching an event
+
+#### Scenario: One declaration of the consultation order
+
+- **WHEN** the contexts consulted for a chord are enumerated
+- **THEN** dispatch and any other consumer read the same declaration
+- **AND** changing that declaration changes both

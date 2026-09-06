@@ -486,6 +486,29 @@ deliberately, which is what distinguishes an intended removal from a
 displacement. The report describes the outcome and SHALL NOT attempt to
 distinguish the two.
 
+Whether a keystroke reaches an action SHALL be judged the way dispatch resolves
+it, through every context consulted for that surface in precedence order, rather
+than through the surface's own rows alone. The global rows both take
+reachability away and supply it: a global row can shadow a surface chord, so a
+configuration can displace an action while binding nothing in the context that
+declares it; and an action a surface declares that the global rows also bind
+stays reachable through a chord no row of that surface names. A check reading
+the surface alone answers both cases wrongly, in opposite directions.
+
+#### Scenario: A global row shadowing a surface chord is reported
+
+- **WHEN** a configuration binds a global chord that a surface's compiled row
+  also binds
+- **AND** no other chord reaches that surface's action under some capability
+  class
+- **THEN** pre-flight reports it unreachable under that class
+
+#### Scenario: A global chord keeps a surface action reachable
+
+- **WHEN** an action is declared both on a surface and in the global rows
+- **AND** the surface's own chords for it are all claimed
+- **THEN** pre-flight reports nothing, because the global chord still reaches it
+
 #### Scenario: A displaced action is reported by pre-flight
 
 - **WHEN** a configuration binds a chord that a compiled row in that context
