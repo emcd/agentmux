@@ -23,16 +23,26 @@ a later one.
 `ui.toml` SHALL be parsed with kebab-case keys. Supported fields SHALL include:
 
 - `default-bundle` (optional): the bundle the TUI browses by default.
+- `bindings` (optional): the operator's key bindings, whose contents the
+  `tui-binding-configuration` capability governs.
 
 `default-bundle` is a `ui.toml` key; `users.toml` remains the identity and
 policy file and does not carry it.
+
+Because layer resolution replaces `ui.toml` whole rather than merging its keys,
+a copy supplying `bindings` SHALL supply `default-bundle` as well for that key
+to take effect. That coupling is the uniform whole-file rule rather than a
+property of the binding group, and the binding group SHALL NOT be given
+key-merging semantics across layers to avoid it.
 
 The runtime SHALL treat a missing `ui.toml` as no configured UI-surface
 defaults, not an error. Absence from every configuration layer is absence, not a
 fault. A malformed `ui.toml` SHALL fail fast with a structured bootstrap
 validation error, and a malformed copy in one layer SHALL NOT fall through to a
 copy in a later layer. Loading `ui.toml` SHALL be read-only and SHALL NOT
-scaffold or modify configuration artifacts.
+scaffold or modify configuration artifacts. In particular, the default bindings
+SHALL be compiled rather than scaffolded into a `ui.toml`, so deleting the file
+returns the TUI to its defaults rather than changing what its defaults are.
 
 `agentmux check configuration` SHALL validate `ui.toml` through the same
 read-only loader and the same effective-file lookup, reporting a malformed file
@@ -52,11 +62,13 @@ inspecting a copy that is being shadowed.
 
 - **WHEN** `ui.toml` exists under two configuration layers
 - **THEN** the copy from the earlier layer supplies the UI-surface defaults
+- **AND** the binding group in effect is the one that copy carries, if any
 
 #### Scenario: Treat missing ui.toml as no UI defaults
 
 - **WHEN** no `ui.toml` exists under any configuration layer
 - **THEN** the runtime resolves no configured `default-bundle`
+- **AND** the compiled default bindings are in force
 - **AND** startup proceeds
 
 #### Scenario: Malformed ui.toml does not fall through
@@ -64,6 +76,12 @@ inspecting a copy that is being shadowed.
 - **WHEN** a `ui.toml` in one layer exists but cannot be parsed
 - **THEN** loading fails with a structured bootstrap validation error
 - **AND** a `ui.toml` in a later layer is not used
+
+#### Scenario: Loading never writes a binding file
+
+- **WHEN** the runtime loads UI-surface configuration
+- **THEN** no `ui.toml` is created or modified
+- **AND** no default binding is written to disk
 
 #### Scenario: Pre-flight names the layer of a malformed ui.toml
 

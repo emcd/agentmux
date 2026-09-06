@@ -10,9 +10,7 @@ alone), explicit binding-context precedence, capability-neutral default
 bindings, generation of all operator-facing binding documentation from the
 table, and the reachability of the help overlay's presentation on a terminal
 too small to show it whole.
-
 ## Requirements
-
 ### Requirement: Named Action Vocabulary
 
 The TUI SHALL name every operator-invocable behavior as a member of a single
@@ -54,16 +52,83 @@ that supplies its own bindings SHALL be able to skip resolution entirely.
 ### Requirement: Default Binding Table
 
 The TUI SHALL define one binding table mapping (binding context, key chord) to
-a named action. That table SHALL be the only place a chord-to-action
-association is declared.
+a named action. That table SHALL be the only place in compiled code where a
+chord-to-action association is declared.
 
-The table SHALL define the TUI's **default** bindings. Nothing in the TUI SHALL
-require that a chord's action be fixed at compile time: dispatch, presentation,
-and documentation SHALL all read the table rather than assuming any particular
-chord.
+The table SHALL define the TUI's **default** bindings, which an operator
+configuration supersedes row by row as the `tui-binding-configuration`
+capability governs. Nothing in the TUI SHALL require that a chord's action be
+fixed at compile time: dispatch and presentation SHALL read the effective table
+built from these defaults and the operator configuration, rather than assuming
+any particular chord.
+
+Table rows SHALL carry no terminal-capability qualifier, since the defaults do
+not vary by capability class. Capability variance SHALL be expressed where it is
+declared — in an operator configuration or in a named preset.
 
 Each row SHALL carry the display section and ordering used to present it, so
 presentation is declared with the binding rather than restated elsewhere.
+
+A table row SHALL match exactly the keystrokes its written form denotes, and no
+others. A row naming a key with a modifier set SHALL NOT match that key under
+any other set. A row naming a key with no modifiers SHALL NOT match it under any
+modifier, except where that key is a single character, which the paragraph below
+governs. A modifier variant intended to invoke an action SHALL be declared as
+its own row.
+
+A chord naming a single character with no modifiers is the one written form
+denoting two keystrokes: that character bare, and that character carrying
+`Shift`, and no other. A terminal's report of a typed character is not a
+function of the key alone — `Shift` and `Caps Lock` each alter both which
+character is reported and which modifiers accompany it — so a form admitting
+only one of the two would refuse a keystroke an operator produced by typing.
+Between them, `c` and `C` so defined cover every way either letter can arrive.
+
+That denotation SHALL be the same on both sides. A compiled row naming a bare
+character and an operator's chord naming that character SHALL match the same two
+keystrokes, whether the row carries the character into an action or invokes a
+fixed one. Claiming the character in a configuration therefore claims all of
+what the compiled row answered, leaving nothing behind on the form the
+configuration did not spell out.
+
+Symmetry is the requirement, not the pair. A written form that denoted more on
+the compiled side than an operator's spelling of it denotes would be a row a
+configuration cannot fully claim, which is the condition the rest of this
+requirement exists to remove — reintroduced for one shape rather than avoided.
+
+Exactness is what lets dispatch, presentation, and reachability agree without
+coordinating. A row matching more than it spells is one a configuration cannot
+fully claim, so the behavior it carries survives being rebound, the help overlay
+and dispatch disagree about whether it is still bound, and no configuration can
+give the unclaimed variants a different meaning.
+
+#### Scenario: A keystroke outside the written form's denotation reaches nothing
+
+- **WHEN** a table row's written form denotes a set of keystrokes
+- **AND** a keystroke outside that set arrives
+- **THEN** the row does not match it
+- **AND** the keystroke reaches whatever other row denotes it, or nothing
+
+#### Scenario: A rebound chord takes its behavior with it
+
+- **WHEN** a configuration binds the chord a table row is written as
+- **THEN** no keystroke reaches that row's action through that row
+- **AND** the help overlay and dispatch agree that it no longer does
+
+#### Scenario: A shifted character still reaches its row
+
+- **WHEN** a character arrives carrying `Shift`
+- **THEN** the row naming that character accepts it
+- **AND** this holds whether the row carries the character into an action or
+  invokes a fixed one
+
+#### Scenario: Configuring a character claims both of its forms
+
+- **WHEN** a configuration binds a chord naming a single character with no
+  modifiers
+- **AND** that character arrives carrying `Shift`
+- **THEN** the configured action is invoked
+- **AND** the compiled row that named the same character reaches nothing
 
 #### Scenario: A chord's action is declared once
 
@@ -79,7 +144,7 @@ presentation is declared with the binding rather than restated elsewhere.
 #### Scenario: No consumer hardcodes a chord
 
 - **WHEN** dispatch, help rendering, or hint rendering names a binding
-- **THEN** it obtains the chord from the table
+- **THEN** it obtains the chord from the effective table
 - **AND** changing that row changes what the consumer does or shows
 
 ### Requirement: Explicit Binding Context Precedence
@@ -94,12 +159,32 @@ Bindings that hold whichever surface is active SHALL be declared as global rows
 in the same table and resolved before the contextual row. Dispatch SHALL NOT
 test a chord ahead of the table.
 
+The order the contexts are consulted in SHALL be declared once and read by
+every consumer of it. Dispatch is not the only consumer: asking what a
+configuration leaves reachable asks the same question of every surface, and a
+consumer that restated the order could answer differently from the one that
+resolves keystrokes.
+
+Resolution SHALL take the first consulted context that binds the chord to an
+action. A context that binds the chord to no action SHALL NOT halt resolution:
+an explicit unbinding empties the chord in the context that named it and
+uncovers whatever the next consulted context binds, which is the same scoping
+every row has. Emptying a global chord therefore reveals a surface row it was
+shadowing rather than silencing the key everywhere.
+
 #### Scenario: A global chord is not shadowed by an open surface
 
-- **WHEN** a chord declared in the global rows is pressed while the picker or an
-  overlay is open
+- **WHEN** a chord bound to an action in the global rows is pressed while the
+  picker or an overlay is open
 - **THEN** it invokes the action its global row names
 - **AND** no contextual row is consulted for that chord
+
+#### Scenario: An emptied global chord uncovers the surface beneath it
+
+- **WHEN** a configuration binds a global chord to no action
+- **AND** the active surface binds that chord
+- **THEN** the surface's action is invoked
+- **AND** the chord is not silenced on surfaces that do not bind it
 
 #### Scenario: An overlay outranks the mode beneath it
 
@@ -112,6 +197,12 @@ test a chord ahead of the table.
 - **WHEN** application state is given
 - **THEN** the active binding context is obtainable from that state alone,
   without dispatching an event
+
+#### Scenario: One declaration of the consultation order
+
+- **WHEN** the contexts consulted for a chord are enumerated
+- **THEN** dispatch and any other consumer read the same declaration
+- **AND** changing that declaration changes both
 
 ### Requirement: Capability-Neutral Default Bindings
 
@@ -126,15 +217,19 @@ action their context binds to `Enter`.
 
 No default binding SHALL vary with the keyboard-enhancement probe outcome. The
 default table SHALL produce identical observable behavior on a terminal that
-disambiguates modified keys and one that does not.
+disambiguates modified keys and one that does not. This requirement governs the
+defaults; an operator configuration MAY declare a binding that varies by
+capability class, as the `tui-binding-configuration` capability governs, and
+doing so SHALL NOT be constrained by this requirement.
 
-`Enter` SHALL retain its existing action in every context that has one, and
-`Ctrl+J` SHALL retain the insert-newline action in the compose `Message` field
-and the interaction write input.
+In the default table, `Enter` SHALL retain its existing action in every context
+that has one, and `Ctrl+J` SHALL retain the insert-newline action in the compose
+`Message` field and the interaction write input.
 
 #### Scenario: Modified Enter behaves identically regardless of terminal
 
 - **WHEN** the operator presses `Shift+Enter` or `Ctrl+Enter` in any context
+- **AND** no operator binding configuration is in force
 - **THEN** the action invoked is the one that context binds to `Enter`, and no
   action is invoked in a context that binds no `Enter` action
 - **AND** the observable result does not depend on whether the terminal
@@ -150,20 +245,43 @@ and the interaction write input.
 
 - **WHEN** the terminal disambiguates modified keys and the operator presses
   `Shift+Enter` in the compose `Message` field
+- **AND** no operator binding configuration is in force
 - **THEN** the message is sent, as a bare `Enter` sends it
 
 #### Scenario: Newline stays on its own chord
 
 - **WHEN** the operator presses `Ctrl+J` in the compose `Message` field or the
   interaction write input
+- **AND** no operator binding configuration is in force
 - **THEN** a newline is inserted
 - **AND** no message is sent and no write is dispatched
+
+#### Scenario: A configured divergence is outside this requirement
+
+- **WHEN** an operator configuration declares a binding that varies by terminal
+  capability class
+- **THEN** the effective table carries that variance
+- **AND** the default table remains capability-neutral
 
 ### Requirement: Generated Operator Binding Documentation
 
 The help overlay, the pane hint strips, and the operator usage guide SHALL be
 generated from the binding table, not transcribed from it. No binding string
-SHALL be authored outside the table.
+SHALL be authored outside the table in any surface of this project that tells an
+operator what a chord currently does.
+
+Operator-authored configuration lies outside that prohibition by construction:
+declaring a binding is what the `tui-binding-configuration` capability exists to
+permit. Hand-written documentation MAY show configuration syntax by example,
+provided the example illustrates the syntax rather than asserting what the
+default bindings are, which the generated section owns.
+
+The help overlay and the pane hint strips SHALL generate from the **effective**
+table, so what they present is what the operator's configuration and terminal
+actually produce. The operator usage guide SHALL generate from the **default**
+table, since it is authored before any operator configuration exists, and it
+SHALL state that the bindings it documents are defaults an operator
+configuration supersedes.
 
 Presentation SHALL be governed by a rule separate from dispatch precedence.
 The binding context resolved for dispatch selects exactly one context; it SHALL
@@ -186,7 +304,7 @@ currently acting on.
 
 The operator usage guide SHALL contain a generated binding section, and the
 repository SHALL fail a lint when that section does not match regeneration from
-the table.
+the default table.
 
 #### Scenario: Help presents the whole surface, not the overlay it was opened from
 
@@ -200,6 +318,19 @@ the table.
 - **WHEN** the help overlay is generated
 - **THEN** bindings appear under the display sections declared in the table
 - **AND** within a section they appear in the table's declaration order
+
+#### Scenario: Help presents the operator's configured chords
+
+- **WHEN** an operator configuration rebinds an action
+- **THEN** the help overlay presents the configured chord for that action
+- **AND** where the surface carries a hint strip that advertises that action,
+  the strip presents the configured chord too
+
+#### Scenario: The usage guide documents defaults and says so
+
+- **WHEN** the operator usage guide's generated binding section is rendered
+- **THEN** it presents the default bindings
+- **AND** it states that an operator configuration supersedes them
 
 #### Scenario: A hint strip is scoped to the surface it annotates
 
