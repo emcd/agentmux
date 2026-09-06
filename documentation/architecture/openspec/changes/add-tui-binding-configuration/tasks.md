@@ -208,9 +208,21 @@
       modifier variants, and this test stays green through that — correctly,
       since neutrality is preserved and historical identity was never what it
       measured.
-- [ ] 6.6 Verify a preset end to end under a real capable terminal with the
+- [x] 6.6 Verify a preset end to end under a real capable terminal with the
       pty-debug procedure, including that the help overlay shows the moved send
-      chord. **Half done, and the remaining half is not reachable from here.**
+      chord.
+
+      **Closed by an operator run under Ghostty on 2026-09-06**, with
+      `presets = ["enter-newline-shift-enter-sends"]` configured and the
+      keyboard-enhancement probe reporting active. The help overlay presented
+      the send line led by `Shift+Enter` rather than `Enter`; `Enter` inserted a
+      newline in the compose `Message` field; and `Shift+Enter` sent, which is
+      how the report itself arrived. That is the whole task: a shipped set, named
+      by an operator, applying its enhanced column in a terminal that reports the
+      protocol.
+
+      What follows is what could be reached without that terminal, kept because
+      it says what `pty-debug` can and cannot establish.
       `pty-debug` reports `Kitty keyboard protocol: unsupported` on every run,
       so it resolves the standard class and both shipped sets are inert in it by
       construction. Verified there: the set loads through the real binary,
@@ -235,23 +247,23 @@
       refusal reads out of the same sweep that produces every other finding,
       which is what stops the two disagreeing about whether quit is reachable.
 
-      **The refusal is wired up, correct, and cannot be triggered by any
-      configuration this grammar can express.** Quit sits on a compiled control
-      chord, which matches every modifier set containing `Ctrl`; two of the six
-      modifier flags a terminal can report — `Hyper` and `Meta` — have no
-      spelling in the chord grammar, so `Ctrl+Hyper+C` is unclaimable and keeps
-      quitting however much else an operator claims. Reachability has to answer
-      for what dispatch does, and dispatch delivers that keystroke to the quit
-      row, so refusing there would refuse a configuration that works.
+      When this landed the refusal was wired up, correct, and impossible to
+      trigger. Quit sat on a compiled control chord matching every modifier set
+      containing `Ctrl`, and two of the six modifier flags a terminal can
+      report — `Hyper` and `Meta` — have no spelling in the chord grammar, so
+      `Ctrl+Hyper+C` was unclaimable and went on quitting however much else an
+      operator claimed. Refusing there would have refused a configuration that
+      works, so the runtime was left correct and the requirement left standing.
 
-      Asserted rather than left to be rediscovered, in
-      `no_configuration_the_grammar_can_express_takes_quit_away` and its loader
-      and pre-flight counterparts. The guard is kept because the requirement
-      asks for it and because a quit row written as one exact keystroke would
-      trip it; whether a requirement that cannot fire should stand as written is
-      a question Group 8 answers by making the rows exact, rather than one to
-      settle by weakening the runtime. Once they are, this note describes a
-      condition that no longer holds and task 8.7 reworks it.
+      Group 8 settled it by making the rows exact rather than by weakening the
+      runtime. `Ctrl+C` now denotes one keystroke, so taking it is refused, and
+      the tests that asserted the guard could not be reached assert that it
+      fires: `rebinding_the_quit_chord_now_loses_quit`,
+      `unbinding_quit_is_refused_per_capability_class`,
+      `taking_the_quit_chord_is_refused_however_it_is_taken`, and
+      `check_configuration_refuses_a_group_that_takes_the_quit_chord`. Each has
+      a control asserting that claiming a modified variant still loads, so a
+      guard written too broadly fails.
 - [x] 7.1a Build the effective table for each capability class where no probe
       outcome is available, so pre-flight has both to inspect.
       `EffectiveBindings::for_each_class`. Group 6 gave this teeth: the shipped
@@ -265,16 +277,25 @@
       The action and context are named in the operator's own vocabulary, since
       the file is what they act on.
 
-      Candidate keystrokes are derived from the compiled rows themselves and
-      expanded over the whole modifier domain a terminal can report, not over
-      the domain the grammar can spell. The consequence is worth stating: a
-      behavior sitting on a chord shape that matches more than it spells is
-      permanently reachable, so findings can only ever name a behavior whose
-      every chord is written as one exact keystroke. In the compiled table that
-      is the `Enter` family alone, which reaches sending in the compose message
-      field and completion acceptance in the `To` field. Everything else is
-      unreportable, not because nothing is checked but because nothing an
-      operator writes can take it away.
+      Candidate keystrokes are derived from the compiled rows themselves rather
+      than from an enumerated keystroke space, so a key added to the table is
+      covered without this being revisited.
+
+      When this landed they were expanded over the whole modifier domain a
+      terminal can report, because rows matched more than they spelled, and the
+      consequence was that a behavior on such a row was permanently reachable:
+      findings could only ever name a behavior whose every chord was written as
+      one exact keystroke, which in the compiled table was the `Enter` family
+      alone. Group 8 made every row exact, so the expansion collapsed to the
+      keystrokes each row denotes and every behavior became displaceable. Task
+      8.7 carried that through and reworked the fixtures written against the
+      old breadth.
+
+      Candidates are gathered across every context dispatch consults, not the
+      surface's alone. An action can be declared both on a surface and in the
+      global rows, and the global chord reaches it while that surface is
+      active — so a keystroke no row of the surface matches can be the thing
+      keeping its behavior reachable.
 - [x] 7.1c Add tests for a finding under one class only, a finding under both,
       and quit unreachable under one class alone being rejected. Add a test that
       displacing an action by rebinding its only chord is reported and still
@@ -374,29 +395,142 @@ to the keystroke a row is written as.
       matching. The quit refusal and the displacement findings become reachable
       conditions again; assert them where they were previously asserted to be
       inexpressible.
-- [ ] 8.8 Verify under a real terminal that a rebound control chord no longer
-      leaves its old behavior on a modified variant, since this is the one
-      change in the arc an operator can notice without configuring anything.
+- [x] 8.8 Verify under a real terminal that a rebound control chord no longer
+      leaves its old behavior on a modified variant.
+
+      **Closed by an operator run under Ghostty on 2026-09-06**, with `Ctrl+R`
+      rebound in the compose `Message` field from refreshing recipients to
+      inserting a newline. `Ctrl+R` inserted newlines; `Ctrl+Shift+R` did
+      nothing — neither the new behavior nor the old one. That is the property,
+      observed rather than inferred.
+
+      It is observed rather than inferred because delivery was established
+      first. In the same session, with `Ctrl+Shift+R` also bound in the help
+      overlay to scrolling, it scrolled the overlay — so the keystroke reaches
+      the TUI through the terminal, the window manager and the input method, and
+      its doing nothing in the compose field is the binding table declining it.
+      Without that half the result would have been indistinguishable from
+      interception, which is how several earlier attempts failed.
+
+      **Most of the obvious chords cannot test this, and a non-result is not
+      evidence.** A chord may be taken before it reaches the application by the
+      terminal, the window manager, or the input method, and all three occurred
+      here: Ghostty binds `ctrl+shift+c` to copy, `ctrl+shift+j` to a
+      screen-file action and `ctrl+enter` to fullscreen; the desktop took
+      `alt+f2`; the input method took `ctrl+shift+u` for Unicode entry. Pressing
+      any of them produces exactly what a passing test looks like, whatever the
+      binding table says. `Ctrl+Shift+J` did not insert a newline and pasted a
+      temp-file path instead, which was Ghostty writing the screen to a file —
+      nothing in agentmux can cause a terminal paste, it only ever receives one.
+
+      Because of that, "the withdrawn variant did nothing" cannot distinguish
+      the table ignoring a keystroke from something upstream swallowing it. The
+      run was designed around that rather than through it.
+
+      **Delivery was proved before absence was believed.** With
+      `[bindings.help-overlay] "shift+esc" = "scroll-help-down"` configured,
+      `Shift+Esc` scrolled the help overlay, establishing that the keystroke
+      reaches the TUI through every intercepting layer. With that row removed,
+      the same keystroke does nothing while `Esc` still closes the overlay. Those
+      two observations together are the verification: the keystroke arrives, and
+      the table declines it.
+
+      **Declared chords survived**, which is the failure this task exists to
+      catch: `Esc` closes help, `Ctrl+J` inserts a newline, `Ctrl+U` clears the
+      `To` field, `F2` opens the picker, `Enter` dispatches in the interaction
+      write pane, and `Alt+Enter` there does nothing.
+
+      **Guidance for anyone repeating this.** Choosing the chord is most of the
+      work. Six were lost to interception before one landed: Ghostty takes
+      `ctrl+shift+c`, `ctrl+shift+j`, `ctrl+shift+a` and `ctrl+enter`, the
+      desktop took `alt+f2`, and the input method took `ctrl+shift+u` for
+      Unicode entry. Enumerate the terminal's bindings with fixed-string
+      matching — `ghostty +list-keybinds | grep -F "keybind = ctrl+shift+"` —
+      rather than a regex, since an unescaped `+` is a quantifier and silently
+      under-matches, which is how `ctrl+shift+a` was recommended here despite
+      being bound to select-all.
+
+      Then bind the variant under test to something visible in one context to
+      prove it arrives, and leave it unbound in the context under test. Both
+      halves then happen in one session, because which context answers is
+      resolved inside the application while interception happens outside it.
 
 ## 9. Documentation and reconciliation
 
-- [ ] 9.1 Document the binding configuration in `documentation/usage/tui.md`:
+- [x] 9.1 Document the binding configuration in `documentation/usage/tui.md`:
       the file and group, the chord grammar, the capability columns, the
       presets, the symbolic modifier, unbinding, and a worked example.
-- [ ] 9.2 Update `src/tui/actions/README.md`: a configuration is the present
+
+      Documented in `documentation/usage/tui.md` under "Configuring
+      bindings". The worked example is the text the loader fixture pins
+      character for character, so the published shape cannot drift from what
+      the parser accepts without a test failing.
+- [x] 9.2 Update `src/tui/actions/README.md`: a configuration is the present
       successor rather than a future one, and the statement that rows carry no
       capability field now holds because the defaults do not vary rather than
       because variance is unexpressible.
-- [ ] 9.3 Update `src/configuration/README.md` for the binding group, including
+
+      The section describing a table that reproduced the handlers' modifier
+      conditions is rewritten, heading included: it said the opposite of what
+      the table now does.
+- [x] 9.3 Update `src/configuration/README.md` for the binding group, including
       why it merges over compiled defaults while files still replace whole.
-- [ ] 9.4 Reconcile `tui-binding-configuration` against what shipped, checking
+
+      Including why binding rows merge over the compiled defaults while a
+      `ui.toml` still replaces the copy it shadows whole, which looks
+      inconsistent and is not.
+- [x] 9.4 Reconcile `tui-binding-configuration` against what shipped, checking
       each requirement rather than the ones this list happened to name.
-- [ ] 9.5 Reconcile `tui-action-bindings` against what shipped, including that
+
+      One omission found and closed: reachability is judged the way dispatch
+      resolves, through every context consulted for a surface, because the
+      global rows both take reachability away and supply it.
+- [x] 9.5 Reconcile `tui-action-bindings` against what shipped, including that
       every surviving statement about capability neutrality is scoped to the
       defaults wherever it appears.
-- [ ] 9.6 Reconcile `ui-surface-configuration` against what shipped.
-- [ ] 9.7 Sweep this change's own artifacts for claims the implementation
+
+      One omission found and closed in context precedence: the consultation
+      order is read by more than dispatch, and an explicit unbinding uncovers
+      the surface row rather than halting resolution. Capability neutrality is
+      scoped to the defaults wherever it appears.
+- [x] 9.6 Reconcile `ui-surface-configuration` against what shipped.
+
+      Checked against what shipped and found accurate as written; no change
+      was needed. The whole-file replacement rule, the `bindings` key, the
+      read-only guarantee and the pre-flight layer reporting all hold.
+- [x] 9.7 Sweep this change's own artifacts for claims the implementation
       falsified, within each file as well as across them.
-- [ ] 9.8 Record the macOS delivery question in the terminal capability matrix,
+
+      Group 7's two notes asserted the refusal could not fire and that a
+      behavior on a broad row was permanently reachable. Both were true when
+      written, both are now false, and both are rewritten to say what held then
+      and what replaced it. The proposal's and design's problem statements are
+      left as written: they describe the state that motivated the change, which
+      is what a proposal is for.
+- [x] 9.8 Record the macOS delivery question in the terminal capability matrix,
       and flip the default resolution of the symbolic modifier only if evidence
       supports it.
+
+      Recorded in `documentation/usage/tui.md` under "The macOS delivery
+      question", beside the keyboard-capability report an operator reads to
+      place their own terminal.
+
+      The default is **not** flipped, because no evidence was gathered to
+      support flipping it. Whether a macOS terminal delivers `Cmd`-modified keys
+      to the process, rather than consuming them, is unmeasured; the capability
+      survey that would answer it is `todos/tui/62`. `primary` therefore
+      resolves to `Ctrl` on macOS as it does everywhere, with
+      `primary-modifier-on-macos = "command"` available opt-in.
+
+      That is a decision on the absence of evidence rather than a deferral of
+      the question. `Ctrl` is the resolution reachable whatever a given macOS
+      terminal does with `Cmd`, so it cannot strand a chord; `Cmd` is not, so
+      defaulting to it would move every symbolic chord onto a modifier we have
+      not confirmed can be delivered. The asymmetry is what makes one of them
+      the safe default in the absence of a survey, rather than the two being a
+      coin flip to be settled later.
+
+      The same section records a caution that applies on every platform, which
+      the arc discovered the hard way in task 8.8: a terminal may bind a chord
+      for itself and never forward it, and no amount of configuration reaches a
+      keystroke that never arrives.

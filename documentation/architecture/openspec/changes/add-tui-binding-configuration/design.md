@@ -360,14 +360,24 @@ unacceptable.
 ### Configured rows resolve ahead of compiled rows within their context
 
 Declaration order is already the tiebreak within a context. Configured rows
-precede compiled ones, so a configured `Shift+Enter` is not shadowed by the
-compiled `AnyModifiers(Enter)` fallback its context carries.
+precede compiled ones, so a configured `Shift+Enter` in the compose `Message`
+field takes that keystroke from the compiled row that sends on it, rather than
+losing to it.
 
-`binding_lookup_order` — global rows before the contextual surface — is
-unchanged. A configured contextual row therefore does not shadow a compiled
-global one: changing `Ctrl+C` means configuring the global context, not the
-compose one. That keeps a globally reachable chord globally reachable, which is
-the property the global rows exist to hold.
+Tier precedence is what settles that, not chord breadth. Both rows name one
+keystroke and the configured one is consulted first. Earlier this section
+argued the point against a compiled fallback matching `Enter` under any
+modifier, which a configured row had to outrank to be reachable at all; that
+row is gone, and with every row matching exactly what it is written as, the
+question is only which tier answers first.
+
+The contexts consulted for a chord — global rows before the contextual
+surface — are unchanged, and are declared once so that dispatch and the
+reachability check cannot disagree about them. A configured contextual row
+therefore does not shadow a compiled global one: changing `Ctrl+C` means
+configuring the global context, not the compose one. That keeps a globally
+reachable chord globally reachable, which is the property the global rows exist
+to hold.
 
 ### Capability is a per-row value, not a pair of sub-tables
 
