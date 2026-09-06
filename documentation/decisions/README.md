@@ -132,7 +132,7 @@ deviate from freely:
 - Status: accepted
 - Supersedes: —
 - Superseded by: —
-- Specs: delivery-quiescence / Async Queue Lifecycle and Ordering
+- Specs: delivery-quiescence / Mailbox Ordering and Cursor Lifecycle
 
 ## Decision
 

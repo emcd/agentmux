@@ -500,9 +500,20 @@ letting a tranche boundary fall somewhere convenient.
       `InflightRegister` design, which makes the undrained read
       unrepresentable rather than merely tested, is independent of any seam
       and still stands on its own merits.
-- [ ] 5.13 Confirm `Mailbox Payload Custody` has reached the live
+- [x] 5.13 Confirm `Mailbox Payload Custody` has reached the live
       `delivery-quiescence` spec before this change is archived, and not
-      merely that a sync was offered. The requirement is delta-only until
+      merely that a sync was offered.
+      Verified after the sync by reading the live spec, together with the
+      other nine requirements this change ADDs — all ten present, none
+      missing. Decision record 0004's `Specs:` citation now resolves.
+      The sync also broke five citations of the three RENAMED requirements
+      and all five are repaired: the former queue-lifecycle name was still
+      carried by this change's own `design.md`, by the live
+      `runtime-bootstrap` spec, and three times by `documentation/decisions`
+      — twice in record 0001, once in the README's own example. The
+      citation gate caught three of the five; the other two sit on
+      unbackticked `Specs:` lines it does not resolve, which is worth
+      knowing before trusting it alone. The requirement is delta-only until
       then, and decision record 0004 in `documentation/decisions/` names it
       as where its standing rule lives — a citation that resolves against
       nothing until the sync happens.

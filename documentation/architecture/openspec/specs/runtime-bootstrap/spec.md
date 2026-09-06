@@ -1082,7 +1082,7 @@ become ready, and no configuration SHALL introduce one.** Such an entry waits
 without a duration bound, subject to one deliberate exception — a fail-stopped
 worker resolves every member it holds rather than stranding it behind a
 generation that can never be replaced; see the `delivery-quiescence` capability's
-`Async Queue Lifecycle and Ordering` requirement. `unreachable-dwell-ms` is not
+`Mailbox Ordering and Cursor Lifecycle` requirement. `unreachable-dwell-ms` is not
 an exception to this: it bounds how long a target may be continuously
 *unreachable*, which qualifies a repeated observation rather than substituting
 for an absent one.
