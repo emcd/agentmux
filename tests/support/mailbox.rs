@@ -82,6 +82,25 @@ impl StubMailbox {
         Self::with_entries(Vec::new())
     }
 
+    /// Places an entry behind whatever the mailbox already holds, after
+    /// construction.
+    ///
+    /// Seeding through [`with_entries`](Self::with_entries) puts every entry
+    /// there before any executor runs, which cannot express an arrival while one
+    /// is already idle — the case a doorbell exists to shorten and a bounded poll
+    /// exists to survive without.
+    ///
+    /// Deliberately silent: this is the relay-side write, and the ring is a
+    /// separate signal the caller makes or withholds for itself. A push that rang
+    /// would leave no way to model the ring being lost.
+    pub fn place(&self, entry: MailboxEntry) {
+        self.state
+            .lock()
+            .expect("stub mailbox")
+            .queued
+            .push_back(entry);
+    }
+
     /// What the executor acknowledged, in order.
     #[must_use]
     pub fn acked(&self) -> Vec<AckedMember> {
@@ -104,6 +123,22 @@ impl StubMailbox {
     #[must_use]
     pub fn is_drained(&self) -> bool {
         self.state.lock().expect("stub mailbox").queued.is_empty()
+    }
+
+    /// The range a declaration currently binds, if one is outstanding.
+    ///
+    /// "Undeclared" is otherwise not observable from outside: an entry that was
+    /// never declared and one that was declared and acknowledged both leave no
+    /// trace in `acked`, and only this tells them apart. A test asserting that a
+    /// transport left entries alone needs to say they were never bound, not
+    /// merely that they were never acknowledged.
+    #[must_use]
+    pub fn outstanding_range(&self) -> Option<EntryRange> {
+        self.state
+            .lock()
+            .expect("stub mailbox")
+            .outstanding
+            .map(|(_, range)| range)
     }
 
     #[must_use]

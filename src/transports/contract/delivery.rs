@@ -46,8 +46,8 @@ pub struct SingleDeliveryOutcome {
 /// transport that reports its own partition declares inside its write. A **raw**
 /// member is not: the relay declares its singleton unit before calling `raww`,
 /// so a raw write stopped in a transport's channel is already bound and the
-/// relay reconciles this result to its unit's record — no evidence having been
-/// recorded, `submission_unknown`. That is the evidence order working, not a gap
+/// relay reconciles this result against the ledger — no acknowledgment having
+/// arrived, `submission_unknown`. That is the resolution order working, not a gap
 /// to route around here.
 ///
 /// The **cause** is reported separately, in the reason code, because a transport

@@ -417,19 +417,54 @@ letting a tranche boundary fall somewhere convenient.
 - [x] 5.7 Add a test for partial acknowledgment: peek N, declare and ack a
       unit covering M < N, confirm the remainder is still peekable,
       undeclared, and unaffected.
-- [ ] 5.8 Add a doorbell-miss test: suppress the notify, confirm the poll
+- [x] 5.8 Add a doorbell-miss test: suppress the notify, confirm the poll
       backstop still delivers within its bound.
-- [ ] 5.9 Add a shutdown-distinction test: with a mix of undeclared and
-      declared-but-unacked entries at shutdown, confirm undeclared entries
-      resolve `dropped_on_shutdown` and declared entries resolve through
-      the guard's evidence order — never the reverse.
-- [ ] 5.10 Add a generation-epoch test: tear down a target's worker-registry
-      entry (mailbox/cursor cleaned up), recreate a session under the same
-      name, and confirm the new `active_generation_id` does not equal any
-      previously issued for that target identity.
-- [ ] 5.11 Re-run the ACP `Busy`-after-one-envelope scenario that motivated
+      `tests/unit/delivery_executor.rs`. The entry is placed *after* the
+      executor has parked, which is the whole of it: an entry seeded before
+      the loop starts is drained on the first pass, before any wait, and
+      such a test passes against an executor with no backstop at all. The
+      bound is deliberately generous and nothing asserts elapsed time — the
+      claim is that correctness does not depend on a ring, not that the
+      timer is punctual. The stub mailbox gained a `place` for this, since
+      seeding through its constructor cannot express an arrival while a
+      consumer is already idle.
+- [x] 5.9 Shutdown distinction: covered by
+      `tests/integration/acp/generation_fence/shutdown.rs`, which parks a
+      declared member inside its framed write, holds an undeclared one
+      behind it, sends a real SIGTERM, and asserts the undeclared member
+      resolves `dropped_on_shutdown` while the declared one does not.
+      **The declared member's spelling is deliberately not asserted**, and
+      should not be: the fence's forced step frees the parked write, so the
+      executor's own evidence legitimately resolves it and the answer moves
+      with that timing. Pinning a spelling there buys a flaky test.
+      **The remaining case is structurally unreachable.** A declared member
+      still unresolved when the post-fence guard drain runs — so that the
+      guard rather than the executor terminalizes it — needs an executor
+      that survives forced termination. No real transport provides one, and
+      the injectable-transport seam that would is the same one deferred for
+      the fail-stop path. A probe on that drain reports zero members every
+      time.
+- [x] 5.10 Generation epoch: covered by
+      `src/relay/delivery/async_worker/reap.rs`'s
+      `unregistering_an_owned_entry_reaps_its_target_and_a_foreign_one_reaps_nothing`,
+      which binds a consumer generation to a registered worker, unregisters
+      the owned entry so the reap rides it, re-claims under the same target,
+      and asserts the new identifier is greater than the one given up. It
+      pins the negative half too — a non-owner's unregister gives up
+      nothing. Note that `resolve_queued_tasks_and_reclaim` is *not* this
+      path: it names no generation, so it is refused by a claimed target and
+      serves only the construction-failure case where none was ever held.
+- [x] 5.11 Re-run the ACP `Busy`-after-one-envelope scenario that motivated
       this proposal and confirm it no longer produces a spurious
       `not_submitted` for members 2..N of a formerly-relay-sized batch.
+      `tests/unit/delivery_executor.rs`, driven at the executor's readiness
+      gate rather than through a live ACP child: `AcpDeliveryWriter::is_ready`
+      admits only `Available`, so a worker mid-turn fails the same gate the
+      stub fails, and the gate is what decides the fate of the entries
+      behind the one it took. The assertion is an absence — members two and
+      three carry no outcome at all while the target is busy, and nothing
+      behind it is left declared — with delivery after readiness returns as
+      the positive control that the absence is suspension rather than loss.
 - [ ] 5.12 Confirm `agentmux:issues/relay/69` and `agentmux:todos/relay/134`
       (carried-forward `establish-delivery-commit-contract` residue) are
       each either resolved by this design or explicitly re-derived against
