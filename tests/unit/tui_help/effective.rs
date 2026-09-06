@@ -270,14 +270,12 @@ fn a_chord_no_tier_contends_is_presented_once_under_the_row_that_binds_it() {
 
 #[test]
 fn a_compiled_row_a_configuration_took_over_is_not_advertised_under_its_old_behavior() {
-    // The `Chord::AnyModifiers` case, which renders as the bare key and matches
-    // that key under every modifier. Configuring the bare key takes the
-    // keystroke the row is *written* as, so the row may not keep printing it.
-    //
-    // What outlasts the row is the modified forms: `Shift+Up` still reaches the
-    // compiled behavior. Those go unadvertised rather than being spelled out --
-    // "any modifier" has no finite spelling -- and that silence is asserted
-    // here so it stays a known consequence rather than an assumption.
+    // Configuring the bare key takes the keystroke the compiled row is written
+    // as, which is now the whole of what that row matched. Nothing outlasts it:
+    // `Shift+Up` reached the compiled behavior before this change and reaches
+    // nothing now, so dispatch and the overlay agree that the behavior is gone
+    // from this context rather than the overlay dropping a row dispatch still
+    // answers.
     let write = BindingContext::InteractionWrite;
     let navigates = Action::NavigateInteractionUp.describe();
     assert_eq!(
@@ -292,15 +290,16 @@ fn a_compiled_row_a_configuration_took_over_is_not_advertised_under_its_old_beha
         false,
     );
 
-    // Dispatch: the configuration takes the bare key, the compiled row keeps
-    // the modified ones.
+    // Dispatch: the configuration takes the bare key, and the compiled row is
+    // left with nothing, because the bare key is all it ever denoted.
     assert_eq!(
         bindings.action_for(write, KeyCode::Up, KeyModifiers::NONE),
         Some(Action::MoveRawwCursorLeft)
     );
     assert_eq!(
         bindings.action_for(write, KeyCode::Up, KeyModifiers::SHIFT),
-        Some(Action::NavigateInteractionUp)
+        None,
+        "a modified form of a rebound chord must not keep the displaced behavior alive"
     );
 
     // Presentation: "Up" is presented under the configured behavior and under
@@ -421,4 +420,131 @@ fn the_picker_strip_advertises_only_chords_that_work_on_the_focused_column() {
              nothing above was resolved"
         );
     }
+}
+
+/// Where presentation drops a compiled row a configuration took over, no
+/// keystroke reaches that row's action through it.
+///
+/// The contradiction that motivated exact matching, asserted rather than
+/// assumed to have gone. Before, rebinding a broad row dropped it from the
+/// overlay while dispatch kept answering under every modifier the operator had
+/// not claimed — so the overlay said a behavior was gone and dispatch still
+/// delivered it, and no configuration could make the two agree.
+///
+/// Swept over each shape the table carries and over every modifier set a
+/// terminal can report, so agreement is a property rather than an example.
+#[test]
+fn where_presentation_drops_a_rebound_row_dispatch_reaches_it_nowhere() {
+    let write = BindingContext::InteractionWrite;
+    let choice = BindingContext::InteractionChoice;
+    // One case per compiled chord shape: a bare key, a control chord, and a
+    // bare character carrying a fixed action.
+    //
+    // The character case names both `c` and `C`, because the table declares the
+    // behavior on two rows and claiming one leaves the other presenting it --
+    // correctly, since it still reaches. Displacing a behavior means claiming
+    // every row that carries it, and that is a property of this fixture rather
+    // than of the shape under test.
+    let cases: [(BindingContext, &[&str], KeyCode, Action); 3] = [
+        (write, &["up"], KeyCode::Up, Action::NavigateInteractionUp),
+        (
+            write,
+            &["ctrl+j"],
+            KeyCode::Char('j'),
+            Action::InsertRawwNewline,
+        ),
+        (
+            choice,
+            &["c", "C"],
+            KeyCode::Char('c'),
+            Action::ResolveChoiceCancelled,
+        ),
+    ];
+
+    for (context, chords, code, displaced) in cases {
+        assert!(
+            (0..=KeyModifiers::all().bits())
+                .filter_map(KeyModifiers::from_bits)
+                .any(|modifiers| default_binding(context, code, modifiers) == Some(displaced)),
+            "the premise fails -- {chords:?} reaches no compiled row to displace"
+        );
+
+        // Rebinding them to something else this context can perform.
+        let configuration = BindingConfiguration {
+            rows: chords
+                .iter()
+                .map(|chord| row(context, chord, Action::ScrollInteractionSnapshotPageUp))
+                .collect(),
+            ..BindingConfiguration::default()
+        };
+        let bindings =
+            EffectiveBindings::build(Some(&configuration), CapabilityClass::Standard, false);
+        let chord = chords.join(", ");
+
+        // Presentation drops the displaced behavior from this context.
+        let described = displaced.describe();
+        assert!(
+            !help_bindings(&bindings)
+                .iter()
+                .flat_map(|section| section.entries.iter())
+                .any(|entry| entry.description == described && entry.covers(context)),
+            "{chord}: the overlay still advertises a chord for {described:?}"
+        );
+
+        // Dispatch agrees: nothing reaches it, under any modifier set at all.
+        for bits in 0..=KeyModifiers::all().bits() {
+            let Some(modifiers) = KeyModifiers::from_bits(bits) else {
+                continue;
+            };
+            assert_ne!(
+                bindings.action_for(context, code, modifiers),
+                Some(displaced),
+                "{chord}: {code:?} under {modifiers:?} still reaches {described:?} \
+                 while the overlay says it is gone"
+            );
+        }
+    }
+}
+
+/// A row a higher tier only partly claims keeps being presented, because it
+/// keeps answering.
+///
+/// The loader refuses a character and its shifted form inside one group, but a
+/// preset and an operator's own rows are separate groups and neither sees the
+/// other. So partial overlap reaches the table across tiers, and presentation
+/// has to hold the same rule dispatch does: a row is dropped only when nothing
+/// it denotes is left to it.
+///
+/// Dropping on partial overlap is what made the overlay hide a chord dispatch
+/// still answered — the exact disagreement exactness exists to remove.
+#[test]
+fn a_partly_claimed_row_is_still_presented_because_it_still_answers() {
+    let choice = BindingContext::InteractionChoice;
+    let configuration = BindingConfiguration {
+        // The preset names the bare character, denoting it bare and shifted.
+        preset_rows: vec![row(choice, "c", Action::MoveNextChoiceOption)],
+        // The operator names only the shifted form, taking one of the two.
+        rows: vec![row(choice, "shift+c", Action::MovePreviousChoiceOption)],
+        ..BindingConfiguration::default()
+    };
+    let bindings = EffectiveBindings::build(Some(&configuration), CapabilityClass::Standard, false);
+
+    // Dispatch: the operator's row takes the shifted form, the preset row keeps
+    // the bare one.
+    assert_eq!(
+        bindings.action_for(choice, KeyCode::Char('c'), KeyModifiers::SHIFT),
+        Some(Action::MovePreviousChoiceOption)
+    );
+    assert_eq!(
+        bindings.action_for(choice, KeyCode::Char('c'), KeyModifiers::NONE),
+        Some(Action::MoveNextChoiceOption),
+        "the preset row still answers for the keystroke the operator did not take"
+    );
+
+    // Presentation agrees: the chord dispatch still answers is advertised.
+    let presented = presented_under(&help_bindings(&bindings), "c");
+    assert!(
+        presented.contains(&Action::MoveNextChoiceOption.describe()),
+        "the overlay hides a chord dispatch still answers: {presented:?}"
+    );
 }

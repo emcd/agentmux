@@ -162,14 +162,22 @@ fn the_global_chords_keep_their_action_with_any_surface_open() {
     }
 }
 
+/// Every context binding `Enter` binds exactly the three chords capability
+/// neutrality governs, and no fourth.
+///
+/// The interaction and picker contexts used to carry a fallback row after the
+/// three, so that `Alt+Enter` kept reaching the action a handler arm testing
+/// only `KeyCode::Enter` accepted. That row is gone: it declared no chord, and
+/// the keystrokes it caught were ones nobody wrote. Compose never carried it,
+/// so this is now uniform across every context rather than a distinction
+/// between them.
 #[test]
-fn enter_carrying_other_modifiers_keeps_reaching_its_handler_action() {
-    // The interaction and picker arms match `KeyCode::Enter` whatever the
-    // modifiers, so Alt+Enter acts there today. The three explicit rows own the
-    // modifier sets capability neutrality governs; a fallback row after them
-    // keeps the rest reaching the same action rather than silently going inert.
-    let alt = KeyModifiers::ALT;
-    let combined = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
+fn enter_binds_the_three_declared_chords_and_no_other_modifier_set() {
+    let declared = [
+        KeyModifiers::NONE,
+        KeyModifiers::SHIFT,
+        KeyModifiers::CONTROL,
+    ];
     for (context, action) in [
         (BindingContext::InteractionWrite, Action::DispatchRaww),
         (
@@ -178,50 +186,62 @@ fn enter_carrying_other_modifiers_keeps_reaching_its_handler_action() {
         ),
         (BindingContext::PickerBundles, Action::CommitPickerBundle),
         (BindingContext::PickerSessions, Action::CommitPickerSession),
+        (BindingContext::ComposeMessage, Action::SendMessage),
+        (BindingContext::ComposeTo, Action::AcceptToCompletion),
     ] {
-        assert_eq!(
-            default_binding(context, KeyCode::Enter, alt),
-            Some(action),
-            "{context:?} drops Alt+Enter its handler accepts"
-        );
-        assert_eq!(
-            default_binding(context, KeyCode::Enter, combined),
-            Some(action),
-            "{context:?} drops Ctrl+Shift+Enter its handler accepts"
-        );
+        for modifiers in declared {
+            assert_eq!(
+                default_binding(context, KeyCode::Enter, modifiers),
+                Some(action),
+                "{context:?} lost a declared Enter chord"
+            );
+        }
+        for modifiers in undeclared_enter_modifier_sets(&declared) {
+            assert_eq!(
+                default_binding(context, KeyCode::Enter, modifiers),
+                None,
+                "{context:?} still answers Enter under {modifiers:?}, which no row declares"
+            );
+        }
     }
-    // Compose guarded on an empty modifier set, so it keeps rejecting the rest.
-    assert_eq!(
-        default_binding(BindingContext::ComposeMessage, KeyCode::Enter, alt),
-        None
-    );
-    assert_eq!(
-        default_binding(BindingContext::ComposeTo, KeyCode::Enter, alt),
-        None
-    );
 }
 
+/// Every modifier set a terminal can report other than the three `Enter` rows
+/// declare. Swept rather than sampled, so a shape that answered under some
+/// unlisted combination could not hide in the gap between examples.
+fn undeclared_enter_modifier_sets(declared: &[KeyModifiers]) -> Vec<KeyModifiers> {
+    (0..=KeyModifiers::all().bits())
+        .filter_map(KeyModifiers::from_bits)
+        .filter(|modifiers| !declared.contains(modifiers))
+        .collect()
+}
+
+/// A control chord is one keystroke, so a further modifier is a different one
+/// and reaches nothing.
+///
+/// This is the operator-visible half of exact matching: `Ctrl+Shift+C` no
+/// longer quits and `Ctrl+Shift+J` no longer inserts a newline. Both were
+/// reachable before, through rows that matched any modifier set containing
+/// `Ctrl` in order to reproduce a handler condition, and neither was ever
+/// written down as a binding.
 #[test]
-fn a_control_chord_matches_however_the_modifiers_are_combined() {
-    // The control blocks test `modifiers.contains(CONTROL)`, so Ctrl+Shift+J
-    // reaches the same behavior as Ctrl+J today.
+fn a_control_chord_does_not_match_a_further_modifier() {
     let combined = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
-    assert_eq!(
-        default_binding(BindingContext::ComposeMessage, KeyCode::Char('j'), combined),
-        Some(Action::InsertMessageNewline)
-    );
-    assert_eq!(
-        default_binding(
-            BindingContext::InteractionWrite,
-            KeyCode::Char('r'),
-            combined
-        ),
-        Some(Action::RefreshRecipients)
-    );
-    assert_eq!(
-        default_binding(BindingContext::Global, KeyCode::Char('c'), combined),
-        Some(Action::Quit)
-    );
+    for (context, code) in [
+        (BindingContext::ComposeMessage, KeyCode::Char('j')),
+        (BindingContext::InteractionWrite, KeyCode::Char('r')),
+        (BindingContext::Global, KeyCode::Char('c')),
+    ] {
+        assert!(
+            default_binding(context, code, KeyModifiers::CONTROL).is_some(),
+            "the premise fails -- the plain control chord does not reach a behavior"
+        );
+        assert_eq!(
+            default_binding(context, code, combined),
+            None,
+            "adding Shift to a control chord must reach nothing"
+        );
+    }
     // Without Ctrl the same character is ordinary typing.
     assert_eq!(
         default_binding(

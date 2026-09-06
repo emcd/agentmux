@@ -178,23 +178,22 @@ const fn typing(sink: TextSink, section: DisplaySection) -> ContextRow {
     }
 }
 
+/// One character carrying `Ctrl`, and nothing else. `Ctrl+Shift+J` is a
+/// different keystroke and reaches this row no longer; a context wanting it
+/// declares it.
 const fn control(character: char) -> Chord {
-    Chord::Control(character)
+    Chord::Key(KeyCode::Char(character), KeyModifiers::CONTROL)
 }
 
-const fn any(code: KeyCode) -> Chord {
-    Chord::AnyModifiers(code)
+/// One key with no modifier at all. Named for what it denotes rather than for
+/// the handler condition it once reproduced.
+const fn bare(code: KeyCode) -> Chord {
+    Chord::Key(code, KeyModifiers::NONE)
 }
 
 const ENTER: Chord = Chord::Key(KeyCode::Enter, KeyModifiers::NONE);
 const SHIFT_ENTER: Chord = Chord::Key(KeyCode::Enter, KeyModifiers::SHIFT);
 const CONTROL_ENTER: Chord = Chord::Key(KeyCode::Enter, KeyModifiers::CONTROL);
-/// Any other modifier set on `Enter`, for the contexts whose handler arm tests
-/// only `KeyCode::Enter`. Declared after the three explicit rows, which own the
-/// modifier sets the capability-neutrality contract governs; this one exists so
-/// `Alt+Enter` keeps reaching the action it reaches today. Compose does not
-/// carry it, because its arm guards on `modifiers.is_empty()`.
-const OTHER_ENTER: Chord = Chord::AnyModifiers(KeyCode::Enter);
 
 use Action as Act;
 use DisplaySection as Section;
@@ -243,14 +242,18 @@ pub(crate) static BINDINGS: &[ContextBindings] = &[
 /// in each context or left as an early return outside the table.
 static GLOBAL: &[ContextRow] = &[
     row(control('c'), Act::Quit, Section::Modes),
-    row(any(KeyCode::F(1)), Act::ToggleHelpOverlay, Section::Modes),
+    row(bare(KeyCode::F(1)), Act::ToggleHelpOverlay, Section::Modes),
 ];
 
 static COMPOSE_TO: &[ContextRow] = &[
-    row(any(KeyCode::F(2)), Act::OpenPicker, Section::Modes),
-    row(any(KeyCode::F(3)), Act::ToggleEventsOverlay, Section::Modes),
-    row(any(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
-    row(any(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
+    row(bare(KeyCode::F(2)), Act::OpenPicker, Section::Modes),
+    row(
+        bare(KeyCode::F(3)),
+        Act::ToggleEventsOverlay,
+        Section::Modes,
+    ),
+    row(bare(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
+    row(bare(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
     row(control('r'), Act::RefreshRecipients, Section::Modes),
     row(
         control('a'),
@@ -269,12 +272,12 @@ static COMPOSE_TO: &[ContextRow] = &[
         Section::Communication,
     ),
     row(
-        any(KeyCode::Tab),
+        bare(KeyCode::Tab),
         Act::CycleNextFocus,
         Section::Communication,
     ),
     row(
-        any(KeyCode::BackTab),
+        bare(KeyCode::BackTab),
         Act::CyclePreviousFocus,
         Section::Communication,
     ),
@@ -286,47 +289,47 @@ static COMPOSE_TO: &[ContextRow] = &[
         Section::Communication,
     ),
     row(
-        any(KeyCode::Up),
+        bare(KeyCode::Up),
         Act::MovePreviousToCompletion,
         Section::Communication,
     ),
     row(
-        any(KeyCode::Down),
+        bare(KeyCode::Down),
         Act::MoveNextToCompletion,
         Section::Communication,
     ),
     row(
-        any(KeyCode::Left),
+        bare(KeyCode::Left),
         Act::MoveToFieldCursorLeft,
         Section::Communication,
     ),
     row(
-        any(KeyCode::Right),
+        bare(KeyCode::Right),
         Act::MoveToFieldCursorRight,
         Section::Communication,
     ),
     row(
-        any(KeyCode::Home),
+        bare(KeyCode::Home),
         Act::MoveToFieldCursorHome,
         Section::Communication,
     ),
     row(
-        any(KeyCode::End),
+        bare(KeyCode::End),
         Act::MoveToFieldCursorEnd,
         Section::Communication,
     ),
     row(
-        any(KeyCode::Backspace),
+        bare(KeyCode::Backspace),
         Act::DeleteComposeCharacter,
         Section::Communication,
     ),
     row(
-        any(KeyCode::PageUp),
+        bare(KeyCode::PageUp),
         Act::ScrollChatHistoryPageUp,
         Section::Communication,
     ),
     row(
-        any(KeyCode::PageDown),
+        bare(KeyCode::PageDown),
         Act::ScrollChatHistoryPageDown,
         Section::Communication,
     ),
@@ -334,10 +337,14 @@ static COMPOSE_TO: &[ContextRow] = &[
 ];
 
 static COMPOSE_MESSAGE: &[ContextRow] = &[
-    row(any(KeyCode::F(2)), Act::OpenPicker, Section::Modes),
-    row(any(KeyCode::F(3)), Act::ToggleEventsOverlay, Section::Modes),
-    row(any(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
-    row(any(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
+    row(bare(KeyCode::F(2)), Act::OpenPicker, Section::Modes),
+    row(
+        bare(KeyCode::F(3)),
+        Act::ToggleEventsOverlay,
+        Section::Modes,
+    ),
+    row(bare(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
+    row(bare(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
     row(control('r'), Act::RefreshRecipients, Section::Modes),
     row(
         control('a'),
@@ -355,12 +362,12 @@ static COMPOSE_MESSAGE: &[ContextRow] = &[
         Section::Communication,
     ),
     row(
-        any(KeyCode::Tab),
+        bare(KeyCode::Tab),
         Act::CycleNextFocus,
         Section::Communication,
     ),
     row(
-        any(KeyCode::BackTab),
+        bare(KeyCode::BackTab),
         Act::CyclePreviousFocus,
         Section::Communication,
     ),
@@ -368,52 +375,52 @@ static COMPOSE_MESSAGE: &[ContextRow] = &[
     row(SHIFT_ENTER, Act::SendMessage, Section::Communication),
     row(CONTROL_ENTER, Act::SendMessage, Section::Communication),
     row(
-        any(KeyCode::Esc),
+        bare(KeyCode::Esc),
         Act::SnapChatHistoryToLatest,
         Section::Communication,
     ),
     row(
-        any(KeyCode::Up),
+        bare(KeyCode::Up),
         Act::MoveMessageCursorUp,
         Section::Communication,
     ),
     row(
-        any(KeyCode::Down),
+        bare(KeyCode::Down),
         Act::MoveMessageCursorDown,
         Section::Communication,
     ),
     row(
-        any(KeyCode::Left),
+        bare(KeyCode::Left),
         Act::MoveMessageCursorLeft,
         Section::Communication,
     ),
     row(
-        any(KeyCode::Right),
+        bare(KeyCode::Right),
         Act::MoveMessageCursorRight,
         Section::Communication,
     ),
     row(
-        any(KeyCode::Home),
+        bare(KeyCode::Home),
         Act::MoveMessageCursorHome,
         Section::Communication,
     ),
     row(
-        any(KeyCode::End),
+        bare(KeyCode::End),
         Act::MoveMessageCursorEnd,
         Section::Communication,
     ),
     row(
-        any(KeyCode::Backspace),
+        bare(KeyCode::Backspace),
         Act::DeleteComposeCharacter,
         Section::Communication,
     ),
     row(
-        any(KeyCode::PageUp),
+        bare(KeyCode::PageUp),
         Act::ScrollChatHistoryPageUp,
         Section::Communication,
     ),
     row(
-        any(KeyCode::PageDown),
+        bare(KeyCode::PageDown),
         Act::ScrollChatHistoryPageDown,
         Section::Communication,
     ),
@@ -421,58 +428,61 @@ static COMPOSE_MESSAGE: &[ContextRow] = &[
 ];
 
 static INTERACTION_WRITE: &[ContextRow] = &[
-    row(any(KeyCode::F(2)), Act::OpenPicker, Section::Modes),
-    row(any(KeyCode::F(3)), Act::ToggleEventsOverlay, Section::Modes),
-    row(any(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
-    row(any(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
+    row(bare(KeyCode::F(2)), Act::OpenPicker, Section::Modes),
+    row(
+        bare(KeyCode::F(3)),
+        Act::ToggleEventsOverlay,
+        Section::Modes,
+    ),
+    row(bare(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
+    row(bare(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
     row(control('r'), Act::RefreshRecipients, Section::Modes),
     row(control('j'), Act::InsertRawwNewline, Section::Interaction),
     row(ENTER, Act::DispatchRaww, Section::Interaction),
     row(SHIFT_ENTER, Act::DispatchRaww, Section::Interaction),
     row(CONTROL_ENTER, Act::DispatchRaww, Section::Interaction),
-    row(OTHER_ENTER, Act::DispatchRaww, Section::Interaction),
     row(
-        any(KeyCode::Left),
+        bare(KeyCode::Left),
         Act::MoveRawwCursorLeft,
         Section::Interaction,
     ),
     row(
-        any(KeyCode::Right),
+        bare(KeyCode::Right),
         Act::MoveRawwCursorRight,
         Section::Interaction,
     ),
     row(
-        any(KeyCode::Up),
+        bare(KeyCode::Up),
         Act::NavigateInteractionUp,
         Section::Interaction,
     ),
     row(
-        any(KeyCode::Down),
+        bare(KeyCode::Down),
         Act::NavigateInteractionDown,
         Section::Interaction,
     ),
     row(
-        any(KeyCode::Home),
+        bare(KeyCode::Home),
         Act::MoveRawwCursorHome,
         Section::Interaction,
     ),
     row(
-        any(KeyCode::End),
+        bare(KeyCode::End),
         Act::MoveRawwCursorEnd,
         Section::Interaction,
     ),
     row(
-        any(KeyCode::Backspace),
+        bare(KeyCode::Backspace),
         Act::DeleteRawwCharacter,
         Section::Interaction,
     ),
     row(
-        any(KeyCode::PageUp),
+        bare(KeyCode::PageUp),
         Act::ScrollInteractionSnapshotPageUp,
         Section::Interaction,
     ),
     row(
-        any(KeyCode::PageDown),
+        bare(KeyCode::PageDown),
         Act::ScrollInteractionSnapshotPageDown,
         Section::Interaction,
     ),
@@ -480,10 +490,14 @@ static INTERACTION_WRITE: &[ContextRow] = &[
 ];
 
 static INTERACTION_CHOICE: &[ContextRow] = &[
-    row(any(KeyCode::F(2)), Act::OpenPicker, Section::Modes),
-    row(any(KeyCode::F(3)), Act::ToggleEventsOverlay, Section::Modes),
-    row(any(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
-    row(any(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
+    row(bare(KeyCode::F(2)), Act::OpenPicker, Section::Modes),
+    row(
+        bare(KeyCode::F(3)),
+        Act::ToggleEventsOverlay,
+        Section::Modes,
+    ),
+    row(bare(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
+    row(bare(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
     row(control('r'), Act::RefreshRecipients, Section::Modes),
     row(control('j'), Act::InsertRawwNewline, Section::Interaction),
     row(ENTER, Act::ResolveChoiceSelected, Section::Interaction),
@@ -498,27 +512,22 @@ static INTERACTION_CHOICE: &[ContextRow] = &[
         Section::Interaction,
     ),
     row(
-        OTHER_ENTER,
-        Act::ResolveChoiceSelected,
-        Section::Interaction,
-    ),
-    row(
-        any(KeyCode::Left),
+        bare(KeyCode::Left),
         Act::MovePreviousChoiceRequest,
         Section::Interaction,
     ),
     row(
-        any(KeyCode::Right),
+        bare(KeyCode::Right),
         Act::MoveNextChoiceRequest,
         Section::Interaction,
     ),
     row(
-        any(KeyCode::Up),
+        bare(KeyCode::Up),
         Act::MovePreviousChoiceOption,
         Section::Interaction,
     ),
     row(
-        any(KeyCode::Down),
+        bare(KeyCode::Down),
         Act::MoveNextChoiceOption,
         Section::Interaction,
     ),
@@ -533,17 +542,17 @@ static INTERACTION_CHOICE: &[ContextRow] = &[
         Section::Interaction,
     ),
     row(
-        any(KeyCode::Backspace),
+        bare(KeyCode::Backspace),
         Act::DeleteRawwCharacter,
         Section::Interaction,
     ),
     row(
-        any(KeyCode::PageUp),
+        bare(KeyCode::PageUp),
         Act::ScrollInteractionSnapshotPageUp,
         Section::Interaction,
     ),
     row(
-        any(KeyCode::PageDown),
+        bare(KeyCode::PageDown),
         Act::ScrollInteractionSnapshotPageDown,
         Section::Interaction,
     ),
@@ -551,35 +560,42 @@ static INTERACTION_CHOICE: &[ContextRow] = &[
 ];
 
 static PICKER_BUNDLES: &[ContextRow] = &[
-    row(any(KeyCode::Esc), Act::ClosePicker, Section::Picker),
-    row(any(KeyCode::F(2)), Act::ClosePicker, Section::Picker),
-    row(any(KeyCode::F(5)), Act::ClosePicker, Section::Picker),
-    row(any(KeyCode::F(3)), Act::ToggleEventsOverlay, Section::Modes),
-    row(any(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
+    row(bare(KeyCode::Esc), Act::ClosePicker, Section::Picker),
+    row(bare(KeyCode::F(2)), Act::ClosePicker, Section::Picker),
+    row(bare(KeyCode::F(5)), Act::ClosePicker, Section::Picker),
+    row(
+        bare(KeyCode::F(3)),
+        Act::ToggleEventsOverlay,
+        Section::Modes,
+    ),
+    row(bare(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
     row(ENTER, Act::CommitPickerBundle, Section::Picker),
     row(SHIFT_ENTER, Act::CommitPickerBundle, Section::Picker),
     row(CONTROL_ENTER, Act::CommitPickerBundle, Section::Picker),
-    row(OTHER_ENTER, Act::CommitPickerBundle, Section::Picker),
-    row(any(KeyCode::Tab), Act::TogglePickerFocus, Section::Picker),
+    row(bare(KeyCode::Tab), Act::TogglePickerFocus, Section::Picker),
     row(
-        any(KeyCode::BackTab),
+        bare(KeyCode::BackTab),
         Act::TogglePickerFocus,
         Section::Picker,
     ),
-    row(any(KeyCode::Left), Act::TogglePickerFocus, Section::Picker),
-    row(any(KeyCode::Right), Act::TogglePickerFocus, Section::Picker),
+    row(bare(KeyCode::Left), Act::TogglePickerFocus, Section::Picker),
     row(
-        any(KeyCode::Down),
+        bare(KeyCode::Right),
+        Act::TogglePickerFocus,
+        Section::Picker,
+    ),
+    row(
+        bare(KeyCode::Down),
         Act::MoveNextPickerSelection,
         Section::Picker,
     ),
     row(
-        any(KeyCode::Up),
+        bare(KeyCode::Up),
         Act::MovePreviousPickerSelection,
         Section::Picker,
     ),
     row(
-        any(KeyCode::Backspace),
+        bare(KeyCode::Backspace),
         Act::DeletePickerFilterCharacter,
         Section::Picker,
     ),
@@ -587,35 +603,42 @@ static PICKER_BUNDLES: &[ContextRow] = &[
 ];
 
 static PICKER_SESSIONS: &[ContextRow] = &[
-    row(any(KeyCode::Esc), Act::ClosePicker, Section::Picker),
-    row(any(KeyCode::F(2)), Act::ClosePicker, Section::Picker),
-    row(any(KeyCode::F(5)), Act::ClosePicker, Section::Picker),
-    row(any(KeyCode::F(3)), Act::ToggleEventsOverlay, Section::Modes),
-    row(any(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
+    row(bare(KeyCode::Esc), Act::ClosePicker, Section::Picker),
+    row(bare(KeyCode::F(2)), Act::ClosePicker, Section::Picker),
+    row(bare(KeyCode::F(5)), Act::ClosePicker, Section::Picker),
+    row(
+        bare(KeyCode::F(3)),
+        Act::ToggleEventsOverlay,
+        Section::Modes,
+    ),
+    row(bare(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
     row(ENTER, Act::CommitPickerSession, Section::Picker),
     row(SHIFT_ENTER, Act::CommitPickerSession, Section::Picker),
     row(CONTROL_ENTER, Act::CommitPickerSession, Section::Picker),
-    row(OTHER_ENTER, Act::CommitPickerSession, Section::Picker),
-    row(any(KeyCode::Tab), Act::TogglePickerFocus, Section::Picker),
+    row(bare(KeyCode::Tab), Act::TogglePickerFocus, Section::Picker),
     row(
-        any(KeyCode::BackTab),
+        bare(KeyCode::BackTab),
         Act::TogglePickerFocus,
         Section::Picker,
     ),
-    row(any(KeyCode::Left), Act::TogglePickerFocus, Section::Picker),
-    row(any(KeyCode::Right), Act::TogglePickerFocus, Section::Picker),
+    row(bare(KeyCode::Left), Act::TogglePickerFocus, Section::Picker),
     row(
-        any(KeyCode::Down),
+        bare(KeyCode::Right),
+        Act::TogglePickerFocus,
+        Section::Picker,
+    ),
+    row(
+        bare(KeyCode::Down),
         Act::MoveNextPickerSelection,
         Section::Picker,
     ),
     row(
-        any(KeyCode::Up),
+        bare(KeyCode::Up),
         Act::MovePreviousPickerSelection,
         Section::Picker,
     ),
     row(
-        any(KeyCode::Backspace),
+        bare(KeyCode::Backspace),
         Act::DeletePickerFilterCharacter,
         Section::Picker,
     ),
@@ -623,11 +646,15 @@ static PICKER_SESSIONS: &[ContextRow] = &[
 ];
 
 static EVENTS_OVERLAY: &[ContextRow] = &[
-    row(any(KeyCode::Esc), Act::ToggleEventsOverlay, Section::Modes),
-    row(any(KeyCode::F(3)), Act::ToggleEventsOverlay, Section::Modes),
-    row(any(KeyCode::F(2)), Act::OpenPicker, Section::Modes),
-    row(any(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
-    row(any(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
+    row(bare(KeyCode::Esc), Act::ToggleEventsOverlay, Section::Modes),
+    row(
+        bare(KeyCode::F(3)),
+        Act::ToggleEventsOverlay,
+        Section::Modes,
+    ),
+    row(bare(KeyCode::F(2)), Act::OpenPicker, Section::Modes),
+    row(bare(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
+    row(bare(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
 ];
 
 /// The overlay presents the whole surface, which is taller than a short
@@ -636,19 +663,23 @@ static EVENTS_OVERLAY: &[ContextRow] = &[
 /// into the renderer: they were inert in this context before, so none of them
 /// shadows a behavior, and no other context is touched.
 static HELP_OVERLAY: &[ContextRow] = &[
-    row(any(KeyCode::Esc), Act::ToggleHelpOverlay, Section::Modes),
-    row(any(KeyCode::F(2)), Act::OpenPicker, Section::Modes),
-    row(any(KeyCode::F(3)), Act::ToggleEventsOverlay, Section::Modes),
-    row(any(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
-    row(any(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
-    row(any(KeyCode::Up), Act::ScrollHelpUp, Section::Help),
-    row(any(KeyCode::Down), Act::ScrollHelpDown, Section::Help),
-    row(any(KeyCode::PageUp), Act::ScrollHelpPageUp, Section::Help),
+    row(bare(KeyCode::Esc), Act::ToggleHelpOverlay, Section::Modes),
+    row(bare(KeyCode::F(2)), Act::OpenPicker, Section::Modes),
     row(
-        any(KeyCode::PageDown),
+        bare(KeyCode::F(3)),
+        Act::ToggleEventsOverlay,
+        Section::Modes,
+    ),
+    row(bare(KeyCode::F(4)), Act::ToggleMode, Section::Modes),
+    row(bare(KeyCode::F(5)), Act::OpenBundlePicker, Section::Modes),
+    row(bare(KeyCode::Up), Act::ScrollHelpUp, Section::Help),
+    row(bare(KeyCode::Down), Act::ScrollHelpDown, Section::Help),
+    row(bare(KeyCode::PageUp), Act::ScrollHelpPageUp, Section::Help),
+    row(
+        bare(KeyCode::PageDown),
         Act::ScrollHelpPageDown,
         Section::Help,
     ),
-    row(any(KeyCode::Home), Act::ScrollHelpToStart, Section::Help),
-    row(any(KeyCode::End), Act::ScrollHelpToEnd, Section::Help),
+    row(bare(KeyCode::Home), Act::ScrollHelpToStart, Section::Help),
+    row(bare(KeyCode::End), Act::ScrollHelpToEnd, Section::Help),
 ];

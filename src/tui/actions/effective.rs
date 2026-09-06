@@ -11,7 +11,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::action::Action;
 use super::bindings::default_binding;
-use super::chord::{ChordPattern, PrimaryModifier, primary_modifier};
+use super::chord::{Chord, ChordPattern, PrimaryModifier, primary_modifier};
 use super::context::BindingContext;
 
 /// Which of a terminal's two classes a lookup is answering for.
@@ -142,8 +142,12 @@ pub enum ConfiguredAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedRow {
     pub context: BindingContext,
-    pub code: KeyCode,
-    pub modifiers: KeyModifiers,
+    /// The same shape a compiled row carries, so a configured chord and a
+    /// compiled one naming the same thing denote the same keystrokes. Storing
+    /// the resolved keystroke instead would leave a configured bare character
+    /// claiming only its bare form while the compiled row kept answering for
+    /// the shifted one.
+    pub chord: Chord,
     /// `None` is an explicit unbinding, which answers "nothing" rather than
     /// deferring to a lower tier.
     pub action: Option<Action>,
@@ -151,7 +155,24 @@ pub(crate) struct ResolvedRow {
 
 impl ResolvedRow {
     fn matches(self, context: BindingContext, code: KeyCode, modifiers: KeyModifiers) -> bool {
-        self.context == context && self.code == code && self.modifiers == modifiers
+        self.context == context && self.chord.matches(code, modifiers)
+    }
+
+    /// Whether this row answers for *every* keystroke `chord` denotes, which is
+    /// what it takes to leave that chord's row unable to answer at all.
+    ///
+    /// All rather than any. Two shapes can denote overlapping but unequal sets —
+    /// a bare character denotes two keystrokes and an exact row can name one of
+    /// them — and a row that keeps even one keystroke is a row a lookup can
+    /// still return. Dropping it on partial overlap is how presentation comes to
+    /// hide a chord dispatch still answers, which is the disagreement this
+    /// projection exists to prevent rather than cause.
+    fn claims(self, context: BindingContext, chord: Chord) -> bool {
+        let denoted = chord.denoted_keystrokes();
+        !denoted.is_empty()
+            && denoted
+                .into_iter()
+                .all(|(code, modifiers)| self.matches(context, code, modifiers))
     }
 }
 
@@ -192,11 +213,10 @@ impl EffectiveBindings {
         let resolve = |rows: &[ConfiguredBinding]| {
             rows.iter()
                 .filter_map(|row| {
-                    let (code, modifiers) = row.chord.resolve(primary);
+                    let chord = row.chord.resolve_to_chord(primary);
                     row.for_class(class).map(|action| ResolvedRow {
                         context: row.context,
-                        code,
-                        modifiers,
+                        chord,
                         action: match action {
                             ConfiguredAction::Invoke(action) => Some(action),
                             ConfiguredAction::Unbound => None,
@@ -340,7 +360,7 @@ fn winning_rows(
         .enumerate()
         .filter(|(_, row)| row.context == context)
         .filter(|(index, row)| {
-            let claims = |other: &&ResolvedRow| other.matches(context, row.code, row.modifiers);
+            let claims = |other: &&ResolvedRow| other.claims(context, row.chord);
             !tier[index + 1..].iter().any(|later| claims(&later))
                 && !above.iter().any(|higher| claims(&higher))
         })

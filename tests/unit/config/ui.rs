@@ -330,62 +330,41 @@ fn a_behavior_the_context_does_not_declare_is_refused() {
     );
 }
 
-/// A global binding group naming every `Ctrl`-carrying spelling of one
-/// character.
+/// Quit is the one behavior whose loss is refused rather than reported, since
+/// an operator whose configuration cannot quit cannot fix it from inside the
+/// TUI. Taking its chord is now enough to trip that, in every way the grammar
+/// can take it.
 ///
-/// Eight rows, because the compiled quit row matches any modifier set
-/// containing `Ctrl` and dispatch honours that. Claiming fewer leaves quit
-/// reachable through whichever set was left, so eight is what it takes to lose
-/// it — which is itself the reason the refusal below is hard to trigger.
-fn claiming_every_control_spelling(character: char, value: &str) -> String {
-    let mut body = String::from("[bindings.global]\n");
-    for extras in [
-        vec![],
-        vec!["cmd"],
-        vec!["alt"],
-        vec!["shift"],
-        vec!["cmd", "alt"],
-        vec!["cmd", "shift"],
-        vec!["alt", "shift"],
-        vec!["cmd", "alt", "shift"],
-    ] {
-        let mut parts = vec!["ctrl"];
-        parts.extend(extras);
-        body.push_str(&format!("\"{}+{character}\" = {value}\n", parts.join("+")));
-    }
-    body
-}
-
-/// Quit is the one behavior whose loss would be refused rather than reported,
-/// since an operator whose configuration cannot quit cannot fix it from inside
-/// the TUI — but no configuration the grammar can express loses it.
-///
-/// The compiled quit row matches every modifier set containing `Ctrl`, and two
-/// of the six flags a terminal can report are ones the grammar cannot spell.
-/// So `Ctrl+Hyper+C` is unclaimable and still quits, however much of the rest
-/// an operator claims. Asserted here rather than left to be rediscovered: the
-/// refusal is wired up and correct, and this table cannot trip it.
+/// The refusal was previously untrippable: the compiled quit row matched every
+/// modifier set containing `Ctrl`, two of the six flags have no spelling, so
+/// `Ctrl+Hyper+C` still quit however much an operator claimed. `Ctrl+C` denotes
+/// one keystroke now, so the guard does what it was written to do.
 #[test]
-fn no_binding_group_the_grammar_can_express_is_refused_for_losing_quit() {
+fn taking_the_quit_chord_is_refused_however_it_is_taken() {
     for value in [
         "\"none\"",
         "\"toggle-help-overlay\"",
         "{ standard = \"none\" }",
     ] {
-        let loaded = load_bindings(&claiming_every_control_spelling('c', value))
-            .unwrap_or_else(|error| panic!("{value} was refused: {error}"))
-            .expect("existing config");
-        assert_eq!(loaded.bindings.expect("a binding group").rows.len(), 8);
+        let error = load_bindings(&format!("[bindings.global]\n\"ctrl+c\" = {value}\n"))
+            .expect_err("taking the only chord that quits must be refused");
+        assert!(
+            error.to_string().contains("no chord quits the TUI"),
+            "{value} was refused for the wrong reason: {error}"
+        );
     }
 }
 
-/// Rebinding the bare quit chord loads, because the compiled row matches any
-/// set containing `Ctrl` and `Ctrl+Shift+C` still reaches it. Refusing here
-/// would refuse a configuration that works.
+/// A further modifier is a different keystroke, so claiming `Ctrl+Shift+C`
+/// leaves quit alone and the group loads.
+///
+/// The other side of the refusal above, and the one that would catch a guard
+/// written too broadly — refusing anything that mentions the quit character
+/// would refuse this too.
 #[test]
-fn rebinding_the_bare_quit_chord_still_loads() {
-    let loaded = load_bindings("[bindings.global]\n\"ctrl+c\" = \"toggle-help-overlay\"\n")
-        .expect("quit is still reachable through the combinations left unclaimed")
+fn claiming_a_modified_variant_of_the_quit_chord_still_loads() {
+    let loaded = load_bindings("[bindings.global]\n\"ctrl+shift+c\" = \"toggle-help-overlay\"\n")
+        .expect("Ctrl+Shift+C is not the quit chord and taking it loses nothing")
         .expect("existing config");
     assert_eq!(loaded.bindings.expect("a binding group").rows.len(), 1);
 }
@@ -493,4 +472,39 @@ fn a_malformed_binding_set_is_not_reported_against_the_operators_file() {
             "{description}: the message points at the operator's file: {rendered}"
         );
     }
+}
+
+/// A bare character and its shifted form denote overlapping keystrokes, so
+/// naming both in one context is refused rather than accepted and disagreed
+/// about downstream.
+///
+/// A bare character denotes the character bare and carrying `Shift`; `shift+c`
+/// denotes the second of those. Accepting both would give dispatch two rows
+/// answering for the same keystroke while presentation dropped one of them, so
+/// the overlay would stop advertising a chord dispatch still answers.
+#[test]
+fn a_character_and_its_shifted_form_collide_in_one_context() {
+    let error = load_bindings(
+        "[bindings.interaction-choice]\n\"c\" = \"move-next-choice-option\"\n\
+         \"shift+c\" = \"move-previous-choice-option\"\n",
+    )
+    .expect_err("a character and its shifted form denote the same keystroke");
+    assert!(
+        error.to_string().contains("denote the same chord"),
+        "refused for the wrong reason: {error}"
+    );
+}
+
+/// The control for that refusal: `c` and `C` are distinct characters, so a
+/// context may bind both. Without this, a collision check keyed on the letter
+/// rather than on the keystrokes would satisfy the case above.
+#[test]
+fn the_two_cases_of_a_character_are_distinct_bindings() {
+    let loaded = load_bindings(
+        "[bindings.interaction-choice]\n\"c\" = \"move-next-choice-option\"\n\
+         \"C\" = \"move-previous-choice-option\"\n",
+    )
+    .expect("c and C are different characters and may both be bound")
+    .expect("existing config");
+    assert_eq!(loaded.bindings.expect("a binding group").rows.len(), 2);
 }
