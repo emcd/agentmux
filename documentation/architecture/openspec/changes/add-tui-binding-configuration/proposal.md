@@ -36,8 +36,17 @@ to the person typing.
   binding to vary by terminal capability.
 - **The shipped defaults stay capability-neutral.** Both columns ship identical,
   so no binding varies with the probe outcome unless an operator declared that
-  it should. Nothing about what the TUI does out of the box changes on any
-  terminal.
+  it should.
+- **Every default row matches exactly what its written form denotes.** Two
+  shapes in the compiled table match more than they spell: a control chord
+  matches any modifier set containing `Ctrl`, and several rows match a key under
+  any modifiers at all. Both were transcribed from the handler conditions the
+  action layer replaced, not chosen. They make a configuration incoherent — an
+  operator who binds `Ctrl+J` finds `Ctrl+Shift+J` still doing the old thing —
+  and they are why the help overlay and dispatch can disagree today. Exact
+  matching removes the disagreement at its source rather than teaching each
+  consumer to compensate. A modifier variant worth keeping is declared as its
+  own row.
 - **Named presets** ship as configuration files embedded in the binary and
   parsed by the same parser an operator's configuration goes through, so each is
   both a worked example and a standing proof that the format can express what we
@@ -116,8 +125,11 @@ to the person typing.
 ## Impact
 
 - `src/tui/actions/bindings.rs` — the compiled table becomes the default layer
-  behind an effective table. Its rows are unchanged, and they still carry no
-  capability field, because the shipped defaults do not vary.
+  behind an effective table. Its rows keep the actions they invoke and carry no
+  capability field, because the shipped defaults do not vary by class. What
+  changes is which keystrokes reach them: the shapes that matched more than they
+  spelled become exact, and the chord shapes that existed only to reproduce a
+  handler condition go away.
 - `src/tui/actions/{action,context,help}.rs` — action names and binding contexts
   acquire an operator-facing spelling that the configuration parses and the
   validator reports against.
@@ -133,8 +145,13 @@ to the person typing.
   `scripts/lint-tui-binding-documentation.sh` — the generated section continues
   to render from the defaults, with its standing as defaults made explicit, and
   the guide gains hand-written configuration and preset documentation.
-- Operators: no behavior changes for anyone. An operator who adopts a preset or
-  writes a row gets what they asked for on terminals that can deliver it.
+- Operators: every chord the help overlay names keeps its action, and an
+  operator who adopts a preset or writes a row gets what they asked for on
+  terminals that can deliver it. One change reaches operators who configure
+  nothing: a modifier variant the old handler conditions happened to accept, and
+  that no row was written as, stops invoking the action it reached by accident.
+  `Ctrl+Shift+C` no longer quits; `Alt+Enter` no longer dispatches in the write
+  pane. The full set is enumerated rather than estimated, by task 8.1.
 - macOS: whether `primary` can usefully resolve to `Cmd` depends on whether a
   terminal delivers `Cmd+Enter` to the process rather than reserving it for its
   own menu shortcuts. No macOS terminal evidence exists in this project yet.
