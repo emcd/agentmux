@@ -204,28 +204,40 @@ reach that action, so an action reachable by two chords is expressible.
 
 ### Requirement: Operator Chord Grammar Round-Trips With Presentation
 
-Every chord the help overlay presents that denotes a keystroke SHALL parse as a
-configuration chord denoting the chord that was presented, so an operator can
-configure a binding by copying the chord out of the reference the TUI itself
-renders.
+Every chord the help overlay presents that denotes one or more keystrokes SHALL
+parse as a configuration chord denoting the same keystrokes as the chord that
+was presented, so an operator can configure a binding by copying the chord out
+of the reference the TUI itself renders.
 
 The overlay also presents a placeholder standing for typing rather than for a
 keystroke. That placeholder SHALL NOT parse, since accepting it would let a
 configuration rebind the rows through which characters are typed, and it is
 therefore outside this requirement rather than an exception to it.
 
-The grammar SHALL express a key with an exact modifier set, and SHALL NOT
-express the chord shapes that exist to reproduce handler conditions or to carry
-typed text. A configuration SHALL NOT be able to rebind the rows through which
-characters are typed.
+The grammar SHALL express the written forms the default table is built from: a
+key with an exact modifier set, and a bare single character. It SHALL NOT
+express the placeholder standing for typing any character, and a configuration
+SHALL NOT be able to rebind the rows through which characters are typed.
+
+Each form SHALL denote, when written in a configuration, the same keystrokes it
+denotes in the default table — one for a key with a modifier set, and for a bare
+character that character both bare and carrying `Shift`, as the
+`tui-action-bindings` capability requires. A form denoting less here than there
+would leave a default row answering for the keystrokes a configuration could not
+name.
+
+The grammar expresses no shape reproducing a handler condition, because the
+default table declares none: a row matches exactly what its written form
+denotes.
 
 A chord that does not parse SHALL fail validation rather than being ignored.
 
 #### Scenario: A chord copied from help is accepted
 
-- **WHEN** a chord denoting a keystroke is rendered in the help overlay
+- **WHEN** a chord denoting one or more keystrokes is rendered in the help
+  overlay
 - **THEN** that written form parses
-- **AND** it denotes the same key and modifier set that was rendered
+- **AND** it denotes the same keystrokes the rendered chord denotes
 
 #### Scenario: The typing placeholder does not parse
 
@@ -450,6 +462,13 @@ Losing a binding does not require an explicit unbinding. Binding a chord that
 already carried an action displaces that action, so a configuration can leave a
 behavior unreachable in a context without ever naming it — rebinding the compose
 `Message` field's `Ctrl+J` drops insert-newline there, silently.
+
+This holds because a default row matches exactly what its written form denotes,
+and an operator's chord written the same way denotes the same keystrokes, as the
+`tui-action-bindings` capability requires. Were a row to match more than an
+operator can claim by writing it, the row would keep answering under the
+keystrokes the configuration had no way to name, and displacement would be
+undetectable rather than merely silent.
 
 `agentmux check configuration` runs outside a TUI session and so has no
 keyboard-enhancement probe outcome, while a class-qualified row can leave an

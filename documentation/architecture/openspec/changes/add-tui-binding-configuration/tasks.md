@@ -197,9 +197,17 @@
       sending off that chord, without which the check could not fail.
 - [x] 6.5 Add a test that the compiled defaults are identical across both
       capability classes when no preset is applied and no row is configured, so
-      the claim that this change alters nothing out of the box is asserted
-      rather than assumed. Asserted between the two classes directly, rather
-      than against a table each was separately compared to.
+      capability neutrality is asserted rather than assumed. Asserted between the
+      two classes directly, rather than against a table each was separately
+      compared to.
+
+      What it proves is that the classes agree with each other, and nothing
+      more. It is not evidence that the defaults are the ones that shipped
+      before this change, and reading it that way would let a class comparison
+      stand in for evidence about what an operator loses. Group 8 withdraws
+      modifier variants, and this test stays green through that — correctly,
+      since neutrality is preserved and historical identity was never what it
+      measured.
 - [ ] 6.6 Verify a preset end to end under a real capable terminal with the
       pty-debug procedure, including that the help overlay shows the moved send
       chord. **Half done, and the remaining half is not reachable from here.**
@@ -241,7 +249,9 @@
       and pre-flight counterparts. The guard is kept because the requirement
       asks for it and because a quit row written as one exact keystroke would
       trip it; whether a requirement that cannot fire should stand as written is
-      a question for task 8.4 rather than one to settle by weakening the runtime.
+      a question Group 8 answers by making the rows exact, rather than one to
+      settle by weakening the runtime. Once they are, this note describes a
+      condition that no longer holds and task 8.7 reworks it.
 - [x] 7.1a Build the effective table for each capability class where no probe
       outcome is available, so pre-flight has both to inspect.
       `EffectiveBindings::for_each_class`. Group 6 gave this teeth: the shipped
@@ -284,25 +294,86 @@
       fixture actually put a tree there — two empty listings would otherwise
       compare equal.
 
-## 8. Documentation and reconciliation
+## 8. Exact chord matching
 
-- [ ] 8.1 Document the binding configuration in `documentation/usage/tui.md`:
+Lands before Group 7 is finalized rather than after. Group 7's reachability
+question is what surfaced the problem, and exact matching shrinks the answer:
+the keystroke expansion over modifier combinations collapses to the keystroke a
+row is written as, so the held Group 7 stack gets simpler rather than larger.
+
+- [ ] 8.1 Enumerate what the compiled table over-matches today — every row whose
+      chord shape accepts a keystroke the row is not written as — and record the
+      list, so the decision below is made against what is there rather than
+      against what is remembered.
+- [ ] 8.2 Confirm against that list that no modifier variant is declared back.
+      The operator decided this on 2026-09-06, before the enumeration rather
+      than after it: so long as the chords the table is written as keep working,
+      which variants stop working is not something they want to adjudicate row
+      by row. So the enumeration is evidence rather than a decision point — its
+      job is to show that nothing a row IS written as was lost, and to supply
+      the list of withdrawn keystrokes for release notes.
+
+      A variant is declared back only if 8.1 turns up one whose loss breaks a
+      chord the table declares, which would mean exactness had been applied
+      wrongly rather than that the variant was wanted.
+- [ ] 8.3 Make every non-typing chord shape match exactly the keystrokes its
+      written form denotes — one for a key with a modifier set, two for a bare
+      character. The shapes that exist only to reproduce a handler condition go
+      away rather than gaining a narrower condition.
+- [ ] 8.4 Keep a bare single character denoting that character both bare and
+      carrying `Shift`, covering the fixed-action character rows as well as the
+      typing rows, and add a test that a shifted character still reaches its row
+      in both. This is the one place exactness would break something a terminal
+      actually does.
+- [ ] 8.4a Resolve an operator's bare single-character chord to the same two
+      keystrokes the compiled row denotes, rather than to the bare form alone.
+      Without this the configured row claims one of the two and the compiled row
+      keeps answering for the other — the very condition Group 8 exists to
+      remove, reappearing in the one shape exempted from it. Add a test that
+      configuring a character intercepts its shifted arrival and that the
+      compiled row it displaced reaches nothing.
+- [ ] 8.4b Teeth-check 8.4a by resolving the configured chord to the bare form
+      only, and confirm the test fails. The two sides denoting the same set is
+      the whole of the guarantee here, and a symmetry that is never exercised
+      asymmetrically is not known to hold.
+- [ ] 8.5 Add a test that a row's action is unreachable through that row under
+      any modifier set outside what its written form denotes, swept over the
+      modifier domain rather than over a chosen sample. Written against the
+      denoted set rather than against the modifiers a row names, since for a bare
+      character those differ: `Shift` is denoted without being named, and a test
+      phrased the other way would demand the opposite of task 8.4.
+- [ ] 8.6 Add a test that the help overlay and dispatch agree about a rebound
+      chord: where presentation drops a compiled row, no keystroke reaches that
+      row's action through it. This is the contradiction that motivated the
+      change, so it is asserted rather than assumed to have gone.
+- [ ] 8.7 Simplify the Group 7 reachability keystroke expansion to the keystroke
+      each row denotes, and rework the fixtures that were written against broad
+      matching. The quit refusal and the displacement findings become reachable
+      conditions again; assert them where they were previously asserted to be
+      inexpressible.
+- [ ] 8.8 Verify under a real terminal that a rebound control chord no longer
+      leaves its old behavior on a modified variant, since this is the one
+      change in the arc an operator can notice without configuring anything.
+
+## 9. Documentation and reconciliation
+
+- [ ] 9.1 Document the binding configuration in `documentation/usage/tui.md`:
       the file and group, the chord grammar, the capability columns, the
       presets, the symbolic modifier, unbinding, and a worked example.
-- [ ] 8.2 Update `src/tui/actions/README.md`: a configuration is the present
+- [ ] 9.2 Update `src/tui/actions/README.md`: a configuration is the present
       successor rather than a future one, and the statement that rows carry no
       capability field now holds because the defaults do not vary rather than
       because variance is unexpressible.
-- [ ] 8.3 Update `src/configuration/README.md` for the binding group, including
+- [ ] 9.3 Update `src/configuration/README.md` for the binding group, including
       why it merges over compiled defaults while files still replace whole.
-- [ ] 8.4 Reconcile `tui-binding-configuration` against what shipped, checking
+- [ ] 9.4 Reconcile `tui-binding-configuration` against what shipped, checking
       each requirement rather than the ones this list happened to name.
-- [ ] 8.5 Reconcile `tui-action-bindings` against what shipped, including that
+- [ ] 9.5 Reconcile `tui-action-bindings` against what shipped, including that
       every surviving statement about capability neutrality is scoped to the
       defaults wherever it appears.
-- [ ] 8.6 Reconcile `ui-surface-configuration` against what shipped.
-- [ ] 8.7 Sweep this change's own artifacts for claims the implementation
+- [ ] 9.6 Reconcile `ui-surface-configuration` against what shipped.
+- [ ] 9.7 Sweep this change's own artifacts for claims the implementation
       falsified, within each file as well as across them.
-- [ ] 8.8 Record the macOS delivery question in the terminal capability matrix,
+- [ ] 9.8 Record the macOS delivery question in the terminal capability matrix,
       and flip the default resolution of the symbolic modifier only if evidence
       supports it.

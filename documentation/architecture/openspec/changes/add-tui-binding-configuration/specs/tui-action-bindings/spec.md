@@ -20,6 +20,67 @@ declared — in an operator configuration or in a named preset.
 Each row SHALL carry the display section and ordering used to present it, so
 presentation is declared with the binding rather than restated elsewhere.
 
+A table row SHALL match exactly the keystrokes its written form denotes, and no
+others. A row naming a key with a modifier set SHALL NOT match that key under
+any other set. A row naming a key with no modifiers SHALL NOT match it under any
+modifier, except where that key is a single character, which the paragraph below
+governs. A modifier variant intended to invoke an action SHALL be declared as
+its own row.
+
+A chord naming a single character with no modifiers is the one written form
+denoting two keystrokes: that character bare, and that character carrying
+`Shift`, and no other. A terminal's report of a typed character is not a
+function of the key alone — `Shift` and `Caps Lock` each alter both which
+character is reported and which modifiers accompany it — so a form admitting
+only one of the two would refuse a keystroke an operator produced by typing.
+Between them, `c` and `C` so defined cover every way either letter can arrive.
+
+That denotation SHALL be the same on both sides. A compiled row naming a bare
+character and an operator's chord naming that character SHALL match the same two
+keystrokes, whether the row carries the character into an action or invokes a
+fixed one. Claiming the character in a configuration therefore claims all of
+what the compiled row answered, leaving nothing behind on the form the
+configuration did not spell out.
+
+Symmetry is the requirement, not the pair. A written form that denoted more on
+the compiled side than an operator's spelling of it denotes would be a row a
+configuration cannot fully claim, which is the condition the rest of this
+requirement exists to remove — reintroduced for one shape rather than avoided.
+
+Exactness is what lets dispatch, presentation, and reachability agree without
+coordinating. A row matching more than it spells is one a configuration cannot
+fully claim, so the behavior it carries survives being rebound, the help overlay
+and dispatch disagree about whether it is still bound, and no configuration can
+give the unclaimed variants a different meaning.
+
+#### Scenario: A keystroke outside the written form's denotation reaches nothing
+
+- **WHEN** a table row's written form denotes a set of keystrokes
+- **AND** a keystroke outside that set arrives
+- **THEN** the row does not match it
+- **AND** the keystroke reaches whatever other row denotes it, or nothing
+
+#### Scenario: A rebound chord takes its behavior with it
+
+- **WHEN** a configuration binds the chord a table row is written as
+- **THEN** no keystroke reaches that row's action through that row
+- **AND** the help overlay and dispatch agree that it no longer does
+
+#### Scenario: A shifted character still reaches its row
+
+- **WHEN** a character arrives carrying `Shift`
+- **THEN** the row naming that character accepts it
+- **AND** this holds whether the row carries the character into an action or
+  invokes a fixed one
+
+#### Scenario: Configuring a character claims both of its forms
+
+- **WHEN** a configuration binds a chord naming a single character with no
+  modifiers
+- **AND** that character arrives carrying `Shift`
+- **THEN** the configured action is invoked
+- **AND** the compiled row that named the same character reaches nothing
+
 #### Scenario: A chord's action is declared once
 
 - **WHEN** a chord invokes an action in a context

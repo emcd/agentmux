@@ -33,6 +33,14 @@ to be selectable.
 **Goals:**
 
 - Operators declare which chords invoke which actions, without rebuilding.
+- A default row matches exactly what its written form denotes, and an operator
+  writing that form denotes the same, so that claiming a chord in a
+  configuration actually claims it. This withdraws the modifier
+  variants the replaced handler conditions happened to accept — `Ctrl+Shift+C`
+  stops quitting, `Alt+Enter` stops dispatching in the write pane — which is a
+  behavior change for operators who have configured nothing. It is a goal rather
+  than a side effect: without it the configuration model is incoherent and this
+  change's own validation is vacuous.
 - Terminal-capability variance has a declaration site, so an operator whose
   terminal lifts the limitation can act on it.
 - The binding sets worth adopting wholesale are applied in one line rather than
@@ -46,11 +54,14 @@ to be selectable.
 
 **Non-Goals:**
 
-- Changing what the TUI does out of the box on any terminal.
+- Changing which action any chord the help overlay names invokes. Every chord
+  the TUI advertises keeps what it does.
 - Reloading bindings without restarting the TUI. The effective table is built
   once at startup.
-- Rebinding the typing rows, or any chord shape that exists to reproduce a
-  handler rather than to be operator-facing.
+- Rebinding the typing rows. They stand for typing rather than for a keystroke,
+  which is why the grammar cannot spell them. The other shapes that existed to
+  reproduce a handler rather than to be operator-facing are not excluded from
+  the grammar — the exactness goal removes them.
 - Per-bundle, per-session, or per-agent binding sets. One effective table.
 - Changing what any action *does*. Only which chord reaches it.
 - Resolving the macOS delivery question. The format carries the axis, and
@@ -78,8 +89,78 @@ sends where chat clients insert a newline — measures surprise against other
 applications rather than against what agentmux does everywhere else, and the
 latter is the baseline an operator actually carries between terminals.
 
-The consequence is that this change alters no observable behavior for anyone,
-which is also what makes it safe to land before the macOS question is settled.
+The consequence is that no default binding varies with the probe outcome, which
+is what makes this safe to land before the macOS question is settled.
+
+That is capability neutrality, and it is a narrower claim than "nothing
+changes". Neutrality says the two capability classes see the same defaults as
+each other. It says nothing about whether those defaults are the ones that
+shipped before this change — and the exactness decision below withdraws some
+modifier variants, so they are not. The two properties are worth keeping apart:
+the first is what this section argues for, and conflating them would let a test
+that compares the classes stand in for evidence about what an operator loses.
+
+### A default row matches exactly what its written form denotes
+
+Two shapes in the compiled table match more than they spell. A control chord
+matches any modifier set containing `Ctrl`, so `Ctrl+Shift+J` reaches whatever
+`Ctrl+J` reaches. Several rows match a key under any modifiers at all, so
+`Alt+Esc` reaches whatever `Esc` reaches. Neither was designed: the action layer
+transcribed the conditions the handlers it replaced were testing —
+`modifiers.contains(CONTROL)`, or a match on the key code alone — so that
+introducing the table changed no behavior. They are accumulated behavior, not a
+policy.
+
+They have to go, and the reason is that a configuration cannot be coherent
+alongside them. An operator who binds `Ctrl+J` has claimed one keystroke; the
+compiled row keeps answering for every other set containing `Ctrl`, so the
+behavior they displaced is still there behind a modifier they did not think
+about. Three consequences, and the first is already shipped:
+
+- **The help overlay and dispatch disagree today.** Presentation drops a
+  compiled row once a higher tier claims the keystroke that row is written as,
+  which is the right rule for a table of exact rows. Dispatch keeps matching
+  broadly. So with `Ctrl+J` rebound, the overlay stops listing insert-newline
+  for that field while `Ctrl+Shift+J` still performs it. An operator is told a
+  binding is gone when it is not.
+- **The reachability question has no good answer.** Pre-flight must decide
+  whether a behavior is still reachable. Answering over what dispatch matches
+  makes the answer useless — no configuration this grammar can express removes
+  any behavior on either shape, including quit, because `Hyper` and `Meta` have
+  no spelling and the broad rows keep answering under them. Answering over what
+  the grammar can spell makes it refuse configurations that work.
+- **The modifier variants cannot be bound to anything else.** `Ctrl+Shift+J` is
+  silently taken, and a configuration naming it cannot make it mean something
+  different from `Ctrl+J` in any context whose compiled row is broad.
+
+With exact matching, dispatch, presentation, and reachability agree by
+construction: every row denotes what it matches, so there is nothing for them to
+disagree about. No shadowing rule, no per-consumer compensation.
+
+*One carve-out, which is not a concession but an encoding fact.* The typing
+shapes keep accepting a character bare or with `Shift`, because that is how a
+terminal reports a typed capital: crossterm delivers `Shift+c` as `Char('C')`
+carrying `SHIFT`. Refusing the modifier there stops capital letters reaching the
+draft.
+
+*Alternative considered: leave dispatch alone and teach presentation to match
+it,* rendering the chords that still reach a behavior when a configuration has
+claimed part of a broad row's family. Rejected. It resolves the visible
+disagreement without resolving either of the other two consequences, and it
+makes the overlay's output depend on a family-remainder computation that exists
+nowhere else in the system.
+
+*Alternative considered: make an operator's exact chord shadow the compiled
+broad row across its whole modifier family.* Rejected as the same fix applied
+one layer too late. It leaves the table full of rows that match more than they
+spell and adds a rule to compensate, where exact matching removes the rows'
+breadth and needs no rule. It also has to answer what a shadowed family member
+falls through to, which exact matching never raises.
+
+The cost is real and is not hidden: a modifier variant that works today stops
+working unless it is declared. Which variants are worth declaring is decided by
+enumerating what the current table over-matches rather than by assertion, and
+the default answer is none.
 
 ### The compiled default table needs no capability field
 
@@ -125,6 +206,14 @@ so no run-time parse exists.* Rejected as disproportionate. The repository has
 no `build.rs` today, and introducing the build-time codegen path to eliminate a
 parse whose input is a compile-time constant buys an invariant the test already
 guarantees.
+
+The selector is spelled `presets`, inside the `[bindings]` group. Naming it
+`keybindings` for the concept a shipped set and an operator's set share would
+read as `bindings.keybindings`, and the anchor moves anyway: under
+`todos/tui/67` these sets are declared at the top level and selected from a
+profile, so the key that survives is the one on the profile rather than this
+one. Renaming it here to match a shape that will relocate it costs an operator
+migration for a word.
 
 *Alternative considered: documenting copy-paste blocks in the usage guide.*
 Rejected: a snippet an operator pasted last year is not revised when the table
@@ -181,14 +270,23 @@ contradictory.
 Unbinding is explicit: a row whose action is `none` leaves the chord inert in
 that context rather than falling through to the compiled row.
 
-### The grammar expresses one chord shape, and it round-trips with help
+### The grammar expresses the operator-facing forms, and round-trips with help
 
-`Chord` carries five variants. Only `Key(code, modifiers)` — a key with an exact
-modifier set — is operator-facing. `AnyModifiers` and `Control` exist to
-reproduce handler arms that test a key code or a `CONTROL` membership without
-narrowing them; `Char` and `Text` are typing rather than binding. Exposing any
-of the four would ask operators to reason about fidelity artifacts, and exposing
-`Text` would let a configuration make typing impossible.
+Two written forms are operator-facing: a key with an exact modifier set, and a
+bare single character, which denotes that character both bare and carrying
+`Shift`. The exactness decision removes the shapes that reproduced handler arms
+by testing a key code or a `CONTROL` membership without narrowing them, so there
+are no fidelity artifacts left to expose.
+
+One shape stays outside the grammar: the placeholder standing for typing any
+character. It is not a keystroke, and exposing it would let a configuration make
+typing impossible.
+
+That the character form is operator-facing is forced rather than chosen. The
+help overlay prints `c` and `C` for the choice pane's cancellation rows, and the
+round-trip invariant below requires that what help prints parses back to what it
+printed. A grammar refusing them would break the invariant on rows an operator
+can see.
 
 The written form is the one `Chord::display` already produces, and the parser
 and that renderer are held to round-trip: **any chord the help overlay prints
@@ -397,10 +495,16 @@ configuration, which is the only thing it can truthfully document.
 
 ## Migration Plan
 
-Nothing to migrate. No operator has a binding configuration today, the shipped
-defaults are unchanged in both capability columns, and every terminal observes
-exactly the behavior it observes now. An operator opts in by naming a preset or
-writing a row.
+No configuration to migrate: no operator has a binding group today, and an
+operator opts in by naming a preset or writing a row.
+
+There is one behavior to announce, and it needs release notes rather than a
+migration. Making default rows exact withdraws the modifier variants the old
+handler conditions accepted, so a terminal observes the behavior it observes now
+for every chord the overlay names and not for the variants it never named. The
+withdrawn set is enumerated by task 8.1 rather than estimated here, and task 8.2
+decides which of them are worth declaring back. Nobody has to do anything; some
+people will notice.
 
 Rollback is granular: the format, the parser, the presets, and the effective
 table are independent of one another. Withdrawing a preset leaves the
@@ -413,11 +517,6 @@ configuration mechanism in place.
   are ordered — the second is only worth asking where the first says yes.
   `todos/tui/62` is the place to gather it. This governs the shipped resolution
   of `primary` on macOS, which reaches only opt-in configuration.
-- Should the binding-set selector be spelled `keybindings` rather than
-  `presets`? Operator-definable named sets are deferred to `todos/tui/67`, and
-  under that design a shipped set and an operator's set are one concept. Naming
-  the selector for the concept now costs a word; renaming a shipped format key
-  later does not.
 - Should further presets ship, beyond the two the operator named? Adding one
   later is cheap; the question is only whether any other set is common enough to
   be worth naming.
