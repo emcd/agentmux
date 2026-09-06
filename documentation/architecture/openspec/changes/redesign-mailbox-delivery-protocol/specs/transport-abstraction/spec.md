@@ -30,10 +30,10 @@ The delivery-loop executor's contract:
   its own token budget, and MAY coalesce consecutively peeked mail entries
   into one packing unit exactly as `mailw` invocations were previously
   coalesced;
-- it calls `declare(target, generation_id, through_seq)` for exactly that
-  decided prefix — possibly all of what it peeked — **before** attempting
-  to write any of it, per `delivery-quiescence`'s `Mailbox Submission
-  Declaration` requirement;
+- it calls `declare(target, generation_id, range)` for exactly that
+  decided prefix — possibly all of what it peeked — naming both ends of the
+  range, **before** attempting to write any of it, per
+  `delivery-quiescence`'s `Mailbox Submission Declaration` requirement;
 - only then does it attempt the write;
 - it calls `ack(target, generation_id, packing_unit_id, evidence)` naming
   the `PackingUnitId` `declare` returned, supplying per-member

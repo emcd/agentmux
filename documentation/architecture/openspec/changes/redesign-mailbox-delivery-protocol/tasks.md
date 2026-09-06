@@ -39,8 +39,9 @@ thing the shadow exists to establish.
       `AdmissionLedger`, read-only, returning the head contiguous mail run or
       a singleton raw entry, gated on the calling connection's consumer
       generation matching `active_generation_id`.
-- [x] 2.3 Add `declare(target, generation_id, through_seq)` to
-      `AdmissionLedger`. Under the ledger's existing single lock: check
+- [x] 2.3 Add `declare(target, generation_id, range)` to
+      `AdmissionLedger`, the range naming both ends. Under the ledger's
+      existing single lock: check
       `generation_id` against `active_generation_id` first (reject on
       mismatch without effect); validate the named range starts exactly at
       cursor + 1, is contiguous, and does not exceed the mailbox's actual
@@ -447,19 +448,22 @@ letting a tranche boundary fall somewhere convenient.
       `verify-openspec-deltas.py` substitutes: the first checks that a delta
       is well formed and the second that a MODIFIED delta retains what it
       replaces, and a requirement that never reaches a live spec passes both.
-- [ ] 5.14 Settle `agentmux:todos/backend/7` before this change is archived:
-      `declare` is specified as `declare(target, generation_id, through_seq)`
-      by `Mailbox Submission Declaration` and by task 2.3, and takes an
-      `EntryRange` carrying both ends in the implementation. Either author a
-      delta naming a range, correcting task 2.3's wording in the same change,
-      or decide explicitly that `through_seq` is shorthand rather than
-      binding and record that where a later author will see it. The divergence
-      is deliberate — with only `through_seq` a caller cannot express a wrong
-      start, which makes the requirement's own `NotAtCursor` rejection
-      unrepresentable and task 5.4 unwritable — but a reviewed type shape is
-      not an amended requirement, and a MODIFIED delta replaces a whole
-      requirement at sync, so whoever authors against the live text next
-      reintroduces the mismatch without noticing.
+- [x] 5.14 Settle `agentmux:todos/backend/7`: `declare` was specified as
+      `declare(target, generation_id, through_seq)` by `Mailbox Submission
+      Declaration` and by task 2.3, while the implementation takes a range
+      carrying both ends. Resolved in favour of the range, and the
+      requirement now says so. Naming only the run's last position leaves
+      the start derived rather than stated, so a caller cannot express a
+      wrong one, which makes the requirement's own out-of-position
+      rejection unrepresentable and task 5.4 unwritable — a rule no code
+      can enforce. The caller is not guessing the value either: `peek`
+      returns the cursor it read at, so a well-formed declaration echoes
+      back the position the relay just served and the check compares the
+      two views of it. Task 2.3's wording is corrected here, and the same
+      signature in `transport-abstraction`'s delivery-loop sequence and in
+      `src/transports/contract/executor.rs` with it. `Mailbox Submission
+      Declaration` is ADDED by this change rather than MODIFIED, so no live
+      requirement had to be reconciled.
 - [ ] 5.15 Run the retention audit against this change at its **pre-archive**
       state and confirm every dropped scenario, per
       `agentmux:todos/backend/8`, which holds the recorded baseline, the

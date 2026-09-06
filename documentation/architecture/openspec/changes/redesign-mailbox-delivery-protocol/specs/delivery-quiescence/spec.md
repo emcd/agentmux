@@ -1110,13 +1110,22 @@ SHALL be refused without returning any entries.
 ### Requirement: Mailbox Submission Declaration
 
 Before writing any peeked entry, a transport's delivery-loop executor SHALL
-call `declare(target, generation_id, through_seq)`, naming the exact
-contiguous range of entries — starting at the target's current cursor
+call `declare(target, generation_id, range)`, naming the exact contiguous
+range of entries — both ends, starting at the target's current cursor
 position plus one — that it is about to submit as one packing unit. This is
 a relay-visible **start record**, not a permission grant: `declare` never
 refuses a well-formed request from the active generation, gates nothing, and
 grants no exclusivity beyond what `Consumer Generation Ownership and
 Replacement`'s single-active-generation rule already provides.
+
+**The range names its start rather than deriving it, and the relay validates
+that start rather than assuming it.** A caller that could name only the run's
+last position could not express a wrong start, which would make the
+out-of-position rejection below unrepresentable and the rule that declarations
+begin at the cursor a convention no code enforces. The caller is not inventing
+the value: `peek` returns the cursor it read at, so a well-formed declaration
+echoes back the position the relay just served, and the check compares the
+caller's view of the target's position against the relay's own.
 
 `declare` SHALL be rejected, without effect, when: `generation_id` does not
 match the target's `active_generation_id`; the named range does not begin
@@ -1229,9 +1238,10 @@ a prior, still-outstanding `declare` call, from the supplied per-member
 Generation Ownership and Replacement`.
 
 **`ack` SHALL NOT accept a free-form cursor position.** It names a
-previously declared unit, not an arbitrary `through_seq`; the relay looks
+previously declared unit, not a range of its own; the relay looks
 up that unit's bound range from its own ledger rather than trusting a
-caller-supplied endpoint. This is what makes the acknowledged range exactly
+caller-supplied one. A range is named once, at `declare`, where it can still
+be refused before any bytes move. This is what makes the acknowledged range exactly
 the range that was declared before any write was attempted, closing the
 gap a free-form cursor would otherwise leave: a caller with a valid
 generation binding but no corresponding `declare` record cannot advance the
