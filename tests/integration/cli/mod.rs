@@ -1,5 +1,6 @@
 mod bundle;
 mod check;
+mod check_bindings;
 mod drop;
 mod held_bundle_guard;
 mod help;

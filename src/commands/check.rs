@@ -25,6 +25,7 @@ use crate::{
         validate_peer_aliases,
     },
     runtime::{error::RuntimeError, starter::validate_supplied_configuration_layers},
+    tui::unreachable_actions,
 };
 
 use super::{CheckArguments, shared};
@@ -151,8 +152,32 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
     // Validate ui.toml alongside relay.toml at the config-root level: a
     // malformed UI-surface config should fail pre-flight with its path and
     // field detail, matching how the TUI/CLI reject it when loading surface
-    // defaults. An absent or valid ui.toml is a no-op.
-    load_ui_configuration(&roots.configuration_roots).map_err(configuration_error_to_runtime)?;
+    // defaults. An absent or valid ui.toml is a no-op. The same read-only
+    // loader and the same effective-file lookup the TUI uses, so a binding
+    // group is judged here exactly as it will be at startup — and the source
+    // report above already named the physical copy the lookup selected.
+    let ui_configuration = load_ui_configuration(&roots.configuration_roots)
+        .map_err(configuration_error_to_runtime)?;
+
+    // Reported, and deliberately not added to `findings`, which answers for the
+    // exit status. An operator may intend a displacement — declaring the chord
+    // against no action is how they say so — and the report describes the
+    // outcome without judging which it was. Losing the quit chord is the one
+    // case that is not a report, and the loader above has already refused it.
+    //
+    // Suppressed by `--quiet` because the run succeeds: quiet exists so a script
+    // can read the exit code alone, and a line that never accompanies a failure
+    // is success output.
+    if !parsed.quiet {
+        for finding in unreachable_actions(
+            ui_configuration
+                .as_ref()
+                .and_then(|configuration| configuration.bindings.as_ref()),
+            cfg!(target_os = "macos"),
+        ) {
+            println!("binding finding: {}", finding.describe());
+        }
+    }
 
     // Suppressed when a layer could not be read: enumeration returned nothing
     // because it could not look, and this error would name the wrong problem

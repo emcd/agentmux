@@ -57,6 +57,8 @@ mod tui_dispatch;
 mod tui_effective_bindings;
 #[path = "unit/tui_help/mod.rs"]
 mod tui_help;
+#[path = "unit/tui_reachability.rs"]
+mod tui_reachability;
 #[path = "unit/tui_relay_error_mapping.rs"]
 mod tui_relay_error_mapping;
 #[path = "unit/tui_session.rs"]

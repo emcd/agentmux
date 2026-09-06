@@ -4,6 +4,7 @@ mod chord;
 mod context;
 mod effective;
 mod help;
+mod reachability;
 
 pub use action::Action;
 pub use bindings::default_binding;
@@ -18,3 +19,4 @@ pub use help::{
     HelpEntry, HelpSection, HelpSource, binding_for, context_bindings, default_help_bindings,
     help_bindings, interaction_choice_hint, interaction_write_hint, picker_hint, typing_binding,
 };
+pub use reachability::{AffectedClasses, UnreachableAction, quit_unreachable, unreachable_actions};

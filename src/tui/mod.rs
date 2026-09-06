@@ -23,11 +23,12 @@ use keyboard::KeyboardEnhancementSession;
 
 pub(crate) use actions::context_actions;
 pub use actions::{
-    Action, BindingConfiguration, BindingContext, CapabilityClass, ChordError, ChordPattern,
-    ConfiguredAction, ConfiguredBinding, EffectiveBindings, HelpEntry, HelpSection, HelpSource,
-    PrimaryModifier, binding_for, context_bindings, default_binding, default_help_bindings,
-    help_bindings, interaction_choice_hint, interaction_write_hint, parse_chord, picker_hint,
-    primary_modifier, typing_binding,
+    Action, AffectedClasses, BindingConfiguration, BindingContext, CapabilityClass, ChordError,
+    ChordPattern, ConfiguredAction, ConfiguredBinding, EffectiveBindings, HelpEntry, HelpSection,
+    HelpSource, PrimaryModifier, UnreachableAction, binding_for, context_bindings, default_binding,
+    default_help_bindings, help_bindings, interaction_choice_hint, interaction_write_hint,
+    parse_chord, picker_hint, primary_modifier, quit_unreachable, typing_binding,
+    unreachable_actions,
 };
 pub use keyboard::{KeyboardEnhancement, format_keyboard_enhancement_lines};
 pub use state::TuiLaunchOptions;

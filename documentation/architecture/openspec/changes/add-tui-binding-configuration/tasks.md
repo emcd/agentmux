@@ -219,26 +219,70 @@
 
 ## 7. Validation and pre-flight
 
-- [ ] 7.1 Reject a configuration under which no chord reaches the quit action
+- [x] 7.1 Reject a configuration under which no chord reaches the quit action
       under either capability class, with an error naming the file in effect and
       the class, so the answer is the same at startup and at pre-flight.
-- [ ] 7.1a Build the effective table for each capability class where no probe
+      Refused as the group is validated, so every path that loads `ui.toml`
+      inherits it rather than pre-flight and startup each carrying a copy. The
+      refusal reads out of the same sweep that produces every other finding,
+      which is what stops the two disagreeing about whether quit is reachable.
+
+      **The refusal is wired up, correct, and cannot be triggered by any
+      configuration this grammar can express.** Quit sits on a compiled control
+      chord, which matches every modifier set containing `Ctrl`; two of the six
+      modifier flags a terminal can report — `Hyper` and `Meta` — have no
+      spelling in the chord grammar, so `Ctrl+Hyper+C` is unclaimable and keeps
+      quitting however much else an operator claims. Reachability has to answer
+      for what dispatch does, and dispatch delivers that keystroke to the quit
+      row, so refusing there would refuse a configuration that works.
+
+      Asserted rather than left to be rediscovered, in
+      `no_configuration_the_grammar_can_express_takes_quit_away` and its loader
+      and pre-flight counterparts. The guard is kept because the requirement
+      asks for it and because a quit row written as one exact keystroke would
+      trip it; whether a requirement that cannot fire should stand as written is
+      a question for task 8.4 rather than one to settle by weakening the runtime.
+- [x] 7.1a Build the effective table for each capability class where no probe
       outcome is available, so pre-flight has both to inspect.
-- [ ] 7.1b Report, from `agentmux check configuration`, any action a context's
+      `EffectiveBindings::for_each_class`. Group 6 gave this teeth: the shipped
+      sets are enhanced-only, so the two tables genuinely differ now.
+- [x] 7.1b Report, from `agentmux check configuration`, any action a context's
       compiled rows declare that a class's effective table leaves unreachable
       there, naming the action, the context, and the class — as a finding rather
       than a rejection, and once rather than twice where it holds under both.
-- [ ] 7.1c Add tests for a finding under one class only, a finding under both,
+      Printed as `binding finding:`, deliberately not added to the `findings`
+      vector that answers for the exit status, so a report cannot fail a run.
+      The action and context are named in the operator's own vocabulary, since
+      the file is what they act on.
+
+      Candidate keystrokes are derived from the compiled rows themselves and
+      expanded over the whole modifier domain a terminal can report, not over
+      the domain the grammar can spell. The consequence is worth stating: a
+      behavior sitting on a chord shape that matches more than it spells is
+      permanently reachable, so findings can only ever name a behavior whose
+      every chord is written as one exact keystroke. In the compiled table that
+      is the `Enter` family alone, which reaches sending in the compose message
+      field and completion acceptance in the `To` field. Everything else is
+      unreportable, not because nothing is checked but because nothing an
+      operator writes can take it away.
+- [x] 7.1c Add tests for a finding under one class only, a finding under both,
       and quit unreachable under one class alone being rejected. Add a test that
       displacing an action by rebinding its only chord is reported and still
       loads, and that declaring the chord against no action is reported the same
       way, since the report describes the outcome rather than judging intent.
-- [ ] 7.2 Extend `agentmux check configuration` to validate the binding group
+      The last pair is asserted as an equality between the two findings rather
+      than as two separate expectations, so they cannot drift apart.
+- [x] 7.2 Extend `agentmux check configuration` to validate the binding group
       through the same read-only loader and effective-file lookup.
-- [ ] 7.3 Add a test that pre-flight reports the physical `ui.toml` the lookup
-      selected when more than one layer supplies a copy.
-- [ ] 7.4 Add a test that loading writes no configuration artifact, so the
-      compiled defaults are never scaffolded to disk.
+- [x] 7.3 Add a test that pre-flight reports the physical `ui.toml` the lookup
+      selected when more than one layer supplies a copy. Asserted in both
+      directions: the shadowed copy configures nothing, so reading it instead
+      would produce no finding as well as the wrong path.
+- [x] 7.4 Add a test that loading writes no configuration artifact, so the
+      compiled defaults are never scaffolded to disk. Compares the whole
+      configuration tree with contents before and after, with a guard that the
+      fixture actually put a tree there — two empty listings would otherwise
+      compare equal.
 
 ## 8. Documentation and reconciliation
 

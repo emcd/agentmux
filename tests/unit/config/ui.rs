@@ -330,6 +330,92 @@ fn a_behavior_the_context_does_not_declare_is_refused() {
     );
 }
 
+/// A global binding group naming every `Ctrl`-carrying spelling of one
+/// character.
+///
+/// Eight rows, because the compiled quit row matches any modifier set
+/// containing `Ctrl` and dispatch honours that. Claiming fewer leaves quit
+/// reachable through whichever set was left, so eight is what it takes to lose
+/// it — which is itself the reason the refusal below is hard to trigger.
+fn claiming_every_control_spelling(character: char, value: &str) -> String {
+    let mut body = String::from("[bindings.global]\n");
+    for extras in [
+        vec![],
+        vec!["cmd"],
+        vec!["alt"],
+        vec!["shift"],
+        vec!["cmd", "alt"],
+        vec!["cmd", "shift"],
+        vec!["alt", "shift"],
+        vec!["cmd", "alt", "shift"],
+    ] {
+        let mut parts = vec!["ctrl"];
+        parts.extend(extras);
+        body.push_str(&format!("\"{}+{character}\" = {value}\n", parts.join("+")));
+    }
+    body
+}
+
+/// Quit is the one behavior whose loss would be refused rather than reported,
+/// since an operator whose configuration cannot quit cannot fix it from inside
+/// the TUI — but no configuration the grammar can express loses it.
+///
+/// The compiled quit row matches every modifier set containing `Ctrl`, and two
+/// of the six flags a terminal can report are ones the grammar cannot spell.
+/// So `Ctrl+Hyper+C` is unclaimable and still quits, however much of the rest
+/// an operator claims. Asserted here rather than left to be rediscovered: the
+/// refusal is wired up and correct, and this table cannot trip it.
+#[test]
+fn no_binding_group_the_grammar_can_express_is_refused_for_losing_quit() {
+    for value in [
+        "\"none\"",
+        "\"toggle-help-overlay\"",
+        "{ standard = \"none\" }",
+    ] {
+        let loaded = load_bindings(&claiming_every_control_spelling('c', value))
+            .unwrap_or_else(|error| panic!("{value} was refused: {error}"))
+            .expect("existing config");
+        assert_eq!(loaded.bindings.expect("a binding group").rows.len(), 8);
+    }
+}
+
+/// Rebinding the bare quit chord loads, because the compiled row matches any
+/// set containing `Ctrl` and `Ctrl+Shift+C` still reaches it. Refusing here
+/// would refuse a configuration that works.
+#[test]
+fn rebinding_the_bare_quit_chord_still_loads() {
+    let loaded = load_bindings("[bindings.global]\n\"ctrl+c\" = \"toggle-help-overlay\"\n")
+        .expect("quit is still reachable through the combinations left unclaimed")
+        .expect("existing config");
+    assert_eq!(loaded.bindings.expect("a binding group").rows.len(), 1);
+}
+
+/// The control for the refusals above: a configuration that touches the global
+/// context without taking every spelling still loads. Without it, a refusal
+/// that fired on any global row at all would satisfy them.
+#[test]
+fn a_global_row_that_leaves_quit_alone_still_loads() {
+    let loaded = load_bindings("[bindings.global]\n\"ctrl+q\" = \"quit\"\n")
+        .expect("a global row that leaves quit reachable loads")
+        .expect("existing config");
+    assert_eq!(loaded.bindings.expect("a binding group").rows.len(), 1);
+}
+
+/// Losing any other behavior is a finding rather than a refusal, so the
+/// configuration still loads. What pre-flight then says about it is asserted
+/// against the reachability report itself.
+#[test]
+fn displacing_a_behavior_other_than_quit_still_loads() {
+    let loaded = load_bindings(
+        "[bindings.compose-message]\n\"enter\" = \"insert-message-newline\"\n\
+         \"shift+enter\" = \"insert-message-newline\"\n\
+         \"ctrl+enter\" = \"insert-message-newline\"\n",
+    )
+    .expect("displacing a behavior is reported, not refused")
+    .expect("existing config");
+    assert_eq!(loaded.bindings.expect("a binding group").rows.len(), 3);
+}
+
 /// The other half of that rule: a behavior the context does declare may be
 /// given a chord it did not have, which is the main thing a configuration is
 /// for.

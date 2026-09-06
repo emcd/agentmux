@@ -28,6 +28,10 @@ pub enum CapabilityClass {
 }
 
 impl CapabilityClass {
+    /// Both classes, for a caller that has no probe outcome and must answer for
+    /// either terminal a configuration might be read on.
+    pub const ALL: [Self; 2] = [Self::Enhanced, Self::Standard];
+
     /// The class a keyboard-enhancement probe outcome puts a terminal in.
     #[must_use]
     pub const fn of(disambiguates_modified_keys: bool) -> Self {
@@ -36,6 +40,39 @@ impl CapabilityClass {
         } else {
             Self::Standard
         }
+    }
+
+    /// How this class is named in an operator's configuration, and in anything
+    /// said back to them about it.
+    ///
+    /// One definition, because a configuration's class-qualified keys and a
+    /// pre-flight finding naming a class are the same vocabulary; two spellings
+    /// would let a report name a column an operator cannot write.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Enhanced => "enhanced",
+            Self::Standard => "standard",
+        }
+    }
+
+    /// Whether a terminal in this class can deliver this keystroke at all.
+    ///
+    /// A terminal outside the disambiguating class delivers a modified `Enter`
+    /// as a bare `Enter`, so a row written as `Shift+Enter` or `Ctrl+Enter` is
+    /// one no keystroke there can satisfy. Asking whether a behavior is
+    /// reachable without this filter counts such a row as an answer, which is
+    /// the reading under which a configuration that displaced sending onto a
+    /// chord that cannot arrive looks fine.
+    ///
+    /// `Enter` alone, because that is the divergence this codebase's capability
+    /// contract is written about: the compiled table's own documentation says a
+    /// modified `Enter` invokes whatever its context binds to bare `Enter`, and
+    /// nothing else is claimed to vary. A class that came to differ in another
+    /// key would be declared here.
+    #[must_use]
+    pub fn delivers(self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+        self == Self::Enhanced || code != KeyCode::Enter || modifiers.is_empty()
     }
 }
 
@@ -175,6 +212,24 @@ impl EffectiveBindings {
                 resolve(&configuration.preset_rows)
             }),
         }
+    }
+
+    /// The table for each capability class, for a caller with no probe outcome
+    /// to choose between them.
+    ///
+    /// `agentmux check configuration` runs outside a TUI session, so no probe
+    /// has happened and no one class is the answer — and a class-qualified row
+    /// can leave a behavior reachable under one class and unreachable under the
+    /// other. Both tables are therefore constructed and both inspected. Startup
+    /// does have a probe outcome and builds the one table for it, so this is
+    /// what keeps pre-flight's answer a superset of startup's rather than a
+    /// different question.
+    #[must_use]
+    pub fn for_each_class(
+        configuration: Option<&BindingConfiguration>,
+        on_macos: bool,
+    ) -> [(CapabilityClass, Self); 2] {
+        CapabilityClass::ALL.map(|class| (class, Self::build(configuration, class, on_macos)))
     }
 
     /// The behavior a chord reaches in one context, or `None` where it reaches
