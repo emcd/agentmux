@@ -191,6 +191,18 @@ impl DeliveryWriter for PtyDeliveryWriter {
     }
 
     fn plan(&mut self, entries: &[MailboxEntry]) -> Option<PlannedWrite<Self::Plan>> {
+        // Narrow hardening: decline when the child's departure is already
+        // latched. The executor only reaches `plan` while `writable()` passed,
+        // but the reader latches `child_exited` asynchronously, so readiness
+        // may have passed just before the departure landed. Declining here
+        // leaves the entries queued and undeclared for the dwell path instead
+        // of declaring a unit no live child will receive. This narrows the
+        // window; it does not eliminate the OS exit/write race — an exit that
+        // lands after this read and before the write still reports whatever
+        // the write primitive itself observed.
+        if self.shared.child_exited.load(Ordering::Acquire) {
+            return None;
+        }
         let head = entries.first()?;
         let bytes = match &head.payload {
             MailboxPayload::Mail(envelope) => {
@@ -314,5 +326,80 @@ fn render_snapshot(
         cursor_x: terminal.cursor_x().unwrap_or(0),
         cursor_y: terminal.cursor_y().unwrap_or(0),
         cursor_visible: terminal.is_cursor_visible().unwrap_or(false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::mailbox::{EntrySequence, MailboxEntry, MailboxPayload};
+    use crate::pty::state::PtyConfigSnapshot;
+
+    /// A departure that lands after readiness passed but before the plan must
+    /// decline rather than declare.
+    ///
+    /// This is the one interleaving the executor's own health gate cannot see:
+    /// `writable()` passed on a live reading, then the reader latched
+    /// `child_exited` before `drain_target` planned. Without the guard this
+    /// returns `Some` and the entry is declared and written to a departed
+    /// child; with it the entry stays queued and undeclared for the dwell
+    /// path. A full-executor test with departure latched before the first
+    /// peek would pass with or without the guard, so it cannot justify it —
+    /// only this ordering can.
+    #[test]
+    fn plan_declines_when_departure_latches_after_readiness() {
+        let child_exited = Arc::new(AtomicBool::new(false));
+        let (_bytes_tx, bytes_rx) = mpsc::channel::<Vec<u8>>(256);
+        let (snapshot_tx, snapshot_rx) = mpsc::channel::<SnapshotRequest>(64);
+        let terminal = libghostty_vt::Terminal::new(libghostty_vt::TerminalOptions {
+            cols: 120,
+            rows: 40,
+            max_scrollback: 10_000,
+        })
+        .expect("test terminal");
+        let mut planner = PtyDeliveryWriter::new(
+            terminal,
+            bytes_rx,
+            snapshot_rx,
+            Arc::new(Mutex::new(
+                Box::new(std::io::Cursor::new(Vec::new())) as Box<dyn Write + Send>
+            )),
+            PtyShared {
+                config: PtyConfigSnapshot {
+                    target_member_id: "test-session".to_string(),
+                    cols: 120,
+                    rows: 40,
+                    prompt_regex: None,
+                    prompt_inspect_lines: 3,
+                    prompt_idle_column: None,
+                },
+                snapshot_tx,
+                child_exited: Arc::clone(&child_exited),
+            },
+            Arc::new(Mutex::new(WorkerReadinessState::Initializing)),
+            None,
+            Arc::new(UnreachableSince::default()),
+            Arc::new(AtomicBool::new(false)),
+        );
+        // No prompt template, so readiness passes while the child is live.
+        assert!(
+            planner.is_ready(),
+            "unconstrained readiness must pass before the departure",
+        );
+        // The departure lands after readiness passed but before the plan.
+        child_exited.store(true, Ordering::Release);
+        let entry = MailboxEntry {
+            sequence: EntrySequence::new(1).expect("a position is never zero"),
+            message_id: "late".to_string(),
+            canonical_bytes: 1,
+            payload: MailboxPayload::Raw {
+                content: "x".to_string(),
+                append_enter: true,
+            },
+        };
+        assert!(
+            planner.plan(std::slice::from_ref(&entry)).is_none(),
+            "a latched departure must decline the plan instead of declaring",
+        );
     }
 }

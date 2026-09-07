@@ -18,7 +18,7 @@ use agentmux::pty::{
 };
 use agentmux::transports::{
     ChoiceMade, DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage, LookMode,
-    LookSnapshotPayload, StartupContext, SubmissionEvidence, Transport,
+    LookSnapshotPayload, StartupContext, SubmissionEvidence, Transport, TransportHealth,
 };
 use regex::Regex;
 use tokio::sync::mpsc;
@@ -366,6 +366,16 @@ fn pty_writes_each_peeked_entry_as_its_own_unit() {
 /// A departed child's queued mail resolves at the dwell rather than waiting
 /// forever.
 ///
+/// The entry is seeded only after the departure is positively observed, which
+/// is what makes the assertions meaningful: the previous revision seeded
+/// before startup, so the executor could peek, declare, and write before the
+/// reader thread consumed the child's EOF, and a successful master write then
+/// correctly reported `Submitted` per the submission-evidence contract. That
+/// revision established no exit-before-write ordering and so could not pin the
+/// dwell path. Seeding after `health()` reports `Unreachable` establishes it:
+/// from here on no write may be declared, and the dwell owes the entry its
+/// non-submission outcome.
+///
 /// Two separate defects would each strand it, and this test fails on either, so
 /// it is written as one case rather than two.
 ///
@@ -386,14 +396,9 @@ fn pty_writes_each_peeked_entry_as_its_own_unit() {
 #[test]
 fn a_departed_pty_child_resolves_its_queued_mail_at_the_dwell() {
     let temporary = tempfile::TempDir::new().expect("temporary directory");
-    let mailbox = Arc::new(StubMailbox::with_entries(vec![entry(
-        1,
-        "stranded",
-        "NOBODY-WILL-READ-THIS",
-        false,
-    )]));
-    // Exits at once, so the reader sees EOF and latches `child_exited` before the
-    // executor has anything to write.
+    let mailbox = Arc::new(StubMailbox::with_entries(Vec::new()));
+    // Exits at once, so the reader sees EOF and latches `child_exited` while
+    // the mailbox is still empty and the executor has nothing to write.
     let mut transport = started_pty_running(
         &mailbox,
         temporary.path(),
@@ -401,8 +406,29 @@ fn a_departed_pty_child_resolves_its_queued_mail_at_the_dwell() {
         Duration::from_millis(200),
     );
 
+    // Seed only after the departure is positively observed. Seeding earlier
+    // admits the startup race the previous revision failed on: an executor
+    // that writes before any observation of the exit reports `Submitted`
+    // for a write the primitive genuinely accepted.
     let started = Instant::now();
-    while mailbox.unreachable_resolutions() == 0 {
+    loop {
+        if matches!(transport.health(), TransportHealth::Unreachable { .. }) {
+            break;
+        }
+        assert!(
+            started.elapsed() < LIVE_DEADLINE,
+            "the child never observably departed",
+        );
+        thread::sleep(Duration::from_millis(20));
+    }
+    // The dwell may already have elapsed against the empty mailbox — the
+    // stub counts even an empty resolution — so the wait below is on the
+    // placed entry leaving, not on the first resolution firing.
+    let resolutions_before = mailbox.unreachable_resolutions();
+    mailbox.place(entry(1, "stranded", "NOBODY-WILL-READ-THIS", false));
+
+    let started = Instant::now();
+    while !mailbox.is_drained() {
         assert!(
             started.elapsed() < LIVE_DEADLINE,
             "a departed child's entries were never resolved: acked={:?} peeks={:?}",
@@ -413,14 +439,18 @@ fn a_departed_pty_child_resolves_its_queued_mail_at_the_dwell() {
     }
 
     assert!(
-        mailbox.is_drained(),
-        "the resolved entry must leave the mailbox: {:?}",
-        mailbox.acked(),
+        mailbox.unreachable_resolutions() > resolutions_before,
+        "the stranded entry must resolve through the dwell path, not merely \
+         have been preceded by an empty-mailbox resolution",
     );
     assert!(
         mailbox.acked().is_empty(),
         "nothing was written to a departed child, so nothing may be acknowledged: {:?}",
         mailbox.acked(),
+    );
+    assert!(
+        mailbox.outstanding_range().is_none(),
+        "no unit may have been declared over the stranded entry",
     );
 
     Transport::shutdown(&mut transport);
