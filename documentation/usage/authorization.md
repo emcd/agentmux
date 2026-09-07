@@ -15,7 +15,7 @@ the operation's minimum.
 
 The starter template ships two presets:
 
-- `default` — conservative same-bundle policy; `find`, `list`,
+- `default` — conservative same-bundle policy; `list`,
   `look`, and `send` are explicitly set, while `raww`, `choose`, and
   `updown` are intentionally omitted (they resolve to their built-in
   `none` default; an omitted control is not an override).

@@ -542,7 +542,6 @@ description = 'Operator policy with cross-namespace reach.'
 
 [policies.controls]
 choose = 'home'
-find = 'self'
 list = 'all'
 look = 'all'
 raww = 'all'
@@ -654,7 +653,6 @@ id = 'default'
 description = 'Conservative same-bundle policy.'
 
 [policies.controls]
-find = 'self'
 list = 'home'
 look = 'home'
 send = 'home'
@@ -665,7 +663,6 @@ description = 'Operator policy with cross-namespace reach.'
 
 [policies.controls]
 choose = 'home'
-find = 'self'
 list = 'all'
 look = 'all'
 raww = 'all'
