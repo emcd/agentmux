@@ -529,12 +529,21 @@ for lifting it, written in the same place the hold is recorded. "Held" or "no
 dispatch" without a trigger becomes an unbounded commitment that resurfaces
 unresolved in every later triage.
 
-### Lanes Without an Aux Counterpart
+### Review Destinations
 
-A lane whose work normally goes through a dedicated Aux review counterpart
-routes through that counterpart before reaching the integrator. Lanes with no
-such counterpart route through the cross-cutting reviewer instead, rather than
-going from author straight to merge on self-verification alone.
+Every non-trivial change SHALL receive peer review before reaching the
+integrator. The active review destinations are Editor General and Advisor;
+dedicated Aux review lanes are retired and SHALL NOT receive review requests.
+
+Route documentation, nomenclature, OpenSpec prose/specification review, and
+mechanical refactors to Editor General. Reserve Advisor for architecture,
+design, deep technical correctness, behavioral contracts, and cross-lane
+technical review.
+
+Every new OpenSpec proposal SHALL be reviewed by both Advisor and Editor General
+before approval. Request both reviews directly and peer-to-peer; do not spend an
+Advisor review on routine mechanical work. No author goes directly from
+self-verification to merge.
 
 ## Pre-Commit Validation
 
