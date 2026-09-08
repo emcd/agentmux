@@ -4,12 +4,13 @@ use serde_json::json;
 
 use super::errors::validation_tool_error;
 use super::params::{
-    CHANGE_COMMAND_PSK, CHOOSE_OUTCOME_SELECTED, ChangePskArgs, ChooseParams, DROP_COMMAND_PEER,
-    DropPeerArgs, HelpParams, LIST_COMMAND_DECISIONS, LIST_COMMAND_NAMESPACES,
-    LIST_COMMAND_PRINCIPALS, LIST_COMMAND_RELAYS, ListArgs, ListDecisionsArgs, ListNamespacesArgs,
-    ListRelaysArgs, LookParams, NAMESPACE_AGENTMUX, NEW_COMMAND_PEER, NewPeerArgs, RawwParams,
-    SendParams, TOOL_CHANGE, TOOL_CHOOSE, TOOL_DROP, TOOL_HELP, TOOL_LIST, TOOL_LOOK, TOOL_NEW,
-    TOOL_RAWW, TOOL_SEND, TOOL_UPDOWN, UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
+    CHANGE_COMMAND_PSK, CHANGE_COMMAND_SCOPE, CHOOSE_OUTCOME_SELECTED, ChangePskArgs,
+    ChangeScopeArgs, ChooseParams, DROP_COMMAND_PEER, DropPeerArgs, HelpParams,
+    LIST_COMMAND_DECISIONS, LIST_COMMAND_NAMESPACES, LIST_COMMAND_PRINCIPALS, LIST_COMMAND_RELAYS,
+    ListArgs, ListDecisionsArgs, ListNamespacesArgs, ListRelaysArgs, LookParams,
+    NAMESPACE_AGENTMUX, NEW_COMMAND_PEER, NewPeerArgs, RawwParams, SendParams, TOOL_CHANGE,
+    TOOL_CHOOSE, TOOL_DROP, TOOL_HELP, TOOL_LIST, TOOL_LOOK, TOOL_NEW, TOOL_RAWW, TOOL_SEND,
+    TOOL_UPDOWN, UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
 };
 
 pub(super) fn help_tool(
@@ -23,7 +24,7 @@ pub(super) fn help_tool(
             "association": association,
             "shape_hints": [
                 "Call help with query='list', 'updown', 'new', 'change', or 'drop' for meta-tool command lists.",
-                "Call help with query='list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'updown.up', 'updown.down', 'new.peer', 'change.psk', or 'drop.peer' for command args schemas.",
+                "Call help with query='list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'updown.up', 'updown.down', 'new.peer', 'change.psk', 'change.scope', or 'drop.peer' for command args schemas.",
                 "Call help with query='send', 'look', 'raww', or 'choose' for exact tool args schemas."
             ],
             "tools": [
@@ -34,7 +35,7 @@ pub(super) fn help_tool(
                 {"tool": TOOL_CHOOSE, "kind": "tool", "description": "Submit an ACP-native decision on a pending choice request."},
                 {"tool": TOOL_UPDOWN, "kind": "meta_tool", "description": "Administer the associated bundle's runtime state (up=host, down=unhost)."},
                 {"tool": TOOL_NEW, "kind": "meta_tool", "description": "Register a principal credential and mint its PSK."},
-                {"tool": TOOL_CHANGE, "kind": "meta_tool", "description": "Rotate the PSK for an existing principal."},
+                {"tool": TOOL_CHANGE, "kind": "meta_tool", "description": "Rotate a principal credential or replace a peer relay's ingress scope."},
                 {"tool": TOOL_DROP, "kind": "meta_tool", "description": "Delete a principal credential from the relay principal store."},
                 {"tool": TOOL_HELP, "kind": "tool", "description": "Return tool/command help and JSON schemas."}
             ],
@@ -236,7 +237,7 @@ pub(super) fn help_tool(
         })),
         "new.peer" => Ok(command_help(
             "new.peer",
-            "Generate a PSK for a principal_id and return it, or write it to an output path or the principal's config (write_to_config).",
+            "Generate a PSK for a principal_id and return it, or write it to an output path or the principal's config (write_to_config). For a peer relay principal, scope is '*' for every namespace with addressable principals (including GLOBAL and future addressable namespace types), a comma-separated set of explicit namespaces, or omitted for no rights.",
             json_schema_for::<NewPeerArgs>(),
             json!({
                 "tool": TOOL_NEW,
@@ -249,11 +250,15 @@ pub(super) fn help_tool(
         TOOL_CHANGE => Ok(json!({
             "tool": TOOL_CHANGE,
             "kind": "meta_tool",
-            "description": "Rotate the PSK for an existing principal.",
+            "description": "Rotate a principal credential or replace a peer relay's ingress scope.",
             "commands": [
                 {
                     "command": "change.psk",
                     "description": "Generate a new PSK for an existing principal_id and return it, or write it to an output path or the principal's config (write_to_config)."
+                },
+                {
+                    "command": "change.scope",
+                    "description": "Replace a peer relay principal's ingress scope in place without changing its credential: '*' for every namespace with addressable principals (including GLOBAL and future addressable namespace types), a comma-separated set of explicit namespaces, or an explicit empty string to clear the grant. Requires change.scope=all relay authorization, distinct from rotation permission."
                 }
             ],
             "invoke": {
@@ -273,6 +278,18 @@ pub(super) fn help_tool(
                 "params": {
                     "command": CHANGE_COMMAND_PSK,
                     "args": {"principal_id": "<id>@<namespace>"}
+                }
+            }),
+        )),
+        "change.scope" => Ok(command_help(
+            "change.scope",
+            "Replace a peer relay principal's ingress scope in place without changing its credential: '*' for every namespace with addressable principals (including GLOBAL and future addressable namespace types), a comma-separated set of explicit namespaces, or an explicit empty string to clear the grant. Requires change.scope=all relay authorization, distinct from rotation permission.",
+            json_schema_for::<ChangeScopeArgs>(),
+            json!({
+                "tool": TOOL_CHANGE,
+                "params": {
+                    "command": CHANGE_COMMAND_SCOPE,
+                    "args": {"principal_id": "<id>@RELAY", "scope": "alpha,beta"}
                 }
             }),
         )),
@@ -308,7 +325,7 @@ pub(super) fn help_tool(
         )),
         _ => Err(validation_tool_error(
             "validation_invalid_params",
-            "unknown help query; try empty query, 'agentmux', 'list', 'list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'send', 'look', 'raww', 'choose', 'updown', 'updown.up', 'updown.down', 'new', 'new.peer', 'change', 'change.psk', 'drop', or 'drop.peer'",
+            "unknown help query; try empty query, 'agentmux', 'list', 'list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'send', 'look', 'raww', 'choose', 'updown', 'updown.up', 'updown.down', 'new', 'new.peer', 'change', 'change.psk', 'change.scope', 'drop', or 'drop.peer'",
             Some(json!({"query": query})),
         )),
     }

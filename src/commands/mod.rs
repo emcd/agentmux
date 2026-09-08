@@ -132,6 +132,16 @@ pub(super) struct ChangePskArguments {
 }
 
 #[derive(Clone, Debug)]
+pub(super) struct ChangeScopeArguments {
+    pub(super) principal_id: String,
+    pub(super) scope: String,
+    pub(super) bundle_name: Option<String>,
+    pub(super) session_selector: Option<String>,
+    pub(super) output_json: bool,
+    pub(super) runtime: RuntimeArguments,
+}
+
+#[derive(Clone, Debug)]
 pub(super) struct DropPeerArguments {
     pub(super) principal_id: String,
     pub(super) bundle_name: Option<String>,

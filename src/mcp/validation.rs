@@ -7,10 +7,10 @@ use crate::{relay::CredentialDestination, runtime::paths::is_valid_bundle_name};
 
 use super::errors::validation_tool_error;
 use super::params::{
-    CHOOSE_OUTCOME_CANCELLED, CHOOSE_OUTCOME_SELECTED, ChangeParams, ChangePskArgs, ChooseParams,
-    DropParams, DropPeerArgs, HelpParams, LOOK_LINES_MAX, LOOK_LINES_MIN, ListArgs,
-    ListDecisionsArgs, ListNamespacesArgs, ListParams, ListRelaysArgs, LookParams, NewParams,
-    NewPeerArgs, RawwParams, SendParams, UpdownArgs, UpdownParams,
+    CHOOSE_OUTCOME_CANCELLED, CHOOSE_OUTCOME_SELECTED, ChangeParams, ChangePskArgs,
+    ChangeScopeArgs, ChooseParams, DropParams, DropPeerArgs, HelpParams, LOOK_LINES_MAX,
+    LOOK_LINES_MIN, ListArgs, ListDecisionsArgs, ListNamespacesArgs, ListParams, ListRelaysArgs,
+    LookParams, NewParams, NewPeerArgs, RawwParams, SendParams, UpdownArgs, UpdownParams,
 };
 
 pub(super) fn validate_list_params(params: &ListParams) -> Result<(), McpError> {
@@ -70,6 +70,10 @@ pub(super) fn validate_change_params(params: &ChangeParams) -> Result<(), McpErr
 
 pub(super) fn validate_change_psk_args(args: &ChangePskArgs) -> Result<(), McpError> {
     validate_unknown_fields("change psk command", Some("args"), &args.extra_fields)
+}
+
+pub(super) fn validate_change_scope_args(args: &ChangeScopeArgs) -> Result<(), McpError> {
+    validate_unknown_fields("change scope command", Some("args"), &args.extra_fields)
 }
 
 pub(super) fn validate_drop_params(params: &DropParams) -> Result<(), McpError> {

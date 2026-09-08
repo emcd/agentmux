@@ -55,11 +55,11 @@
 - [x] 4.2 Gate all scope updates with `change.scope=all` through the existing
   action-control map. Add the explicit grant to the starter operator preset;
   leave existing configs and missing-action deny defaults unchanged.
-- [ ] 4.3 Extend CLI change dispatch with `change scope <principal_id> --scope
+- [x] 4.3 Extend CLI change dispatch with `change scope <principal_id> --scope
   SCOPE`, existing requester/runtime/JSON conventions, canonical scope output
   and vocabulary diagnostics. Keep new-peer string scope and psk-specific
   destinations and behavior separate.
-- [ ] 4.4 Extend MCP change selector, scope params/validation/handler and help
+- [x] 4.4 Extend MCP change selector, scope params/validation/handler and help
   catalog/schema. Expose exact `change.scope` args, update new-peer grammar
   descriptions, preserve PSK response contracts and relay error passthrough,
   and add no top-level tool.

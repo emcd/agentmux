@@ -78,6 +78,7 @@ async fn help_command_schemas_are_free_of_null_unions() {
         "list.principals",
         "new.peer",
         "change.psk",
+        "change.scope",
     ];
 
     let mut offenders = Vec::new();
@@ -117,7 +118,7 @@ async fn meta_tool_command_schemas_are_flat_string_enums() {
         ("list", &["principals", "namespaces", "relays", "decisions"]),
         ("updown", &["up", "down"]),
         ("new", &["peer"]),
-        ("change", &["psk"]),
+        ("change", &["psk", "scope"]),
     ];
 
     for (tool_name, values) in expected {
