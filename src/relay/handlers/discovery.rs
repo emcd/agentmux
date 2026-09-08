@@ -25,7 +25,8 @@ use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 
 use super::super::authorization::{authorize_discovery_origin, requester_list_reaches_all};
 use super::super::identity::{
-    PrincipalType, classify_principal_id, scope_permits, split_principal_id,
+    PrincipalType, classify_principal_id, peer_scope_covers_namespace, peer_scope_covers_target,
+    split_principal_id,
 };
 use super::super::stream::list_namespace_sessions;
 use super::super::{
@@ -179,7 +180,7 @@ fn receiving_namespace_discovery(
         let bundle = load_bundle_configuration(context.configuration_roots, &paths.bundle_name)
             .map_err(map_config)?;
         let covered = bundle.members.iter().any(|member| {
-            scope_permits(
+            peer_scope_covers_target(
                 Some(scope),
                 canonical_session_id(member.id.as_str(), paths.bundle_name.as_str()).as_str(),
             )
@@ -190,7 +191,7 @@ fn receiving_namespace_discovery(
     }
     let global_covered = list_namespace_sessions(GLOBAL_NAMESPACE)
         .iter()
-        .any(|(principal_id, _, _)| scope_permits(Some(scope), principal_id.as_str()));
+        .any(|(principal_id, _, _)| peer_scope_covers_target(Some(scope), principal_id.as_str()));
     if global_covered {
         namespaces.insert(GLOBAL_NAMESPACE.to_string());
     }
@@ -223,8 +224,8 @@ fn emit_scope_unmatched(requester: &str, scope: &str) {
 /// Receiving-side principal discovery for one concrete namespace. A namespace the
 /// scope does not cover — including a nonexistent one — is rejected uniformly with
 /// `authorization_forbidden`, disclosing no existence. A covered namespace returns
-/// the canonical listed bundle filtered to scope-covered principals, marked
-/// `principals_partial` when a principal-scoped grant omitted others.
+/// its complete listing with normal diagnostics and no scope-induced
+/// `principals_partial` marker: peer grants cover whole namespaces.
 fn receiving_principal_discovery(
     context: &DiscoveryContext<'_>,
     scope: Option<&str>,
@@ -258,9 +259,9 @@ fn receiving_principal_discovery(
     })
 }
 
-/// Builds the scope-filtered listed bundle for a covered namespace. Reuses the
-/// canonical listed-bundle builder, then trims principals to those the scope
-/// permits, setting `principals_partial` when a strict subset survives.
+/// Builds the listed bundle for a covered namespace. Peer grants cover whole
+/// namespaces, so a covered namespace returns its complete canonical listing
+/// with normal diagnostics and no scope-induced `principals_partial` marker.
 fn build_scoped_namespace_bundle(
     context: &DiscoveryContext<'_>,
     scope: &str,
@@ -280,46 +281,36 @@ fn build_scoped_namespace_bundle(
     let bundle_config =
         load_bundle_configuration(context.configuration_roots, namespace).map_err(map_config)?;
     let tmux_socket = tmux_socket_path_for_runtime_directory(&paths.runtime_directory);
-    let mut bundle = build_listed_bundle(
+    let bundle = build_listed_bundle(
         &bundle_config,
         &paths.runtime_directory,
         tmux_socket.as_path(),
     )?;
-    let total = bundle.principals.len();
-    bundle
-        .principals
-        .retain(|principal| scope_permits(Some(scope), principal.id.as_str()));
-    // `principals_partial` reflects an actual omission of configured principals.
-    if bundle.principals.len() < total {
-        bundle.principals_partial = Some(true);
-    }
-    // An exact-principal grant authorizes addressing the covered principals only,
-    // regardless of whether an omission happened to occur. Suppress every
-    // bundle-level diagnostic — hosting/state/startup health and the
-    // startup-failure history — because it describes namespace-wide state outside
-    // the grant. This must not hinge on the partial marker: startup history is
-    // keyed by session id independent of current membership, so a stale record
-    // for a removed or out-of-scope principal would otherwise leak through a
-    // grant whose sole covered principal is the only member currently configured.
-    if is_exact_principal_scope(scope) {
-        suppress_bundle_diagnostics(&mut bundle);
-    }
+    debug_assert!(
+        bundle
+            .principals
+            .iter()
+            .all(|principal| peer_scope_covers_target(Some(scope), principal.id.as_str())),
+        "a covered namespace must expose only scope-covered principals"
+    );
     Ok(bundle)
 }
 
-/// Builds the scope-filtered `GLOBAL` listed bundle from the unified registry.
+/// Builds the `GLOBAL` listed bundle from the unified registry.
 ///
 /// `GLOBAL` is registry-backed rather than a `BundleCatalog` bundle, so its
 /// principals come from `list_namespace_sessions` and there is no bundle
 /// configuration, runtime directory, or startup history to fold. Without this
 /// path a foreign `GLOBAL` principal request always fell through to an empty
-/// bundle even when namespace discovery had advertised `GLOBAL`.
+/// bundle even when namespace discovery had advertised `GLOBAL`. A covered
+/// `GLOBAL` returns every registry principal with canonical list state —
+/// hosted/up iff a principal is ready (see `handle_global_list`) — and no
+/// scope-induced `principals_partial` marker.
 fn build_scoped_global_bundle(scope: &str) -> ListedBundle {
     let sessions = list_namespace_sessions(GLOBAL_NAMESPACE);
-    let total = sessions.len();
     let mut principals = sessions
         .into_iter()
-        .filter(|(principal_id, _, _)| scope_permits(Some(scope), principal_id.as_str()))
+        .filter(|(principal_id, _, _)| peer_scope_covers_target(Some(scope), principal_id.as_str()))
         .map(|(principal_id, session_type, ready)| ListedSession {
             id: principal_id,
             name: None,
@@ -328,12 +319,7 @@ fn build_scoped_global_bundle(scope: &str) -> ListedBundle {
         })
         .collect::<Vec<_>>();
     principals.sort_by(|left, right| left.id.cmp(&right.id));
-    let partial = principals.len() < total;
-    // A namespace (complete) grant mirrors canonical `GLOBAL` list state —
-    // hosted/up iff a covered principal is ready (see `handle_global_list`). An
-    // exact-principal grant is addressing-only, so it keeps neutral diagnostics
-    // like every other subset view.
-    let hosted = !is_exact_principal_scope(scope) && principals.iter().any(|session| session.ready);
+    let hosted = principals.iter().any(|session| session.ready);
     let state = if hosted {
         ListedBundleState::Up
     } else {
@@ -349,27 +335,8 @@ fn build_scoped_global_bundle(scope: &str) -> ListedBundle {
         startup_failure_count: 0,
         recent_startup_failures: Vec::new(),
         principals,
-        principals_partial: partial.then_some(true),
+        principals_partial: None,
     }
-}
-
-/// Whether an ingress `scope` names a single principal (`id@namespace`) rather
-/// than a whole namespace. An exact-principal grant is addressing-only: its
-/// listing exposes only the covered principals and no bundle-level diagnostics.
-fn is_exact_principal_scope(scope: &str) -> bool {
-    split_principal_id(scope).is_some()
-}
-
-/// Neutralizes bundle-level diagnostics on an exact-principal (addressing-only)
-/// listing so it exposes only per-principal data.
-fn suppress_bundle_diagnostics(bundle: &mut ListedBundle) {
-    bundle.hosted = false;
-    bundle.state = ListedBundleState::Down;
-    bundle.startup_health = None;
-    bundle.state_reason_code = None;
-    bundle.state_reason = None;
-    bundle.startup_failure_count = 0;
-    bundle.recent_startup_failures = Vec::new();
 }
 
 /// Forwards a discovery request to the peer named by `alias`, propagating a
@@ -426,12 +393,11 @@ fn is_relay_principal(principal: &RequestPrincipal) -> bool {
     classify_principal_id(principal.session_id.as_str()) == Some(PrincipalType::Relay)
 }
 
-/// Whether an ingress `scope` covers `namespace` for principal discovery: a bare
-/// bundle scope names the namespace directly, and an exact `id@namespace` scope
-/// covers its own namespace. Fail-closed for any other scope.
+/// Whether an ingress `scope` covers `namespace` for principal discovery: `*`
+/// covers every addressable namespace and a set covers its named namespaces.
+/// Fail-closed for any other scope.
 fn scope_covers_namespace(scope: &str, namespace: &str) -> bool {
-    scope == namespace
-        || matches!(split_principal_id(scope), Some((_, scope_namespace)) if scope_namespace == namespace)
+    peer_scope_covers_namespace(Some(scope), namespace)
 }
 
 /// Rejects a peer relay attempting to re-forward discovery through this relay.

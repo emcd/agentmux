@@ -1,9 +1,9 @@
 //! Receiving-side (ingress) discovery, filtered by the peer principal's scope.
 //!
-//! A namespace scope exposes the complete namespace, an exact-principal scope
-//! exposes a `principals_partial` subset, an out-of-scope or empty namespace
-//! discloses no existence, and an absent scope denies. The scope filter also
-//! governs what reaches the receiving operator's inscriptions.
+//! A namespace set or wildcard scope exposes complete namespaces, an
+//! out-of-scope or empty namespace discloses no existence, and an absent scope
+//! denies. The scope filter also governs what reaches the receiving
+//! operator's inscriptions.
 
 use std::io::BufReader;
 use std::os::unix::net::UnixStream;
@@ -301,41 +301,6 @@ fn ingress_principal_discovery_returns_complete_namespace_under_namespace_scope(
 }
 
 #[test]
-fn ingress_principal_discovery_marks_subset_under_exact_principal_scope() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
-    let state_root = temporary.path().join("state");
-    let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
-    let relay_principal_id = unique_relay_principal_id();
-    // An exact-principal scope exposes only that principal.
-    write_ingress_peer_store(
-        &bundle_paths.state_root,
-        relay_principal_id.as_str(),
-        Some(format!("alpha@{bundle_name}").as_str()),
-    );
-    let response = ingress_request_response(
-        &configuration_roots,
-        &bundle_paths,
-        relay_principal_id.as_str(),
-        json!({"operation": "discover_principals", "namespace": bundle_name}),
-    );
-    assert_eq!(response["response"]["kind"], "discover_principals");
-    let bundles = response["response"]["bundles"]
-        .as_array()
-        .expect("bundles array");
-    assert_eq!(bundles.len(), 1);
-    let principals = bundles[0]["principals"]
-        .as_array()
-        .expect("principals array");
-    assert_eq!(principals.len(), 1);
-    assert_eq!(principals[0]["id"], format!("alpha@{bundle_name}"));
-    // The subset omits `bravo`, so the marker is set.
-    assert_eq!(bundles[0]["principals_partial"], true);
-}
-
-#[test]
 fn ingress_principal_discovery_denies_out_of_scope_namespace_without_disclosure() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
@@ -404,118 +369,6 @@ fn ingress_principal_discovery_denies_absent_scope() {
 }
 
 #[test]
-fn ingress_exact_scope_suppresses_stale_out_of_scope_startup_history() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
-    // Reconfigure the bundle to the single member `alpha`. `bravo` is no longer a
-    // configured member, but a stale startup-failure record for it survives on
-    // disk (startup history is keyed by session id, independent of membership).
-    std::fs::write(
-        configuration_roots
-            .base_layer()
-            .join("bundles")
-            .join(format!("{bundle_name}.toml")),
-        "\nformat-version = 1\n\n[[sessions]]\nid = \"alpha\"\nname = \"Alpha\"\ndirectory = \"/tmp\"\ncoder = \"shell\"\n",
-    )
-    .expect("rewrite sole-alpha bundle");
-    let state_root = temporary.path().join("state");
-    let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
-    write_startup_failure(&bundle_paths.runtime_directory, "bravo");
-    let relay_principal_id = unique_relay_principal_id();
-    // Exact-principal scope for the sole configured member: nothing is omitted, so
-    // the partial marker stays unset — but the exact-principal grant must still
-    // suppress the stale out-of-scope history rather than leak it because
-    // `len == total`.
-    write_ingress_peer_store(
-        &bundle_paths.state_root,
-        relay_principal_id.as_str(),
-        Some(format!("alpha@{bundle_name}").as_str()),
-    );
-    let response = ingress_request_response(
-        &configuration_roots,
-        &bundle_paths,
-        relay_principal_id.as_str(),
-        json!({"operation": "discover_principals", "namespace": bundle_name}),
-    );
-    assert_eq!(response["response"]["kind"], "discover_principals");
-    let bundle = &response["response"]["bundles"][0];
-    let principals = bundle["principals"].as_array().expect("principals array");
-    assert_eq!(principals.len(), 1);
-    assert_eq!(principals[0]["id"], format!("alpha@{bundle_name}"));
-    // No configured principal was omitted, so the partial marker is absent.
-    assert!(bundle.get("principals_partial").is_none() || bundle["principals_partial"].is_null());
-    // The exact-principal grant still suppresses the stale out-of-scope history
-    // and every bundle diagnostic.
-    assert_eq!(bundle["startup_failure_count"], 0);
-    assert!(
-        bundle["recent_startup_failures"]
-            .as_array()
-            .expect("failures array")
-            .is_empty()
-    );
-    assert!(
-        !serde_json::to_string(bundle)
-            .expect("encode bundle")
-            .contains("bravo"),
-        "stale out-of-scope startup history must not leak: {bundle}"
-    );
-    drop(temporary);
-}
-
-#[test]
-fn ingress_principal_subset_suppresses_out_of_scope_bundle_diagnostics() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
-    let state_root = temporary.path().join("state");
-    let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
-    // A recorded startup failure for out-of-scope `bravo`, carrying its session
-    // id, reason, and details. An `alpha`-only grant must not leak any of it.
-    write_startup_failure(&bundle_paths.runtime_directory, "bravo");
-    let relay_principal_id = unique_relay_principal_id();
-    write_ingress_peer_store(
-        &bundle_paths.state_root,
-        relay_principal_id.as_str(),
-        Some(format!("alpha@{bundle_name}").as_str()),
-    );
-    let response = ingress_request_response(
-        &configuration_roots,
-        &bundle_paths,
-        relay_principal_id.as_str(),
-        json!({"operation": "discover_principals", "namespace": bundle_name}),
-    );
-    assert_eq!(response["response"]["kind"], "discover_principals");
-    let bundle = &response["response"]["bundles"][0];
-    // Only the covered principal survives, and the subset is marked.
-    let principals = bundle["principals"].as_array().expect("principals array");
-    assert_eq!(principals.len(), 1);
-    assert_eq!(principals[0]["id"], format!("alpha@{bundle_name}"));
-    assert_eq!(bundle["principals_partial"], true);
-    // The out-of-scope failure record and its count are suppressed, along with
-    // every other bundle-level diagnostic that describes namespace-wide state.
-    assert_eq!(bundle["startup_failure_count"], 0);
-    assert!(
-        bundle["recent_startup_failures"]
-            .as_array()
-            .expect("failures array")
-            .is_empty()
-    );
-    assert_eq!(bundle["hosted"], false);
-    assert_eq!(bundle["state"], "down");
-    // No serialized field carries the out-of-scope session id.
-    assert!(
-        !serde_json::to_string(bundle)
-            .expect("encode bundle")
-            .contains("bravo"),
-        "subset listing must not leak out-of-scope session data: {bundle}"
-    );
-    drop(temporary);
-}
-
-#[test]
 fn ingress_global_principal_discovery_enumerates_registry_under_namespace_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
@@ -569,51 +422,6 @@ fn ingress_global_principal_discovery_enumerates_registry_under_namespace_scope(
 }
 
 #[test]
-fn ingress_global_principal_discovery_marks_subset_under_exact_scope() {
-    let temporary = TempDir::new().expect("temporary directory");
-    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
-    let state_root = temporary.path().join("state");
-    let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
-    let relay_principal_id = unique_relay_principal_id();
-    // Two declared GLOBAL operators, both live in the registry; the exact grant
-    // covers only one.
-    let (covered, excluded) = declare_two_global_operators(&configuration_roots, &bundle_name);
-    write_ingress_peer_store(
-        &bundle_paths.state_root,
-        relay_principal_id.as_str(),
-        Some(covered.as_str()),
-    );
-    let (covered_client, covered_handle) =
-        spawn_live_global_principal(&configuration_roots, &bundle_paths, covered.as_str());
-    let (excluded_client, excluded_handle) =
-        spawn_live_global_principal(&configuration_roots, &bundle_paths, excluded.as_str());
-    let response = ingress_request_response(
-        &configuration_roots,
-        &bundle_paths,
-        relay_principal_id.as_str(),
-        json!({"operation": "discover_principals", "namespace": "GLOBAL"}),
-    );
-    assert_eq!(response["response"]["kind"], "discover_principals");
-    let bundle = &response["response"]["bundles"][0];
-    let principals = bundle["principals"].as_array().expect("principals array");
-    assert_eq!(principals.len(), 1);
-    assert_eq!(principals[0]["id"], covered);
-    // The excluded relay-wide principal is omitted and the subset is marked.
-    assert_eq!(bundle["principals_partial"], true);
-    // An exact-principal grant is addressing-only: neutral diagnostics even
-    // though the covered principal is live.
-    assert_eq!(bundle["hosted"], false);
-    assert_eq!(bundle["state"], "down");
-    covered_client.shutdown(std::net::Shutdown::Both).ok();
-    excluded_client.shutdown(std::net::Shutdown::Both).ok();
-    covered_handle.join().expect("join covered principal");
-    excluded_handle.join().expect("join excluded principal");
-    drop(temporary);
-}
-
-#[test]
 fn ingress_discovery_rejects_peer_reforward_without_dialing() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
@@ -646,51 +454,6 @@ fn ingress_discovery_rejects_peer_reforward_without_dialing() {
         response["response"]["error"]["details"]["capability"],
         "ingress"
     );
-}
-
-// Writes a startup-failure history file into the bundle runtime directory with a
-// single failure record for `session_id`, so a list projection folds it into
-// `recent_startup_failures` (and its count) unless a scope filter suppresses it.
-fn write_startup_failure(runtime_directory: &Path, session_id: &str) {
-    std::fs::create_dir_all(runtime_directory).expect("create runtime directory");
-    let body = json!({
-        "schema_version": 1,
-        "next_sequence": 2,
-        "records": [{
-            "session_id": session_id,
-            "transport": "tmux",
-            "code": "runtime_startup_failed",
-            "reason": "boom",
-            "timestamp": "2026-07-21T00:00:00Z",
-            "sequence": 1,
-            "details": {"note": "out-of-scope detail"},
-        }],
-    });
-    std::fs::write(
-        runtime_directory.join("startup_failures.json"),
-        serde_json::to_string(&body).expect("encode failure history"),
-    )
-    .expect("write startup failure history");
-}
-
-// Rewrites users.toml to declare two GLOBAL operator principals, returning their
-// ids. A GLOBAL principal must be declared to Hello, so a multi-principal GLOBAL
-// registry test needs more than the single default operator the standard
-// configuration declares.
-fn declare_two_global_operators(
-    configuration_roots: &ConfigurationRoots,
-    bundle_name: &str,
-) -> (String, String) {
-    let first = global_user_id(bundle_name);
-    let second = first.replace("@GLOBAL", "-two@GLOBAL");
-    std::fs::write(
-        configuration_roots.base_layer().join("users.toml"),
-        format!(
-            "default-session = \"{first}\"\n\n[[sessions]]\nid = \"{first}\"\npolicy = \"operator\"\n\n[sessions.ui]\n\n[[sessions]]\nid = \"{second}\"\npolicy = \"operator\"\n\n[sessions.ui]\n"
-        ),
-    )
-    .expect("write users configuration");
-    (first, second)
 }
 
 // Opens a live `@GLOBAL` connection and holds it registered in the process-wide

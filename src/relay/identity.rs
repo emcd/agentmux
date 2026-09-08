@@ -19,6 +19,10 @@ use crate::runtime::paths::{is_valid_bundle_name, session_identity_psk_path};
 
 use super::{CredentialDestination, GLOBAL_SESSION_SUFFIX, RelayError, relay_error};
 
+pub(crate) use super::peer_scope::{
+    parse_peer_scope, peer_scope_covers_namespace, peer_scope_covers_target,
+};
+
 const PSK_BYTE_LENGTH: usize = 32;
 const PRINCIPAL_FILE_MODE: u32 = 0o600;
 const PRINCIPAL_STORE_FORMAT_VERSION: u32 = 1;
@@ -41,6 +45,14 @@ fn unique_temp_path(final_path: &Path, tag: &str) -> PathBuf {
     let mut name = final_path.file_name().unwrap_or_default().to_os_string();
     name.push(format!(".{pid}.{nonce}.{tag}.tmp"));
     final_path.with_file_name(name)
+}
+
+/// Syncs a parent directory so a just-renamed store file is durable before the
+/// caller acknowledges success. Opening the directory read-only and syncing it
+/// persists the rename itself, not just file contents.
+fn sync_parent_directory(dir: &Path) -> io::Result<()> {
+    let file = fs::File::open(dir)?;
+    file.sync_all()
 }
 
 /// Returns the canonical `session@namespace` identity for a session id.
@@ -196,6 +208,18 @@ impl PrincipalStore {
         }
         let mut records_by_hash = HashMap::with_capacity(envelope.principals.len());
         for record in envelope.principals {
+            if record.principal_type == PrincipalType::Relay
+                && parse_peer_scope(record.scope.as_deref()).is_err()
+            {
+                return Err(relay_error(
+                    "internal_principal_store",
+                    "principal store holds a malformed peer scope",
+                    Some(json!({
+                        "path": path.display().to_string(),
+                        "principal_id": record.principal_id,
+                    })),
+                ));
+            }
             records_by_hash.insert(record.credential_hash.clone(), record);
         }
         Ok(Self {
@@ -261,8 +285,12 @@ impl PrincipalStore {
 
     /// Writes the principal store to disk with mode 0600.
     ///
-    /// Persists by writing to a sibling temporary file and renaming so that a
-    /// crash mid-write cannot corrupt an existing store.
+    /// Persists by writing to a sibling temporary file, syncing it, renaming
+    /// over the store file (the update linearization point for effective state),
+    /// then syncing the parent directory before reporting durable success. A
+    /// post-rename directory-sync failure reports
+    /// `internal_store_durability_uncertain`: publication already occurred, so
+    /// callers must not claim the old store remains durable or effective.
     pub(crate) fn persist(&self) -> Result<(), RelayError> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|source| self.io_error("create parent", source))?;
@@ -284,10 +312,7 @@ impl PrincipalStore {
         })?;
         // Stage into a per-attempt-unique sibling (`create_new`, so a stale or
         // concurrent temp can never be reused) and enforce mode BEFORE the
-        // rename, so the atomic rename is the single, last fallible step. A
-        // failure after publication (e.g. a post-rename chmod) would otherwise
-        // report an error while the new store is already durable, defeating the
-        // handlers' rollback.
+        // rename. A failure before publication leaves the old store intact.
         let tmp_path = unique_temp_path(&self.path, "store");
         {
             let mut options = fs::OpenOptions::new();
@@ -311,11 +336,27 @@ impl PrincipalStore {
             let _ = fs::remove_file(&tmp_path);
             return Err(self.io_error("set mode 0600", source));
         }
-        // Commit point: nothing fallible runs after this rename.
+        // Commit point: the rename publishes the replacement.
         fs::rename(&tmp_path, &self.path).map_err(|source| {
             let _ = fs::remove_file(&tmp_path);
             self.io_error("rename store", source)
         })?;
+        // Durable completion: sync the parent directory before acknowledging
+        // success. Failure here means the replacement is published but host-crash
+        // durability is uncertain.
+        if let Some(parent) = self.path.parent()
+            && let Err(source) = sync_parent_directory(parent)
+        {
+            return Err(relay_error(
+                "internal_store_durability_uncertain",
+                "principal store published but parent-directory sync failed; durability is uncertain",
+                Some(json!({
+                    "path": self.path.display().to_string(),
+                    "context": "sync parent",
+                    "cause": source.to_string(),
+                })),
+            ));
+        }
         Ok(())
     }
 

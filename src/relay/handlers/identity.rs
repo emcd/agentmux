@@ -17,8 +17,8 @@ use crate::relay::authorization::{RelayActionFamily, authorize_relay_action};
 use crate::relay::context::RequestPrincipal;
 use crate::relay::identity::{
     IdentityIntrospectRights, PrincipalRecord, PrincipalStore, PrincipalType,
-    classify_principal_id, generate_psk, hash_token_sha256, scope_permits, split_principal_id,
-    stage_credential_sink, write_pending_credential,
+    classify_principal_id, generate_psk, hash_token_sha256, parse_peer_scope, scope_permits,
+    split_principal_id, stage_credential_sink, write_pending_credential,
 };
 use crate::relay::stream::{
     RelayStreamEvent, notify_trusted_hosts_of_revocation, revoke_streams_for_identity,
@@ -57,6 +57,11 @@ pub(in crate::relay) fn handle_new_peer(
         "peer",
     )?;
     let principal_type = classify_target_principal(context.principal_id.as_str())?;
+    let canonical_scope = if principal_type == PrincipalType::Relay {
+        parse_peer_scope(context.scope.as_deref())?
+    } else {
+        context.scope.clone()
+    };
     let mut store = PrincipalStore::load(principal_store_path(state_root))?;
     store.prune_expired(OffsetDateTime::now_utc());
     if store
@@ -82,7 +87,7 @@ pub(in crate::relay) fn handle_new_peer(
         principal_id: context.principal_id.clone(),
         principal_type,
         credential_hash,
-        scope: context.scope.clone(),
+        scope: canonical_scope.clone(),
         expires_at: None,
         metadata: Default::default(),
     });
@@ -121,7 +126,7 @@ pub(in crate::relay) fn handle_new_peer(
         psk: returned_psk,
         written_path,
         config_snippet,
-        diagnostics: scope_vocabulary_diagnostics(context.scope.as_deref()),
+        diagnostics: scope_vocabulary_diagnostics(canonical_scope.as_deref()),
     })
 }
 

@@ -1,11 +1,11 @@
 ## 1. Scope Model
 
-- [ ] 1.1 After a separate implementation dispatch, implement one peer scope
+- [x] 1.1 After a separate implementation dispatch, implement one peer scope
   parser for `*`, comma-separated namespaces and empty/no rights, with canonical
   trimming, sorting and deduplication. Use runtime namespace addressability,
   including GLOBAL and future addressable types; add no legacy parser or store
   migration. Keep application introspection scope matching separate.
-- [ ] 1.2 Validate persisted peer scope with the same grammar and use the
+- [x] 1.2 Validate persisted peer scope with the same grammar and use the
   existing scope field for canonical persistence. Fail closed on malformed
   state without defaults, conversions, or dual-format compatibility.
 
@@ -42,7 +42,7 @@
   principal discovery under the same commit/decision ordering. Preserve
   nonempty sorted namespace results, covered-absent empty views, out-of-scope
   non-disclosure and local unmatched-scope inscriptions.
-- [ ] 3.3 Use complete namespace listings and normal diagnostics for peer scope,
+- [x] 3.3 Use complete namespace listings and normal diagnostics for peer scope,
   eliminating exact-principal peer filtering without removing the generic
   partial marker from other contracts. Include GLOBAL under wildcard using its
   registry source. Add no discovery aggregation, recipient fanout or operations.
