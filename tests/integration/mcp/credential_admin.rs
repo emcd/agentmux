@@ -236,6 +236,38 @@ async fn change_scope_rejects_omitted_scope_before_relay_contact() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn change_scope_surfaces_relay_persistence_failure_without_success_payload() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(
+            |request| match request.get("operation").and_then(Value::as_str) {
+                Some("change_scope") => json!({
+                    "kind": "error",
+                    "error": {
+                        "code": "internal_principal_store",
+                        "message": "principal store io failure",
+                    },
+                }),
+                _ => json!({
+                    "kind": "error",
+                    "error": {"code": "internal_unexpected_failure", "message": "unexpected operation"},
+                }),
+            },
+        ),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let arguments = scope_args(json!({"scope": "alpha"}));
+    let response = harness.call_tool(2, "change", arguments).await;
+
+    // A failed update must surface the relay failure, never a success payload
+    // carrying a grant the relay did not commit.
+    assert_eq!(error_code(&response), Some("internal_principal_store"));
+    assert_eq!(relay.requests_for_operation("change_scope").len(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn change_rejects_an_unknown_command() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(

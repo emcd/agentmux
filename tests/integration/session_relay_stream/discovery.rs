@@ -6,10 +6,10 @@
 //!   forwards a request with the `relay` selector cleared and no `on_behalf_of`,
 //!   propagating peer-authored results and typed peer errors unchanged.
 //! - Receiving-side (ingress) discovery filters the relay's own catalog and
-//!   registry by the authenticated peer principal's ingress scope: a namespace
-//!   scope exposes the complete namespace, an exact-principal scope exposes a
-//!   `principals_partial` subset, an out-of-scope or empty namespace discloses no
-//!   existence, and an absent scope denies.
+//!   registry by the authenticated peer principal's current ingress grant: a
+//!   namespace set or wildcard exposes complete namespaces with no
+//!   scope-induced `principals_partial` marker, an out-of-scope or empty
+//!   namespace discloses no existence, and an absent scope denies.
 //!
 //! The cases are grouped by which side of the exchange they exercise:
 //! [`relays`] for enumeration and local namespace visibility, [`origin`] for
