@@ -20,7 +20,7 @@ use crate::runtime::paths::{is_valid_bundle_name, session_identity_psk_path};
 use super::{CredentialDestination, GLOBAL_SESSION_SUFFIX, RelayError, relay_error};
 
 pub(crate) use super::peer_scope::{
-    parse_peer_scope, peer_scope_covers_namespace, peer_scope_covers_target,
+    live_peer_ingress, parse_peer_scope, peer_scope_covers_namespace, peer_scope_covers_target,
 };
 
 const PSK_BYTE_LENGTH: usize = 32;
@@ -761,19 +761,18 @@ pub(crate) struct VerifiedIdentity {
     /// Drives sender-attribution (`authenticated_identity`) and distinguishes
     /// store-backed from socket-trust connections on the Hello path.
     pub(crate) store_backed: bool,
+    /// Hex SHA-256 of the presented credential for store-backed connections;
+    /// `None` for socket-trust. Recorded on the connection so live ingress
+    /// authorization can verify the current record still carries this exact
+    /// credential — a dropped/recreated or rotated record must not authorize a
+    /// connection bound to a superseded credential merely because the
+    /// principal id was reused.
+    pub(crate) credential_hash: Option<String>,
     /// Introspection rights for an `Application` principal, carrying its
     /// registered scope; `None` for every other principal type. Recorded on the
     /// connection context so request dispatch can gate `IdentityIntrospect`
     /// (task 2.5).
     pub(crate) introspect_rights: Option<IdentityIntrospectRights>,
-    /// Cross-relay ingress scope for a `Relay` (peer) principal: the store
-    /// record's registered `scope` (set via `new peer <id>@RELAY --scope`),
-    /// bounding which targets a forwarded `Send`/`Raww` from this peer may reach.
-    /// `None` for every other principal type, and `None` for a peer registered
-    /// without a scope (which the ingress gate treats as fail-closed). Kept
-    /// separate from `introspect_rights` so a peer relay gains only delivery
-    /// ingress, not the application-only identity snapshot or revocation fan-out.
-    pub(crate) ingress_scope: Option<String>,
 }
 
 /// Verifies a Hello `principal_id` + `identity_token` against the principal
@@ -840,14 +839,11 @@ pub(crate) fn verify_hello_credential(
         (record.principal_type == PrincipalType::Application).then(|| IdentityIntrospectRights {
             scope: record.scope.clone(),
         });
-    let ingress_scope = (record.principal_type == PrincipalType::Relay)
-        .then(|| record.scope.clone())
-        .flatten();
     Ok(VerifiedIdentity {
         principal_type: record.principal_type,
         store_backed: true,
+        credential_hash: Some(hash),
         introspect_rights,
-        ingress_scope,
     })
 }
 
@@ -875,9 +871,9 @@ fn verify_socket_trust(
                 store_backed: false,
                 // Socket-trust is accepted only for session and user
                 // principals, never `Application` or `Relay`, so it grants no
-                // introspect rights and no cross-relay ingress scope.
+                // introspect rights.
+                credential_hash: None,
                 introspect_rights: None,
-                ingress_scope: None,
             })
         }
     }

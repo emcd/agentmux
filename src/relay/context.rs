@@ -1,4 +1,5 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::configuration::{BundleConfiguration, BundleMember};
 
@@ -36,15 +37,27 @@ pub(super) struct RequestPrincipal {
     /// forwarding stamps `on_behalf_of` from this; local attribution does not
     /// read it.
     pub(super) admitted_identity: Option<String>,
+    /// Hex SHA-256 of the credential the requester's connection presented at
+    /// Hello (`None` for socket-trust). Live peer-ingress authorization binds
+    /// the current store record to this hash.
+    pub(super) credential_hash: Option<String>,
     /// Introspection rights for an application principal, recorded at Hello;
     /// `None` for every other connection. Request dispatch gates
     /// `IdentityIntrospect` on this.
     pub(super) introspect_rights: Option<IdentityIntrospectRights>,
-    /// Cross-relay ingress scope for a peer relay (`<id>@RELAY`) principal,
-    /// recorded at Hello; `None` for every other connection. A forwarded
-    /// `Send`/`Raww` from a peer relay is gated to this scope (deny-by-default
-    /// when absent).
-    pub(super) ingress_scope: Option<String>,
+}
+
+/// Relay-wide handles a peer-ingress request needs for live authorization:
+/// the state root locating the principal store, and the shared
+/// identity-admin serialization. Held across the final grant lookup,
+/// authorization, and local admission so a scope update cannot interleave
+/// between the grant check and admission. Lock order is identity-admin first,
+/// admission ledger second; ingress never awaits target execution or network
+/// forwarding under this guard (a peer ingress requester may not forward).
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PeerIngressAuthority<'a> {
+    pub(super) state_root: &'a Path,
+    pub(super) admin_lock: &'a Mutex<()>,
 }
 
 #[derive(Clone, Debug)]

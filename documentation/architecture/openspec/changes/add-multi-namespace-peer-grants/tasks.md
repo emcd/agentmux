@@ -11,7 +11,7 @@
 
 ## 2. Live Authority and Atomic Updates
 
-- [ ] 2.1 Replace Hello-snapshotted peer grant authority with current record
+- [x] 2.1 Replace Hello-snapshotted peer grant authority with current record
   lookup on each ingress operation. Preserve authenticated credential binding
   so missing, dropped or superseded records cannot use stale connection rights.
 - [ ] 2.2 Implement scope-only record replacement under principal-store
@@ -28,17 +28,17 @@
   preserve the latest scope on rotation and other successful field mutations.
   Keep scope-only updates connected, emit no credential revocation event, and
   record actor/peer/old/new scope without secrets. Support clear and no-op.
-- [ ] 2.4 Order final ingress authorization and local delivery admission with
+- [x] 2.4 Order final ingress authorization and local delivery admission with
   scope commits using the shared spine/identity transaction seam. Document
   lock order with the admission ledger; never await or wait for target execution
   under the guard. Preparation alone must not preserve removed access.
 
 ## 3. Delivery and Existing Discovery
 
-- [ ] 3.1 Apply set/wildcard coverage to all resolved ingress Send/Raww targets
+- [x] 3.1 Apply set/wildcard coverage to all resolved ingress Send/Raww targets
   before any admission, retaining existing existence ordering, origin policy,
   attribution irrelevance, transport gates and chaining restrictions.
-- [ ] 3.2 Apply current scope to existing namespace and concrete-namespace
+- [x] 3.2 Apply current scope to existing namespace and concrete-namespace
   principal discovery under the same commit/decision ordering. Preserve
   nonempty sorted namespace results, covered-absent empty views, out-of-scope
   non-disclosure and local unmatched-scope inscriptions.

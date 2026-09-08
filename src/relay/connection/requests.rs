@@ -14,9 +14,9 @@ use serde_json::json;
 
 use super::super::stream::{OutgoingFrame, registration_is_current, write_stream_frame_to_writer};
 use super::super::{
-    RelayRequest, RelayResponse, RequestPrincipal, dispatch_discovery, dispatch_identity_admin,
-    dispatch_identity_introspect, dispatch_list, dispatch_look, dispatch_raww, dispatch_request,
-    dispatch_send, handlers, relay_error,
+    PeerIngressAuthority, RelayRequest, RelayResponse, RequestPrincipal, dispatch_discovery,
+    dispatch_identity_admin, dispatch_identity_introspect, dispatch_list, dispatch_look,
+    dispatch_raww, dispatch_request, dispatch_send, handlers, relay_error,
 };
 use super::framing::dispatch_on_blocking_pool;
 use super::helpers::{full_requester_principal_id, resolve_namespace_routing_bundle};
@@ -110,8 +110,8 @@ pub(super) async fn handle_request(
             session_id: active_registration.requester_session_id().to_string(),
             authenticated_identity: binding.authenticated_identity.clone(),
             admitted_identity: binding.admitted_identity.clone(),
+            credential_hash: binding.credential_hash.clone(),
             introspect_rights: binding.introspect_rights.clone(),
-            ingress_scope: binding.ingress_scope.clone(),
         };
         let response = {
             let state_root = Arc::clone(frame.state_root);
@@ -207,15 +207,21 @@ pub(super) async fn handle_request(
             session_id: active_registration.requester_session_id().to_string(),
             authenticated_identity: binding.authenticated_identity.clone(),
             admitted_identity: binding.admitted_identity.clone(),
+            credential_hash: binding.credential_hash.clone(),
             introspect_rights: binding.introspect_rights.clone(),
-            ingress_scope: binding.ingress_scope.clone(),
         };
         let response = {
             let configuration_roots = Arc::clone(frame.configuration_roots);
             let bound_bundle = binding.bound_bundle.clone();
             let bundle_catalog = bundle_catalog.clone();
             let peer_connection_manager = Arc::clone(peer_connection_manager);
+            let state_root = Arc::clone(frame.state_root);
+            let identity_admin_lock = Arc::clone(&frame.context.identity_admin_lock);
             dispatch_on_blocking_pool(move || {
+                let ingress_authority = PeerIngressAuthority {
+                    state_root: state_root.as_ref(),
+                    admin_lock: identity_admin_lock.as_ref(),
+                };
                 dispatch_send(
                     request,
                     &configuration_roots,
@@ -223,6 +229,7 @@ pub(super) async fn handle_request(
                     Some(principal),
                     &bundle_catalog,
                     peer_connection_manager.as_ref(),
+                    Some(ingress_authority),
                 )
             })
             .await
@@ -241,8 +248,8 @@ pub(super) async fn handle_request(
             session_id: active_registration.requester_session_id().to_string(),
             authenticated_identity: binding.authenticated_identity.clone(),
             admitted_identity: binding.admitted_identity.clone(),
+            credential_hash: binding.credential_hash.clone(),
             introspect_rights: binding.introspect_rights.clone(),
-            ingress_scope: binding.ingress_scope.clone(),
         };
         let response = {
             let configuration_roots = Arc::clone(frame.configuration_roots);
@@ -273,15 +280,21 @@ pub(super) async fn handle_request(
             session_id: active_registration.requester_session_id().to_string(),
             authenticated_identity: binding.authenticated_identity.clone(),
             admitted_identity: binding.admitted_identity.clone(),
+            credential_hash: binding.credential_hash.clone(),
             introspect_rights: binding.introspect_rights.clone(),
-            ingress_scope: binding.ingress_scope.clone(),
         };
         let response = {
             let configuration_roots = Arc::clone(frame.configuration_roots);
             let bound_bundle = binding.bound_bundle.clone();
             let bundle_catalog = bundle_catalog.clone();
             let peer_connection_manager = Arc::clone(peer_connection_manager);
+            let state_root = Arc::clone(frame.state_root);
+            let identity_admin_lock = Arc::clone(&frame.context.identity_admin_lock);
             dispatch_on_blocking_pool(move || {
+                let ingress_authority = PeerIngressAuthority {
+                    state_root: state_root.as_ref(),
+                    admin_lock: identity_admin_lock.as_ref(),
+                };
                 dispatch_raww(
                     request,
                     &configuration_roots,
@@ -289,6 +302,7 @@ pub(super) async fn handle_request(
                     Some(principal),
                     &bundle_catalog,
                     peer_connection_manager.as_ref(),
+                    Some(ingress_authority),
                 )
             })
             .await
@@ -321,15 +335,21 @@ pub(super) async fn handle_request(
             session_id: full_requester_principal_id(active_registration),
             authenticated_identity: binding.authenticated_identity.clone(),
             admitted_identity: binding.admitted_identity.clone(),
+            credential_hash: binding.credential_hash.clone(),
             introspect_rights: binding.introspect_rights.clone(),
-            ingress_scope: binding.ingress_scope.clone(),
         };
         let response = {
             let configuration_roots = Arc::clone(frame.configuration_roots);
             let bundle_catalog = bundle_catalog.clone();
             let peer_connection_manager = Arc::clone(peer_connection_manager);
             let relay_aliases = Arc::clone(&frame.context.relay_aliases);
+            let state_root = Arc::clone(frame.state_root);
+            let identity_admin_lock = Arc::clone(&frame.context.identity_admin_lock);
             dispatch_on_blocking_pool(move || {
+                let ingress_authority = PeerIngressAuthority {
+                    state_root: state_root.as_ref(),
+                    admin_lock: identity_admin_lock.as_ref(),
+                };
                 dispatch_discovery(
                     request,
                     &configuration_roots,
@@ -337,6 +357,7 @@ pub(super) async fn handle_request(
                     &bundle_catalog,
                     peer_connection_manager.as_ref(),
                     relay_aliases.as_slice(),
+                    Some(ingress_authority),
                 )
             })
             .await
@@ -375,8 +396,8 @@ pub(super) async fn handle_request(
         session_id: active_registration.requester_session_id().to_string(),
         authenticated_identity: binding.authenticated_identity.clone(),
         admitted_identity: binding.admitted_identity.clone(),
+        credential_hash: binding.credential_hash.clone(),
         introspect_rights: binding.introspect_rights.clone(),
-        ingress_scope: binding.ingress_scope.clone(),
     };
     let response = {
         let configuration_roots = Arc::clone(frame.configuration_roots);

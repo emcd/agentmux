@@ -5,11 +5,17 @@
 //! application introspection scope helper (`scope_permits`) is unchanged and
 //! never consulted here.
 
+use std::path::Path;
+use std::sync::MutexGuard;
+
 use serde_json::json;
+use subtle::ConstantTimeEq;
+use time::OffsetDateTime;
 
-use crate::runtime::paths::is_valid_bundle_name;
+use crate::runtime::paths::{is_valid_bundle_name, principal_store_path};
 
-use super::identity::split_principal_id;
+use super::context::PeerIngressAuthority;
+use super::identity::{PrincipalStore, PrincipalType, split_principal_id};
 use super::{RelayError, relay_error};
 
 /// Reserved namespace partitions that never carry addressable peer targets.
@@ -135,4 +141,78 @@ pub(crate) fn peer_scope_covers_namespace(scope: Option<&str>, namespace: &str) 
                 .any(|name| name == namespace)
         }
     }
+}
+
+/// Resolves the current authoritative ingress scope for an authenticated peer
+/// relay connection.
+///
+/// Loads the principal store and returns the live record's scope only when the
+/// record exists, is a relay principal, is unexpired, and still carries the
+/// exact credential hash the connection presented at Hello. Any other outcome
+/// — missing or dropped record, superseded credential (rotated or
+/// re-registered under a reused id), expired record, or an unreadable store —
+/// yields `None`, which ingress authorization treats as deny-by-default. The
+/// credential-hash binding is what keeps a stale connection from inheriting a
+/// replacement record's rights.
+pub(crate) fn resolve_peer_ingress_scope(
+    state_root: &Path,
+    peer_principal_id: &str,
+    credential_hash: Option<&str>,
+) -> Option<String> {
+    let presented = credential_hash?;
+    let store = PrincipalStore::load(principal_store_path(state_root)).ok()?;
+    let record = store.find_by_principal_id(peer_principal_id)?;
+    if record.principal_type != PrincipalType::Relay {
+        return None;
+    }
+    if record.is_expired(OffsetDateTime::now_utc()) {
+        return None;
+    }
+    let stored = record.credential_hash.as_bytes();
+    let candidate = presented.as_bytes();
+    if stored.len() != candidate.len() || !bool::from(stored.ct_eq(candidate)) {
+        return None;
+    }
+    record.scope.clone()
+}
+
+/// Live, serialized ingress authority for one peer request.
+///
+/// Resolves the current authoritative scope under the shared identity-admin
+/// serialization and holds the guard across the caller's authorization and
+/// local admission, so a scope update cannot interleave between the grant
+/// check and admission. The scope is `None` (deny-by-default) when the record
+/// is missing, superseded, expired, or unreadable.
+pub(crate) struct LivePeerIngress<'a> {
+    pub(crate) scope: Option<String>,
+    _guard: MutexGuard<'a, ()>,
+}
+
+/// Acquires the shared serialization and resolves the peer's current grant.
+///
+/// Fails only when no ingress authority was threaded to the handler (a
+/// programming error: every stream ingress path supplies one); all store-level
+/// failures resolve to a deny-by-default `None` scope, never an error.
+pub(crate) fn live_peer_ingress<'a>(
+    authority: Option<PeerIngressAuthority<'a>>,
+    peer_principal_id: &str,
+    credential_hash: Option<&str>,
+) -> Result<LivePeerIngress<'a>, RelayError> {
+    let Some(authority) = authority else {
+        return Err(relay_error(
+            "internal_unexpected_request",
+            "peer relay ingress without ingress authority",
+            None,
+        ));
+    };
+    let guard = authority
+        .admin_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let scope =
+        resolve_peer_ingress_scope(authority.state_root, peer_principal_id, credential_hash);
+    Ok(LivePeerIngress {
+        scope,
+        _guard: guard,
+    })
 }

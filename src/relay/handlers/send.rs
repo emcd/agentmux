@@ -19,7 +19,7 @@ use super::super::delivery::admission::{
     rollback_admission,
 };
 use super::super::delivery::enqueue_async_delivery;
-use super::super::identity::{PrincipalType, classify_principal_id};
+use super::super::identity::{PrincipalType, classify_principal_id, live_peer_ingress};
 use super::super::lifecycle::load_hosted_bundle;
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget as RouteTarget,
@@ -27,9 +27,9 @@ use super::super::routing::{
 };
 use super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, GLOBAL_NAMESPACE, PeerConnectionManager,
-    RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
-    SendOutcome, SendRequestContext, SendResult, SenderReturnRoute, bare_session_id,
-    canonical_session_id, relay_error,
+    PeerIngressAuthority, RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse,
+    RequestPrincipal, SCHEMA_VERSION, SendOutcome, SendRequestContext, SendResult,
+    SenderReturnRoute, bare_session_id, canonical_session_id, relay_error,
 };
 use super::routed::{load_home_context, run_target_operation};
 use super::sender::{SenderIdentity, resolve_sender_in_namespace};
@@ -46,6 +46,7 @@ pub(in crate::relay) fn handle_send_routed(
     bundle_catalog: &BundleCatalog,
     principal: Option<&RequestPrincipal>,
     peer_connection_manager: Option<&PeerConnectionManager>,
+    ingress_authority: Option<PeerIngressAuthority<'_>>,
 ) -> Result<RelayResponse, RelayError> {
     let RelayRequest::Send {
         request_id,
@@ -76,6 +77,7 @@ pub(in crate::relay) fn handle_send_routed(
         bundle_catalog,
         principal,
         peer_connection_manager,
+        ingress_authority,
     )
 }
 
@@ -86,6 +88,7 @@ fn handle_send(
     bundle_catalog: &BundleCatalog,
     principal: Option<&RequestPrincipal>,
     peer_connection_manager: Option<&PeerConnectionManager>,
+    ingress_authority: Option<PeerIngressAuthority<'_>>,
 ) -> Result<RelayResponse, RelayError> {
     // A cross-relay ingress request arrives from an authenticated peer relay
     // principal (`<id>@RELAY`): it carries no bundle policy, its home namespace is
@@ -155,11 +158,25 @@ fn handle_send(
         )?
     };
     // The route authorization mode: a peer relay is gated per-target by its
-    // registered ingress scope (deny-by-default); every other requester by its
-    // policy tier resolved in the home bundle.
+    // live ingress scope (deny-by-default), resolved from the current store
+    // record under the shared identity-admin serialization and held across
+    // authorization and admission below; every other requester by its policy
+    // tier resolved in the home bundle.
+    let live_ingress = if relay_ingress {
+        let peer = principal.expect("relay ingress is detected from an authenticated principal");
+        Some(live_peer_ingress(
+            ingress_authority,
+            peer.session_id.as_str(),
+            peer.credential_hash.as_deref(),
+        )?)
+    } else {
+        None
+    };
     let route_authorization = if relay_ingress {
         RouteAuthorization::Ingress {
-            scope: principal.and_then(|principal| principal.ingress_scope.as_deref()),
+            scope: live_ingress
+                .as_ref()
+                .and_then(|ingress| ingress.scope.as_deref()),
         }
     } else {
         RouteAuthorization::Policy(&authorization)

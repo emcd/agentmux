@@ -33,14 +33,14 @@ pub(super) struct HelloBinding {
     /// accepted socket-trust connections. Distinguishes authenticated senders
     /// from socket-trust ones for sender-attribution responses.
     pub(super) store_backed: bool,
+    /// Hex SHA-256 of the presented credential for store-backed connections;
+    /// `None` for socket-trust. Binds live ingress authorization to the exact
+    /// credential this connection presented.
+    pub(super) credential_hash: Option<String>,
     /// Introspection rights for an application principal; `None` for every
     /// other principal type. Recorded on the connection context so request
     /// dispatch can gate `IdentityIntrospect`.
     pub(super) introspect_rights: Option<IdentityIntrospectRights>,
-    /// Cross-relay ingress scope for a peer relay (`<id>@RELAY`) principal;
-    /// `None` for every other principal type. Recorded on the connection context
-    /// so a forwarded `Send`/`Raww` from this peer is gated to its scope.
-    pub(super) ingress_scope: Option<String>,
 }
 
 /// Verifies a Hello, registers the stream under the resolved identity, and
@@ -134,8 +134,8 @@ pub(super) async fn handle_hello(
     // Cross-relay forwarding attributes the origin from this, so a relay
     // accepting socket-trust still tells a peer who a message is from.
     binding_state.admitted_identity = Some(hello.principal_id.clone());
+    binding_state.credential_hash = binding.credential_hash;
     binding_state.introspect_rights = binding.introspect_rights;
-    binding_state.ingress_scope = binding.ingress_scope;
     binding_state.bound_bundle = binding.bound_bundle;
     // A trusted-host (application principal) receives an
     // `identity.snapshot` of the active principals within its scope

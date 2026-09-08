@@ -25,14 +25,14 @@ use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 
 use super::super::authorization::{authorize_discovery_origin, requester_list_reaches_all};
 use super::super::identity::{
-    PrincipalType, classify_principal_id, peer_scope_covers_namespace, peer_scope_covers_target,
-    split_principal_id,
+    PrincipalType, classify_principal_id, live_peer_ingress, peer_scope_covers_namespace,
+    peer_scope_covers_target, split_principal_id,
 };
 use super::super::stream::list_namespace_sessions;
 use super::super::{
     BundleCatalog, GLOBAL_NAMESPACE, ListedBundle, ListedBundleState, ListedRelay, ListedSession,
-    PeerConnectionManager, RelayError, RelayRequest, RelayResponse, RequestPrincipal,
-    SCHEMA_VERSION, canonical_session_id, map_config, relay_error,
+    PeerConnectionManager, PeerIngressAuthority, RelayError, RelayRequest, RelayResponse,
+    RequestPrincipal, SCHEMA_VERSION, canonical_session_id, map_config, relay_error,
 };
 use super::listing::build_listed_bundle;
 
@@ -47,6 +47,10 @@ pub(in crate::relay) struct DiscoveryContext<'a> {
     /// normalized `[[peers]]` configuration (never by dialing the connection
     /// manager). The single source for `list.relays`.
     pub(in crate::relay) configured_relay_aliases: &'a [String],
+    /// Live peer-ingress authority (`None` off the stream path). Peer ingress
+    /// resolves its current grant under this serialization and holds it across
+    /// the scope-filtered decision.
+    pub(in crate::relay) ingress_authority: Option<PeerIngressAuthority<'a>>,
 }
 
 /// Enumerates this relay's configured outbound peer aliases without dialing.
@@ -88,6 +92,21 @@ pub(in crate::relay) fn handle_discover_namespaces(
     relay: Option<String>,
 ) -> Result<RelayResponse, RelayError> {
     let ingress = is_relay_principal(principal);
+    // Live peer authority: resolve the current grant under the shared
+    // identity-admin serialization and hold it across the scope-filtered
+    // decision below. A Hello-time snapshot must not preserve removed access.
+    let live_ingress = if ingress {
+        Some(live_peer_ingress(
+            context.ingress_authority,
+            principal.session_id.as_str(),
+            principal.credential_hash.as_deref(),
+        )?)
+    } else {
+        None
+    };
+    let live_scope = live_ingress
+        .as_ref()
+        .and_then(|ingress| ingress.scope.as_deref());
     match relay {
         Some(alias) => {
             reject_peer_reforward(ingress)?;
@@ -98,11 +117,9 @@ pub(in crate::relay) fn handle_discover_namespaces(
                 &RelayRequest::DiscoverNamespaces { relay: None },
             )
         }
-        None if ingress => receiving_namespace_discovery(
-            context,
-            principal.ingress_scope.as_deref(),
-            principal.session_id.as_str(),
-        ),
+        None if ingress => {
+            receiving_namespace_discovery(context, live_scope, principal.session_id.as_str())
+        }
         None => local_namespace_discovery(context, principal),
     }
 }
@@ -116,6 +133,20 @@ pub(in crate::relay) fn handle_discover_principals(
     namespace: String,
 ) -> Result<RelayResponse, RelayError> {
     let ingress = is_relay_principal(principal);
+    // Live peer authority, resolved and held across the filtered decision (see
+    // `handle_discover_namespaces`).
+    let live_ingress = if ingress {
+        Some(live_peer_ingress(
+            context.ingress_authority,
+            principal.session_id.as_str(),
+            principal.credential_hash.as_deref(),
+        )?)
+    } else {
+        None
+    };
+    let live_scope = live_ingress
+        .as_ref()
+        .and_then(|ingress| ingress.scope.as_deref());
     match relay {
         Some(alias) => {
             reject_peer_reforward(ingress)?;
@@ -129,11 +160,7 @@ pub(in crate::relay) fn handle_discover_principals(
                 },
             )
         }
-        None if ingress => receiving_principal_discovery(
-            context,
-            principal.ingress_scope.as_deref(),
-            namespace.as_str(),
-        ),
+        None if ingress => receiving_principal_discovery(context, live_scope, namespace.as_str()),
         None => Err(relay_error(
             "internal_unexpected_request",
             "local principal discovery is served by List, not DiscoverPrincipals",

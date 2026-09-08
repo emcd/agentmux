@@ -122,6 +122,7 @@ fn handle_request_with_principal(
                 bundle_catalog,
                 principal.as_ref(),
                 None,
+                None,
             );
         }
         RelayRequest::Look { .. } => {
@@ -143,6 +144,7 @@ fn handle_request_with_principal(
                 configuration_roots,
                 bundle_catalog,
                 principal.as_ref(),
+                None,
                 None,
             );
         }
@@ -434,6 +436,7 @@ pub(in crate::relay) fn dispatch_send(
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
     peer_connection_manager: &PeerConnectionManager,
+    ingress_authority: Option<PeerIngressAuthority<'_>>,
 ) -> RelayResponse {
     let home_namespace = match bound_bundle {
         Some(paths) => paths.bundle_name.clone(),
@@ -446,6 +449,7 @@ pub(in crate::relay) fn dispatch_send(
         bundle_catalog,
         principal.as_ref(),
         Some(peer_connection_manager),
+        ingress_authority,
     ) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },
@@ -496,6 +500,7 @@ pub(in crate::relay) fn dispatch_raww(
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
     peer_connection_manager: &PeerConnectionManager,
+    ingress_authority: Option<PeerIngressAuthority<'_>>,
 ) -> RelayResponse {
     let home_namespace = match bound_bundle {
         Some(paths) => paths.bundle_name.clone(),
@@ -508,6 +513,7 @@ pub(in crate::relay) fn dispatch_raww(
         bundle_catalog,
         principal.as_ref(),
         Some(peer_connection_manager),
+        ingress_authority,
     ) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },
@@ -527,12 +533,14 @@ pub(in crate::relay) fn dispatch_discovery(
     bundle_catalog: &BundleCatalog,
     peer_connection_manager: &PeerConnectionManager,
     configured_relay_aliases: &[String],
+    ingress_authority: Option<PeerIngressAuthority<'_>>,
 ) -> RelayResponse {
     let context = handlers::DiscoveryContext {
         configuration_roots,
         bundle_catalog,
         peer_connection_manager,
         configured_relay_aliases,
+        ingress_authority,
     };
     let result = match request {
         RelayRequest::ListRelays => handlers::handle_list_relays(&context, &principal),

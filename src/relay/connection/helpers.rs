@@ -194,8 +194,8 @@ pub(super) fn resolve_hello_binding(
     let VerifiedIdentity {
         principal_type,
         store_backed,
+        credential_hash,
         introspect_rights,
-        ingress_scope,
     } = verified;
     match principal_type {
         PrincipalType::Session => {
@@ -217,8 +217,8 @@ pub(super) fn resolve_hello_binding(
                 principal_id: hello.principal_id.clone(),
                 bound_bundle: Some(bundle_paths),
                 store_backed,
+                credential_hash: credential_hash.clone(),
                 introspect_rights,
-                ingress_scope,
             })
         }
         PrincipalType::User => {
@@ -229,8 +229,8 @@ pub(super) fn resolve_hello_binding(
                 principal_id: hello.principal_id.clone(),
                 bound_bundle: None,
                 store_backed,
+                credential_hash: credential_hash.clone(),
                 introspect_rights,
-                ingress_scope,
             })
         }
         PrincipalType::Application | PrincipalType::Relay => Ok(HelloBinding {
@@ -238,8 +238,8 @@ pub(super) fn resolve_hello_binding(
             principal_id: hello.principal_id.clone(),
             bound_bundle: None,
             store_backed,
+            credential_hash,
             introspect_rights,
-            ingress_scope,
         }),
     }
 }
