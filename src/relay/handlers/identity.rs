@@ -308,6 +308,121 @@ pub(in crate::relay) fn handle_change_psk(
     })
 }
 
+/// Replaces the ingress scope of a registered peer relay in place, preserving
+/// its credential, identity, expiry, and unrelated metadata.
+///
+/// Gated on the dedicated `change.scope=all` control (rotation rights confer
+/// none of it). The update runs under the shared identity-admin serialization,
+/// so it orders against concurrent registration, rotation, drop, replacement,
+/// and final ingress authorization decisions. An empty scope clears the grant;
+/// repeating the normalized scope succeeds (performing directory
+/// synchronization rather than short-circuiting) without rotating or
+/// disconnecting the peer. Scope-only updates emit no credential revocation:
+/// the peer stays connected and keeps its PSK.
+///
+/// Durability follows rename-publication semantics: the atomic rename is the
+/// update linearization point for effective authority, and the parent-directory
+/// sync completes durable success. A pre-rename failure leaves the old record
+/// and effective grant intact; a post-rename directory-sync failure keeps the
+/// published replacement effective and surfaces an
+/// `internal_store_durability_uncertain` error carrying the effective scope
+/// rather than success or an old-grant-intact claim.
+pub(in crate::relay) fn handle_change_scope(
+    configuration_roots: &ConfigurationRoots,
+    state_root: &Path,
+    requester_principal_id: &str,
+    principal_id: String,
+    scope: String,
+) -> Result<RelayResponse, RelayError> {
+    authorize_relay_action(
+        configuration_roots,
+        requester_principal_id,
+        RelayActionFamily::Change,
+        "scope",
+    )?;
+    if classify_principal_id(principal_id.as_str()) != Some(PrincipalType::Relay) {
+        return Err(relay_error(
+            "validation_invalid_principal_id",
+            "change scope applies only to peer relay principals (<id>@RELAY)",
+            Some(serde_json::json!({ "principal_id": principal_id })),
+        ));
+    }
+    // The scope grammar is validated before the store lookup so malformed input
+    // fails identically for missing and registered peers; record existence is
+    // still disclosed only behind the authorization gate above.
+    let canonical = parse_peer_scope(Some(scope.as_str()))?;
+    // No expiry pruning here: this operation must not alter unrelated records
+    // as a side effect.
+    let mut store = PrincipalStore::load(principal_store_path(state_root))?;
+    let Some(existing) = store.find_by_principal_id(principal_id.as_str()).cloned() else {
+        return Err(relay_error(
+            "validation_unknown_principal",
+            "principal_id is not registered; create it with new peer first",
+            Some(serde_json::json!({ "principal_id": principal_id })),
+        ));
+    };
+    if existing.principal_type != PrincipalType::Relay {
+        return Err(relay_error(
+            "validation_invalid_params",
+            "change scope applies only to registered relay principals",
+            Some(serde_json::json!({
+                "field": "principal_id",
+                "principal_id": principal_id,
+            })),
+        ));
+    }
+    let previous = existing.scope.clone();
+    store.remove_by_principal_id(principal_id.as_str());
+    store.insert(PrincipalRecord {
+        principal_id: principal_id.clone(),
+        principal_type: existing.principal_type,
+        credential_hash: existing.credential_hash.clone(),
+        scope: canonical.clone(),
+        expires_at: existing.expires_at.clone(),
+        metadata: existing.metadata.clone(),
+    });
+    if let Err(error) = store.persist() {
+        if error.code == "internal_store_durability_uncertain" {
+            let effective = canonical.clone().unwrap_or_default();
+            emit_inscription(
+                "relay.identity.scope_updated",
+                &serde_json::json!({
+                    "actor": requester_principal_id,
+                    "principal_id": principal_id,
+                    "previous_scope": previous.unwrap_or_default(),
+                    "scope": effective,
+                    "durability": "uncertain",
+                }),
+            );
+            return Err(relay_error(
+                "internal_store_durability_uncertain",
+                "scope replacement published but parent-directory sync failed; durability is uncertain and the replacement remains effective",
+                Some(serde_json::json!({
+                    "principal_id": principal_id,
+                    "scope": effective,
+                })),
+            ));
+        }
+        return Err(error);
+    }
+    let effective = canonical.clone().unwrap_or_default();
+    emit_inscription(
+        "relay.identity.scope_updated",
+        &serde_json::json!({
+            "actor": requester_principal_id,
+            "principal_id": principal_id,
+            "previous_scope": previous.unwrap_or_default(),
+            "scope": effective,
+        }),
+    );
+    Ok(RelayResponse::ChangeScope {
+        schema_version: SCHEMA_VERSION.to_string(),
+        principal_id,
+        scope: effective,
+        diagnostics: scope_vocabulary_diagnostics(canonical.as_deref()),
+    })
+}
+
 /// Deletes a principal from the relay-wide store and revokes it.
 ///
 /// The store record is the only copy of the credential hash, so dropping a

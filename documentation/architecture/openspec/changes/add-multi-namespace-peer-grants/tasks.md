@@ -14,7 +14,7 @@
 - [x] 2.1 Replace Hello-snapshotted peer grant authority with current record
   lookup on each ingress operation. Preserve authenticated credential binding
   so missing, dropped or superseded records cannot use stale connection rights.
-- [ ] 2.2 Implement scope-only record replacement under principal-store
+- [x] 2.2 Implement scope-only record replacement under principal-store
   serialization, preserving credential/hash, identity/type, expiry and
   unrelated metadata/records. Sync the temporary file, publish through atomic
   rename while holding the shared boundary, then sync the parent directory
@@ -24,7 +24,7 @@
   uncertainty with the effective scope, never success or an old-grant-intact
   claim. Same-scope retry must reauthorize and synchronize rather than
   short-circuit, following ordinary last-writer-wins semantics.
-- [ ] 2.3 Serialize scope replacement with new/rotation/drop transactions;
+- [x] 2.3 Serialize scope replacement with new/rotation/drop transactions;
   preserve the latest scope on rotation and other successful field mutations.
   Keep scope-only updates connected, emit no credential revocation event, and
   record actor/peer/old/new scope without secrets. Support clear and no-op.
@@ -49,10 +49,10 @@
 
 ## 4. Administration and Adapters
 
-- [ ] 4.1 Add relay ChangeScope request/response and relay-wide dispatch ahead
+- [x] 4.1 Add relay ChangeScope request/response and relay-wide dispatch ahead
   of bundle routing; validate peer identity, required string scope and grammar,
   with unknown-principal lookup behind authorization and existing error mapping.
-- [ ] 4.2 Gate all scope updates with `change.scope=all` through the existing
+- [x] 4.2 Gate all scope updates with `change.scope=all` through the existing
   action-control map. Add the explicit grant to the starter operator preset;
   leave existing configs and missing-action deny defaults unchanged.
 - [ ] 4.3 Extend CLI change dispatch with `change scope <principal_id> --scope

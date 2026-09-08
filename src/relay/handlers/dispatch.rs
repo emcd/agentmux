@@ -77,6 +77,7 @@ pub(in crate::relay) fn handle_request(
         }
         RelayRequest::NewPeer { .. }
         | RelayRequest::ChangePsk { .. }
+        | RelayRequest::ChangeScope { .. }
         | RelayRequest::DropPeer { .. }
         | RelayRequest::IdentityIntrospect { .. }
         | RelayRequest::ListRelays
@@ -169,6 +170,16 @@ pub(in crate::relay) fn handle_identity_admin_request(
             requester_principal_id,
             principal_id,
             destination,
+        ),
+        RelayRequest::ChangeScope {
+            principal_id,
+            scope,
+        } => identity::handle_change_scope(
+            configuration_roots,
+            state_root,
+            requester_principal_id,
+            principal_id,
+            scope,
         ),
         RelayRequest::DropPeer { principal_id } => identity::handle_drop_peer(
             configuration_roots,
@@ -280,6 +291,7 @@ fn normalize_request_identities(request: RelayRequest, namespace: &str) -> Relay
         | RelayRequest::ChoicesList
         | RelayRequest::NewPeer { .. }
         | RelayRequest::ChangePsk { .. }
+        | RelayRequest::ChangeScope { .. }
         | RelayRequest::DropPeer { .. }
         | RelayRequest::IdentityIntrospect { .. }
         | RelayRequest::ListRelays
