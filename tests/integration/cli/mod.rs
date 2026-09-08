@@ -1,4 +1,5 @@
 mod bundle;
+mod change_scope;
 mod check;
 mod check_bindings;
 mod drop;

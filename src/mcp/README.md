@@ -19,7 +19,7 @@ This module implements the MCP stdio server for `agentmux`.
   - `choose` (submit an ACP-native choice decision)
   - `updown` (requires `command="up"` or `command="down"`)
   - `new` (requires `command="peer"`)
-  - `change` (requires `command="psk"`)
+  - `change` (requires `command="psk"` or `command="scope"`)
   - `drop` (requires `command="peer"`)
   - `raww`
   - `send`
@@ -180,6 +180,8 @@ when the relay is down, and reachability surfaces per request as
      (`RelayRequest::NewPeer`)
    - `change` (`command="psk"`) -> `RelayStreamSession`
      (`RelayRequest::ChangePsk`)
+   - `change` (`command="scope"`) -> `RelayStreamSession`
+     (`RelayRequest::ChangeScope`)
    - `drop` (`command="peer"`) -> `RelayStreamSession`
      (`RelayRequest::DropPeer`)
    - `raww` -> `RelayStreamSession` (`RelayRequest::Raww`)
@@ -249,12 +251,18 @@ when the relay is down, and reachability surfaces per request as
   the response. `output_path` and `write_to_config` are mutually
   exclusive — the adapter rejects both-set with `validation_invalid_params`
   before issuing a relay request. `write_to_config` is honored only for
-  session principals. `args.scope` is recorded on the principal (set for
-  `@RELAY` / `@EXTERNAL`).
+  session principals.   `args.scope` is recorded on the principal (set for
+  `@RELAY` / `@EXTERNAL`). For a peer relay it is `'*'` for every namespace
+  with addressable principals, a comma-separated set of explicit namespaces,
+  or omitted for no rights.
 - The `change` tool (`command="psk"`) rotates an existing principal's
   PSK, returning it or writing it via the same `output_path` /
   `write_to_config` destination selector, and revokes live connections
   holding the prior credential once the destination commits.
+  (`command="scope"`) replaces a peer relay's ingress scope in place —
+  `'*'`, comma-separated namespaces, or explicit empty string to clear —
+  preserving its credential and connection, gated on the dedicated
+  `change.scope=all` control.
 - The `drop` tool (`command="peer"`) deletes a principal from the
   store, completing the lifecycle the other two begin. The record is
   the only copy of the credential hash, so the credential stops
@@ -273,11 +281,11 @@ when the relay is down, and reachability surfaces per request as
 - All three are relay-wide operations: they ride the MCP server's relay
   stream, and the relay authorizes the connection's principal
   against its policy preset relay-wide, requiring an `all`
-  `new.peer` / `change.psk` / `drop.peer` grant. A bundle-relative
-  `home` grant is insufficient. The three controls are distinct — a
-  `new.peer` or `change.psk` grant confers no ability to drop — so a
-  policy file predating the `drop` control permits no deletion until an
-  operator adds it. The MCP server's own identity must therefore carry
+  `new.peer` / `change.psk` / `change.scope` / `drop.peer` grant. A bundle-relative
+  `home` grant is insufficient. The controls are distinct — a
+  `new.peer` or `change.psk` grant confers no ability to drop or to change
+  scope — so a policy file predating a control permits nothing under it until
+  an operator adds it. The MCP server's own identity must therefore carry
   an operator policy for these tools to succeed.
 
 ## Cross-Relay Discovery
@@ -301,10 +309,11 @@ when the relay is down, and reachability surfaces per request as
   than through a bundle. The MCP layer performs no authorization: both the
   origin `list`-scope check and the receiving relay's ingress filtering happen
   on the relay (see `src/relay/README.md`, Cross-Relay Discovery).
-- Foreign `list.principals` responses may carry `principals_partial=true` on a
-  bundle whose principal set was narrowed by the peer's ingress scope, so a
-  caller can tell a scope-filtered subset from a complete listing. The MCP
-  server passes the flag through unchanged (omitted, not `null`, when absent).
+- Foreign `list.principals` responses carry complete namespace listings with
+  normal diagnostics: peer grants cover whole namespaces, so no
+  scope-induced `principals_partial` marker is produced. The MCP
+  server passes the flag through unchanged (omitted, not `null`, when absent)
+  for the generic contracts that still use it.
 - Each command emits the standard five lifecycle inscriptions
   (`mcp.tool.list.relays.*`, `mcp.tool.list.namespaces.*`,
   `mcp.tool.list.principals.*`: request / success / relay_error /

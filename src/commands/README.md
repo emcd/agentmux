@@ -51,6 +51,9 @@ This directory owns the unified CLI surface for `agentmux`.
 - `change.rs`
   - `agentmux change psk <principal_id>` credential rotation; relays a
     `ChangePsk` request and renders the new PSK.
+  - `agentmux change scope <principal_id> --scope SCOPE` peer-grant
+    replacement; relays a `ChangeScope` request and renders the canonical
+    scope (`'*'`, comma-separated namespaces, or empty for cleared).
 - `drop.rs`
   - `agentmux drop peer <principal_id>` principal deletion; relays a `DropPeer`
     request and reports the deleted principal plus, for session principals only,

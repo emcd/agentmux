@@ -3,7 +3,7 @@
 //! `new peer` / `change psk` administration path through
 //! `serve_connection`, using the shared relay-stream harness.
 //!
-//! The cluster files partition the 27 tests by concern:
+//! The cluster files partition the tests by concern:
 //! - [`hello`]: Hello with valid / mismatched / unrecognized credentials,
 //!   including the socket-trust paths and the application-principal hello.
 //! - [`psk_lifecycle`]: `change psk` rotation, revocation of the
@@ -20,6 +20,10 @@
 //!   (path validation, O_NOFOLLOW, mode 0600, end-to-end auth).
 //! - [`second_claim`]: stale vs live prior-writer semantics for
 //!   `register_stream`'s identity-claim conflict decision.
+//! - [`scope_grants`]: `change scope` peer-grant administration and live
+//!   multi-namespace ingress (grammar, dedicated authority, in-place
+//!   credential-preserving updates, current-record decisions, and
+//!   credential-bound staleness).
 //!
 //! Shared helpers (every cluster shares the per-bundle operator
 //! configuration writer, the principal-store path, the operator-request
@@ -42,6 +46,7 @@ mod hello;
 mod introspect;
 mod new_peer;
 mod psk_lifecycle;
+mod scope_grants;
 mod second_claim;
 mod send_attribution;
 

@@ -216,3 +216,89 @@ pub(crate) fn live_peer_ingress<'a>(
         _guard: guard,
     })
 }
+
+// The credential-hash binding inside `resolve_peer_ingress_scope` is
+// crate-private by design and unreachable through any public surface:
+// revocation closes a dropped principal's connections before a stale one
+// could present a superseded credential, so no public operation exercises the
+// mismatch branch. This single inline test pins it alongside the grammar.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::relay::identity::{PrincipalRecord, PrincipalType, hash_token_sha256};
+
+    #[test]
+    fn peer_scope_grammar_and_credential_binding() {
+        // Grammar: wildcard, sets, canonicalization, and empty/no rights.
+        assert_eq!(parse_peer_scope(None).unwrap(), None);
+        assert_eq!(parse_peer_scope(Some("   ")).unwrap(), None);
+        assert_eq!(parse_peer_scope(Some("*")).unwrap(), Some("*".to_string()));
+        assert_eq!(
+            parse_peer_scope(Some(" beta,alpha ,beta,GLOBAL ")).unwrap(),
+            Some("GLOBAL,alpha,beta".to_string())
+        );
+        // Reserved and malformed names fail closed.
+        for bad in [
+            "alpha,,beta",
+            "*,alpha",
+            "alpha@bundle",
+            "RELAY",
+            "EXTERNAL",
+            "has space",
+            ".",
+        ] {
+            assert!(
+                parse_peer_scope(Some(bad)).is_err(),
+                "scope {bad:?} must be rejected"
+            );
+        }
+        // Coverage: wildcard spans addressable namespaces only; sets are exact.
+        assert!(peer_scope_covers_target(Some("*"), "alpha@bundle"));
+        assert!(peer_scope_covers_target(Some("*"), "op@GLOBAL"));
+        assert!(!peer_scope_covers_target(Some("*"), "x@RELAY"));
+        assert!(!peer_scope_covers_target(Some("*"), "x@EXTERNAL"));
+        assert!(peer_scope_covers_target(Some("alpha"), "s@alpha"));
+        assert!(!peer_scope_covers_target(Some("alpha"), "s@beta"));
+        assert!(!peer_scope_covers_target(None, "s@alpha"));
+        assert!(peer_scope_covers_namespace(Some("*"), "future-type"));
+        assert!(!peer_scope_covers_namespace(Some("*"), "RELAY"));
+
+        // Binding: only the exact presented credential hash authorizes.
+        let state_root =
+            std::env::temp_dir().join(format!("agentmux-peer-scope-test-{}", std::process::id()));
+        let token = "binding-probe-psk";
+        let hash = hash_token_sha256(token);
+        let mut store = PrincipalStore::load(principal_store_path(&state_root)).unwrap();
+        store.insert(PrincipalRecord {
+            principal_id: "probe@RELAY".to_string(),
+            principal_type: PrincipalType::Relay,
+            credential_hash: hash.clone(),
+            scope: Some("*".to_string()),
+            expires_at: None,
+            metadata: Default::default(),
+        });
+        store.persist().unwrap();
+        assert_eq!(
+            resolve_peer_ingress_scope(&state_root, "probe@RELAY", Some(&hash)),
+            Some("*".to_string())
+        );
+        assert_eq!(
+            resolve_peer_ingress_scope(
+                &state_root,
+                "probe@RELAY",
+                Some(&hash_token_sha256("other-psk"))
+            ),
+            None,
+            "a superseded credential must not inherit the record"
+        );
+        assert_eq!(
+            resolve_peer_ingress_scope(&state_root, "missing@RELAY", Some(&hash)),
+            None
+        );
+        assert_eq!(
+            resolve_peer_ingress_scope(&state_root, "probe@RELAY", None),
+            None
+        );
+        std::fs::remove_dir_all(&state_root).ok();
+    }
+}

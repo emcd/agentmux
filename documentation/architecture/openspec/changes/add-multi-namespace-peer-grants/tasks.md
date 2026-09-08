@@ -66,21 +66,21 @@
 
 ## 5. Regression and Race Evidence
 
-- [ ] 5.1 Test public interfaces for wildcard coverage of GLOBAL, newly loaded
+- [x] 5.1 Test public interfaces for wildcard coverage of GLOBAL, newly loaded
   bundles and a newly addressable namespace classification; test sets,
   whitespace trimming, canonical sorting/deduplication, future explicit names,
   empty/no rights and malformed input. Verify application introspection
   remains unchanged.
-- [ ] 5.2 Test scope widening/narrowing/clearing/no-op on one live peer connection,
+- [x] 5.2 Test scope widening/narrowing/clearing/no-op on one live peer connection,
   proving PSK/hash, identity, expiry and unrelated metadata are unchanged and
   Send/Raww plus both discovery operations use current rights without reconnect.
-- [ ] 5.3 Add deterministic interleaving tests for update-before-final-admission
+- [x] 5.3 Add deterministic interleaving tests for update-before-final-admission
   and admission-before-update. Prove no obsolete prepared grant admits work
   after commit and previously admitted deliveries are not cancelled.
-- [ ] 5.4 Add deterministic discovery races on both sides of scope commit;
+- [x] 5.4 Add deterministic discovery races on both sides of scope commit;
   prove later decisions use the replacement while an earlier fixed result may
   arrive later. Cover clearing and simultaneous requests on existing connections.
-- [ ] 5.5 Fault-inject pre-rename scope persistence failure and verify old
+- [x] 5.5 Fault-inject pre-rename scope persistence failure and verify old
   durable/effective record preservation; fault-inject post-rename
   directory-sync failure and verify the replacement stays effective with an
   indeterminate-durability error carrying the effective scope. Test concurrent
@@ -88,26 +88,26 @@
   grant restoration. Cover response loss after durable commit and safe
   idempotent retry that reauthorizes and synchronizes, plus stale
   credential-binding races.
-- [ ] 5.6 Test dedicated action permissions: missing/none/self/home denied,
+- [x] 5.6 Test dedicated action permissions: missing/none/self/home denied,
   change.scope=all allowed, rotation-only cannot change scope, wildcard peer
   scope is not administration, and unauthorized callers cannot probe record
   existence. Verify starter explicit grants without rewriting existing policy.
-- [ ] 5.7 Test CLI/MCP/relay parity for provisioning and updates, help catalogs,
+- [x] 5.7 Test CLI/MCP/relay parity for provisioning and updates, help catalogs,
   required/unknown fields, clear versus omitted/null scope, canonical output,
   diagnostics and unchanged PSK destinations/revocation/self-rotation behavior.
-- [ ] 5.8 Test existing discovery filtering: empty/absent namespace cases,
+- [x] 5.8 Test existing discovery filtering: empty/absent namespace cases,
   complete diagnostics and no scope-induced partial marker, unmatched logging,
   one concrete namespace per foreign principal lookup, no implicit GLOBAL
   append, no onward forwarding, and no cross-relay Look or recipient expansion.
 
 ## 6. Documentation and Verification
 
-- [ ] 6.1 Update relay, commands and MCP subsystem READMEs plus affected nearer
+- [x] 6.1 Update relay, commands and MCP subsystem READMEs plus affected nearer
   docs with scope grammar, authoritative operation-time rights, admission/update
   ordering and dedicated action permission. Update usage authorization,
   maintainer configuration, CLI and MCP guides with quoted wildcard examples,
   future addressable-type reach and live scope changes preserving credentials.
-- [ ] 6.2 Document the intentional breaking peer-grant cutover without legacy
+- [x] 6.2 Document the intentional breaking peer-grant cutover without legacy
   conversion promises, and response-loss/ordering semantics without claiming
   cancellation of admitted work or retraction of earlier discovery responses.
 - [ ] 6.3 Run formatting and standard repository verification plus the affected
