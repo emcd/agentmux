@@ -110,10 +110,10 @@
 - [x] 6.2 Document the intentional breaking peer-grant cutover without legacy
   conversion promises, and response-loss/ordering semantics without claiming
   cancellation of admitted work or retraction of earlier discovery responses.
-- [ ] 6.3 Run formatting and standard repository verification plus the affected
+- [x] 6.3 Run formatting and standard repository verification plus the affected
   unit/integration and deterministic race tests. Verify MCP help/selector schemas
   through the client after rebuilding; record any refresh or environment issues.
-- [ ] 6.4 Run strict OpenSpec validation, delta/rename drop audits and sync
+- [x] 6.4 Run strict OpenSpec validation, delta/rename drop audits and sync
   dry-run. Confirm only the retired exact-principal peer discovery scenario is
   dropped and manually compare all affected normative clauses and artifact
   consistency. Do not sync live specs before the approved archive workflow.
