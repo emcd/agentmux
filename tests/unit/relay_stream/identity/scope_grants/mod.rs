@@ -105,6 +105,89 @@ fn store_record(bundle_paths: &BundleRuntimePaths, principal_id: &str) -> Value 
         .clone()
 }
 
+/// Writes a users.toml declaring `operators` distinct `@GLOBAL` operators on
+/// the operator policy, so concurrent admin callers on one shared context do
+/// not collide on a single identity claim.
+fn write_multi_operator_users(configuration_roots: &ConfigurationRoots, operators: &[String]) {
+    let sessions = operators
+        .iter()
+        .map(|operator| {
+            format!("[[sessions]]\nid = \"{operator}\"\npolicy = \"operator\"\n\n[sessions.ui]\n")
+        })
+        .collect::<String>();
+    std::fs::write(
+        configuration_roots.base_layer().join("users.toml"),
+        format!("default-session = \"{}\"\n\n{}", operators[0], sessions),
+    )
+    .expect("write multi-operator users configuration");
+}
+
+/// Connects as an explicit `@GLOBAL` operator, submits one relay-admin
+/// request, and returns the response frame. Variant of the shared
+/// `operator_request` for tests that hold another operator identity live.
+fn operator_request_as(
+    configuration_roots: &ConfigurationRoots,
+    bundle_paths: &BundleRuntimePaths,
+    operator: &str,
+    request: Value,
+) -> Value {
+    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
+    let read_stream = client.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(read_stream);
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": operator,
+            "identity_token": "socket-trust",
+        }),
+    );
+    let ack = read_json(&mut reader);
+    assert_eq!(
+        ack["frame"], "hello_ack",
+        "operator hello not acked: {ack:?}"
+    );
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "admin-1",
+            "request": request,
+        }),
+    );
+    let mut response = read_json(&mut reader);
+    while response["frame"] != "response" {
+        response = read_json(&mut reader);
+    }
+    shutdown_stream(&client, "shutdown operator stream");
+    join.join().expect("join operator relay thread");
+    response
+}
+
+/// Registers `principal_id` via `new peer` as an explicit operator and
+/// returns the issued PSK.
+fn register_peer_as(
+    configuration_roots: &ConfigurationRoots,
+    bundle_paths: &BundleRuntimePaths,
+    operator: &str,
+    principal_id: &str,
+    scope: Option<&str>,
+) -> String {
+    let mut request = json!({"operation": "new_peer", "principal_id": principal_id});
+    if let Some(scope) = scope {
+        request["scope"] = Value::String(scope.to_string());
+    }
+    let response = operator_request_as(configuration_roots, bundle_paths, operator, request);
+    assert_eq!(
+        response["response"]["kind"], "new_peer",
+        "new peer rejected: {response:?}"
+    );
+    response["response"]["psk"]
+        .as_str()
+        .expect("psk in new peer response")
+        .to_string()
+}
 /// Submits one ingress Send as a peer relay over a fresh connection.
 fn peer_send_response(
     configuration_roots: &ConfigurationRoots,

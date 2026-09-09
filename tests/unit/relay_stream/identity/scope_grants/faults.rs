@@ -168,6 +168,22 @@ fn postrename_dirsync_failure_keeps_replacement_effective() {
         "effective replacement must govern despite uncertainty: {denied:?}"
     );
 
+    // Retrying the same scope with the fault still armed reports uncertainty
+    // again: the retry performs authorization and synchronization rather than
+    // short-circuiting as a no-op success.
+    let rearmed = change_scope_request(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        peer_id,
+        Some("some-other-bundle"),
+    );
+    assert_eq!(rearmed["response"]["kind"], "error");
+    assert_eq!(
+        rearmed["response"]["error"]["code"], "internal_store_durability_uncertain",
+        "armed retry must synchronize, not shortcut: {rearmed:?}"
+    );
+
     // Clearing the fault lets the idempotent same-scope retry synchronize and
     // succeed rather than short-circuiting.
     std::fs::remove_file(dir_sync_fault_file(&bundle_paths)).expect("clear fault");
@@ -185,16 +201,26 @@ fn postrename_dirsync_failure_keeps_replacement_effective() {
     assert_eq!(retried["response"]["scope"], "some-other-bundle");
 }
 
+/// Path of the pre-rename fault-injection seam failing a store persist after
+/// staging but before the rename publication point.
+fn prename_fault_file(bundle_paths: &BundleRuntimePaths) -> std::path::PathBuf {
+    bundle_paths
+        .state_root
+        .join("identity")
+        .join(".fault-pre-rename")
+}
+
 #[test]
-fn rotation_under_dirsync_failure_reports_honestly_and_recovers() {
+fn prename_storage_failure_leaves_old_grant_intact() {
     let temporary = TempDir::new().expect("temporary directory");
-    let bundle_name = "ident_scope_rotfault";
+    let bundle_name = "ident_scope_prestorage";
     let configuration_roots = write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
-    let peer_id = "rotfault@RELAY";
+    let peer_id = "prestorage@RELAY";
+    let target = format!("alpha@{bundle_name}");
 
-    let original_psk = register_peer(
+    let psk = register_peer(
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -202,9 +228,65 @@ fn rotation_under_dirsync_failure_reports_honestly_and_recovers() {
         Some("*"),
     );
 
-    // With directory sync faulted, the rotation cannot complete durability:
-    // the handler reports the double fault honestly instead of claiming the
-    // old credential survived untouched.
+    // Fail the persist after staging but before rename publication: the
+    // failure is a plain store error, never durability uncertainty, and the
+    // old record and effective grant are untouched.
+    std::fs::write(prename_fault_file(&bundle_paths), "fail").expect("arm fault");
+    let failed = change_scope_request(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        peer_id,
+        Some(bundle_name),
+    );
+    std::fs::remove_file(prename_fault_file(&bundle_paths)).expect("clear fault");
+    assert_eq!(failed["response"]["kind"], "error");
+    assert_eq!(
+        failed["response"]["error"]["code"], "internal_principal_store",
+        "pre-rename failure must not report uncertainty: {failed:?}"
+    );
+    assert_eq!(
+        store_record(&bundle_paths, peer_id)["scope"],
+        "*",
+        "failed update must not touch the record"
+    );
+    let allowed = peer_send_response(&configuration_roots, &bundle_paths, peer_id, &psk, &target);
+    assert_eq!(
+        allowed["response"]["kind"], "send",
+        "old grant must survive a failed update: {allowed:?}"
+    );
+
+    // Clearing the fault lets the same replacement commit normally.
+    let retried = change_scope_request(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        peer_id,
+        Some(bundle_name),
+    );
+    assert_eq!(retried["response"]["kind"], "change_scope", "{retried:?}");
+}
+
+#[test]
+fn rotation_double_fault_reports_rollback_failure_and_recovers() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_scope_doublefault";
+    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let peer_id = "doublefault@RELAY";
+
+    register_peer(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        peer_id,
+        Some("*"),
+    );
+
+    // With directory sync faulted, the rotation's compensation persist faults
+    // too: the handler reports the double fault honestly instead of claiming
+    // either the old or the new credential survived.
     std::fs::write(dir_sync_fault_file(&bundle_paths), "fail").expect("arm fault");
     let failed = operator_request(
         &configuration_roots,
@@ -213,16 +295,13 @@ fn rotation_under_dirsync_failure_reports_honestly_and_recovers() {
         json!({"operation": "change_psk", "principal_id": peer_id}),
     );
     assert_eq!(failed["response"]["kind"], "error");
-    assert!(
-        [
-            "internal_store_durability_uncertain",
-            "internal_credential_rollback_failed"
-        ]
-        .contains(&failed["response"]["error"]["code"].as_str().unwrap_or("")),
-        "rotation under fault must report uncertainty, never success: {failed:?}"
+    assert_eq!(
+        failed["response"]["error"]["code"], "internal_credential_rollback_failed",
+        "double fault must report rollback failure: {failed:?}"
     );
 
-    // After the fault clears, re-rotating restores a known-good credential.
+    // After the fault clears, rotating again restores a known-good credential
+    // regardless of which record survived the ambiguous interval.
     std::fs::remove_file(dir_sync_fault_file(&bundle_paths)).expect("clear fault");
     let rotation = operator_request(
         &configuration_roots,
@@ -238,7 +317,6 @@ fn rotation_under_dirsync_failure_reports_honestly_and_recovers() {
         .as_str()
         .expect("rotated psk")
         .to_string();
-    assert_ne!(rotated_psk, original_psk);
     let accepted = hello_first_frame(
         &configuration_roots,
         &bundle_paths,

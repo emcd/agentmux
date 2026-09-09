@@ -368,6 +368,169 @@ fn ingress_principal_discovery_denies_absent_scope() {
     );
 }
 
+// Rewrites the bundle's configuration file with invalid TOML so any load of
+// it fails. Collection errors must never reach an unauthorized peer.
+fn break_bundle_configuration(configuration_roots: &ConfigurationRoots, bundle_name: &str) {
+    std::fs::write(
+        configuration_roots
+            .base_layer()
+            .join("bundles")
+            .join(format!("{bundle_name}.toml")),
+        "[[[this is not valid toml",
+    )
+    .expect("break bundle configuration");
+}
+
+#[test]
+fn ingress_principal_discovery_hides_collection_errors_from_out_of_scope_peer() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    let relay_principal_id = unique_relay_principal_id();
+    write_ingress_peer_store(
+        &bundle_paths.state_root,
+        relay_principal_id.as_str(),
+        Some("some-other-bundle"),
+    );
+    break_bundle_configuration(&configuration_roots, &bundle_name);
+
+    let response = ingress_request_response(
+        &configuration_roots,
+        &bundle_paths,
+        relay_principal_id.as_str(),
+        json!({"operation": "discover_principals", "namespace": bundle_name}),
+    );
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"], "authorization_forbidden",
+        "out-of-scope peer must see denial, not diagnostics: {response:?}"
+    );
+    // Uniform denial: no namespace, path, or cause may leak.
+    assert_eq!(
+        response["response"]["error"]["details"],
+        json!({"capability": "ingress"}),
+        "denial must disclose nothing: {response:?}"
+    );
+}
+
+#[test]
+fn ingress_principal_discovery_absent_scope_denies_despite_broken_config() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    let relay_principal_id = unique_relay_principal_id();
+    write_ingress_peer_store(&bundle_paths.state_root, relay_principal_id.as_str(), None);
+    break_bundle_configuration(&configuration_roots, &bundle_name);
+
+    let response = ingress_request_response(
+        &configuration_roots,
+        &bundle_paths,
+        relay_principal_id.as_str(),
+        json!({"operation": "discover_principals", "namespace": bundle_name}),
+    );
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"], "authorization_forbidden",
+        "absent scope must deny before collection: {response:?}"
+    );
+}
+
+#[test]
+fn ingress_principal_discovery_reports_collection_errors_to_covered_peer() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    let relay_principal_id = unique_relay_principal_id();
+    write_ingress_peer_store(
+        &bundle_paths.state_root,
+        relay_principal_id.as_str(),
+        Some(bundle_name.as_str()),
+    );
+    break_bundle_configuration(&configuration_roots, &bundle_name);
+
+    let response = ingress_request_response(
+        &configuration_roots,
+        &bundle_paths,
+        relay_principal_id.as_str(),
+        json!({"operation": "discover_principals", "namespace": bundle_name}),
+    );
+    // A covered peer is authorized: the collection diagnostic surfaces.
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"], "internal_unexpected_failure",
+        "covered peer sees the diagnostic error: {response:?}"
+    );
+}
+
+#[test]
+fn ingress_namespace_discovery_hides_collection_errors_from_out_of_scope_peer() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    let relay_principal_id = unique_relay_principal_id();
+    write_ingress_peer_store(
+        &bundle_paths.state_root,
+        relay_principal_id.as_str(),
+        Some("some-other-bundle"),
+    );
+    break_bundle_configuration(&configuration_roots, &bundle_name);
+
+    let response = ingress_request_response(
+        &configuration_roots,
+        &bundle_paths,
+        relay_principal_id.as_str(),
+        json!({"operation": "discover_namespaces"}),
+    );
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"], "authorization_forbidden",
+        "a set scope that cannot be evaluated against a failed collection must deny: {response:?}"
+    );
+}
+
+#[test]
+fn ingress_namespace_discovery_reports_collection_errors_to_wildcard_peer() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = format!("party-{}", Uuid::new_v4().simple());
+    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths =
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+    let relay_principal_id = unique_relay_principal_id();
+    write_ingress_peer_store(
+        &bundle_paths.state_root,
+        relay_principal_id.as_str(),
+        Some("*"),
+    );
+    break_bundle_configuration(&configuration_roots, &bundle_name);
+
+    let response = ingress_request_response(
+        &configuration_roots,
+        &bundle_paths,
+        relay_principal_id.as_str(),
+        json!({"operation": "discover_namespaces"}),
+    );
+    // A wildcard covers every addressable namespace by definition, so the
+    // authorized holder sees the collection diagnostic.
+    assert_eq!(response["response"]["kind"], "error");
+    assert_eq!(
+        response["response"]["error"]["code"], "internal_unexpected_failure",
+        "wildcard peer sees the diagnostic error: {response:?}"
+    );
+}
+
 #[test]
 fn ingress_global_principal_discovery_enumerates_registry_under_namespace_scope() {
     let temporary = TempDir::new().expect("temporary directory");

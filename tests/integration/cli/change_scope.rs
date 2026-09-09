@@ -293,3 +293,79 @@ fn change_scope_json_reports_uncertain_durability_with_effective_scope() {
     assert_eq!(payload["durability"], "uncertain");
     assert_eq!(payload["principal_id"], "west@RELAY");
 }
+
+#[test]
+fn change_scope_rejects_a_bare_namespace_identity_before_relay_contact() {
+    let (fixture, relay_thread) = change_scope_fixture(0);
+
+    let output = run_change_scope_for("@RELAY", &["--scope", "alpha"], &fixture);
+    relay_thread.join().expect("join fake relay");
+    assert!(
+        !output.status.success(),
+        "a namespace without a local identity must fail before relay contact"
+    );
+    let logged = fixture.request_logs["alpha"]
+        .lock()
+        .expect("lock request log");
+    assert!(
+        logged.is_empty(),
+        "no relay request may be issued: {logged:?}"
+    );
+}
+
+#[test]
+fn change_scope_normalizes_a_padded_principal_before_relay_contact() {
+    let (fixture, relay_thread) = change_scope_fixture(1);
+
+    let output = run_change_scope_for(" west@RELAY", &["--scope", "alpha"], &fixture);
+    relay_thread.join().expect("join fake relay");
+    assert!(output.status.success(), "padded principal: {output:?}");
+    let logged = fixture.request_logs["alpha"]
+        .lock()
+        .expect("lock request log");
+    assert_eq!(logged.len(), 1);
+    assert_eq!(
+        logged[0]["principal_id"], "west@RELAY",
+        "the normalized identity is submitted: {logged:?}"
+    );
+}
+
+fn run_new_peer(
+    principal: &str,
+    extra: &[&str],
+    fixture: &ChangeScopeFixture,
+) -> std::process::Output {
+    let mut args = vec!["new", "peer", principal];
+    args.extend_from_slice(extra);
+    Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args(args)
+        .args([
+            "--configuration-directory",
+            &fixture.config_root.to_string_lossy(),
+            "--state-directory",
+            &fixture.state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &fixture.inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run agentmux new peer")
+}
+
+#[test]
+fn new_peer_rejects_a_bare_namespace_identity_before_relay_contact() {
+    let (fixture, relay_thread) = change_scope_fixture(0);
+
+    let output = run_new_peer("@RELAY", &["--scope", "*"], &fixture);
+    relay_thread.join().expect("join fake relay");
+    assert!(
+        !output.status.success(),
+        "a namespace without a local identity must fail before relay contact"
+    );
+    let logged = fixture.request_logs["alpha"]
+        .lock()
+        .expect("lock request log");
+    assert!(
+        logged.is_empty(),
+        "no relay request may be issued: {logged:?}"
+    );
+}

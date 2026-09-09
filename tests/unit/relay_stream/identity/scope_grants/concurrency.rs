@@ -1,22 +1,5 @@
 use super::*;
 
-/// Writes a users.toml declaring `operators` distinct `@GLOBAL` operators on
-/// the operator policy, so concurrent admin callers on one shared context do
-/// not collide on a single identity claim.
-fn write_multi_operator_users(configuration_roots: &ConfigurationRoots, operators: &[String]) {
-    let sessions = operators
-        .iter()
-        .map(|operator| {
-            format!("[[sessions]]\nid = \"{operator}\"\npolicy = \"operator\"\n\n[sessions.ui]\n")
-        })
-        .collect::<String>();
-    std::fs::write(
-        configuration_roots.base_layer().join("users.toml"),
-        format!("default-session = \"{}\"\n\n{}", operators[0], sessions),
-    )
-    .expect("write multi-operator users configuration");
-}
-
 #[test]
 fn concurrent_scope_updates_and_rotation_serialize_on_shared_context() {
     let temporary = TempDir::new().expect("temporary directory");
@@ -303,6 +286,22 @@ fn scope_update_progresses_while_a_principal_probe_is_stalled() {
             response = read_json(&mut reader);
         }
         let _ = done_tx.send(response);
+        // A second operation on the same connection after the release must
+        // also observe the replacement grant: namespace discovery hides the
+        // no-longer-covered bundle as an empty success.
+        send_json(
+            &mut client,
+            json!({
+                "frame": "request",
+                "request_id": "post-commit-namespaces",
+                "request": {"operation": "discover_namespaces"},
+            }),
+        );
+        let mut namespaces = read_json(&mut reader);
+        while namespaces["frame"] != "response" {
+            namespaces = read_json(&mut reader);
+        }
+        let _ = done_tx.send(namespaces);
         shutdown_stream(&client, "shutdown stalled peer stream");
         join.join().expect("join stalled peer thread");
     });
@@ -341,10 +340,119 @@ fn scope_update_progresses_while_a_principal_probe_is_stalled() {
     let decided = done_rx
         .recv_timeout(Duration::from_secs(30))
         .expect("stalled discovery never completed after release");
-    assert_eq!(decided["response"]["kind"], "error");
+    assert_eq!(decided["response"]["kind"], "error",);
     assert_eq!(
         decided["response"]["error"]["code"], "authorization_forbidden",
         "post-commit decision must use the replacement grant: {decided:?}"
     );
+    let namespaces = done_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("post-commit namespace discovery never completed");
+    assert_eq!(namespaces["response"]["kind"], "discover_namespaces");
+    assert!(
+        namespaces["response"]["namespaces"]
+            .as_array()
+            .expect("namespaces array")
+            .is_empty(),
+        "both discovery operations observe the replacement: {namespaces:?}"
+    );
     probe.join().expect("join probe thread");
+}
+
+#[test]
+fn raced_admission_and_narrowing_each_resolve_safely() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_scope_raceorder";
+    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let operator_id = global_user_id(bundle_name);
+    write_multi_operator_users(&configuration_roots, std::slice::from_ref(&operator_id));
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let peer_id = "raceorder@RELAY";
+    let target = format!("alpha@{bundle_name}");
+    let catalog = single_bundle_catalog(&bundle_paths);
+    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
+
+    let seed = operator_request_on_context(
+        &context,
+        &operator_id,
+        json!({"operation": "new_peer", "principal_id": peer_id, "scope": "*"}),
+    );
+    assert_eq!(seed["response"]["kind"], "new_peer");
+    let psk = seed["response"]["psk"]
+        .as_str()
+        .expect("seed psk")
+        .to_string();
+
+    // Race a peer Send against a narrowing update on the shared
+    // serialization: whichever commits first, both outcomes stay valid —
+    // admission-before-update admits under the old grant, update-before-final
+    // -admission denies under the replacement — and neither corrupts state.
+    let barrier = Arc::new(Barrier::new(2));
+    let send_context = Arc::clone(&context);
+    let send_target = target.clone();
+    let send_peer = peer_id.to_string();
+    let send_psk = psk.clone();
+    let send_barrier = Arc::clone(&barrier);
+    let send_thread = thread::spawn(move || {
+        let (mut client, join) = spawn_relay_connection_on_context(send_context);
+        let read_stream = client.try_clone().expect("clone stream");
+        let mut reader = BufReader::new(read_stream);
+        send_json(
+            &mut client,
+            json!({
+                "frame": "hello",
+                "schema_version": "1",
+                "principal_id": send_peer,
+                "identity_token": send_psk,
+            }),
+        );
+        assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+        send_barrier.wait();
+        send_json(
+            &mut client,
+            json!({
+                "frame": "request",
+                "request_id": "raced-send",
+                "request": {
+                    "operation": "send",
+                    "requester_session": send_peer,
+                    "message": "raced admission",
+                    "targets": [send_target],
+                    "broadcast": false,
+                },
+            }),
+        );
+        let mut response = read_json(&mut reader);
+        while response["frame"] != "response" {
+            response = read_json(&mut reader);
+        }
+        shutdown_stream(&client, "shutdown raced peer stream");
+        join.join().expect("join raced peer thread");
+        response
+    });
+
+    barrier.wait();
+    let narrowed = operator_request_on_context(
+        &context,
+        &operator_id,
+        json!({"operation": "change_scope", "principal_id": peer_id, "scope": "other"}),
+    );
+    assert_eq!(
+        narrowed["response"]["kind"], "change_scope",
+        "narrowing must commit: {narrowed:?}"
+    );
+    let raced = send_thread.join().expect("join send thread");
+    match &raced["response"]["kind"] {
+        Value::String(kind) if kind == "send" => {}
+        _ => assert_eq!(
+            raced["response"]["error"]["code"], "authorization_forbidden",
+            "raced send resolves denied only under the replacement: {raced:?}"
+        ),
+    }
+    assert_eq!(
+        store_record(&bundle_paths, peer_id)["scope"],
+        "other",
+        "narrowing must be the final grant"
+    );
 }

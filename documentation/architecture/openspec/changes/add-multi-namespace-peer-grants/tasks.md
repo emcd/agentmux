@@ -74,13 +74,13 @@
 - [x] 5.2 Test scope widening/narrowing/clearing/no-op on one live peer connection,
   proving PSK/hash, identity, expiry and unrelated metadata are unchanged and
   Send/Raww plus both discovery operations use current rights without reconnect.
-- [x] 5.3 Add deterministic interleaving tests for update-before-final-admission
+- [ ] 5.3 Add deterministic interleaving tests for update-before-final-admission
   and admission-before-update. Prove no obsolete prepared grant admits work
   after commit and previously admitted deliveries are not cancelled.
-- [x] 5.4 Add deterministic discovery races on both sides of scope commit;
+- [ ] 5.4 Add deterministic discovery races on both sides of scope commit;
   prove later decisions use the replacement while an earlier fixed result may
   arrive later. Cover clearing and simultaneous requests on existing connections.
-- [x] 5.5 Fault-inject pre-rename scope persistence failure and verify old
+- [ ] 5.5 Fault-inject pre-rename scope persistence failure and verify old
   durable/effective record preservation; fault-inject post-rename
   directory-sync failure and verify the replacement stays effective with an
   indeterminate-durability error carrying the effective scope. Test concurrent

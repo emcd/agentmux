@@ -328,6 +328,31 @@ async fn new_peer_rejects_malformed_relay_scope_before_relay_contact() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn change_scope_validates_the_normalized_identity_before_relay_contact() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(|_| panic!("relay must not receive change_scope for a malformed identity")),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    // An untrimmed principal must not bypass grammar validation, and a bare
+    // namespace without a local identity is not a relay principal at all.
+    for principal_id in ["west@RELAY ", "@RELAY"] {
+        let mut arguments = scope_args(json!({"scope": "alpha,,beta"}));
+        if let Some(args) = arguments.get_mut("args") {
+            args["principal_id"] = json!(principal_id);
+        }
+        let response = harness.call_tool(2, "change", arguments).await;
+        assert!(
+            error_code(&response).is_some(),
+            "malformed identity {principal_id:?} must fail: {response:?}"
+        );
+    }
+    assert!(relay.requests_for_operation("change_scope").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn change_rejects_an_unknown_command() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
