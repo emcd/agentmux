@@ -351,14 +351,14 @@ all configured bundle namespaces and `GLOBAL`.
 
 The receiving relay SHALL authorize every discovery operation using the current
 authoritative scope for the authenticated peer under `Peer Ingress Scope Grammar`
-and `Authoritative Peer Scope Updates` in the `relay-identity` capability. It
-SHALL reuse peer target namespace coverage, not application introspection scope
-matching or a Hello-time peer grant snapshot.
+and `Authoritative Peer Scope Updates` in the `relay-identity` capability.
+It SHALL reuse peer target namespace coverage, not application introspection
+scope matching or a Hello-time peer grant snapshot.
 
-The receiving relay SHALL derive results only from its own bundle catalog and
-`GLOBAL` registry. It SHALL NOT use a foreign origin principal, `on_behalf_of`,
-an origin-supplied catalog, or an origin-local relay alias as authorization or
-discovery input.
+The receiving relay SHALL derive results only from its own existing discovery
+candidate sources (currently bundle catalog and GLOBAL registry). It SHALL NOT
+use a foreign origin principal, `on_behalf_of`, origin-supplied catalog, or
+origin-local relay alias as authorization or discovery input.
 
 Ingress behavior SHALL be:
 
@@ -370,37 +370,35 @@ Ingress behavior SHALL be:
 - a concrete namespace outside scope returns `authorization_forbidden` without
   revealing whether it exists.
 
-Namespace discovery SHALL return sorted unique covered namespaces containing at
-least one addressable principal. An empty namespace SHALL be omitted, producing
-the same result as an absent namespace. Principal discovery SHALL continue to
-name one concrete namespace per request. A covered absent namespace SHALL return
-the existing neutral empty bundle view. No wildcard or set scope SHALL cause
-foreign principal aggregation or append GLOBAL to a lookup of another namespace.
+Namespace discovery SHALL return sorted unique covered namespaces containing
+at least one addressable principal. An empty namespace SHALL be omitted,
+producing the same result as an absent namespace. Principal discovery SHALL
+continue to name one concrete namespace per request. A covered absent namespace
+SHALL return the existing neutral empty bundle view. No wildcard or set scope
+SHALL cause foreign principal aggregation or append GLOBAL to a lookup of
+another namespace.
 
-Because peer grants cover complete namespaces, covered principal discovery SHALL
-return complete listings and their normal namespace diagnostics, with no
-scope-induced `principals_partial` marker. The generic marker's contracts for
-other uses SHALL remain unchanged. GLOBAL SHALL use its registry-backed view.
-Future addressable namespace types SHALL use their own existing candidate and
-listing mechanisms; wildcard authorization SHALL require no extra type allowlist
-or additional opt-in.
+Because peer grants cover complete namespaces, covered principal discovery
+SHALL return complete listings and their normal namespace diagnostics, with
+no scope-induced `principals_partial` marker. The generic marker's contracts
+for other uses SHALL remain unchanged. GLOBAL SHALL use its registry-backed
+view. Future addressable namespace types SHALL use their own existing candidate
+and listing mechanisms; wildcard authorization SHALL require no extra type
+allowlist or additional opt-in.
 
-The shipped peer ingress scope is operation-agnostic. This requirement does not
-add a capability-specific `list` permission separate from target scope.
-
-A namespace-scoped grant for a namespace containing no configured or registered
-principals SHALL NOT make that namespace discoverable. Namespace discovery SHALL
-omit it, producing the same result as an absent namespace.
+Peer ingress scope SHALL remain operation-agnostic; no separate list control
+is introduced for the peer. Origin list authorization and the prohibition on
+peer discovery re-forwarding SHALL remain unchanged.
 
 For a nonempty scope covering no discoverable namespace, namespace discovery
 SHALL return an empty success and record the scope and requester in local
 inscriptions. That record SHALL NOT alter the response or disclose additional
 namespace existence to the peer. Credentials SHALL NOT be recorded.
 
-Final filtering SHALL be ordered against scope-update commits. A decision ordered
-after update success SHALL use the replacement or a later committed scope,
-including on the same connection. A result fixed before commit may be sent
-afterwards, without implying authority for a later lookup.
+Final filtering SHALL be ordered against scope-update commits. A decision
+ordered after update success SHALL use the replacement or a later committed
+scope, including on the same connection. A result fixed before commit may be
+sent afterwards, without implying authority for a later lookup.
 
 #### Scenario: Namespace scope exposes complete namespace
 
@@ -411,29 +409,27 @@ afterwards, without implying authority for a later lookup.
 
 #### Scenario: Empty namespace under namespace scope is omitted
 
-- **WHEN** peer scope is namespace `myapp`
-- **AND** `myapp` contains no configured or registered principals
+- **WHEN** peer scope covers `myapp`
+- **AND** myapp contains no configured or registered addressable principals
 - **THEN** namespace discovery omits `myapp`
 - **AND** does not reveal whether `myapp` exists
 
 #### Scenario: Scope covering nothing is recorded rather than refused
 
-- **WHEN** an authenticated peer's ingress scope covers no namespace on the
-  receiving relay
-- **THEN** namespace discovery returns an empty result rather than
-  `authorization_forbidden`
-- **AND** the response does not reveal whether any namespace exists
-- **AND** the receiving relay records the scope and the requesting principal
+- **WHEN** a peer's nonempty scope covers no discoverable namespace
+- **THEN** namespace discovery returns empty success, not authorization denial
+- **AND** the response does not reveal namespace existence
+- **AND** the receiving relay records the scope and requester locally
 
 #### Scenario: Absent scope denies discovery
 
-- **WHEN** an authenticated peer principal has no registered ingress scope
+- **WHEN** an authenticated peer has no registered scope
 - **THEN** namespace and principal discovery return `authorization_forbidden`
 
 #### Scenario: Out-of-scope namespace reveals no existence
 
-- **WHEN** a peer requests principals for a namespace outside its scope
-- **THEN** the receiving relay returns `authorization_forbidden`
+- **WHEN** a peer requests principals for a namespace outside its current scope
+- **THEN** the relay returns `authorization_forbidden`
 - **AND** the response does not reveal whether the namespace exists
 
 #### Scenario: Set filters namespace discovery without aggregating principals

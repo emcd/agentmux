@@ -1137,7 +1137,7 @@ The system SHALL expose a meta-tool `new` that registers a principal credential.
 `new peer` request `args` SHALL be:
 
 - `principal_id` (required, `<id>@<namespace>`)
-- `scope` (optional)
+- `scope` (optional string)
 - `output_path` (optional, absolute path)
 - `write_to_config` (optional, boolean)
 
@@ -1161,91 +1161,74 @@ Those strings are legal namespace names, so the diagnostic SHALL NOT fail the
 request; `all` names a namespace, while `*` grants wildcard reach. A scope
 merely resolving to nothing SHALL NOT produce the advisory.
 
-Diagnostics SHALL travel in the response payload rather than on any process
-output stream, because the relay is a separate process from both callers and its
-own stderr reaches neither. Each diagnostic SHALL carry a `code` and a
-human-readable `message`. The MCP tool SHALL preserve the diagnostics in its
-structured result; the CLI SHALL render each diagnostic to its own stderr and
-SHALL still exit zero.
+Diagnostics SHALL travel in the response payload, not relay process output.
+Each SHALL carry a code and human-readable message. MCP SHALL preserve them in
+its structured result; CLI SHALL render each to its own stderr and still exit
+zero on success.
 
 The relay SHALL generate the PSK, persist only its SHA-256 hash, and route the
-raw value to one of three credential destinations:
+raw value to one of three destinations:
 
-- **Response** (default, when neither option is set): the relay SHALL return the
-  raw PSK once in the response.
-- **Path** (`output_path` set): the relay SHALL write the PSK to that path and
-  omit it from the response. The path MUST be absolute, its parent MUST already
-  exist, and the target MUST NOT be a symlink; a path failing these
-  preconditions SHALL be rejected with `validation_invalid_output_path`.
-- **Config** (`write_to_config` set): the relay SHALL write the PSK to the
-  principal's relay-owned canonical credential path and omit it from the
-  response. Config is derivable only for **session** principals, whose
-  credential location the relay owns; the relay SHALL reject Config for relay,
-  user, or application principals with
+- Response (default): return the raw PSK once in the response.
+- Path (`output_path`): write the PSK there and omit it from the response. The
+  path MUST be absolute, its parent MUST exist, and its target MUST NOT be a
+  symlink. Failure of these preconditions SHALL return
+  `validation_invalid_output_path`.
+- Config (`write_to_config`): write to the relay-owned canonical credential
+  path and omit the PSK from the response. This is available only to session
+  principals. Relay, user or application principals SHALL receive
   `validation_config_destination_unsupported`. Before deriving any path the
-  relay SHALL reject a `principal_id` whose components are not a valid session
-  identity — the configured session-id grammar for the id and the canonical
-  bundle-name grammar for the namespace (which permits dotted names but rejects
-  the traversal-only `.`/`..` segments and path separators) — with
-  `validation_invalid_principal_id`.
+  relay SHALL reject principal components that violate the session-id or
+  bundle-name grammar (including traversal-only `.`/`..` and path separators,
+  while permitting dotted bundle names) with `validation_invalid_principal_id`.
 
-The relay SHALL validate and stage the selected destination before mutating the
-principal store; a rejected or failed destination SHALL NOT register the
-principal. `new` is a relay-wide operation: the relay SHALL authorize the
-connection principal against an `all`-scoped `new.peer` grant, and a
-bundle-relative `home` grant SHALL be insufficient.
+The relay SHALL validate and stage the destination before store mutation; a
+rejected or failed destination SHALL NOT register the principal. Registration
+SHALL require the connection principal's relay-wide `new.peer=all` control;
+`home` is insufficient. Scope-update authority SHALL NOT substitute for it.
 
 #### Scenario: Advertise new tool
 
 - **WHEN** an MCP client enumerates available tools
-- **THEN** the system includes `new`
+- **THEN** the inventory includes `new`
 
 #### Scenario: Mint PSK for a new peer principal
 
-- **WHEN** a caller invokes `new` with `command="peer"` and a `principal_id`
+- **WHEN** a caller invokes `new` with `command="peer"` and a principal id
 - **THEN** the relay registers the principal and returns the minted PSK
-- **AND** omits the raw PSK from the response when `output_path` or
-  `write_to_config` selected a file destination
+- **AND** omits the PSK from the response for output_path or write_to_config
 
 #### Scenario: Warn on a scope drawn from the policy-tier vocabulary
 
-- **WHEN** a caller invokes `new` with `command="peer"` and `scope` set to
-  `none`, `self`, `home`, or `all`
-- **THEN** the response carries an `advisory_scope_resembles_policy_tier`
-  diagnostic
-- **AND** registers the principal with that scope
-- **AND** the request succeeds
+- **WHEN** a caller registers scope `none`, `self`, `home`, or `all`
+- **THEN** the response carries `advisory_scope_resembles_policy_tier`
+- **AND** registers the principal with that namespace scope successfully
 
 #### Scenario: MCP caller receives the scope diagnostic
 
-- **WHEN** an MCP caller invokes `new` with a policy-tier `scope`
-- **THEN** the structured result carries the diagnostic with its code and
-  message
+- **WHEN** MCP registration produces the scope advisory
+- **THEN** the structured result carries its code and message
 
 #### Scenario: CLI renders the scope diagnostic to stderr
 
-- **WHEN** an operator runs `new peer` with a policy-tier `--scope`
-- **THEN** the CLI writes the diagnostic message to its own stderr
-- **AND** exits zero
+- **WHEN** CLI registration produces the scope advisory
+- **THEN** CLI renders it to stderr and exits zero
 
 #### Scenario: Register an unresolvable scope without a diagnostic
 
-- **WHEN** a caller invokes `new` with `command="peer"` and a `scope` naming a
-  namespace that does not exist on this relay
-- **THEN** the relay registers the principal without emitting the
-  vocabulary-collision diagnostic
+- **WHEN** a caller registers a scope naming a namespace not currently present
+- **THEN** registration succeeds without the vocabulary-collision diagnostic
 
 #### Scenario: Reject config destination for a non-session principal
 
-- **WHEN** a caller invokes `new` with `write_to_config` for a principal whose
-  type is not session
+- **WHEN** a caller requests write_to_config for a non-session principal
 - **THEN** the relay returns `validation_config_destination_unsupported`
 - **AND** does not register the principal
 
 #### Scenario: Reject mutually exclusive credential destinations
 
-- **WHEN** a caller supplies both `output_path` and `write_to_config`
-- **THEN** the request is rejected with `validation_invalid_params`
+- **WHEN** a caller supplies output_path and write_to_config together
+- **THEN** the adapter returns `validation_invalid_params`
 - **AND** no relay request is issued
 
 #### Scenario: Provision wildcard and namespace sets through CLI and MCP
@@ -1299,14 +1282,12 @@ relay request is issued.
 
 The relay SHALL generate a new PSK for the existing principal and apply the same
 credential-destination selector as `new peer` (Response by default, Path for
-`output_path`, Config for `write_to_config`), with identical session-only Config
-derivation, path preconditions, and safe-segment validation. The relay SHALL
-stage and commit the destination before revoking the live connections that hold
-the prior credential, other than the requesting connection; a rejected or failed
-destination SHALL NOT rotate the PSK or revoke any connection. `change` is a
-relay-wide operation: the relay SHALL authorize the connection principal against
-an `all`-scoped `change.psk` grant, and a bundle-relative `home` grant SHALL be
-insufficient.
+output_path, Config for write_to_config), with identical session-only Config
+derivation, path preconditions, and safe-segment validation. It SHALL stage and
+commit the destination before revoking live connections holding the prior
+credential, other than the requester. A rejected or failed destination SHALL
+NOT rotate the PSK or revoke any connection. Rotation is relay-wide and SHALL
+require `change.psk=all`; home SHALL be insufficient.
 
 Rotation SHALL preserve the latest committed scope, expiry, type and unrelated
 metadata, serialized against concurrent scope updates. Rotation rights SHALL
@@ -1314,75 +1295,63 @@ NOT grant scope administration. Rotation replaces a credential while the
 principal persists, so it is not revocation under `relay-identity`'s
 `Revocation and Expiry Enforcement` requirement; its teardown obligations follow.
 
+The relay SHALL tear down every session authenticated with the prior credential
+other than the requester. Before closing each it SHALL emit a
+`runtime_identity_revoked` typed error frame. A bare connection drop without the
+typed frame is not permitted, being indistinguishable from relay_unavailable.
 
-The relay SHALL tear down every live session authenticated with the prior
-credential, other than the requesting connection. Before closing each such
-session the relay SHALL emit a `runtime_identity_revoked` typed error response
-frame; a bare connection drop without a typed error frame is not permitted, as it
-would be indistinguishable from `relay_unavailable` at the client.
+The relay SHALL emit `identity.revoked` on the stream-event carrier to each
+connected trusted-host stream whose scope covers the rotated principal. Each
+event SHALL carry the principal_id and revocation timestamp.
 
-The relay SHALL emit an `identity.revoked` event on the existing stream-event
-carrier to every connected trusted-host stream whose scope covers the rotated
-principal. Each event SHALL carry the `principal_id` and the timestamp of
-revocation.
-
-The relay SHALL NOT tear down the requesting connection when a principal rotates
-its own credential. That connection is the caller awaiting the response, which
-carries the only copy of the new PSK when the Response destination was selected;
-tearing it down discards that response and leaves the principal holding no
-credential matching the hash the relay has already committed. The relay SHALL
-still emit the `identity.revoked` event for a self-rotation, because a trusted
-host holding a cached view of that credential must drop it regardless of who
-initiated the change. Excluding the requester cannot leave another session alive
-holding the prior credential, because the stream registry admits at most one live
-connection per `principal_id`.
+The relay SHALL NOT tear down the requesting connection on self-rotation: it
+awaits the response carrying the only new PSK copy with Response destination.
+Tearing it down discards that response after the hash was committed. The relay
+SHALL still emit identity.revoked to trusted hosts so their credential caches
+are invalidated. Excluding the requester cannot leave another live session
+holding the old credential because the registry admits at most one connection
+per principal_id.
 
 #### Scenario: Advertise change tool
 
 - **WHEN** an MCP client enumerates available tools
-- **THEN** the system includes `change`
+- **THEN** the inventory includes `change`
 
 #### Scenario: Rotate PSK for an existing principal
 
-- **WHEN** a caller invokes `change` with `command="psk"` and a `principal_id`
-- **THEN** the relay rotates the principal's PSK and returns the new value
-- **AND** omits the raw PSK from the response when a file destination was
-  selected
+- **WHEN** a caller invokes change with command psk and a principal_id
+- **THEN** the relay rotates its PSK and returns the new value
+- **AND** omits it from the response when a file destination was selected
 
 #### Scenario: Rejected destination leaves the credential unrotated
 
-- **WHEN** a `change psk` request selects a destination the relay rejects
+- **WHEN** a change psk request selects a rejected destination
 - **THEN** the relay returns the corresponding validation error
-- **AND** does not rotate the PSK or revoke any live connection
+- **AND** does not rotate the PSK or revoke any connection
 
 #### Scenario: Self-rotation returns the rotated credential
 
-- **WHEN** a principal whose connection authenticated with its own credential
-  rotates its own PSK with the Response destination
-- **THEN** the relay returns the rotated PSK on that connection
-- **AND** does not tear that connection down
+- **WHEN** a principal authenticated with its own credential rotates its own
+  PSK with Response destination
+- **THEN** the relay returns the new PSK on that connection
+- **AND** does not tear it down
 
 #### Scenario: Rotation revokes another principal's live session
 
-- **WHEN** a caller rotates the PSK of a different principal that holds a live
-  authenticated session
-- **THEN** that session receives a `runtime_identity_revoked` typed error frame
-  before its connection is closed
+- **WHEN** a caller rotates a different principal with a live session
+- **THEN** that session receives runtime_identity_revoked before closing
 
 #### Scenario: Rotation fans out identity.revoked to trusted hosts
 
 - **WHEN** a caller rotates a principal's PSK
-- **THEN** the relay emits an `identity.revoked` event on the stream-event
-  carrier to each connected trusted-host stream whose scope covers that
-  principal
-- **AND** the event carries the `principal_id` and the timestamp of revocation
+- **THEN** each connected trusted host whose scope covers it receives
+  identity.revoked with principal_id and revocation timestamp
 
 #### Scenario: Self-rotation still notifies trusted hosts
 
 - **WHEN** a principal rotates its own PSK
-- **THEN** trusted-host streams within scope still receive the
-  `identity.revoked` event
-- **AND** the requesting connection is not torn down
+- **THEN** trusted-host streams within scope still receive identity.revoked
+- **AND** the requester is not torn down
 
 #### Scenario: Rotation never restores an obsolete grant
 
