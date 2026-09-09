@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::super::canonical_session_id;
-use super::super::identity::scope_permits;
+use super::super::identity::peer_scope_covers_target;
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget, ScopeTier,
     required_tier,
@@ -206,9 +206,9 @@ pub(in crate::relay) fn authorize_route(
 ///
 /// A forwarded `Send`/`Raww` from a peer relay carries no bundle policy, so the
 /// tier-based [`authorize_route`] does not apply. Instead, each session target
-/// must be covered by the peer principal's registered `scope` — an exact
-/// `session@bundle` identity or a bare `bundle` namespace — checked via
-/// [`scope_permits`]. An absent scope covers nothing (fail-closed). A target
+/// must be covered by the peer principal's registered `scope` — `*` for every
+/// addressable namespace or a comma-separated namespace set — checked via
+/// [`peer_scope_covers_target`]. An absent scope covers nothing (fail-closed). A target
 /// outside the scope is rejected with `authorization_forbidden` carrying an
 /// ingress-denied reason. Target *existence* is validated earlier by the spine's
 /// prepare stage, so an unknown target still sorts before this
@@ -249,7 +249,7 @@ fn authorize_ingress(scope: Option<&str>, route: &ResolvedRoute) -> Result<(), R
             continue;
         };
         let canonical = canonical_session_id(session_id, target.namespace.as_str());
-        if !scope_permits(scope, canonical.as_str()) {
+        if !peer_scope_covers_target(scope, canonical.as_str()) {
             return Err(relay_error(
                 "authorization_forbidden",
                 "request denied by cross-relay ingress policy",

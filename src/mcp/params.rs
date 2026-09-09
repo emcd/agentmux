@@ -24,6 +24,7 @@ pub(super) const TOOL_NEW: &str = "new";
 pub(super) const NEW_COMMAND_PEER: &str = "peer";
 pub(super) const TOOL_CHANGE: &str = "change";
 pub(super) const CHANGE_COMMAND_PSK: &str = "psk";
+pub(super) const CHANGE_COMMAND_SCOPE: &str = "scope";
 pub(super) const TOOL_DROP: &str = "drop";
 pub(super) const DROP_COMMAND_PEER: &str = "peer";
 pub(super) const LIST_COMMAND_NAMESPACES: &str = "namespaces";
@@ -57,7 +58,7 @@ fn new_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
 }
 
 fn change_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    command_enum_schema(&["psk"])
+    command_enum_schema(&["psk", "scope"])
 }
 
 fn drop_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
@@ -292,7 +293,7 @@ pub(super) struct NewPeerArgs {
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub(super) struct ChangeParams {
-    /// Change subcommand selector. Required; allowed value: `psk`.
+    /// Change subcommand selector. Required; allowed values: `psk`, `scope`.
     #[schemars(schema_with = "change_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
@@ -323,6 +324,28 @@ pub(super) struct ChangePskArgs {
     #[serde(default)]
     #[schemars(with = "bool")]
     pub(super) write_to_config: Option<bool>,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct ChangeScopeArgs {
+    /// Peer relay principal identifier whose ingress scope is replaced, in
+    /// `<id>@RELAY` form.
+    #[serde(default)]
+    #[schemars(with = "String")]
+    pub(super) principal_id: Option<String>,
+    /// Replacement scope: `*` for every namespace with addressable principals
+    /// (including GLOBAL and future addressable namespace types), a
+    /// comma-separated set of explicit namespaces, or an explicit empty string
+    /// to clear the grant. Requires `change.scope=all` relay authorization,
+    /// distinct from credential-rotation permission.
+    #[serde(default)]
+    #[schemars(with = "String")]
+    pub(super) scope: Option<String>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]

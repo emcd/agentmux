@@ -25,13 +25,14 @@ use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 
 use super::super::authorization::{authorize_discovery_origin, requester_list_reaches_all};
 use super::super::identity::{
-    PrincipalType, classify_principal_id, scope_permits, split_principal_id,
+    PrincipalType, classify_principal_id, is_wildcard_scope, live_peer_ingress,
+    peer_scope_covers_namespace, peer_scope_covers_target, split_principal_id,
 };
 use super::super::stream::list_namespace_sessions;
 use super::super::{
     BundleCatalog, GLOBAL_NAMESPACE, ListedBundle, ListedBundleState, ListedRelay, ListedSession,
-    PeerConnectionManager, RelayError, RelayRequest, RelayResponse, RequestPrincipal,
-    SCHEMA_VERSION, canonical_session_id, map_config, relay_error,
+    PeerConnectionManager, PeerIngressAuthority, RelayError, RelayRequest, RelayResponse,
+    RequestPrincipal, SCHEMA_VERSION, map_config, relay_error,
 };
 use super::listing::build_listed_bundle;
 
@@ -46,6 +47,10 @@ pub(in crate::relay) struct DiscoveryContext<'a> {
     /// normalized `[[peers]]` configuration (never by dialing the connection
     /// manager). The single source for `list.relays`.
     pub(in crate::relay) configured_relay_aliases: &'a [String],
+    /// Live peer-ingress authority (`None` off the stream path). Peer ingress
+    /// resolves its current grant under this serialization and holds it across
+    /// the scope-filtered decision.
+    pub(in crate::relay) ingress_authority: Option<PeerIngressAuthority<'a>>,
 }
 
 /// Enumerates this relay's configured outbound peer aliases without dialing.
@@ -97,11 +102,30 @@ pub(in crate::relay) fn handle_discover_namespaces(
                 &RelayRequest::DiscoverNamespaces { relay: None },
             )
         }
-        None if ingress => receiving_namespace_discovery(
-            context,
-            principal.ingress_scope.as_deref(),
-            principal.session_id.as_str(),
-        ),
+        None if ingress => {
+            // Two phases around the shared identity-admin serialization. Phase
+            // 1 collects the full candidate snapshot with no lock held, so a
+            // stalled bundle probe cannot block scope administration or other
+            // ingress decisions; its Result is retained, not released.
+            // Phase 2 resolves the current grant under the lock and fixes the
+            // filtered result there, so a scope update cannot interleave
+            // between the grant check and the decision — and collection
+            // diagnostics never reach an unauthorized caller.
+            let snapshot = collect_namespace_snapshot(context);
+            // ORDERING: gate before final resolution, as in the send path —
+            // the collected snapshot carries no authority.
+            super::super::test_hooks::test_authority_gate(principal.session_id.as_str());
+            let live = live_peer_ingress(
+                context.ingress_authority,
+                principal.session_id.as_str(),
+                principal.credential_hash.as_deref(),
+            )?;
+            Ok(filter_namespace_snapshot(
+                snapshot,
+                live.scope.as_deref(),
+                principal.session_id.as_str(),
+            )?)
+        }
         None => local_namespace_discovery(context, principal),
     }
 }
@@ -128,11 +152,26 @@ pub(in crate::relay) fn handle_discover_principals(
                 },
             )
         }
-        None if ingress => receiving_principal_discovery(
-            context,
-            principal.ingress_scope.as_deref(),
-            namespace.as_str(),
-        ),
+        None if ingress => {
+            // Two phases, as in `handle_discover_namespaces`: the bundle
+            // listing (including tmux readiness probes) is collected with no
+            // lock held and its Result retained; the grant is resolved and the
+            // filtered result fixed under the shared serialization, so
+            // collection diagnostics never reach an unauthorized caller.
+            let snapshot = collect_principal_snapshot(context, namespace.as_str());
+            // ORDERING: gate before final resolution, as in the send path.
+            super::super::test_hooks::test_authority_gate(principal.session_id.as_str());
+            let live = live_peer_ingress(
+                context.ingress_authority,
+                principal.session_id.as_str(),
+                principal.credential_hash.as_deref(),
+            )?;
+            Ok(decide_principal_snapshot(
+                snapshot,
+                live.scope.as_deref(),
+                namespace.as_str(),
+            ))
+        }
         None => Err(relay_error(
             "internal_unexpected_request",
             "local principal discovery is served by List, not DiscoverPrincipals",
@@ -161,39 +200,52 @@ fn local_namespace_discovery(
     Ok(namespaces_response(namespaces, "local"))
 }
 
-/// Receiving-side namespace discovery: derive namespaces from this relay's own
-/// catalog and `GLOBAL` registry, keeping only those with at least one principal
-/// covered by the peer's ingress `scope`. An empty (no-principal) namespace is
-/// therefore omitted even under a matching namespace scope, and an absent scope
-/// denies discovery entirely.
-fn receiving_namespace_discovery(
+/// Phase 1 of receiving-side namespace discovery: collect every namespace on
+/// this relay holding at least one principal, from the bundle catalog and the
+/// `GLOBAL` registry. Runs with no lock held; bundle configuration loads and
+/// registry reads here never block scope administration.
+fn collect_namespace_snapshot(
     context: &DiscoveryContext<'_>,
+) -> Result<BTreeSet<String>, RelayError> {
+    let mut namespaces = BTreeSet::new();
+    for paths in context.bundle_catalog.snapshot() {
+        let bundle = load_bundle_configuration(context.configuration_roots, &paths.bundle_name)
+            .map_err(map_config)?;
+        if !bundle.members.is_empty() {
+            namespaces.insert(paths.bundle_name);
+        }
+    }
+    if !list_namespace_sessions(GLOBAL_NAMESPACE).is_empty() {
+        namespaces.insert(GLOBAL_NAMESPACE.to_string());
+    }
+    Ok(namespaces)
+}
+
+/// Phase 2 of receiving-side namespace discovery: filter a collected snapshot
+/// by the peer's current grant under the shared serialization and fix the
+/// result there. The collection `Result` is retained until this decision: an
+/// absent scope, or a set scope that cannot be evaluated against a failed
+/// collection, ends in `authorization_forbidden` rather than releasing
+/// configuration diagnostics to a caller that may cover nothing. A wildcard
+/// covers every addressable namespace by definition, so an authorized wildcard
+/// holder sees the snapshot or its diagnostic error. An empty filtered set is
+/// an ordinary empty success with a local unmatched-scope inscription.
+fn filter_namespace_snapshot(
+    snapshot: Result<BTreeSet<String>, RelayError>,
     scope: Option<&str>,
     requester: &str,
 ) -> Result<RelayResponse, RelayError> {
     let Some(scope) = scope else {
         return Err(ingress_forbidden());
     };
-    let mut namespaces = BTreeSet::new();
-    for paths in context.bundle_catalog.snapshot() {
-        let bundle = load_bundle_configuration(context.configuration_roots, &paths.bundle_name)
-            .map_err(map_config)?;
-        let covered = bundle.members.iter().any(|member| {
-            scope_permits(
-                Some(scope),
-                canonical_session_id(member.id.as_str(), paths.bundle_name.as_str()).as_str(),
-            )
-        });
-        if covered {
-            namespaces.insert(paths.bundle_name);
-        }
+    if is_wildcard_scope(scope) {
+        return Ok(namespaces_response(snapshot?, "ingress"));
     }
-    let global_covered = list_namespace_sessions(GLOBAL_NAMESPACE)
-        .iter()
-        .any(|(principal_id, _, _)| scope_permits(Some(scope), principal_id.as_str()));
-    if global_covered {
-        namespaces.insert(GLOBAL_NAMESPACE.to_string());
-    }
+    let snapshot = snapshot.map_err(|_| ingress_forbidden())?;
+    let namespaces = snapshot
+        .into_iter()
+        .filter(|namespace| peer_scope_covers_namespace(Some(scope), namespace))
+        .collect::<BTreeSet<_>>();
     if namespaces.is_empty() {
         emit_scope_unmatched(requester, scope);
     }
@@ -220,30 +272,81 @@ fn emit_scope_unmatched(requester: &str, scope: &str) {
     );
 }
 
-/// Receiving-side principal discovery for one concrete namespace. A namespace the
-/// scope does not cover — including a nonexistent one — is rejected uniformly with
-/// `authorization_forbidden`, disclosing no existence. A covered namespace returns
-/// the canonical listed bundle filtered to scope-covered principals, marked
-/// `principals_partial` when a principal-scoped grant omitted others.
-fn receiving_principal_discovery(
+/// Phase 1 of receiving-side principal discovery: build the complete canonical
+/// listing for one concrete namespace, including tmux readiness probes. Runs
+/// with no lock held so a stalled probe cannot block scope administration or
+/// other ingress decisions. Returns `None` when this relay does not currently
+/// host the namespace.
+fn collect_principal_snapshot(
     context: &DiscoveryContext<'_>,
+    namespace: &str,
+) -> Result<Option<ListedBundle>, RelayError> {
+    if namespace == GLOBAL_NAMESPACE {
+        // `GLOBAL` is registry-backed, not a catalog bundle; its snapshot is a
+        // fast in-process registry read with no probes, collected here for
+        // shape symmetry with hosted bundles.
+        return Ok(Some(build_scoped_global_bundle("*")));
+    }
+    let Some(paths) = context
+        .bundle_catalog
+        .snapshot()
+        .into_iter()
+        .find(|paths| paths.bundle_name == namespace)
+    else {
+        return Ok(None);
+    };
+    let bundle_config =
+        load_bundle_configuration(context.configuration_roots, namespace).map_err(map_config)?;
+    let tmux_socket = tmux_socket_path_for_runtime_directory(&paths.runtime_directory);
+    let bundle = build_listed_bundle(
+        &bundle_config,
+        &paths.runtime_directory,
+        tmux_socket.as_path(),
+    )?;
+    Ok(Some(bundle))
+}
+
+/// Phase 2 of receiving-side principal discovery: authorize one concrete
+/// namespace against the peer's current grant under the shared serialization
+/// and fix the collected listing there. The collection `Result` is retained
+/// until this decision: a namespace the scope does not cover — including a
+/// nonexistent one — is rejected uniformly with `authorization_forbidden`
+/// without releasing collection diagnostics, disclosing no existence. A
+/// covered namespace releases its collection result to the authorized holder:
+/// the complete listing with normal diagnostics and no scope-induced
+/// `principals_partial` marker, or the neutral empty view for a covered
+/// namespace this relay does not host.
+fn decide_principal_snapshot(
+    snapshot: Result<Option<ListedBundle>, RelayError>,
     scope: Option<&str>,
     namespace: &str,
-) -> Result<RelayResponse, RelayError> {
+) -> RelayResponse {
     let Some(scope) = scope else {
-        return Err(ingress_forbidden());
+        return RelayResponse::Error {
+            error: ingress_forbidden(),
+        };
     };
     if !scope_covers_namespace(scope, namespace) {
-        return Err(ingress_forbidden());
+        return RelayResponse::Error {
+            error: ingress_forbidden(),
+        };
     }
-    // `GLOBAL` is registry-backed, not a catalog bundle, so it is discovered from
-    // the unified registry rather than a bundle configuration; every other
-    // namespace is a hosted bundle.
-    let bundle = if namespace == GLOBAL_NAMESPACE {
-        build_scoped_global_bundle(scope)
-    } else {
-        build_scoped_namespace_bundle(context, scope, namespace)?
+    // Covered: the collection result belongs to an authorized holder, so its
+    // diagnostic error (if any) may surface.
+    let snapshot = match snapshot {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return RelayResponse::Error { error };
+        }
     };
+    let bundle = snapshot.unwrap_or_else(|| empty_namespace_bundle(namespace));
+    debug_assert!(
+        bundle
+            .principals
+            .iter()
+            .all(|principal| peer_scope_covers_target(Some(scope), principal.id.as_str())),
+        "a covered namespace must expose only scope-covered principals"
+    );
     emit_inscription(
         "relay.discovery.principals.success",
         &json!({
@@ -252,74 +355,27 @@ fn receiving_principal_discovery(
             "principals_partial": bundle.principals_partial,
         }),
     );
-    Ok(RelayResponse::DiscoverPrincipals {
+    RelayResponse::DiscoverPrincipals {
         schema_version: SCHEMA_VERSION.to_string(),
         bundles: vec![bundle],
-    })
+    }
 }
 
-/// Builds the scope-filtered listed bundle for a covered namespace. Reuses the
-/// canonical listed-bundle builder, then trims principals to those the scope
-/// permits, setting `principals_partial` when a strict subset survives.
-fn build_scoped_namespace_bundle(
-    context: &DiscoveryContext<'_>,
-    scope: &str,
-    namespace: &str,
-) -> Result<ListedBundle, RelayError> {
-    let Some(paths) = context
-        .bundle_catalog
-        .snapshot()
-        .into_iter()
-        .find(|paths| paths.bundle_name == namespace)
-    else {
-        // The scope names a namespace this relay does not currently host: expose
-        // an empty listing rather than disclose the mismatch, matching the
-        // empty-namespace outcome.
-        return Ok(empty_namespace_bundle(namespace));
-    };
-    let bundle_config =
-        load_bundle_configuration(context.configuration_roots, namespace).map_err(map_config)?;
-    let tmux_socket = tmux_socket_path_for_runtime_directory(&paths.runtime_directory);
-    let mut bundle = build_listed_bundle(
-        &bundle_config,
-        &paths.runtime_directory,
-        tmux_socket.as_path(),
-    )?;
-    let total = bundle.principals.len();
-    bundle
-        .principals
-        .retain(|principal| scope_permits(Some(scope), principal.id.as_str()));
-    // `principals_partial` reflects an actual omission of configured principals.
-    if bundle.principals.len() < total {
-        bundle.principals_partial = Some(true);
-    }
-    // An exact-principal grant authorizes addressing the covered principals only,
-    // regardless of whether an omission happened to occur. Suppress every
-    // bundle-level diagnostic — hosting/state/startup health and the
-    // startup-failure history — because it describes namespace-wide state outside
-    // the grant. This must not hinge on the partial marker: startup history is
-    // keyed by session id independent of current membership, so a stale record
-    // for a removed or out-of-scope principal would otherwise leak through a
-    // grant whose sole covered principal is the only member currently configured.
-    if is_exact_principal_scope(scope) {
-        suppress_bundle_diagnostics(&mut bundle);
-    }
-    Ok(bundle)
-}
-
-/// Builds the scope-filtered `GLOBAL` listed bundle from the unified registry.
+/// Builds the `GLOBAL` listed bundle from the unified registry.
 ///
 /// `GLOBAL` is registry-backed rather than a `BundleCatalog` bundle, so its
 /// principals come from `list_namespace_sessions` and there is no bundle
 /// configuration, runtime directory, or startup history to fold. Without this
 /// path a foreign `GLOBAL` principal request always fell through to an empty
-/// bundle even when namespace discovery had advertised `GLOBAL`.
+/// bundle even when namespace discovery had advertised `GLOBAL`. A covered
+/// `GLOBAL` returns every registry principal with canonical list state —
+/// hosted/up iff a principal is ready (see `handle_global_list`) — and no
+/// scope-induced `principals_partial` marker.
 fn build_scoped_global_bundle(scope: &str) -> ListedBundle {
     let sessions = list_namespace_sessions(GLOBAL_NAMESPACE);
-    let total = sessions.len();
     let mut principals = sessions
         .into_iter()
-        .filter(|(principal_id, _, _)| scope_permits(Some(scope), principal_id.as_str()))
+        .filter(|(principal_id, _, _)| peer_scope_covers_target(Some(scope), principal_id.as_str()))
         .map(|(principal_id, session_type, ready)| ListedSession {
             id: principal_id,
             name: None,
@@ -328,12 +384,7 @@ fn build_scoped_global_bundle(scope: &str) -> ListedBundle {
         })
         .collect::<Vec<_>>();
     principals.sort_by(|left, right| left.id.cmp(&right.id));
-    let partial = principals.len() < total;
-    // A namespace (complete) grant mirrors canonical `GLOBAL` list state —
-    // hosted/up iff a covered principal is ready (see `handle_global_list`). An
-    // exact-principal grant is addressing-only, so it keeps neutral diagnostics
-    // like every other subset view.
-    let hosted = !is_exact_principal_scope(scope) && principals.iter().any(|session| session.ready);
+    let hosted = principals.iter().any(|session| session.ready);
     let state = if hosted {
         ListedBundleState::Up
     } else {
@@ -349,27 +400,8 @@ fn build_scoped_global_bundle(scope: &str) -> ListedBundle {
         startup_failure_count: 0,
         recent_startup_failures: Vec::new(),
         principals,
-        principals_partial: partial.then_some(true),
+        principals_partial: None,
     }
-}
-
-/// Whether an ingress `scope` names a single principal (`id@namespace`) rather
-/// than a whole namespace. An exact-principal grant is addressing-only: its
-/// listing exposes only the covered principals and no bundle-level diagnostics.
-fn is_exact_principal_scope(scope: &str) -> bool {
-    split_principal_id(scope).is_some()
-}
-
-/// Neutralizes bundle-level diagnostics on an exact-principal (addressing-only)
-/// listing so it exposes only per-principal data.
-fn suppress_bundle_diagnostics(bundle: &mut ListedBundle) {
-    bundle.hosted = false;
-    bundle.state = ListedBundleState::Down;
-    bundle.startup_health = None;
-    bundle.state_reason_code = None;
-    bundle.state_reason = None;
-    bundle.startup_failure_count = 0;
-    bundle.recent_startup_failures = Vec::new();
 }
 
 /// Forwards a discovery request to the peer named by `alias`, propagating a
@@ -426,12 +458,11 @@ fn is_relay_principal(principal: &RequestPrincipal) -> bool {
     classify_principal_id(principal.session_id.as_str()) == Some(PrincipalType::Relay)
 }
 
-/// Whether an ingress `scope` covers `namespace` for principal discovery: a bare
-/// bundle scope names the namespace directly, and an exact `id@namespace` scope
-/// covers its own namespace. Fail-closed for any other scope.
+/// Whether an ingress `scope` covers `namespace` for principal discovery: `*`
+/// covers every addressable namespace and a set covers its named namespaces.
+/// Fail-closed for any other scope.
 fn scope_covers_namespace(scope: &str, namespace: &str) -> bool {
-    scope == namespace
-        || matches!(split_principal_id(scope), Some((_, scope_namespace)) if scope_namespace == namespace)
+    peer_scope_covers_namespace(Some(scope), namespace)
 }
 
 /// Rejects a peer relay attempting to re-forward discovery through this relay.

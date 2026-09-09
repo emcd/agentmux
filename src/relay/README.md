@@ -761,7 +761,23 @@ one directory apart; prefer `control` when the authorization sense is meant.
   colliding identities to this relay). `[[peers]]` is outbound-only and takes no
   `scope`: **inbound** cross-relay authorization is the scope this relay grants a
   connecting peer's principal via `new peer <id>@RELAY --scope`, enforced by the
-  target-side ingress filter (deny-by-default). Raw peer PSKs stay owner-only at
+  target-side ingress filter (deny-by-default). The scope is `'*'` for every
+  namespace with addressable principals (including `GLOBAL` and future
+  addressable namespace types), a comma-separated set of explicit namespaces,
+  or absent for no rights; `change scope <id>@RELAY --scope` (gated on the
+  dedicated `change.scope=all` control) replaces it in place without changing
+  the PSK. Every ingress decision resolves the current store record — never a
+  Hello-time snapshot — bound to the connection's presented credential hash.
+  This is an intentional pre-1 breaking cutover: exact-principal peer grants no
+  longer exist, and a stored peer scope outside the namespace grammar fails
+  store loading rather than acquiring fallback rights. Reprovision affected
+  peers with `new peer` / `change scope` under the new grammar; there is no
+  conversion path, and rolling back the binary requires reviewing the scope
+  state first. A scope update ordered before final admission governs; an
+  already-admitted delivery is never retroactively cancelled, and an
+  already-fixed discovery result may arrive after the update without implying
+  authority for later lookups.
+  Raw peer PSKs stay owner-only at
   `<state-root>/peers/<alias>.psk`; the principal store holds only hashes.
 - **Expiry pruning**: records with an RFC 3339 `expires_at` in the past (and,
   fail-closed, any with an unparseable `expires_at`) are pruned. The store is
@@ -816,8 +832,18 @@ one directory apart; prefer `control` when the authorization sense is meant.
 - Credential administration is relay-wide, not bundle-scoped. `new peer`
   (`RelayRequest::NewPeer`) generates a PSK and stores its SHA-256 hash;
   `change psk` (`RelayRequest::ChangePsk`) rotates an existing principal's hash
-  in place; `drop peer` (`RelayRequest::DropPeer`) deletes the record and takes
-  no destination, having no credential to route. `new peer` and `change psk`
+  in place; `change scope` (`RelayRequest::ChangeScope`) replaces a peer
+  relay's ingress scope in place — preserving PSK, identity, expiry, and
+  unrelated metadata without disconnecting it — gated on the dedicated
+  `change.scope=all` control (rotation rights confer none of it); `drop peer`
+  (`RelayRequest::DropPeer`) deletes the record and takes
+  no destination, having no credential to route. Scope updates serialize with
+  all other store mutations under the shared identity-admin lock; the atomic
+  rename publishes the replacement as effective authority and the
+  parent-directory sync completes durable success, while a post-rename sync
+  failure keeps the replacement effective and reports
+  `internal_store_durability_uncertain` rather than success. `new peer` and
+  `change psk`
   carry a `CredentialDestination` selector that routes the raw value to exactly
   one sink:
   - **Response** (default): return the raw PSK once in the response.
@@ -1043,8 +1069,10 @@ one directory apart; prefer `control` when the authorization sense is meant.
   2. *Receiving-relay ingress.* A forwarded request arrives with its `relay`
      selector cleared (no transitive re-forwarding) and **no** `on_behalf_of`,
      and the receiving relay derives every result from its own bundle catalog +
-     `GLOBAL` registry, filtered by the authenticated peer principal's
-     registered ingress `scope` via `scope_permits` — the same
+     `GLOBAL` registry, filtered by the peer's current authoritative ingress
+     scope — `'*'` or a namespace set resolved live from the store (bound to
+     the connection's credential) under the shared identity-admin
+     serialization, never a Hello-time snapshot. It is the same
      `RouteAuthorization::Ingress` deny-by-default authority that gates
      forwarded `Send`/`Raww`. An absent scope yields `authorization_forbidden`.
 - **No existence disclosure across the boundary.** A namespace the peer's scope
@@ -1053,17 +1081,10 @@ one directory apart; prefer `control` when the authorization sense is meant.
   without confirming the namespace exists. Foreign bundle/namespace ids derive
   solely from the receiving relay's catalog/registry and are never rewritten or
   injected by the origin request.
-- **Partial marker.** When ingress scope narrows a bundle to an exact-principal
-  subset (rather than a whole-namespace grant), the receiving relay stamps
-  `principals_partial=Some(true)` on that `ListedBundle` via
-  `build_scoped_namespace_bundle`; a complete listing leaves it `None`. The
-  builder reuses the canonical `build_listed_bundle` (extracted in
-  `handlers/listing.rs`) and then retains only scope-permitted principals, so
-  readiness/state folding is not duplicated in discovery. A subset listing also
-  **suppresses every bundle-level diagnostic** (`hosted`/`state`/`startup_health`
-  and the startup-failure history/count): those describe namespace-wide state
-  outside the grant and would otherwise leak out-of-scope session ids, reasons,
-  and failure details. A subset view is addressing-only.
+- **Complete listings, no scope-induced partial marker.** Peer grants cover
+  whole namespaces, so a covered namespace returns its complete canonical
+  listing with normal diagnostics and `principals_partial` left `None`. The
+  generic marker's contracts for other uses are unchanged.
 - **`GLOBAL` discovery.** `GLOBAL` is registry-backed, not a catalog bundle, so
   foreign `GLOBAL` principal discovery builds its listing from the unified
   registry (`list_namespace_sessions`) scope-filtered by the peer's ingress

@@ -19,6 +19,11 @@ use crate::runtime::paths::{is_valid_bundle_name, session_identity_psk_path};
 
 use super::{CredentialDestination, GLOBAL_SESSION_SUFFIX, RelayError, relay_error};
 
+pub(crate) use super::peer_scope::{
+    is_wildcard_scope, live_peer_ingress, parse_peer_scope, peer_scope_covers_namespace,
+    peer_scope_covers_target,
+};
+
 const PSK_BYTE_LENGTH: usize = 32;
 const PRINCIPAL_FILE_MODE: u32 = 0o600;
 const PRINCIPAL_STORE_FORMAT_VERSION: u32 = 1;
@@ -41,6 +46,26 @@ fn unique_temp_path(final_path: &Path, tag: &str) -> PathBuf {
     let mut name = final_path.file_name().unwrap_or_default().to_os_string();
     name.push(format!(".{pid}.{nonce}.{tag}.tmp"));
     final_path.with_file_name(name)
+}
+
+/// Syncs a parent directory so a just-renamed store file is durable before the
+/// caller acknowledges success. Opening the directory read-only and syncing it
+/// persists the rename itself, not just file contents.
+///
+/// Test fault-injection seam: the presence of a `.fault-dir-sync` file in the
+/// directory forces a sync failure, so fault-controlled tests can assert the
+/// post-rename durability-uncertain contract deterministically through the
+/// genuine sync-error mapping (rather than a synthesized error code). The
+/// seam is active in every build profile so release-profile test runs inject
+/// identically; it requires write access to the identity directory, which
+/// already confers the ability to corrupt the store outright, so it grants no
+/// new privilege.
+fn sync_parent_directory(dir: &Path) -> io::Result<()> {
+    if dir.join(".fault-dir-sync").exists() {
+        return Err(io::Error::other("injected fault: .fault-dir-sync present"));
+    }
+    let file = fs::File::open(dir)?;
+    file.sync_all()
 }
 
 /// Returns the canonical `session@namespace` identity for a session id.
@@ -196,6 +221,18 @@ impl PrincipalStore {
         }
         let mut records_by_hash = HashMap::with_capacity(envelope.principals.len());
         for record in envelope.principals {
+            if record.principal_type == PrincipalType::Relay
+                && parse_peer_scope(record.scope.as_deref()).is_err()
+            {
+                return Err(relay_error(
+                    "internal_principal_store",
+                    "principal store holds a malformed peer scope",
+                    Some(json!({
+                        "path": path.display().to_string(),
+                        "principal_id": record.principal_id,
+                    })),
+                ));
+            }
             records_by_hash.insert(record.credential_hash.clone(), record);
         }
         Ok(Self {
@@ -261,8 +298,12 @@ impl PrincipalStore {
 
     /// Writes the principal store to disk with mode 0600.
     ///
-    /// Persists by writing to a sibling temporary file and renaming so that a
-    /// crash mid-write cannot corrupt an existing store.
+    /// Persists by writing to a sibling temporary file, syncing it, renaming
+    /// over the store file (the update linearization point for effective state),
+    /// then syncing the parent directory before reporting durable success. A
+    /// post-rename directory-sync failure reports
+    /// `internal_store_durability_uncertain`: publication already occurred, so
+    /// callers must not claim the old store remains durable or effective.
     pub(crate) fn persist(&self) -> Result<(), RelayError> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|source| self.io_error("create parent", source))?;
@@ -284,10 +325,7 @@ impl PrincipalStore {
         })?;
         // Stage into a per-attempt-unique sibling (`create_new`, so a stale or
         // concurrent temp can never be reused) and enforce mode BEFORE the
-        // rename, so the atomic rename is the single, last fallible step. A
-        // failure after publication (e.g. a post-rename chmod) would otherwise
-        // report an error while the new store is already durable, defeating the
-        // handlers' rollback.
+        // rename. A failure before publication leaves the old store intact.
         let tmp_path = unique_temp_path(&self.path, "store");
         {
             let mut options = fs::OpenOptions::new();
@@ -311,11 +349,41 @@ impl PrincipalStore {
             let _ = fs::remove_file(&tmp_path);
             return Err(self.io_error("set mode 0600", source));
         }
-        // Commit point: nothing fallible runs after this rename.
+        // Test fault-injection seam for the pre-rename path (same rationale
+        // and privilege argument as `.fault-dir-sync`): the presence of a
+        // `.fault-pre-rename` file beside the store fails the persist after
+        // staging but before the rename publication point, so tests can
+        // assert the old-record-intact contract deterministically.
+        if let Some(parent) = self.path.parent()
+            && parent.join(".fault-pre-rename").exists()
+        {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(self.io_error(
+                "stage store",
+                io::Error::other("injected fault: .fault-pre-rename present"),
+            ));
+        }
+        // Commit point: the rename publishes the replacement.
         fs::rename(&tmp_path, &self.path).map_err(|source| {
             let _ = fs::remove_file(&tmp_path);
             self.io_error("rename store", source)
         })?;
+        // Durable completion: sync the parent directory before acknowledging
+        // success. Failure here means the replacement is published but host-crash
+        // durability is uncertain.
+        if let Some(parent) = self.path.parent()
+            && let Err(source) = sync_parent_directory(parent)
+        {
+            return Err(relay_error(
+                "internal_store_durability_uncertain",
+                "principal store published but parent-directory sync failed; durability is uncertain",
+                Some(json!({
+                    "path": self.path.display().to_string(),
+                    "context": "sync parent",
+                    "cause": source.to_string(),
+                })),
+            ));
+        }
         Ok(())
     }
 
@@ -720,19 +788,18 @@ pub(crate) struct VerifiedIdentity {
     /// Drives sender-attribution (`authenticated_identity`) and distinguishes
     /// store-backed from socket-trust connections on the Hello path.
     pub(crate) store_backed: bool,
+    /// Hex SHA-256 of the presented credential for store-backed connections;
+    /// `None` for socket-trust. Recorded on the connection so live ingress
+    /// authorization can verify the current record still carries this exact
+    /// credential — a dropped/recreated or rotated record must not authorize a
+    /// connection bound to a superseded credential merely because the
+    /// principal id was reused.
+    pub(crate) credential_hash: Option<String>,
     /// Introspection rights for an `Application` principal, carrying its
     /// registered scope; `None` for every other principal type. Recorded on the
     /// connection context so request dispatch can gate `IdentityIntrospect`
     /// (task 2.5).
     pub(crate) introspect_rights: Option<IdentityIntrospectRights>,
-    /// Cross-relay ingress scope for a `Relay` (peer) principal: the store
-    /// record's registered `scope` (set via `new peer <id>@RELAY --scope`),
-    /// bounding which targets a forwarded `Send`/`Raww` from this peer may reach.
-    /// `None` for every other principal type, and `None` for a peer registered
-    /// without a scope (which the ingress gate treats as fail-closed). Kept
-    /// separate from `introspect_rights` so a peer relay gains only delivery
-    /// ingress, not the application-only identity snapshot or revocation fan-out.
-    pub(crate) ingress_scope: Option<String>,
 }
 
 /// Verifies a Hello `principal_id` + `identity_token` against the principal
@@ -799,14 +866,11 @@ pub(crate) fn verify_hello_credential(
         (record.principal_type == PrincipalType::Application).then(|| IdentityIntrospectRights {
             scope: record.scope.clone(),
         });
-    let ingress_scope = (record.principal_type == PrincipalType::Relay)
-        .then(|| record.scope.clone())
-        .flatten();
     Ok(VerifiedIdentity {
         principal_type: record.principal_type,
         store_backed: true,
+        credential_hash: Some(hash),
         introspect_rights,
-        ingress_scope,
     })
 }
 
@@ -834,9 +898,9 @@ fn verify_socket_trust(
                 store_backed: false,
                 // Socket-trust is accepted only for session and user
                 // principals, never `Application` or `Relay`, so it grants no
-                // introspect rights and no cross-relay ingress scope.
+                // introspect rights.
+                credential_hash: None,
                 introspect_rights: None,
-                ingress_scope: None,
             })
         }
     }

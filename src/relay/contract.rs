@@ -442,6 +442,10 @@ pub enum RelayRequest {
         #[serde(default)]
         destination: CredentialDestination,
     },
+    ChangeScope {
+        principal_id: String,
+        scope: String,
+    },
     DropPeer {
         principal_id: String,
     },
@@ -589,6 +593,18 @@ pub enum RelayResponse {
         /// and `config` credential destinations.
         #[serde(skip_serializing_if = "Option::is_none")]
         written_path: Option<String>,
+    },
+    ChangeScope {
+        schema_version: String,
+        principal_id: String,
+        /// Canonical scope (`*`, comma-separated namespaces, or empty string
+        /// for no rights).
+        scope: String,
+        /// Advisories raised while updating. Carried in the payload because
+        /// the relay is a separate process: its stderr reaches neither the CLI
+        /// client nor an MCP caller. Omitted when the request raised none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        diagnostics: Vec<RelayDiagnostic>,
     },
     DropPeer {
         schema_version: String,

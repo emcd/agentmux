@@ -14,7 +14,7 @@ use super::super::delivery::admission::{
     AdmissionTargetKey, admit, canonical_payload_bytes, rollback_admission,
 };
 use super::super::delivery::enqueue_async_delivery;
-use super::super::identity::{PrincipalType, classify_principal_id};
+use super::super::identity::{PrincipalType, classify_principal_id, live_peer_ingress};
 use super::super::routing::{
     Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
     resolve_raww_route,
@@ -22,8 +22,9 @@ use super::super::routing::{
 use super::super::stream::lookup_registry_session_type;
 use super::super::{
     AsyncDeliveryTask, DeliveryPayloadMode, ListedSessionTransport, PeerConnectionManager,
-    RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
-    bare_session_id, canonical_session_id, relay_error, unsupported_operation,
+    PeerIngressAuthority, RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse,
+    RequestPrincipal, SCHEMA_VERSION, bare_session_id, canonical_session_id, relay_error,
+    unsupported_operation,
 };
 use super::routed::{load_home_context, resolve_target_bundle, run_target_operation};
 use super::sender::{SenderIdentity, resolve_sender_in_namespace};
@@ -49,6 +50,7 @@ pub(in crate::relay) fn handle_raww_routed(
     bundle_catalog: &BundleCatalog,
     principal: Option<&RequestPrincipal>,
     peer_connection_manager: Option<&PeerConnectionManager>,
+    ingress_authority: Option<PeerIngressAuthority<'_>>,
 ) -> Result<RelayResponse, RelayError> {
     let RelayRequest::Raww {
         request_id,
@@ -153,11 +155,28 @@ pub(in crate::relay) fn handle_raww_routed(
     }
 
     // The route authorization mode: a peer relay is gated per-target by its
-    // registered ingress scope (deny-by-default); every other requester by its
-    // policy tier resolved in the home bundle.
+    // live ingress scope (deny-by-default), resolved from the current store
+    // record under the shared identity-admin serialization and held across
+    // authorization and admission below; every other requester by its policy
+    // tier resolved in the home bundle.
+    let live_ingress = if relay_ingress {
+        let peer = principal.expect("relay ingress is detected from an authenticated principal");
+        // ORDERING: same gate-before-resolution contract as the send path —
+        // see handle_send.
+        super::super::test_hooks::test_authority_gate(peer.session_id.as_str());
+        Some(live_peer_ingress(
+            ingress_authority,
+            peer.session_id.as_str(),
+            peer.credential_hash.as_deref(),
+        )?)
+    } else {
+        None
+    };
     let route_authorization = if relay_ingress {
         RouteAuthorization::Ingress {
-            scope: principal.and_then(|principal| principal.ingress_scope.as_deref()),
+            scope: live_ingress
+                .as_ref()
+                .and_then(|ingress| ingress.scope.as_deref()),
         }
     } else {
         RouteAuthorization::Policy(&authorization)

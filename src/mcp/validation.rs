@@ -3,14 +3,20 @@ use std::collections::BTreeMap;
 use rmcp::ErrorData as McpError;
 use serde_json::json;
 
-use crate::{relay::CredentialDestination, runtime::paths::is_valid_bundle_name};
+use crate::{
+    relay::{
+        CredentialDestination,
+        peer_scope::{is_relay_principal_id, parse_peer_scope},
+    },
+    runtime::paths::is_valid_bundle_name,
+};
 
 use super::errors::validation_tool_error;
 use super::params::{
-    CHOOSE_OUTCOME_CANCELLED, CHOOSE_OUTCOME_SELECTED, ChangeParams, ChangePskArgs, ChooseParams,
-    DropParams, DropPeerArgs, HelpParams, LOOK_LINES_MAX, LOOK_LINES_MIN, ListArgs,
-    ListDecisionsArgs, ListNamespacesArgs, ListParams, ListRelaysArgs, LookParams, NewParams,
-    NewPeerArgs, RawwParams, SendParams, UpdownArgs, UpdownParams,
+    CHOOSE_OUTCOME_CANCELLED, CHOOSE_OUTCOME_SELECTED, ChangeParams, ChangePskArgs,
+    ChangeScopeArgs, ChooseParams, DropParams, DropPeerArgs, HelpParams, LOOK_LINES_MAX,
+    LOOK_LINES_MIN, ListArgs, ListDecisionsArgs, ListNamespacesArgs, ListParams, ListRelaysArgs,
+    LookParams, NewParams, NewPeerArgs, RawwParams, SendParams, UpdownArgs, UpdownParams,
 };
 
 pub(super) fn validate_list_params(params: &ListParams) -> Result<(), McpError> {
@@ -61,7 +67,31 @@ pub(super) fn validate_new_params(params: &NewParams) -> Result<(), McpError> {
 }
 
 pub(super) fn validate_new_peer_args(args: &NewPeerArgs) -> Result<(), McpError> {
-    validate_unknown_fields("new peer command", Some("args"), &args.extra_fields)
+    validate_unknown_fields("new peer command", Some("args"), &args.extra_fields)?;
+    // Pre-submission checks on the normalized identity so malformed input
+    // fails before any relay contact. A principal aiming at the relay
+    // namespace with a malformed identity is rejected here; other principal
+    // types keep their own scope model and pass through for the relay to
+    // judge.
+    let normalized_principal = args.principal_id.as_deref().map(str::trim).unwrap_or("");
+    if normalized_principal.ends_with("@RELAY") && !is_relay_principal_id(normalized_principal) {
+        return Err(validation_tool_error(
+            "validation_invalid_principal_id",
+            "principal_id is not in <id>@<namespace> form",
+            Some(json!({"field": "principal_id"})),
+        ));
+    }
+    if let Some(scope) = args.scope.as_deref()
+        && is_relay_principal_id(normalized_principal)
+        && let Err(error) = parse_peer_scope(Some(scope))
+    {
+        return Err(validation_tool_error(
+            error.code.as_str(),
+            error.message.as_str(),
+            Some(json!({"field": "scope"})),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn validate_change_params(params: &ChangeParams) -> Result<(), McpError> {
@@ -70,6 +100,48 @@ pub(super) fn validate_change_params(params: &ChangeParams) -> Result<(), McpErr
 
 pub(super) fn validate_change_psk_args(args: &ChangePskArgs) -> Result<(), McpError> {
     validate_unknown_fields("change psk command", Some("args"), &args.extra_fields)
+}
+
+pub(super) fn validate_change_scope_args(args: &ChangeScopeArgs) -> Result<(), McpError> {
+    validate_unknown_fields("change scope command", Some("args"), &args.extra_fields)?;
+    // Shape and grammar are enforced before relay submission so invalid input
+    // fails with field validation rather than an infrastructure error: the
+    // target must be a peer relay principal and an explicit scope string is
+    // required (empty clears; omitted/null never clears).
+    let principal_id = args
+        .principal_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    let Some(principal_id) = principal_id else {
+        return Err(validation_tool_error(
+            "validation_invalid_params",
+            "principal_id is required for change scope",
+            Some(json!({"field": "principal_id"})),
+        ));
+    };
+    if !is_relay_principal_id(principal_id) {
+        return Err(validation_tool_error(
+            "validation_invalid_principal_id",
+            "change scope applies only to peer relay principals (<id>@RELAY)",
+            Some(json!({"field": "principal_id", "principal_id": principal_id})),
+        ));
+    }
+    let Some(scope) = args.scope.as_deref() else {
+        return Err(validation_tool_error(
+            "validation_invalid_params",
+            "scope is required for change scope; pass an explicit empty string to clear the grant",
+            Some(json!({"field": "scope"})),
+        ));
+    };
+    if let Err(error) = parse_peer_scope(Some(scope)) {
+        return Err(validation_tool_error(
+            error.code.as_str(),
+            error.message.as_str(),
+            Some(json!({"field": "scope"})),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn validate_drop_params(params: &DropParams) -> Result<(), McpError> {

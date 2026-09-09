@@ -1,7 +1,11 @@
 use serde_json::json;
 
 use crate::{
-    relay::{RelayRequest, RelayResponse, request_relay},
+    relay::{
+        RelayRequest, RelayResponse,
+        peer_scope::{is_relay_principal_id, parse_peer_scope},
+        request_relay,
+    },
     runtime::{
         error::RuntimeError, paths::RelayRuntimePaths,
         starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
@@ -168,8 +172,28 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
             "new peer requires a <principal_id> argument".to_string(),
         ));
     };
+    // Pre-submission grammar check for peer relay scopes so malformed input
+    // fails before any relay contact. A principal aiming at the relay
+    // namespace with a malformed identity is rejected here too; other
+    // principal types keep their own scope model and pass through for the
+    // relay to judge.
+    let normalized_principal = principal_id.trim();
+    if normalized_principal.ends_with("@RELAY") && !is_relay_principal_id(normalized_principal) {
+        return Err(RuntimeError::validation(
+            "validation_invalid_principal_id",
+            "principal_id is not in <id>@<namespace> form".to_string(),
+        ));
+    }
+    if let Some(scope) = scope.as_deref()
+        && is_relay_principal_id(normalized_principal)
+        && let Err(error) = parse_peer_scope(Some(scope))
+    {
+        return Err(RuntimeError::validation(error.code, error.message));
+    }
+    // The normalized (trimmed) identity is submitted, so validation and the
+    // relay observe the same principal.
     Ok(NewPeerArguments {
-        principal_id,
+        principal_id: normalized_principal.to_string(),
         scope,
         output_path,
         write_to_config,
@@ -183,5 +207,8 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
 pub(super) fn print_new_help() {
     println!(
         "Usage: agentmux new peer <principal_id> [--scope SCOPE] [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]"
+    );
+    println!(
+        "SCOPE is '*' for every namespace with addressable principals (including GLOBAL and future addressable namespace types), a comma-separated set of explicit namespaces, or omitted for no rights."
     );
 }

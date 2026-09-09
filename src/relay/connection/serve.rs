@@ -48,6 +48,10 @@ pub(super) struct ConnectionBinding {
     /// and attached to each dispatched request for sender attribution; stays
     /// `None` for socket-trust connections.
     pub(super) authenticated_identity: Option<String>,
+    /// Hex SHA-256 of the credential this connection presented at Hello, set
+    /// for store-backed connections; `None` for socket-trust. Live ingress
+    /// authorization re-verifies it against the current store record.
+    pub(super) credential_hash: Option<String>,
     /// `principal_id` the connection was admitted under, set on every accepted
     /// Hello whether or not a store credential backed it. Cross-relay forwarding
     /// attributes the origin from this, so a peer learns who a message is from
@@ -63,11 +67,6 @@ pub(super) struct ConnectionBinding {
     /// attached to each dispatched request so dispatch can gate
     /// `IdentityIntrospect`; stays `None` for every other connection.
     pub(super) introspect_rights: Option<IdentityIntrospectRights>,
-    /// Cross-relay ingress scope for a peer relay (`<id>@RELAY`) connection,
-    /// recorded at Hello and attached to each dispatched request so a forwarded
-    /// Send/Raww is gated to the peer's scope; stays `None` for every other
-    /// connection.
-    pub(super) ingress_scope: Option<String>,
 }
 
 /// What the frame loop does once a handler returns.

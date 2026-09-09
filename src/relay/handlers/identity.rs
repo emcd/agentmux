@@ -17,8 +17,8 @@ use crate::relay::authorization::{RelayActionFamily, authorize_relay_action};
 use crate::relay::context::RequestPrincipal;
 use crate::relay::identity::{
     IdentityIntrospectRights, PrincipalRecord, PrincipalStore, PrincipalType,
-    classify_principal_id, generate_psk, hash_token_sha256, scope_permits, split_principal_id,
-    stage_credential_sink, write_pending_credential,
+    classify_principal_id, generate_psk, hash_token_sha256, parse_peer_scope, scope_permits,
+    split_principal_id, stage_credential_sink, write_pending_credential,
 };
 use crate::relay::stream::{
     RelayStreamEvent, notify_trusted_hosts_of_revocation, revoke_streams_for_identity,
@@ -57,6 +57,11 @@ pub(in crate::relay) fn handle_new_peer(
         "peer",
     )?;
     let principal_type = classify_target_principal(context.principal_id.as_str())?;
+    let canonical_scope = if principal_type == PrincipalType::Relay {
+        parse_peer_scope(context.scope.as_deref())?
+    } else {
+        context.scope.clone()
+    };
     let mut store = PrincipalStore::load(principal_store_path(state_root))?;
     store.prune_expired(OffsetDateTime::now_utc());
     if store
@@ -82,15 +87,54 @@ pub(in crate::relay) fn handle_new_peer(
         principal_id: context.principal_id.clone(),
         principal_type,
         credential_hash,
-        scope: context.scope.clone(),
+        scope: canonical_scope.clone(),
         expires_at: None,
         metadata: Default::default(),
     });
     if let Err(error) = store.persist() {
-        if let Some(pending) = pending {
-            pending.abort();
+        if !is_durability_uncertain(&error) {
+            if let Some(pending) = pending {
+                pending.abort();
+            }
+            return Err(error);
         }
-        return Err(error);
+        // Uncertain: the rename published the new record. Compensate by
+        // removing it, but retain staged credential material until the
+        // effective outcome is known.
+        store.remove_by_principal_id(context.principal_id.as_str());
+        match store.persist() {
+            Ok(()) => {
+                // Prior absence restored deterministically.
+                if let Some(pending) = pending {
+                    pending.abort();
+                }
+                return Err(error);
+            }
+            Err(rollback) if is_durability_uncertain(&rollback) => {
+                // Compensation rename succeeded: the prior absence is
+                // effective now and only crash durability is uncertain.
+                // Discard new material and report the original uncertainty —
+                // a retry observes a clean unknown-principal.
+                if let Some(pending) = pending {
+                    pending.abort();
+                }
+                return Err(error);
+            }
+            Err(rollback) => {
+                // Compensation failed before its rename: the original
+                // publication stands and the new record is effective. Publish
+                // staged credential material best-effort so file sinks match
+                // the effective record, then report the double fault for
+                // operator reconciliation (introspect, drop, recreate). A
+                // Response-destination PSK cannot be delivered alongside an
+                // error and is lost here; nothing referenced it yet, so the
+                // principal is recoverable.
+                if let Some(pending) = pending {
+                    let _ = pending.commit();
+                }
+                return Err(credential_rollback_failed(error, rollback));
+            }
+        }
     }
 
     let config_snippet =
@@ -121,7 +165,7 @@ pub(in crate::relay) fn handle_new_peer(
         psk: returned_psk,
         written_path,
         config_snippet,
-        diagnostics: scope_vocabulary_diagnostics(context.scope.as_deref()),
+        diagnostics: scope_vocabulary_diagnostics(canonical_scope.as_deref()),
     })
 }
 
@@ -210,13 +254,67 @@ pub(in crate::relay) fn handle_change_psk(
         metadata: existing.metadata.clone(),
     });
     if let Err(error) = store.persist() {
-        // The on-disk store is written atomically, so a persist failure leaves
-        // the prior credential intact; discard the staged write and do not
-        // revoke anything.
-        if let Some(pending) = pending {
-            pending.abort();
+        if !is_durability_uncertain(&error) {
+            // A pre-rename persist failure leaves the prior credential intact;
+            // discard the staged write and do not revoke anything.
+            if let Some(pending) = pending {
+                pending.abort();
+            }
+            return Err(error);
         }
-        return Err(error);
+        // Uncertain: the rename published the rotated hash. Compensate by
+        // restoring the prior record, retaining staged material until the
+        // effective outcome is known.
+        store.remove_by_principal_id(principal_id.as_str());
+        store.insert(existing.clone());
+        match store.persist() {
+            Ok(()) => {
+                // Prior record restored deterministically: the old credential
+                // is effective again, so revocation stays skipped.
+                if let Some(pending) = pending {
+                    pending.abort();
+                }
+                return Err(error);
+            }
+            Err(rollback) if is_durability_uncertain(&rollback) => {
+                // Compensation rename succeeded: the prior record is
+                // effective now and only crash durability is uncertain.
+                // Discard new material, skip revocation, and report the
+                // original uncertainty — the old credential authenticates and
+                // a retry rotates cleanly.
+                if let Some(pending) = pending {
+                    pending.abort();
+                }
+                return Err(error);
+            }
+            Err(rollback) => {
+                // Compensation failed: the rotated hash may still be
+                // effective. Fail closed — publish staged material
+                // best-effort, tear down sessions holding the superseded
+                // credential, notify watching hosts — and report the double
+                // fault. A Response-destination PSK cannot be delivered
+                // alongside an error and is lost here; the operator
+                // reconciles by rotating again, which always applies cleanly
+                // to the existing record.
+                match pending {
+                    None => {}
+                    Some(pending) => {
+                        let _ = pending.commit();
+                    }
+                }
+                let (revoked_connections, notified_hosts) =
+                    revoke_superseded_credential(principal_id.as_str(), requester_principal_id);
+                emit_inscription(
+                    "relay.identity.psk_rotate_failed",
+                    &serde_json::json!({
+                        "principal_id": principal_id,
+                        "revoked_connections": revoked_connections,
+                        "notified_hosts": notified_hosts,
+                    }),
+                );
+                return Err(credential_rollback_failed(error, rollback));
+            }
+        }
     }
     let written_path = match pending {
         None => None,
@@ -249,38 +347,8 @@ pub(in crate::relay) fn handle_change_psk(
     // destination is Response. Excluding it cannot leave some other session
     // alive on the prior credential: the stream registry keys one entry per
     // `principal_id`, so a self-rotation's only possible match is the requester.
-    let revoked_frame = RelayResponse::Error {
-        error: relay_error(
-            "runtime_identity_revoked",
-            "identity credential was rotated; reconnect with the new credential",
-            Some(serde_json::json!({ "principal_id": principal_id })),
-        ),
-    };
-    let revoked_connections = if requester_principal_id == principal_id {
-        0
-    } else {
-        revoke_streams_for_identity(principal_id.as_str(), &revoked_frame)
-    };
-
-    // Notify every connected trusted host whose scope covers the revoked
-    // principal so they can drop any cached view of it. This is distinct from
-    // the teardown above: the revoked principal's own session receives a typed
-    // error frame, while watching hosts receive an `identity.revoked` event.
-    let revoked_at = OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_default();
-    let revoked_event = RelayStreamEvent {
-        event_type: "identity.revoked".to_string(),
-        // `target_session` is rewritten per recipient host by the fan-out; the
-        // revoked principal is carried in the payload.
-        target_session: String::new(),
-        created_at: revoked_at.clone(),
-        payload: serde_json::json!({
-            "principal_id": principal_id,
-            "revoked_at": revoked_at,
-        }),
-    };
-    let notified_hosts = notify_trusted_hosts_of_revocation(principal_id.as_str(), &revoked_event);
+    let (revoked_connections, notified_hosts) =
+        revoke_superseded_credential(principal_id.as_str(), requester_principal_id);
     emit_inscription(
         "relay.identity.psk_rotated",
         &serde_json::json!({
@@ -300,6 +368,121 @@ pub(in crate::relay) fn handle_change_psk(
         principal_id,
         psk: returned_psk,
         written_path,
+    })
+}
+
+/// Replaces the ingress scope of a registered peer relay in place, preserving
+/// its credential, identity, expiry, and unrelated metadata.
+///
+/// Gated on the dedicated `change.scope=all` control (rotation rights confer
+/// none of it). The update runs under the shared identity-admin serialization,
+/// so it orders against concurrent registration, rotation, drop, replacement,
+/// and final ingress authorization decisions. An empty scope clears the grant;
+/// repeating the normalized scope succeeds (performing directory
+/// synchronization rather than short-circuiting) without rotating or
+/// disconnecting the peer. Scope-only updates emit no credential revocation:
+/// the peer stays connected and keeps its PSK.
+///
+/// Durability follows rename-publication semantics: the atomic rename is the
+/// update linearization point for effective authority, and the parent-directory
+/// sync completes durable success. A pre-rename failure leaves the old record
+/// and effective grant intact; a post-rename directory-sync failure keeps the
+/// published replacement effective and surfaces an
+/// `internal_store_durability_uncertain` error carrying the effective scope
+/// rather than success or an old-grant-intact claim.
+pub(in crate::relay) fn handle_change_scope(
+    configuration_roots: &ConfigurationRoots,
+    state_root: &Path,
+    requester_principal_id: &str,
+    principal_id: String,
+    scope: String,
+) -> Result<RelayResponse, RelayError> {
+    authorize_relay_action(
+        configuration_roots,
+        requester_principal_id,
+        RelayActionFamily::Change,
+        "scope",
+    )?;
+    if classify_principal_id(principal_id.as_str()) != Some(PrincipalType::Relay) {
+        return Err(relay_error(
+            "validation_invalid_principal_id",
+            "change scope applies only to peer relay principals (<id>@RELAY)",
+            Some(serde_json::json!({ "principal_id": principal_id })),
+        ));
+    }
+    // The scope grammar is validated before the store lookup so malformed input
+    // fails identically for missing and registered peers; record existence is
+    // still disclosed only behind the authorization gate above.
+    let canonical = parse_peer_scope(Some(scope.as_str()))?;
+    // No expiry pruning here: this operation must not alter unrelated records
+    // as a side effect.
+    let mut store = PrincipalStore::load(principal_store_path(state_root))?;
+    let Some(existing) = store.find_by_principal_id(principal_id.as_str()).cloned() else {
+        return Err(relay_error(
+            "validation_unknown_principal",
+            "principal_id is not registered; create it with new peer first",
+            Some(serde_json::json!({ "principal_id": principal_id })),
+        ));
+    };
+    if existing.principal_type != PrincipalType::Relay {
+        return Err(relay_error(
+            "validation_invalid_params",
+            "change scope applies only to registered relay principals",
+            Some(serde_json::json!({
+                "field": "principal_id",
+                "principal_id": principal_id,
+            })),
+        ));
+    }
+    let previous = existing.scope.clone();
+    store.remove_by_principal_id(principal_id.as_str());
+    store.insert(PrincipalRecord {
+        principal_id: principal_id.clone(),
+        principal_type: existing.principal_type,
+        credential_hash: existing.credential_hash.clone(),
+        scope: canonical.clone(),
+        expires_at: existing.expires_at.clone(),
+        metadata: existing.metadata.clone(),
+    });
+    if let Err(error) = store.persist() {
+        if is_durability_uncertain(&error) {
+            let effective = canonical.clone().unwrap_or_default();
+            emit_inscription(
+                "relay.identity.scope_updated",
+                &serde_json::json!({
+                    "actor": requester_principal_id,
+                    "principal_id": principal_id,
+                    "previous_scope": previous.unwrap_or_default(),
+                    "scope": effective,
+                    "durability": "uncertain",
+                }),
+            );
+            return Err(relay_error(
+                "internal_store_durability_uncertain",
+                "scope replacement published but parent-directory sync failed; durability is uncertain and the replacement remains effective",
+                Some(serde_json::json!({
+                    "principal_id": principal_id,
+                    "scope": effective,
+                })),
+            ));
+        }
+        return Err(error);
+    }
+    let effective = canonical.clone().unwrap_or_default();
+    emit_inscription(
+        "relay.identity.scope_updated",
+        &serde_json::json!({
+            "actor": requester_principal_id,
+            "principal_id": principal_id,
+            "previous_scope": previous.unwrap_or_default(),
+            "scope": effective,
+        }),
+    );
+    Ok(RelayResponse::ChangeScope {
+        schema_version: SCHEMA_VERSION.to_string(),
+        principal_id,
+        scope: effective,
+        diagnostics: scope_vocabulary_diagnostics(canonical.as_deref()),
     })
 }
 
@@ -350,10 +533,16 @@ pub(in crate::relay) fn handle_drop_peer(
         ));
     };
     store.remove_by_principal_id(principal_id.as_str());
-    // Persist before revoking: the on-disk store is written atomically, so a
-    // failed persist leaves the principal authenticating and nothing should be
-    // torn down.
-    store.persist()?;
+    // Persist before revoking: a pre-rename persist failure leaves the
+    // principal authenticating and nothing is torn down. A post-rename
+    // durability failure already published the removal, so revocation still
+    // runs (the record is effectively gone) and the uncertainty is reported
+    // instead of success.
+    let durability_uncertain = match store.persist() {
+        Ok(()) => None,
+        Err(error) if is_durability_uncertain(&error) => Some(error),
+        Err(error) => return Err(error),
+    };
 
     let revoked_frame = RelayResponse::Error {
         error: relay_error(
@@ -386,16 +575,22 @@ pub(in crate::relay) fn handle_drop_peer(
         }),
     );
 
-    Ok(RelayResponse::DropPeer {
-        schema_version: SCHEMA_VERSION.to_string(),
-        credential_path: relay_owned_credential_path(
-            existing.principal_type,
-            principal_id.as_str(),
-            state_root,
-        ),
-        principal_id,
-        principal_type: existing.principal_type.as_str().to_string(),
-    })
+    let credential_path =
+        relay_owned_credential_path(existing.principal_type, principal_id.as_str(), state_root);
+    let principal_type = existing.principal_type.as_str().to_string();
+    match durability_uncertain {
+        None => Ok(RelayResponse::DropPeer {
+            schema_version: SCHEMA_VERSION.to_string(),
+            credential_path,
+            principal_id,
+            principal_type,
+        }),
+        Some(_) => Err(relay_error(
+            "internal_store_durability_uncertain",
+            "principal removal published but parent-directory sync failed; durability is uncertain and the removal remains effective",
+            Some(serde_json::json!({ "principal_id": principal_id })),
+        )),
+    }
 }
 
 /// Renders the relay-owned canonical credential path for a dropped principal,
@@ -542,10 +737,71 @@ fn classify_target_principal(principal_id: &str) -> Result<PrincipalType, RelayE
     })
 }
 
-/// Builds the error for the double-fault case where a credential publish failed
-/// *and* the compensating store rollback also failed. The store may now hold a
-/// hash with no usable credential, so the failure is surfaced (carrying both
-/// underlying codes) rather than discarded.
+/// True when a store-persist error reports post-rename durability uncertainty
+/// rather than a pre-publication failure. Pre-rename failures leave the old
+/// store intact; uncertain ones already published the replacement, so callers
+/// must compensate (or complete the effective state) instead of assuming the
+/// old record survived.
+fn is_durability_uncertain(error: &RelayError) -> bool {
+    error.code == "internal_store_durability_uncertain"
+}
+
+/// Tears down live sessions holding a superseded credential and notifies
+/// watching trusted hosts, returning `(revoked_connections, notified_hosts)`.
+///
+/// Shared by the rotation success path and the compensation-failure path, where
+/// the rotated hash may still be effective and sessions on the old credential
+/// must not linger. The requester's own connection is exempt (see the rotation
+/// success path for why excluding it is safe).
+fn revoke_superseded_credential(
+    principal_id: &str,
+    requester_principal_id: &str,
+) -> (usize, usize) {
+    let revoked_frame = RelayResponse::Error {
+        error: relay_error(
+            "runtime_identity_revoked",
+            "identity credential was rotated; reconnect with the new credential",
+            Some(serde_json::json!({ "principal_id": principal_id })),
+        ),
+    };
+    let revoked_connections = if requester_principal_id == principal_id {
+        0
+    } else {
+        revoke_streams_for_identity(principal_id, &revoked_frame)
+    };
+
+    // Notify every connected trusted host whose scope covers the revoked
+    // principal so they can drop any cached view of it. This is distinct from
+    // the teardown above: the revoked principal's own session receives a typed
+    // error frame, while watching hosts receive an `identity.revoked` event.
+    let revoked_at = OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_default();
+    let revoked_event = RelayStreamEvent {
+        event_type: "identity.revoked".to_string(),
+        // `target_session` is rewritten per recipient host by the fan-out; the
+        // revoked principal is carried in the payload.
+        target_session: String::new(),
+        created_at: revoked_at.clone(),
+        payload: serde_json::json!({
+            "principal_id": principal_id,
+            "revoked_at": revoked_at,
+        }),
+    };
+    let notified_hosts = notify_trusted_hosts_of_revocation(principal_id, &revoked_event);
+    (revoked_connections, notified_hosts)
+}
+
+/// Builds the error for the double fault where a store publication left
+/// durability uncertain *and* the compensating persist failed before its own
+/// rename. The original publication therefore stands: the new record is
+/// effective, and callers fail closed on it (revoking superseded sessions,
+/// publishing staged material best-effort). A compensation that itself
+/// publishes but stays sync-uncertain does NOT reach this error — the prior
+/// state is effective then, so the original uncertainty is reported instead.
+/// The operator reconciles by inspecting and re-rotating or recreating; staged
+/// Response-destination secrets that could not be delivered are lost, but
+/// nothing referenced them yet.
 fn credential_rollback_failed(write_error: RelayError, rollback_error: RelayError) -> RelayError {
     relay_error(
         "internal_credential_rollback_failed",

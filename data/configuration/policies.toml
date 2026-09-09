@@ -47,6 +47,7 @@ peer = 'all'
 
 [policies.controls.change]
 psk = 'all'
+scope = 'all'
 
 [policies.controls.drop]
 peer = 'all'
