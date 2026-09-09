@@ -206,7 +206,33 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
 
 pub(super) fn print_new_help() {
     println!(
-        "Usage: agentmux new peer <principal_id> [--scope SCOPE] [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]"
+        "Usage: agentmux new peer <principal_id> [--scope SCOPE] [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]\n\
+         \n\
+         principal_id is <id>@<namespace>: <id>@RELAY registers a peer relay,\n\
+         <id>@GLOBAL a user, <id>@EXTERNAL an application, and <id>@<bundle>\n\
+         a bundle-scoped session. Every value needs the @ separator.\n\
+         \n\
+         --scope names what the credential may observe: for @RELAY see\n\
+         SCOPE below; for @EXTERNAL a session@bundle identity, a bare bundle\n\
+         name, or omitted. none/self/home/all are session-policy tiers, not\n\
+         scopes; using one matches a namespace literally named that and\n\
+         raises an advisory without failing the command.\n\
+         \n\
+         --output PATH writes the PSK to a caller-named absolute path whose\n\
+         parent directory already exists; parents are never created and a\n\
+         symlinked target is refused. --write-config writes only session\n\
+         principals to their relay-owned identity path, creating parents, and\n\
+         is rejected for relay/user/application principals. The flags are\n\
+         mutually exclusive; with neither, the PSK prints to stdout once.\n\
+         \n\
+         --bundle NAME and --as-session NAME resolve the calling identity:\n\
+         explicit flags first, then the ui.toml default-bundle and the\n\
+         users.toml default-session. Outside a session context pass --bundle\n\
+         (and usually --as-session); otherwise the command fails with\n\
+         validation_unknown_bundle or validation_unknown_session.\n\
+         \n\
+         --json keeps stdout parseable; advisories go to stderr in both modes\n\
+         and never change the exit status."
     );
     println!(
         "SCOPE is '*' for every namespace with addressable principals (including GLOBAL and future addressable namespace types), a comma-separated set of explicit namespaces, or omitted for no rights."
