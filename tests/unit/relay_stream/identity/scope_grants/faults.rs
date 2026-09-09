@@ -10,6 +10,73 @@ fn dir_sync_fault_file(bundle_paths: &BundleRuntimePaths) -> std::path::PathBuf 
 }
 
 #[test]
+fn drop_under_dirsync_failure_revokes_and_reports_uncertainty() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_scope_dropfault";
+    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let peer_id = "dropfault@RELAY";
+
+    let psk = register_peer(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        peer_id,
+        Some("*"),
+    );
+
+    // The peer stays connected so the test can observe whether revocation
+    // still runs when durability is uncertain.
+    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let read_stream = client.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(read_stream);
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": peer_id,
+            "identity_token": psk,
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+
+    std::fs::write(dir_sync_fault_file(&bundle_paths), "fail").expect("arm fault");
+    let dropped = operator_request(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        json!({"operation": "drop_peer", "principal_id": peer_id}),
+    );
+    std::fs::remove_file(dir_sync_fault_file(&bundle_paths)).expect("clear fault");
+    assert_eq!(dropped["response"]["kind"], "error");
+    assert_eq!(
+        dropped["response"]["error"]["code"], "internal_store_durability_uncertain",
+        "published removal must report uncertainty, not success: {dropped:?}"
+    );
+
+    // The removal is effective despite the uncertainty: the live session is
+    // revoked and the credential authenticates nothing.
+    let mut revoked = read_json(&mut reader);
+    while revoked["frame"] != "response" {
+        revoked = read_json(&mut reader);
+    }
+    assert_eq!(
+        revoked["response"]["error"]["code"], "runtime_identity_revoked",
+        "revocation must run for the effective removal: {revoked:?}"
+    );
+    join.join().expect("join revoked peer thread");
+
+    let stale = hello_first_frame(&configuration_roots, &bundle_paths, peer_id, &psk, true);
+    assert_eq!(stale["response"]["kind"], "error");
+    assert_eq!(
+        stale["response"]["error"]["code"], "validation_unrecognized_credential",
+        "removed credential must not authenticate: {stale:?}"
+    );
+}
+
+#[test]
 fn precommit_validation_failure_leaves_old_grant_intact() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_prename";
