@@ -25,8 +25,8 @@ use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 
 use super::super::authorization::{authorize_discovery_origin, requester_list_reaches_all};
 use super::super::identity::{
-    PrincipalType, classify_principal_id, live_peer_ingress, peer_scope_covers_namespace,
-    peer_scope_covers_target, split_principal_id,
+    PrincipalType, classify_principal_id, is_wildcard_scope, live_peer_ingress,
+    peer_scope_covers_namespace, peer_scope_covers_target, split_principal_id,
 };
 use super::super::stream::list_namespace_sessions;
 use super::super::{
@@ -106,10 +106,12 @@ pub(in crate::relay) fn handle_discover_namespaces(
             // Two phases around the shared identity-admin serialization. Phase
             // 1 collects the full candidate snapshot with no lock held, so a
             // stalled bundle probe cannot block scope administration or other
-            // ingress decisions. Phase 2 resolves the current grant under the
-            // lock and fixes the filtered result there, so a scope update
-            // cannot interleave between the grant check and the decision.
-            let snapshot = collect_namespace_snapshot(context)?;
+            // ingress decisions; its Result is retained, not released.
+            // Phase 2 resolves the current grant under the lock and fixes the
+            // filtered result there, so a scope update cannot interleave
+            // between the grant check and the decision — and collection
+            // diagnostics never reach an unauthorized caller.
+            let snapshot = collect_namespace_snapshot(context);
             let live = live_peer_ingress(
                 context.ingress_authority,
                 principal.session_id.as_str(),
@@ -150,9 +152,10 @@ pub(in crate::relay) fn handle_discover_principals(
         None if ingress => {
             // Two phases, as in `handle_discover_namespaces`: the bundle
             // listing (including tmux readiness probes) is collected with no
-            // lock held; the grant is resolved and the filtered result fixed
-            // under the shared serialization.
-            let snapshot = collect_principal_snapshot(context, namespace.as_str())?;
+            // lock held and its Result retained; the grant is resolved and the
+            // filtered result fixed under the shared serialization, so
+            // collection diagnostics never reach an unauthorized caller.
+            let snapshot = collect_principal_snapshot(context, namespace.as_str());
             let live = live_peer_ingress(
                 context.ingress_authority,
                 principal.session_id.as_str(),
@@ -215,16 +218,25 @@ fn collect_namespace_snapshot(
 
 /// Phase 2 of receiving-side namespace discovery: filter a collected snapshot
 /// by the peer's current grant under the shared serialization and fix the
-/// result there. An empty (no-principal) namespace is omitted even under a
-/// matching scope, and an absent scope denies discovery entirely.
+/// result there. The collection `Result` is retained until this decision: an
+/// absent scope, or a set scope that cannot be evaluated against a failed
+/// collection, ends in `authorization_forbidden` rather than releasing
+/// configuration diagnostics to a caller that may cover nothing. A wildcard
+/// covers every addressable namespace by definition, so an authorized wildcard
+/// holder sees the snapshot or its diagnostic error. An empty filtered set is
+/// an ordinary empty success with a local unmatched-scope inscription.
 fn filter_namespace_snapshot(
-    snapshot: BTreeSet<String>,
+    snapshot: Result<BTreeSet<String>, RelayError>,
     scope: Option<&str>,
     requester: &str,
 ) -> Result<RelayResponse, RelayError> {
     let Some(scope) = scope else {
         return Err(ingress_forbidden());
     };
+    if is_wildcard_scope(scope) {
+        return Ok(namespaces_response(snapshot?, "ingress"));
+    }
+    let snapshot = snapshot.map_err(|_| ingress_forbidden())?;
     let namespaces = snapshot
         .into_iter()
         .filter(|namespace| peer_scope_covers_namespace(Some(scope), namespace))
@@ -291,13 +303,16 @@ fn collect_principal_snapshot(
 
 /// Phase 2 of receiving-side principal discovery: authorize one concrete
 /// namespace against the peer's current grant under the shared serialization
-/// and fix the collected listing there. A namespace the scope does not cover —
-/// including a nonexistent one — is rejected uniformly with
-/// `authorization_forbidden`, disclosing no existence. A covered namespace
-/// returns its complete collected listing with normal diagnostics and no
-/// scope-induced `principals_partial` marker.
+/// and fix the collected listing there. The collection `Result` is retained
+/// until this decision: a namespace the scope does not cover — including a
+/// nonexistent one — is rejected uniformly with `authorization_forbidden`
+/// without releasing collection diagnostics, disclosing no existence. A
+/// covered namespace releases its collection result to the authorized holder:
+/// the complete listing with normal diagnostics and no scope-induced
+/// `principals_partial` marker, or the neutral empty view for a covered
+/// namespace this relay does not host.
 fn decide_principal_snapshot(
-    snapshot: Option<ListedBundle>,
+    snapshot: Result<Option<ListedBundle>, RelayError>,
     scope: Option<&str>,
     namespace: &str,
 ) -> RelayResponse {
@@ -311,6 +326,14 @@ fn decide_principal_snapshot(
             error: ingress_forbidden(),
         };
     }
+    // Covered: the collection result belongs to an authorized holder, so its
+    // diagnostic error (if any) may surface.
+    let snapshot = match snapshot {
+        Ok(snapshot) => snapshot,
+        Err(error) => {
+            return RelayResponse::Error { error };
+        }
+    };
     let bundle = snapshot.unwrap_or_else(|| empty_namespace_bundle(namespace));
     debug_assert!(
         bundle

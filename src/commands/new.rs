@@ -173,10 +173,19 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
         ));
     };
     // Pre-submission grammar check for peer relay scopes so malformed input
-    // fails before any relay contact. Other principal types keep their own
-    // scope model and pass through for the relay to judge.
+    // fails before any relay contact. A principal aiming at the relay
+    // namespace with a malformed identity is rejected here too; other
+    // principal types keep their own scope model and pass through for the
+    // relay to judge.
+    let normalized_principal = principal_id.trim();
+    if normalized_principal.ends_with("@RELAY") && !is_relay_principal_id(normalized_principal) {
+        return Err(RuntimeError::validation(
+            "validation_invalid_principal_id",
+            "principal_id is not in <id>@<namespace> form".to_string(),
+        ));
+    }
     if let Some(scope) = scope.as_deref()
-        && is_relay_principal_id(principal_id.as_str())
+        && is_relay_principal_id(normalized_principal)
         && let Err(error) = parse_peer_scope(Some(scope))
     {
         return Err(RuntimeError::validation(error.code, error.message));

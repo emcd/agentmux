@@ -326,9 +326,10 @@ fn parse_change_scope_arguments(
         ));
     };
     // Pre-submission field validation so malformed input fails before any
-    // relay contact: the target must be a peer relay principal and the scope
-    // must satisfy the peer grammar.
-    if !is_relay_principal_id(principal_id.as_str()) {
+    // relay contact: the normalized target must be a peer relay principal and
+    // the scope must satisfy the peer grammar.
+    let normalized_principal = principal_id.trim();
+    if !is_relay_principal_id(normalized_principal) {
         return Err(RuntimeError::validation(
             "validation_invalid_principal_id",
             "change scope applies only to peer relay principals (<id>@RELAY)".to_string(),
@@ -338,7 +339,7 @@ fn parse_change_scope_arguments(
         return Err(RuntimeError::validation(error.code, error.message));
     }
     Ok(ChangeScopeArguments {
-        principal_id,
+        principal_id: normalized_principal.to_string(),
         scope,
         bundle_name,
         session_selector,

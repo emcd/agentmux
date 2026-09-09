@@ -20,7 +20,8 @@ use crate::runtime::paths::{is_valid_bundle_name, session_identity_psk_path};
 use super::{CredentialDestination, GLOBAL_SESSION_SUFFIX, RelayError, relay_error};
 
 pub(crate) use super::peer_scope::{
-    live_peer_ingress, parse_peer_scope, peer_scope_covers_namespace, peer_scope_covers_target,
+    is_wildcard_scope, live_peer_ingress, parse_peer_scope, peer_scope_covers_namespace,
+    peer_scope_covers_target,
 };
 
 const PSK_BYTE_LENGTH: usize = 32;
@@ -50,7 +51,19 @@ fn unique_temp_path(final_path: &Path, tag: &str) -> PathBuf {
 /// Syncs a parent directory so a just-renamed store file is durable before the
 /// caller acknowledges success. Opening the directory read-only and syncing it
 /// persists the rename itself, not just file contents.
+///
+/// Test fault-injection seam: the presence of a `.fault-dir-sync` file in the
+/// directory forces a sync failure, so fault-controlled tests can assert the
+/// post-rename durability-uncertain contract deterministically through the
+/// genuine sync-error mapping (rather than a synthesized error code). The
+/// seam is active in every build profile so release-profile test runs inject
+/// identically; it requires write access to the identity directory, which
+/// already confers the ability to corrupt the store outright, so it grants no
+/// new privilege.
 fn sync_parent_directory(dir: &Path) -> io::Result<()> {
+    if dir.join(".fault-dir-sync").exists() {
+        return Err(io::Error::other("injected fault: .fault-dir-sync present"));
+    }
     let file = fs::File::open(dir)?;
     file.sync_all()
 }
@@ -336,6 +349,20 @@ impl PrincipalStore {
             let _ = fs::remove_file(&tmp_path);
             return Err(self.io_error("set mode 0600", source));
         }
+        // Test fault-injection seam for the pre-rename path (same rationale
+        // and privilege argument as `.fault-dir-sync`): the presence of a
+        // `.fault-pre-rename` file beside the store fails the persist after
+        // staging but before the rename publication point, so tests can
+        // assert the old-record-intact contract deterministically.
+        if let Some(parent) = self.path.parent()
+            && parent.join(".fault-pre-rename").exists()
+        {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(self.io_error(
+                "stage store",
+                io::Error::other("injected fault: .fault-pre-rename present"),
+            ));
+        }
         // Commit point: the rename publishes the replacement.
         fs::rename(&tmp_path, &self.path).map_err(|source| {
             let _ = fs::remove_file(&tmp_path);
@@ -344,25 +371,6 @@ impl PrincipalStore {
         // Durable completion: sync the parent directory before acknowledging
         // success. Failure here means the replacement is published but host-crash
         // durability is uncertain.
-        //
-        // Test fault-injection seam (debug builds only): the presence of a
-        // `.fault-dir-sync` file beside the store forces the uncertain outcome
-        // without touching real I/O, so fault-controlled tests can assert the
-        // post-rename contract deterministically. Release builds always sync.
-        #[cfg(debug_assertions)]
-        if let Some(parent) = self.path.parent()
-            && parent.join(".fault-dir-sync").exists()
-        {
-            return Err(relay_error(
-                "internal_store_durability_uncertain",
-                "principal store published but parent-directory sync failed; durability is uncertain",
-                Some(json!({
-                    "path": self.path.display().to_string(),
-                    "context": "sync parent",
-                    "cause": "injected fault: .fault-dir-sync present",
-                })),
-            ));
-        }
         if let Some(parent) = self.path.parent()
             && let Err(source) = sync_parent_directory(parent)
         {

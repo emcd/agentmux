@@ -68,11 +68,21 @@ pub(super) fn validate_new_params(params: &NewParams) -> Result<(), McpError> {
 
 pub(super) fn validate_new_peer_args(args: &NewPeerArgs) -> Result<(), McpError> {
     validate_unknown_fields("new peer command", Some("args"), &args.extra_fields)?;
-    // Pre-submission grammar check for peer relay scopes so malformed input
-    // fails before any relay contact. Other principal types keep their own
-    // scope model and pass through for the relay to judge.
-    if let (Some(principal_id), Some(scope)) = (args.principal_id.as_deref(), args.scope.as_deref())
-        && is_relay_principal_id(principal_id)
+    // Pre-submission checks on the normalized identity so malformed input
+    // fails before any relay contact. A principal aiming at the relay
+    // namespace with a malformed identity is rejected here; other principal
+    // types keep their own scope model and pass through for the relay to
+    // judge.
+    let normalized_principal = args.principal_id.as_deref().map(str::trim).unwrap_or("");
+    if normalized_principal.ends_with("@RELAY") && !is_relay_principal_id(normalized_principal) {
+        return Err(validation_tool_error(
+            "validation_invalid_principal_id",
+            "principal_id is not in <id>@<namespace> form",
+            Some(json!({"field": "principal_id"})),
+        ));
+    }
+    if let Some(scope) = args.scope.as_deref()
+        && is_relay_principal_id(normalized_principal)
         && let Err(error) = parse_peer_scope(Some(scope))
     {
         return Err(validation_tool_error(

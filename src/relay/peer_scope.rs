@@ -20,7 +20,13 @@ use super::{RelayError, relay_error};
 
 /// Returns true when `principal_id` names a peer relay principal (`<id>@RELAY`).
 pub(crate) fn is_relay_principal_id(principal_id: &str) -> bool {
-    matches!(principal_id.rsplit_once('@'), Some((_, "RELAY")))
+    matches!(principal_id.rsplit_once('@'), Some((local, "RELAY")) if !local.is_empty())
+}
+
+/// Returns true when a peer `scope` is the wildcard: every addressable
+/// namespace is covered by definition, without consulting any catalog.
+pub(crate) fn is_wildcard_scope(scope: &str) -> bool {
+    scope.trim() == "*"
 }
 
 /// Reserved namespace partitions that never carry addressable peer targets./// `RELAY` is the peer-identity namespace itself and `EXTERNAL` is the
