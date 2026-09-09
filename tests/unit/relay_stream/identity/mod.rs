@@ -23,7 +23,8 @@
 //! - [`scope_grants`]: `change scope` peer-grant administration and live
 //!   multi-namespace ingress (grammar, dedicated authority, in-place
 //!   credential-preserving updates, current-record decisions, and
-//!   credential-bound staleness).
+//!   credential-bound staleness), split by concern into per-cluster modules
+//!   under `scope_grants/` — see that hub's own overview.
 //!
 //! Shared helpers (every cluster shares the per-bundle operator
 //! configuration writer, the principal-store path, the operator-request

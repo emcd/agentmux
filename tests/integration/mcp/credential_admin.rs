@@ -268,6 +268,66 @@ async fn change_scope_surfaces_relay_persistence_failure_without_success_payload
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn change_scope_rejects_malformed_scope_before_relay_contact() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(|_| panic!("relay must not receive change_scope for a malformed scope")),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let arguments = scope_args(json!({"scope": "*,alpha"}));
+    let response = harness.call_tool(2, "change", arguments).await;
+
+    assert_eq!(error_code(&response), Some("validation_invalid_params"));
+    assert!(relay.requests_for_operation("change_scope").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn change_scope_rejects_non_relay_principal_before_relay_contact() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(|_| panic!("relay must not receive change_scope for a non-relay principal")),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let arguments = scope_args(json!({"scope": "alpha"}));
+    let mut arguments = arguments;
+    if let Some(args) = arguments.get_mut("args") {
+        args["principal_id"] = json!("worker@party");
+    }
+    let response = harness.call_tool(2, "change", arguments).await;
+
+    assert_eq!(
+        error_code(&response),
+        Some("validation_invalid_principal_id")
+    );
+    assert!(relay.requests_for_operation("change_scope").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn new_peer_rejects_malformed_relay_scope_before_relay_contact() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(|_| panic!("relay must not receive new_peer for a malformed scope")),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    let mut arguments = Map::new();
+    arguments.insert("command".to_string(), Value::String("peer".to_string()));
+    arguments.insert(
+        "args".to_string(),
+        json!({"principal_id": "west@RELAY", "scope": "alpha,,beta"}),
+    );
+    let response = harness.call_tool(2, "new", arguments).await;
+
+    assert_eq!(error_code(&response), Some("validation_invalid_params"));
+    assert!(relay.requests_for_operation("new_peer").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn change_rejects_an_unknown_command() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
