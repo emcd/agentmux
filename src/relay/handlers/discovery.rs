@@ -112,6 +112,9 @@ pub(in crate::relay) fn handle_discover_namespaces(
             // between the grant check and the decision — and collection
             // diagnostics never reach an unauthorized caller.
             let snapshot = collect_namespace_snapshot(context);
+            // ORDERING: gate before final resolution, as in the send path —
+            // the collected snapshot carries no authority.
+            super::super::test_hooks::test_authority_gate(principal.session_id.as_str());
             let live = live_peer_ingress(
                 context.ingress_authority,
                 principal.session_id.as_str(),
@@ -156,6 +159,8 @@ pub(in crate::relay) fn handle_discover_principals(
             // filtered result fixed under the shared serialization, so
             // collection diagnostics never reach an unauthorized caller.
             let snapshot = collect_principal_snapshot(context, namespace.as_str());
+            // ORDERING: gate before final resolution, as in the send path.
+            super::super::test_hooks::test_authority_gate(principal.session_id.as_str());
             let live = live_peer_ingress(
                 context.ingress_authority,
                 principal.session_id.as_str(),

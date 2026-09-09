@@ -25,6 +25,8 @@ pub(crate) mod peer_scope;
 mod routing;
 mod startup_state;
 mod stream;
+#[doc(hidden)]
+pub mod test_hooks;
 mod watcher;
 
 use self::authorization::load_authorization_context;

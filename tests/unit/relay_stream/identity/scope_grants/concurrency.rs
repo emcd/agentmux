@@ -1,5 +1,7 @@
 use super::*;
 
+use agentmux::relay::test_hooks::{AuthorityGate, arm_authority_gate, disarm_authority_gate};
+
 #[test]
 fn concurrent_scope_updates_and_rotation_serialize_on_shared_context() {
     let temporary = TempDir::new().expect("temporary directory");
@@ -525,4 +527,113 @@ fn shared_serial_narrow_then_send_denies() {
     assert_eq!(allowed["response"]["kind"], "send", "{allowed:?}");
     shutdown_stream(&client, "shutdown peer stream");
     join.join().expect("join peer thread");
+}
+
+/// Deterministic update-before-final-admission: the send pauses at the
+/// authority gate after preparation and before final authority resolution, a
+/// narrowing commits mid-pause, and the released send must deny under the
+/// replacement grant. The gate is peer-filtered and held only for this peer;
+/// the lock stays free during the pause so the update can commit.
+#[test]
+fn gated_update_before_final_admission_denies() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_scope_gate";
+    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let operator_id = global_user_id(bundle_name);
+    write_multi_operator_users(&configuration_roots, std::slice::from_ref(&operator_id));
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let peer_id = "gated@RELAY";
+    let target = format!("alpha@{bundle_name}");
+    let catalog = single_bundle_catalog(&bundle_paths);
+    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
+
+    let seed = operator_request_on_context(
+        &context,
+        &operator_id,
+        json!({"operation": "new_peer", "principal_id": peer_id, "scope": "*"}),
+    );
+    assert_eq!(seed["response"]["kind"], "new_peer");
+    let psk = seed["response"]["psk"]
+        .as_str()
+        .expect("seed psk")
+        .to_string();
+
+    let (gate, reached_rx, proceed_tx) = AuthorityGate::arm(peer_id);
+    arm_authority_gate(gate);
+
+    // The send runs on its own connection up to the authority gate, where it
+    // parks: preparation (existence) already ran under the old grant, but no
+    // authority decision has been made yet.
+    let send_context = Arc::clone(&context);
+    let send_peer = peer_id.to_string();
+    let send_target = target.clone();
+    let send_psk = psk.clone();
+    let send_thread = thread::spawn(move || {
+        let (mut client, join) = spawn_relay_connection_on_context(send_context);
+        let read_stream = client.try_clone().expect("clone stream");
+        let mut reader = BufReader::new(read_stream);
+        send_json(
+            &mut client,
+            json!({
+                "frame": "hello",
+                "schema_version": "1",
+                "principal_id": send_peer,
+                "identity_token": send_psk,
+            }),
+        );
+        assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+        send_json(
+            &mut client,
+            json!({
+                "frame": "request",
+                "request_id": "gated-send",
+                "request": {
+                    "operation": "send",
+                    "requester_session": send_peer,
+                    "message": "paused at authority gate",
+                    "targets": [send_target],
+                    "broadcast": false,
+                },
+            }),
+        );
+        let mut response = read_json(&mut reader);
+        while response["frame"] != "response" {
+            response = read_json(&mut reader);
+        }
+        shutdown_stream(&client, "shutdown gated peer stream");
+        join.join().expect("join gated peer thread");
+        response
+    });
+
+    // The gate arrival proves the send is parked before its final authority
+    // resolution. Only then may the narrowing commit.
+    reached_rx
+        .recv_timeout(Duration::from_secs(15))
+        .expect("send never reached the authority gate");
+    let narrowed = operator_request_on_context(
+        &context,
+        &operator_id,
+        json!({"operation": "change_scope", "principal_id": peer_id, "scope": "other"}),
+    );
+    assert_eq!(
+        narrowed["response"]["kind"], "change_scope",
+        "narrowing must commit during the pause: {narrowed:?}"
+    );
+    proceed_tx.send(()).expect("release authority gate");
+    disarm_authority_gate();
+
+    // The released send resolves the replacement grant and denies: no
+    // operation authorizes under the old grant and admits after the commit.
+    let decided = send_thread.join().expect("join send thread");
+    assert_eq!(decided["response"]["kind"], "error");
+    assert_eq!(
+        decided["response"]["error"]["code"], "authorization_forbidden",
+        "post-commit decision must deny: {decided:?}"
+    );
+    assert_eq!(
+        store_record(&bundle_paths, peer_id)["scope"],
+        "other",
+        "narrowing must be the final grant"
+    );
 }

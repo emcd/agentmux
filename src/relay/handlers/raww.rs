@@ -161,6 +161,9 @@ pub(in crate::relay) fn handle_raww_routed(
     // tier resolved in the home bundle.
     let live_ingress = if relay_ingress {
         let peer = principal.expect("relay ingress is detected from an authenticated principal");
+        // ORDERING: same gate-before-resolution contract as the send path —
+        // see handle_send.
+        super::super::test_hooks::test_authority_gate(peer.session_id.as_str());
         Some(live_peer_ingress(
             ingress_authority,
             peer.session_id.as_str(),

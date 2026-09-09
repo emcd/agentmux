@@ -162,8 +162,15 @@ fn handle_send(
     // record under the shared identity-admin serialization and held across
     // authorization and admission below; every other requester by its policy
     // tier resolved in the home bundle.
+    // ORDERING: the test-authority gate pauses here — before the final
+    // authority resolution below — so a test can commit a scope update
+    // mid-flight. Resolution MUST stay after the gate: resolving first
+    // would authorize under a grant the update then replaces, admitting
+    // under an obsolete decision (verified by negative control: an unlocked
+    // pre-gate resolution admits, failing gated_update_before_final_admission_denies).
     let live_ingress = if relay_ingress {
         let peer = principal.expect("relay ingress is detected from an authenticated principal");
+        super::super::test_hooks::test_authority_gate(peer.session_id.as_str());
         Some(live_peer_ingress(
             ingress_authority,
             peer.session_id.as_str(),
