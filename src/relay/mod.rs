@@ -21,7 +21,7 @@ mod handlers;
 mod identity;
 mod lifecycle;
 mod peer_connection;
-mod peer_scope;
+pub(crate) mod peer_scope;
 mod routing;
 mod startup_state;
 mod stream;

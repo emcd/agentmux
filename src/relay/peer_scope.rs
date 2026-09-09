@@ -18,9 +18,12 @@ use super::context::PeerIngressAuthority;
 use super::identity::{PrincipalStore, PrincipalType, split_principal_id};
 use super::{RelayError, relay_error};
 
-/// Reserved namespace partitions that never carry addressable peer targets.
-///
-/// `RELAY` is the peer-identity namespace itself and `EXTERNAL` is the
+/// Returns true when `principal_id` names a peer relay principal (`<id>@RELAY`).
+pub(crate) fn is_relay_principal_id(principal_id: &str) -> bool {
+    matches!(principal_id.rsplit_once('@'), Some((_, "RELAY")))
+}
+
+/// Reserved namespace partitions that never carry addressable peer targets./// `RELAY` is the peer-identity namespace itself and `EXTERNAL` is the
 /// application namespace; neither names a bundle or `GLOBAL` principal set.
 /// They are rejected as explicit peer-scope names and never covered by `*`.
 const PEER_NON_ADDRESSABLE_NAMESPACES: [&str; 2] = ["RELAY", "EXTERNAL"];

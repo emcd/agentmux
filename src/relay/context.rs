@@ -55,9 +55,9 @@ pub(super) struct RequestPrincipal {
 /// admission ledger second; ingress never awaits target execution or network
 /// forwarding under this guard (a peer ingress requester may not forward).
 #[derive(Clone, Copy, Debug)]
-pub(super) struct PeerIngressAuthority<'a> {
-    pub(super) state_root: &'a Path,
-    pub(super) admin_lock: &'a Mutex<()>,
+pub(crate) struct PeerIngressAuthority<'a> {
+    pub(crate) state_root: &'a Path,
+    pub(crate) admin_lock: &'a Mutex<()>,
 }
 
 #[derive(Clone, Debug)]

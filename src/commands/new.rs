@@ -1,7 +1,11 @@
 use serde_json::json;
 
 use crate::{
-    relay::{RelayRequest, RelayResponse, request_relay},
+    relay::{
+        RelayRequest, RelayResponse,
+        peer_scope::{is_relay_principal_id, parse_peer_scope},
+        request_relay,
+    },
     runtime::{
         error::RuntimeError, paths::RelayRuntimePaths,
         starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
@@ -168,6 +172,15 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
             "new peer requires a <principal_id> argument".to_string(),
         ));
     };
+    // Pre-submission grammar check for peer relay scopes so malformed input
+    // fails before any relay contact. Other principal types keep their own
+    // scope model and pass through for the relay to judge.
+    if let Some(scope) = scope.as_deref()
+        && is_relay_principal_id(principal_id.as_str())
+        && let Err(error) = parse_peer_scope(Some(scope))
+    {
+        return Err(RuntimeError::validation(error.code, error.message));
+    }
     Ok(NewPeerArguments {
         principal_id,
         scope,

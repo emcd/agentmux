@@ -1,7 +1,11 @@
 use serde_json::json;
 
 use crate::{
-    relay::{RelayRequest, RelayResponse, request_relay},
+    relay::{
+        RelayRequest, RelayResponse,
+        peer_scope::{is_relay_principal_id, parse_peer_scope},
+        request_relay,
+    },
     runtime::{
         error::RuntimeError, paths::RelayRuntimePaths,
         starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
@@ -157,6 +161,45 @@ fn run_change_scope(arguments: &[String]) -> Result<(), RuntimeError> {
             }
             Ok(())
         }
+        RelayResponse::Error { error } if error.code == "internal_store_durability_uncertain" => {
+            // The replacement is published and effective but its crash
+            // durability is uncertain: preserve the effective grant in
+            // machine-readable form on both surfaces instead of dropping the
+            // scope/principal details that map_relay_error would omit.
+            let principal_id = error
+                .details
+                .as_ref()
+                .and_then(|details| details.get("principal_id"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(parsed.principal_id.as_str());
+            let scope = error
+                .details
+                .as_ref()
+                .and_then(|details| details.get("scope"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            if parsed.output_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&json!({
+                        "code": error.code,
+                        "principal_id": principal_id,
+                        "scope": scope,
+                        "durability": "uncertain",
+                    }))
+                    .map_err(|source| {
+                        RuntimeError::io(
+                            "encode change scope uncertainty json",
+                            std::io::Error::other(source),
+                        )
+                    })?
+                );
+            } else {
+                println!("principal_id={principal_id} scope={scope} durability=uncertain");
+            }
+            eprintln!("agentmux change scope: {}: {}", error.code, error.message);
+            Err(shared::map_relay_error(error))
+        }
         RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
         other => Err(RuntimeError::validation(
             "internal_unexpected_failure",
@@ -282,6 +325,18 @@ fn parse_change_scope_arguments(
             "change scope requires --scope SCOPE (pass --scope '' to clear the grant)".to_string(),
         ));
     };
+    // Pre-submission field validation so malformed input fails before any
+    // relay contact: the target must be a peer relay principal and the scope
+    // must satisfy the peer grammar.
+    if !is_relay_principal_id(principal_id.as_str()) {
+        return Err(RuntimeError::validation(
+            "validation_invalid_principal_id",
+            "change scope applies only to peer relay principals (<id>@RELAY)".to_string(),
+        ));
+    }
+    if let Err(error) = parse_peer_scope(Some(scope.as_str())) {
+        return Err(RuntimeError::validation(error.code, error.message));
+    }
     Ok(ChangeScopeArguments {
         principal_id,
         scope,

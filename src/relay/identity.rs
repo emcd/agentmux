@@ -344,6 +344,25 @@ impl PrincipalStore {
         // Durable completion: sync the parent directory before acknowledging
         // success. Failure here means the replacement is published but host-crash
         // durability is uncertain.
+        //
+        // Test fault-injection seam (debug builds only): the presence of a
+        // `.fault-dir-sync` file beside the store forces the uncertain outcome
+        // without touching real I/O, so fault-controlled tests can assert the
+        // post-rename contract deterministically. Release builds always sync.
+        #[cfg(debug_assertions)]
+        if let Some(parent) = self.path.parent()
+            && parent.join(".fault-dir-sync").exists()
+        {
+            return Err(relay_error(
+                "internal_store_durability_uncertain",
+                "principal store published but parent-directory sync failed; durability is uncertain",
+                Some(json!({
+                    "path": self.path.display().to_string(),
+                    "context": "sync parent",
+                    "cause": "injected fault: .fault-dir-sync present",
+                })),
+            ));
+        }
         if let Some(parent) = self.path.parent()
             && let Err(source) = sync_parent_directory(parent)
         {

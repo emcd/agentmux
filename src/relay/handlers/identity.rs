@@ -95,6 +95,16 @@ pub(in crate::relay) fn handle_new_peer(
         if let Some(pending) = pending {
             pending.abort();
         }
+        if is_durability_uncertain(&error) {
+            // The rename published the new record but durability is uncertain:
+            // roll back to the prior absence so a retry observes a clean
+            // unknown-principal rather than a half-published registration, and
+            // report the uncertainty instead of a clean failure.
+            store.remove_by_principal_id(context.principal_id.as_str());
+            if let Err(rollback) = store.persist() {
+                return Err(credential_rollback_failed(error, rollback));
+            }
+        }
         return Err(error);
     }
 
@@ -215,11 +225,22 @@ pub(in crate::relay) fn handle_change_psk(
         metadata: existing.metadata.clone(),
     });
     if let Err(error) = store.persist() {
-        // The on-disk store is written atomically, so a persist failure leaves
-        // the prior credential intact; discard the staged write and do not
-        // revoke anything.
+        // A pre-rename persist failure leaves the prior credential intact;
+        // discard the staged write and do not revoke anything. A post-rename
+        // durability failure already published the rotated hash, so restore
+        // the prior record (returning the effective credential to the old
+        // one) and report the uncertainty instead of a clean failure —
+        // revocation stays skipped because the old credential is effective
+        // again.
         if let Some(pending) = pending {
             pending.abort();
+        }
+        if is_durability_uncertain(&error) {
+            store.remove_by_principal_id(principal_id.as_str());
+            store.insert(existing.clone());
+            if let Err(rollback) = store.persist() {
+                return Err(credential_rollback_failed(error, rollback));
+            }
         }
         return Err(error);
     }
@@ -382,7 +403,7 @@ pub(in crate::relay) fn handle_change_scope(
         metadata: existing.metadata.clone(),
     });
     if let Err(error) = store.persist() {
-        if error.code == "internal_store_durability_uncertain" {
+        if is_durability_uncertain(&error) {
             let effective = canonical.clone().unwrap_or_default();
             emit_inscription(
                 "relay.identity.scope_updated",
@@ -470,10 +491,16 @@ pub(in crate::relay) fn handle_drop_peer(
         ));
     };
     store.remove_by_principal_id(principal_id.as_str());
-    // Persist before revoking: the on-disk store is written atomically, so a
-    // failed persist leaves the principal authenticating and nothing should be
-    // torn down.
-    store.persist()?;
+    // Persist before revoking: a pre-rename persist failure leaves the
+    // principal authenticating and nothing is torn down. A post-rename
+    // durability failure already published the removal, so revocation still
+    // runs (the record is effectively gone) and the uncertainty is reported
+    // instead of success.
+    let durability_uncertain = match store.persist() {
+        Ok(()) => None,
+        Err(error) if is_durability_uncertain(&error) => Some(error),
+        Err(error) => return Err(error),
+    };
 
     let revoked_frame = RelayResponse::Error {
         error: relay_error(
@@ -506,16 +533,22 @@ pub(in crate::relay) fn handle_drop_peer(
         }),
     );
 
-    Ok(RelayResponse::DropPeer {
-        schema_version: SCHEMA_VERSION.to_string(),
-        credential_path: relay_owned_credential_path(
-            existing.principal_type,
-            principal_id.as_str(),
-            state_root,
-        ),
-        principal_id,
-        principal_type: existing.principal_type.as_str().to_string(),
-    })
+    let credential_path =
+        relay_owned_credential_path(existing.principal_type, principal_id.as_str(), state_root);
+    let principal_type = existing.principal_type.as_str().to_string();
+    match durability_uncertain {
+        None => Ok(RelayResponse::DropPeer {
+            schema_version: SCHEMA_VERSION.to_string(),
+            credential_path,
+            principal_id,
+            principal_type,
+        }),
+        Some(_) => Err(relay_error(
+            "internal_store_durability_uncertain",
+            "principal removal published but parent-directory sync failed; durability is uncertain and the removal remains effective",
+            Some(serde_json::json!({ "principal_id": principal_id })),
+        )),
+    }
 }
 
 /// Renders the relay-owned canonical credential path for a dropped principal,
@@ -662,8 +695,16 @@ fn classify_target_principal(principal_id: &str) -> Result<PrincipalType, RelayE
     })
 }
 
-/// Builds the error for the double-fault case where a credential publish failed
-/// *and* the compensating store rollback also failed. The store may now hold a
+/// True when a store-persist error reports post-rename durability uncertainty
+/// rather than a pre-publication failure. Pre-rename failures leave the old
+/// store intact; uncertain ones already published the replacement, so callers
+/// must compensate (or complete the effective state) instead of assuming the
+/// old record survived.
+fn is_durability_uncertain(error: &RelayError) -> bool {
+    error.code == "internal_store_durability_uncertain"
+}
+
+/// Builds the error for the double-fault case where a credential publish failed/// *and* the compensating store rollback also failed. The store may now hold a
 /// hash with no usable credential, so the failure is surfaced (carrying both
 /// underlying codes) rather than discarded.
 fn credential_rollback_failed(write_error: RelayError, rollback_error: RelayError) -> RelayError {
