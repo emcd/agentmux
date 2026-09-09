@@ -768,6 +768,11 @@ struct HeldTmuxServer {
 
 impl HeldTmuxServer {
     fn start(socket: &std::path::Path, session: &str) -> Self {
+        assert!(
+            socket.as_os_str().len() < 100,
+            "tmux socket path too long for portability: {}",
+            socket.display()
+        );
         let status = std::process::Command::new("tmux")
             .args(["-S", &socket.to_string_lossy(), "kill-server"])
             .output();
@@ -880,7 +885,11 @@ impl Drop for HeldTmuxServer {
 /// necessarily executed after the commit.
 #[test]
 fn held_tmux_delivery_runs_after_narrowing_with_original_text() {
-    let temporary = TempDir::new().expect("temporary directory");
+    // Scratch space under /tmp keeps the tmux socket path portable: unix
+    // socket paths must fit sun_path (104 bytes on macOS), which
+    // runner-controlled TMPDIR layouts can exceed, failing the bind with
+    // "file name too long" for reasons unrelated to the behavior under test.
+    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_tmuxhold";
     let configuration_roots = write_scope_configuration(&temporary, bundle_name);
     let operator_id = global_user_id(bundle_name);

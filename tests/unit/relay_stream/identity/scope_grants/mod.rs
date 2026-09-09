@@ -248,6 +248,14 @@ impl TmuxBlackhole {
     fn arm(runtime_dir: &Path) -> Self {
         std::fs::create_dir_all(runtime_dir).expect("runtime dir");
         let socket_path = runtime_dir.join("tmux.sock");
+        // tmux sockets must fit the platform sun_path (104 bytes on macOS):
+        // fail loudly here rather than with an obscure bind error deep in a
+        // test. Callers keep scratch space under /tmp for margin.
+        assert!(
+            socket_path.as_os_str().len() < 100,
+            "tmux socket path too long for portability: {}",
+            socket_path.display()
+        );
         if socket_path.exists() {
             std::fs::remove_file(&socket_path).expect("clear tmux socket path");
         }
