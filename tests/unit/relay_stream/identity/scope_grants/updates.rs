@@ -529,12 +529,18 @@ fn admitted_delivery_executes_after_narrowing_without_cancellation() {
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
     let peer_id = "uiexec@RELAY";
+    let catalog = single_bundle_catalog(&bundle_paths);
+    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
 
-    // The receiver doubles as a live UI endpoint: its stream observes the
-    // delivered envelope for sends targeting it. The admin identity performs
-    // credential administration so the two concurrent Hellos never collide.
+    // Arrival-level evidence that narrowing neither tears down admitted work
+    // nor the connection carrying it: a delivery admitted under the wildcard
+    // grant still reaches its UI recipient after the grant narrows, on shared
+    // -context connections throughout. Non-cancellation is also structural:
+    // async delivery workers operate on AsyncDeliveryTask, which carries no
+    // scope, credential hash, or store handle, so a scope update cannot
+    // express cancellation through them.
     let (mut operator_client, operator_join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection_on_context(Arc::clone(&context));
     let operator_read = operator_client.try_clone().expect("clone operator stream");
     let mut operator_reader = BufReader::new(operator_read);
     send_json(
@@ -558,7 +564,7 @@ fn admitted_delivery_executes_after_narrowing_without_cancellation() {
 
     // Admit a peer delivery to the operator under the wildcard grant: the
     // queued response proves admission completed.
-    let (mut peer_client, peer_join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let (mut peer_client, peer_join) = spawn_relay_connection_on_context(Arc::clone(&context));
     let peer_read = peer_client.try_clone().expect("clone peer stream");
     let mut peer_reader = BufReader::new(peer_read);
     send_json(
@@ -593,9 +599,8 @@ fn admitted_delivery_executes_after_narrowing_without_cancellation() {
 
     // Narrow after admission: the grant governs subsequent admissions, but
     // the admitted delivery is never retroactively cancelled.
-    let narrowed = operator_request_as(
-        &configuration_roots,
-        &bundle_paths,
+    let narrowed = operator_request_on_context(
+        &context,
         &admin_id,
         json!({"operation": "change_scope", "principal_id": peer_id, "scope": "other"}),
     );

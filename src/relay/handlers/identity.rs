@@ -110,11 +110,21 @@ pub(in crate::relay) fn handle_new_peer(
                 }
                 return Err(error);
             }
+            Err(rollback) if is_durability_uncertain(&rollback) => {
+                // Compensation rename succeeded: the prior absence is
+                // effective now and only crash durability is uncertain.
+                // Discard new material and report the original uncertainty —
+                // a retry observes a clean unknown-principal.
+                if let Some(pending) = pending {
+                    pending.abort();
+                }
+                return Err(error);
+            }
             Err(rollback) => {
-                // Compensation did not restore the prior absence, so the
-                // original publication may still be effective. Publish staged
-                // credential material best-effort so file sinks match the
-                // possibly-effective record, then report the double fault for
+                // Compensation failed before its rename: the original
+                // publication stands and the new record is effective. Publish
+                // staged credential material best-effort so file sinks match
+                // the effective record, then report the double fault for
                 // operator reconciliation (introspect, drop, recreate). A
                 // Response-destination PSK cannot be delivered alongside an
                 // error and is lost here; nothing referenced it yet, so the
@@ -261,6 +271,17 @@ pub(in crate::relay) fn handle_change_psk(
             Ok(()) => {
                 // Prior record restored deterministically: the old credential
                 // is effective again, so revocation stays skipped.
+                if let Some(pending) = pending {
+                    pending.abort();
+                }
+                return Err(error);
+            }
+            Err(rollback) if is_durability_uncertain(&rollback) => {
+                // Compensation rename succeeded: the prior record is
+                // effective now and only crash durability is uncertain.
+                // Discard new material, skip revocation, and report the
+                // original uncertainty — the old credential authenticates and
+                // a retry rotates cleanly.
                 if let Some(pending) = pending {
                     pending.abort();
                 }
@@ -771,18 +792,16 @@ fn revoke_superseded_credential(
     (revoked_connections, notified_hosts)
 }
 
-/// Builds the error for the double-fault case where a store publication left
-/// durability uncertain *and* the compensating store rollback also failed.
-/// Two outcomes share this code, distinguished by `rollback_error`:
-/// - compensation failed before its rename: the original publication stands
-///   (the new record is effective; callers fail closed on it, e.g. by
-///   revoking superseded sessions);
-/// - compensation published but is itself sync-uncertain: the effective state
-///   is ambiguous between the original publication and the compensation.
-///   Either way the store may be inconsistent, so the failure is surfaced
-///   (carrying both underlying codes) rather than discarded; staged credential
-///   material is published best-effort before this error is built, and the
-///   operator reconciles by inspecting and re-rotating or recreating.
+/// Builds the error for the double fault where a store publication left
+/// durability uncertain *and* the compensating persist failed before its own
+/// rename. The original publication therefore stands: the new record is
+/// effective, and callers fail closed on it (revoking superseded sessions,
+/// publishing staged material best-effort). A compensation that itself
+/// publishes but stays sync-uncertain does NOT reach this error — the prior
+/// state is effective then, so the original uncertainty is reported instead.
+/// The operator reconciles by inspecting and re-rotating or recreating; staged
+/// Response-destination secrets that could not be delivered are lost, but
+/// nothing referenced them yet.
 fn credential_rollback_failed(write_error: RelayError, rollback_error: RelayError) -> RelayError {
     relay_error(
         "internal_credential_rollback_failed",

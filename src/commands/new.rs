@@ -190,8 +190,10 @@ fn parse_new_arguments(arguments: &[String]) -> Result<NewPeerArguments, Runtime
     {
         return Err(RuntimeError::validation(error.code, error.message));
     }
+    // The normalized (trimmed) identity is submitted, so validation and the
+    // relay observe the same principal.
     Ok(NewPeerArguments {
-        principal_id,
+        principal_id: normalized_principal.to_string(),
         scope,
         output_path,
         write_to_config,

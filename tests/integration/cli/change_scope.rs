@@ -369,3 +369,67 @@ fn new_peer_rejects_a_bare_namespace_identity_before_relay_contact() {
         "no relay request may be issued: {logged:?}"
     );
 }
+
+#[test]
+fn new_peer_normalizes_a_padded_principal_before_relay_contact() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &["tui"]);
+    write_tui_configuration(
+        &config_root,
+        Some("alpha"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+    let alpha_paths = BundleRuntimePaths::resolve(&state_root, "alpha").expect("alpha paths");
+    ensure_bundle_runtime_directory(&alpha_paths).expect("ensure alpha runtime directory");
+
+    let mut responses = HashMap::new();
+    responses.insert(
+        "alpha".to_string(),
+        RelayResponse::NewPeer {
+            schema_version: "1".to_string(),
+            principal_id: "west@RELAY".to_string(),
+            principal_type: "relay".to_string(),
+            psk: Some("SECRET-PSK".to_string()),
+            written_path: None,
+            config_snippet: "# snippet".to_string(),
+            diagnostics: Vec::new(),
+        },
+    );
+    let mut request_logs = HashMap::new();
+    request_logs.insert(
+        "alpha".to_string(),
+        Arc::new(Mutex::new(Vec::<Value>::new())),
+    );
+    let relay_thread = spawn_fake_relay_for_bundles(
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
+        1,
+        responses,
+        request_logs.clone(),
+    );
+    let fixture = ChangeScopeFixture {
+        _temporary: temporary,
+        config_root,
+        state_root,
+        inscriptions_root,
+        request_logs,
+    };
+
+    let output = run_new_peer(" west@RELAY", &["--scope", "*"], &fixture);
+    relay_thread.join().expect("join fake relay");
+    assert!(output.status.success(), "padded principal: {output:?}");
+    let logged = fixture.request_logs["alpha"]
+        .lock()
+        .expect("lock request log");
+    assert_eq!(logged.len(), 1);
+    assert_eq!(
+        logged[0]["principal_id"], "west@RELAY",
+        "the normalized identity is submitted: {logged:?}"
+    );
+}

@@ -220,41 +220,7 @@ fn scope_update_progresses_while_a_principal_probe_is_stalled() {
     // Black-hole the bundle's tmux socket: the tmux CLI dials it during the
     // readiness probe of principal discovery and then waits indefinitely, so
     // the probe stays stalled until the test releases it.
-    std::fs::create_dir_all(&bundle_paths.runtime_directory).expect("runtime dir");
-    let socket_path = bundle_paths.runtime_directory.join("tmux.sock");
-    if socket_path.exists() {
-        std::fs::remove_file(&socket_path).expect("clear tmux socket path");
-    }
-    let listener = UnixListener::bind(&socket_path).expect("bind black-hole socket");
-    listener
-        .set_nonblocking(true)
-        .expect("nonblocking listener");
-    let (accepted_tx, accepted_rx) = mpsc::channel::<()>();
-    let accepted_streams: Arc<Mutex<Vec<UnixStream>>> = Arc::new(Mutex::new(Vec::new()));
-    let stop = Arc::new(AtomicBool::new(false));
-    let accept_thread = {
-        let listener = listener;
-        let accepted_streams = Arc::clone(&accepted_streams);
-        let stop = Arc::clone(&stop);
-        let mut signaled = false;
-        thread::spawn(move || {
-            while !stop.load(Ordering::SeqCst) {
-                match listener.accept() {
-                    Ok((stream, _)) => {
-                        accepted_streams.lock().expect("lock streams").push(stream);
-                        if !signaled {
-                            signaled = true;
-                            let _ = accepted_tx.send(());
-                        }
-                    }
-                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                        thread::sleep(Duration::from_millis(20));
-                    }
-                    Err(_) => break,
-                }
-            }
-        })
-    };
+    let blackhole = TmuxBlackhole::arm(&bundle_paths.runtime_directory);
 
     // Start principal discovery on a shared-context peer connection: it will
     // stall inside the readiness probe.
@@ -309,9 +275,7 @@ fn scope_update_progresses_while_a_principal_probe_is_stalled() {
     // The accept proves the probe is in flight and stalled: only then may the
     // scope update run. It must complete promptly rather than wait out the
     // probe behind the shared serialization.
-    accepted_rx
-        .recv_timeout(Duration::from_secs(15))
-        .expect("tmux probe never dialed the black-hole socket");
+    blackhole.wait_for_dial(Duration::from_secs(15));
     let started = Instant::now();
     let narrowed = operator_request_on_context(
         &context,
@@ -332,11 +296,7 @@ fn scope_update_progresses_while_a_principal_probe_is_stalled() {
     // Release the probe: the tmux clients fail, the decision resolves under
     // the replacement grant committed above, and the narrowed scope denies a
     // request that started before the commit.
-    stop.store(true, Ordering::SeqCst);
-    accept_thread.join().expect("join accept thread");
-    for stream in accepted_streams.lock().expect("lock streams").drain(..) {
-        let _ = stream.shutdown(std::net::Shutdown::Both);
-    }
+    blackhole.release();
     let decided = done_rx
         .recv_timeout(Duration::from_secs(30))
         .expect("stalled discovery never completed after release");
@@ -359,8 +319,20 @@ fn scope_update_progresses_while_a_principal_probe_is_stalled() {
     probe.join().expect("join probe thread");
 }
 
+/// Contention smoke coverage for a raced admission against a narrowing
+/// update on the shared serialization.
+///
+/// This test pins request STARTS with a barrier but cannot pin the
+/// commit/admission order: whichever side holds the shared lock first wins
+/// outright, so both resolutions are asserted as valid outcome classes
+/// (admission-before-update admits under the old grant; update-before-final
+/// -admission denies under the replacement) with a consistent final grant.
+/// Deterministic order coverage lives in the serial tests
+/// (`live_narrowing_applies_on_the_same_connection_without_reconnect`,
+/// `admitted_send_survives_narrowing_without_teardown`, and
+/// `shared_serial_narrow_then_send_denies`), which fix each order exactly.
 #[test]
-fn raced_admission_and_narrowing_each_resolve_safely() {
+fn raced_admission_and_narrowing_resolve_safely_smoke() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_raceorder";
     let configuration_roots = write_scope_configuration(&temporary, bundle_name);
@@ -455,4 +427,102 @@ fn raced_admission_and_narrowing_each_resolve_safely() {
         "other",
         "narrowing must be the final grant"
     );
+}
+
+/// Deterministic update-before-final-admission on the shared serialization:
+/// a committed narrowing denies a later send, and re-widening restores it,
+/// all on one peer connection sharing the admin lock with the updater.
+#[test]
+fn shared_serial_narrow_then_send_denies() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_scope_sharedserial";
+    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let operator_id = global_user_id(bundle_name);
+    write_multi_operator_users(&configuration_roots, std::slice::from_ref(&operator_id));
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let peer_id = "sharedserial@RELAY";
+    let target = format!("alpha@{bundle_name}");
+    let catalog = single_bundle_catalog(&bundle_paths);
+    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
+
+    let seed = operator_request_on_context(
+        &context,
+        &operator_id,
+        json!({"operation": "new_peer", "principal_id": peer_id, "scope": "*"}),
+    );
+    assert_eq!(seed["response"]["kind"], "new_peer");
+    let psk = seed["response"]["psk"]
+        .as_str()
+        .expect("seed psk")
+        .to_string();
+
+    let (mut client, join) = spawn_relay_connection_on_context(Arc::clone(&context));
+    let read_stream = client.try_clone().expect("clone stream");
+    let mut reader = BufReader::new(read_stream);
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": peer_id,
+            "identity_token": psk,
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+    let mut request_id = 0;
+    let mut peer_request = |request: Value| -> Value {
+        request_id += 1;
+        send_json(
+            &mut client,
+            json!({
+                "frame": "request",
+                "request_id": format!("sharedserial-{request_id}"),
+                "request": request,
+            }),
+        );
+        let mut response = read_json(&mut reader);
+        while response["frame"] != "response" {
+            response = read_json(&mut reader);
+        }
+        response
+    };
+
+    // Narrow first: the committed replacement governs the later admission.
+    let narrowed = operator_request_on_context(
+        &context,
+        &operator_id,
+        json!({"operation": "change_scope", "principal_id": peer_id, "scope": "other"}),
+    );
+    assert_eq!(narrowed["response"]["kind"], "change_scope");
+    let denied = peer_request(json!({
+        "operation": "send",
+        "requester_session": peer_id,
+        "message": "after narrowing",
+        "targets": [target],
+        "broadcast": false,
+    }));
+    assert_eq!(denied["response"]["kind"], "error");
+    assert_eq!(
+        denied["response"]["error"]["code"], "authorization_forbidden",
+        "{denied:?}"
+    );
+
+    // Re-widen: the same connection admits again with no reconnect.
+    let widened = operator_request_on_context(
+        &context,
+        &operator_id,
+        json!({"operation": "change_scope", "principal_id": peer_id, "scope": "*"}),
+    );
+    assert_eq!(widened["response"]["kind"], "change_scope");
+    let allowed = peer_request(json!({
+        "operation": "send",
+        "requester_session": peer_id,
+        "message": "after widening",
+        "targets": [target],
+        "broadcast": false,
+    }));
+    assert_eq!(allowed["response"]["kind"], "send", "{allowed:?}");
+    shutdown_stream(&client, "shutdown peer stream");
+    join.join().expect("join peer thread");
 }

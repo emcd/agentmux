@@ -19,6 +19,7 @@
 
 use std::io::BufReader;
 use std::os::unix::net::{UnixListener, UnixStream};
+use std::path::Path;
 use std::sync::{
     Arc, Barrier, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -230,6 +231,83 @@ fn peer_send_response(
     shutdown_stream(&client, "shutdown peer stream");
     join.join().expect("join peer relay thread");
     response
+}
+
+/// Black-holes a bundle's tmux socket: the tmux CLI dials it during readiness
+/// probes and delivery attempts, then waits indefinitely for a reply that
+/// never comes, stalling the calling worker until released. Lets tests hold
+/// target-side execution at a deterministic point.
+struct TmuxBlackhole {
+    stop: Arc<AtomicBool>,
+    accepted: Arc<Mutex<Vec<UnixStream>>>,
+    thread: Option<thread::JoinHandle<()>>,
+    dialed_rx: mpsc::Receiver<()>,
+}
+
+impl TmuxBlackhole {
+    fn arm(runtime_dir: &Path) -> Self {
+        std::fs::create_dir_all(runtime_dir).expect("runtime dir");
+        let socket_path = runtime_dir.join("tmux.sock");
+        if socket_path.exists() {
+            std::fs::remove_file(&socket_path).expect("clear tmux socket path");
+        }
+        let listener = UnixListener::bind(&socket_path).expect("bind black-hole socket");
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking listener");
+        let (dialed_tx, dialed_rx) = mpsc::channel::<()>();
+        let accepted: Arc<Mutex<Vec<UnixStream>>> = Arc::new(Mutex::new(Vec::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let thread = {
+            let accepted = Arc::clone(&accepted);
+            let stop = Arc::clone(&stop);
+            let mut signaled = false;
+            thread::spawn(move || {
+                while !stop.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            accepted.lock().expect("lock streams").push(stream);
+                            if !signaled {
+                                signaled = true;
+                                let _ = dialed_tx.send(());
+                            }
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(20));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            })
+        };
+        Self {
+            stop,
+            accepted,
+            thread: Some(thread),
+            dialed_rx,
+        }
+    }
+
+    /// Blocks until a tmux client dials the socket, proving the stalled
+    /// operation is in flight. Fails loudly on timeout so a fast-failing
+    /// probe cannot pass as a stall.
+    fn wait_for_dial(&self, timeout: Duration) {
+        self.dialed_rx
+            .recv_timeout(timeout)
+            .expect("tmux client never dialed the black-hole socket");
+    }
+
+    /// Releases the stall: accepted clients fail, stalled workers proceed,
+    /// and the accept thread exits.
+    fn release(mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            thread.join().expect("join accept thread");
+        }
+        for stream in self.accepted.lock().expect("lock streams").drain(..) {
+            let _ = stream.shutdown(std::net::Shutdown::Both);
+        }
+    }
 }
 
 mod binding;
