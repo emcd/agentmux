@@ -70,7 +70,7 @@ jobs:
       - name: Declare Rust Toolchain
         id: rust-toolchain
         run: |
-          echo "toolchain=stable" >>${GITHUB_OUTPUT}
+          echo "toolchain=1.98.0" >>${GITHUB_OUTPUT}
 
       - name: Declare Crates.io URL
         id: crates-io

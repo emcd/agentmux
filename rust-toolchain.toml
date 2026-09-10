@@ -1,0 +1,11 @@
+[toolchain]
+# Pinned Rust baseline for local development, linting, and release checks.
+# GitHub Actions installs this same version via `dtolnay/rust-toolchain`
+# (`toolchain: 1.98.0` in tester.yaml/releaser.yaml), so local `cargo`
+# invocations — including the pre-commit hooks — run the identical
+# rustc/clippy that gates CI. Bumping this pin is a deliberate,
+# repo-wide change: update the GHA `toolchain:` entries, Cargo.toml
+# `rust-version`, and the policy in `.auxiliary/agents/project.md`
+# in the same commit.
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]

@@ -33,6 +33,7 @@ jobs:
         # joins them.
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.98.0
           components: rustfmt, clippy
 
       - name: Install linecheck
@@ -110,6 +111,8 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.98.0
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
