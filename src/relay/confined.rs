@@ -48,6 +48,7 @@ pub(crate) fn unique_temp_path(final_path: &Path, tag: &str) -> PathBuf {
 #[derive(Debug)]
 pub(crate) enum ConfineError {
     Symlink { component: String },
+    Exchanged { component: String },
     DirSync { source: io::Error },
     Io { source: io::Error },
 }
@@ -67,7 +68,7 @@ impl ConfineError {
     /// no I/O failure; callers handle them first.
     pub(crate) fn io_source(self) -> Option<io::Error> {
         match self {
-            Self::Symlink { .. } => None,
+            Self::Symlink { .. } | Self::Exchanged { .. } => None,
             Self::DirSync { source } => Some(source),
             Self::Io { source } => Some(source),
         }
@@ -87,17 +88,17 @@ fn open_confined_root(state_root: &Path, create: bool) -> Result<Option<OwnedFd>
         ))
     })?;
     match open_at(libc::AT_FDCWD, &path, open_dir_flags(), 0) {
-        // `O_NOFOLLOW | O_DIRECTORY` refuses a symlinked state root with
-        // `ELOOP` rather than anchoring the traversal outside the tree.
+        // `O_NOFOLLOW | O_DIRECTORY` refuses a symlinked state root rather
+        // than anchoring the traversal outside the tree.
         Ok(fd) => Ok(Some(fd)),
         Err(source) if source.kind() == io::ErrorKind::NotFound && !create => Ok(None),
         Err(source) if source.kind() == io::ErrorKind::NotFound => {
             fs::create_dir_all(state_root).map_err(ConfineError::io)?;
             open_at(libc::AT_FDCWD, &path, open_dir_flags(), 0)
                 .map(Some)
-                .map_err(|source| map_open_error(source, &state_root.display().to_string()))
+                .map_err(|source| map_dir_open_error(libc::AT_FDCWD, &path, source))
         }
-        Err(source) => Err(map_open_error(source, &state_root.display().to_string())),
+        Err(source) => Err(map_dir_open_error(libc::AT_FDCWD, &path, source)),
     }
 }
 
@@ -135,12 +136,14 @@ fn walk_confined(
                         &component.display().to_string(),
                     ));
                 }
-                current = open_at(current.as_raw_fd(), &cname, open_dir_flags(), 0)
-                    .map_err(|source| map_open_error(source, &component.display().to_string()))?;
+                let reopen_fd = current.as_raw_fd();
+                current = open_at(reopen_fd, &cname, open_dir_flags(), 0)
+                    .map_err(|source| map_dir_open_error(reopen_fd, &cname, source))?;
             }
             Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(source) => {
-                return Err(map_open_error(source, &component.display().to_string()));
+                let parent_fd = current.as_raw_fd();
+                return Err(map_dir_open_error(parent_fd, &cname, source));
             }
         }
     }
@@ -234,6 +237,8 @@ pub(crate) fn confined_stage(
         tmp_name,
         final_name: cname_of(file_name),
         display_path: state_root.join(target).display().to_string(),
+        anchor: state_root.to_path_buf(),
+        parents: parents.iter().collect(),
     })
 }
 
@@ -271,6 +276,9 @@ pub(crate) struct ConfinedWrite {
     tmp_name: CString,
     final_name: CString,
     display_path: String,
+    /// Anchor and relative parent for commit-time re-verification.
+    anchor: PathBuf,
+    parents: PathBuf,
 }
 
 impl ConfinedWrite {
@@ -293,6 +301,15 @@ impl ConfinedWrite {
     /// its durability-uncertain outcome.
     pub(crate) fn commit(self) -> Result<String, ConfineError> {
         super::test_hooks::fire_confined_commit_hook();
+        // Re-verify the anchor chain before publishing: the rename below is
+        // fully handle-relative, so an exchanged ancestor cannot redirect
+        // it — but publishing into a detached directory would still be
+        // wrong. Re-walking and comparing directory identity turns any
+        // staged-to-commit exchange into a loud abort instead.
+        if let Err(error) = self.verify_anchor() {
+            self.abort();
+            return Err(error);
+        }
         let renamed = unsafe {
             libc::renameat(
                 self.parent.as_raw_fd(),
@@ -319,6 +336,47 @@ impl ConfinedWrite {
     pub(crate) fn abort(self) {
         remove_relative(&self.parent, &self.tmp_name);
     }
+
+    /// Re-walks the anchor chain by pathname and compares the re-resolved
+    /// parent directory identity against the retained handle. A symlinked
+    /// component aborts with its name; a silently exchanged (or vanished)
+    /// ancestor aborts rather than publishing into a detached directory.
+    fn verify_anchor(&self) -> Result<(), ConfineError> {
+        let components: Vec<&Path> = self
+            .parents
+            .components()
+            .map(|component| Path::new(component.as_os_str()))
+            .collect();
+        let Some(root) = open_confined_root(&self.anchor, false)? else {
+            return Err(ConfineError::io(io::Error::new(
+                io::ErrorKind::NotFound,
+                "confined anchor vanished before commit",
+            )));
+        };
+        let Some(fresh) = walk_confined(root.as_fd(), &components, false)? else {
+            return Err(ConfineError::io(io::Error::new(
+                io::ErrorKind::NotFound,
+                "confined parent vanished before commit",
+            )));
+        };
+        let (held_dev, held_ino) = fd_identity(self.parent.as_fd())?;
+        let (fresh_dev, fresh_ino) = fd_identity(fresh.as_fd())?;
+        if (held_dev, held_ino) != (fresh_dev, fresh_ino) {
+            return Err(ConfineError::Exchanged {
+                component: self.parents.display().to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Returns the device/inode identity of an open directory handle.
+fn fd_identity(fd: BorrowedFd) -> Result<(u64, u64), ConfineError> {
+    let mut status: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd.as_raw_fd(), &mut status) } != 0 {
+        return Err(ConfineError::io(io::Error::last_os_error()));
+    }
+    Ok((status.st_dev as u64, status.st_ino as u64))
 }
 
 /// Derives the sibling temp file name for `target` without touching the
@@ -366,14 +424,50 @@ fn open_at(parent: RawFd, name: &CString, flags: libc::c_int, mode: u32) -> io::
 }
 
 /// Maps an `openat`/`mkdirat` failure to a confinement error: a symlink
-/// refusal (`ELOOP`) names the offending component for
+/// refusal names the offending component for
 /// `validation_invalid_credential_path`; every other failure keeps its I/O
 /// identity for the caller's internal error mapping.
+///
+/// A no-follow directory open reports a symlink-to-directory as `ENOTDIR`
+/// rather than `ELOOP` on Linux, so directory opens disambiguate with an
+/// `lstat`: symlink means refusal, anything else keeps the I/O error.
 fn map_open_error(source: io::Error, component: &str) -> ConfineError {
     if source.raw_os_error() == Some(libc::ELOOP) {
         return ConfineError::symlink(component);
     }
     ConfineError::io(source)
+}
+
+/// Maps a no-follow *directory* open failure, disambiguating the `ENOTDIR`
+/// a symlink-to-directory produces from a genuine non-directory.
+fn map_dir_open_error(parent: RawFd, name: &CString, source: io::Error) -> ConfineError {
+    if source.raw_os_error() == Some(libc::ELOOP) {
+        let component = name.to_string_lossy().into_owned();
+        return ConfineError::symlink(component.as_str());
+    }
+    if source.raw_os_error() == Some(libc::ENOTDIR) && is_symlink_at(parent, name) {
+        let component = name.to_string_lossy().into_owned();
+        return ConfineError::symlink(component.as_str());
+    }
+    ConfineError::io(source)
+}
+
+/// Reports whether `name` relative to the `parent` handle is a symlink,
+/// without following it.
+fn is_symlink_at(parent: RawFd, name: &CString) -> bool {
+    let mut status: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe {
+        libc::fstatat(
+            parent,
+            name.as_ptr(),
+            &mut status,
+            libc::AT_SYMLINK_NOFOLLOW,
+        )
+    } != 0
+    {
+        return false;
+    }
+    status.st_mode & libc::S_IFMT == libc::S_IFLNK
 }
 
 /// Best-effort removal of a sibling temp file relative to its parent handle.

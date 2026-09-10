@@ -76,6 +76,7 @@ pub(super) async fn handle_request(
             | RelayRequest::ChangePsk { .. }
             | RelayRequest::ChangeScope { .. }
             | RelayRequest::DropPeer { .. }
+            | RelayRequest::InstallPeerCredential { .. }
     ) {
         let requester_principal_id = full_requester_principal_id(active_registration);
         let response = {

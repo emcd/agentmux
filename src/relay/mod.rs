@@ -566,7 +566,7 @@ pub(in crate::relay) fn dispatch_discovery(
 }
 
 /// Dispatches a relay-wide identity administration request (`new peer`,
-/// `change psk`), which mutates the relay-level principal store and has no
+/// `change psk`, peer credential install), which mutates the relay-level principal store and has no
 /// bundle context. `requester_principal_id` is the full claimed identity of the
 /// caller, used to resolve operator authorization relay-wide.
 pub(in crate::relay) fn dispatch_identity_admin(

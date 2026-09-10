@@ -152,7 +152,7 @@ impl PrincipalStore {
     /// state tree.
     pub(crate) fn load(state_root: &Path) -> Result<Self, RelayError> {
         let path = principal_store_path(state_root);
-        let relative = store_relative_path(state_root, &path);
+        let relative = state_relative_path(state_root, &path);
         let raw = match confined_read(state_root, relative) {
             Ok(Some(bytes)) => String::from_utf8(bytes).map_err(|source| {
                 relay_error(
@@ -317,12 +317,16 @@ impl PrincipalStore {
         })?;
         // Stage into a per-attempt-unique sibling and enforce mode BEFORE the
         // rename. A failure before publication leaves the old store intact.
-        let relative = store_relative_path(&self.state_root, &self.path);
+        let relative = state_relative_path(&self.state_root, &self.path);
         let staged = confined_stage(&self.state_root, relative, serialized.as_slice(), "store")
             .map_err(|error| match error {
                 ConfineError::Symlink { component } => invalid_credential_path(
                     component.as_str(),
                     "principal store ancestor is a symlink",
+                ),
+                ConfineError::Exchanged { component } => invalid_credential_path(
+                    component.as_str(),
+                    "principal store ancestor changed during commit",
                 ),
                 ConfineError::DirSync { .. } => self.io_error(
                     "stage store",
@@ -335,6 +339,10 @@ impl PrincipalStore {
             ConfineError::Symlink { component } => invalid_credential_path(
                 component.as_str(),
                 "principal store ancestor is a symlink",
+            ),
+            ConfineError::Exchanged { component } => invalid_credential_path(
+                component.as_str(),
+                "principal store ancestor changed during commit",
             ),
             ConfineError::DirSync { source } => relay_error(
                 "internal_store_durability_uncertain",
@@ -434,6 +442,10 @@ impl PendingCredentialWrite {
                         component.as_str(),
                         "credential ancestor is a symlink",
                     ),
+                    ConfineError::Exchanged { component } => invalid_credential_path(
+                        component.as_str(),
+                        "credential ancestor changed during commit",
+                    ),
                     ConfineError::DirSync { source } => relay_error(
                         "internal_credential_write",
                         "credential file published but parent-directory sync failed; durability is uncertain",
@@ -512,13 +524,17 @@ pub(crate) fn write_pending_credential(
         return Ok(None);
     };
     if *create_parents {
-        let relative = store_relative_path(state_root, path);
+        let relative = state_relative_path(state_root, path);
         let staged =
             confined_stage(state_root, relative, psk.as_bytes(), "cred").map_err(|error| {
                 match error {
                     ConfineError::Symlink { component } => invalid_credential_path(
                         component.as_str(),
                         "credential ancestor is a symlink",
+                    ),
+                    ConfineError::Exchanged { component } => invalid_credential_path(
+                        component.as_str(),
+                        "credential ancestor changed during commit",
                     ),
                     ConfineError::DirSync { .. } => relay_error(
                         "internal_credential_write",
@@ -730,7 +746,7 @@ pub(crate) fn invalid_credential_path(component: &str, message: &str) -> RelayEr
 /// Returns the state-root-relative form of a relay-owned path. Relay-owned
 /// paths are constructed below the state root, so stripping always succeeds;
 /// the panic documents that invariant rather than failing open.
-fn store_relative_path<'a>(state_root: &Path, path: &'a Path) -> &'a Path {
+pub(crate) fn state_relative_path<'a>(state_root: &Path, path: &'a Path) -> &'a Path {
     path.strip_prefix(state_root)
         .expect("relay-owned store path below the state root")
 }
