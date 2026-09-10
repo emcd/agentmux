@@ -25,6 +25,10 @@ The MCP server advertises:
   (`command="peer"`); its credential stops authenticating and any
   session bound to it is disconnected. Credential files on disk are
   left in place.
+- `link`: install a peer credential into the connected relay's
+  relay-owned slot (`command="peer"` with the local alias and the PSK
+  the opposite relay issued); the PSK travels in request memory only
+  and is never returned, logged, or persisted.
 - `raww`: write raw text directly to one target session.
 - `send`: deliver to explicit targets or broadcast.
 

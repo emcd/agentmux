@@ -17,6 +17,7 @@ agentmux raww <target-session> --text TEXT [--no-enter] [--bundle NAME] [--as-se
 agentmux new peer <principal_id> [--scope SCOPE] [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json]
 agentmux change psk <principal_id> [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json]
 agentmux drop peer <principal_id> [--bundle NAME] [--as-session NAME] [--json]
+agentmux link peer --issuer-state-directory PATH --destination-state-directory PATH --alias ALIAS --connect-as ID [--scope SCOPE] [--alias-scope SCOPE] [--paired --peer-alias ALIAS --peer-scope SCOPE --peer-connect-as ID] [--upgrade] [--bundle NAME] [--as-session NAME] [--json]
 agentmux check configuration [<bundle-id>] [-q|--quiet]
 agentmux tui [--bundle NAME] [--as-session NAME] [--lines N]
 agentmux send (--target NAME ... | --broadcast) [--message TEXT] [--request-id ID] [--bundle NAME] [--as-session NAME] [--json]

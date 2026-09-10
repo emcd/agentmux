@@ -11,5 +11,6 @@ Suggested reading order:
 5. [MCP Surface](mcp-surface.md)
 6. [Multi-Worktree Workflow](multi-worktree-workflow.md)
 7. [TUI Workbench Guide](tui.md)
+8. [Reciprocal Relay Setup](reciprocal-relay-setup.md)
 
 Developer-oriented architecture docs remain under `src/**/README.md`.
