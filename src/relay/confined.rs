@@ -126,12 +126,19 @@ fn walk_confined(
             Err(source) if source.kind() == io::ErrorKind::NotFound && create => {
                 // `mkdirat` derives the directory from the retained parent
                 // handle, so a concurrently exchanged ancestor cannot redirect
-                // the creation. The parent is synced after creating the
-                // child so a fresh directory chain is durable like the
-                // commit it stages for; a staging-phase sync failure aborts
-                // before publication (never uncertainty — nothing published).
+                // the creation. The mode casts to `libc::mode_t`, which is
+                // `u16` on macOS and `u32` elsewhere; the value stays
+                // owner-only on every platform. The parent is synced after
+                // creating the child so a fresh directory chain is durable
+                // like the commit it stages for; a staging-phase sync
+                // failure aborts before publication (never uncertainty —
+                // nothing published).
                 let created = unsafe {
-                    libc::mkdirat(current.as_raw_fd(), cname.as_ptr(), CONFINED_DIR_MODE)
+                    libc::mkdirat(
+                        current.as_raw_fd(),
+                        cname.as_ptr(),
+                        CONFINED_DIR_MODE as libc::mode_t,
+                    )
                 };
                 if created != 0 {
                     return Err(map_open_error(
@@ -434,7 +441,10 @@ fn open_file_flags() -> libc::c_int {
 /// The caller supplies a valid open directory handle and a NUL-terminated
 /// name; the call performs no other memory access.
 fn open_at(parent: RawFd, name: &CString, flags: libc::c_int, mode: u32) -> io::Result<OwnedFd> {
-    let fd = unsafe { libc::openat(parent, name.as_ptr(), flags, mode) };
+    // Variadic `openat` takes the mode through `...`, so it passes as
+    // `c_uint` (with `mode_t` range preserved); `mkdirat` takes `mode_t`
+    // directly at its own call site.
+    let fd = unsafe { libc::openat(parent, name.as_ptr(), flags, mode as libc::c_uint) };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -486,7 +496,10 @@ fn is_symlink_at(parent: RawFd, name: &CString) -> bool {
     {
         return false;
     }
-    status.st_mode & libc::S_IFMT == libc::S_IFLNK
+    // `as u64` widens `st_mode`/`S_IFMT`/`S_IFLNK` on both platforms
+    // (`u16` on macOS, `u32` on Linux) without tripping cast lints on
+    // either; zero-extension preserves the file-type bits.
+    status.st_mode as u64 & libc::S_IFMT as u64 == libc::S_IFLNK as u64
 }
 
 /// Best-effort removal of a sibling temp file relative to its parent handle.
