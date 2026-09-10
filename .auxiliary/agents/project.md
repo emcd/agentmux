@@ -29,9 +29,12 @@ and coordinate work across multiple worktrees with clear contracts.
 
 ## Prerequisites
 
-- Rust (stable; minimum version 1.90 per Cargo.toml's `rust-version` --
-  no exact toolchain pin; CI and local builds float on whatever
-  `stable` resolves to at build time).
+- Rust (pinned to 1.98.0 via `rust-toolchain.toml`; minimum version
+  1.98 per Cargo.toml's `rust-version`, deliberately equal to the pin
+  so the MSRV is the version CI and local builds actually run. CI
+  installs the same version via `dtolnay/rust-toolchain`
+  (`toolchain: 1.98.0`). Bumping the toolchain means updating the pin,
+  the GHA entries, `rust-version`, and this line together).
 - tmux (only required when working on the Tmux transport — the
   canonical `cargo nextest run` invocation exercises the Tmux commands
   directly via integration tests).
