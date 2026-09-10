@@ -141,22 +141,25 @@ for the full development workflow.
 - MCP host:
   - Command: `agentmux host mcp`
   - Responsibility: expose MCP tools (`list`, `help`, `look`, `choose`,
-    `updown`, `new`, `change`, `drop`, `raww`, `send`) and forward requests to
-    relay.
+    `updown`, `new`, `change`, `drop`, `link`, `raww`, `send`) and forward
+    requests to relay.
 - Operator CLI:
   - Commands: `agentmux list principals`, `agentmux look`, `agentmux raww`,
-    `agentmux send`, `agentmux tui`
+    `agentmux send`, `agentmux tui`, `agentmux link peer`
   - Responsibility: direct local inspection, message delivery, and interactive
     coordination flows with relay auto-start fallback for `agentmux tui`.
 - Inter-relay communication:
   - Peers via `relay.toml` `[[peers]]` (`alias`/`address`/`connect-as`),
     PSK credential admin (`agentmux new peer` / `agentmux change psk`),
-    cross-relay `send` via bang-path `session@bundle!peer`, relay-wide
-    discovery (`list relays` / `discover`), and sender attribution
-    (`on_behalf_of` carried on delivered envelopes). See
-    `documentation/usage/maintainer-configuration-guide.md` (`relay.toml`
-    `[[peers]]`) and `src/relay/README.md` Cross-Relay / Cross-bundle
-    sections.
+    reciprocal provisioning (`agentmux link peer`, which mints and installs
+    without printing PSKs), cross-relay `send` via bang-path
+    `session@bundle!peer`, relay-wide discovery (`list relays` /
+    `discover`), and sender attribution (`on_behalf_of` carried on
+    delivered envelopes). See
+    `documentation/usage/reciprocal-relay-setup.md` (worked two-relay
+    setup), `documentation/usage/maintainer-configuration-guide.md`
+    (`relay.toml` `[[peers]]`) and `src/relay/README.md` Cross-Relay /
+    Cross-bundle sections.
 - Pty transport (stubbed, not graduated):
   - `libghostty-vt`-backed, `Cargo.toml` feature `pty` (default `cargo build`
     does not pull it), wired throughout `src/pty/` with `portable-pty` child
@@ -177,12 +180,16 @@ and association resolution, configuration root contents, and authorization
 model, see the [usage guides](documentation/usage/README.md):
 
 - [CLI Surface](documentation/usage/cli-surface.md) — `host`, `up`/`down`,
-  `list`, `look`, `raww`, `send`, `tui`, `new`, `change`, `drop`, `check`, and
-  shared runtime flags.
+  `list`, `look`, `raww`, `send`, `tui`, `new`, `change`, `drop`, `link`,
+  `check`, and shared runtime flags.
 - [MCP Surface](documentation/usage/mcp-surface.md) — `list` (with
   `principals`/`namespaces`/`relays`/`decisions`), `look`, `choose`,
-  `updown`, `new`, `change`, `drop`, `raww`, `send`, and relay-owned
+  `updown`, `new`, `change`, `drop`, `link`, `raww`, `send`, and relay-owned
   per-target admission bounds.
+- [Reciprocal Relay Setup](documentation/usage/reciprocal-relay-setup.md)
+  — worked two-relay federation: reciprocal aliases, `link peer`
+  provisioning, both `[[peers]]` entries, restart, and bidirectional
+  verification.
 - [Multi-Worktree Workflow](documentation/usage/multi-worktree-workflow.md)
   — typical topology, the MCP four-tier association precedence for
   `host mcp`, and the one-shot UI/user selector family used by

@@ -21,6 +21,7 @@ This module implements the MCP stdio server for `agentmux`.
   - `new` (requires `command="peer"`)
   - `change` (requires `command="psk"` or `command="scope"`)
   - `drop` (requires `command="peer"`)
+  - `link` (requires `command="peer"`)
   - `raww`
   - `send`
 - Preserve canonical relay `list` and `look` success payloads without adapter
@@ -282,7 +283,15 @@ when the relay is down, and reachability surfaces per request as
   path for **session** principals only, since a peer relay's credential
   lives under the connecting relay's state root, which this relay
   cannot observe.
-- All three are relay-wide operations: they ride the MCP server's relay
+- The `link` tool (`command="peer"`) installs a peer credential into the
+  connected relay's relay-owned slot (`peers/<alias>.psk`), carrying the
+  opposite relay's issued PSK as an explicit secret argument in request
+  memory only. It requires `<alias>@RELAY` registered as a relay
+  principal, authorizes absent slots under `new.peer=all`, present
+  identical slots under either credential control, and present differing
+  slots under `change.psk=all`, and never returns, logs, or persists the
+  PSK. See the [reciprocal setup guide](../../documentation/usage/reciprocal-relay-setup.md).
+- All four are relay-wide operations: they ride the MCP server's relay
   stream, and the relay authorizes the connection's principal
   against its policy preset relay-wide, requiring an `all`
   `new.peer` / `change.psk` / `change.scope` / `drop.peer` grant. A bundle-relative
