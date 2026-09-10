@@ -15,16 +15,16 @@
 
 ## 3. Tests
 
-- [ ] 3.1 Add ancestor-symlink rejection tests for `new peer` and `change psk` sink operations asserting `validation_invalid_credential_path` (unit).
-- [ ] 3.2 Add store load/persist symlink tests proving the external target is neither read nor changed (unit).
-- [ ] 3.3 Add ancestor-exchange-after-staging tests asserting abort before publish, covering sink and install writes (unit).
-- [ ] 3.4 Add install tests: referent binding, three-way authorization classification, idempotent rewrite, unsafe-component refusal (unit + integration, both surfaces).
-- [ ] 3.5 Add the pinned retry test: successful write, lost response, same-authority (`new.peer=all` only) identical retry succeeds (integration).
-- [ ] 3.6 Add link-flow tests: one-way bootstrap order, second-claim tolerance (one-way only), halt on issuance failure, paired zero-drop install, cross-equality mismatch abort before any mint, upgrade path, mode-specific timeout recoveries (one-way retry-proceed vs paired rotate-to-known distinguishing test), post-rename durability uncertainty (integration, both surfaces).
-- [ ] 3.7 Add transfer-boundary tests: issuance Response carries exactly one PSK, all other responses omit it, no secret in logs/snippets/diagnostics/outputs (integration).
+- [x] 3.1 Add ancestor-symlink rejection tests for `new peer` and `change psk` sink operations asserting `validation_invalid_credential_path` (unit).
+- [x] 3.2 Add store load/persist symlink tests proving the external target is neither read nor changed (unit).
+- [x] 3.3 Add ancestor-exchange-after-staging tests asserting abort before publish, covering sink and install writes (unit).
+- [x] 3.4 Add install tests: referent binding, three-way authorization classification, idempotent rewrite, unsafe-component refusal (unit + integration, both surfaces).
+- [x] 3.5 Add the pinned retry test: successful write, lost response, same-authority (`new.peer=all` only) identical retry succeeds (integration).
+- [x] 3.6 Add link-flow tests: one-way bootstrap order, second-claim tolerance (one-way only), halt on issuance failure, paired zero-drop install, cross-equality mismatch abort before any mint, upgrade path, mode-specific timeout recoveries (one-way retry-proceed vs paired rotate-to-known distinguishing test), post-rename durability uncertainty (integration, both surfaces).
+- [x] 3.7 Add transfer-boundary tests: issuance Response carries exactly one PSK, all other responses omit it, no secret in logs/snippets/diagnostics/outputs (integration).
 
 ## 4. Verification and review
 
-- [ ] 4.1 Run the full test suite, clippy, fmt, and `openspec validate --all --strict`.
+- [x] 4.1 Run the full test suite, clippy, fmt, and `openspec validate --all --strict`.
 - [ ] 4.2 Confirm `new peer` / `change psk` Config semantics remain session-only (no widening).
 - [ ] 4.3 Confirm `agentmux:issues/relay/83` remains untouched (separate documentation work).
