@@ -159,7 +159,7 @@ fn register_alias_referent(
         // The registration mint is explicitly discarded: no party needs it
         // for this direction. The record's credential stays valid-but-unheld
         // under the normal rotation lifecycle.
-        RelayResponse::NewPeer { psk: _, .. } => Ok(()),
+        RelayResponse::NewPeer { .. } => Ok(()),
         RelayResponse::Error { error } if error.code == "validation_principal_exists" => Ok(()),
         RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
         _ => Err(unexpected_link_response()),
