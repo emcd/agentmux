@@ -158,8 +158,11 @@ pub(super) struct SendParams {
     /// Message body to route to targets.
     pub(super) message: String,
     /// Explicit target recipients as principal ids (one or many). Each is a
-    /// bare id resolved within the associated bundle, or a fully-qualified
-    /// `<id>@<namespace>` for a cross-namespace peer.
+    /// bare id resolved within the associated bundle, a fully-qualified
+    /// `<id>@<namespace>` for a cross-namespace peer, or a relay-qualified
+    /// `<id>@<namespace>!<relay>` for a cross-relay peer (e.g.
+    /// `qa-partner@agentmux!rnd-qa`), where `<relay>` is a configured outbound
+    /// peer alias from `list.relays`.
     #[serde(default)]
     pub(super) targets: Vec<String>,
     /// Broadcast to all known sessions for the bundle.
@@ -176,8 +179,10 @@ pub(super) struct SendParams {
 pub(super) struct LookParams {
     /// Principal id to inspect: a bare id resolves within the associated
     /// bundle, or a fully-qualified `<id>@<namespace>` targets a cross-namespace
-    /// peer. Routing context is inferred from the `@<namespace>` suffix; no
-    /// explicit namespace parameter is accepted.
+    /// peer. Relay-qualified `<id>@<namespace>!<relay>` targets are recognized
+    /// but not supported for inspection and are rejected as
+    /// `runtime_cross_relay_unsupported`. Routing context is inferred from the
+    /// `@<namespace>` suffix; no explicit namespace parameter is accepted.
     pub(super) target_session: String,
     /// Optional snapshot window size: tmux pane lines, or ACP replay entries.
     #[serde(default)]
@@ -425,8 +430,10 @@ pub(super) struct LinkPeerArgs {
 #[schemars(deny_unknown_fields)]
 pub(super) struct RawwParams {
     /// Principal id to write to: a bare id resolved within the associated
-    /// bundle, or a fully-qualified `<id>@<namespace>` for a cross-namespace
-    /// peer.
+    /// bundle, a fully-qualified `<id>@<namespace>` for a cross-namespace
+    /// peer, or a relay-qualified `<id>@<namespace>!<relay>` for a cross-relay
+    /// peer (e.g. `qa-partner@agentmux!rnd-qa`), where `<relay>` is a
+    /// configured outbound peer alias from `list.relays`.
     pub(super) target_session: String,
     /// Raw text content written directly to the target's input, bypassing
     /// normal chat/message semantics.

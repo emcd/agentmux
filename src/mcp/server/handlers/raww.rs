@@ -20,7 +20,7 @@ use crate::mcp::validation::{qualify_target, validate_raww_request};
 impl McpServer {
     #[tool(
         name = "raww",
-        description = "Write raw text directly to one target session's input, bypassing normal chat/message semantics; use with care. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer."
+        description = "Write raw text directly to one target session's input, bypassing normal chat/message semantics; use with care. Target is a bare id in the associated bundle, a fully-qualified id@namespace peer, or a relay-qualified id@namespace!relay peer (e.g. qa-partner@agentmux!rnd-qa)."
     )]
     async fn tool_raww(
         &self,
