@@ -1,9 +1,9 @@
 ## 1. Confinement helper
 
-- [ ] 1.1 Add a shared no-follow traversal helper for state-root-owned credential writes (per-component walk, `validation_invalid_credential_path` naming the component, owner-only modes on created directories, retained dirfds anchored at the state root for all post-staging operations).
-- [ ] 1.2 Route the credential sink's directory creation, permission changes, temp creation, rename, and cleanup through the helper for both `new peer` and `change psk`, plus the peer-slot install's directory creation, file opens, temp creation, rename, and cleanup.
-- [ ] 1.3 Route `PrincipalStore` load and persist through the helper (mandatory). Verification: existing concurrency suite passes unchanged, fault-injection paths (`.fault-pre-rename`, `.fault-dir-sync`) exercise the same error paths, on-disk shape after `persist` is byte-identical to today.
-- [ ] 1.4 Keep `Path` destinations on final-target symlink check only (no ancestor traversal, no creation).
+- [x] 1.1 Add a shared no-follow traversal helper for state-root-owned credential writes (per-component walk, `validation_invalid_credential_path` naming the component, owner-only modes on created directories, retained dirfds anchored at the state root for all post-staging operations).
+- [x] 1.2 Route the credential sink's directory creation, permission changes, temp creation, rename, and cleanup through the helper for both `new peer` and `change psk`, plus the peer-slot install's directory creation, file opens, temp creation, rename, and cleanup.
+- [x] 1.3 Route `PrincipalStore` load and persist through the helper (mandatory). Verification: existing concurrency suite passes unchanged, fault-injection paths (`.fault-pre-rename`, `.fault-dir-sync`) exercise the same error paths, on-disk shape after `persist` is byte-identical to today.
+- [x] 1.4 Keep `Path` destinations on final-target symlink check only (no ancestor traversal, no creation).
 
 ## 2. Peer-link protocol
 

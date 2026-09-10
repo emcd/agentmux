@@ -11,7 +11,6 @@ use serde_json::json;
 
 use crate::configuration::ConfigurationRoots;
 use crate::relay::RelayError;
-use crate::runtime::paths::principal_store_path;
 
 use super::super::constants::RELAY_NAMESPACE;
 use super::super::identity::{PrincipalStore, PrincipalType};
@@ -109,7 +108,7 @@ pub fn validate_peer_aliases(
     if peers.is_empty() {
         return Ok(());
     }
-    let store = PrincipalStore::load(principal_store_path(state_root))?;
+    let store = PrincipalStore::load(state_root)?;
     for peer in peers {
         let principal_id = format!("{}@{RELAY_NAMESPACE}", peer.alias);
         let Some(record) = store.find_by_principal_id(principal_id.as_str()) else {

@@ -3,7 +3,6 @@ use std::{
     fs, io,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
 };
 
 use base64::Engine;
@@ -15,9 +14,15 @@ use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::runtime::paths::{is_valid_bundle_name, session_identity_psk_path};
+use crate::runtime::paths::{
+    is_valid_bundle_name, principal_store_path, session_identity_psk_path,
+};
 
-use super::{CredentialDestination, GLOBAL_SESSION_SUFFIX, RelayError, relay_error};
+use super::{
+    CredentialDestination, GLOBAL_SESSION_SUFFIX, RelayError,
+    confined::{CONFINED_FILE_MODE, ConfineError, ConfinedWrite, confined_read, confined_stage},
+    relay_error,
+};
 
 pub(crate) use super::peer_scope::{
     is_wildcard_scope, live_peer_ingress, parse_peer_scope, peer_scope_covers_namespace,
@@ -25,48 +30,11 @@ pub(crate) use super::peer_scope::{
 };
 
 const PSK_BYTE_LENGTH: usize = 32;
-const PRINCIPAL_FILE_MODE: u32 = 0o600;
 const PRINCIPAL_STORE_FORMAT_VERSION: u32 = 1;
 /// Upper bound on a `config`-destination session-id component, mirroring
 /// `configuration::SESSION_ID_LENGTH_MAX` (kept in sync manually since that
 /// constant is crate-private to the configuration module).
 const CONFIG_SESSION_ID_LENGTH_MAX: usize = 31;
-
-/// Process-unique nonce source for temp-file names, so a staged store or
-/// credential temp never collides with a concurrent or stale artifact.
-static TEMP_FILE_NONCE: AtomicU64 = AtomicU64::new(0);
-
-/// Builds a per-attempt-unique sibling temp path for `final_path`. Combining the
-/// pid with a monotonic nonce keeps two concurrent writers (and any stale
-/// crash-left artifact) from ever selecting the same temp name, so a
-/// `create_new` open can safely refuse a pre-existing file.
-fn unique_temp_path(final_path: &Path, tag: &str) -> PathBuf {
-    let nonce = TEMP_FILE_NONCE.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id();
-    let mut name = final_path.file_name().unwrap_or_default().to_os_string();
-    name.push(format!(".{pid}.{nonce}.{tag}.tmp"));
-    final_path.with_file_name(name)
-}
-
-/// Syncs a parent directory so a just-renamed store file is durable before the
-/// caller acknowledges success. Opening the directory read-only and syncing it
-/// persists the rename itself, not just file contents.
-///
-/// Test fault-injection seam: the presence of a `.fault-dir-sync` file in the
-/// directory forces a sync failure, so fault-controlled tests can assert the
-/// post-rename durability-uncertain contract deterministically through the
-/// genuine sync-error mapping (rather than a synthesized error code). The
-/// seam is active in every build profile so release-profile test runs inject
-/// identically; it requires write access to the identity directory, which
-/// already confers the ability to corrupt the store outright, so it grants no
-/// new privilege.
-fn sync_parent_directory(dir: &Path) -> io::Result<()> {
-    if dir.join(".fault-dir-sync").exists() {
-        return Err(io::Error::other("injected fault: .fault-dir-sync present"));
-    }
-    let file = fs::File::open(dir)?;
-    file.sync_all()
-}
 
 /// Returns the canonical `session@namespace` identity for a session id.
 ///
@@ -161,10 +129,12 @@ impl PrincipalRecord {
 /// Relay-level principal store backed by `<state-root>/identity/principals.json`.
 ///
 /// Loads at relay startup; writes are performed atomically with restrictive
-/// mode (0600) on every mutation.
+/// mode (0600) on every mutation. Both load and persist traverse the state
+/// root without following symlinks (see [`confined`]).
 #[derive(Clone, Debug, Default)]
 pub(crate) struct PrincipalStore {
     path: PathBuf,
+    state_root: PathBuf,
     records_by_hash: HashMap<String, PrincipalRecord>,
 }
 
@@ -176,18 +146,41 @@ struct StoreEnvelope {
 }
 
 impl PrincipalStore {
-    /// Loads the principal store at `path`, returning an empty store when the
-    /// file does not yet exist.
-    pub(crate) fn load(path: PathBuf) -> Result<Self, RelayError> {
-        let raw = match fs::read_to_string(&path) {
-            Ok(content) => content,
-            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+    /// Loads the principal store under `state_root`, returning an empty store
+    /// when the file does not yet exist. A symlinked ancestor aborts with
+    /// `validation_invalid_credential_path` instead of reading outside the
+    /// state tree.
+    pub(crate) fn load(state_root: &Path) -> Result<Self, RelayError> {
+        let path = principal_store_path(state_root);
+        let relative = store_relative_path(state_root, &path);
+        let raw = match confined_read(state_root, relative) {
+            Ok(Some(bytes)) => String::from_utf8(bytes).map_err(|source| {
+                relay_error(
+                    "internal_principal_store",
+                    "failed to read principal store",
+                    Some(json!({
+                        "path": path.display().to_string(),
+                        "cause": source.to_string(),
+                    })),
+                )
+            })?,
+            Ok(None) => {
                 return Ok(Self {
                     path,
+                    state_root: state_root.to_path_buf(),
                     records_by_hash: HashMap::new(),
                 });
             }
-            Err(source) => {
+            Err(ConfineError::Symlink { component }) => {
+                return Err(invalid_credential_path(
+                    component.as_str(),
+                    "principal store ancestor is a symlink",
+                ));
+            }
+            Err(other) => {
+                let source = other
+                    .io_source()
+                    .unwrap_or_else(|| io::Error::other("confined store read failed"));
                 return Err(relay_error(
                     "internal_principal_store",
                     "failed to read principal store",
@@ -237,6 +230,7 @@ impl PrincipalStore {
         }
         Ok(Self {
             path,
+            state_root: state_root.to_path_buf(),
             records_by_hash,
         })
     }
@@ -304,11 +298,9 @@ impl PrincipalStore {
     /// post-rename directory-sync failure reports
     /// `internal_store_durability_uncertain`: publication already occurred, so
     /// callers must not claim the old store remains durable or effective.
+    /// Every step traverses the state root without following symlinks; a
+    /// symlinked ancestor aborts with `validation_invalid_credential_path`.
     pub(crate) fn persist(&self) -> Result<(), RelayError> {
-        if let Some(parent) = self.path.parent() {
-            fs::create_dir_all(parent).map_err(|source| self.io_error("create parent", source))?;
-            let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
-        }
         let envelope = StoreEnvelope {
             format_version: PRINCIPAL_STORE_FORMAT_VERSION,
             principals: self.records_by_hash.values().cloned().collect(),
@@ -323,58 +315,28 @@ impl PrincipalStore {
                 })),
             )
         })?;
-        // Stage into a per-attempt-unique sibling (`create_new`, so a stale or
-        // concurrent temp can never be reused) and enforce mode BEFORE the
+        // Stage into a per-attempt-unique sibling and enforce mode BEFORE the
         // rename. A failure before publication leaves the old store intact.
-        let tmp_path = unique_temp_path(&self.path, "store");
-        {
-            let mut options = fs::OpenOptions::new();
-            options
-                .create_new(true)
-                .write(true)
-                .mode(PRINCIPAL_FILE_MODE);
-            let mut file = options
-                .open(&tmp_path)
-                .map_err(|source| self.io_error("open temp", source))?;
-            if let Err(source) =
-                io::Write::write_all(&mut file, &serialized).and_then(|()| file.sync_all())
-            {
-                let _ = fs::remove_file(&tmp_path);
-                return Err(self.io_error("write temp", source));
-            }
-        }
-        if let Err(source) =
-            fs::set_permissions(&tmp_path, fs::Permissions::from_mode(PRINCIPAL_FILE_MODE))
-        {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(self.io_error("set mode 0600", source));
-        }
-        // Test fault-injection seam for the pre-rename path (same rationale
-        // and privilege argument as `.fault-dir-sync`): the presence of a
-        // `.fault-pre-rename` file beside the store fails the persist after
-        // staging but before the rename publication point, so tests can
-        // assert the old-record-intact contract deterministically.
-        if let Some(parent) = self.path.parent()
-            && parent.join(".fault-pre-rename").exists()
-        {
-            let _ = fs::remove_file(&tmp_path);
-            return Err(self.io_error(
-                "stage store",
-                io::Error::other("injected fault: .fault-pre-rename present"),
-            ));
-        }
+        let relative = store_relative_path(&self.state_root, &self.path);
+        let staged = confined_stage(&self.state_root, relative, serialized.as_slice(), "store")
+            .map_err(|error| match error {
+                ConfineError::Symlink { component } => invalid_credential_path(
+                    component.as_str(),
+                    "principal store ancestor is a symlink",
+                ),
+                ConfineError::DirSync { .. } => self.io_error(
+                    "stage store",
+                    io::Error::other("unexpected directory sync during staging"),
+                ),
+                ConfineError::Io { source } => self.io_error("stage store", source),
+            })?;
         // Commit point: the rename publishes the replacement.
-        fs::rename(&tmp_path, &self.path).map_err(|source| {
-            let _ = fs::remove_file(&tmp_path);
-            self.io_error("rename store", source)
-        })?;
-        // Durable completion: sync the parent directory before acknowledging
-        // success. Failure here means the replacement is published but host-crash
-        // durability is uncertain.
-        if let Some(parent) = self.path.parent()
-            && let Err(source) = sync_parent_directory(parent)
-        {
-            return Err(relay_error(
+        staged.commit().map(|_| ()).map_err(|error| match error {
+            ConfineError::Symlink { component } => invalid_credential_path(
+                component.as_str(),
+                "principal store ancestor is a symlink",
+            ),
+            ConfineError::DirSync { source } => relay_error(
                 "internal_store_durability_uncertain",
                 "principal store published but parent-directory sync failed; durability is uncertain",
                 Some(json!({
@@ -382,9 +344,9 @@ impl PrincipalStore {
                     "context": "sync parent",
                     "cause": source.to_string(),
                 })),
-            ));
-        }
-        Ok(())
+            ),
+            ConfineError::Io { source } => self.io_error("rename store", source),
+        })
     }
 
     fn io_error(&self, context: &str, source: io::Error) -> RelayError {
@@ -425,9 +387,17 @@ pub(crate) enum StagedCredentialSink {
 /// publishes it. The write lands before the store commit; the rename runs after
 /// it, so a store failure discards the staged file and leaves the prior
 /// credential (if any) intact.
-pub(crate) struct PendingCredentialWrite {
-    tmp_path: PathBuf,
-    final_path: PathBuf,
+pub(crate) enum PendingCredentialWrite {
+    /// Caller-named `path` sink: temp sibling addressed by pathname. Ancestor
+    /// traversal is unchecked (the parents pre-exist outside the trust
+    /// anchor); only the final target carries the symlink refusal.
+    Direct {
+        tmp_path: PathBuf,
+        final_path: PathBuf,
+    },
+    /// Relay-owned sink: staged through confined traversal, published
+    /// relative to retained directory handles.
+    Confined(ConfinedWrite),
 }
 
 impl PendingCredentialWrite {
@@ -435,25 +405,64 @@ impl PendingCredentialWrite {
     ///
     /// The temp file's mode is enforced at staging time (before this call), so
     /// the rename is the single, last fallible step — no post-publication work
-    /// can report an error after the credential is already in place.
+    /// can report an error after the credential is already in place, except
+    /// the confined directory sync, which reports durability uncertainty
+    /// without rolling back.
     pub(crate) fn commit(self) -> Result<String, RelayError> {
-        fs::rename(&self.tmp_path, &self.final_path).map_err(|source| {
-            let _ = fs::remove_file(&self.tmp_path);
-            relay_error(
-                "internal_credential_write",
-                "failed to finalize credential file",
-                Some(json!({
-                    "path": self.final_path.display().to_string(),
-                    "cause": source.to_string(),
-                })),
-            )
-        })?;
-        Ok(self.final_path.display().to_string())
+        match self {
+            Self::Direct {
+                tmp_path,
+                final_path,
+            } => {
+                fs::rename(&tmp_path, &final_path).map_err(|source| {
+                    let _ = fs::remove_file(&tmp_path);
+                    relay_error(
+                        "internal_credential_write",
+                        "failed to finalize credential file",
+                        Some(json!({
+                            "path": final_path.display().to_string(),
+                            "cause": source.to_string(),
+                        })),
+                    )
+                })?;
+                Ok(final_path.display().to_string())
+            }
+            Self::Confined(staged) => {
+                let display = staged.display_path().to_string();
+                staged.commit().map_err(|error| match error {
+                    ConfineError::Symlink { component } => invalid_credential_path(
+                        component.as_str(),
+                        "credential ancestor is a symlink",
+                    ),
+                    ConfineError::DirSync { source } => relay_error(
+                        "internal_credential_write",
+                        "credential file published but parent-directory sync failed; durability is uncertain",
+                        Some(json!({
+                            "path": display,
+                            "cause": source.to_string(),
+                        })),
+                    ),
+                    ConfineError::Io { source } => relay_error(
+                        "internal_credential_write",
+                        "failed to finalize credential file",
+                        Some(json!({
+                            "path": display,
+                            "cause": source.to_string(),
+                        })),
+                    ),
+                })
+            }
+        }
     }
 
     /// Discards the staged temp file without publishing it.
     pub(crate) fn abort(self) {
-        let _ = fs::remove_file(&self.tmp_path);
+        match self {
+            Self::Direct { tmp_path, .. } => {
+                let _ = fs::remove_file(&tmp_path);
+            }
+            Self::Confined(staged) => staged.abort(),
+        }
     }
 }
 
@@ -487,10 +496,13 @@ pub(crate) fn stage_credential_sink(
 
 /// Writes `psk` to the sink's temp sibling (0600, `O_NOFOLLOW`, fsync), creating
 /// parent directories only for relay-owned config paths. Returns `None` for the
-/// response sink (nothing to publish).
+/// response sink (nothing to publish). Relay-owned sinks stage through
+/// confined traversal anchored at `state_root`; caller-named sinks keep the
+/// pathname flow with the final-target symlink check only.
 pub(crate) fn write_pending_credential(
     sink: &StagedCredentialSink,
     psk: &str,
+    state_root: &Path,
 ) -> Result<Option<PendingCredentialWrite>, RelayError> {
     let StagedCredentialSink::File {
         path,
@@ -499,28 +511,43 @@ pub(crate) fn write_pending_credential(
     else {
         return Ok(None);
     };
-    if *create_parents && let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|source| {
-            relay_error(
-                "internal_credential_write",
-                "failed to create credential directory",
-                Some(json!({
-                    "path": parent.display().to_string(),
-                    "cause": source.to_string(),
-                })),
-            )
-        })?;
-        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
+    if *create_parents {
+        let relative = store_relative_path(state_root, path);
+        let staged =
+            confined_stage(state_root, relative, psk.as_bytes(), "cred").map_err(|error| {
+                match error {
+                    ConfineError::Symlink { component } => invalid_credential_path(
+                        component.as_str(),
+                        "credential ancestor is a symlink",
+                    ),
+                    ConfineError::DirSync { .. } => relay_error(
+                        "internal_credential_write",
+                        "unexpected directory sync during staging",
+                        Some(json!({
+                            "path": path.display().to_string(),
+                        })),
+                    ),
+                    ConfineError::Io { source } => relay_error(
+                        "internal_credential_write",
+                        "failed to stage credential file",
+                        Some(json!({
+                            "path": path.display().to_string(),
+                            "cause": source.to_string(),
+                        })),
+                    ),
+                }
+            })?;
+        return Ok(Some(PendingCredentialWrite::Confined(staged)));
     }
     // `create_new` (O_EXCL) guarantees we materialize a fresh 0600 file rather
     // than truncating a stale sibling whose looser permissions would briefly
     // hold the raw PSK; `O_NOFOLLOW` refuses a symlinked temp.
-    let tmp_path = unique_temp_path(path, "cred");
+    let tmp_path = crate::relay::confined::unique_temp_path(path, "cred");
     let mut options = fs::OpenOptions::new();
     options
         .create_new(true)
         .write(true)
-        .mode(PRINCIPAL_FILE_MODE)
+        .mode(CONFINED_FILE_MODE)
         .custom_flags(libc::O_NOFOLLOW);
     let file = options.open(&tmp_path).map_err(|source| {
         relay_error(
@@ -535,7 +562,7 @@ pub(crate) fn write_pending_credential(
     // Enforce exactly 0600 before the secret is written, then publish via the
     // rename commit point, so no fallible permission step follows publication.
     if let Err(source) =
-        fs::set_permissions(&tmp_path, fs::Permissions::from_mode(PRINCIPAL_FILE_MODE))
+        fs::set_permissions(&tmp_path, fs::Permissions::from_mode(CONFINED_FILE_MODE))
     {
         let _ = fs::remove_file(&tmp_path);
         return Err(relay_error(
@@ -561,7 +588,7 @@ pub(crate) fn write_pending_credential(
             })),
         ));
     }
-    Ok(Some(PendingCredentialWrite {
+    Ok(Some(PendingCredentialWrite::Direct {
         tmp_path,
         final_path: path.clone(),
     }))
@@ -688,6 +715,24 @@ fn invalid_output_path(path: &Path, message: &str) -> RelayError {
         message,
         Some(json!({ "path": path.display().to_string() })),
     )
+}
+
+/// Builds a `validation_invalid_credential_path` rejection naming the
+/// symlinked ancestor component that aborted a state-root-owned write.
+pub(crate) fn invalid_credential_path(component: &str, message: &str) -> RelayError {
+    relay_error(
+        "validation_invalid_credential_path",
+        message,
+        Some(json!({ "component": component })),
+    )
+}
+
+/// Returns the state-root-relative form of a relay-owned path. Relay-owned
+/// paths are constructed below the state root, so stripping always succeeds;
+/// the panic documents that invariant rather than failing open.
+fn store_relative_path<'a>(state_root: &Path, path: &'a Path) -> &'a Path {
+    path.strip_prefix(state_root)
+        .expect("relay-owned store path below the state root")
 }
 
 /// Returns true when a record's `expires_at` is absent-free but at or before

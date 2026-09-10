@@ -10,6 +10,7 @@ mod authorization;
 mod catalog;
 mod client;
 mod configuration;
+mod confined;
 mod connection;
 mod constants;
 mod context;
@@ -625,7 +626,7 @@ pub(in crate::relay) fn dispatch_identity_introspect(
 /// created. Intended to run once at relay startup; per-connection access prunes
 /// in memory, and store mutations persist the pruned set.
 pub fn prune_principal_store(state_root: &Path) -> Result<usize, RelayError> {
-    let mut store = PrincipalStore::load(crate::runtime::paths::principal_store_path(state_root))?;
+    let mut store = PrincipalStore::load(state_root)?;
     let pruned = store.prune_expired(time::OffsetDateTime::now_utc());
     if pruned > 0 {
         store.persist()?;

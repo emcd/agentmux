@@ -1,6 +1,7 @@
-//! Deterministic test hooks for ingress authority/admission ordering.
+//! Deterministic test hooks for ingress authority/admission ordering and
+//! confined-write commit boundaries.
 //!
-//! The single hook here pauses a peer-ingress request after preparation and
+//! The authority hook pauses a peer-ingress request after preparation and
 //! before its final authority resolution, so a test can commit a scope update
 //! mid-flight and assert which grant governs the decision. It exists because
 //! no black-box signal can pause the relay between those two steps: every
@@ -9,6 +10,11 @@
 //! The hook is peer-filtered and inert unless a test arms it: unarmed calls
 //! cost one mutex probe on the ingress path only, and armed gates match a
 //! single peer id, so parallel tests cannot trip each other's gates.
+//!
+//! The commit hook runs a test-installed callback inside a confined commit
+//! between staging and rename publication, so ancestor-exchange tests can
+//! deterministically swap an ancestor for a symlink mid-commit. It is inert
+//! unless armed: unarmed commits cost one mutex probe.
 
 use std::{
     sync::{Mutex, mpsc},
@@ -79,4 +85,51 @@ pub(crate) fn test_authority_gate(peer_principal_id: &str) {
     gate.proceed_rx
         .recv_timeout(Duration::from_secs(30))
         .expect("test authority gate released");
+}
+
+/// A one-shot callback a test installs to run inside a confined commit
+/// between staging and rename publication — e.g. exchanging an ancestor
+/// directory for a symlink — so ancestor-exchange tests are deterministic.
+/// Inert unless armed: unarmed commits cost one mutex probe.
+pub struct ConfinedCommitHook {
+    callback: Box<dyn Fn() + Send + 'static>,
+}
+
+impl ConfinedCommitHook {
+    /// Creates a commit hook running `callback` at the staging/commit
+    /// boundary.
+    pub fn arm(callback: impl Fn() + Send + 'static) -> Self {
+        Self {
+            callback: Box::new(callback),
+        }
+    }
+}
+
+static CONFINED_COMMIT_HOOK: Mutex<Option<ConfinedCommitHook>> = Mutex::new(None);
+
+/// Installs `hook` as the active confined-commit hook, replacing any
+/// previous one. Test-only; call [`disarm_confined_commit_hook`] when done.
+pub fn arm_confined_commit_hook(hook: ConfinedCommitHook) {
+    *CONFINED_COMMIT_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(hook);
+}
+
+/// Removes any installed confined-commit hook.
+pub fn disarm_confined_commit_hook() {
+    *CONFINED_COMMIT_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// Commit-boundary pause point for confined writes, called after staging and
+/// before rename publication. Runs the armed hook, if any, then returns.
+/// Unarmed calls return immediately after one mutex probe.
+pub(crate) fn fire_confined_commit_hook() {
+    let hook = CONFINED_COMMIT_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(hook) = hook.as_ref() {
+        (hook.callback)();
+    }
 }

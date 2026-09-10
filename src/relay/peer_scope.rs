@@ -12,7 +12,7 @@ use serde_json::json;
 use subtle::ConstantTimeEq;
 use time::OffsetDateTime;
 
-use crate::runtime::paths::{is_valid_bundle_name, principal_store_path};
+use crate::runtime::paths::is_valid_bundle_name;
 
 use super::context::PeerIngressAuthority;
 use super::identity::{PrincipalStore, PrincipalType, split_principal_id};
@@ -169,7 +169,7 @@ pub(crate) fn resolve_peer_ingress_scope(
     credential_hash: Option<&str>,
 ) -> Option<String> {
     let presented = credential_hash?;
-    let store = PrincipalStore::load(principal_store_path(state_root)).ok()?;
+    let store = PrincipalStore::load(state_root).ok()?;
     let record = store.find_by_principal_id(peer_principal_id)?;
     if record.principal_type != PrincipalType::Relay {
         return None;
@@ -277,7 +277,7 @@ mod tests {
             std::env::temp_dir().join(format!("agentmux-peer-scope-test-{}", std::process::id()));
         let token = "binding-probe-psk";
         let hash = hash_token_sha256(token);
-        let mut store = PrincipalStore::load(principal_store_path(&state_root)).unwrap();
+        let mut store = PrincipalStore::load(&state_root).unwrap();
         store.insert(PrincipalRecord {
             principal_id: "probe@RELAY".to_string(),
             principal_type: PrincipalType::Relay,

@@ -28,7 +28,6 @@ use crate::{
         load_tui_configuration,
     },
     relay::{errors::relay_error, identity::canonical_session_id},
-    runtime::paths::principal_store_path,
 };
 
 /// Reconstructs the full `<id>@<namespace>` principal_id of the requester from
@@ -177,7 +176,7 @@ pub(super) fn resolve_hello_binding(
             })),
         ));
     }
-    let store = PrincipalStore::load(principal_store_path(state_root))?;
+    let store = PrincipalStore::load(state_root)?;
     // Expiry is enforced inside `verify_hello_credential` (against `now`) rather
     // than by pruning the store first: an expired-but-recognized credential is
     // rejected with the distinct `runtime_identity_expired` error and its
