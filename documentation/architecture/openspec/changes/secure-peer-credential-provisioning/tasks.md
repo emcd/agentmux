@@ -26,5 +26,5 @@
 ## 4. Verification and review
 
 - [x] 4.1 Run the full test suite, clippy, fmt, and `openspec validate --all --strict`.
-- [ ] 4.2 Confirm `new peer` / `change psk` Config semantics remain session-only (no widening).
-- [ ] 4.3 Confirm `agentmux:issues/relay/83` remains untouched (separate documentation work).
+- [x] 4.2 Confirm `new peer` / `change psk` Config semantics remain session-only (no widening).
+- [x] 4.3 Confirm `agentmux:issues/relay/83` remains untouched (separate documentation work).
