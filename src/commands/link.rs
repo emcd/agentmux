@@ -118,20 +118,23 @@ fn link_request(
 
 /// Registers `alias@RELAY` on the destination, returning `Ok(())` whether
 /// the record is fresh or already registered (second-claim tolerance: the
-/// install step verifies the relay type before writing).
+/// install step verifies the relay type before writing). A transport
+/// failure retries once: success means the record was absent and
+/// second-claim means it committed — the error disambiguates.
 fn register_alias_referent(
     destination: &LinkEndpoint,
     alias: &str,
     scope: Option<String>,
 ) -> Result<(), RuntimeError> {
-    let response = link_request(
-        destination,
-        &RelayRequest::NewPeer {
-            principal_id: format!("{alias}@RELAY"),
-            scope,
-            destination: crate::relay::CredentialDestination::Response,
-        },
-    )?;
+    let request = RelayRequest::NewPeer {
+        principal_id: format!("{alias}@RELAY"),
+        scope,
+        destination: crate::relay::CredentialDestination::Response,
+    };
+    let response = match link_request(destination, &request) {
+        Ok(response) => response,
+        Err(_) => link_request(destination, &request)?,
+    };
     match response {
         // The registration mint is explicitly discarded: no party needs it
         // for this direction. The record's credential stays valid-but-unheld
@@ -144,36 +147,74 @@ fn register_alias_referent(
 }
 
 /// Issues (or, for upgrade, rotates) the inbound identity on the issuer,
-/// returning the raw PSK in process memory only.
+/// returning the raw PSK in process memory only. An issuance transport
+/// failure recovers via the rotate-and-install ladder: rotate for a fresh
+/// known PSK, or — when rotation reports an unknown principal, proving the
+/// issuance never committed — issue fresh. A lost issuance PSK is
+/// unknowable, so blind re-issuance is never attempted.
 fn issue_inbound_credential(
     issuer: &LinkEndpoint,
     connect_as: &str,
     scope: Option<String>,
     upgrade: bool,
 ) -> Result<String, RuntimeError> {
-    let request = if upgrade {
-        RelayRequest::ChangePsk {
-            principal_id: format!("{connect_as}@RELAY"),
-            destination: crate::relay::CredentialDestination::Response,
-        }
-    } else {
-        RelayRequest::NewPeer {
-            principal_id: format!("{connect_as}@RELAY"),
-            scope,
-            destination: crate::relay::CredentialDestination::Response,
-        }
+    let principal_id = format!("{connect_as}@RELAY");
+    let issue = || RelayRequest::NewPeer {
+        principal_id: principal_id.clone(),
+        scope: scope.clone(),
+        destination: crate::relay::CredentialDestination::Response,
     };
-    match link_request(issuer, &request)? {
-        RelayResponse::NewPeer { psk: Some(psk), .. } => Ok(psk),
-        RelayResponse::ChangePsk { psk: Some(psk), .. } => Ok(psk),
-        RelayResponse::NewPeer { .. } | RelayResponse::ChangePsk { .. } => {
-            Err(RuntimeError::validation(
+    let rotate = || RelayRequest::ChangePsk {
+        principal_id: principal_id.clone(),
+        destination: crate::relay::CredentialDestination::Response,
+    };
+    if upgrade {
+        return match link_request(issuer, &rotate())? {
+            RelayResponse::ChangePsk { psk: Some(psk), .. } => Ok(psk),
+            RelayResponse::ChangePsk { .. } => Err(RuntimeError::validation(
                 "internal_unexpected_failure",
-                "relay omitted the issued credential".to_string(),
-            ))
+                "relay omitted the rotated credential".to_string(),
+            )),
+            RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
+            _ => Err(unexpected_link_response()),
+        };
+    }
+    match link_request(issuer, &issue()) {
+        Ok(RelayResponse::NewPeer { psk: Some(psk), .. }) => Ok(psk),
+        Ok(RelayResponse::NewPeer { .. }) => Err(RuntimeError::validation(
+            "internal_unexpected_failure",
+            "relay omitted the issued credential".to_string(),
+        )),
+        Ok(RelayResponse::Error { error }) => Err(shared::map_relay_error(error)),
+        Ok(_) => Err(unexpected_link_response()),
+        Err(_) => {
+            // Issuance-unknown: rotate for a known PSK. Unknown-principal
+            // proves the issuance never committed, so issuing fresh is
+            // safe; any other outcome aborts.
+            match link_request(issuer, &rotate()) {
+                Ok(RelayResponse::ChangePsk { psk: Some(psk), .. }) => Ok(psk),
+                Ok(RelayResponse::ChangePsk { .. }) => Err(RuntimeError::validation(
+                    "internal_unexpected_failure",
+                    "relay omitted the rotated credential".to_string(),
+                )),
+                Ok(RelayResponse::Error { error })
+                    if error.code == "validation_unknown_principal" =>
+                {
+                    match link_request(issuer, &issue())? {
+                        RelayResponse::NewPeer { psk: Some(psk), .. } => Ok(psk),
+                        RelayResponse::NewPeer { .. } => Err(RuntimeError::validation(
+                            "internal_unexpected_failure",
+                            "relay omitted the issued credential".to_string(),
+                        )),
+                        RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
+                        _ => Err(unexpected_link_response()),
+                    }
+                }
+                Ok(RelayResponse::Error { error }) => Err(shared::map_relay_error(error)),
+                Ok(_) => Err(unexpected_link_response()),
+                Err(source) => Err(source),
+            }
         }
-        RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
-        _ => Err(unexpected_link_response()),
     }
 }
 
@@ -275,8 +316,11 @@ fn link_paired(
     }))
 }
 
-/// Registers one paired alias referent, retaining the mint. An existing
-/// record aborts the pairing: its mint is unheld and unknowable, so the
+/// Registers one paired alias referent, retaining the mint. A transport
+/// failure retries once: success carries a fresh known mint, while
+/// second-claim proves a committed registration with a lost mint and
+/// recovers by rotating to a known credential. A first-attempt second-claim
+/// aborts instead: the record pre-exists with an unheld credential, so the
 /// pairing cannot proceed — rotate it into a known credential (upgrade)
 /// instead.
 fn register_paired_alias(
@@ -284,20 +328,18 @@ fn register_paired_alias(
     alias: &str,
     scope: Option<String>,
 ) -> Result<String, RuntimeError> {
-    match link_request(
-        endpoint,
-        &RelayRequest::NewPeer {
-            principal_id: format!("{alias}@RELAY"),
-            scope,
-            destination: crate::relay::CredentialDestination::Response,
-        },
-    )? {
-        RelayResponse::NewPeer { psk: Some(psk), .. } => Ok(psk),
-        RelayResponse::NewPeer { .. } => Err(RuntimeError::validation(
+    let request = RelayRequest::NewPeer {
+        principal_id: format!("{alias}@RELAY"),
+        scope,
+        destination: crate::relay::CredentialDestination::Response,
+    };
+    match link_request(endpoint, &request) {
+        Ok(RelayResponse::NewPeer { psk: Some(psk), .. }) => Ok(psk),
+        Ok(RelayResponse::NewPeer { .. }) => Err(RuntimeError::validation(
             "internal_unexpected_failure",
             "relay omitted the issued credential".to_string(),
         )),
-        RelayResponse::Error { error } if error.code == "validation_principal_exists" => {
+        Ok(RelayResponse::Error { error }) if error.code == "validation_principal_exists" => {
             Err(RuntimeError::validation(
                 "validation_principal_exists",
                 format!(
@@ -306,6 +348,43 @@ fn register_paired_alias(
                 ),
             ))
         }
+        Ok(RelayResponse::Error { error }) => Err(shared::map_relay_error(error)),
+        Ok(_) => Err(unexpected_link_response()),
+        Err(_) => match link_request(endpoint, &request) {
+            Ok(RelayResponse::NewPeer { psk: Some(psk), .. }) => Ok(psk),
+            Ok(RelayResponse::NewPeer { .. }) => Err(RuntimeError::validation(
+                "internal_unexpected_failure",
+                "relay omitted the issued credential".to_string(),
+            )),
+            Ok(RelayResponse::Error { error }) if error.code == "validation_principal_exists" => {
+                rotate_to_known_credential(endpoint, alias)
+            }
+            Ok(RelayResponse::Error { error }) => Err(shared::map_relay_error(error)),
+            Ok(_) => Err(unexpected_link_response()),
+            Err(source) => Err(source),
+        },
+    }
+}
+
+/// Rotates an alias record with a lost mint into a known credential for
+/// paired recovery. Blind retry can never recover the lost mint; rotation
+/// yields a fresh known PSK to retain for cross-install.
+fn rotate_to_known_credential(
+    endpoint: &LinkEndpoint,
+    alias: &str,
+) -> Result<String, RuntimeError> {
+    match link_request(
+        endpoint,
+        &RelayRequest::ChangePsk {
+            principal_id: format!("{alias}@RELAY"),
+            destination: crate::relay::CredentialDestination::Response,
+        },
+    )? {
+        RelayResponse::ChangePsk { psk: Some(psk), .. } => Ok(psk),
+        RelayResponse::ChangePsk { .. } => Err(RuntimeError::validation(
+            "internal_unexpected_failure",
+            "relay omitted the rotated credential".to_string(),
+        )),
         RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
         _ => Err(unexpected_link_response()),
     }
