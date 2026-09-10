@@ -162,6 +162,7 @@ async fn tool_catalog_matches_exact_advertised_tool_set() {
             "choose".to_string(),
             "drop".to_string(),
             "help".to_string(),
+            "link".to_string(),
             "list".to_string(),
             "look".to_string(),
             "new".to_string(),

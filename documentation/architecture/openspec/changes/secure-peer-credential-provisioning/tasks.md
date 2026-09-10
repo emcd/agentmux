@@ -11,7 +11,7 @@
 - [x] 2.2 Implement CLI `link peer` one-way mode (register, issue, install; explicit registration-mint discard; second-claim tolerance on registration; halt on issuance failure).
 - [x] 2.3 Implement CLI `link peer` paired mode (declared cross-equality verification before either mint, two alias registrations retaining both mints, cross-installs, zero drops) plus the one-way-to-bidirectional upgrade path (rotate discarded alias credential, install on the peer).
 - [x] 2.4 Implement endpoint selection (two state roots, `<state-root>/relay.sock` derivation, both relays live; entries added after linking) and mode-specific timeout recovery (one-way registration disambiguation, paired rotate-to-known, issuance rotate-or-drop, install same-PSK retry).
-- [ ] 2.5 Implement MCP `link` meta-tool with `command="peer"` mirroring the install contract (explicit secret argument, no logging or persistence of the secret).
+- [x] 2.5 Implement MCP `link` meta-tool with `command="peer"` mirroring the install contract (explicit secret argument, no logging or persistence of the secret).
 
 ## 3. Tests
 

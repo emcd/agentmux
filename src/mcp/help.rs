@@ -5,12 +5,12 @@ use serde_json::json;
 use super::errors::validation_tool_error;
 use super::params::{
     CHANGE_COMMAND_PSK, CHANGE_COMMAND_SCOPE, CHOOSE_OUTCOME_SELECTED, ChangePskArgs,
-    ChangeScopeArgs, ChooseParams, DROP_COMMAND_PEER, DropPeerArgs, HelpParams,
+    ChangeScopeArgs, ChooseParams, DROP_COMMAND_PEER, DropPeerArgs, HelpParams, LINK_COMMAND_PEER,
     LIST_COMMAND_DECISIONS, LIST_COMMAND_NAMESPACES, LIST_COMMAND_PRINCIPALS, LIST_COMMAND_RELAYS,
-    ListArgs, ListDecisionsArgs, ListNamespacesArgs, ListRelaysArgs, LookParams,
+    LinkPeerArgs, ListArgs, ListDecisionsArgs, ListNamespacesArgs, ListRelaysArgs, LookParams,
     NAMESPACE_AGENTMUX, NEW_COMMAND_PEER, NewPeerArgs, RawwParams, SendParams, TOOL_CHANGE,
-    TOOL_CHOOSE, TOOL_DROP, TOOL_HELP, TOOL_LIST, TOOL_LOOK, TOOL_NEW, TOOL_RAWW, TOOL_SEND,
-    TOOL_UPDOWN, UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
+    TOOL_CHOOSE, TOOL_DROP, TOOL_HELP, TOOL_LINK, TOOL_LIST, TOOL_LOOK, TOOL_NEW, TOOL_RAWW,
+    TOOL_SEND, TOOL_UPDOWN, UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
 };
 
 pub(super) fn help_tool(
@@ -23,8 +23,8 @@ pub(super) fn help_tool(
             "namespace": NAMESPACE_AGENTMUX,
             "association": association,
             "shape_hints": [
-                "Call help with query='list', 'updown', 'new', 'change', or 'drop' for meta-tool command lists.",
-                "Call help with query='list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'updown.up', 'updown.down', 'new.peer', 'change.psk', 'change.scope', or 'drop.peer' for command args schemas.",
+                "Call help with query='list', 'updown', 'new', 'change', 'drop', or 'link' for meta-tool command lists.",
+                "Call help with query='list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'updown.up', 'updown.down', 'new.peer', 'change.psk', 'change.scope', 'drop.peer', or 'link.peer' for command args schemas.",
                 "Call help with query='send', 'look', 'raww', or 'choose' for exact tool args schemas."
             ],
             "tools": [
@@ -37,6 +37,7 @@ pub(super) fn help_tool(
                 {"tool": TOOL_NEW, "kind": "meta_tool", "description": "Register a principal credential and mint its PSK."},
                 {"tool": TOOL_CHANGE, "kind": "meta_tool", "description": "Rotate a principal credential or replace a peer relay's ingress scope."},
                 {"tool": TOOL_DROP, "kind": "meta_tool", "description": "Delete a principal credential from the relay principal store."},
+                {"tool": TOOL_LINK, "kind": "meta_tool", "description": "Install a peer credential into the connected relay's relay-owned slot."},
                 {"tool": TOOL_HELP, "kind": "tool", "description": "Return tool/command help and JSON schemas."}
             ],
             "invoke": {
@@ -323,9 +324,39 @@ pub(super) fn help_tool(
                 }
             }),
         )),
+        TOOL_LINK => Ok(json!({
+            "tool": TOOL_LINK,
+            "kind": "meta_tool",
+            "description": "Install a peer credential into the connected relay's relay-owned slot.",
+            "commands": [
+                {
+                    "command": "link.peer",
+                    "description": "Install the PSK the opposite relay issued into this relay's relay-owned peer slot; the PSK travels in request memory only and is never returned, logged, or persisted."
+                }
+            ],
+            "invoke": {
+                "tool": TOOL_LINK,
+                "params": {
+                    "command": LINK_COMMAND_PEER,
+                    "args": {"alias": "<peer-alias>"}
+                }
+            }
+        })),
+        "link.peer" => Ok(command_help(
+            "link.peer",
+            "Install the PSK the opposite relay issued into this relay's relay-owned peer slot; the PSK travels in request memory only and is never returned, logged, or persisted.",
+            json_schema_for::<LinkPeerArgs>(),
+            json!({
+                "tool": TOOL_LINK,
+                "params": {
+                    "command": LINK_COMMAND_PEER,
+                    "args": {"alias": "<peer-alias>"}
+                }
+            }),
+        )),
         _ => Err(validation_tool_error(
             "validation_invalid_params",
-            "unknown help query; try empty query, 'agentmux', 'list', 'list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'send', 'look', 'raww', 'choose', 'updown', 'updown.up', 'updown.down', 'new', 'new.peer', 'change', 'change.psk', 'change.scope', 'drop', or 'drop.peer'",
+            "unknown help query; try empty query, 'agentmux', 'list', 'list.principals', 'list.namespaces', 'list.relays', 'list.decisions', 'send', 'look', 'raww', 'choose', 'updown', 'updown.up', 'updown.down', 'new', 'new.peer', 'change', 'change.psk', 'change.scope', 'drop', 'drop.peer', 'link', or 'link.peer'",
             Some(json!({"query": query})),
         )),
     }

@@ -27,6 +27,8 @@ pub(super) const CHANGE_COMMAND_PSK: &str = "psk";
 pub(super) const CHANGE_COMMAND_SCOPE: &str = "scope";
 pub(super) const TOOL_DROP: &str = "drop";
 pub(super) const DROP_COMMAND_PEER: &str = "peer";
+pub(super) const TOOL_LINK: &str = "link";
+pub(super) const LINK_COMMAND_PEER: &str = "peer";
 pub(super) const LIST_COMMAND_NAMESPACES: &str = "namespaces";
 pub(super) const LIST_COMMAND_RELAYS: &str = "relays";
 pub(super) const NAMESPACE_AGENTMUX: &str = "agentmux";
@@ -62,6 +64,10 @@ fn change_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema 
 }
 
 fn drop_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    command_enum_schema(&["peer"])
+}
+
+fn link_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     command_enum_schema(&["peer"])
 }
 
@@ -375,6 +381,40 @@ pub(super) struct DropPeerArgs {
     #[serde(default)]
     #[schemars(with = "String")]
     pub(super) principal_id: Option<String>,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct LinkParams {
+    /// Link subcommand selector. Required; allowed value: `peer`.
+    #[schemars(schema_with = "link_command_schema")]
+    pub(super) command: String,
+    /// Command-scoped arguments.
+    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
+    #[serde(default)]
+    pub(super) args: Value,
+    /// Unknown fields captured for explicit validation.
+    #[serde(flatten, default)]
+    #[schemars(skip)]
+    pub(super) extra_fields: BTreeMap<String, Value>,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+#[schemars(deny_unknown_fields)]
+pub(super) struct LinkPeerArgs {
+    /// Local peer alias whose relay-owned slot receives the credential.
+    #[serde(default)]
+    #[schemars(with = "String")]
+    pub(super) alias: Option<String>,
+    /// Raw PSK issued by the opposite relay. Travels in request memory
+    /// only; never logged, persisted, or returned.
+    #[serde(default)]
+    #[schemars(with = "String")]
+    pub(super) psk: Option<String>,
     /// Unknown fields captured for explicit validation.
     #[serde(flatten, default)]
     #[schemars(skip)]

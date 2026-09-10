@@ -120,7 +120,8 @@ impl McpServer {
             + Self::tool_router_updown()
             + Self::tool_router_new()
             + Self::tool_router_change()
-            + Self::tool_router_drop();
+            + Self::tool_router_drop()
+            + Self::tool_router_link();
         Self {
             state: Arc::new(McpState {
                 configuration,
