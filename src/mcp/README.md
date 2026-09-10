@@ -145,7 +145,11 @@ when the relay is down, and reachability surfaces per request as
    `qualify_target` helper, filling in the `@<namespace>` suffix the relay
    requires: a target that already carries `@<namespace>` passes through
    verbatim (so a `<session>@<peer-bundle>` target still reaches a peer
-   bundle); a bare target is qualified with the MCP server's bound bundle.
+   bundle, and a relay-qualified `<session>@<bundle>!<alias>` target keeps
+   its `!<alias>` cross-relay selector for `send`/`raww`); a bare target is
+   qualified with the MCP server's bound bundle. `look` recognizes the
+   relay-qualified shape but rejects it as `runtime_cross_relay_unsupported`
+   instead of forwarding.
    Qualification runs only after the step-4 association precheck, so on an
    unassociated server the call is already rejected with
    `validation_unassociated_server` and never reaches qualification.
@@ -418,7 +422,9 @@ when the relay is down, and reachability surfaces per request as
   `operator_session_id`) are rejected as unknown parameters.
 - `send`, `look`, and `raww` qualify a bare target with the MCP server's
   bound bundle via the shared `qualify_target` helper (`send` maps it over
-  its target list as `qualify_send_targets`). Qualification runs after the
+  its target list as `qualify_send_targets`); an already-qualified target —
+  including a relay-qualified `<session>@<bundle>!<alias>` cross-relay
+  address for `send`/`raww` — passes through verbatim. Qualification runs after the
   association precheck, so an unassociated server is already rejected with
   `validation_unassociated_server` (below) before a bare target could reach
   qualification.

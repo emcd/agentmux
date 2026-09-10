@@ -20,7 +20,7 @@ use crate::mcp::validation::{qualify_target, validate_look_request};
 impl McpServer {
     #[tool(
         name = "look",
-        description = "Inspect a target session's latest snapshot: tmux pane lines, or ACP structured replay entries. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer."
+        description = "Inspect a target session's latest snapshot: tmux pane lines, or ACP structured replay entries. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer; relay-qualified id@namespace!relay inspection is not supported."
     )]
     async fn tool_look(
         &self,

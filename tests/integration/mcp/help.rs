@@ -195,6 +195,43 @@ async fn help_send_query_returns_args_schema() {
     assert_eq!(payload["command"], "send");
     assert!(payload["args_schema"]["properties"]["message"].is_object());
     assert!(payload["args_schema"]["properties"]["targets"].is_object());
+    let targets_description = payload["args_schema"]["properties"]["targets"]
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        targets_description.contains("!<relay>")
+            && targets_description.contains("qa-partner@agentmux!rnd-qa"),
+        "send targets schema must document relay-qualified syntax: {targets_description:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn help_look_query_documents_relay_qualified_limitation() {
+    let runtime = TestRuntime::create();
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness.call_tool(2, "help", help_call(Some("look"))).await;
+    let payload = decode_tool_payload(&response);
+
+    assert_eq!(payload["command"], "look");
+    assert!(payload["args_schema"]["properties"]["target_session"].is_object());
+    let target_description = payload["args_schema"]["properties"]["target_session"]
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        target_description.contains("!<relay>")
+            && target_description.contains("runtime_cross_relay_unsupported"),
+        "look target schema must document the relay-qualified limitation: {target_description:?}"
+    );
+    let description = payload
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        description.contains("!relay"),
+        "look help description must mention relay-qualified targets: {description:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -208,6 +245,23 @@ async fn help_raww_query_returns_args_schema() {
     assert!(payload["args_schema"]["properties"]["target_session"].is_object());
     assert!(payload["args_schema"]["properties"]["text"].is_object());
     assert!(payload["args_schema"]["properties"]["no_enter"].is_object());
+    let target_description = payload["args_schema"]["properties"]["target_session"]
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        target_description.contains("!<relay>")
+            && target_description.contains("qa-partner@agentmux!rnd-qa"),
+        "raww target schema must document relay-qualified syntax: {target_description:?}"
+    );
+    let description = payload
+        .get("description")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    assert!(
+        description.contains("!relay"),
+        "raww help description must mention relay-qualified targets: {description:?}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

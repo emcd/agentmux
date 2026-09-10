@@ -30,8 +30,8 @@ pub(super) fn help_tool(
             "tools": [
                 {"tool": TOOL_LIST, "kind": "meta_tool", "description": "List principals for one namespace or fan out across namespaces."},
                 {"tool": TOOL_SEND, "kind": "tool", "description": "Submit a message to explicit targets or broadcast."},
-                {"tool": TOOL_LOOK, "kind": "tool", "description": "Inspect a target session's latest snapshot: tmux pane lines, or ACP structured replay entries. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer."},
-                {"tool": TOOL_RAWW, "kind": "tool", "description": "Write raw text directly to one target session's input, bypassing normal chat/message semantics; use with care. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer."},
+                {"tool": TOOL_LOOK, "kind": "tool", "description": "Inspect a target session's latest snapshot: tmux pane lines, or ACP structured replay entries. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer; relay-qualified id@namespace!relay inspection is not supported."},
+                {"tool": TOOL_RAWW, "kind": "tool", "description": "Write raw text directly to one target session's input, bypassing normal chat/message semantics; use with care. Target is a bare id in the associated bundle, a fully-qualified id@namespace peer, or a relay-qualified id@namespace!relay peer (e.g. qa-partner@agentmux!rnd-qa)."},
                 {"tool": TOOL_CHOOSE, "kind": "tool", "description": "Submit an ACP-native decision on a pending choice request."},
                 {"tool": TOOL_UPDOWN, "kind": "meta_tool", "description": "Administer the associated bundle's runtime state (up=host, down=unhost)."},
                 {"tool": TOOL_NEW, "kind": "meta_tool", "description": "Register a principal credential and mint its PSK."},
@@ -134,7 +134,7 @@ pub(super) fn help_tool(
         )),
         TOOL_LOOK => Ok(command_help(
             TOOL_LOOK,
-            "Inspect a target session's latest snapshot: tmux pane lines, or ACP structured replay entries. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer.",
+            "Inspect a target session's latest snapshot: tmux pane lines, or ACP structured replay entries. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer; relay-qualified id@namespace!relay inspection is not supported.",
             json_schema_for::<LookParams>(),
             json!({
                 "tool": TOOL_LOOK,
@@ -143,7 +143,7 @@ pub(super) fn help_tool(
         )),
         TOOL_RAWW => Ok(command_help(
             TOOL_RAWW,
-            "Write raw text directly to one target session's input, bypassing normal chat/message semantics; use with care. Target is a bare id in the associated bundle or a fully-qualified id@namespace peer.",
+            "Write raw text directly to one target session's input, bypassing normal chat/message semantics; use with care. Target is a bare id in the associated bundle, a fully-qualified id@namespace peer, or a relay-qualified id@namespace!relay peer (e.g. qa-partner@agentmux!rnd-qa).",
             json_schema_for::<RawwParams>(),
             json!({
                 "tool": TOOL_RAWW,
