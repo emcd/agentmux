@@ -2,6 +2,7 @@ mod choices;
 mod credential_admin;
 mod help;
 pub(crate) mod helpers;
+mod link;
 mod list;
 mod look;
 mod raww;

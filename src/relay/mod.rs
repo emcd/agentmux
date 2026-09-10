@@ -10,6 +10,7 @@ mod authorization;
 mod catalog;
 mod client;
 mod configuration;
+mod confined;
 mod connection;
 mod constants;
 mod context;
@@ -565,7 +566,7 @@ pub(in crate::relay) fn dispatch_discovery(
 }
 
 /// Dispatches a relay-wide identity administration request (`new peer`,
-/// `change psk`), which mutates the relay-level principal store and has no
+/// `change psk`, peer credential install), which mutates the relay-level principal store and has no
 /// bundle context. `requester_principal_id` is the full claimed identity of the
 /// caller, used to resolve operator authorization relay-wide.
 pub(in crate::relay) fn dispatch_identity_admin(
@@ -625,7 +626,7 @@ pub(in crate::relay) fn dispatch_identity_introspect(
 /// created. Intended to run once at relay startup; per-connection access prunes
 /// in memory, and store mutations persist the pruned set.
 pub fn prune_principal_store(state_root: &Path) -> Result<usize, RelayError> {
-    let mut store = PrincipalStore::load(crate::runtime::paths::principal_store_path(state_root))?;
+    let mut store = PrincipalStore::load(state_root)?;
     let pruned = store.prune_expired(time::OffsetDateTime::now_utc());
     if pruned > 0 {
         store.persist()?;

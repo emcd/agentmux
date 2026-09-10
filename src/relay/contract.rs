@@ -442,6 +442,14 @@ pub enum RelayRequest {
         #[serde(default)]
         destination: CredentialDestination,
     },
+    /// Install a peer credential into this relay's relay-owned peer slot.
+    /// Carries the raw PSK issued by the opposite relay; the relay writes it
+    /// to `peers/<alias>.psk` and never returns it. Requires
+    /// `<alias>@RELAY` registered as a relay principal (the alias referent).
+    InstallPeerCredential {
+        alias: String,
+        psk: String,
+    },
     ChangeScope {
         principal_id: String,
         scope: String,
@@ -593,6 +601,14 @@ pub enum RelayResponse {
         /// and `config` credential destinations.
         #[serde(skip_serializing_if = "Option::is_none")]
         written_path: Option<String>,
+    },
+    InstallPeerCredential {
+        schema_version: String,
+        /// Local peer alias whose slot received the credential.
+        alias: String,
+        /// Absolute path the PSK was written to. The raw PSK never appears
+        /// in this response.
+        written_path: String,
     },
     ChangeScope {
         schema_version: String,

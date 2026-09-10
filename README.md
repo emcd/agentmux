@@ -214,13 +214,14 @@ now:
   operator-controlled mechanism to force a stale or compromised session off a
   claimed identity ahead of its own reconnect.
 - **Credential configuration writes can follow symlinked ancestor
-  directories.** `new peer --write-config` and `change psk --write-config`
-  derive their destination beneath the state root, and the final write uses
-  `O_NOFOLLOW`, but the directory-creation, permission-change, and rename
-  steps leading up to it still follow symlinks in the ancestor path. A
-  symlink placed beneath the state tree can redirect a credential write
-  outside it. Avoid symlinks beneath your configured state root until this
-  is fixed.
+  directories.** Fixed in the 0.10.0 peer-credential-provisioning change:
+  every state-root-owned credential write (credential sinks, peer-slot
+  installation, principal-store load/persist) now traverses path components
+  without following symlinks and publishes relative to retained directory
+  handles, aborting with `validation_invalid_credential_path` on a symlinked
+  ancestor. Caller-named `--output` paths keep the final-target symlink
+  check only. Avoid symlinks beneath your configured state root regardless:
+  they are now rejected loudly instead of followed silently.
 
 These are prioritized for the 0.10.0 release.
 

@@ -27,7 +27,7 @@ use crate::relay::{
     CredentialDestination, RelayDiagnostic, RelayError, RelayResponse, SCHEMA_VERSION, relay_error,
 };
 use crate::runtime::inscriptions::emit_inscription;
-use crate::runtime::paths::{peer_relay_psk_path, principal_store_path, session_identity_psk_path};
+use crate::runtime::paths::{peer_relay_psk_path, session_identity_psk_path};
 
 /// Inputs for a `new peer` registration.
 pub(in crate::relay) struct NewPeerRequestContext {
@@ -62,7 +62,7 @@ pub(in crate::relay) fn handle_new_peer(
     } else {
         context.scope.clone()
     };
-    let mut store = PrincipalStore::load(principal_store_path(state_root))?;
+    let mut store = PrincipalStore::load(state_root)?;
     store.prune_expired(OffsetDateTime::now_utc());
     if store
         .find_by_principal_id(context.principal_id.as_str())
@@ -82,7 +82,7 @@ pub(in crate::relay) fn handle_new_peer(
     )?;
     let psk = generate_psk();
     let credential_hash = hash_token_sha256(psk.as_str());
-    let pending = write_pending_credential(&sink, psk.as_str())?;
+    let pending = write_pending_credential(&sink, psk.as_str(), state_root)?;
     store.insert(PrincipalRecord {
         principal_id: context.principal_id.clone(),
         principal_type,
@@ -143,6 +143,13 @@ pub(in crate::relay) fn handle_new_peer(
         None => (Some(psk), None),
         Some(pending) => match pending.commit() {
             Ok(path) => (None, Some(path)),
+            Err(error) if is_credential_uncertain(&error) => {
+                // Post-rename directory-sync failure: the file is published
+                // and the store record committed, so both stand. Rolling the
+                // record back would orphan a published credential file with
+                // no record; report the typed uncertainty instead.
+                return Err(error);
+            }
             Err(error) => {
                 // The rename failed after the store commit: remove the record we
                 // just inserted so no principal lingers without a credential
@@ -224,7 +231,7 @@ pub(in crate::relay) fn handle_change_psk(
         RelayActionFamily::Change,
         "psk",
     )?;
-    let mut store = PrincipalStore::load(principal_store_path(state_root))?;
+    let mut store = PrincipalStore::load(state_root)?;
     store.prune_expired(OffsetDateTime::now_utc());
     let Some(existing) = store.find_by_principal_id(principal_id.as_str()).cloned() else {
         return Err(relay_error(
@@ -243,7 +250,7 @@ pub(in crate::relay) fn handle_change_psk(
     )?;
     let psk = generate_psk();
     let credential_hash = hash_token_sha256(psk.as_str());
-    let pending = write_pending_credential(&sink, psk.as_str())?;
+    let pending = write_pending_credential(&sink, psk.as_str(), state_root)?;
     store.remove_by_principal_id(principal_id.as_str());
     store.insert(PrincipalRecord {
         principal_id: principal_id.clone(),
@@ -320,6 +327,25 @@ pub(in crate::relay) fn handle_change_psk(
         None => None,
         Some(pending) => match pending.commit() {
             Ok(path) => Some(path),
+            Err(error) if is_credential_uncertain(&error) => {
+                // Post-rename directory-sync failure: the rotated file is
+                // published and the rotated hash committed, so both stand.
+                // Restoring the prior record would leave the new file
+                // authenticating nothing while the old hash returns. Tear
+                // down sessions holding the superseded credential exactly as
+                // the success path does, then report the typed uncertainty.
+                let (revoked_connections, notified_hosts) =
+                    revoke_superseded_credential(principal_id.as_str(), requester_principal_id);
+                emit_inscription(
+                    "relay.identity.psk_rotated",
+                    &serde_json::json!({
+                        "principal_id": principal_id,
+                        "revoked_connections": revoked_connections,
+                        "notified_hosts": notified_hosts,
+                    }),
+                );
+                return Err(error);
+            }
             Err(error) => {
                 // The rename failed after the store commit: restore the prior
                 // record so the unchanged config file still authenticates, and
@@ -416,7 +442,7 @@ pub(in crate::relay) fn handle_change_scope(
     let canonical = parse_peer_scope(Some(scope.as_str()))?;
     // No expiry pruning here: this operation must not alter unrelated records
     // as a side effect.
-    let mut store = PrincipalStore::load(principal_store_path(state_root))?;
+    let mut store = PrincipalStore::load(state_root)?;
     let Some(existing) = store.find_by_principal_id(principal_id.as_str()).cloned() else {
         return Err(relay_error(
             "validation_unknown_principal",
@@ -521,7 +547,7 @@ pub(in crate::relay) fn handle_drop_peer(
         RelayActionFamily::Drop,
         "peer",
     )?;
-    let mut store = PrincipalStore::load(principal_store_path(state_root))?;
+    let mut store = PrincipalStore::load(state_root)?;
     store.prune_expired(OffsetDateTime::now_utc());
     // Behind the gate: answering this for an unauthorized caller would disclose
     // whether an arbitrary principal exists.
@@ -647,7 +673,7 @@ pub(in crate::relay) fn handle_identity_introspect(
     if !scope_permits(rights.scope.as_deref(), target_session) {
         return Err(introspect_denied(target_session));
     }
-    let store = PrincipalStore::load(principal_store_path(state_root))?;
+    let store = PrincipalStore::load(state_root)?;
     let Some(record) = store.find_by_principal_id(target_session) else {
         return Err(relay_error(
             "validation_unknown_principal",
@@ -692,7 +718,7 @@ pub(in crate::relay) fn build_identity_snapshot_event(
     host_principal_id: &str,
     rights: &IdentityIntrospectRights,
 ) -> Result<RelayStreamEvent, RelayError> {
-    let store = PrincipalStore::load(principal_store_path(state_root))?;
+    let store = PrincipalStore::load(state_root)?;
     let now = OffsetDateTime::now_utc();
     let principals: Vec<Value> = store
         .records()
@@ -744,6 +770,14 @@ fn classify_target_principal(principal_id: &str) -> Result<PrincipalType, RelayE
 /// old record survived.
 fn is_durability_uncertain(error: &RelayError) -> bool {
     error.code == "internal_store_durability_uncertain"
+}
+
+/// True when a credential-sink commit error reports post-rename durability
+/// uncertainty rather than a pre-publication failure. The file is published
+/// and the store record committed, so callers must preserve both instead of
+/// compensating the store.
+fn is_credential_uncertain(error: &RelayError) -> bool {
+    error.code == "internal_credential_durability_uncertain"
 }
 
 /// Tears down live sessions holding a superseded credential and notifies

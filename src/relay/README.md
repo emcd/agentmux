@@ -200,7 +200,10 @@ one directory apart; prefer `control` when the authorization sense is meant.
   - choices snapshot, list, and pick request handlers.
 - `handlers/identity.rs`
   - relay-wide identity administration: `new peer` credential registration,
-    `change psk` rotation, and `drop peer` deletion. Operates on the relay-level
+    `change psk` rotation, and `drop peer` deletion, plus the peer-slot
+    install operation in the sibling `handlers/install.rs` (alias-referent
+    binding, three-way slot-state authorization, confined publication, PSK
+    never returned). Operates on the relay-level
     principal store with no bundle context; dispatched via
     `dispatch_identity_admin` before the per-bundle routing path in
     `connection/requests.rs`, which names each relay-wide admin request
@@ -874,15 +877,24 @@ one directory apart; prefer `control` when the authorization sense is meant.
   fallible step after it; a post-commit rename failure rolls the store change
   back (and surfaces `internal_credential_rollback_failed` if the rollback write
   also fails). Identity-admin store transactions are serialized at relay scope,
-  so concurrent `new peer` / `change psk` / `drop peer` calls cannot interleave
-  store persists and credential renames. All three authorize the requester
-  relay-wide: the caller's policy preset (resolved from a session member's
-  `policy_id` or a `@GLOBAL` operator's TUI-config policy) must grant
-  `new.peer` / `change.psk` / `drop.peer` at the `all` tier — bundle-relative
-  `home` scope is insufficient, and application/relay principals are denied
-  fail-closed. The three controls are distinct: neither `new.peer` nor
-  `change.psk` confers deletion, so a policy file predating the `drop` control
-  permits none until an operator adds it.
+  so concurrent `new peer` / `change psk` / `drop peer` / peer-slot install
+  calls cannot interleave store persists and credential renames. All four
+  authorize the requester relay-wide: the caller's policy preset (resolved
+  from a session member's `policy_id` or a `@GLOBAL` operator's TUI-config
+  policy) must grant `new.peer` / `change.psk` / `drop.peer` at the `all`
+  tier — bundle-relative `home` scope is insufficient, and application/relay
+  principals are denied fail-closed. Install classifies the slot at commit
+  time: absent requires `new.peer`, byte-identical content accepts either
+  control, different content requires `change.psk`. The three controls are
+  distinct: neither `new.peer` nor `change.psk` confers deletion, so a policy
+  file predating the `drop` control permits none until an operator adds it.
+  Every state-root-owned credential write (sink staging, peer-slot
+  installation, store load/persist) traverses path components without
+  following symlinks and publishes relative to retained directory handles
+  anchored at the state root; a symlinked ancestor aborts with
+  `validation_invalid_credential_path`, and an ancestor exchanged for a
+  symlink between staging and commit aborts the same way. Caller-named path
+  sinks keep the final-target symlink check only.
 
 ### Cross-bundle routing and the uniform authorization model
 

@@ -195,6 +195,27 @@ pub fn peer_relay_psk_path(state_root: &Path, peer_alias: &str) -> PathBuf {
         .join(format!("{peer_alias}.psk"))
 }
 
+/// True when `token` is safe to embed in a relay-owned peer path as a peer
+/// alias or bare relay id: non-empty, with no path separator, no identity
+/// qualifier, no bang-path separator, no NUL byte, and no traversal-only
+/// value. One strict grammar shared by the relay, CLI, and MCP surfaces so
+/// malformed tokens fail before any relay contact — mirroring the
+/// authoritative relay.toml peer-id token grammar, so an accepted token is
+/// never rejected later at peer configuration. Safe grammar does not
+/// protect a symlinked ancestor — that is the confined traversal helper's
+/// job — but it keeps a crafted token from escaping its slot directory
+/// lexically.
+#[must_use]
+pub fn is_valid_peer_token(token: &str) -> bool {
+    !token.is_empty()
+        && token != "."
+        && token != ".."
+        && !token.contains('/')
+        && !token.contains('@')
+        && !token.contains('!')
+        && !token.contains('\0')
+}
+
 /// Resolves the principal store path at the relay-level state root.
 ///
 /// Layout: `<state-root>/identity/principals.json`. The store is authoritative

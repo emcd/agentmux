@@ -8,15 +8,16 @@ use crate::{
         CredentialDestination,
         peer_scope::{is_relay_principal_id, parse_peer_scope},
     },
-    runtime::paths::is_valid_bundle_name,
+    runtime::paths::{is_valid_bundle_name, is_valid_peer_token},
 };
 
 use super::errors::validation_tool_error;
 use super::params::{
     CHOOSE_OUTCOME_CANCELLED, CHOOSE_OUTCOME_SELECTED, ChangeParams, ChangePskArgs,
     ChangeScopeArgs, ChooseParams, DropParams, DropPeerArgs, HelpParams, LOOK_LINES_MAX,
-    LOOK_LINES_MIN, ListArgs, ListDecisionsArgs, ListNamespacesArgs, ListParams, ListRelaysArgs,
-    LookParams, NewParams, NewPeerArgs, RawwParams, SendParams, UpdownArgs, UpdownParams,
+    LOOK_LINES_MIN, LinkParams, LinkPeerArgs, ListArgs, ListDecisionsArgs, ListNamespacesArgs,
+    ListParams, ListRelaysArgs, LookParams, NewParams, NewPeerArgs, RawwParams, SendParams,
+    UpdownArgs, UpdownParams,
 };
 
 pub(super) fn validate_list_params(params: &ListParams) -> Result<(), McpError> {
@@ -150,6 +151,25 @@ pub(super) fn validate_drop_params(params: &DropParams) -> Result<(), McpError> 
 
 pub(super) fn validate_drop_peer_args(args: &DropPeerArgs) -> Result<(), McpError> {
     validate_unknown_fields("drop peer command", Some("args"), &args.extra_fields)
+}
+
+pub(super) fn validate_link_params(params: &LinkParams) -> Result<(), McpError> {
+    validate_unknown_fields("link request", None, &params.extra_fields)
+}
+
+pub(super) fn validate_link_peer_args(args: &LinkPeerArgs) -> Result<(), McpError> {
+    validate_unknown_fields("link peer command", Some("args"), &args.extra_fields)?;
+    // The relay enforces the shared peer-token grammar independently, but
+    // malformed aliases fail here before any relay contact.
+    let alias = args.alias.as_deref().map(str::trim).unwrap_or("");
+    if !is_valid_peer_token(alias) {
+        return Err(validation_tool_error(
+            "validation_invalid_params",
+            "alias is not a safe peer token",
+            Some(json!({"field": "alias"})),
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn validate_list_principals_args(args: &ListArgs) -> Result<(), McpError> {

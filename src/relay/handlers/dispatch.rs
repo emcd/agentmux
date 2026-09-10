@@ -15,7 +15,7 @@ use super::super::{
     ListedSession, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
     bare_session_id, relay_error,
 };
-use super::{choices, identity, listing};
+use super::{choices, identity, install, listing};
 
 /// Per-bundle dispatcher for the operations whose subject is a bundle the
 /// requester is a member of (`Up`/`Down`, `List`, choice decisions). The
@@ -79,6 +79,7 @@ pub(in crate::relay) fn handle_request(
         | RelayRequest::ChangePsk { .. }
         | RelayRequest::ChangeScope { .. }
         | RelayRequest::DropPeer { .. }
+        | RelayRequest::InstallPeerCredential { .. }
         | RelayRequest::IdentityIntrospect { .. }
         | RelayRequest::ListRelays
         | RelayRequest::DiscoverNamespaces { .. }
@@ -137,9 +138,10 @@ pub(in crate::relay) fn handle_global_list() -> RelayResponse {
 }
 
 /// Dispatches a relay-wide identity administration request (`new peer`,
-/// `change psk`). These bypass the per-bundle `handle_request` path: they
-/// operate on the relay-level principal store and authorize against the
-/// requester's policy preset relay-wide rather than within a bundle context.
+/// `change psk`, peer credential install). These bypass the per-bundle
+/// `handle_request` path: they operate on the relay-level principal store
+/// and authorize against the requester's policy preset relay-wide rather
+/// than within a bundle context.
 pub(in crate::relay) fn handle_identity_admin_request(
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
@@ -187,6 +189,15 @@ pub(in crate::relay) fn handle_identity_admin_request(
             requester_principal_id,
             principal_id,
         ),
+        RelayRequest::InstallPeerCredential { alias, psk } => {
+            install::handle_install_peer_credential(
+                configuration_roots,
+                state_root,
+                requester_principal_id,
+                alias,
+                psk,
+            )
+        }
         _ => Err(relay_error(
             "internal_unexpected_request",
             "non-admin request routed to identity admin dispatcher",
@@ -293,6 +304,7 @@ fn normalize_request_identities(request: RelayRequest, namespace: &str) -> Relay
         | RelayRequest::ChangePsk { .. }
         | RelayRequest::ChangeScope { .. }
         | RelayRequest::DropPeer { .. }
+        | RelayRequest::InstallPeerCredential { .. }
         | RelayRequest::IdentityIntrospect { .. }
         | RelayRequest::ListRelays
         | RelayRequest::DiscoverNamespaces { .. }

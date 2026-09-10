@@ -41,9 +41,11 @@ use tempfile::TempDir;
 use super::*;
 
 mod concurrency;
+mod credential_confinement;
 mod drop_peer;
 mod expires;
 mod hello;
+mod install_peer_credential;
 mod introspect;
 mod new_peer;
 mod psk_lifecycle;

@@ -10,6 +10,7 @@ mod choices;
 mod discovery;
 mod dispatch;
 mod identity;
+mod install;
 mod listing;
 mod look;
 mod raww;

@@ -10,6 +10,7 @@ mod check;
 mod down;
 mod drop;
 mod host;
+mod link;
 mod list;
 mod look;
 mod new;
@@ -150,6 +151,42 @@ pub(super) struct DropPeerArguments {
     pub(super) runtime: RuntimeArguments,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) enum LinkPeerMode {
+    OneWay,
+    Paired,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct LinkPeerPairedArguments {
+    pub(super) peer_alias: String,
+    pub(super) peer_scope: Option<String>,
+    pub(super) peer_connect_as: String,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct LinkPeerArguments {
+    pub(super) mode: LinkPeerMode,
+    pub(super) issuer_state_root: std::path::PathBuf,
+    pub(super) destination_state_root: std::path::PathBuf,
+    pub(super) issuer_configuration_layers: Vec<std::path::PathBuf>,
+    pub(super) destination_configuration_layers: Vec<std::path::PathBuf>,
+    pub(super) inscriptions_root: Option<std::path::PathBuf>,
+    pub(super) alias: String,
+    pub(super) connect_as: String,
+    pub(super) scope: Option<String>,
+    pub(super) alias_scope: Option<String>,
+    pub(super) paired: Option<LinkPeerPairedArguments>,
+    pub(super) upgrade: bool,
+    pub(super) bundle_name: Option<String>,
+    pub(super) session_selector: Option<String>,
+    pub(super) issuer_bundle_name: Option<String>,
+    pub(super) issuer_session_selector: Option<String>,
+    pub(super) destination_bundle_name: Option<String>,
+    pub(super) destination_session_selector: Option<String>,
+    pub(super) output_json: bool,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(super) struct CheckArguments {
     /// Optional single bundle to validate; `None` validates every discoverable
@@ -245,6 +282,7 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
         "look" => look::run_agentmux_look(&arguments[1..]),
         "raww" => raww::run_agentmux_raww(&arguments[1..]),
         "new" => new::run_agentmux_new(&arguments[1..]),
+        "link" => link::run_agentmux_link(&arguments[1..]),
         "change" => change::run_agentmux_change(&arguments[1..]),
         "drop" => drop::run_agentmux_drop(&arguments[1..]),
         "check" => check::run_agentmux_check(&arguments[1..]),
@@ -302,6 +340,10 @@ fn print_agentmux_help() {
         "  drop peer <principal_id> [--bundle NAME] [--as-session NAME] [--json] ",
         "[--configuration-directory PATH] [--state-directory PATH] ",
         "[--inscriptions-directory PATH|--logs-directory PATH]\n",
+        "  link peer --issuer-state-directory PATH --destination-state-directory PATH ",
+        "--alias ALIAS --connect-as ID [--scope SCOPE] [--alias-scope SCOPE] ",
+        "[--paired --peer-alias ALIAS --peer-scope SCOPE --peer-connect-as ID] ",
+        "[--upgrade] [--bundle NAME] [--as-session NAME] [--json]\n",
         "  check configuration [<bundle-id>] [-q|--quiet] [--configuration-directory PATH] ",
         "[--state-directory PATH] [--inscriptions-directory PATH|",
         "--logs-directory PATH]\n",

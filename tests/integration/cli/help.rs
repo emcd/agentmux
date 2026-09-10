@@ -163,8 +163,9 @@ fn drop_appears_in_the_top_level_command_topology() {
 /// arms at runtime: adding a subcommand and its help line fails this test until
 /// the roster is updated, which is the point — the update is where a developer
 /// notices the surface grew.
-const DISPATCHED_SUBCOMMANDS: [&str; 12] = [
-    "host", "up", "down", "list", "look", "raww", "new", "change", "drop", "check", "tui", "send",
+const DISPATCHED_SUBCOMMANDS: [&str; 13] = [
+    "host", "up", "down", "list", "look", "raww", "new", "change", "drop", "link", "check", "tui",
+    "send",
 ];
 
 /// Extracts the leading token of each entry under the help output's `Commands:`

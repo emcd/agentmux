@@ -7,6 +7,8 @@ mod held_bundle_guard;
 mod help;
 pub(crate) mod helpers;
 mod host;
+mod link;
+mod link_recovery;
 mod list;
 mod look;
 mod new;
