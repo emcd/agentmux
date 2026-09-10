@@ -149,6 +149,24 @@ fn install_peer_credential_writes_slot_and_omits_psk() {
         0o600,
         "installed slot is not owner-only"
     );
+    assert_eq!(
+        std::fs::metadata(slot.parent().expect("slot parent"))
+            .expect("peers metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700,
+        "freshly created relay-owned parents are not owner-only"
+    );
+    assert_eq!(
+        std::fs::metadata(bundle_paths.state_root.join("identity"))
+            .expect("identity metadata")
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700,
+        "freshly created store parent is not owner-only"
+    );
 }
 
 // Install without a registered alias referent fails naming the alias and
@@ -182,7 +200,6 @@ fn install_peer_credential_requires_alias_referent() {
     );
     assert!(!slot.exists(), "install must not write without a referent");
 }
-
 // Unsafe alias components are refused before any filesystem access.
 #[test]
 fn install_peer_credential_rejects_unsafe_alias() {
@@ -190,7 +207,16 @@ fn install_peer_credential_rejects_unsafe_alias() {
     let bundle_name = "ident_install_alias";
     let (configuration_roots, bundle_paths, _, _) = install_paths(&temporary, bundle_name, "bravo");
 
-    for alias in ["../escape", "a/b", "with@qualifier", "", ".", ".."] {
+    for alias in [
+        "../escape",
+        "a/b",
+        "with@qualifier",
+        "bang!alias",
+        "",
+        ".",
+        "..",
+        "has\0nul",
+    ] {
         let response = install_peer_credential(
             &configuration_roots,
             &bundle_paths,
@@ -208,7 +234,6 @@ fn install_peer_credential_rejects_unsafe_alias() {
         );
     }
 }
-
 // Repeating an identical install succeeds without changing the slot: the
 // lost-response retry path.
 #[test]
@@ -655,5 +680,34 @@ fn install_dir_sync_failure_stays_published_as_uncertain() {
         std::fs::read_to_string(&slot).expect("read published slot"),
         psk,
         "uncertain install must leave the published file in place"
+    );
+}
+
+// The authorization gate fires before any state inspection: a
+// control-free caller is denied even where the store is absent, so no
+// alias-existence or slot-content oracle reaches unauthorized callers.
+// (Where the store is unreadable, Hello itself fail-closes first, so the
+// absent-root case is the gate's observable boundary.)
+#[test]
+fn install_gate_denies_before_state_inspection() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_install_gate";
+    let (configuration_roots, _, _, bystander) =
+        write_limited_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    // Absent state root: the gate denies before the empty-store path could
+    // report an unknown principal.
+    let denied = install_peer_credential_as(
+        &configuration_roots,
+        &bundle_paths,
+        &bystander,
+        "bravo",
+        "some-psk",
+    );
+    assert_eq!(
+        denied["response"]["error"]["code"], "authorization_forbidden",
+        "gate must precede inspection: {denied:?}"
     );
 }

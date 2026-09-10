@@ -119,8 +119,39 @@ impl McpServer {
                     Value::Object(response),
                 )?]))
             }
-            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.link.peer", other)),
+            Ok(other) => Err(map_unexpected_link_response(&alias, other)),
             Err(source) => Err(self.map_relay_call_error("mcp.tool.link.peer.io_error", source)),
+        }
+    }
+}
+
+/// Maps a non-success relay response without inscribing or returning the
+/// response payload: an unexpected `NewPeer`/`ChangePsk` variant can carry
+/// a PSK, so the shared mapper's full-payload inscription and details are
+/// unsafe for this tool. Only the alias (already caller-supplied) and the
+/// outcome travel to observability and the caller.
+fn map_unexpected_link_response(alias: &str, response: RelayResponse) -> McpError {
+    match response {
+        RelayResponse::Error { error } => {
+            emit_inscription(
+                "mcp.tool.link.peer.relay_error",
+                &json!({
+                    "alias": alias,
+                    "code": error.code.clone(),
+                }),
+            );
+            validation_tool_error(error.code.as_str(), error.message.as_str(), None)
+        }
+        _ => {
+            emit_inscription(
+                "mcp.tool.link.peer.unexpected_response",
+                &json!({"alias": alias}),
+            );
+            validation_tool_error(
+                "internal_unexpected_failure",
+                "relay returned an unexpected response for link peer",
+                None,
+            )
         }
     }
 }

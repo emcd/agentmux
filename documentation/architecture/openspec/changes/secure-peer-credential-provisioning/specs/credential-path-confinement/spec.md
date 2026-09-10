@@ -47,15 +47,31 @@ root trust anchor and routinely contain legitimate symlinks.
 - **THEN** each is created with mode 0700 and contains no symlinked component
 - **AND** the credential file lands with mode 0600
 
+#### Scenario: Post-rename directory-sync failure preserves the registration
+
+- **WHEN** a `new peer` credential write fails directory sync after rename
+  publication
+- **THEN** the relay reports a typed durability-uncertain outcome
+- **AND** the committed record stands instead of rolling back, leaving the
+  published file credentialed
+
+#### Scenario: Post-rename directory-sync failure preserves the rotation
+
+- **WHEN** a `change psk` credential write fails directory sync after rename
+  publication
+- **THEN** the relay reports a typed durability-uncertain outcome
+- **AND** the rotated record stands with the superseded credential revoked
+
 ### Requirement: Retained Directory Handle Publication
 
 The system SHALL execute directory creation, file opens, temporary-file
 creation, rename publication, and cleanup relative to retained directory
 handles anchored at the trusted state root after staging, never by
-re-walking pathnames.
-An ancestor exchanged for a symlink after staging and before commit or abort
-SHALL abort the operation with `validation_invalid_credential_path` rather
-than publish through the exchanged component.
+re-walking pathnames. Publication therefore cannot be redirected outside
+the state tree by any exchange: an ancestor exchange persisting at commit
+SHALL abort the operation with `validation_invalid_credential_path`
+rather than publish, while handle-relative publication through an already
+verified chain stays inside the tree by construction.
 
 #### Scenario: Ancestor exchange after staging aborts before publish
 

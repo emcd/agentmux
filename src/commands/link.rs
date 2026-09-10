@@ -12,7 +12,7 @@ use crate::{
     relay::{RelayRequest, RelayResponse, peer_scope::parse_peer_scope, request_relay},
     runtime::{
         error::RuntimeError,
-        paths::{RelayRuntimePaths, RuntimeRootOverrides, RuntimeRoots},
+        paths::{RelayRuntimePaths, RuntimeRootOverrides, RuntimeRoots, is_valid_peer_token},
         starter::ensure_starter_configuration_layout,
         tui_session::resolve_tui_session_identity,
     },
@@ -38,25 +38,45 @@ pub(super) fn run_agentmux_link(arguments: &[String]) -> Result<(), RuntimeError
     }
 
     let parsed = parse_link_arguments(arguments)?;
+    // Per-side operator selectors fall back to the shared selectors, so one
+    // `--bundle`/`--as-session` pair serves relays whose local operator
+    // identities match, while relays with differing identities take
+    // explicit per-side selectors.
     let issuer = resolve_link_endpoint(
         &parsed.issuer_state_root,
         &parsed.issuer_configuration_layers,
         parsed.inscriptions_root.clone(),
-        parsed.bundle_name.as_deref(),
-        parsed.session_selector.as_deref(),
+        parsed
+            .issuer_bundle_name
+            .as_deref()
+            .or(parsed.bundle_name.as_deref()),
+        parsed
+            .issuer_session_selector
+            .as_deref()
+            .or(parsed.session_selector.as_deref()),
     )?;
     let destination = resolve_link_endpoint(
         &parsed.destination_state_root,
         &parsed.destination_configuration_layers,
         parsed.inscriptions_root.clone(),
-        parsed.bundle_name.as_deref(),
-        parsed.session_selector.as_deref(),
+        parsed
+            .destination_bundle_name
+            .as_deref()
+            .or(parsed.bundle_name.as_deref()),
+        parsed
+            .destination_session_selector
+            .as_deref()
+            .or(parsed.session_selector.as_deref()),
     )?;
 
     let mut lines = Vec::new();
-    let summary = match parsed.mode {
-        LinkPeerMode::OneWay => link_one_way(&parsed, &issuer, &destination, &mut lines)?,
-        LinkPeerMode::Paired => link_paired(&parsed, &issuer, &destination, &mut lines)?,
+    let summary = if parsed.upgrade {
+        link_upgrade(&parsed, &issuer, &destination, &mut lines)?
+    } else {
+        match parsed.mode {
+            LinkPeerMode::OneWay => link_one_way(&parsed, &issuer, &destination, &mut lines)?,
+            LinkPeerMode::Paired => link_paired(&parsed, &issuer, &destination, &mut lines)?,
+        }
     };
     if parsed.output_json {
         println!(
@@ -148,10 +168,12 @@ fn register_alias_referent(
 
 /// Issues (or, for upgrade, rotates) the inbound identity on the issuer,
 /// returning the raw PSK in process memory only. An issuance transport
-/// failure recovers via the rotate-and-install ladder: rotate for a fresh
-/// known PSK, or — when rotation reports an unknown principal, proving the
-/// issuance never committed — issue fresh. A lost issuance PSK is
-/// unknowable, so blind re-issuance is never attempted.
+/// failure reports link-issuance-unknown instead of recovering
+/// automatically: a lost issuance PSK is unknowable, and a pre-existing
+/// record would turn an automatic rotation into a rotation of an unrelated
+/// credential the first response would have rejected. The operator recovers
+/// explicitly with `link peer --upgrade` (rotate and install) or
+/// drop-and-relink.
 fn issue_inbound_credential(
     issuer: &LinkEndpoint,
     connect_as: &str,
@@ -164,12 +186,14 @@ fn issue_inbound_credential(
         scope: scope.clone(),
         destination: crate::relay::CredentialDestination::Response,
     };
-    let rotate = || RelayRequest::ChangePsk {
-        principal_id: principal_id.clone(),
-        destination: crate::relay::CredentialDestination::Response,
-    };
     if upgrade {
-        return match link_request(issuer, &rotate())? {
+        return match link_request(
+            issuer,
+            &RelayRequest::ChangePsk {
+                principal_id: principal_id.clone(),
+                destination: crate::relay::CredentialDestination::Response,
+            },
+        )? {
             RelayResponse::ChangePsk { psk: Some(psk), .. } => Ok(psk),
             RelayResponse::ChangePsk { .. } => Err(RuntimeError::validation(
                 "internal_unexpected_failure",
@@ -187,34 +211,14 @@ fn issue_inbound_credential(
         )),
         Ok(RelayResponse::Error { error }) => Err(shared::map_relay_error(error)),
         Ok(_) => Err(unexpected_link_response()),
-        Err(_) => {
-            // Issuance-unknown: rotate for a known PSK. Unknown-principal
-            // proves the issuance never committed, so issuing fresh is
-            // safe; any other outcome aborts.
-            match link_request(issuer, &rotate()) {
-                Ok(RelayResponse::ChangePsk { psk: Some(psk), .. }) => Ok(psk),
-                Ok(RelayResponse::ChangePsk { .. }) => Err(RuntimeError::validation(
-                    "internal_unexpected_failure",
-                    "relay omitted the rotated credential".to_string(),
-                )),
-                Ok(RelayResponse::Error { error })
-                    if error.code == "validation_unknown_principal" =>
-                {
-                    match link_request(issuer, &issue())? {
-                        RelayResponse::NewPeer { psk: Some(psk), .. } => Ok(psk),
-                        RelayResponse::NewPeer { .. } => Err(RuntimeError::validation(
-                            "internal_unexpected_failure",
-                            "relay omitted the issued credential".to_string(),
-                        )),
-                        RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
-                        _ => Err(unexpected_link_response()),
-                    }
-                }
-                Ok(RelayResponse::Error { error }) => Err(shared::map_relay_error(error)),
-                Ok(_) => Err(unexpected_link_response()),
-                Err(source) => Err(source),
-            }
-        }
+        Err(_) => Err(RuntimeError::validation(
+            "link_issuance_unknown",
+            format!(
+                "issuance of {principal_id} may or may not have committed and its \
+                 PSK is unknowable; recover explicitly with `link peer --upgrade` \
+                 (rotate and install) or drop-and-relink"
+            ),
+        )),
     }
 }
 
@@ -242,38 +246,65 @@ fn install_peer_slot(
     }
 }
 
-/// One-way link: register the alias referent on the destination, issue (or
-/// rotate for upgrade) the inbound identity on the issuer, install into the
-/// destination slot. Issuance failure halts before any install.
+/// One-way link: register the alias referent on the destination, issue the
+/// inbound identity on the issuer, install into the destination slot.
+/// Issuance failure halts before any install.
 fn link_one_way(
     parsed: &LinkPeerArguments,
     issuer: &LinkEndpoint,
     destination: &LinkEndpoint,
     lines: &mut Vec<String>,
 ) -> Result<serde_json::Value, RuntimeError> {
-    let upgrade = parsed.upgrade;
     register_alias_referent(destination, &parsed.alias, parsed.alias_scope.clone())?;
     lines.push(format!(
         "link peer: registered {}@RELAY on destination",
         parsed.alias
     ));
-    let psk = issue_inbound_credential(issuer, &parsed.connect_as, parsed.scope.clone(), upgrade)?;
+    let psk = issue_inbound_credential(issuer, &parsed.connect_as, parsed.scope.clone(), false)?;
     lines.push(format!(
-        "link peer: {} {}@RELAY on issuer",
-        if upgrade { "rotated" } else { "issued" },
+        "link peer: issued {}@RELAY on issuer",
         parsed.connect_as
     ));
     let written_path = install_peer_slot(destination, &parsed.alias, &psk)?;
     lines.push(format!(
-        "link peer: installed {} on destination",
-        written_path
+        "link peer: installed {written_path} on destination"
     ));
     // `psk` drops here without ever reaching output, logs, or files.
     Ok(json!({
         "alias": parsed.alias,
         "connect_as": parsed.connect_as,
         "written_path": written_path,
-        "upgrade": upgrade,
+        "upgrade": false,
+    }))
+}
+
+/// Upgrade link: rotate the inbound identity on the issuer and install
+/// into the destination slot, with no registration step. The upgraded
+/// direction's records must already exist — rotation fails
+/// unknown-principal and installation fails unregistered-alias otherwise —
+/// so an upgrade performs exactly one rotation plus one install and can
+/// neither create nor discard a mint.
+fn link_upgrade(
+    parsed: &LinkPeerArguments,
+    issuer: &LinkEndpoint,
+    destination: &LinkEndpoint,
+    lines: &mut Vec<String>,
+) -> Result<serde_json::Value, RuntimeError> {
+    let psk = issue_inbound_credential(issuer, &parsed.connect_as, None, true)?;
+    lines.push(format!(
+        "link peer: rotated {}@RELAY on issuer",
+        parsed.connect_as
+    ));
+    let written_path = install_peer_slot(destination, &parsed.alias, &psk)?;
+    lines.push(format!(
+        "link peer: installed {written_path} on destination"
+    ));
+    // `psk` drops here without ever reaching output, logs, or files.
+    Ok(json!({
+        "alias": parsed.alias,
+        "connect_as": parsed.connect_as,
+        "written_path": written_path,
+        "upgrade": true,
     }))
 }
 
@@ -318,11 +349,13 @@ fn link_paired(
 
 /// Registers one paired alias referent, retaining the mint. A transport
 /// failure retries once: success carries a fresh known mint, while
-/// second-claim proves a committed registration with a lost mint and
-/// recovers by rotating to a known credential. A first-attempt second-claim
-/// aborts instead: the record pre-exists with an unheld credential, so the
-/// pairing cannot proceed — rotate it into a known credential (upgrade)
-/// instead.
+/// second-claim proves nothing about this pairing — the record may be this
+/// call's commit with a lost mint or a pre-existing record — so the
+/// coordinator reports link-registration-unknown instead of rotating. An
+/// automatic rotation could rotate a pre-existing unrelated credential that
+/// a normal first response would have rejected. A first-attempt
+/// second-claim reports the same unknown state. The operator recovers
+/// explicitly with `link peer --upgrade` or drop-and-restart.
 fn register_paired_alias(
     endpoint: &LinkEndpoint,
     alias: &str,
@@ -333,6 +366,16 @@ fn register_paired_alias(
         scope,
         destination: crate::relay::CredentialDestination::Response,
     };
+    let unknown = || {
+        RuntimeError::validation(
+            "link_registration_unknown",
+            format!(
+                "registration of {alias}@RELAY may or may not have committed and \
+                 its mint is unknowable; recover explicitly with `link peer \
+                 --upgrade` (rotate and install) or drop-and-restart"
+            ),
+        )
+    };
     match link_request(endpoint, &request) {
         Ok(RelayResponse::NewPeer { psk: Some(psk), .. }) => Ok(psk),
         Ok(RelayResponse::NewPeer { .. }) => Err(RuntimeError::validation(
@@ -340,13 +383,7 @@ fn register_paired_alias(
             "relay omitted the issued credential".to_string(),
         )),
         Ok(RelayResponse::Error { error }) if error.code == "validation_principal_exists" => {
-            Err(RuntimeError::validation(
-                "validation_principal_exists",
-                format!(
-                    "{alias}@RELAY is already registered with an unheld credential; \
-                     rotate it into a known credential first, then link one-way"
-                ),
-            ))
+            Err(unknown())
         }
         Ok(RelayResponse::Error { error }) => Err(shared::map_relay_error(error)),
         Ok(_) => Err(unexpected_link_response()),
@@ -357,36 +394,12 @@ fn register_paired_alias(
                 "relay omitted the issued credential".to_string(),
             )),
             Ok(RelayResponse::Error { error }) if error.code == "validation_principal_exists" => {
-                rotate_to_known_credential(endpoint, alias)
+                Err(unknown())
             }
             Ok(RelayResponse::Error { error }) => Err(shared::map_relay_error(error)),
             Ok(_) => Err(unexpected_link_response()),
-            Err(source) => Err(source),
+            Err(_) => Err(unknown()),
         },
-    }
-}
-
-/// Rotates an alias record with a lost mint into a known credential for
-/// paired recovery. Blind retry can never recover the lost mint; rotation
-/// yields a fresh known PSK to retain for cross-install.
-fn rotate_to_known_credential(
-    endpoint: &LinkEndpoint,
-    alias: &str,
-) -> Result<String, RuntimeError> {
-    match link_request(
-        endpoint,
-        &RelayRequest::ChangePsk {
-            principal_id: format!("{alias}@RELAY"),
-            destination: crate::relay::CredentialDestination::Response,
-        },
-    )? {
-        RelayResponse::ChangePsk { psk: Some(psk), .. } => Ok(psk),
-        RelayResponse::ChangePsk { .. } => Err(RuntimeError::validation(
-            "internal_unexpected_failure",
-            "relay omitted the rotated credential".to_string(),
-        )),
-        RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
-        _ => Err(unexpected_link_response()),
     }
 }
 
@@ -429,6 +442,10 @@ fn parse_link_arguments(arguments: &[String]) -> Result<LinkPeerArguments, Runti
     let mut upgrade = false;
     let mut bundle_name: Option<String> = None;
     let mut session_selector: Option<String> = None;
+    let mut issuer_bundle_name: Option<String> = None;
+    let mut issuer_session_selector: Option<String> = None;
+    let mut destination_bundle_name: Option<String> = None;
+    let mut destination_session_selector: Option<String> = None;
     let mut output_json = false;
     let mut index = 1usize;
     while index < arguments.len() {
@@ -494,6 +511,34 @@ fn parse_link_arguments(arguments: &[String]) -> Result<LinkPeerArguments, Runti
             "--as-session" => {
                 session_selector = Some(shared::take_value(arguments, &mut index, "--as-session")?);
             }
+            "--issuer-bundle" => {
+                issuer_bundle_name = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--issuer-bundle",
+                )?);
+            }
+            "--issuer-as-session" => {
+                issuer_session_selector = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--issuer-as-session",
+                )?);
+            }
+            "--destination-bundle" => {
+                destination_bundle_name = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--destination-bundle",
+                )?);
+            }
+            "--destination-as-session" => {
+                destination_session_selector = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--destination-as-session",
+                )?);
+            }
             "--json" => output_json = true,
             value if value.starts_with('-') => {
                 return Err(RuntimeError::InvalidArgument {
@@ -543,8 +588,21 @@ fn parse_link_arguments(arguments: &[String]) -> Result<LinkPeerArguments, Runti
             "link peer requires a non-empty --connect-as".to_string(),
         ));
     };
-    // Pre-submission scope grammar checks so malformed input fails before
-    // any relay contact; the relay validates independently.
+    // Pre-submission grammar checks so malformed input fails before any
+    // relay contact; the relay validates independently. Peer tokens share
+    // one strict grammar (no separators, qualifiers, bang marks, NUL, or
+    // traversal).
+    for (flag, token) in [
+        ("--alias", alias.as_str()),
+        ("--connect-as", connect_as.as_str()),
+    ] {
+        if !is_valid_peer_token(token) {
+            return Err(RuntimeError::validation(
+                "validation_invalid_params",
+                format!("{flag} is not a safe peer token"),
+            ));
+        }
+    }
     for scope_value in scope.iter().chain(alias_scope.iter()) {
         if let Err(error) = parse_peer_scope(Some(scope_value)) {
             return Err(RuntimeError::validation(error.code, error.message));
@@ -582,6 +640,17 @@ fn parse_link_arguments(arguments: &[String]) -> Result<LinkPeerArguments, Runti
                 return Err(RuntimeError::validation(error.code, error.message));
             }
         }
+        for (flag, token) in [
+            ("--peer-alias", peer_alias.as_str()),
+            ("--peer-connect-as", peer_connect_as.as_str()),
+        ] {
+            if !is_valid_peer_token(token) {
+                return Err(RuntimeError::validation(
+                    "validation_invalid_params",
+                    format!("{flag} is not a safe peer token"),
+                ));
+            }
+        }
         Ok(LinkPeerArguments {
             mode: LinkPeerMode::Paired,
             issuer_state_root,
@@ -601,6 +670,10 @@ fn parse_link_arguments(arguments: &[String]) -> Result<LinkPeerArguments, Runti
             upgrade: false,
             bundle_name,
             session_selector,
+            issuer_bundle_name,
+            issuer_session_selector,
+            destination_bundle_name,
+            destination_session_selector,
             output_json,
         })
     } else {
@@ -625,6 +698,10 @@ fn parse_link_arguments(arguments: &[String]) -> Result<LinkPeerArguments, Runti
             upgrade,
             bundle_name,
             session_selector,
+            issuer_bundle_name,
+            issuer_session_selector,
+            destination_bundle_name,
+            destination_session_selector,
             output_json,
         })
     }
@@ -632,9 +709,9 @@ fn parse_link_arguments(arguments: &[String]) -> Result<LinkPeerArguments, Runti
 
 pub(super) fn print_link_help() {
     println!(
-        "Usage: agentmux link peer --issuer-state-directory PATH --destination-state-directory PATH --alias ALIAS --connect-as ID [--scope SCOPE] [--alias-scope SCOPE] [--paired --peer-alias ALIAS --peer-scope SCOPE --peer-connect-as ID] [--upgrade] [--bundle NAME] [--as-session NAME] [--json]"
+        "Usage: agentmux link peer --issuer-state-directory PATH --destination-state-directory PATH --alias ALIAS --connect-as ID [--scope SCOPE] [--alias-scope SCOPE] [--paired --peer-alias ALIAS --peer-scope SCOPE --peer-connect-as ID] [--upgrade] [--bundle NAME] [--as-session NAME] [--issuer-bundle NAME] [--issuer-as-session NAME] [--destination-bundle NAME] [--destination-as-session NAME] [--json]"
     );
     println!(
-        "Coordinates peer credential provisioning: registers the alias on the destination, issues the inbound identity on the issuer, and installs the PSK into the destination peer slot without ever printing it. --paired provisions both directions at once; --upgrade rotates instead of issuing."
+        "Coordinates peer credential provisioning: registers the alias on the destination, issues the inbound identity on the issuer, and installs the PSK into the destination peer slot without ever printing it. --paired provisions both directions at once; --upgrade rotates instead of issuing. Per-side --issuer-* / --destination-* selectors override the shared --bundle / --as-session for relays with differing operator identities."
     );
 }

@@ -143,6 +143,13 @@ pub(in crate::relay) fn handle_new_peer(
         None => (Some(psk), None),
         Some(pending) => match pending.commit() {
             Ok(path) => (None, Some(path)),
+            Err(error) if is_credential_uncertain(&error) => {
+                // Post-rename directory-sync failure: the file is published
+                // and the store record committed, so both stand. Rolling the
+                // record back would orphan a published credential file with
+                // no record; report the typed uncertainty instead.
+                return Err(error);
+            }
             Err(error) => {
                 // The rename failed after the store commit: remove the record we
                 // just inserted so no principal lingers without a credential
@@ -320,6 +327,25 @@ pub(in crate::relay) fn handle_change_psk(
         None => None,
         Some(pending) => match pending.commit() {
             Ok(path) => Some(path),
+            Err(error) if is_credential_uncertain(&error) => {
+                // Post-rename directory-sync failure: the rotated file is
+                // published and the rotated hash committed, so both stand.
+                // Restoring the prior record would leave the new file
+                // authenticating nothing while the old hash returns. Tear
+                // down sessions holding the superseded credential exactly as
+                // the success path does, then report the typed uncertainty.
+                let (revoked_connections, notified_hosts) =
+                    revoke_superseded_credential(principal_id.as_str(), requester_principal_id);
+                emit_inscription(
+                    "relay.identity.psk_rotated",
+                    &serde_json::json!({
+                        "principal_id": principal_id,
+                        "revoked_connections": revoked_connections,
+                        "notified_hosts": notified_hosts,
+                    }),
+                );
+                return Err(error);
+            }
             Err(error) => {
                 // The rename failed after the store commit: restore the prior
                 // record so the unchanged config file still authenticates, and
@@ -744,6 +770,14 @@ fn classify_target_principal(principal_id: &str) -> Result<PrincipalType, RelayE
 /// old record survived.
 fn is_durability_uncertain(error: &RelayError) -> bool {
     error.code == "internal_store_durability_uncertain"
+}
+
+/// True when a credential-sink commit error reports post-rename durability
+/// uncertainty rather than a pre-publication failure. The file is published
+/// and the store record committed, so callers must preserve both instead of
+/// compensating the store.
+fn is_credential_uncertain(error: &RelayError) -> bool {
+    error.code == "internal_credential_durability_uncertain"
 }
 
 /// Tears down live sessions holding a superseded credential and notifies

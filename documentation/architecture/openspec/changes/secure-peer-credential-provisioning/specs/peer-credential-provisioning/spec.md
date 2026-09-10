@@ -159,17 +159,21 @@ rewrite. An unsafe slot component SHALL abort with
 ### Requirement: Peer-Link Per-Step Timeout Recovery
 
 The protocol SHALL provide no cross-relay transaction and SHALL perform no
-automatic compensation. Each relay call SHALL carry its own timeout with
-mode-specific forward recovery. One-way registration-unknown SHALL retry
-`new peer`, where success means the record was absent and second-claim
-rejection means it committed; existing-record tolerance belongs ONLY to
-one-way mode. Paired registration-unknown SHALL recover by rotating the
-affected record to a known PSK and retaining it, or by drop-and-restart,
-because a committed registration with a lost Response leaves no mint to
-proceed with and blind retry can never recover it. Issuance-unknown SHALL
-recover via rotate-and-install or drop-and-relink, because a lost issuance
-PSK is unknowable and retry is useless. Install-unknown SHALL retry install
-with the same PSK, safe by install idempotency.
+automatic compensation or automatic rotation on ambiguous state. Each relay
+call SHALL carry its own timeout with mode-specific forward recovery.
+One-way registration-unknown SHALL retry `new peer`, where success means
+the record was absent and second-claim rejection means a record stands;
+existing-record tolerance belongs ONLY to one-way mode, where the install
+step verifies the relay type before writing. Paired registration-unknown
+SHALL retry once and then report link-registration-unknown: success carries
+a fresh known mint, while second-claim proves nothing about the pairing
+(a pre-existing record second-claims identically) and automatic rotation
+could rotate an unrelated credential. Issuance-unknown SHALL report
+link-issuance-unknown: a lost issuance PSK is unknowable, blind
+re-issuance is never attempted, and automatic rotation never fires. Both
+unknown reports SHALL name explicit operator recovery (`link peer
+--upgrade` or drop-and-relink). Install-unknown SHALL retry install with
+the same PSK, safe by install idempotency.
 
 #### Scenario: Failed install leaves the issued principal in place
 
@@ -185,19 +189,20 @@ with the same PSK, safe by install idempotency.
 - **AND** second-claim rejection verifies the relay type and proceeds to
   issuance
 
-#### Scenario: Paired registration timeout recovers by rotation
+#### Scenario: Paired registration ambiguity reports unknown without rotating
 
-- **WHEN** paired alias registration times out with the mint Response lost
-- **THEN** the coordinator rotates the affected record to a known PSK and
-  retains it for cross-install, or drops and restarts the pairing
-- **AND** never retries the blind registration expecting the lost mint
+- **WHEN** paired alias registration fails ambiguously and the retry
+  second-claims
+- **THEN** the coordinator reports link-registration-unknown naming
+  explicit recovery
+- **AND** sends no rotation for the pre-existing record
 
-#### Scenario: Issuance timeout recovers by rotation
+#### Scenario: Issuance ambiguity reports unknown without rotating
 
-- **WHEN** issuance times out with the PSK response lost
-- **THEN** the coordinator recovers via `change psk` on A followed by
-  install, or via drop-and-relink
-- **AND** never retries the blind issuance
+- **WHEN** issuance fails ambiguously
+- **THEN** the coordinator reports link-issuance-unknown naming explicit
+  recovery
+- **AND** sends no rotation and no blind re-issuance
 
 ### Requirement: Peer-Slot Install Durability
 

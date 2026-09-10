@@ -180,6 +180,10 @@ pub(super) struct LinkPeerArguments {
     pub(super) upgrade: bool,
     pub(super) bundle_name: Option<String>,
     pub(super) session_selector: Option<String>,
+    pub(super) issuer_bundle_name: Option<String>,
+    pub(super) issuer_session_selector: Option<String>,
+    pub(super) destination_bundle_name: Option<String>,
+    pub(super) destination_session_selector: Option<String>,
     pub(super) output_json: bool,
 }
 

@@ -10,7 +10,7 @@
 - [x] 2.1 Implement the relay-side install operation (alias-referent binding, absent/identical/different authorization classification under a per-slot lock, 0700/0600 permissions, idempotent same-content rewrite, temp-write plus file fsync plus atomic rename plus directory fsync with typed post-rename uncertainty, PSK omitted from every install response).
 - [x] 2.2 Implement CLI `link peer` one-way mode (register, issue, install; explicit registration-mint discard; second-claim tolerance on registration; halt on issuance failure).
 - [x] 2.3 Implement CLI `link peer` paired mode (declared cross-equality verification before either mint, two alias registrations retaining both mints, cross-installs, zero drops) plus the one-way-to-bidirectional upgrade path (rotate discarded alias credential, install on the peer).
-- [x] 2.4 Implement endpoint selection (two state roots, `<state-root>/relay.sock` derivation, both relays live; entries added after linking) and mode-specific timeout recovery (one-way registration disambiguation, paired rotate-to-known, issuance rotate-or-drop, install same-PSK retry).
+- [x] 2.4 Implement endpoint selection (two state roots, `<state-root>/relay.sock` derivation, both relays live; entries added after linking) and mode-specific timeout recovery (one-way registration disambiguation, paired unknown reporting without auto-rotation, issuance unknown reporting, install same-PSK retry).
 - [x] 2.5 Implement MCP `link` meta-tool with `command="peer"` mirroring the install contract (explicit secret argument, no logging or persistence of the secret).
 
 ## 3. Tests
@@ -20,7 +20,7 @@
 - [x] 3.3 Add ancestor-exchange-after-staging tests asserting abort before publish, covering sink and install writes (unit).
 - [x] 3.4 Add install tests: referent binding, three-way authorization classification, idempotent rewrite, unsafe-component refusal (unit + integration, both surfaces).
 - [x] 3.5 Add the pinned retry test: successful write, lost response, same-authority (`new.peer=all` only) identical retry succeeds (integration).
-- [x] 3.6 Add link-flow tests: one-way bootstrap order, second-claim tolerance (one-way only), halt on issuance failure, paired zero-drop install, cross-equality mismatch abort before any mint, upgrade path, mode-specific timeout recoveries (one-way retry-proceed vs paired rotate-to-known distinguishing test), post-rename durability uncertainty (integration, both surfaces).
+- [x] 3.6 Add link-flow tests: one-way bootstrap order, second-claim tolerance (one-way only), halt on issuance failure, paired zero-drop install, cross-equality mismatch abort before any mint, upgrade path, mode-specific timeout recoveries (one-way retry-proceed, paired/issuance unknown reporting with no-rotation negative controls), post-rename durability uncertainty (integration, both surfaces).
 - [x] 3.7 Add transfer-boundary tests: issuance Response carries exactly one PSK, all other responses omit it, no secret in logs/snippets/diagnostics/outputs (integration).
 
 ## 4. Verification and review

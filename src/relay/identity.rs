@@ -447,7 +447,7 @@ impl PendingCredentialWrite {
                         "credential ancestor changed during commit",
                     ),
                     ConfineError::DirSync { source } => relay_error(
-                        "internal_credential_write",
+                        "internal_credential_durability_uncertain",
                         "credential file published but parent-directory sync failed; durability is uncertain",
                         Some(json!({
                             "path": display,

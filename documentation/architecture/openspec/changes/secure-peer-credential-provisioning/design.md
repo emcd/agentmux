@@ -75,11 +75,11 @@ The prior draft's "every response omits the PSK" was impossible: issuance MUST c
 
 ### 6. Per-step timeout recovery; no cross-relay transaction
 
-Each relay call carries its own timeout, and each unknown state has its own forward recovery — specified PER MODE, because paired mode requires retained mints that one-way mode discards. No automatic compensation anywhere (a compensating drop would race concurrent use):
+Each relay call carries its own timeout, and each unknown state has its own forward recovery — specified PER MODE, because paired mode requires retained mints that one-way mode discards. No automatic compensation anywhere (a compensating drop would race concurrent use), and no automatic rotation on ambiguous state: a transport failure can strike before submission, so a second-claim may attest a pre-existing unrelated record rather than this call's commit, and rotating on it could rotate a credential a normal first response would have rejected:
 
-- One-way registration timeout (alias record commit unknown, mint unneeded): retry `new peer`; success means it was absent, second-claim rejection means it committed — the error disambiguates, then proceed. Existing-record tolerance belongs ONLY to one-way mode.
-- Paired registration timeout (committed registration with lost Response leaves no K1/K3 to proceed with): recover by rotating that record to a known PSK and retaining it, or drop-and-restart the pairing. Blind retry can never recover the lost mint.
-- Issuance timeout (hash may be committed, PSK response lost): the PSK is unknowable on loss, so retry is useless — recover via rotate-and-install (`change psk` yields a fresh known PSK, then install) or drop-and-relink.
+- One-way registration timeout (alias record commit unknown, mint unneeded): retry `new peer`; success means it was absent and second-claim means a record stands — either way the install step verifies the relay type before writing, so both proceed. Existing-record tolerance belongs ONLY to one-way mode.
+- Paired registration timeout: retry once; success carries a fresh known mint and proceeds, while second-claim reports link-registration-unknown for explicit operator recovery (`link peer --upgrade` or drop-and-restart). Never rotate automatically: the record may pre-exist.
+- Issuance timeout: report link-issuance-unknown for explicit operator recovery (`link peer --upgrade` rotates and installs; drop-and-relink restarts). The PSK is unknowable on loss, so blind re-issuance is never attempted and automatic rotation never fires.
 - Install timeout (treated as install-unknown): retry install with the same PSK — safe exactly because install is idempotent under decision 4's identical-content case.
 
 ### 7. Install durability is pinned; uncertainty is typed, never silent

@@ -126,7 +126,10 @@ fn walk_confined(
             Err(source) if source.kind() == io::ErrorKind::NotFound && create => {
                 // `mkdirat` derives the directory from the retained parent
                 // handle, so a concurrently exchanged ancestor cannot redirect
-                // the creation.
+                // the creation. The parent is synced after creating the
+                // child so a fresh directory chain is durable like the
+                // commit it stages for; a staging-phase sync failure aborts
+                // before publication (never uncertainty — nothing published).
                 let created = unsafe {
                     libc::mkdirat(current.as_raw_fd(), cname.as_ptr(), CONFINED_DIR_MODE)
                 };
@@ -136,6 +139,7 @@ fn walk_confined(
                         &component.display().to_string(),
                     ));
                 }
+                sync_fd(&current).map_err(ConfineError::io)?;
                 let reopen_fd = current.as_raw_fd();
                 current = open_at(reopen_fd, &cname, open_dir_flags(), 0)
                     .map_err(|source| map_dir_open_error(reopen_fd, &cname, source))?;
@@ -205,11 +209,19 @@ pub(crate) fn confined_stage(
             "confined parent vanished",
         )));
     };
+    let final_name = cname_of(file_name)?;
+    // Normative final-target symlink refusal: renaming over a planted
+    // symlink would replace the link rather than following it, but the
+    // caller-named sink refuses symlinked targets and relay-owned sinks
+    // must not silently clobber operator entries either.
+    if is_symlink_at(parent.as_raw_fd(), &final_name) {
+        return Err(ConfineError::symlink(&target.display().to_string()));
+    }
     // Test fault-injection seam for the pre-rename path: a
     // `.fault-pre-rename` file beside the target fails staging after the
     // temp is written but before publication, so tests assert the
     // old-content-intact contract deterministically.
-    let tmp_name = temp_file_name(state_root, target, tag);
+    let tmp_name = temp_file_name(state_root, target, tag)?;
     let file = open_at(
         parent.as_raw_fd(),
         &tmp_name,
@@ -235,7 +247,7 @@ pub(crate) fn confined_stage(
     Ok(ConfinedWrite {
         parent,
         tmp_name,
-        final_name: cname_of(file_name),
+        final_name,
         display_path: state_root.join(target).display().to_string(),
         anchor: state_root.to_path_buf(),
         parents: parents.iter().collect(),
@@ -257,7 +269,7 @@ pub(crate) fn confined_read(
     let Some(parent) = walk_confined(root.as_fd(), &parents, false)? else {
         return Ok(None);
     };
-    let final_name = cname_of(file_name);
+    let final_name = cname_of(file_name)?;
     let file = match open_at(parent.as_raw_fd(), &final_name, open_file_flags(), 0) {
         Ok(file) => fs::File::from(file),
         Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -292,9 +304,10 @@ impl ConfinedWrite {
     /// Publishes the staged file with an atomic rename executed against the
     /// retained parent handle, then syncs that handle so the rename is
     /// durable before success is reported. The test exchange hook fires
-    /// between staging and rename, so an ancestor swapped for a symlink
-    /// after staging still aborts: every operation below addresses the
-    /// retained handle, never a re-walked pathname.
+    /// between staging and rename; commit then re-verifies the anchor
+    /// chain, so an exchange persisting at commit aborts loudly. Publication
+    /// itself is handle-relative and can never redirect outside the state
+    /// tree, even for an exchange that resolves identically.
     ///
     /// A directory-sync failure after the rename reports the failure without
     /// rolling back: publication already occurred, so the caller maps it to
@@ -381,15 +394,21 @@ fn fd_identity(fd: BorrowedFd) -> Result<(u64, u64), ConfineError> {
 
 /// Derives the sibling temp file name for `target` without touching the
 /// filesystem: only the file-name mapping of [`unique_temp_path`] is used.
-fn temp_file_name(state_root: &Path, target: &Path, tag: &str) -> CString {
+fn temp_file_name(state_root: &Path, target: &Path, tag: &str) -> Result<CString, ConfineError> {
     let tmp = unique_temp_path(&state_root.join(target), tag);
     cname_of(tmp.file_name().map(Path::new).unwrap_or(target))
 }
 
-/// Converts a path component to a `CString`, rejecting interior NUL bytes
-/// that cannot name a filesystem entry.
-fn cname_of(component: &Path) -> CString {
-    CString::new(component.as_os_str().as_bytes()).expect("confined target component holds NUL")
+/// Converts a path component to a `CString`, refusing interior NUL bytes
+/// that cannot name a filesystem entry. Fallible defense-in-depth behind
+/// the peer-token grammar, which already rejects NUL before relay contact.
+fn cname_of(component: &Path) -> Result<CString, ConfineError> {
+    CString::new(component.as_os_str().as_bytes()).map_err(|_| {
+        ConfineError::io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "confined target component holds NUL",
+        ))
+    })
 }
 
 /// Converts a whole path to a `CString` for the anchor open, returning

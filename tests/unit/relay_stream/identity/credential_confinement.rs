@@ -361,6 +361,48 @@ fn path_sink_through_symlinked_parent_still_succeeds() {
     );
 }
 
+// A pre-planted symlink at the final credential path is refused, not
+// replaced: the link stands and the external target is untouched.
+#[test]
+fn config_sink_refuses_symlinked_final_target() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_conf_final";
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let session_dir = state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("sessions")
+        .join("alpha");
+    std::fs::create_dir_all(&session_dir).expect("create session directory");
+    let external = temporary.path().join("external-final");
+    std::fs::create_dir_all(&external).expect("create external directory");
+    std::fs::write(external.join("marker"), "untouched").expect("write marker");
+    std::os::unix::fs::symlink(
+        external.join("stolen.psk"),
+        session_dir.join("identity.psk"),
+    )
+    .expect("plant final symlink");
+
+    let response = operator_request(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        config_destination_request(&format!("alpha@{bundle_name}")),
+    );
+    assert_invalid_credential_path(&response);
+    assert_untouched(&external);
+    assert!(
+        !external.join("stolen.psk").exists(),
+        "refused publish must not materialize through the link"
+    );
+    assert!(
+        session_dir.join("identity.psk").is_symlink(),
+        "refused publish must leave the planted link standing"
+    );
+}
+
 // Transfer boundary: the issuance Response carries exactly one PSK and no
 // file path, while file-sink responses omit the PSK and carry the path.
 #[test]
@@ -406,5 +448,131 @@ fn issuance_response_carries_psk_while_file_sinks_omit_it() {
     assert!(
         filed["response"]["written_path"].is_string(),
         "file-sink response must carry the path: {filed:?}"
+    );
+}
+
+// A post-rename directory-sync failure on a `new peer` config sink keeps
+// the committed record: the file is published, so compensation must not
+// orphan it. A repeat registration second-claims, proving the record
+// stands.
+#[test]
+fn new_peer_config_dir_sync_failure_preserves_registration() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_conf_sink_new";
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let principal_id = format!("alpha@{bundle_name}");
+    let session_dir = state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("sessions")
+        .join("alpha");
+    std::fs::create_dir_all(&session_dir).expect("create session directory");
+    std::fs::write(session_dir.join(".fault-dir-sync"), "").expect("arm dir-sync fault");
+
+    let response = operator_request(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        config_destination_request(&principal_id),
+    );
+    assert_eq!(
+        response["response"]["kind"], "error",
+        "expected uncertainty error: {response:?}"
+    );
+    assert_eq!(
+        response["response"]["error"]["code"], "internal_credential_durability_uncertain",
+        "wrong code: {response:?}"
+    );
+    let slot = session_dir.join("identity.psk");
+    assert!(
+        slot.exists(),
+        "uncertain publish must leave the credential file in place"
+    );
+    assert!(
+        !std::fs::read_to_string(&slot)
+            .expect("read published slot")
+            .is_empty(),
+        "published slot must hold the credential"
+    );
+
+    let retry = operator_request(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        config_destination_request(&principal_id),
+    );
+    assert_eq!(
+        retry["response"]["error"]["code"], "validation_principal_exists",
+        "record must stand, not roll back: {retry:?}"
+    );
+}
+
+// A post-rename directory-sync failure on a `change psk` config sink keeps
+// the rotated record and revokes the superseded credential: the old PSK
+// stops authenticating and the slot file holds the replacement.
+#[test]
+fn change_psk_config_dir_sync_failure_preserves_rotation() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_conf_sink_rotate";
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let principal_id = format!("alpha@{bundle_name}");
+    let old_psk = register_peer(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        &principal_id,
+        None,
+    );
+    let session_dir = state_root
+        .join("bundles")
+        .join(bundle_name)
+        .join("sessions")
+        .join("alpha");
+    std::fs::create_dir_all(&session_dir).expect("create session directory");
+    std::fs::write(session_dir.join(".fault-dir-sync"), "").expect("arm dir-sync fault");
+
+    let response = operator_request(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        json!({
+            "operation": "change_psk",
+            "principal_id": principal_id,
+            "destination": {"kind": "config"},
+        }),
+    );
+    assert_eq!(
+        response["response"]["kind"], "error",
+        "expected uncertainty error: {response:?}"
+    );
+    assert_eq!(
+        response["response"]["error"]["code"], "internal_credential_durability_uncertain",
+        "wrong code: {response:?}"
+    );
+
+    let stale = hello_first_frame(
+        &configuration_roots,
+        &bundle_paths,
+        &principal_id,
+        &old_psk,
+        false,
+    );
+    assert_eq!(
+        stale["frame"], "response",
+        "superseded credential must stop authenticating: {stale:?}"
+    );
+    let rotated = operator_request(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        json!({"operation": "change_psk", "principal_id": principal_id}),
+    );
+    assert_eq!(
+        rotated["response"]["kind"], "change_psk",
+        "rotated record must stay rotatable: {rotated:?}"
     );
 }

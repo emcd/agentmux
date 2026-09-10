@@ -13,7 +13,7 @@ use crate::relay::identity::{
     PrincipalStore, PrincipalType, invalid_credential_path, state_relative_path,
 };
 use crate::relay::{RelayError, RelayResponse, SCHEMA_VERSION, relay_error};
-use crate::runtime::paths::peer_relay_psk_path;
+use crate::runtime::paths::{is_valid_peer_token, peer_relay_psk_path};
 
 /// Installs a peer credential into this relay's relay-owned peer slot.
 ///
@@ -38,7 +38,7 @@ pub(in crate::relay) fn handle_install_peer_credential(
     alias: String,
     psk: String,
 ) -> Result<RelayResponse, RelayError> {
-    if !is_valid_peer_alias(alias.as_str()) {
+    if !is_valid_peer_token(alias.as_str()) {
         return Err(invalid_credential_path(
             alias.as_str(),
             "peer alias is not a safe path component",
@@ -51,6 +51,43 @@ pub(in crate::relay) fn handle_install_peer_credential(
             Some(serde_json::json!({ "alias": alias })),
         ));
     }
+    // Authorization gate before any state inspection: a caller holding
+    // neither applicable control learns nothing about alias existence or
+    // slot content. Policy resolution reads configuration only, never the
+    // store or slot. Exact state-dependent authorization follows under the
+    // shared identity-admin serialization.
+    let new_denial = authorize_relay_action(
+        configuration_roots,
+        requester_principal_id,
+        RelayActionFamily::New,
+        "peer",
+    )
+    .err();
+    let change_denial = authorize_relay_action(
+        configuration_roots,
+        requester_principal_id,
+        RelayActionFamily::Change,
+        "psk",
+    )
+    .err();
+    match (new_denial, change_denial) {
+        (Some(denial), Some(_)) => Err(denial),
+        (new_denial, change_denial) => {
+            install_after_gate(state_root, alias, psk, new_denial, change_denial)
+        }
+    }
+}
+
+/// Installs after the authorization gate admitted at least one applicable
+/// control: alias-referent binding, slot classification, exact
+/// state-dependent authorization, and confined publication.
+fn install_after_gate(
+    state_root: &Path,
+    alias: String,
+    psk: String,
+    new_denial: Option<RelayError>,
+    change_denial: Option<RelayError>,
+) -> Result<RelayResponse, RelayError> {
     let store = PrincipalStore::load(state_root)?;
     let referent = store.find_by_principal_id(format!("{alias}@RELAY").as_str());
     if !referent.is_some_and(|record| record.principal_type == PrincipalType::Relay) {
@@ -78,41 +115,20 @@ pub(in crate::relay) fn handle_install_peer_credential(
     };
     match slot {
         SlotState::Absent => {
-            authorize_relay_action(
-                configuration_roots,
-                requester_principal_id,
-                RelayActionFamily::New,
-                "peer",
-            )?;
+            if let Some(denial) = new_denial {
+                return Err(denial);
+            }
         }
         SlotState::Identical => {
             // Either control suffices: an identical rewrite changes nothing,
-            // so accepting both preserves lost-response retry for the
-            // original caller without widening authority. Surface the
-            // provisioning denial when neither control is held.
-            if let Err(new_denial) = authorize_relay_action(
-                configuration_roots,
-                requester_principal_id,
-                RelayActionFamily::New,
-                "peer",
-            ) && authorize_relay_action(
-                configuration_roots,
-                requester_principal_id,
-                RelayActionFamily::Change,
-                "psk",
-            )
-            .is_err()
-            {
-                return Err(new_denial);
-            }
+            // so the gate's guarantee (at least one control held) is the
+            // whole rule, preserving lost-response retry for the original
+            // caller without widening authority.
         }
         SlotState::Different => {
-            authorize_relay_action(
-                configuration_roots,
-                requester_principal_id,
-                RelayActionFamily::Change,
-                "psk",
-            )?;
+            if let Some(denial) = change_denial {
+                return Err(denial);
+            }
         }
     }
     let staged =
@@ -152,19 +168,6 @@ pub(in crate::relay) fn handle_install_peer_credential(
         alias,
         written_path,
     })
-}
-
-/// True when `alias` is safe to embed in the relay-owned peer slot filename:
-/// non-empty, with no path separator, no identity qualifier, and no
-/// traversal-only value. Safe grammar does not protect a symlinked `peers/`
-/// ancestor — that is the traversal helper's job — but it keeps a crafted
-/// alias from escaping the slot directory lexically.
-fn is_valid_peer_alias(alias: &str) -> bool {
-    !alias.is_empty()
-        && alias != "."
-        && alias != ".."
-        && !alias.contains('/')
-        && !alias.contains('@')
 }
 
 /// Slot classification for peer credential install authorization.

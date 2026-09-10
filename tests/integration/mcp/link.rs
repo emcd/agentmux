@@ -77,7 +77,7 @@ async fn link_peer_rejects_missing_alias_before_relay_contact() {
             .get("message")
             .and_then(Value::as_str)
             .unwrap_or_default()
-            .contains("alias is required"),
+            .contains("alias"),
         "unexpected error: {response:?}"
     );
     assert!(
@@ -111,6 +111,45 @@ async fn link_peer_rejects_missing_psk_before_relay_contact() {
             .contains("psk is required"),
         "unexpected error: {response:?}"
     );
+    assert!(
+        relay
+            .requests_for_operation("install_peer_credential")
+            .is_empty(),
+        "rejected link must not reach the relay"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn link_peer_rejects_unsafe_alias_before_relay_contact() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(|_| panic!("relay must not receive link for an unsafe alias")),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+
+    for alias in [
+        "../escape",
+        "a/b",
+        "with@qualifier",
+        "bang!alias",
+        "",
+        ".",
+        "has\0nul",
+    ] {
+        let response = harness
+            .call_tool(2, "link", link_args(json!({"alias": alias})))
+            .await;
+        let error = response["error"].as_object().expect("tool error");
+        assert!(
+            error
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .contains("alias"),
+            "unsafe alias {alias:?} must fail: {response:?}"
+        );
+    }
     assert!(
         relay
             .requests_for_operation("install_peer_credential")
@@ -175,6 +214,41 @@ async fn link_peer_surfaces_relay_rejection() {
             .and_then(Value::as_str),
         Some("validation_unknown_principal"),
         "relay rejection must surface: {response:?}"
+    );
+    assert_eq!(
+        relay
+            .requests_for_operation("install_peer_credential")
+            .len(),
+        1
+    );
+}
+
+// Negative control: a relay response carrying a PSK to the link tool must
+// neither persist (inscriptions carry alias only) nor return the secret.
+// The tool reports a generic failure with no payload.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn link_peer_redacts_psk_bearing_relay_response() {
+    let runtime = TestRuntime::create();
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        Arc::new(|_| {
+            json!({
+                "kind": "new_peer",
+                "schema_version": "1",
+                "principal_id": "bravo@RELAY",
+                "principal_type": "relay",
+                "psk": "leaked-secret-psk",
+                "written_path": Value::Null,
+                "config_snippet": "# snippet",
+            })
+        }),
+    );
+    let mut harness = McpHarness::spawn(&runtime).await;
+    let response = harness.call_tool(2, "link", link_args(json!({}))).await;
+    let serialized = serde_json::to_string(&response).expect("serialize tool response");
+    assert!(
+        !serialized.contains("leaked-secret-psk"),
+        "PSK-bearing relay response must not surface: {serialized}"
     );
     assert_eq!(
         relay
