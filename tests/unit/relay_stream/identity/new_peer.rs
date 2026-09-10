@@ -498,6 +498,44 @@ fn new_peer_stays_silent_for_a_scope_that_merely_resolves_to_nothing() {
     );
 }
 
+// A relay principal's storage hint must not name a path under this relay's
+// state root: the credential is installed under the connecting relay's own
+// state directory, which this relay cannot see.
+#[test]
+fn new_peer_relay_snippet_names_no_local_state_root_path() {
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "ident_snippet_relay";
+    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+
+    let response = operator_request(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        json!({"operation": "new_peer", "principal_id": "peer1@RELAY"}),
+    );
+    assert_eq!(
+        response["response"]["kind"], "new_peer",
+        "new peer rejected: {response:?}"
+    );
+    let snippet = response["response"]["config_snippet"]
+        .as_str()
+        .expect("config snippet in new peer response");
+    assert!(
+        snippet.contains("peers/peer1.psk"),
+        "the hint must name the peer file: {snippet}"
+    );
+    assert!(
+        snippet.contains("cannot see"),
+        "the hint must disclaim visibility into the peer directory: {snippet}"
+    );
+    assert!(
+        !snippet.contains(&state_root.display().to_string()),
+        "the hint must not print this relay's state root as the peer path: {snippet}"
+    );
+}
+
 // A registration with no scope at all raises nothing.
 #[test]
 fn new_peer_without_a_scope_raises_no_diagnostics() {

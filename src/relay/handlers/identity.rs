@@ -27,7 +27,7 @@ use crate::relay::{
     CredentialDestination, RelayDiagnostic, RelayError, RelayResponse, SCHEMA_VERSION, relay_error,
 };
 use crate::runtime::inscriptions::emit_inscription;
-use crate::runtime::paths::{peer_relay_psk_path, session_identity_psk_path};
+use crate::runtime::paths::session_identity_psk_path;
 
 /// Inputs for a `new peer` registration.
 pub(in crate::relay) struct NewPeerRequestContext {
@@ -869,10 +869,8 @@ fn build_config_snippet(
             let alias = split_principal_id(principal_id)
                 .map(|(local, _)| local)
                 .unwrap_or(principal_id);
-            let path = peer_relay_psk_path(state_root, alias);
             format!(
-                "Store the PSK at {} (mode 0600) on the peer relay; it presents it as identity_token when connecting inbound.",
-                path.display()
+                "Store the PSK as peers/{alias}.psk under the connecting relay's own state directory (mode 0600), copying it there out of band; this relay cannot see that directory so no printed path can name it. It presents it as identity_token when connecting inbound."
             )
         }
         PrincipalType::User | PrincipalType::Application => {
