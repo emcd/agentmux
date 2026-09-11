@@ -58,9 +58,15 @@ This module implements the MCP stdio server for `agentmux`.
     - `authenticated_identity` (optional): the relay-verified `principal_id`
       of the caller, present only for store-backed credential connections
       and omitted for socket-trust sessions.
-    - `on_behalf_of` (optional): the delegated principal the caller is
-      acting for. Reserved for a future delegated-identity delta; surfaced
-      in the schema so callers can consume it without a breaking change.
+    - `on_behalf_of` (optional): the principal the *originating* relay
+      admitted, stamped on a forwarded cross-relay `Send`/`Raww`. Advisory
+      and single-hop: never an authorization input (the receiving relay
+      still gates on the peer's registered ingress `scope`), never chained
+      onward to a third relay, and meaningful only relative to
+      `authenticated_identity` (which names the forwarding relay's own peer
+      principal). `raww` does not surface `on_behalf_of` in either its
+      request schema or its response; the relay tracks it internally for
+      cross-relay forwarding but neither side exposes it to the caller.
     Both follow the relay's `skip_serializing_if` semantics: omitted
     entirely (not `null`) when absent.
 - Validate MCP request payloads before relay submission.
@@ -331,6 +337,9 @@ when the relay is down, and reachability surfaces per request as
   (`mcp.tool.list.relays.*`, `mcp.tool.list.namespaces.*`,
   `mcp.tool.list.principals.*`: request / success / relay_error /
   unexpected_response / io_error).
+- To establish the peering itself — issuing and installing peer
+  credentials with `new peer` / `link peer` across both relays — see the
+  [reciprocal setup guide](../../documentation/usage/reciprocal-relay-setup.md).
 
 ## Key Types
 
