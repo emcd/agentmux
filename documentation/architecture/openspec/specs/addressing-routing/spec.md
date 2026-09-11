@@ -104,7 +104,7 @@ Pty and Tmux lifecycle selection constraints:
 
 - if a coder-backed session includes `coder-session-id` and the coder defines
   `[coders.pty]` (Pty) or `[coders.tmux]` (Tmux), the runtime SHALL construct
-  the resume command by substituting `{coder-session-id}` into the
+  the resume command by substituting `{{coder-session-id}}` into the
   `resume-command` template.
 - if the coder-backed session omits `coder-session-id`, the runtime SHALL
   use the `initial-command` template.
