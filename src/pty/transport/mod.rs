@@ -131,7 +131,7 @@ pub struct PtyTransport {
     started: bool,
     /// Configured initial command (from the per-coder
     /// `[coders.<id>.pty].initial-command` after the bootstrap path
-    /// substitutes `{coder-session-id}`). Used by `startup` to launch
+    /// substitutes `{{coder-session-id}}`). Used by `startup` to launch
     /// the child process.
     configured_initial_command: String,
     /// Configured working directory (from the bundle member's

@@ -23,7 +23,7 @@ id = "codex"
 
 [coders.tmux]
 initial-command = "codex start"
-resume-command = "codex resume {coder-session-id}"
+resume-command = "codex resume {{coder-session-id}}"
 prompt-regex = "^›"
 prompt-inspect-lines = 8
 prompt-idle-column = 3
