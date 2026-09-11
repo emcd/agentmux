@@ -268,6 +268,15 @@ that does not grant `updown = "home"` cannot bring bundles up or down;
 `agentmux up` and `agentmux down` will surface a typed
 `authorization_forbidden` error.
 
+Relay-wide credential administration (`new.peer`, `change.psk`,
+`change.scope`, `drop.peer`) requires the `all` tier: these operations
+mutate the relay-level principal store. `change.scope` replaces a peer
+principal's ingress scope without rotating its credential; `link peer`
+carries no separate control and authorizes each call it makes under
+`new.peer` / `change.psk`. The full control inventory and the peer
+ingress scope grammar live in
+[authorization.md](authorization.md).
+
 ### `relay.toml` — relay-wide settings
 
 This file is optional. A missing `relay.toml` resolves to all defaults,

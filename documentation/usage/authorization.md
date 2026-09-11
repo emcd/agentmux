@@ -103,16 +103,44 @@ The relay-wide grants are:
 
 - `new.peer = "all"` — register a peer principal and mint its PSK.
 - `change.psk = "all"` — rotate an existing principal's PSK.
+- `change.scope = "all"` — replace a peer relay principal's ingress
+  scope in place without changing its credential (rotation rights
+  confer none of it).
 - `drop.peer = "all"` — delete a principal from the store, revoking any
   session still bound to it.
 
-These are three separate controls. Granting `new.peer` and `change.psk`
-confers no ability to drop, so an existing policy file that predates the
-`drop` control permits no deletion until an operator adds it.
+These are four separate controls. Granting `new.peer` and `change.psk`
+confers no ability to drop or to rescope, so an existing policy file
+that predates the `drop` or `change.scope` controls permits neither
+until an operator adds them.
 
 These grants must be carried by the calling session's policy preset,
 not by the bundle's `default` preset. The MCP server's own identity
 must therefore carry an operator policy for these tools to succeed.
+
+`agentmux link peer` carries no separate control: each call it makes
+is authorized under the grants above — registration and issuance
+under `new.peer`, installation under `new.peer` for an empty slot or
+`change.psk` for a changed credential. The safe operator workflow is
+the paired flow in
+[reciprocal-relay-setup.md](reciprocal-relay-setup.md), which mints
+and installs both directions without rendering either PSK.
+
+## Peer ingress scope grammar
+
+A peer relay principal's ingress scope is `'*'` for every namespace
+with addressable principals (including `GLOBAL` and future
+addressable namespace types), a comma-separated set of explicit
+namespaces, or absent for no rights. Names are trimmed, sorted,
+deduplicated, and case-preserved; they need not exist yet. `RELAY`
+(the peer-identity namespace) and `EXTERNAL` (the application
+namespace) are never addressable: they are rejected as explicit names
+and never covered by `'*'`. An empty item, a wildcard mixed with
+names, or a malformed name fails load with
+`validation_invalid_params`. Replace a scope in place with
+`change scope <id>@RELAY --scope` (gated on `change.scope=all`);
+every ingress decision resolves the live store record, never a
+Hello-time snapshot.
 
 ## Operational references
 

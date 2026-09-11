@@ -150,7 +150,8 @@ for the full development workflow.
     coordination flows with relay auto-start fallback for `agentmux tui`.
 - Inter-relay communication:
   - Peers via `relay.toml` `[[peers]]` (`alias`/`address`/`connect-as`),
-    PSK credential admin (`agentmux new peer` / `agentmux change psk`),
+    PSK credential admin (`agentmux new peer` / `agentmux change psk` /
+    `agentmux change scope` / `agentmux drop peer`),
     reciprocal provisioning (`agentmux link peer`, which mints and installs
     without printing PSKs), cross-relay `send` via bang-path
     `session@bundle!peer`, relay-wide discovery (`list relays` /
