@@ -427,6 +427,7 @@ struct PlaceholderContext {
     end: usize,
     entry_quote: QuoteState,
     entry_boundary: BoundaryState,
+    entry_escaped: bool,
     right_boundary_valid: bool,
 }
 
@@ -513,20 +514,14 @@ fn scan_template(template: &str, pattern: &Regex) -> TemplateScan {
             state.2,
             &template[cursor..occurrence.start()],
         );
-        if state.2 {
-            // An escape before the opening braces quotes them as a shell
-            // would: the occurrence stays literal and unclassified.
-            state = feed_text(state.0, state.1, state.2, occurrence.as_str());
-            cursor = occurrence.end();
-            continue;
-        }
-        let (entry_quote, entry_boundary, _) = state;
+        let (entry_quote, entry_boundary, entry_escaped) = state;
         state = feed_text(state.0, state.1, state.2, occurrence.as_str());
         occurrences.push(PlaceholderContext {
             begin: occurrence.start(),
             end: occurrence.end(),
             entry_quote,
             entry_boundary,
+            entry_escaped,
             right_boundary_valid: right_boundary_valid(template, occurrence.end(), state),
         });
         cursor = occurrence.end();
@@ -535,14 +530,15 @@ fn scan_template(template: &str, pattern: &Regex) -> TemplateScan {
 }
 
 /// Rejects a directory token outside a standalone unquoted word: quoted,
-/// affixed, or escape-continued placement would corrupt the quoted
-/// rendering with literal quote characters or extra word bytes.
+/// affixed, escape-continued, or escape-opened placement would corrupt the
+/// quoted rendering with literal quote characters or extra word bytes.
 fn check_directory_placement(
     occurrence: &PlaceholderContext,
     path: &Path,
     session_id: &str,
 ) -> Result<(), ConfigurationError> {
-    if occurrence.entry_quote != QuoteState::Outside
+    if occurrence.entry_escaped
+        || occurrence.entry_quote != QuoteState::Outside
         || occurrence.entry_boundary != BoundaryState::AtBoundary
         || !occurrence.right_boundary_valid
     {

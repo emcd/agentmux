@@ -196,6 +196,39 @@ resume-command = "conduct"
 }
 
 #[test]
+fn rejects_escaped_unknown_placeholder() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let error = load_error_for_initial("\"cmd \\\\{{bundle}}\"", &directory);
+    assert!(
+        error.contains("unknown placeholder"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_escaped_directory_placeholder() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let error = load_error_for_initial("\"cmd \\\\{{session-directory}}\"", &directory);
+    assert!(
+        error.contains("standalone unquoted word"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn escaped_id_token_still_substitutes_raw() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let command = command_for_initial("\"conduct \\\\{{bundle-session-id}}\"", &directory, None);
+    assert!(
+        command.contains("\\session-a"),
+        "escaped id token must still substitute, got: {command}"
+    );
+}
+
+#[test]
 fn rejects_directory_inside_single_quotes() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();

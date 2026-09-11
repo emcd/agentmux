@@ -23,7 +23,8 @@
   placement controls for `{{session-directory}}` (standalone accept,
   single-quote reject, double-quote reject, adjacent-prefix reject,
   adjacent-suffix reject, after-escape reject, escape-then-whitespace
-  accept); backslash-bearing directory value resolves; Pty argv equality
+  accept, escaped-unknown reject, escaped-directory reject, escaped-id
+  raw substitution); backslash-bearing directory value resolves; Pty argv equality
   asserted through the real `shell_words` tokenizer; tmux argv equality
   asserted through a shell seam; ACP stdio `command` containing brace
   text passes through verbatim and unrendered.
