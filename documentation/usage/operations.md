@@ -279,6 +279,15 @@ A peer's `address` in `relay.toml` is the other relay's socket path beneath its
 state root — `~/.local/state/agentmux-b/relay.sock` for the pair above. Because
 you chose both roots, both addresses are known before either relay has run.
 
+Cross-relay failures are typed and scoped to the affected delivery, never
+to startup: outbound peer connections are lazy, and a missing or
+unreadable peer credential fails only that delivery naming the path.
+The full symptom table (link issuance/registration uncertainty, naming
+mismatches, authorization, credential paths) lives in
+[reciprocal-relay-setup.md](reciprocal-relay-setup.md); the peer ingress
+scope grammar and the relay-wide controls behind those errors live in
+[authorization.md](authorization.md).
+
 ### Migrating off repository-local state
 
 Earlier versions redirected debug builds to a repository-local state root,

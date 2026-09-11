@@ -7,6 +7,53 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **`agentmux link peer` (CLI) / `link` (MCP):** safe cross-relay
+  credential provisioning. One-way mode registers, mints, and installs
+  a single direction; `--paired` verifies cross-matched
+  alias/`connect-as` names and cross-installs both directions with two
+  mints, two installs, and zero drops; `--upgrade` rotates in place
+  with no registration step. Raw PSKs are never printed, logged, or
+  copied by hand — only hashes sit in the principal store, raw bytes
+  rest `0600` under `<state-root>/peers/`. Uncertain issuance or
+  registration reports `link_issuance_unknown` /
+  `link_registration_unknown` for explicit recovery instead of blind
+  retry. See `documentation/usage/reciprocal-relay-setup.md`.
+- **`agentmux change scope` (CLI) / `change.scope` (MCP):** replace a
+  peer relay principal's ingress scope in place without rotating its
+  credential, gated on the new `change.scope=all` control (rotation
+  rights confer none of it).
+- **Coder command interpolation:** `{{bundle-session-id}}` and
+  `{{session-directory}}` (rendered as a single shell-quoted
+  standalone word) join the standardized double-brace vocabulary
+  alongside the migrated `{{coder-session-id}}`.
+- **Multi-namespace peer grants:** ingress scopes use the namespace
+  grammar — `'*'` for every addressable namespace (including `GLOBAL`
+  and future addressable types, never `RELAY`/`EXTERNAL`),
+  comma-separated namespace sets, or absent for no rights.
+
+### Changed
+
+- **BREAKING: coder templates use double-brace syntax only.**
+  `{coder-session-id}` is rejected as an unknown placeholder; update
+  templates to `{{coder-session-id}}`. Unknown placeholders of either
+  brace shape fail configuration load.
+- **BREAKING: exact-principal peer grants removed.** A stored peer
+  scope outside the namespace grammar fails store loading rather than
+  acquiring fallback rights. Reprovision affected peers with
+  `new peer` / `change scope`; there is no conversion path.
+- Pinned Rust toolchain to 1.98.0 (`rust-toolchain.toml`; CI and
+  pre-commit hooks run the identical compiler).
+
+### Fixed
+
+- State-root symlink confinement for credential writes: symlinked
+  ancestors abort with `validation_invalid_credential_path` instead of
+  traversing attacker-influenced paths.
+- macOS `mode_t` widths in confined directory creation (`mkdirat` /
+  `openat`).
+
 ## [0.9.0] - 2026-08-26
 
 ### Added

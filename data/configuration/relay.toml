@@ -33,7 +33,10 @@
 
 # Outbound peer relay endpoints. Each entry activates cross-relay routing: a
 # `Send`/`Raww` addressed with the bang-path `<session>@<bundle>!<alias>` is
-# forwarded to the peer you locally call `<alias>`. `[[peers]]` is OUTBOUND-ONLY
+# forwarded to the peer you locally call `<alias>`. Prefer
+# `agentmux link peer` (paired flow) to provision both directions without
+# handling raw PSKs; see documentation/usage/reciprocal-relay-setup.md.
+# `[[peers]]` is OUTBOUND-ONLY
 # and takes no `scope`: inbound cross-relay authorization is the scope you grant a
 # connecting peer's principal with `new peer <id>@RELAY --scope`, enforced by the
 # target-side ingress filter. Raw peer PSKs are NOT stored here — they remain

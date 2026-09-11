@@ -766,7 +766,8 @@ one directory apart; prefer `control` when the authorization sense is meant.
   connecting peer's principal via `new peer <id>@RELAY --scope`, enforced by the
   target-side ingress filter (deny-by-default). The scope is `'*'` for every
   namespace with addressable principals (including `GLOBAL` and future
-  addressable namespace types), a comma-separated set of explicit namespaces,
+  addressable namespace types, and never the `RELAY`/`EXTERNAL`
+  partitions), a comma-separated set of explicit namespaces,
   or absent for no rights; `change scope <id>@RELAY --scope` (gated on the
   dedicated `change.scope=all` control) replaces it in place without changing
   the PSK. Every ingress decision resolves the current store record — never a
@@ -881,13 +882,15 @@ one directory apart; prefer `control` when the authorization sense is meant.
   calls cannot interleave store persists and credential renames. All four
   authorize the requester relay-wide: the caller's policy preset (resolved
   from a session member's `policy_id` or a `@GLOBAL` operator's TUI-config
-  policy) must grant `new.peer` / `change.psk` / `drop.peer` at the `all`
+  policy) must grant `new.peer` / `change.psk` / `change.scope` /
+  `drop.peer` at the `all`
   tier — bundle-relative `home` scope is insufficient, and application/relay
   principals are denied fail-closed. Install classifies the slot at commit
   time: absent requires `new.peer`, byte-identical content accepts either
-  control, different content requires `change.psk`. The three controls are
-  distinct: neither `new.peer` nor `change.psk` confers deletion, so a policy
-  file predating the `drop` control permits none until an operator adds it.
+  control, different content requires `change.psk`. The four controls are
+  distinct: neither `new.peer` nor `change.psk` confers deletion or
+  rescoping, so a policy file predating the `drop` or `change.scope`
+  control permits neither until an operator adds it.
   Every state-root-owned credential write (sink staging, peer-slot
   installation, store load/persist) traverses path components without
   following symlinks and publishes relative to retained directory handles

@@ -54,8 +54,11 @@ Scopes are the inbound grants each side confers: `--alias-scope` is what
 the peer may reach on the destination relay, recorded on the alias
 principal. Omit a scope for no rights (the peer authenticates but can
 reach nothing); pass `--scope '*'` or a comma-separated namespace set
-to grant ingress. Scope grammar is the same namespace grammar as
-`new peer --scope`; see the [CLI surface](cli-surface.md).
+to grant ingress. The full grammar (`'*'`, namespace sets, no-rights
+absence, and the `RELAY`/`EXTERNAL` exclusions) lives in
+[authorization.md](authorization.md); adjust a granted scope afterwards
+with `change scope <alias>@RELAY --scope` (gated on
+`change.scope=all`), which replaces it without rotating the PSK.
 
 ## 2. Provision both directions with `link peer`
 
