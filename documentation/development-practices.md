@@ -545,6 +545,18 @@ before approval. Request both reviews directly and peer-to-peer; do not spend an
 Advisor review on routine mechanical work. No author goes directly from
 self-verification to merge.
 
+### Review Triggers
+
+A non-binding checklist of patterns that have caused review misses in past
+cycles lives in the notebook at `agentmux:procedures/reviews/1`. Update
+items via the nb MCP as new misses are observed — this subsection is the
+stable anchor, not the live content.
+
+The rubric applies **when relevant**: each item names a trigger (commit
+shape, claim type, or role activity), a risk (concrete miss it would have
+caught), and a check (what to actually do). Skip items that do not match
+the situation. Mechanical walks of the full list defeat the purpose.
+
 ## Pre-Commit Validation
 
 Run validation before committing to avoid hook failures:
