@@ -33,17 +33,27 @@ The template vocabulary SHALL be:
 - `{{session-directory}}` — the session's declared `directory`, rendered as
   a single shell-quoted word denoting that directory (POSIX single-quote
   escaping), so it arrives as one argument on both the tmux shell handoff
-  and the pty `shell_words` handoff.
+  and the pty `shell_words` handoff. It SHALL occupy an entire unquoted
+  shell word in the original template (see below); the id tokens above
+  substitute as raw values and may occur in any template context.
 
 Template placeholders SHALL be validated before reconciliation starts, by
 inspecting and classifying every placeholder occurrence in the original
 template before substitution: each `{name}` or `{{name}}` (where `name`
 matches `[a-z][a-z0-9_-]*`) is either a known variable or unknown.
-Unknown occurrences SHALL fail configuration validation, as SHALL known
-occurrences lacking required values (a template using `{coder-session-id}`
-without a session value, or `{{session-directory}}` when the session
-directory is not valid Unicode). Only validated known occurrences are
-substituted; substituted value bytes SHALL never be rescanned.
+Unknown occurrences SHALL fail configuration validation, as SHALL a
+template using `{coder-session-id}` without a session value. Only
+validated known occurrences are substituted; substituted value bytes
+SHALL never be rescanned.
+
+The placeholder `{{session-directory}}` SHALL be bounded on both sides
+by a POSIX shell word boundary: the scanner SHALL be in Outside quote
+state with no active escape at the opening `{{`, and the byte after the
+closing `}}` SHALL be end-of-template or an unquoted unescaped
+whitespace. Templates placing it inside single quotes, inside double
+quotes, adjacent to non-boundary characters on either side, or after an
+escape sequence that continues the current word SHALL fail configuration
+validation.
 
 #### Scenario: Use resume command when coder-session-id is present
 
@@ -99,12 +109,52 @@ substituted; substituted value bytes SHALL never be rescanned.
   placeholder
 - **THEN** the system rejects configuration with a validation error
 
-#### Scenario: Reject non-Unicode directory with {{session-directory}}
+#### Scenario: Accept session-directory as a standalone unquoted word
+
+- **WHEN** a chosen command template contains `{{session-directory}}` as
+  an entire unquoted shell word (bounded on both sides by a word
+  boundary in the original template)
+- **THEN** the system resolves the command with the directory as a single
+  quoted word denoting the declared directory
+
+#### Scenario: Reject session-directory inside single quotes
 
 - **WHEN** a chosen command template contains `{{session-directory}}`
-- **AND** the session's declared directory is not valid Unicode
+  inside single quotes
 - **THEN** the system rejects configuration with a validation error
-- **AND** templates without `{{session-directory}}` are unaffected
+
+#### Scenario: Reject session-directory inside double quotes
+
+- **WHEN** a chosen command template contains `{{session-directory}}`
+  inside double quotes
+- **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Reject session-directory with an adjacent prefix
+
+- **WHEN** a chosen command template contains `{{session-directory}}`
+  immediately preceded by a non-boundary character
+- **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Reject session-directory with an adjacent suffix
+
+- **WHEN** a chosen command template contains `{{session-directory}}`
+  immediately followed by a non-boundary character
+- **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Reject session-directory after an escape continuing the word
+
+- **WHEN** a chosen command template contains `{{session-directory}}`
+  immediately preceded by an escape sequence that continues the current
+  word
+- **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Accept session-directory after escape-then-whitespace
+
+- **WHEN** a chosen command template contains an escaped character, then
+  an unquoted unescaped whitespace, then `{{session-directory}}` as a
+  standalone word
+- **THEN** the system resolves the command with the directory as a single
+  quoted word denoting the declared directory
 
 #### Scenario: Reject unresolved placeholder during validation
 

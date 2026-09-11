@@ -43,9 +43,9 @@ carry characters outside the regex class — in practice, underscores, e.g.
 `id@bundle`); `{{session-directory}}` renders the session's declared
 `directory` as the literal declared string with no rebasing or
 canonicalization; the value is shell-quoted per D5 so the resulting argv
-argument equals the declared directory on both transports. Rationale: both are available in `build_session_target` without
-new lookup or resolution (D4's conditional non-Unicode rejection below is
-the one deliberate new validation failure, not a resolution step). Naming: `bundle-session-id` reads as the
+argument equals the declared directory on both transports, provided the
+placeholder occupies a standalone word (see D5). Rationale: both are available in `build_session_target` without
+new lookup or resolution. Naming: `bundle-session-id` reads as the
 session id in bundle id-space, symmetric with `coder-session-id` (the
 session id in coder id-space) — hyphens throughout, per the existing
 convention, overriding the underscore spelling in `todos/runtime/26` per
@@ -70,10 +70,9 @@ Classify every placeholder occurrence in the original template: each
 `{{name}}` or `{name}` with `name = [a-z][a-z0-9_-]*` (underscore added to
 the existing class) is either one of the three known variables
 (`{coder-session-id}`, `{{bundle-session-id}}`, `{{session-directory}}`)
-or unknown. Reject unknown occurrences, reject known occurrences lacking
-required values (`{coder-session-id}` without a session value, D4's
-non-Unicode directory), and only then substitute the known occurrences —
-never scanning the rendered value bytes. Rationale: one rule for both
+or unknown. Reject unknown occurrences, reject `{coder-session-id}`
+occurring without a session value, and only then substitute the known
+occurrences — never scanning the rendered value bytes. Rationale: one rule for both
 brace shapes; underscore support is required to reject unknown doubles
 like `{{bundle_session_id}}`
 (a realistic typo of the hyphenated name). Consequence: single-brace
@@ -81,13 +80,14 @@ literals with underscores (silent today) also
 fail — same narrow breaking class as the proposal notes, covered by a
 scenario.
 
-**D4 — Non-UTF8 directory with `{{session-directory}}` is a validation error.**
-A command string cannot hold a non-UTF8 path; silently lossy-converting
-would label the session with a directory naming a different directory (the
-same reasoning the runtime README applies to undecodable layer paths).
-Sessions without `{{session-directory}}` in their template are unaffected.
+**D4 — Removed during implementation review.**
+Non-UTF8 directory rejection was specified here, then dropped: the session
+directory deserializes from a TOML string, which is Unicode by
+construction, so no public configuration path can supply non-Unicode
+bytes to the renderer. The number is retained as a gap so review
+references to D5 stay stable.
 
-**D5 — Interpolation semantics: validate the template, quote the directory.**
+**D5 — Interpolation semantics: validate the template, quote the directory, place it standalone.**
 Unknown-placeholder detection inspects the template *before* substitution;
 substituted value bytes are never rescanned, so a directory containing
 brace-shaped text (e.g. `/work/{name}`) cannot be mistaken for a template
@@ -105,6 +105,20 @@ shell-significant character can reach the template. Alternative (raw
 directory fragment with documented limitations) rejected: directories with
 spaces are ordinary, and pushing word-splitting onto the operator trades a
 quoting rule implementers own for failures operators cannot foresee.
+`{{session-directory}}` SHALL occupy an entire unquoted shell word in the
+original template: the scanner must be in Outside quote state with no
+active escape at the opening `{{`, and the byte after the closing `}}`
+must be end-of-template or an unquoted unescaped whitespace. Templates
+placing it inside single or double quotes, adjacent to non-boundary
+characters on either side, or after an escape sequence that continues the
+current word SHALL fail configuration validation. This restriction
+applies only to `{{session-directory}}`; the id tokens substitute raw
+and may occur in any template context. The scanner walks the template as
+a POSIX shell grammar (Outside / InsideSingleQuote / InsideDoubleQuote,
+word-boundary tracking, backslash escape state) so apparent separators
+are judged active or not; per-occurrence context (entry quote, entry
+boundary, right-boundary lookahead) is recorded once and read by
+classification, keeping the renderer itself small.
 
 ## Risks / Trade-offs
 
