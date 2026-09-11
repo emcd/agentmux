@@ -175,6 +175,10 @@ fn render_transport(transport: &ListedSessionTransport) -> &'static str {
 
 pub(super) fn print_raww_help() {
     println!(
-        "Usage: agentmux raww <target-session> --text TEXT [--no-enter] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]"
+        "Usage: agentmux raww <target-session> --text TEXT [--no-enter] [--bundle NAME] [--as-session NAME] [--json] [--configuration-directory PATH] [--state-directory PATH] [--inscriptions-directory PATH|--logs-directory PATH]\n\
+         \n\
+         The target accepts the relay-qualified form <principal>!<relay_id>\n\
+         (for example session@bundle!peer) for bundle sessions and @GLOBAL\n\
+         users; the relay forwards the write cross-relay."
     );
 }

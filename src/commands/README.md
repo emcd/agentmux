@@ -41,9 +41,13 @@ This directory owns the unified CLI surface for `agentmux`.
 - `list.rs`
   - `agentmux list principals`.
 - `look.rs`
-  - `agentmux look`.
+  - `agentmux look`. Cross-relay targets (`<principal>!<relay_id>`) are
+    recognized but rejected with `runtime_cross_relay_unsupported`; only
+    send and raww forward cross-relay.
 - `raww.rs`
-  - `agentmux raww` direct-write request surface.
+  - `agentmux raww` direct-write request surface. The target accepts the
+    relay-qualified `<principal>!<relay_id>` form for bundle sessions and
+    `@GLOBAL` users, forwarded cross-relay like send.
 - `new.rs`
   - `agentmux new peer <principal_id>` credential registration; relays a
     `NewPeer` request and renders the returned PSK + config snippet (or reports
@@ -52,12 +56,19 @@ This directory owns the unified CLI surface for `agentmux`.
   - `agentmux change psk <principal_id>` credential rotation; relays a
     `ChangePsk` request and renders the new PSK.
   - `agentmux change scope <principal_id> --scope SCOPE` peer-grant
-    replacement; relays a `ChangeScope` request and renders the canonical
-    scope (`'*'`, comma-separated namespaces, or empty for cleared).
+    replacement for `<id>@RELAY` principals only; relays a `ChangeScope`
+    request and renders the canonical scope (`'*'`, comma-separated
+    namespaces, or empty for cleared).
 - `drop.rs`
   - `agentmux drop peer <principal_id>` principal deletion; relays a `DropPeer`
     request and reports the deleted principal plus, for session principals only,
     the relay-owned credential file left behind for the operator to remove.
+- `link.rs`
+  - `agentmux link peer` two-relay credential provisioning without ever
+    printing a PSK; registers `{alias}@RELAY` on the destination, issues
+    `{connect-as}@RELAY` on the issuer, and installs the same PSK into the
+    destination slot. `--paired` provisions both directions at once under
+    symmetric naming; `--upgrade` rotates instead of issuing.
 - `check.rs`
   - `agentmux check configuration [<bundle-id>]` read-only configuration
     pre-flight; validates one or all bundles through the relay's startup loading
@@ -65,7 +76,10 @@ This directory owns the unified CLI surface for `agentmux`.
     first invalid bundle with file path + field-level detail. Never scaffolds or
     mutates configuration.
 - `send.rs`
-  - `agentmux send`, including stdin/message precedence and timeout fields.
+  - `agentmux send`, including stdin/message precedence. Send carries no
+    per-call timeout override (see `send --help` for the delivery bounds);
+    targets accept the relay-qualified `<principal>!<relay_id>` form for
+    cross-relay delivery to bundle sessions and `@GLOBAL` users.
 - `tui.rs`
   - `agentmux tui` launch path, session/default precedence wiring, and relay
     auto-spawn fallback using resolved runtime roots.
