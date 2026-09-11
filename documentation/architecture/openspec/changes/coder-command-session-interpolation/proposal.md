@@ -44,6 +44,10 @@ This blocks the Cistella `revise-driver-surface` follow-on to
   gains the `{{coder-session-id}}` (migrated), `{{bundle-session-id}}`, and
   `{{session-directory}}` placeholders, their value sources, and the
   unknown-placeholder rule over both detected shapes.
+- `addressing-routing`: the "Bundle Membership Configuration" requirement
+  migrates its resume-command substitution reference to
+  `{{coder-session-id}}` (one-line sync; no behavior change beyond the
+  vocabulary migration).
 
 ## Impact
 
