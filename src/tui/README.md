@@ -283,15 +283,19 @@ to it.
     chosen in the same window. Committing the already-active bundle is a no-op
     that just hands focus to the session column. The picker enumerates one
     bundle at a time (the active one); relay-wide cross-bundle enumeration is
-    tracked separately (todos/tui/47). Cross-bundle targeting for `Send` and
-    `Look` is still handled via the
-    `session@bundle` grammar in the `To` / look-target field: the relay resolves
-    the peer bundle by suffix and authorizes the requester's capability at the
-    uniform cross-bundle `all` scope (the same threshold for `send` and
-    `look`; unknown peers/targets surface as `validation_unknown_bundle` /
-    `validation_unknown_target`). `Raww` routes the same way: the relay derives
-    the peer bundle from the look-target's `session@bundle` suffix and authorizes
-    `raww` at the same uniform `all` cross-bundle scope (issues/relay/24).
+    tracked separately (todos/tui/47). Cross-bundle targeting for `Send` is
+    still handled via the `session@bundle` grammar in the `To` field: the relay
+    resolves the peer bundle by suffix and authorizes the requester's capability
+    at the uniform cross-bundle `all` scope (unknown peers/targets surface as
+    `validation_unknown_bundle` / `validation_unknown_target`). A
+    relay-qualified `session@bundle!relay` typed in `To` passes through verbatim
+    to relay `Send` routing for cross-relay delivery; the TUI parses no `!`
+    form itself. Interaction `Look` and `Raww` targets come from the picker
+    only, and relay-qualified `Look` is unsupported at the relay
+    (`runtime_cross_relay_unsupported`), so cross-relay use from the TUI is
+    send-only. `Raww` routes the same way: the relay derives
+    the peer bundle from the interaction target's `session@bundle` suffix and
+    authorizes `raww` at the same uniform `all` cross-bundle scope (issues/relay/24).
     Because `Send` and `Raww` routing is suffix-based, the shared relay client
     omits the wire-envelope `namespace` on those frames for every caller (TUI and
     MCP alike); the browsing bundle survives only as the `List` / recipient-picker

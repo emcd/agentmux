@@ -284,6 +284,11 @@ pub(super) fn print_send_help() {
          not ready; the relay.toml [delivery] per-target admission quota\n\
          bounds how many such messages may accumulate. A target that is\n\
          continuously unreachable is bounded separately: its messages resolve\n\
-         not_submitted after [delivery].unreachable-dwell-ms."
+         not_submitted after [delivery].unreachable-dwell-ms.\n\
+         \n\
+         Targets accept the relay-qualified form <principal>!<relay_id>\n\
+         (for example session@bundle!peer) for bundle sessions and @GLOBAL\n\
+         users; the relay forwards them cross-relay and reports a per-target\n\
+         PeerUnavailable outcome when the peer is unreachable."
     );
 }

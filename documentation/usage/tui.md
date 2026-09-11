@@ -375,7 +375,13 @@ facts a binding row cannot carry:
 - The mouse wheel scrolls chat history.
 - `To` takes recipients by grammar: `session` routes within the active bundle,
   `session@bundle` to a named bundle, and `session@GLOBAL` to a relay-wide
-  user. Comma-separate multiple recipients; accepting a completion commits the
+  user. A single leading `@` is an autocomplete trigger and is stripped. A
+  bare `session` from a relay-wide sender is rejected
+  (`validation_unqualified_target`). A relay-qualified
+  `session@bundle!relay` passes through verbatim to relay `Send` routing for
+  cross-relay delivery; the TUI parses no `!` form itself, and cross-relay
+  `Look` is unsupported (Interaction targets come from the picker only).
+  Comma-separate multiple recipients; accepting a completion commits the
   `, ` delimiter for you.
 - Which Interaction pane a chord reaches depends on state. The Write input is
   live when it holds text, or when the target has no pending choice requests;
@@ -440,9 +446,11 @@ longer present in the current list, the session selection falls back
 deterministically to the first available session.
 
 The picker lists one bundle's sessions at a time (the active bundle).
-Cross-bundle targeting is governed by policy scope: reaching sessions in
-another bundle requires the `all` scope for the operation, and the relay
-denies insufficient scope with `authorization_forbidden`.
+The `To` completion pool additionally offers relay-wide `session@bundle`
+candidates from the other bundles visible to the operator; bundles the
+operator cannot enumerate are omitted silently. Scope is enforced by the
+relay on the subsequent send, which denies insufficient scope with
+`authorization_forbidden`.
 
 ## Status and Outcome Vocabulary
 
@@ -455,8 +463,9 @@ Delivery outcomes:
 
 - `accepted`: locally accepted and pending terminal completion
 - `success`: terminal success
-- `timeout`: terminal timeout
 - `failed`: terminal failure with reason/reason_code when available
+- `not_submitted`: the target stayed unreachable past the relay's dwell bound
+- `submission_unknown`: terminal state could not be determined
 
 ## Usage Notes
 

@@ -16,6 +16,7 @@ agentmux look <target-session> [--bundle NAME] [--as-session NAME] [--lines N]
 agentmux raww <target-session> --text TEXT [--no-enter] [--bundle NAME] [--as-session NAME] [--json]
 agentmux new peer <principal_id> [--scope SCOPE] [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json]
 agentmux change psk <principal_id> [--output PATH | --write-config] [--bundle NAME] [--as-session NAME] [--json]
+agentmux change scope <principal_id> --scope SCOPE [--bundle NAME] [--as-session NAME] [--json]
 agentmux drop peer <principal_id> [--bundle NAME] [--as-session NAME] [--json]
 agentmux link peer --issuer-state-directory PATH --destination-state-directory PATH --alias ALIAS --connect-as ID [--scope SCOPE] [--alias-scope SCOPE] [--paired --peer-alias ALIAS --peer-scope SCOPE --peer-connect-as ID] [--upgrade] [--bundle NAME] [--as-session NAME] [--json]
 agentmux check configuration [<bundle-id>] [-q|--quiet]
@@ -32,6 +33,28 @@ for the layer-list semantics.
 
 Use `--help` on each command for the full flag list and runtime-flag
 inclusion.
+
+## Cross-relay notes
+
+- `change scope` applies only to peer relay principals (`<id>@RELAY`) and
+  replaces the grant with the canonical scope: `'*'` for every addressable
+  namespace, a comma-separated set of explicit namespaces, or empty
+  (`--scope ''`) to clear it. Use `--help` for the validation rules.
+- `link peer` provisions a credential across two relays without ever
+  printing the PSK: `--alias` names the destination slot, `--connect-as`
+  the issuer-side inbound identity, `--scope` / `--alias-scope` bound each
+  side's grant. `--paired` provisions both directions at once under
+  symmetric naming (`--connect-as` equals `--peer-alias` and vice versa);
+  `--upgrade` rotates an existing credential instead of issuing a new one.
+  Per-side `--issuer-*` / `--destination-*` selectors override the shared
+  `--bundle` / `--as-session` identity.
+- `send` and `raww` accept relay-qualified targets
+  (`<principal>!<relay_id>`, for example `session@bundle!peer`) for bundle
+  sessions and `@GLOBAL` users; the relay forwards them cross-relay. An
+  unreachable peer surfaces per-target as `PeerUnavailable`.
+- `look` does not support cross-relay targets: a relay-qualified target is
+  recognized but rejected with `runtime_cross_relay_unsupported`. Cross-relay
+  use from the CLI is send-only (send and raww).
 
 ## Bare `agentmux` dispatch
 
