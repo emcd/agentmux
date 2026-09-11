@@ -23,9 +23,14 @@ Rendering applies to tmux `initial-command`/`resume-command` and pty
 `initial-command`/`resume-command`. ACP stdio `command` is a verbatim
 passthrough and is never rendered.
 
-The template vocabulary SHALL be:
+The template vocabulary SHALL be three double-brace names only. The
+placeholder scanner detects both `{name}` and `{{name}}` shapes, but
+every occurrence whose name does not match `{{coder-session-id}}`,
+`{{bundle-session-id}}`, or `{{session-directory}}` — including every
+single-brace occurrence — SHALL fail configuration validation as an
+unknown placeholder.
 
-- `{coder-session-id}` — the session's `coder-session-id`; required when
+- `{{coder-session-id}}` — the session's `coder-session-id`; required when
   present in the chosen template.
 - `{{bundle-session-id}}` — the bare session id from the `[[sessions]]` table in
   `bundle.toml`, normalized as the canonical member id (not
@@ -42,7 +47,7 @@ inspecting and classifying every placeholder occurrence in the original
 template before substitution: each `{name}` or `{{name}}` (where `name`
 matches `[a-z][a-z0-9_-]*`) is either a known variable or unknown.
 Unknown occurrences SHALL fail configuration validation, as SHALL a
-template using `{coder-session-id}` without a session value. Only
+template using `{{coder-session-id}}` without a session value. Only
 validated known occurrences are substituted; substituted value bytes
 SHALL never be rescanned.
 
@@ -59,7 +64,7 @@ validation.
 
 - **WHEN** a session includes `coder-session-id`
 - **THEN** the system resolves startup command from coder `resume-command`
-- **AND** substitutes `{coder-session-id}` with the session value
+- **AND** substitutes `{{coder-session-id}}` with the session value
 
 #### Scenario: Use initial command when coder-session-id is absent
 
@@ -103,11 +108,12 @@ validation.
   than `{{bundle-session-id}}` or `{{session-directory}}`
 - **THEN** the system rejects configuration with a validation error
 
-#### Scenario: Reject single-brace underscore placeholder during validation
+#### Scenario: Reject single-brace coder-session-id as unknown
 
-- **WHEN** a chosen command template contains a `{name_with_underscore}`
-  placeholder
+- **WHEN** a chosen command template contains `{coder-session-id}` in
+  single-brace form
 - **THEN** the system rejects configuration with a validation error
+  naming it an unknown placeholder
 
 #### Scenario: Accept session-directory as a standalone unquoted word
 

@@ -65,20 +65,20 @@ three command fields) rejected for that blast radius; if the Cistella
 driver needs ACP transport, it is a follow-on with its own regression
 analysis. A tmux/pty coder entry serves the conduct wrapper today.
 
-**D3 — Unified unknown-placeholder rule, extended name class.**
-Classify every placeholder occurrence in the original template: each
-`{{name}}` or `{name}` with `name = [a-z][a-z0-9_-]*` (underscore added to
-the existing class) is either one of the three known variables
-(`{coder-session-id}`, `{{bundle-session-id}}`, `{{session-directory}}`)
-or unknown. Reject unknown occurrences, reject `{coder-session-id}`
-occurring without a session value, and only then substitute the known
-occurrences — never scanning the rendered value bytes. Rationale: one rule for both
-brace shapes; underscore support is required to reject unknown doubles
-like `{{bundle_session_id}}`
-(a realistic typo of the hyphenated name). Consequence: single-brace
-literals with underscores (silent today) also
-fail — same narrow breaking class as the proposal notes, covered by a
-scenario.
+**D3 — One accepted vocabulary over two detected shapes.**
+Classify every `{name}` and `{{name}}` occurrence the scanner detects
+(the regex matches both shapes) against the accepted vocabulary: the
+three double-brace names (`{{coder-session-id}}`,
+`{{bundle-session-id}}`, `{{session-directory}}`). Every other
+occurrence — including every single-brace `{name}` form — is an unknown
+placeholder and fails load. Coexistence of detected shapes is not
+coexistence of accepted syntax: no single-brace path is recognized,
+substituted, or preserved. Rationale: one rule for every occurrence;
+underscore support in the name class is required to reject unknown
+doubles like `{{bundle_session_id}}`
+(a realistic typo of a hyphenated name). Consequence: single-brace
+literals that rendered before (notably `{coder-session-id}`) now fail —
+that rejection is the migration mechanism, covered by a scenario.
 
 **D4 — Removed during implementation review.**
 Non-UTF8 directory rejection was specified here, then dropped: the session
@@ -98,7 +98,7 @@ the rendered string to `new-session` (shell interpretation,
 (`src/pty/command.rs`), and both honor single quotes — so quoting is
 transparent for simple paths and correct for spaces, quotes, and
 backslashes, arriving as one argument equal to the declared directory on
-both transports. `{{bundle-session-id}}` and `{coder-session-id}`
+both transports. `{{bundle-session-id}}` and `{{coder-session-id}}`
 substitute raw: session ids are charset-constrained at validation
 (`validate_session_id`: ASCII alphanumeric plus `-`/`_`), so no
 shell-significant character can reach the template. Alternative (raw
@@ -131,15 +131,13 @@ classification, keeping the renderer itself small.
   Cistella-side selectors. Mitigation: documented in the spec; `{{bundle}}`
   is the follow-on fix, and the Cistella side was always going to need
   `agentmux.bundle` from somewhere.
-- [Two placeholder syntaxes coexist] (`{coder-session-id}` vs
-  `{{bundle-session-id}}`) → No migration: renaming the existing variable would
-  break every shipped and operator template. The spec documents both
-  vocabularies side by side.
 
 ## Migration Plan
 
-None required. Additive for all valid configurations; the breaking class is
-limited to underscore-bearing placeholder literals that never rendered.
+Existing templates using `{coder-session-id}` fail load with an "unknown
+placeholder" error after this change lands. The classifier is the
+migration mechanism: there is no compatibility flag, no deprecation
+period, and no shim. Operators must update to the double-brace form.
 Rollback is a revert: no state, no schema, no persisted artifacts.
 
 ## Open Questions
