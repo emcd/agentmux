@@ -576,7 +576,7 @@ fn classify_template_placeholders(
             (false, &text[1..text.len() - 1])
         };
         match (is_double, name) {
-            (false, "coder-session-id") => usage.uses_coder_session_id = true,
+            (true, "coder-session-id") => usage.uses_coder_session_id = true,
             (true, "bundle-session-id") => usage.uses_bundle_session_id = true,
             (true, "session-directory") => {
                 check_directory_placement(occurrence, path, session_id)?;
@@ -606,7 +606,7 @@ fn apply_substitutions(
     if usage.uses_coder_session_id
         && let Some(value) = coder_session_id
     {
-        rendered = rendered.replace("{coder-session-id}", value);
+        rendered = rendered.replace("{{coder-session-id}}", value);
     }
     if usage.uses_bundle_session_id {
         rendered = rendered.replace("{{bundle-session-id}}", session_id);
@@ -622,14 +622,16 @@ fn apply_substitutions(
 /// Every placeholder occurrence in the original template is classified
 /// before anything is substituted, and substituted value bytes are never
 /// rescanned — so a directory containing brace-shaped text cannot read as
-/// a template placeholder. The known variables are `{coder-session-id}`
-/// (the session's value, required when it occurs),
+/// a template placeholder. The accepted variables are
+/// `{{coder-session-id}}` (the session's value, required when it occurs),
 /// `{{bundle-session-id}}` (the normalized session id, substituted raw —
 /// the id charset admits no shell metacharacters), and
 /// `{{session-directory}}` (the session directory, rendered as a single
 /// shell-quoted word so it arrives as one argument on both the tmux shell
 /// handoff and the pty `shell_words` handoff, and required to occupy a
-/// standalone unquoted word so operator quotes cannot corrupt it).
+/// standalone unquoted word so operator quotes cannot corrupt it). Every
+/// other occurrence, including every single-brace form, fails load as an
+/// unknown placeholder.
 fn render_command_template(
     template: &str,
     coder_session_id: Option<&str>,

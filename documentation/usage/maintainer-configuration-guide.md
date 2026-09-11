@@ -524,7 +524,7 @@ id = 'codex'
 
 [coders.tmux]
 initial-command = 'codex'
-resume-command = 'codex resume {coder-session-id}'
+resume-command = 'codex resume {{coder-session-id}}'
 prompt-regex = '(?ms)^›.*\n\s*\n.*$'
 prompt-inspect-lines = 3
 prompt-idle-column = 2
@@ -534,12 +534,15 @@ Command templates render per session. The vocabulary is:
 
 | Placeholder | Value |
 |---|---|
-| `{coder-session-id}` | The session's `coder-session-id`; required when it occurs. |
+| `{{coder-session-id}}` | The session's `coder-session-id`; required when it occurs. |
 | `{{bundle-session-id}}` | The bare session id from the `[[sessions]]` table (not bundle-qualified); substituted raw. |
 | `{{session-directory}}` | The session's declared `directory`, rendered as a single shell-quoted word so it arrives as one argument. |
 
 Placeholders are classified in the original template before substitution;
-any other `{name}` or `{{name}}` fails load. `{{session-directory}}`
+any other `{name}` or `{{name}}` fails load. This includes the formerly
+supported single-brace `{coder-session-id}`: templates using it are
+rejected as unknown placeholders and must be updated to
+`{{coder-session-id}}`. `{{session-directory}}`
 must occupy an entire unquoted shell word — bounded on both sides by the
 start or end of the template or by unquoted unescaped whitespace. A
 template placing it inside single or double quotes, next to other
@@ -654,7 +657,7 @@ id = 'codex'
 
 [coders.tmux]
 initial-command = 'codex'
-resume-command = 'codex resume {coder-session-id}'
+resume-command = 'codex resume {{coder-session-id}}'
 prompt-regex = '(?ms)^›.*\n\s*\n.*$'
 prompt-inspect-lines = 3
 prompt-idle-column = 2
@@ -859,7 +862,7 @@ both. With `coder = 'codex'` resolving to the Tmux transport,
 `coder-session-id` on `master` selects the Tmux coder's
 `resume-command` template over `initial-command`
 (`src/configuration/targets.rs:47-68`). The example's
-`resume-command = 'codex resume {coder-session-id}'` substitutes the
+`resume-command = 'codex resume {{coder-session-id}}'` substitutes the
 UUID into the literal `codex resume 00000000-0000-0000-0000-000000000000`
 that the relay invokes when it brings the session up. An ACP coder
 takes the same field differently — ACP selects `session/load` versus

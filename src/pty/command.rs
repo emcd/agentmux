@@ -3,7 +3,7 @@
 //! The per-coder `[coders.<id>.pty].initial-command` (and
 //! `resume-command`) is a TOML string the bootstrap path renders
 //! against the per-session template (e.g. `codex resume
-//! {coder-session-id}`). The rendered string is a shell-style command
+//! {{coder-session-id}}`). The rendered string is a shell-style command
 //! line with program + args + shell quoting, not a single executable
 //! path. [`portable_pty::CommandBuilder::new`] takes a program path;
 //! passing the whole rendered string would try to exec a literal

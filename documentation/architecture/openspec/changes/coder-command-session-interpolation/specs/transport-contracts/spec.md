@@ -104,8 +104,9 @@ validation.
 
 #### Scenario: Reject unknown double-brace placeholder during validation
 
-- **WHEN** a chosen command template contains a `{{name}}` placeholder other
-  than `{{bundle-session-id}}` or `{{session-directory}}`
+- **WHEN** a chosen command template contains a `{{name}}` placeholder
+  outside the three-name vocabulary (`{{coder-session-id}}`,
+  `{{bundle-session-id}}`, `{{session-directory}}`)
 - **THEN** the system rejects configuration with a validation error
 
 #### Scenario: Reject single-brace coder-session-id as unknown

@@ -17,7 +17,7 @@ id = "conduct"
 
 [coders.tmux]
 initial-command = "cistella conduct --session-directory {{session-directory}} --label agentmux.session={{bundle-session-id}} -- opencode"
-resume-command = "cistella conduct --session-directory {{session-directory}} --label agentmux.session={{bundle-session-id}} --resume {coder-session-id} -- opencode"
+resume-command = "cistella conduct --session-directory {{session-directory}} --label agentmux.session={{bundle-session-id}} --resume {{coder-session-id}} -- opencode"
 "#;
 
 const CODERS_PTY: &str = r#"
@@ -28,7 +28,7 @@ id = "conduct"
 
 [coders.pty]
 initial-command = "cistella conduct --session-directory {{session-directory}} --label agentmux.session={{bundle-session-id}} -- opencode"
-resume-command = "cistella conduct --session-directory {{session-directory}} --label agentmux.session={{bundle-session-id}} --resume {coder-session-id} -- opencode"
+resume-command = "cistella conduct --session-directory {{session-directory}} --label agentmux.session={{bundle-session-id}} --resume {{coder-session-id}} -- opencode"
 "#;
 
 fn session_toml(directory: &str, coder_session_id: Option<&str>) -> String {
@@ -300,13 +300,41 @@ fn quoted_id_tokens_stay_valid() {
     let directory = temporary.path().display().to_string();
     let quoted = command_for_commands(
         "\"conduct\"",
-        "\"conduct --resume '{coder-session-id}' --label \\\"{{bundle-session-id}}\\\"\"",
+        "\"conduct --resume '{{coder-session-id}}' --label \\\"{{bundle-session-id}}\\\"\"",
         &directory,
         Some("abc123"),
     );
     assert!(
         quoted.contains("--resume 'abc123' --label \"session-a\""),
         "quoted id tokens must resolve, got: {quoted}"
+    );
+}
+
+#[test]
+fn rejects_single_brace_coder_session_id_as_unknown() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let root = write_config(
+        &temporary,
+        "alpha",
+        r#"
+format-version = 1
+
+[[coders]]
+id = "conduct"
+
+[coders.tmux]
+initial-command = "conduct --resume {coder-session-id}"
+resume-command = "conduct"
+"#,
+        &session_toml(&directory, None),
+    );
+    let error = load_bundle_configuration(&root, "alpha").expect_err("single-brace loads");
+    assert!(
+        error
+            .to_string()
+            .contains("unknown placeholder '{coder-session-id}'"),
+        "unexpected error: {error}"
     );
 }
 
@@ -418,32 +446,6 @@ resume-command = "conduct"
         error
             .to_string()
             .contains("unknown placeholder '{{bundle}}'"),
-        "unexpected error: {error}"
-    );
-}
-
-#[test]
-fn rejects_single_brace_underscore_literal() {
-    let temporary = TempDir::new().expect("temporary");
-    let directory = temporary.path().display().to_string();
-    let root = write_config(
-        &temporary,
-        "alpha",
-        r#"
-format-version = 1
-
-[[coders]]
-id = "conduct"
-
-[coders.tmux]
-initial-command = "conduct {session_directory}"
-resume-command = "conduct"
-"#,
-        &session_toml(&directory, None),
-    );
-    let error = load_bundle_configuration(&root, "alpha").expect_err("underscore literal loads");
-    assert!(
-        error.to_string().contains("unknown placeholder"),
         "unexpected error: {error}"
     );
 }
