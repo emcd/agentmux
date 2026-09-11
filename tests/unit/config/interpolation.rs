@@ -4,6 +4,9 @@ use tempfile::TempDir;
 
 use agentmux::configuration::{TargetConfiguration, load_bundle_configuration};
 
+#[cfg(feature = "pty")]
+use agentmux::pty::tokenize_command;
+
 use super::helpers::*;
 
 const CODERS_TMUX: &str = r#"
@@ -32,6 +35,7 @@ fn session_toml(directory: &str, coder_session_id: Option<&str>) -> String {
     let resume = coder_session_id
         .map(|value| format!("coder-session-id = \"{value}\"\n"))
         .unwrap_or_default();
+    let escaped = directory.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
         r#"
 format-version = 1
@@ -39,7 +43,7 @@ format-version = 1
 [[sessions]]
 id = "session-a"
 name = "a"
-directory = "{directory}"
+directory = "{escaped}"
 coder = "conduct"
 {resume}"#
     )
@@ -128,6 +132,188 @@ fn resolves_brace_shaped_directory_without_false_rejection() {
     assert!(
         command.contains(&format!("'{directory}'")),
         "brace-shaped directory must render quoted, got: {command}"
+    );
+}
+
+fn command_for_initial(
+    initial_command: &str,
+    directory: &str,
+    coder_session_id: Option<&str>,
+) -> String {
+    command_for_commands(initial_command, "\"conduct\"", directory, coder_session_id)
+}
+
+fn command_for_commands(
+    initial_command: &str,
+    resume_command: &str,
+    directory: &str,
+    coder_session_id: Option<&str>,
+) -> String {
+    let temporary = TempDir::new().expect("temporary");
+    let coders = format!(
+        r#"
+format-version = 1
+
+[[coders]]
+id = "conduct"
+
+[coders.tmux]
+initial-command = {initial_command}
+resume-command = {resume_command}
+"#
+    );
+    let root = write_config(
+        &temporary,
+        "alpha",
+        &coders,
+        &session_toml(directory, coder_session_id),
+    );
+    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let TargetConfiguration::Tmux(target) = &loaded.members[0].target else {
+        panic!("expected tmux target");
+    };
+    target.start_command.clone()
+}
+
+fn load_error_for_initial(initial_command: &str, directory: &str) -> String {
+    let temporary = TempDir::new().expect("temporary");
+    let coders = format!(
+        r#"
+format-version = 1
+
+[[coders]]
+id = "conduct"
+
+[coders.tmux]
+initial-command = {initial_command}
+resume-command = "conduct"
+"#
+    );
+    let root = write_config(&temporary, "alpha", &coders, &session_toml(directory, None));
+    load_bundle_configuration(&root, "alpha")
+        .expect_err("misplaced placeholder loads")
+        .to_string()
+}
+
+#[test]
+fn rejects_directory_inside_single_quotes() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let error = load_error_for_initial("\"cmd '{{session-directory}}'\"", &directory);
+    assert!(
+        error.contains("standalone unquoted word"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_directory_inside_double_quotes() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let error = load_error_for_initial("\"cmd \\\"{{session-directory}}\\\"\"", &directory);
+    assert!(
+        error.contains("standalone unquoted word"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_directory_with_adjacent_prefix() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let error = load_error_for_initial("'cmd prefix{{session-directory}}'", &directory);
+    assert!(
+        error.contains("standalone unquoted word"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_directory_with_adjacent_suffix() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let error = load_error_for_initial("'cmd {{session-directory}}suffix'", &directory);
+    assert!(
+        error.contains("standalone unquoted word"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn rejects_directory_after_escape_continuing_word() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let error = load_error_for_initial("'cmd \\\"{{session-directory}}'", &directory);
+    assert!(
+        error.contains("standalone unquoted word"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn accepts_directory_after_escape_then_whitespace() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let command = command_for_initial("'cmd \\\" {{session-directory}}'", &directory, None);
+    assert!(
+        command.contains(&format!("'{directory}'")),
+        "expected quoted directory, got: {command}"
+    );
+}
+
+#[test]
+fn quoted_id_tokens_stay_valid() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let quoted = command_for_commands(
+        "\"conduct\"",
+        "\"conduct --resume '{coder-session-id}' --label \\\"{{bundle-session-id}}\\\"\"",
+        &directory,
+        Some("abc123"),
+    );
+    assert!(
+        quoted.contains("--resume 'abc123' --label \"session-a\""),
+        "quoted id tokens must resolve, got: {quoted}"
+    );
+}
+
+const SPECIAL_DIRECTORY_NAME: &str = "two words'o\\clock";
+
+#[cfg(feature = "pty")]
+#[test]
+fn pty_tokenizer_returns_special_directory_as_single_argument() {
+    let temporary = TempDir::new().expect("temporary");
+    let special = temporary.path().join(SPECIAL_DIRECTORY_NAME);
+    fs::create_dir(&special).expect("create special directory");
+    let directory = special.display().to_string();
+    let command = start_command_for(CODERS_TMUX, &directory, None);
+    let tokens = tokenize_command(&command).expect("tokenize rendered command");
+    let flag = tokens
+        .iter()
+        .position(|token| token == "--session-directory")
+        .expect("session-directory flag present");
+    assert_eq!(tokens[flag + 1], directory);
+}
+
+#[cfg(unix)]
+#[test]
+fn shell_receives_special_directory_as_single_argument() {
+    use std::process::Command;
+
+    let temporary = TempDir::new().expect("temporary");
+    let special = temporary.path().join(SPECIAL_DIRECTORY_NAME);
+    fs::create_dir(&special).expect("create special directory");
+    let directory = special.display().to_string();
+    let command = command_for_initial("\"printf '<%s>' {{session-directory}}\"", &directory, None);
+    let output = Command::new("sh")
+        .arg("-c")
+        .arg(&command)
+        .output()
+        .expect("run shell seam");
+    assert!(output.status.success(), "shell failed: {output:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        format!("<{directory}>")
     );
 }
 

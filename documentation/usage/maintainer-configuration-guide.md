@@ -539,10 +539,14 @@ Command templates render per session. The vocabulary is:
 | `{{session-directory}}` | The session's declared `directory`, rendered as a single shell-quoted word so it arrives as one argument. |
 
 Placeholders are classified in the original template before substitution;
-any other `{name}` or `{{name}}` fails load, as does a template using
-`{{session-directory}}` when the directory is not valid Unicode. Rendering
-applies to tmux/pty `initial-command`/`resume-command`; an ACP stdio
-`command` passes through verbatim and is never rendered.
+any other `{name}` or `{{name}}` fails load. `{{session-directory}}`
+must occupy an entire unquoted shell word — bounded on both sides by the
+start or end of the template or by unquoted unescaped whitespace. A
+template placing it inside single or double quotes, next to other
+characters, or after an escape that continues the current word fails
+load: the value renders pre-quoted, so operator quotes would corrupt the
+argument. Rendering applies to tmux/pty `initial-command`/`resume-command`;
+an ACP stdio `command` passes through verbatim and is never rendered.
 
 ### `policies.toml`
 

@@ -514,6 +514,8 @@ fn scan_template(template: &str, pattern: &Regex) -> TemplateScan {
             &template[cursor..occurrence.start()],
         );
         if state.2 {
+            // An escape before the opening braces quotes them as a shell
+            // would: the occurrence stays literal and unclassified.
             state = feed_text(state.0, state.1, state.2, occurrence.as_str());
             cursor = occurrence.end();
             continue;
