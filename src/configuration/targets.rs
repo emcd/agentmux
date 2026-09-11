@@ -53,6 +53,7 @@ pub(super) fn build_session_target(
                     let start_command = render_command_template(
                         command_template,
                         coder_session_id.as_deref(),
+                        &session.directory,
                         bundle_path,
                         session_id,
                     )?;
@@ -84,6 +85,7 @@ pub(super) fn build_session_target(
                     let start_command = render_command_template(
                         command_template,
                         coder_session_id.as_deref(),
+                        &session.directory,
                         bundle_path,
                         session_id,
                     )?;
@@ -401,15 +403,66 @@ pub(super) fn validate_environment_entries(
     Ok(())
 }
 
+/// Renders a coder command template for one session.
+///
+/// Every placeholder occurrence in the original template is classified
+/// before anything is substituted, and substituted value bytes are never
+/// rescanned — so a directory containing brace-shaped text cannot read as
+/// a template placeholder. The known variables are `{coder-session-id}`
+/// (the session's value, required when it occurs),
+/// `{{bundle-session-id}}` (the normalized session id, substituted raw —
+/// the id charset admits no shell metacharacters), and
+/// `{{session-directory}}` (the session directory, rendered as a single
+/// shell-quoted word so it arrives as one argument on both the tmux shell
+/// handoff and the pty `shell_words` handoff).
 fn render_command_template(
     template: &str,
     coder_session_id: Option<&str>,
+    session_directory: &Path,
     path: &Path,
     session_id: &str,
 ) -> Result<String, ConfigurationError> {
-    let mut rendered = template.to_string();
+    let occurrence_pattern = Regex::new(r"\{\{([a-z][a-z0-9_-]*)\}\}|\{([a-z][a-z0-9_-]*)\}")
+        .map_err(|source| {
+            ConfigurationError::invalid(
+                path,
+                format!("internal placeholder regex failure: {source}"),
+            )
+        })?;
+    let mut uses_coder_session_id = false;
+    let mut uses_session_directory = false;
+    for captures in occurrence_pattern.captures_iter(template) {
+        let occurrence = captures
+            .get(0)
+            .expect("placeholder regex matched an empty occurrence")
+            .as_str();
+        let (is_double, name) = match (captures.get(1), captures.get(2)) {
+            (Some(double), None) => (true, double.as_str()),
+            (None, Some(single)) => (false, single.as_str()),
+            _ => {
+                return Err(ConfigurationError::invalid(
+                    path,
+                    format!("internal placeholder regex failure for '{occurrence}'"),
+                ));
+            }
+        };
+        match (is_double, name) {
+            (false, "coder-session-id") => uses_coder_session_id = true,
+            (true, "bundle-session-id") => {}
+            (true, "session-directory") => uses_session_directory = true,
+            _ => {
+                return Err(ConfigurationError::invalid(
+                    path,
+                    format!(
+                        "session '{session_id}' template has unknown placeholder '{occurrence}'"
+                    ),
+                ));
+            }
+        }
+    }
 
-    if rendered.contains("{coder-session-id}") {
+    let mut rendered = template.to_string();
+    if uses_coder_session_id {
         let Some(coder_session_id) = coder_session_id else {
             return Err(ConfigurationError::invalid(
                 path,
@@ -418,21 +471,18 @@ fn render_command_template(
         };
         rendered = rendered.replace("{coder-session-id}", coder_session_id);
     }
-
-    let placeholder_regex = Regex::new(r"\{[a-z][a-z0-9-]*\}").map_err(|source| {
-        ConfigurationError::invalid(
-            path,
-            format!("internal placeholder regex failure: {source}"),
-        )
-    })?;
-    if let Some(found) = placeholder_regex.find(rendered.as_str()) {
-        return Err(ConfigurationError::invalid(
-            path,
-            format!(
-                "session '{session_id}' template has unknown placeholder '{}'",
-                found.as_str()
-            ),
-        ));
+    rendered = rendered.replace("{{bundle-session-id}}", session_id);
+    if uses_session_directory {
+        let Some(directory) = session_directory.to_str() else {
+            return Err(ConfigurationError::invalid(
+                path,
+                format!(
+                    "session '{session_id}' template uses {{{{session-directory}}}} \
+                     but session directory is not valid Unicode"
+                ),
+            ));
+        };
+        rendered = rendered.replace("{{session-directory}}", &shell_quote_word(directory));
     }
 
     if normalize_field(rendered.as_str()).is_empty() {
@@ -442,6 +492,24 @@ fn render_command_template(
         ));
     }
     Ok(rendered)
+}
+
+/// Quotes a value as a single POSIX shell word: wraps it in single quotes,
+/// encoding each embedded `'` as `'\''`. Both template consumers honor
+/// single quotes (the tmux `new-session` shell handoff and the pty
+/// `shell_words` tokenizer), so quoting is transparent for simple values
+/// and correct for spaces, quotes, and backslashes.
+fn shell_quote_word(value: &str) -> String {
+    let mut quoted = String::with_capacity(value.len() + 2);
+    quoted.push('\'');
+    let mut chunks = value.split('\'');
+    quoted.push_str(chunks.next().unwrap_or_default());
+    for chunk in chunks {
+        quoted.push_str("'\\''");
+        quoted.push_str(chunk);
+    }
+    quoted.push('\'');
+    quoted
 }
 
 fn prompt_readiness_from_tmux_target(

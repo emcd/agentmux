@@ -530,6 +530,20 @@ prompt-inspect-lines = 3
 prompt-idle-column = 2
 ```
 
+Command templates render per session. The vocabulary is:
+
+| Placeholder | Value |
+|---|---|
+| `{coder-session-id}` | The session's `coder-session-id`; required when it occurs. |
+| `{{bundle-session-id}}` | The bare session id from the `[[sessions]]` table (not bundle-qualified); substituted raw. |
+| `{{session-directory}}` | The session's declared `directory`, rendered as a single shell-quoted word so it arrives as one argument. |
+
+Placeholders are classified in the original template before substitution;
+any other `{name}` or `{{name}}` fails load, as does a template using
+`{{session-directory}}` when the directory is not valid Unicode. Rendering
+applies to tmux/pty `initial-command`/`resume-command`; an ACP stdio
+`command` passes through verbatim and is never rendered.
+
 ### `policies.toml`
 
 ```toml

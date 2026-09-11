@@ -5,6 +5,7 @@ mod bundle;
 mod coder;
 mod environment;
 mod group;
+mod interpolation;
 mod layers;
 mod roots;
 mod session;

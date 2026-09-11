@@ -369,7 +369,7 @@ pub struct TmuxTargetConfiguration {
 /// neither).
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PtyTargetConfiguration {
-    /// Per-coder initial command. `{{coder-session-id}}` placeholder is
+    /// Per-coder initial command. `{coder-session-id}` placeholder is
     /// replaced when the bundle member carries a `coder-session-id`.
     pub initial_command: String,
     /// Per-coder resume command. Selected when the bundle member
