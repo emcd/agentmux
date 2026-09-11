@@ -20,7 +20,9 @@ The MCP server advertises:
   (`command="up"` / `command="down"`).
 - `new`: register a peer principal and mint its PSK
   (`command="peer"`).
-- `change`: rotate a principal's PSK (`command="psk"`).
+- `change`: rotate a principal's PSK (`command="psk"`) or replace a
+  peer relay's ingress scope in place (`command="scope"`, gated on the
+  dedicated `change.scope=all` control).
 - `drop`: delete a principal from the relay principal store
   (`command="peer"`); its credential stops authenticating and any
   session bound to it is disconnected. Credential files on disk are
@@ -28,7 +30,9 @@ The MCP server advertises:
 - `link`: install a peer credential into the connected relay's
   relay-owned slot (`command="peer"` with the local alias and the PSK
   the opposite relay issued); the PSK travels in request memory only
-  and is never returned, logged, or persisted.
+  and is never returned, logged, or persisted. See
+  [Reciprocal Relay Setup](reciprocal-relay-setup.md) for the full
+  two-relay flow.
 - `raww`: write raw text directly to one target session.
 - `send`: deliver to explicit targets or broadcast.
 
@@ -51,6 +55,24 @@ layout.
   to `mode.lines` rows). Pty grid dimensions are configured per-coder
   under `[coders.<id>.pty]` (`cols`, `rows`).
 - Terminal completion is correlated out-of-band by `message_id`.
+
+## Cross-relay targets
+
+`send` and `raww` accept relay-qualified targets of the form
+`<id>@<namespace>!<relay>` (e.g. `qa-partner@agentmux!rnd-qa`), where
+`<relay>` is a locally configured outbound peer alias. The `!<relay>`
+selector routes the request to that peer, which delivers the foreign
+`<id>@<namespace>` under its ingress scope. Discover aliases with `list`
+(`command="relays"`); inspect a peer's namespaces and principals with
+`list` (`command="namespaces"` / `command="principals"`, `args.relay`
+set).
+
+`look` does not support cross-relay targets: a relay-qualified target is
+rejected with `runtime_cross_relay_unsupported`.
+
+See [Reciprocal Relay Setup](reciprocal-relay-setup.md) for establishing
+the peering (peer credential registration, reciprocal `[[peers]]`
+entries, `link peer` install).
 
 ## Association resolution for `host mcp`
 
@@ -79,3 +101,5 @@ as a separate inference step once the bundle resolves.
   namespace concept: [authorization.md](authorization.md).
 - Multi-worktree topology and association resolution:
   [multi-worktree-workflow.md](multi-worktree-workflow.md).
+- Establishing cross-relay peering:
+  [reciprocal-relay-setup.md](reciprocal-relay-setup.md).
