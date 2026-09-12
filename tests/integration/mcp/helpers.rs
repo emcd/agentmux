@@ -664,24 +664,27 @@ pub(crate) fn error_code(response: &Value) -> Option<&str> {
         .and_then(Value::as_str)
 }
 
-/// Asserts the response is the JSON-RPC `invalid_params` (-32602) rejection that
-/// rmcp emits when a required parameter is missing or ill-typed, before the tool
-/// handler runs. Required selectors are enforced by the tool input schema, so an
-/// absent one surfaces here as a parameter-deserialization error naming `field`,
-/// not as a handler-level `validation_invalid_params` code.
+/// Asserts the tool-level deserialization failure rmcp returns before the
+/// handler runs when a required parameter is missing or ill-typed. Required
+/// selectors are enforced by the tool input schema, so an absent one names
+/// `field` rather than returning a handler-level `validation_invalid_params`
+/// code.
 pub(crate) fn assert_param_deserialize_error(response: &Value, field: &str) {
-    let error = response
-        .get("error")
-        .unwrap_or_else(|| panic!("expected protocol error in response: {response}"));
+    let result = response
+        .get("result")
+        .unwrap_or_else(|| panic!("expected tool error result in response: {response}"));
     assert_eq!(
-        error.get("code").and_then(Value::as_i64),
-        Some(-32602),
-        "expected invalid_params (-32602) in response: {response}"
+        result.get("isError").and_then(Value::as_bool),
+        Some(true),
+        "expected tool error result in response: {response}"
     );
-    let message = error
-        .get("message")
+    let message = result
+        .get("content")
+        .and_then(Value::as_array)
+        .and_then(|content| content.first())
+        .and_then(|content| content.get("text"))
         .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("missing error.message in response: {response}"));
+        .unwrap_or_else(|| panic!("missing tool error text in response: {response}"));
     assert!(
         message.contains(field),
         "expected deserialize error naming '{field}', got: {message}"
