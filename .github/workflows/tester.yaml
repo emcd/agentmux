@@ -75,6 +75,11 @@ jobs:
           CLIPPY_PTY_REQUIRE: '1'
         run: scripts/clippy-pty.sh
 
+      - name: Verify Published Package
+        # Packages and compiles the extracted crate, catching files omitted by
+        # Cargo.toml's explicit include allowlist before a release tag does.
+        run: cargo package
+
   test:
     needs: [initialize, lint]
     strategy:

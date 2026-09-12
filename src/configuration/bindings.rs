@@ -45,14 +45,14 @@ static SHIPPED_PRESETS: &[ShippedPreset] = &[
         name: "enter-newline-shift-enter-sends",
         text: include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/data/bindings/enter-newline-shift-enter-sends.toml"
+            "/data/configuration/bindings/enter-newline-shift-enter-sends.toml"
         )),
     },
     ShippedPreset {
         name: "enter-newline-primary-enter-sends",
         text: include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/data/bindings/enter-newline-primary-enter-sends.toml"
+            "/data/configuration/bindings/enter-newline-primary-enter-sends.toml"
         )),
     },
 ];

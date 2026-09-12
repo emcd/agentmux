@@ -30,7 +30,8 @@ normalizes them into runtime structures used by CLI, MCP, relay, and TUI code.
     context names against the TUI vocabulary, parsing chords, and refusing a
     binding a context cannot perform.
   - The binding sets this build ships, and the reader that turns one into rows.
-    Their text lives in `data/bindings/` and is embedded with `include_str!`.
+     Their text lives in `data/configuration/bindings/` and is embedded with
+     `include_str!`.
 
 ## Layer Resolution
 
