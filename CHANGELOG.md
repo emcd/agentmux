@@ -9,6 +9,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ### Added
 
+- **Pull-model mailboxes:** each target now owns an in-memory mailbox for
+  undelivered entries. A target that is busy or not ready retains its entries
+  until its transport can deliver them, while unreachable targets resolve
+  through the configured dwell policy.
+- **Configurable TUI bindings:** `ui.toml` can select a built-in binding preset
+  and override or unbind named actions by context. The TUI help overlay and
+  pane hints use the same effective binding table.
 - **`agentmux link peer` (CLI) / `link` (MCP):** safe cross-relay
   credential provisioning. One-way mode registers, mints, and installs
   a single direction; `--paired` verifies cross-matched

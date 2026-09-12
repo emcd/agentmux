@@ -1,13 +1,13 @@
 # Agentmux
 
-Agentmux is a product-agnostic runtime for inter-agent communication that
-lets agent sessions exchange structured messages and coordinate work without
-being tied to one specific coding product or harness. It supports agent
-harnesses running in tmux panes and ACP-backed sessions.
+Agentmux provides relays for inter-agent communication and a single pane of
+glass for the management of multiple agent harness sessions. It is not tied to
+one particular harness, and can support Claude Code, Codex CLI, OpenCode, and
+others simultaneously. It provides Agent Client Protocol (ACP) and Tmux
+(terminal multiplexer) transports.
 
-> **The Pty transport is work-in-progress and not production-ready.** It is not
-> yet a supported way to run coder sessions: known gaps are targeted for a
-> future release. Until they land, treat Pty-backed members as experimental.
+(A `libghostty-vt`-based transport is under development to provide deeper and
+more reliable support than Tmux.)
 
 ## Disclaimer
 
@@ -40,7 +40,7 @@ in any way.
 ## Requirements
 
 - `tmux` on `PATH` (required; this requirement will be dropped once the
-  Pty transport graduates to replace the tmux dependency)
+  Pty transport graduates to replace the `tmux` dependency)
 - Direct pseudo-tty support is currently being developed. For more
   information on how to build `agentmux` with it, see
   `documentation/development/README.md` Zig-free Pty Builds.
@@ -117,20 +117,6 @@ For login-time startup, service examples, shared runtime flags, and runtime
 artifact locations, see
 [documentation/usage/operations.md](documentation/usage/operations.md).
 
-## Development Prerequisites
-
-The pre-commit hooks and CI use [cargo-nextest](https://nexte.st/) as the
-test runner. Install it locally if you intend to run the test suite:
-
-```bash
-cargo install cargo-nextest --locked
-```
-
-The hooks will fail otherwise. See
-[documentation/development-practices.md](
-  documentation/development-practices.md)
-for the full development workflow.
-
 ## Architecture At A Glance
 
 - Relay host:
@@ -164,8 +150,8 @@ for the full development workflow.
 - Pty transport (stubbed, not graduated):
   - `libghostty-vt`-backed, `Cargo.toml` feature `pty` (default `cargo build`
     does not pull it), wired throughout `src/pty/` with `portable-pty` child
-    management. Full tmux-parity graduation deferred past 0.9.0 — see the
-    WIP notice at the top and `src/pty/README.md`.
+    management. Full Tmux-parity graduation remains deferred — see the
+    transport details in `src/pty/README.md`.
 
 Both host modes use shared, layered runtime roots for configuration
 (`--configuration-directory` / `AGENTMUX_CONFIGURATION_DIRECTORY`,
@@ -207,9 +193,8 @@ model, see the [usage guides](documentation/usage/README.md):
 
 ## Known Security Limitations
 
-This is alpha software under active development. The following gaps are
-known and deliberately deferred past the 0.9.0 release rather than fixed
-now:
+This is alpha software under active development. The following limitations
+remain:
 
 - **Credential expiry does not terminate already-connected sessions.** Expiry
   is enforced only at connection time -- the Hello handshake rejects an expired
@@ -221,34 +206,24 @@ now:
 - **No forced-takeover path for identity claims.** There is no
   operator-controlled mechanism to force a stale or compromised session off a
   claimed identity ahead of its own reconnect.
-- **Credential configuration writes can follow symlinked ancestor
-  directories.** Fixed in the 0.10.0 peer-credential-provisioning change:
-  every state-root-owned credential write (credential sinks, peer-slot
-  installation, principal-store load/persist) now traverses path components
-  without following symlinks and publishes relative to retained directory
-  handles, aborting with `validation_invalid_credential_path` on a symlinked
-  ancestor. Caller-named `--output` paths keep the final-target symlink
-  check only. Avoid symlinks beneath your configured state root regardless:
-  they are now rejected loudly instead of followed silently.
-
-These are prioritized for the 0.10.0 release.
 
 ## Planned Features
 
 - Bundle/session `about` surfaces with human-readable descriptions
   for operators and agents.
-- Mailbox-style message retrieval (`fetch`) and optional hold/quiet delivery
-  mode to reduce coordination noise.
-- Direct raw-write command support for CLI/TUI so users and agents can interact
-  with coder sessions without dropping to tmux.
+- Optional hold/quiet delivery controls to reduce coordination noise.
 - Config include/pointer support so centrally hosted configs can reference
   project-local bundle definitions.
-- Expanded global TUI session-management ergonomics (session lifecycle and
-  keybinding customization).
+- Expanded global TUI session-management ergonomics.
 - Additional autostart examples beyond systemd (for example
   launchd/OpenRC/Windows service patterns).
-- Native Windows support (direct PTY/ConPTY and non-tmux transport path).
+- Native Windows support through the `libghostty-vt` transport work, including
+  direct PTY/ConPTY support.
 
 ## License
 
 [Apache 2.0](LICENSE)
+
+## Contributing
+
+To contribute, see the [contribution guide](documentation/CONTRIBUTION.md).
