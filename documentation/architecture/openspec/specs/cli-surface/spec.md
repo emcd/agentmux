@@ -735,6 +735,16 @@ The legacy `agentmux list` surface remains removed.
 - **WHEN** operator invokes `agentmux list principals --namespace '*'`
 - **THEN** CLI performs adapter-owned fan-out across all namespaces
 
+#### Scenario: Resolve relay-wide listing without a default bundle
+
+- **WHEN** operator invokes `agentmux list principals --namespace GLOBAL --as-session user@GLOBAL` with no `ui.toml` default-bundle
+- **THEN** CLI resolves the relay-wide identity without an operation bundle and lists relay-wide principals
+
+#### Scenario: Require bundle context for star fan-out
+
+- **WHEN** operator invokes `agentmux list principals --namespace '*'` with no associated bundle and no `ui.toml` default-bundle
+- **THEN** CLI rejects with `validation_unknown_bundle`
+
 ### Requirement: List Sessions Machine Output Contract
 
 CLI machine-readable successful output for single-bundle mode SHALL include:

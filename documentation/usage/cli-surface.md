@@ -56,6 +56,15 @@ inclusion.
   recognized but rejected with `runtime_cross_relay_unsupported`. Cross-relay
   use from the CLI is send-only (send and raww).
 
+## Listing without a bundle
+
+`list principals --namespace GLOBAL --as-session user@GLOBAL` needs no
+`ui.toml` default-bundle (and `list` accepts no `--bundle`): `GLOBAL` is its
+own routing namespace, so the relay-wide identity resolves without an
+operation bundle. A concrete bundle namespace supplies itself; omitted
+namespace and `--namespace '*'` fan-out still require associated/default
+context.
+
 ## Bare `agentmux` dispatch
 
 Without a subcommand, the binary dispatches based on whether standard

@@ -35,11 +35,14 @@ pub(super) fn run_agentmux_list(arguments: &[String]) -> Result<(), RuntimeError
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    // Only a concrete bundle namespace seeds the identity-resolution hint; the
-    // fan-out (`*`) and relay-wide (`GLOBAL`) selectors resolve the requester
-    // in the associated/home bundle.
+    // Only a concrete bundle namespace seeds the identity-resolution hint,
+    // except for the relay-wide (`GLOBAL`) selector, which supplies its own
+    // routing namespace so no associated/home bundle is required. The
+    // fan-out (`*`) still resolves the requester in the associated/home
+    // bundle.
     let bundle_hint = match namespace {
-        Some("*") | Some("GLOBAL") => None,
+        Some("GLOBAL") => Some("GLOBAL"),
+        Some("*") => None,
         other => other,
     };
     let resolved_session = resolve_tui_session_identity(

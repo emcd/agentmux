@@ -20,7 +20,10 @@ shared by relay and MCP hosts.
 - `tui_session.rs`
   - resolves TUI session selection from CLI + `users.toml` defaults, and
     browsing-bundle selection from CLI + `ui.toml` defaults,
-  - validates selected TUI session policy references.
+  - validates selected TUI session policy references,
+  - carries the caller's operation bundle hint through to the resolved
+    namespace; `list` supplies an explicit `GLOBAL` hint for relay-wide
+    listing, which needs no `ui.toml` default-bundle.
 - `bootstrap.rs`
   - relay socket bind and runtime lock acquisition.
 - `inscriptions.rs`

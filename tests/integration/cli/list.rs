@@ -32,6 +32,131 @@ fn list_principals_rejects_reserved_namespace_token() {
 }
 
 #[test]
+fn list_global_session_resolves_without_default_bundle() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui"]);
+    // No ui.toml default-bundle: the explicit canonical session must carry
+    // the GLOBAL namespace on its own.
+    write_tui_configuration(
+        &config_root,
+        None,
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
+    let relay_thread = spawn_fake_relay_once(
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
+        RelayResponse::List {
+            schema_version: "1".to_string(),
+            bundle: ListedBundle {
+                id: "GLOBAL".to_string(),
+                hosted: true,
+                state: ListedBundleState::Up,
+                startup_health: Some(ListedBundleStartupHealth::Healthy),
+                state_reason_code: None,
+                state_reason: None,
+                startup_failure_count: 0,
+                recent_startup_failures: Vec::new(),
+                principals: vec![ListedSession {
+                    id: "user@GLOBAL".to_string(),
+                    name: Some("Operator".to_string()),
+                    transport: ListedSessionTransport::Ui,
+                    ready: true,
+                }],
+                principals_partial: None,
+            },
+        },
+        Arc::clone(&request_log),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "list",
+            "principals",
+            "--namespace",
+            "GLOBAL",
+            "--as-session",
+            "user@GLOBAL",
+            "--json",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run list principals --namespace GLOBAL");
+    relay_thread.join().expect("join fake relay thread");
+    assert!(
+        output.status.success(),
+        "canonical session must resolve without a default bundle: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode list payload");
+    assert_eq!(payload["bundle"]["id"], "GLOBAL");
+    let requests = request_log.lock().expect("request log lock");
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0]["requester_session"], "user@GLOBAL");
+}
+
+#[test]
+fn list_fanout_without_bundle_or_default_still_fails() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui"]);
+    // No ui.toml default-bundle: unlike explicit GLOBAL, fan-out still
+    // resolves the requester in the associated/home bundle.
+    write_tui_configuration(
+        &config_root,
+        None,
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "list",
+            "principals",
+            "--namespace",
+            "*",
+            "--as-session",
+            "user@GLOBAL",
+            "--json",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run list principals --namespace *");
+    assert!(
+        !output.status.success(),
+        "fan-out without a bundle must fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("validation_unknown_bundle"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[test]
 fn list_sessions_requires_sessions_subcommand() {
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args(["list"])
