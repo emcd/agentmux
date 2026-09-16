@@ -16,10 +16,16 @@ files with kebab-case keys:
 Each bundle file SHALL include:
 
 - `format-version` (supported value for this schema: `1`)
+- optional `project-name-from` (`session-directory-basename` or
+  `bundle-name`): the default project-name derivation rule for
+  sessions without an override
 - `[[sessions]]` entries with:
   - `id`
   - optional `name` (human-readable recipient name)
   - `directory`
+  - optional `project-name` (explicit project identity override)
+  - optional `project-name-from` (per-session derivation rule
+    override)
   - exactly one session shape: a coder-backed shape (a flat `coder` reference,
     with optional `coder-session-id`) or a coder-less shape (exactly one
     `[sessions.ui]` or `[sessions.pubsub]` marker subtable)
@@ -48,6 +54,13 @@ A coder-less `[[sessions]]` entry SHALL declare exactly one `[sessions.ui]` or
 `[sessions.pubsub]` marker subtable, which SHALL carry no required fields
 (empty body is valid). A coder-less entry SHALL NOT carry a `coder` or
 `coder-session-id` field.
+
+Project-name keys SHALL resolve per the transport-contracts project-name
+precedence: session `project-name`, else the applicable
+`project-name-from` rule (session-level beats bundle-level), else the
+session-directory basename. A session declaring both its own
+`project-name` and `project-name-from` SHALL fail configuration
+validation as ambiguous.
 
 Coder definitions SHALL include target descriptors in `coders.toml`:
 
@@ -160,6 +173,21 @@ Bundle identity SHALL be derived from bundle filename (`<bundle-id>.toml`).
   `[coders.tmux]` subtables
 - **THEN** the validator rejects the configuration with a structured config
   error
+
+#### Scenario: Accept project-name keys on session and bundle
+
+- **WHEN** a bundle file declares top-level `project-name-from`
+- **AND** a session entry declares `project-name`
+- **THEN** the system loads configuration successfully
+- **AND** the session resolves `{{project-name}}` to its explicit value
+
+#### Scenario: Accept session project-name-from overriding bundle rule
+
+- **WHEN** a bundle file declares top-level `project-name-from`
+- **AND** a session entry within it declares a different
+  `project-name-from`
+- **THEN** the system loads configuration successfully
+- **AND** the session resolves `{{project-name}}` per the session rule
 
 ### Requirement: Bundle Group Membership Field
 

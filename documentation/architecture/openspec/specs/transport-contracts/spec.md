@@ -286,12 +286,12 @@ Rendering applies to tmux `initial-command`/`resume-command` and pty
 `initial-command`/`resume-command`. ACP stdio `command` is a verbatim
 passthrough and is never rendered.
 
-The template vocabulary SHALL be three double-brace names only. The
+The template vocabulary SHALL be four double-brace names only. The
 placeholder scanner detects both `{name}` and `{{name}}` shapes, but every
 occurrence whose name does not match `{{coder-session-id}}`,
-`{{bundle-session-id}}`, or `{{session-directory}}` — including every
-single-brace occurrence — SHALL fail configuration validation as an unknown
-placeholder.
+`{{bundle-session-id}}`, `{{session-directory}}`, or `{{project-name}}`
+— including every single-brace occurrence — SHALL fail configuration
+validation as an unknown placeholder.
 
 - `{{coder-session-id}}` — the session's `coder-session-id`; required when
   present in the chosen template.
@@ -301,25 +301,65 @@ placeholder.
 - `{{session-directory}}` — the session's declared `directory`, rendered as a
   single shell-quoted word denoting that directory (POSIX single-quote
   escaping), so it arrives as one argument on both the tmux shell handoff and
-  the pty `shell_words` handoff. It SHALL occupy an entire unquoted shell word
-  in the original template (see below); the id tokens above substitute as raw
-  values and may occur in any template context.
+  the pty `shell_words` handoff. It SHALL occur in an unquoted word in the
+  original template (see below); the id and project tokens below substitute
+  as raw values and may occur in any template context.
+- `{{project-name}}` — the resolved project name for the session,
+  substituted raw. Project names admit ASCII alphanumerics plus `-`,
+  `_`, and `.`, excluding the exact `.` and `..` segments, with no
+  length cap and no first-character restriction — a strict superset
+  of the path-safe canonical bundle ids (`is_valid_bundle_name`
+  minus the exact `./..` segments) — so no shell metacharacter,
+  quote, or whitespace can reach a template from any resolution
+  source.
 
 Template placeholders SHALL be validated before reconciliation starts, by
 inspecting and classifying every placeholder occurrence in the original
-template before substitution: each `{name}` or `{{name}}` (where `name` matches
-`[a-z][a-z0-9_-]*`) is either a known variable or unknown. Unknown occurrences
-SHALL fail configuration validation, as SHALL a template using
-`{{coder-session-id}}` without a session value. Only validated known occurrences
-are substituted; substituted value bytes SHALL never be rescanned.
+template before substitution: each `{name}` or `{{name}}` (where `name`
+matches `[a-z][a-z0-9_-]*`) is either a known variable or unknown.
+Unknown occurrences SHALL fail configuration validation, as SHALL a
+template using `{{coder-session-id}}` without a session value. Only
+validated known occurrences are substituted; substituted value bytes
+SHALL never be rescanned.
 
-The placeholder `{{session-directory}}` SHALL be bounded on both sides by a
-POSIX shell word boundary: the scanner SHALL be in Outside quote state with no
-active escape at the opening `{{`, and the byte after the closing `}}` SHALL be
-end-of-template or an unquoted unescaped whitespace. Templates placing it inside
-single quotes, inside double quotes, adjacent to non-boundary characters on
-either side, or after an escape sequence that continues the current word SHALL
-fail configuration validation.
+The placeholder `{{session-directory}}` SHALL occur in an unquoted word
+whose every literal affix character belongs to the shell-literal-safe
+set (ASCII letters and digits plus `-_.:/=,+@%`) and whose every
+adjacent placeholder is a grammar-safe variable
+(`{{bundle-session-id}}`, `{{project-name}}`, or another quoted
+`{{session-directory}}` — never `{{coder-session-id}}`, whose
+unconstrained value could inject word-breaking bytes): the scanner SHALL be in
+Outside quote state with no active escape at the opening `{{`, the
+byte after the closing `}}` SHALL NOT be a quote character or an
+escape, and for every `=` in the placeholder's word the word text
+from its start through that `=`, read with each placeholder span
+as one ASCII letter since substituted values are dynamic, SHALL
+NOT match shell assignment shape (`^[A-Za-z_][A-Za-z0-9_]*=`). Templates placing it
+inside single quotes, inside double quotes, after an escape sequence
+that continues the current word, immediately adjacent to a quote
+character or escape on either side, affixed with any other character,
+or in a word that could form a shell assignment SHALL fail
+configuration validation.
+
+Project names SHALL resolve in precedence order: the session
+`project-name` explicit override; else the applicable
+`project-name-from` rule (session-level beats bundle-level), where
+`session-directory-basename` yields the final segment of the declared
+session directory and `bundle-name` yields the canonical bundle id;
+else the session-directory basename. Derived values (rule yields and
+the basename fallback) SHALL be resolved and grammar-validated only
+when the chosen tmux/Pty template actually uses `{{project-name}}`;
+explicit `project-name` values and `project-name-from` rule names
+SHALL validate eagerly. A session declaring both its own
+`project-name` and `project-name-from` is ambiguous and SHALL fail
+configuration validation; a session `project-name` above a bundle-only
+`project-name-from` wins by precedence. Every eagerly validated value
+and every lazily derived value that is used SHALL satisfy the
+project-name grammar; a non-conforming used value SHALL fail
+configuration validation rather than sanitizing silently. Sessions
+whose chosen template never mentions `{{project-name}}` — including
+coder-less sessions, which have no command template — SHALL load
+without any basename conformance requirement.
 
 #### Scenario: Use resume command when coder-session-id is present
 
@@ -339,6 +379,13 @@ fail configuration validation.
 - **THEN** the system substitutes the session id and the session's declared
   directory respectively
 - **AND** the directory arrives as one shell word on both transports
+
+#### Scenario: Substitute project-name raw
+
+- **WHEN** a chosen command template contains `{{project-name}}`
+- **THEN** the system substitutes the resolved project name without
+  quoting
+- **AND** the value contains no shell metacharacters by grammar
 
 #### Scenario: Resolve brace-shaped directory without false rejection
 
@@ -365,9 +412,9 @@ fail configuration validation.
 
 #### Scenario: Reject unknown double-brace placeholder during validation
 
-- **WHEN** a chosen command template contains a `{{name}}` placeholder outside
-  the three-name vocabulary (`{{coder-session-id}}`,
-  `{{bundle-session-id}}`, `{{session-directory}}`)
+- **WHEN** a chosen command template contains a `{{name}}` placeholder
+  outside the four-name vocabulary (`{{coder-session-id}}`,
+  `{{bundle-session-id}}`, `{{session-directory}}`, `{{project-name}}`)
 - **THEN** the system rejects configuration with a validation error
 
 #### Scenario: Reject single-brace coder-session-id as unknown
@@ -377,13 +424,69 @@ fail configuration validation.
 - **THEN** the system rejects configuration with a validation error naming it
   an unknown placeholder
 
-#### Scenario: Accept session-directory as a standalone unquoted word
+#### Scenario: Accept session-directory composed in an unquoted word
 
-- **WHEN** a chosen command template contains `{{session-directory}}` as an
-  entire unquoted shell word (bounded on both sides by a word boundary in the
-  original template)
-- **THEN** the system resolves the command with the directory as a single
-  quoted word denoting the declared directory
+- **WHEN** a chosen command template contains `{{session-directory}}`
+  composed with literal affixes or adjacent variables in one unquoted
+  word (e.g. `--dir={{session-directory}}`,
+  `--mount {{project-name}}:{{session-directory}}`)
+- **THEN** the system resolves the command with the composed word
+  denoting the declared directory among the operator's affixes
+- **AND** the composed word arrives as one shell word on both transports
+
+#### Scenario: Reject session-directory with glob affix
+
+- **WHEN** a chosen command template contains `{{session-directory}}`
+  affixed with a glob character (e.g. `{{session-directory}}*`)
+- **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Reject session-directory with expansion affix
+
+- **WHEN** a chosen command template contains `{{session-directory}}`
+  affixed with a shell expansion (e.g. `x${IFS}{{session-directory}}`)
+- **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Reject session-directory with operator affix
+
+- **WHEN** a chosen command template contains `{{session-directory}}`
+  affixed with a shell operator (e.g. `{{session-directory}};next`)
+- **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Reject session-directory with assignment prefix
+
+- **WHEN** a chosen command template places `{{session-directory}}`
+  in a word whose literal prefix from word start matches shell
+  assignment shape (e.g. `A={{session-directory}}`)
+- **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Reject variable composing assignment shape before equals
+
+- **WHEN** a chosen command template places a placeholder where the
+  word text from word start through a following `=`, read with each
+  placeholder span as one ASCII letter, matches shell assignment
+  shape (e.g. `{{project-name}}={{session-directory}}` resolving
+  `project-name` to `ROOT`)
+- **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Reject directory composing assignment shape before equals
+
+- **WHEN** a chosen command template places `{{session-directory}}`
+  where the word text from word start through a following `=`, read
+  with the placeholder span as one ASCII letter, matches shell
+  assignment shape (e.g. `A{{session-directory}}=x`)
+- **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Reject session-directory before an escape
+
+- **WHEN** a chosen command template contains `{{session-directory}}`
+  immediately followed by an escape character
+- **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Reject session-directory adjacent to coder-session-id
+
+- **WHEN** a chosen command template places `{{session-directory}}`
+  in one word adjacent to `{{coder-session-id}}`
+- **THEN** the system rejects configuration with a validation error
 
 #### Scenario: Reject session-directory inside single quotes
 
@@ -397,16 +500,10 @@ fail configuration validation.
   double quotes
 - **THEN** the system rejects configuration with a validation error
 
-#### Scenario: Reject session-directory with an adjacent prefix
+#### Scenario: Reject session-directory quote-adjacent
 
-- **WHEN** a chosen command template contains `{{session-directory}}`
-  immediately preceded by a non-boundary character
-- **THEN** the system rejects configuration with a validation error
-
-#### Scenario: Reject session-directory with an adjacent suffix
-
-- **WHEN** a chosen command template contains `{{session-directory}}`
-  immediately followed by a non-boundary character
+- **WHEN** a chosen command template places `{{session-directory}}`
+  immediately adjacent to a quote character on either side
 - **THEN** the system rejects configuration with a validation error
 
 #### Scenario: Reject session-directory after an escape continuing the word
@@ -422,6 +519,69 @@ fail configuration validation.
   word
 - **THEN** the system resolves the command with the directory as a single
   quoted word denoting the declared directory
+
+#### Scenario: Resolve project-name from session override
+
+- **WHEN** a session declares `project-name`
+- **THEN** the system resolves `{{project-name}}` to that value
+  regardless of any bundle `project-name-from` rule
+
+#### Scenario: Resolve project-name from session override above bundle rule
+
+- **WHEN** a session declares `project-name`
+- **AND** the session omits `project-name-from`
+- **AND** the bundle declares a `project-name-from`
+- **THEN** the system resolves `{{project-name}}` to the session value
+- **AND** no ambiguity error surfaces
+
+#### Scenario: Resolve project-name from session rule above bundle rule
+
+- **WHEN** a session declares `project-name-from`
+- **AND** its bundle declares a different `project-name-from`
+- **THEN** the system resolves `{{project-name}}` per the session rule
+
+#### Scenario: Resolve project-name from bundle rule
+
+- **WHEN** a session omits `project-name`
+- **AND** its bundle declares `project-name-from = "bundle-name"`
+- **THEN** the system resolves `{{project-name}}` to the canonical
+  bundle id
+
+#### Scenario: Resolve project-name from dotted bundle-name
+
+- **WHEN** a session omits `project-name`
+- **AND** its bundle declares `project-name-from = "bundle-name"`
+- **AND** the canonical bundle id contains dots (e.g. `team.one`)
+- **THEN** the system resolves `{{project-name}}` to the dotted id
+
+#### Scenario: Resolve project-name from directory basename by default
+
+- **WHEN** a session omits `project-name`
+- **AND** no applicable `project-name-from` rule names another source
+- **THEN** the system resolves `{{project-name}}` to the final segment
+  of the declared session directory
+
+#### Scenario: Load session with nonconforming basename and no project-name usage
+
+- **WHEN** a session declares a directory whose basename violates the
+  project-name grammar (e.g. dotted, spaced, or hidden)
+- **AND** no chosen template uses `{{project-name}}`
+- **THEN** the system loads the configuration successfully
+- **AND** no basename conformance is required
+
+#### Scenario: Reject session declaring both project-name and project-name-from
+
+- **WHEN** a session declares its own `project-name` and its own
+  `project-name-from`
+- **THEN** the system rejects configuration with a validation error
+  naming the ambiguity
+
+#### Scenario: Reject non-conforming project-name value
+
+- **WHEN** a project-name resolution source yields a value outside the
+  portable path-segment grammar
+- **THEN** the system rejects configuration with a validation error
+  rather than sanitizing the value
 
 #### Scenario: Reject unresolved placeholder during validation
 
