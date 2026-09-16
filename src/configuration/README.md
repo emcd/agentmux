@@ -21,8 +21,13 @@ normalizes them into runtime structures used by CLI, MCP, relay, and TUI code.
 - `fields.rs`
   - Shared field normalization, id/group validation, and best-effort path
     canonicalization helpers.
-- `targets.rs`
-  - Session-shape selection and coder target validation/resolution.
+- `targets/`
+  - `session.rs` — session-shape selection and per-session target
+    resolution.
+  - `template.rs` — command-template scanner, placement checks, and
+    single-pass substitution.
+  - `validation.rs` — coder target, environment, and prompt-readiness
+    validation.
 - `loaders.rs`
   - Public load APIs and per-file parsing/validation orchestration.
 - `bindings.rs`

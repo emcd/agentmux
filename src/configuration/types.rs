@@ -370,11 +370,11 @@ pub struct TmuxTargetConfiguration {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct PtyTargetConfiguration {
     /// Per-coder initial command. A coder command template: the accepted
-    /// variables are `{{coder-session-id}}`, `{{bundle-session-id}}`, and
-    /// `{{session-directory}}` (double-brace only; any other placeholder,
-    /// including every single-brace form, fails load). See
-    /// `render_command_template` in `targets.rs` for the vocabulary and
-    /// placement rules.
+    /// variables are `{{coder-session-id}}`, `{{bundle-session-id}}`,
+    /// `{{session-directory}}`, and `{{project-name}}` (double-brace
+    /// only; any other placeholder, including every single-brace form,
+    /// fails load). See `render_command_template` in
+    /// `targets/template.rs` for the vocabulary and placement rules.
     pub initial_command: String,
     /// Per-coder resume command. Selected when the bundle member
     /// carries a `coder-session-id` (i.e. the operator is resuming

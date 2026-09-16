@@ -212,7 +212,7 @@ fn rejects_escaped_directory_placeholder() {
     let directory = temporary.path().display().to_string();
     let error = load_error_for_initial("\"cmd \\\\{{session-directory}}\"", &directory);
     assert!(
-        error.contains("standalone unquoted word"),
+        error.contains("must not escape {{session-directory}}"),
         "unexpected error: {error}"
     );
 }
@@ -234,7 +234,7 @@ fn rejects_directory_inside_single_quotes() {
     let directory = temporary.path().display().to_string();
     let error = load_error_for_initial("\"cmd '{{session-directory}}'\"", &directory);
     assert!(
-        error.contains("standalone unquoted word"),
+        error.contains("in an unquoted word"),
         "unexpected error: {error}"
     );
 }
@@ -245,30 +245,30 @@ fn rejects_directory_inside_double_quotes() {
     let directory = temporary.path().display().to_string();
     let error = load_error_for_initial("\"cmd \\\"{{session-directory}}\\\"\"", &directory);
     assert!(
-        error.contains("standalone unquoted word"),
+        error.contains("in an unquoted word"),
         "unexpected error: {error}"
     );
 }
 
 #[test]
-fn rejects_directory_with_adjacent_prefix() {
+fn accepts_directory_with_safe_literal_prefix() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_initial("'cmd prefix{{session-directory}}'", &directory);
+    let command = command_for_initial("'cmd prefix{{session-directory}}'", &directory, None);
     assert!(
-        error.contains("standalone unquoted word"),
-        "unexpected error: {error}"
+        command.contains(&format!("prefix'{directory}'")),
+        "expected composed directory word, got: {command}"
     );
 }
 
 #[test]
-fn rejects_directory_with_adjacent_suffix() {
+fn accepts_directory_with_safe_literal_suffix() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_initial("'cmd {{session-directory}}suffix'", &directory);
+    let command = command_for_initial("'cmd {{session-directory}}suffix'", &directory, None);
     assert!(
-        error.contains("standalone unquoted word"),
-        "unexpected error: {error}"
+        command.contains(&format!("'{directory}'suffix")),
+        "expected composed directory word, got: {command}"
     );
 }
 
@@ -278,7 +278,7 @@ fn rejects_directory_after_escape_continuing_word() {
     let directory = temporary.path().display().to_string();
     let error = load_error_for_initial("'cmd \\\"{{session-directory}}'", &directory);
     assert!(
-        error.contains("standalone unquoted word"),
+        error.contains("not shell-literal-safe"),
         "unexpected error: {error}"
     );
 }

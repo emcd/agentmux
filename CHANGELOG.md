@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Composed `{{session-directory}}` templates:** the directory token may
+  now compose inside a larger unquoted word with shell-literal-safe
+  affixes (ASCII letters/digits plus `-_.:/=,+@%`) and adjacent
+  grammar-safe variables, so `--dir={{session-directory}}` and
+  `--mount {{project-name}}:{{session-directory}}` resolve with the
+  composed word arriving as one argument on both transports.
+  Quote/escape adjacency, unsafe affixes, shell-assignment-shaped words,
+  and adjacency to the unconstrained `{{coder-session-id}}` fail load.
+- **`{{project-name}}` interpolation:** sessions accept an explicit
+  `project-name` override and bundles/sessions accept a
+  `project-name-from` rule (`session-directory-basename` |
+  `bundle-name`). Precedence is override, then session rule, then bundle
+  rule, then the directory basename. Names admit ASCII alphanumerics
+  plus `-`, `_`, `.` (excluding `.`/`..`) with no length cap, so dotted
+  and long bundle ids resolve as-is; derived values validate only when
+  the chosen template uses the variable.
+
 ## [0.10.0] - 2026-09-12
 
 ### Added
