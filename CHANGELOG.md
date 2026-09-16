@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-09-16
+
 ### Added
 
 - **Composed `{{session-directory}}` templates:** the directory token may
@@ -25,6 +27,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
   plus `-`, `_`, `.` (excluding `.`/`..`) with no length cap, so dotted
   and long bundle ids resolve as-is; derived values validate only when
   the chosen template uses the variable.
+
+### Fixed
+
+- **`list --as-session` with `@GLOBAL` suffix:** an explicit canonical
+  `--as-session user@GLOBAL` now resolves the requester namespace for
+  `list` without requiring a `ui.toml` default-bundle. Bare selectors
+  still require associated/default bundle context.
+
+## [0.10.1] - 2026-09-12
+
+### Fixed
+
+- **Packaged binding configuration:** shipped binding TOML presets moved to
+  `data/configuration/bindings/` with recursive Cargo package inclusion.
+  CI now verifies `cargo package` succeeds.
 
 ## [0.10.0] - 2026-09-12
 
