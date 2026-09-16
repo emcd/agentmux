@@ -133,6 +133,10 @@ pub(super) struct RawBundleFile {
     pub(super) format_version: u32,
     #[serde(default)]
     pub(super) autostart: bool,
+    /// Default project-name derivation rule for sessions without an
+    /// override (`session-directory-basename` or `bundle-name`).
+    #[serde(default)]
+    pub(super) project_name_from: Option<String>,
     #[serde(default)]
     pub(super) groups: Vec<String>,
     /// Bundle-level environment applied to every coder-backed session in the
@@ -228,6 +232,13 @@ pub(super) struct RawSession {
     #[serde(default)]
     pub(super) name: Option<String>,
     pub(super) directory: PathBuf,
+    /// Explicit project identity override; beats every derivation rule.
+    #[serde(default)]
+    pub(super) project_name: Option<String>,
+    /// Per-session derivation rule override (`session-directory-basename`
+    /// or `bundle-name`); beats the bundle-level rule.
+    #[serde(default)]
+    pub(super) project_name_from: Option<String>,
     #[serde(default)]
     pub(super) policy: Option<String>,
     #[serde(default)]

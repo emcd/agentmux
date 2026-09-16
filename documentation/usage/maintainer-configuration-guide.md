@@ -411,6 +411,9 @@ What lives in a bundle file:
 - `format-version` — schema version, currently `1`.
 - `autostart` — whether the relay starts the bundle on its own
   startup. Default `false`.
+- `project-name-from` — optional default project-name derivation rule
+  for sessions without an override: `session-directory-basename` or
+  `bundle-name`.
 - `groups` — group identifiers for collective lifecycle operations
   (`agentmux up --group` / `agentmux down --group`).
 - `[[sessions]]` — one entry per session. Each carries:
@@ -418,6 +421,10 @@ What lives in a bundle file:
   - `name` — optional human-facing label.
   - `directory` — the absolute path the session runs from. See
     [Bundle member `directory` semantics](#bundle-member-directory-semantics).
+  - `project-name` — optional explicit project identity override;
+    beats every derivation rule.
+  - `project-name-from` — optional per-session derivation rule
+    override; beats the bundle-level rule.
   - `policy` — optional policy preset reference; defaults to the
     `policies.toml` `default` preset.
   - `coder` — optional coder id from `coders.toml`.
@@ -427,6 +434,20 @@ What lives in a bundle file:
     overriding bundle and coder entries of the same name.
   - `[sessions.ui]` or `[sessions.pubsub]` — only on a session that
     is not coder-backed.
+
+`{{project-name}}` resolves in precedence order: the session
+`project-name` override; else the applicable `project-name-from` rule
+(session-level beats bundle-level), where `session-directory-basename`
+yields the final segment of the declared directory and `bundle-name`
+yields the canonical bundle id; else the directory basename. Project
+names admit ASCII alphanumerics plus `-`, `_`, and `.` (excluding the
+exact `.` and `..`), with no length cap and no first-character rule, so
+dotted and long bundle ids resolve as-is. Derived values are resolved
+and validated only when the chosen command template actually uses
+`{{project-name}}` — sessions that never mention it load exactly as
+before, whatever their basename looks like. A session declaring both
+its own `project-name` and `project-name-from` fails load as ambiguous
+(a session value above a bundle-only rule simply wins).
 
 A bundle definition only one layer defines is enumerated; a definition
 shadowing one of the same identifier in a later layer is enumerated
@@ -545,19 +566,29 @@ Command templates render per session. The vocabulary is:
 |---|---|
 | `{{coder-session-id}}` | The session's `coder-session-id`; required when it occurs. |
 | `{{bundle-session-id}}` | The bare session id from the `[[sessions]]` table (not bundle-qualified); substituted raw. |
-| `{{session-directory}}` | The session's declared `directory`, rendered as a single shell-quoted word so it arrives as one argument. |
+| `{{session-directory}}` | The session's declared `directory`, rendered as a single shell-quoted word so it arrives as one argument. May compose inside a larger unquoted word (see below). |
+| `{{project-name}}` | The resolved project name for the session (explicit `project-name`, else the applicable `project-name-from` rule, else the directory basename); substituted raw. |
 
 Placeholders are classified in the original template before substitution;
 any other `{name}` or `{{name}}` fails load. This includes the formerly
 supported single-brace `{coder-session-id}`: templates using it are
 rejected as unknown placeholders and must be updated to
 `{{coder-session-id}}`. `{{session-directory}}`
-must occupy an entire unquoted shell word — bounded on both sides by the
-start or end of the template or by unquoted unescaped whitespace. A
-template placing it inside single or double quotes, next to other
-characters, or after an escape that continues the current word fails
-load: the value renders pre-quoted, so operator quotes would corrupt the
-argument. Rendering applies to tmux/pty `initial-command`/`resume-command`;
+must occupy an unquoted word whose every literal affix character is
+shell-literal-safe (ASCII letters and digits plus `-_.:/=,+@%`) and
+whose every adjacent placeholder is a grammar-safe variable
+(`{{bundle-session-id}}`, `{{project-name}}`, or another quoted
+`{{session-directory}}` — never `{{coder-session-id}}`), so forms like
+`--dir={{session-directory}}` and
+`--mount {{project-name}}:{{session-directory}}` resolve with the
+composed word arriving as one argument. A template placing it inside
+single or double quotes, adjacent to a quote or escape, affixed with any
+other character (glob, expansion, operator, comment, tilde, history, or
+caret markers), or in a word that could form a shell assignment (for
+example `A={{session-directory}}`) fails load. The previously required
+standalone-word form still loads unchanged — composition only accepts
+more placements, and every previously valid template renders
+byte-identically. Rendering applies to tmux/pty `initial-command`/`resume-command`;
 an ACP stdio `command` passes through verbatim and is never rendered.
 
 ### `policies.toml`
@@ -870,7 +901,7 @@ and a sub-worktree: the `master` session runs from
 both. With `coder = 'codex'` resolving to the Tmux transport,
 `coder-session-id` on `master` selects the Tmux coder's
 `resume-command` template over `initial-command`
-(`src/configuration/targets.rs:47-68`). The example's
+(`src/configuration/targets/session.rs`). The example's
 `resume-command = 'codex resume {{coder-session-id}}'` substitutes the
 UUID into the literal `codex resume 00000000-0000-0000-0000-000000000000`
 that the relay invokes when it brings the session up. An ACP coder

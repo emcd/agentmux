@@ -79,6 +79,51 @@ pub(super) fn normalize_optional(value: Option<&str>) -> Option<String> {
         .map(ToString::to_string)
 }
 
+/// Validates a project name against the bundle-superset path-segment
+/// grammar: ASCII alphanumerics plus `-`, `_`, and `.`, excluding the
+/// exact `.` and `..` segments, with no length cap and no first-character
+/// restriction. The grammar admits every path-safe canonical bundle id
+/// while keeping substituted values free of shell metacharacters, quotes,
+/// and whitespace.
+pub(super) fn validate_project_name(
+    value: &str,
+    path: &Path,
+    context: &str,
+) -> Result<(), ConfigurationError> {
+    let conforming = !value.is_empty()
+        && value != "."
+        && value != ".."
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+    if conforming {
+        return Ok(());
+    }
+    Err(ConfigurationError::invalid(
+        path,
+        format!(
+            "{context} '{value}' must be a portable path segment: ASCII alphanumerics \
+             plus '-', '_', or '.', excluding '.' and '..'"
+        ),
+    ))
+}
+
+/// Validates a project-name derivation rule name: exactly
+/// `session-directory-basename` or `bundle-name`.
+pub(super) fn validate_project_name_from(
+    rule: &str,
+    path: &Path,
+    context: &str,
+) -> Result<(), ConfigurationError> {
+    if matches!(rule, "session-directory-basename" | "bundle-name") {
+        return Ok(());
+    }
+    Err(ConfigurationError::invalid(
+        path,
+        format!("{context} '{rule}' must be 'session-directory-basename' or 'bundle-name'"),
+    ))
+}
+
 pub(super) fn validate_session_id(path: &Path, session_id: &str) -> Result<(), ConfigurationError> {
     let mut characters = session_id.chars();
     let Some(first) = characters.next() else {

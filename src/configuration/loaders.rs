@@ -8,7 +8,8 @@ use super::{
     BUNDLE_SCHEMA_VERSION, ConfigurationError, ConfigurationRoots, POLICIES_SCHEMA_VERSION,
     fields::{
         canonicalize_best_effort, normalize_field, normalize_global_session_id,
-        validate_bundle_groups, validate_format_version, validate_session_id,
+        validate_bundle_groups, validate_format_version, validate_project_name,
+        validate_project_name_from, validate_session_id,
     },
     paths::{
         bundle_configuration_path, coders_configuration_path, effective_bundle_definitions,
@@ -20,7 +21,7 @@ use super::{
     },
     roots::LAYER_SEPARATOR,
     targets::{
-        build_session_target, select_marker_session_type, validate_acp_target,
+        ProjectNameInputs, build_session_target, select_marker_session_type, validate_acp_target,
         validate_environment_entries, validate_pty_target, validate_tmux_target,
     },
     types::{
@@ -308,6 +309,17 @@ fn validate_loaded_configuration(
         bundle_path,
         &format!("bundle '{expected_bundle_name}'"),
     )?;
+    let bundle_project_name_from = bundle_file
+        .project_name_from
+        .as_deref()
+        .map(normalize_field);
+    if let Some(rule) = bundle_project_name_from {
+        validate_project_name_from(
+            rule,
+            bundle_path,
+            &format!("bundle '{expected_bundle_name}' project-name-from"),
+        )?;
+    }
 
     if bundle_file.sessions.is_empty() {
         return Err(ConfigurationError::invalid(
@@ -356,6 +368,34 @@ fn validate_loaded_configuration(
                 format!("session '{session_id}' directory must be non-empty"),
             ));
         }
+        // Presence-preserving normalization: a declared key stays declared
+        // even when blank, so eager validation rejects it instead of the
+        // session silently falling through to another resolution source.
+        let project_name = session.project_name.as_deref().map(normalize_field);
+        let session_project_name_from = session.project_name_from.as_deref().map(normalize_field);
+        if project_name.is_some() && session_project_name_from.is_some() {
+            return Err(ConfigurationError::invalid(
+                bundle_path,
+                format!(
+                    "session '{session_id}' declares both project-name and \
+                     project-name-from; only one may govern"
+                ),
+            ));
+        }
+        if let Some(value) = project_name {
+            validate_project_name(
+                value,
+                bundle_path,
+                &format!("session '{session_id}' project-name"),
+            )?;
+        }
+        if let Some(rule) = session_project_name_from {
+            validate_project_name_from(
+                rule,
+                bundle_path,
+                &format!("session '{session_id}' project-name-from"),
+            )?;
+        }
 
         let policy_id = session
             .policy
@@ -364,8 +404,20 @@ fn validate_loaded_configuration(
             .filter(|value| !value.is_empty())
             .map(ToString::to_string);
 
-        let (target, coder_session_id) =
-            build_session_target(session, &coders, coders_path, bundle_path, session_id)?;
+        let project = ProjectNameInputs {
+            explicit: project_name,
+            session_rule: session_project_name_from,
+            bundle_rule: bundle_project_name_from,
+            bundle_id: expected_bundle_name,
+        };
+        let (target, coder_session_id) = build_session_target(
+            session,
+            &coders,
+            coders_path,
+            bundle_path,
+            session_id,
+            &project,
+        )?;
 
         validate_environment_entries(
             &session.environment,
