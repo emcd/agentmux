@@ -7,6 +7,8 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-09-19
+
 ### Added
 
 - **`{{bundle-name}}` coder-template variable:** the canonical bundle id
