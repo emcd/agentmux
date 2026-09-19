@@ -286,10 +286,11 @@ Rendering applies to tmux `initial-command`/`resume-command` and pty
 `initial-command`/`resume-command`. ACP stdio `command` is a verbatim
 passthrough and is never rendered.
 
-The template vocabulary SHALL be four double-brace names only. The
+The template vocabulary SHALL be five double-brace names only. The
 placeholder scanner detects both `{name}` and `{{name}}` shapes, but every
 occurrence whose name does not match `{{coder-session-id}}`,
-`{{bundle-session-id}}`, `{{session-directory}}`, or `{{project-name}}`
+`{{bundle-session-id}}`, `{{bundle-name}}`, `{{session-directory}}`, or
+`{{project-name}}`
 — including every single-brace occurrence — SHALL fail configuration
 validation as an unknown placeholder.
 
@@ -298,12 +299,17 @@ validation as an unknown placeholder.
 - `{{bundle-session-id}}` — the bare session id from the `[[sessions]]` table
   in `bundle.toml`, normalized as the canonical member id (not
   bundle-qualified).
+- `{{bundle-name}}` — the canonical bundle id from the bundle filename,
+  validated against the shell-safe path-segment grammar at the
+  configuration boundary and substituted raw. The token may occur in any
+  template context, including adjacent to `{{session-directory}}` in one
+  word.
 - `{{session-directory}}` — the session's declared `directory`, rendered as a
   single shell-quoted word denoting that directory (POSIX single-quote
   escaping), so it arrives as one argument on both the tmux shell handoff and
   the pty `shell_words` handoff. It SHALL occur in an unquoted word in the
-  original template (see below); the id and project tokens below substitute
-  as raw values and may occur in any template context.
+  original template (see below); the id, bundle-name, and project tokens
+  below substitute as raw values and may occur in any template context.
 - `{{project-name}}` — the resolved project name for the session,
   substituted raw. Project names admit ASCII alphanumerics plus `-`,
   `_`, and `.`, excluding the exact `.` and `..` segments, with no
@@ -326,9 +332,9 @@ The placeholder `{{session-directory}}` SHALL occur in an unquoted word
 whose every literal affix character belongs to the shell-literal-safe
 set (ASCII letters and digits plus `-_.:/=,+@%`) and whose every
 adjacent placeholder is a grammar-safe variable
-(`{{bundle-session-id}}`, `{{project-name}}`, or another quoted
-`{{session-directory}}` — never `{{coder-session-id}}`, whose
-unconstrained value could inject word-breaking bytes): the scanner SHALL be in
+(`{{bundle-session-id}}`, `{{bundle-name}}`, `{{project-name}}`, or
+another quoted `{{session-directory}}` — never `{{coder-session-id}}`,
+whose unconstrained value could inject word-breaking bytes): the scanner SHALL be in
 Outside quote state with no active escape at the opening `{{`, the
 byte after the closing `}}` SHALL NOT be a quote character or an
 escape, and for every `=` in the placeholder's word the word text
@@ -413,9 +419,32 @@ without any basename conformance requirement.
 #### Scenario: Reject unknown double-brace placeholder during validation
 
 - **WHEN** a chosen command template contains a `{{name}}` placeholder
-  outside the four-name vocabulary (`{{coder-session-id}}`,
-  `{{bundle-session-id}}`, `{{session-directory}}`, `{{project-name}}`)
+  outside the five-name vocabulary (`{{coder-session-id}}`,
+  `{{bundle-session-id}}`, `{{bundle-name}}`, `{{session-directory}}`,
+  `{{project-name}}`)
 - **THEN** the system rejects configuration with a validation error
+
+#### Scenario: Substitute bundle-name raw
+
+- **WHEN** a chosen command template contains `{{bundle-name}}`
+- **THEN** the system substitutes the canonical bundle id without
+  quoting
+- **AND** the token is accepted in any template context, including
+  inside quotes
+
+#### Scenario: Reject bundle filename with shell-unsafe characters
+
+- **WHEN** a bundle id contains shell-unsafe characters (e.g. `;`,
+  space, quote, expansion, or glob)
+- **THEN** the system rejects configuration with a validation error
+  before any template render
+
+#### Scenario: Accept bundle-name adjacent to session-directory
+
+- **WHEN** a chosen command template places `{{bundle-name}}`
+  in one word adjacent to `{{session-directory}}`
+- **THEN** the system resolves the command with the composed word
+  arriving as one shell word on both transports
 
 #### Scenario: Reject single-brace coder-session-id as unknown
 

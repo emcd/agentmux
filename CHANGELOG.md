@@ -7,6 +7,13 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+### Added
+
+- **`{{bundle-name}}` coder-template variable:** the canonical bundle id
+  from the bundle filename, validated against the shell-safe grammar at
+  load and substituted raw in any template context — including composed
+  words adjacent to `{{session-directory}}`.
+
 ## [0.10.2] - 2026-09-16
 
 ### Added
