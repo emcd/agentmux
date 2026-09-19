@@ -108,6 +108,16 @@ pub(super) fn validate_project_name(
     ))
 }
 
+/// Validates a bundle id against the shell-safe path-segment grammar: the
+/// same grammar as project names, so a validated id substitutes raw into
+/// command templates without shell metacharacters, quotes, or whitespace.
+pub(super) fn validate_bundle_name(
+    bundle_name: &str,
+    path: &Path,
+) -> Result<(), ConfigurationError> {
+    validate_project_name(bundle_name, path, "bundle name")
+}
+
 /// Validates a project-name derivation rule name: exactly
 /// `session-directory-basename` or `bundle-name`.
 pub(super) fn validate_project_name_from(

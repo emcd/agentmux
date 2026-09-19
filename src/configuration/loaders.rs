@@ -1,15 +1,15 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use super::{
     BUNDLE_SCHEMA_VERSION, ConfigurationError, ConfigurationRoots, POLICIES_SCHEMA_VERSION,
     fields::{
         canonicalize_best_effort, normalize_field, normalize_global_session_id,
-        validate_bundle_groups, validate_format_version, validate_project_name,
-        validate_project_name_from, validate_session_id,
+        validate_bundle_groups, validate_bundle_name, validate_format_version,
+        validate_project_name, validate_project_name_from, validate_session_id,
     },
     paths::{
         bundle_configuration_path, coders_configuration_path, effective_bundle_definitions,
@@ -83,6 +83,16 @@ pub fn load_bundle_configuration(
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
 ) -> Result<BundleConfiguration, ConfigurationError> {
+    // The bundle id renders raw into command templates, so its shell-safe
+    // grammar is proven before any path resolution: the resolvers join the
+    // unvalidated value into `bundles/{name}.toml` and probe layered
+    // filesystem candidates. The diagnostic path below is assembled only
+    // for error context and never probed.
+    validate_bundle_name(
+        bundle_name,
+        &PathBuf::from(format!("bundles/{bundle_name}.toml")),
+    )?;
+
     let coders_path = coders_configuration_path(configuration_roots)?;
     let bundle_path = bundle_configuration_path(configuration_roots, bundle_name)?;
 

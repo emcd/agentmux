@@ -665,6 +665,93 @@ fn rejects_blank_project_name_with_rule_as_ambiguous() {
 }
 
 #[test]
+fn substitutes_bundle_name_raw() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let command = command_for_template("\"cmd --bundle {{bundle-name}}\"", &directory, "", "");
+    assert!(
+        command.contains("cmd --bundle alpha"),
+        "bundle name must substitute raw, got: {command}"
+    );
+}
+
+#[test]
+fn bundle_name_stays_valid_in_quotes() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let command = command_for_template("\"cmd '{{bundle-name}}'\"", &directory, "", "");
+    assert!(
+        command.contains("cmd 'alpha'"),
+        "bundle name must stay valid in any context, got: {command}"
+    );
+}
+
+#[test]
+fn resolves_bundle_name_from_dotted_bundle() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let coders = tmux_coders("\"cmd {{bundle-name}}\"", "\"conduct\"");
+    let bundle = bundle_document(&directory, None, "", "");
+    let command = start_command("team.one", &coders, &bundle);
+    assert!(
+        command.contains("cmd team.one"),
+        "dotted bundle id must resolve, got: {command}"
+    );
+}
+
+#[test]
+fn accepts_bundle_name_adjacent_to_directory() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let command = command_for_template(
+        "\"cmd {{bundle-name}}{{session-directory}}\"",
+        &directory,
+        "",
+        "",
+    );
+    assert!(
+        command.contains(&format!("alpha'{directory}'")),
+        "grammar-safe bundle name must compose, got: {command}"
+    );
+}
+
+#[test]
+fn rejects_bundle_filenames_with_shell_unsafe_characters() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    for bundle_name in [
+        "alpha;printf-pwned",
+        "alpha pwned",
+        "alpha'pwned",
+        "alpha$pwned",
+        "alpha*pwned",
+        "../pwned",
+    ] {
+        let coders = tmux_coders("\"cmd {{bundle-name}}\"", "\"conduct\"");
+        let bundle = bundle_document(&directory, None, "", "");
+        let root = write_config(&temporary, bundle_name, &coders, &bundle);
+        let error = load_bundle_configuration(&root, bundle_name)
+            .expect_err("unsafe bundle name loads")
+            .to_string();
+        assert!(
+            error.contains("must be a portable path segment"),
+            "unexpected error for {bundle_name}: {error}"
+        );
+    }
+}
+
+#[test]
+fn rejects_unknown_bundle_name_misspelling() {
+    let temporary = TempDir::new().expect("temporary");
+    let directory = temporary.path().display().to_string();
+    let error = load_error_for_template("\"cmd {{bundle-nam}}\"", &directory, "", "");
+    assert!(
+        error.contains("unknown placeholder '{{bundle-nam}}'"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn placeholder_shaped_directory_value_stays_literal() {
     let temporary = TempDir::new().expect("temporary");
     let shaped = temporary.path().join("w{{project-name}}");

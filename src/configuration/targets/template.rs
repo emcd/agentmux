@@ -44,6 +44,7 @@ struct TemplateScan {
 struct TemplateUsage {
     uses_coder_session_id: bool,
     uses_bundle_session_id: bool,
+    uses_bundle_name: bool,
     uses_session_directory: bool,
     uses_project_name: bool,
 }
@@ -241,7 +242,9 @@ fn is_assignment_shape(prefix_through_equals: &str) -> bool {
 
 /// Names the adjacent placeholder kind of one occurrence overlapping a
 /// composed word: the grammar-safe variables substitute shell-safe bytes,
-/// while `{{coder-session-id}}` and unknown shapes fail the word.
+/// while `{{coder-session-id}}` and unknown shapes fail the word. Bundle
+/// names validate against the shell-safe grammar at load, so
+/// `{{bundle-name}}` composes like the other grammar-safe variables.
 fn check_adjacent_placeholder(
     text: &str,
     path: &Path,
@@ -249,14 +252,15 @@ fn check_adjacent_placeholder(
 ) -> Result<(), ConfigurationError> {
     match occurrence_kind(text) {
         OccurrenceKind::BundleSessionId
+        | OccurrenceKind::BundleName
         | OccurrenceKind::ProjectName
         | OccurrenceKind::SessionDirectory => Ok(()),
         OccurrenceKind::CoderSessionId => Err(ConfigurationError::invalid(
             path,
             format!(
                 "session '{session_id}' template must not compose \
-                 {{{{session-directory}}}} with {{{{coder-session-id}}}} in one word: \
-                 the coder id has no shell-safe grammar"
+                 {{{{session-directory}}}} with '{text}' in one word: \
+                 the value has no shell-safe grammar at the config layer"
             ),
         )),
         OccurrenceKind::Unknown => Err(ConfigurationError::invalid(
@@ -401,8 +405,8 @@ fn check_assignment_shapes(
 
 /// Rejects unknown placeholder names and misplaced directory tokens.
 /// Quote, affix-grammar, adjacency, and assignment-shape rejection applies
-/// only to `{{session-directory}}`: the id and project tokens substitute
-/// grammar-safe raw values, so they stay valid in any template context.
+/// only to `{{session-directory}}`: the id, bundle, and project tokens
+/// substitute raw values, so they stay valid in any template context.
 fn classify_template_placeholders(
     template: &str,
     scan: &TemplateScan,
@@ -412,6 +416,7 @@ fn classify_template_placeholders(
     let mut usage = TemplateUsage {
         uses_coder_session_id: false,
         uses_bundle_session_id: false,
+        uses_bundle_name: false,
         uses_session_directory: false,
         uses_project_name: false,
     };
@@ -420,6 +425,7 @@ fn classify_template_placeholders(
         match occurrence_kind(text) {
             OccurrenceKind::CoderSessionId => usage.uses_coder_session_id = true,
             OccurrenceKind::BundleSessionId => usage.uses_bundle_session_id = true,
+            OccurrenceKind::BundleName => usage.uses_bundle_name = true,
             OccurrenceKind::SessionDirectory => {
                 check_directory_placement(template, scan, index, path, session_id)?;
                 usage.uses_session_directory = true;
@@ -440,6 +446,7 @@ fn classify_template_placeholders(
 enum OccurrenceKind {
     CoderSessionId,
     BundleSessionId,
+    BundleName,
     SessionDirectory,
     ProjectName,
     Unknown,
@@ -455,6 +462,7 @@ fn occurrence_kind(text: &str) -> OccurrenceKind {
     match (is_double, name) {
         (true, "coder-session-id") => OccurrenceKind::CoderSessionId,
         (true, "bundle-session-id") => OccurrenceKind::BundleSessionId,
+        (true, "bundle-name") => OccurrenceKind::BundleName,
         (true, "session-directory") => OccurrenceKind::SessionDirectory,
         (true, "project-name") => OccurrenceKind::ProjectName,
         _ => OccurrenceKind::Unknown,
@@ -545,37 +553,67 @@ fn resolve_project_name(
 /// original occurrence appends its value. Substituted value bytes are
 /// never inspected, so placeholder-shaped bytes inside a directory or a
 /// coder id stay literal while genuine template occurrences substitute.
+/// Resolved values substituted into one template render, alongside the
+/// error context naming the session under load.
+struct TemplateSubstitution<'a> {
+    coder_session_id: Option<&'a str>,
+    session_id: &'a str,
+    bundle_id: &'a str,
+    directory: &'a str,
+    project_name: Option<&'a str>,
+    path: &'a Path,
+}
+
+/// Appends one original occurrence's value: raw ids and project name,
+/// the directory as one shell-quoted word.
+fn append_occurrence_value(
+    rendered: &mut String,
+    text: &str,
+    substitution: &TemplateSubstitution,
+) -> Result<(), ConfigurationError> {
+    match occurrence_kind(text) {
+        OccurrenceKind::CoderSessionId => rendered.push_str(
+            substitution
+                .coder_session_id
+                .expect("classifier requires a coder-session-id value when used"),
+        ),
+        OccurrenceKind::BundleSessionId => rendered.push_str(substitution.session_id),
+        OccurrenceKind::BundleName => rendered.push_str(substitution.bundle_id),
+        OccurrenceKind::SessionDirectory => {
+            rendered.push_str(&shell_quote_word(substitution.directory));
+        }
+        OccurrenceKind::ProjectName => rendered.push_str(
+            substitution
+                .project_name
+                .expect("project name resolves when the template uses it"),
+        ),
+        OccurrenceKind::Unknown => {
+            return Err(ConfigurationError::invalid(
+                substitution.path,
+                format!(
+                    "session '{}' template has unknown placeholder '{text}'",
+                    substitution.session_id
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn apply_substitutions(
     template: &str,
     scan: &TemplateScan,
-    coder_session_id: Option<&str>,
-    session_id: &str,
-    directory: &str,
-    project_name: Option<&str>,
-    path: &Path,
+    substitution: &TemplateSubstitution,
 ) -> Result<String, ConfigurationError> {
-    let mut rendered = String::with_capacity(template.len() + directory.len());
+    let mut rendered = String::with_capacity(template.len() + substitution.directory.len());
     let mut cursor = 0;
     for occurrence in &scan.occurrences {
         rendered.push_str(&template[cursor..occurrence.begin]);
-        let text = &template[occurrence.begin..occurrence.end];
-        match occurrence_kind(text) {
-            OccurrenceKind::CoderSessionId => rendered.push_str(
-                coder_session_id.expect("classifier requires a coder-session-id value when used"),
-            ),
-            OccurrenceKind::BundleSessionId => rendered.push_str(session_id),
-            OccurrenceKind::SessionDirectory => {
-                rendered.push_str(&shell_quote_word(directory));
-            }
-            OccurrenceKind::ProjectName => rendered
-                .push_str(project_name.expect("project name resolves when the template uses it")),
-            OccurrenceKind::Unknown => {
-                return Err(ConfigurationError::invalid(
-                    path,
-                    format!("session '{session_id}' template has unknown placeholder '{text}'"),
-                ));
-            }
-        }
+        append_occurrence_value(
+            &mut rendered,
+            &template[occurrence.begin..occurrence.end],
+            substitution,
+        )?;
         cursor = occurrence.end;
     }
     rendered.push_str(&template[cursor..]);
@@ -591,6 +629,8 @@ fn apply_substitutions(
 /// `{{coder-session-id}}` (the session's value, required when it occurs),
 /// `{{bundle-session-id}}` (the normalized session id, substituted raw —
 /// the id charset admits no shell metacharacters),
+/// `{{bundle-name}}` (the canonical bundle id from the bundle filename,
+/// validated against the shell-safe grammar at load and substituted raw),
 /// `{{session-directory}}` (the session directory, rendered as a single
 /// shell-quoted word so it arrives as one argument on both the tmux shell
 /// handoff and the pty `shell_words` handoff, and required to occupy an
@@ -603,7 +643,6 @@ fn apply_substitutions(
 pub(in crate::configuration) fn render_command_template(
     template: &str,
     coder_session_id: Option<&str>,
-    session_directory: &Path,
     project: &ProjectNameSource,
     path: &Path,
     session_id: &str,
@@ -616,18 +655,19 @@ pub(in crate::configuration) fn render_command_template(
         .uses_project_name
         .then(|| resolve_project_name(project, path, session_id))
         .transpose()?;
-    let directory = session_directory
+    let directory = project
+        .directory
         .to_str()
         .expect("session directory is valid Unicode: it deserializes from a TOML string");
-    let rendered = apply_substitutions(
-        template,
-        &scan,
+    let substitution = TemplateSubstitution {
         coder_session_id,
         session_id,
+        bundle_id: project.bundle_id,
         directory,
-        project_name.as_deref(),
+        project_name: project_name.as_deref(),
         path,
-    )?;
+    };
+    let rendered = apply_substitutions(template, &scan, &substitution)?;
     ensure_command_nonempty(rendered.as_str(), path, session_id)?;
     Ok(rendered)
 }

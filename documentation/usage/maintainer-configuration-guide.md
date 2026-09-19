@@ -566,6 +566,7 @@ Command templates render per session. The vocabulary is:
 |---|---|
 | `{{coder-session-id}}` | The session's `coder-session-id`; required when it occurs. |
 | `{{bundle-session-id}}` | The bare session id from the `[[sessions]]` table (not bundle-qualified); substituted raw. |
+| `{{bundle-name}}` | The canonical bundle id from the bundle filename, validated against the shell-safe grammar at load; substituted raw. |
 | `{{session-directory}}` | The session's declared `directory`, rendered as a single shell-quoted word so it arrives as one argument. May compose inside a larger unquoted word (see below). |
 | `{{project-name}}` | The resolved project name for the session (explicit `project-name`, else the applicable `project-name-from` rule, else the directory basename); substituted raw. |
 
@@ -577,8 +578,8 @@ rejected as unknown placeholders and must be updated to
 must occupy an unquoted word whose every literal affix character is
 shell-literal-safe (ASCII letters and digits plus `-_.:/=,+@%`) and
 whose every adjacent placeholder is a grammar-safe variable
-(`{{bundle-session-id}}`, `{{project-name}}`, or another quoted
-`{{session-directory}}` — never `{{coder-session-id}}`), so forms like
+(`{{bundle-session-id}}`, `{{bundle-name}}`, `{{project-name}}`, or
+another quoted `{{session-directory}}` — never `{{coder-session-id}}`), so forms like
 `--dir={{session-directory}}` and
 `--mount {{project-name}}:{{session-directory}}` resolve with the
 composed word arriving as one argument. A template placing it inside

@@ -35,7 +35,6 @@ fn render_session_command(
     render_command_template(
         command_template,
         coder_session_id,
-        &session.directory,
         &source,
         bundle_path,
         session_id,
