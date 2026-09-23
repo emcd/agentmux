@@ -7,6 +7,21 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-09-23
+
+### Fixed
+
+- **Relay misdelivery under tmux session-name ambiguity:** when a target
+  tmux session was temporarily unavailable, `tmux -t <name>` silently
+  fell back to a foreign window with the same name (typically the most
+  recently active one), causing messages to be delivered to the wrong
+  session while relay logs showed the correct target. This was exposed
+  by Cistella containerization, which introduced naming collisions
+  (Cargo-installed wrappers produced window name `cistella`; local
+  developer builds produced `target/debug/cistella`). Fix fails closed
+  by verifying the resolved session identity against the requested
+  target, converting silent misdelivery into loud non-delivery.
+
 ## [0.10.3] - 2026-09-19
 
 ### Added
