@@ -44,9 +44,14 @@ fi
 
 case "${args[0]}" in
   display-message)
+    target="${args[3]-}"
+    target="${target#=}"
     case "${args[4]-}" in
       '#{pane_id}')
         printf "%%1\n"
+        ;;
+      '#{session_name} #{pane_id}')
+        printf "%s %%1\n" "${target}"
         ;;
       '#{window_activity}')
         printf "1\n"
@@ -96,9 +101,14 @@ fi
 
 case "${args[0]}" in
   display-message)
+    target="${args[3]-}"
+    target="${target#=}"
     case "${args[4]-}" in
       '#{pane_id}')
         printf "%%1\n"
+        ;;
+      '#{session_name} #{pane_id}')
+        printf "%s %%1\n" "${target}"
         ;;
       '#{window_activity}')
         printf "1\n"

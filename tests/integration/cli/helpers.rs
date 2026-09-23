@@ -442,6 +442,13 @@ case "${{command_name}}" in
           printf "%%1\n"
         fi
         ;;
+      '#{{session_name}} #{{pane_id}}')
+        if [[ -s "${{UNREADY_FILE}}" ]] && grep -Fxq "${{target_session}}" "${{UNREADY_FILE}}"; then
+          printf "\n"
+        else
+          printf "%s %%1\n" "${{target_session}}"
+        fi
+        ;;
       '#{{window_activity}}')
         printf "0\n"
         ;;

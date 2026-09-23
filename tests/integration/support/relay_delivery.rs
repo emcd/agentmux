@@ -502,9 +502,14 @@ case "${{command_name}}" in
     ;;
   display-message)
     format="${{args[4]-}}"
+    target="${{args[3]-}}"
+    target="${{target#=}}"
     case "${{format}}" in
       '#{{pane_id}}')
         printf "%%1\n"
+        ;;
+      '#{{session_name}} #{{pane_id}}')
+        printf "%s %%1\n" "${{target}}"
         ;;
       '#{{window_activity}}')
         printf "1\n"
