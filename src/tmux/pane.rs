@@ -221,17 +221,49 @@ pub(crate) fn resolve_active_pane_target(
     tmux_socket: &Path,
     target_session: &str,
 ) -> Result<String, String> {
+    // The session name AND the pane id are read in one call so the identity
+    // check below applies to the very pane id this returns: verifying in a
+    // separate call would reopen the race it closes.
     let output = run_tmux_command(
         tmux_socket,
-        &["display-message", "-p", "-t", target_session, "#{pane_id}"],
+        &[
+            "display-message",
+            "-p",
+            "-t",
+            target_session,
+            "#{session_name} #{pane_id}",
+        ],
     )?;
-    let pane_target = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if pane_target.is_empty() {
+    let resolved = String::from_utf8_lossy(&output.stdout);
+    parse_active_pane_target(target_session, resolved.as_ref())
+}
+
+/// Verifies a `display-message` resolution names the requested session.
+///
+/// tmux resolves a `-t` name that matches no session by falling back to a
+/// same-named window in another session. Accepting that fallback would write,
+/// observe, and look at a stranger's pane whenever the target's own session
+/// is absent (killed, not yet recreated) while a same-named window exists
+/// elsewhere — a cross-session misdelivery that every relay-side log still
+/// attributes to the target. A name mismatch therefore fails closed: the
+/// caller reports provable non-delivery rather than reaching the wrong pane.
+fn parse_active_pane_target(target_session: &str, stdout: &str) -> Result<String, String> {
+    let (session_name, pane_id) = stdout
+        .trim()
+        .split_once(' ')
+        .map(|(session, pane)| (session.trim(), pane.trim()))
+        .unwrap_or_default();
+    if session_name.is_empty() || pane_id.is_empty() {
         return Err(format!(
             "tmux did not return an active pane for session {target_session}"
         ));
     }
-    Ok(pane_target)
+    if session_name != target_session {
+        return Err(format!(
+            "tmux resolved session {target_session} to a pane in session {session_name}; refusing cross-session targeting"
+        ));
+    }
+    Ok(pane_id.to_string())
 }
 
 pub(crate) fn capture_pane_snapshot(
@@ -612,4 +644,33 @@ pub(crate) fn sanitize_diagnostic_text(text: &str) -> String {
         clipped.push_str("...");
     }
     clipped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The `display-message` identity check fails closed: an exact session
+    /// resolves, while a window-name fallback, an empty answer, and garbage
+    /// all refuse rather than naming a stranger's pane.
+    #[test]
+    fn active_pane_resolution_names_only_its_own_session() {
+        assert_eq!(
+            parse_active_pane_target("cistella", "cistella %1\n"),
+            Ok("%1".to_string()),
+            "exact session must resolve to its pane"
+        );
+        assert!(
+            parse_active_pane_target("cistella", "coordinator %1\n").is_err(),
+            "window-name fallback into another session must fail closed"
+        );
+        assert!(
+            parse_active_pane_target("cistella", "\n").is_err(),
+            "empty answer must fail closed"
+        );
+        assert!(
+            parse_active_pane_target("cistella", "cistella\n").is_err(),
+            "answer without a pane id must fail closed"
+        );
+    }
 }
