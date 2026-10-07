@@ -889,7 +889,7 @@ fn held_tmux_delivery_runs_after_narrowing_with_original_text() {
     // socket paths must fit sun_path (104 bytes on macOS), which
     // runner-controlled TMPDIR layouts can exceed, failing the bind with
     // "file name too long" for reasons unrelated to the behavior under test.
-    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
+    let temporary = TempDir::new_in("/tmp/scratch").expect("short scratch space");
     let bundle_name = "ident_scope_tmuxhold";
     let configuration_roots = write_scope_configuration(&temporary, bundle_name);
     let operator_id = global_user_id(bundle_name);
