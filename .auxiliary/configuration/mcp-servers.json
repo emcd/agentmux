@@ -1,10 +1,9 @@
 {
   "mcpServers": {
     "agentmux": {
-      "command": "reloaderoo",
+      "command": "cargo",
       "args": [
-        "--",
-        "cargo", "run", "--bin", "agentmux", "--",
+        "run", "--bin", "agentmux", "--",
         "host", "mcp"
       ]
     },

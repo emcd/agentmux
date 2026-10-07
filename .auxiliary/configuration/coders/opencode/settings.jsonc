@@ -62,8 +62,6 @@
     "agentmux": {
       "type": "local",
       "command": [
-        "reloaderoo",
-        "--",
         "cargo",
         "run",
         "--bin",
