@@ -1,10 +1,9 @@
 {
   "mcpServers": {
     "agentmux": {
-      "command": "env",
+      "command": "cargo",
       "args": [
-        "AGENTMUX_CONFIGURATION_DIRECTORY=/home/me/src/agentmux/.auxiliary/configuration/agentmux",
-        "cargo", "run", "--bin", "agentmux", "--",
+        "run", "--bin", "agentmux", "--",
         "host", "mcp"
       ]
     },
