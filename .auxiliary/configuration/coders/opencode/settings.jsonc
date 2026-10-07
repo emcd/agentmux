@@ -62,6 +62,8 @@
     "agentmux": {
       "type": "local",
       "command": [
+        "env",
+        "AGENTMUX_CONFIGURATION_DIRECTORY=/home/me/src/agentmux/.auxiliary/configuration/agentmux",
         "cargo",
         "run",
         "--bin",
