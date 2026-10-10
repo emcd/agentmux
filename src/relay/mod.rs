@@ -1,6 +1,6 @@
 //! Relay IPC contract and message-routing implementation.
 
-use std::{path::Path, time::Duration};
+use std::{collections::HashSet, path::Path, time::Duration};
 
 use crate::configuration::{ConfigurationRoots, load_bundle_configuration};
 use crate::runtime::paths::{BundleRuntimePaths, tmux_socket_path_for_runtime_directory};
@@ -288,6 +288,20 @@ pub fn append_startup_failure(
     record: StartupFailureRecord,
 ) -> Result<StartupFailureRecord, String> {
     startup_state::append_startup_failure(runtime_directory, record)
+}
+
+/// Drops failure-history records naming sessions outside `member_ids`
+/// (renamed or removed members no future serve can clear). Returns the
+/// number removed; writes only when something was removed.
+///
+/// # Errors
+///
+/// Returns the history read/write failure cause, or a lock-poisoned cause.
+pub fn prune_startup_failures_for_non_members(
+    runtime_directory: &Path,
+    member_ids: &HashSet<String>,
+) -> Result<usize, String> {
+    startup_state::prune_startup_failures_for_non_members(runtime_directory, member_ids)
 }
 
 /// Records that a session has been observed serving successfully, clearing any
