@@ -71,6 +71,11 @@ case "${args[0]}" in
     printf "no server running on %s\n" "${TMUX_SOCKET-socket}" >&2
     exit 1
     ;;
+  new-session)
+    if [[ " $* " == *" -P "* ]]; then
+      printf '$1\n'
+    fi
+    ;;
   *)
     :
     ;;
@@ -130,6 +135,11 @@ case "${args[0]}" in
   kill-server)
     printf "no server running on %s\n" "${TMUX_SOCKET-socket}" >&2
     exit 1
+    ;;
+  new-session)
+    if [[ " $* " == *" -P "* ]]; then
+      printf '$1\n'
+    fi
     ;;
   *)
     :

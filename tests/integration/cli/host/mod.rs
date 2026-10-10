@@ -1,13 +1,15 @@
 //! CLI `host relay` integration tests covering the relay subcommand end-to-end
 //! through the hosted binary.
 //!
-//! The cluster files partition the 19 tests by concern:
+//! The cluster files partition the 22 tests by concern:
 //! - [`flags`]: CLI argument rejection for positional bundle selectors and
 //!   unknown flag combinations (2 tests).
 //! - [`startup`]: startup modes (default autostart, no-autostart process-only),
 //!   startup-failure records surfaced through `list`, summary folding of
 //!   per-session failure reasons, startup-failure clearing on successful
-//!   session startup, and per-bundle failure detail inscription (6 tests).
+//!   session startup, and per-bundle failure detail inscription (7 tests).
+//! - [`ownership`]: ownership-inscription exactness — the relay marks the tmux
+//!   session it just created by captured session id, never by name (3 tests).
 //! - [`credentials`]: `--require-credentials` CLI flag,
 //!   `require-session-credentials = true` in `relay.toml`, and the absence
 //!   of either (3 tests).
@@ -36,6 +38,7 @@ use super::helpers::*;
 
 mod credentials;
 mod flags;
+mod ownership;
 mod startup;
 mod watcher;
 

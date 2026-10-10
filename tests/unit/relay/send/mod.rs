@@ -102,6 +102,11 @@ case "${args[0]}" in
     printf "1\n" > "${PASTED_FILE}"
     sleep 60
     ;;
+  new-session)
+    if [[ " $* " == *" -P "* ]]; then
+      printf '$1\n'
+    fi
+    ;;
   *)
     :
     ;;

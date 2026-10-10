@@ -139,6 +139,9 @@ fn create_member_once(tmux_socket: &Path, member: &BundleMember) -> Result<(), S
     let mut arguments = vec![
         "new-session".to_string(),
         "-d".to_string(),
+        "-P".to_string(),
+        "-F".to_string(),
+        "#{session_id}".to_string(),
         "-s".to_string(),
         member.id.clone(),
     ];
@@ -162,18 +165,44 @@ fn create_member_once(tmux_socket: &Path, member: &BundleMember) -> Result<(), S
         arguments.push(format!("{}={}", entry.name, entry.value));
     }
     arguments.push(start_command.to_string());
-    run_tmux_command(tmux_socket, &arguments)?;
+    let created = run_tmux_command(tmux_socket, &arguments)?;
+    let session_id = parse_created_session_id(&created.stdout)?;
+    // Target the ownership inscription at the session id captured above. The
+    // id is the only tmux-native handle bound to one specific session: a
+    // session-name target does prefix matching, so requesting an absent
+    // shorter name (e.g. `cistella`) can mark an existing longer one (e.g.
+    // `cistella-o`). The `=<name>` form the `has-session`/`kill-session`
+    // guards use is rejected by real tmux for `set-option`, so the id printed
+    // once by `new-session -P -F` is the exact handle here; when the session
+    // disappears first, this call errors instead of drifting to a stranger.
     run_tmux_command(
         tmux_socket,
         &[
             "set-option",
             "-t",
-            member.id.as_str(),
+            session_id.as_str(),
             OWNERSHIP_OPTION_NAME,
             OWNERSHIP_OPTION_VALUE,
         ],
     )?;
     Ok(())
+}
+
+/// Reads back the session id a successful `new-session -P -F '#{session_id}'`
+/// prints. The shape check is fail-closed: anything but one `$N` token
+/// refuses to guess, so ownership is never inscribed against a handle the
+/// creation call did not just report.
+fn parse_created_session_id(stdout: &[u8]) -> Result<String, String> {
+    let printed = String::from_utf8_lossy(stdout).trim().to_string();
+    let well_formed = printed.len() > 1
+        && printed.starts_with('$')
+        && printed[1..].bytes().all(|byte| byte.is_ascii_digit());
+    if well_formed {
+        return Ok(printed);
+    }
+    Err(format!(
+        "tmux new-session did not report a session id (got {printed:?})"
+    ))
 }
 
 fn retry_delay_for_attempt(session_name: &str, attempt: usize) -> Duration {
