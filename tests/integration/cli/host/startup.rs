@@ -365,6 +365,152 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
     assert!(output.status.success(), "command should succeed");
 }
 
+fn write_bundle_configuration_with_kill_after_create_member(config_root: &Path, bundle_name: &str) {
+    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+    fs::write(
+        config_root.join("coders.toml"),
+        r#"
+format-version = 1
+
+[[coders]]
+id = "tmux-default"
+
+[coders.tmux]
+initial-command = "sh -lc 'exec sleep 45'"
+resume-command = "sh -lc 'exec sleep 45'"
+"#,
+    )
+    .expect("write coders config");
+    fs::write(
+        config_root.join("policies.toml"),
+        r#"
+format-version = 1
+default = "default"
+
+[[policies]]
+id = "default"
+
+[policies.controls]
+list = "all"
+look = "self"
+send = "home"
+"#,
+    )
+    .expect("write policies config");
+    fs::write(
+        config_root
+            .join("bundles")
+            .join(format!("{bundle_name}.toml")),
+        r#"
+format-version = 1
+autostart = true
+
+[[sessions]]
+id = "steady"
+name = "steady"
+directory = "/tmp"
+coder = "tmux-default"
+
+[[sessions]]
+id = "victim"
+name = "victim"
+directory = "/tmp"
+coder = "tmux-default"
+"#,
+    )
+    .expect("write bundle config");
+}
+
+/// A session whose child dies between `new-session -P` and the ownership
+/// mark must surface a startup failure naming it — never a silent success
+/// with no session behind it.
+#[test]
+fn host_relay_records_startup_failure_when_session_dies_before_marking() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration_with_kill_after_create_member(&config_root, "alpha");
+    write_tui_configuration(
+        &config_root,
+        Some("alpha"),
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    let fake_tmux = temporary.path().join("fake-tmux.sh");
+    write_fake_tmux_script(&fake_tmux);
+    kill_fake_tmux_session_after_create(&fake_tmux, "victim");
+
+    let child = process::RelayChildGuard::new(
+        Command::new(env!("CARGO_BIN_EXE_agentmux"))
+            .args([
+                "host",
+                "relay",
+                "--configuration-directory",
+                &config_root.to_string_lossy(),
+                "--state-directory",
+                &state_root.to_string_lossy(),
+                "--inscriptions-directory",
+                &inscriptions_root.to_string_lossy(),
+            ])
+            .env("AGENTMUX_TMUX_COMMAND", &fake_tmux)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn agentmux host relay"),
+    );
+    wait_for_relay_ready(&state_root, "alpha");
+
+    let listed = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "list",
+            "principals",
+            "--namespace",
+            "alpha",
+            "--json",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run list sessions");
+    assert!(listed.status.success(), "list sessions should succeed");
+    let listed_json: Value = serde_json::from_slice(&listed.stdout).expect("decode list payload");
+    let failures = listed_json["bundle"]["recent_startup_failures"]
+        .as_array()
+        .expect("startup failures array");
+    let victim_failure = failures
+        .iter()
+        .find(|entry| entry["session_id"] == "victim")
+        .unwrap_or_else(|| {
+            panic!("expected startup failure for the instant-death session: {listed_json}")
+        });
+    // The captured `$N` mark must fail against the dead session rather than
+    // land on a sibling: the record carries the failed mark, not silence.
+    let failure_text = serde_json::to_string(victim_failure).expect("encode failure record");
+    assert!(
+        failure_text.contains("no such session"),
+        "instant-death failure should name the failed mark: {listed_json}"
+    );
+    assert!(
+        !failures.iter().any(|entry| entry["session_id"] == "steady"),
+        "the healthy member must not carry a failure: {listed_json}"
+    );
+
+    shutdown_relay_if_present(&state_root, "alpha");
+    let output = child
+        .wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT)
+        .expect("wait for agentmux host relay");
+    assert!(output.status.success(), "command should succeed");
+}
+
 #[test]
 fn host_relay_autostart_summary_reports_a_partial_startup_as_degraded() {
     let temporary = TempDir::new().expect("temporary");

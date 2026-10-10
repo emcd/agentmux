@@ -338,6 +338,54 @@ pub(super) fn fail_fake_tmux_session_creation(script_path: &Path, session_id: &s
     fs::write(&path, existing).expect("write fake tmux create failure sessions");
 }
 
+pub(super) fn fake_tmux_kill_after_create_file(script_path: &Path) -> PathBuf {
+    script_path.with_extension("kill-after-create")
+}
+
+pub(super) fn kill_fake_tmux_session_after_create(script_path: &Path, session_id: &str) {
+    fs::write(
+        fake_tmux_kill_after_create_file(script_path),
+        format!("{session_id}\n"),
+    )
+    .expect("write fake tmux kill-after-create sentinel");
+}
+
+pub(super) fn fake_tmux_malformed_id_file(script_path: &Path) -> PathBuf {
+    script_path.with_extension("malformed-id")
+}
+
+pub(super) fn fail_fake_tmux_session_id_report(script_path: &Path, session_id: &str) {
+    fs::write(
+        fake_tmux_malformed_id_file(script_path),
+        format!("{session_id}\n"),
+    )
+    .expect("write fake tmux malformed-id sentinel");
+}
+
+/// Makes the fake tmux answer `new-session -P` for `session_id` with
+/// `raw_output` verbatim (backslash escapes decoded), exercising malformed
+/// id shapes — empty, non-numeric, multiline, trailing garbage — through
+/// the CLI instead of a unit test.
+pub(super) fn fail_fake_tmux_session_id_report_raw(
+    script_path: &Path,
+    session_id: &str,
+    raw_output: &str,
+) {
+    let path = fake_tmux_malformed_id_file(script_path);
+    let mut existing = fs::read_to_string(&path).unwrap_or_default();
+    existing.push_str(&format!("{session_id}={raw_output}\n"));
+    fs::write(&path, existing).expect("write fake tmux malformed-id sentinel");
+}
+
+pub(super) fn read_fake_tmux_owned_sessions(script_path: &Path) -> Vec<String> {
+    let content = fs::read_to_string(script_path.with_extension("owned")).unwrap_or_default();
+    content
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 pub(super) fn write_fake_tmux_script(path: &Path) {
     let sessions_file = path.with_extension("sessions");
     let owned_file = path.with_extension("owned");
@@ -346,6 +394,9 @@ pub(super) fn write_fake_tmux_script(path: &Path) {
     let unready_file = fake_tmux_unready_sessions_file(path);
     let query_failure_file = fake_tmux_query_failure_file(path);
     let create_failure_file = fake_tmux_create_failure_file(path);
+    let ids_file = path.with_extension("ids");
+    let kill_after_create_file = fake_tmux_kill_after_create_file(path);
+    let malformed_id_file = fake_tmux_malformed_id_file(path);
     let body = format!(
         r##"#!/usr/bin/env bash
 set -euo pipefail
@@ -357,10 +408,54 @@ SEARCH_PATH_FILE="{search_path}"
 UNREADY_FILE="{unready}"
 QUERY_FAILURE_FILE="{query_failure}"
 CREATE_FAILURE_FILE="{create_failure}"
+IDS_FILE="{ids}"
+KILL_AFTER_CREATE_FILE="{kill_after_create}"
+MALFORMED_ID_FILE="{malformed_id}"
 touch "${{SESSIONS_FILE}}" "${{OWNED_FILE}}" "${{LOG_FILE}}" "${{UNREADY_FILE}}" "${{CREATE_FAILURE_FILE}}"
 
 printf "%s\n" "$*" >> "${{LOG_FILE}}"
 printf "%s\n" "${{PATH-}}" > "${{SEARCH_PATH_FILE}}"
+
+# Creation-time session-id bookkeeping. Each successful `new-session`
+# mints one `$N` handle and remembers which name it belongs to, the way
+# real tmux assigns immutable session ids at creation.
+allocate_session_id() {{
+  touch "${{IDS_FILE}}"
+  local count
+  count="$(wc -l < "${{IDS_FILE}}" | tr -d ' ')"
+  local id='$'"${{count}}"
+  printf "%s %s\n" "${{id}}" "$1" >> "${{IDS_FILE}}"
+  printf "%s\n" "${{id}}"
+}}
+
+lookup_session_id() {{
+  [[ -f "${{IDS_FILE}}" ]] || return 0
+  while IFS=' ' read -r id name; do
+    if [[ "${{id}}" == "$1" ]]; then
+      printf "%s\n" "${{name}}"
+      return 0
+    fi
+  done < "${{IDS_FILE}}"
+  return 0
+}}
+
+session_present() {{
+  [[ -s "${{SESSIONS_FILE}}" ]] && grep -Fxq "$1" "${{SESSIONS_FILE}}"
+}}
+
+# Models real tmux 3.4 name resolution for a missing shorter name: it falls
+# back to an existing longer name with the request as a prefix.
+prefix_match_session() {{
+  [[ -s "${{SESSIONS_FILE}}" ]] || return 0
+  while IFS= read -r session; do
+    [[ -z "${{session}}" ]] && continue
+    if [[ "${{session}}" == "$1"* && "${{session}}" != "$1" ]]; then
+      printf "%s\n" "${{session}}"
+      return 0
+    fi
+  done < "${{SESSIONS_FILE}}"
+  return 0
+}}
 
 args=("$@")
 if [[ "${{#args[@]}}" -ge 2 && "${{args[0]}}" == "-S" ]]; then
@@ -402,16 +497,89 @@ case "${{command_name}}" in
     done < "${{SESSIONS_FILE}}"
     ;;
   new-session)
-    session_name="${{args[3]}}"
+    session_name=""
+    print_session_id=0
+    i=0
+    while [[ $i -lt ${{#args[@]}} ]]; do
+      case "${{args[$i]}}" in
+        -s)
+          session_name="${{args[$((i+1))]-}}"
+          i=$((i+2))
+          continue
+          ;;
+        -F)
+          if [[ "${{args[$((i+1))]-}}" == '#{{session_id}}' ]]; then
+            print_session_id=1
+          fi
+          i=$((i+2))
+          continue
+          ;;
+      esac
+      i=$((i+1))
+    done
     if [[ -s "${{CREATE_FAILURE_FILE}}" ]] && grep -Fxq "${{session_name}}" "${{CREATE_FAILURE_FILE}}"; then
       echo "permission denied" >&2
       exit 1
     fi
     printf "%s\n" "${{session_name}}" >> "${{SESSIONS_FILE}}"
     sort -u "${{SESSIONS_FILE}}" -o "${{SESSIONS_FILE}}"
+    # A malformed-id entry is either a bare session name (fixed sentinel
+    # output) or a `name=raw` pair whose raw bytes print verbatim with
+    # backslash escapes decoded, so the harness can emit the full malformed
+    # shape matrix through the CLI.
+    malformed_kind=""
+    malformed_text=""
+    if [[ -f "${{MALFORMED_ID_FILE}}" ]]; then
+      malformed_entry="$(grep -E "^${{session_name}}=" "${{MALFORMED_ID_FILE}}" | tail -n 1 || true)"
+      if [[ -n "${{malformed_entry}}" ]]; then
+        malformed_kind="pair"
+        malformed_text="${{malformed_entry#*=}}"
+      elif grep -Fxq "${{session_name}}" "${{MALFORMED_ID_FILE}}"; then
+        malformed_kind="fixed"
+      fi
+    fi
+    case "${{malformed_kind}}" in
+      pair) printf '%b\n' "${{malformed_text}}" ;;
+      fixed) printf "not-a-session-id\n" ;;
+      *)
+        if [[ "${{print_session_id}}" == "1" ]]; then
+          allocate_session_id "${{session_name}}"
+        fi
+        ;;
+    esac
+    if [[ -f "${{KILL_AFTER_CREATE_FILE}}" ]] && grep -Fxq "${{session_name}}" "${{KILL_AFTER_CREATE_FILE}}"; then
+      grep -Fxv "${{session_name}}" "${{SESSIONS_FILE}}" > "${{SESSIONS_FILE}}.tmp" || true
+      mv "${{SESSIONS_FILE}}.tmp" "${{SESSIONS_FILE}}"
+    fi
     ;;
   set-option)
-    session_name="${{args[2]#=}}"
+    # Models real tmux 3.4 target resolution: an exact session id (`$N`)
+    # resolves through the creation-time mapping and errors when the session
+    # is gone; a session name resolves exactly, then by prefix fallback to an
+    # existing longer name, else errors. A `=`-prefixed target is rejected
+    # outright — real tmux refuses it — so a reversion to `=name` cannot
+    # falsely pass through normalization here.
+    if [[ "${{args[2]-}}" == =* ]]; then
+      echo "no such session: ${{args[2]}}" >&2
+      exit 1
+    fi
+    target="${{args[2]#=}}"
+    target="${{target%:}}"
+    if [[ "${{target}}" == '$'* ]]; then
+      session_name="$(lookup_session_id "${{target}}")"
+      if [[ -z "${{session_name}}" ]] || ! session_present "${{session_name}}"; then
+        echo "no such session: ${{target}}" >&2
+        exit 1
+      fi
+    elif session_present "${{target}}"; then
+      session_name="${{target}}"
+    else
+      session_name="$(prefix_match_session "${{target}}")"
+      if [[ -z "${{session_name}}" ]]; then
+        echo "can't find session: ${{target}}" >&2
+        exit 1
+      fi
+    fi
     printf "%s\n" "${{session_name}}" >> "${{OWNED_FILE}}"
     sort -u "${{OWNED_FILE}}" -o "${{OWNED_FILE}}"
     ;;
@@ -475,6 +643,9 @@ esac
         unready = unready_file.display(),
         query_failure = query_failure_file.display(),
         create_failure = create_failure_file.display(),
+        ids = ids_file.display(),
+        kill_after_create = kill_after_create_file.display(),
+        malformed_id = malformed_id_file.display(),
     );
     fs::write(path, body).expect("write fake tmux script");
     fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("set fake tmux executable");
