@@ -39,7 +39,7 @@ impl Drop for SocketGuard {
 
 fn temporary_socket_path() -> (SocketGuard, PathBuf) {
     let counter = SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let path = PathBuf::from("/tmp/scratch").join(format!(
+    let path = std::env::temp_dir().join(format!(
         "amx-tui-relay-err-{}-{counter}.sock",
         std::process::id()
     ));
