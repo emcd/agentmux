@@ -8,10 +8,13 @@ use crate::configuration::{
     BundleConfiguration, BundleMember, ConfigurationRoots, TargetConfiguration,
     inject_spawn_state_directory, load_bundle_configuration, load_tui_configuration,
 };
+use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::BundleRuntimePaths;
 
 use super::identity::canonical_session_id;
-use super::startup_state::note_session_served_successfully;
+use super::startup_state::{
+    note_session_served_successfully, prune_startup_failures_for_non_members,
+};
 use super::stream::register_configured_session;
 use super::{
     BundleStartupReport, ReconciliationReport, RelayError, ShutdownReport, StartupFailureRecord,
@@ -305,6 +308,29 @@ pub(super) fn reconcile_loaded_bundle(
     for session_name in stale_owned {
         prune_owned_session(tmux_socket, &session_name)?;
         report.pruned_sessions.push(session_name);
+    }
+
+    // Failure history names sessions, not members: a renamed or removed
+    // member's records would otherwise report stale failures forever, since
+    // no future serve can clear them. Pruned here, beside the stale-owned
+    // pruning above, so one reconcile pass retires both kinds of
+    // member-shaped leftovers. A hygiene failure must not fail bring-up, so
+    // it is recorded as an inscription rather than propagated.
+    if let Err(cause) = prune_startup_failures_for_non_members(
+        runtime_directory,
+        &bundle
+            .members
+            .iter()
+            .map(|member| member.id.clone())
+            .collect::<HashSet<_>>(),
+    ) {
+        emit_inscription(
+            "relay.reconcile.prune_failures_error",
+            &json!({
+                "namespace": bundle.bundle_name,
+                "cause": cause,
+            }),
+        );
     }
 
     if let Some(bootstrap_member) = missing.first().cloned() {

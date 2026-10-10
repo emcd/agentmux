@@ -106,6 +106,33 @@ pub(super) fn clear_startup_failures_for_session(
     Ok(removed)
 }
 
+/// Drops failure-history records naming sessions that are no longer bundle
+/// members (renamed or removed): no future serve can clear them, so they
+/// would otherwise report stale failures — and inflate the failure count —
+/// forever. Writes only when something was removed. Returns the number
+/// removed.
+pub(super) fn prune_startup_failures_for_non_members(
+    runtime_directory: &Path,
+    member_ids: &HashSet<String>,
+) -> Result<usize, String> {
+    let _guard = startup_failure_history_lock()
+        .lock()
+        .map_err(|_| "failed to lock startup failure history".to_string())?;
+    let path = startup_failure_history_path(runtime_directory);
+    let Some(mut history) = load_persisted_startup_failure_history(path.as_path())? else {
+        return Ok(0);
+    };
+    let original_len = history.records.len();
+    history
+        .records
+        .retain(|record| member_ids.contains(record.session_id.as_str()));
+    let removed = original_len - history.records.len();
+    if removed > 0 {
+        store_persisted_startup_failure_history(path.as_path(), &history)?;
+    }
+    Ok(removed)
+}
+
 pub(super) fn append_startup_failure(
     runtime_directory: &Path,
     mut record: StartupFailureRecord,

@@ -111,3 +111,39 @@ fn clearing_one_session_leaves_another_session_untouched() {
         "one session recovering must not clear another's history"
     );
 }
+
+#[test]
+fn pruning_non_members_removes_renamed_sessions_and_keeps_members() {
+    use agentmux::relay::prune_startup_failures_for_non_members;
+    use std::collections::HashSet;
+
+    // A renamed member's old records would otherwise report stale failures
+    // forever: no future serve can clear a session id that no longer exists.
+    let temporary = TempDir::new().expect("temporary");
+    let runtime_directory = temporary.path();
+    append_startup_failure(runtime_directory, failure("cistella", "old failure"))
+        .expect("append stale failure");
+    append_startup_failure(runtime_directory, failure("cistella-o", "live failure"))
+        .expect("append live failure");
+
+    let members: HashSet<String> = ["cistella-o".to_string()].into_iter().collect();
+    assert_eq!(
+        prune_startup_failures_for_non_members(runtime_directory, &members).expect("prune"),
+        1,
+        "exactly the non-member record goes"
+    );
+
+    assert!(recorded_reasons(runtime_directory, "cistella").is_empty());
+    assert_eq!(
+        recorded_reasons(runtime_directory, "cistella-o"),
+        ["live failure"],
+        "member records survive pruning"
+    );
+
+    // Pruning an already-clean history writes nothing and reports zero.
+    assert_eq!(
+        prune_startup_failures_for_non_members(runtime_directory, &members).expect("reprune"),
+        0,
+        "second prune is a no-op"
+    );
+}
