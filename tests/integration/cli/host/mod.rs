@@ -4,10 +4,15 @@
 //! The cluster files partition the 22 tests by concern:
 //! - [`flags`]: CLI argument rejection for positional bundle selectors and
 //!   unknown flag combinations (2 tests).
-//! - [`startup`]: startup modes (default autostart, no-autostart process-only),
-//!   startup-failure records surfaced through `list`, summary folding of
-//!   per-session failure reasons, startup-failure clearing on successful
-//!   session startup, and per-bundle failure detail inscription (7 tests).
+//! - [`startup`]: startup modes (default autostart, no-autostart process-only)
+//!   and the autostart summary shape (partial startup as degraded, failed
+//!   session reasons folded into the per-bundle summary) (4 tests).
+//! - [`startup_config`]: bundle-configuration writers shared by [`startup`]
+//!   and [`startup_failures`] (no tests).
+//! - [`startup_failures`]: startup-failure records surfaced through `list`,
+//!   startup-failure clearing on successful session startup, the independence
+//!   of the health verdict from the failure history, and per-bundle failure
+//!   detail inscription (5 tests).
 //! - [`ownership`]: ownership-inscription exactness — the relay marks the tmux
 //!   session it just created by captured session id, never by name (3 tests).
 //! - [`credentials`]: `--require-credentials` CLI flag,
@@ -40,6 +45,8 @@ mod credentials;
 mod flags;
 mod ownership;
 mod startup;
+mod startup_config;
+mod startup_failures;
 mod watcher;
 
 /// Wait budget for observing a watcher-driven signal: a reload/suppression
