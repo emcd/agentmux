@@ -124,6 +124,9 @@ jobs:
         with:
           tool: cargo-nextest@0.9
 
+      - name: Create test scratch directory
+        run: mkdir -p /tmp/scratch
+
       - name: Build
         run: cargo build --release ${{ matrix.id == 'pty-feature' && '--features pty' || '' }}
 
