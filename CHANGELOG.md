@@ -7,6 +7,19 @@ and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.ht
 
 ## [Unreleased]
 
+## [0.10.5] - 2026-10-10
+
+### Fixed
+
+- **Session ownership marking uses immutable session ID:** `create_member_once`
+  now captures the tmux session ID at creation (`new-session -P -F
+  '#{session_id}'`) and marks ownership against that ID, preventing wrong-session
+  marking when a same-prefix sibling exists and recording failure when the created
+  session disappears before marking.
+- **Test scratch space:** use `/tmp/scratch` for test socket paths, created on
+  CI runners. `/tmp` is not writable in the Cistella container; macOS `TMPDIR`
+  is too long for tmux socket paths.
+
 ## [0.10.4] - 2026-09-23
 
 ### Fixed
