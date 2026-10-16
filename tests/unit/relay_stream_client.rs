@@ -28,7 +28,7 @@ fn temporary_socket_path(prefix: &str) -> (SocketPathGuard, PathBuf) {
     let counter = SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
     let short_prefix = &prefix[..prefix.len().min(12)];
-    let socket_path = std::env::temp_dir()
+    let socket_path = std::path::PathBuf::from("/tmp")
         .join(format!("amx-{short_prefix}-{pid}-{counter}.sock"));
     let _ = std::fs::remove_file(&socket_path);
     (

@@ -6,7 +6,7 @@ use agentmux::relay::test_hooks::{
 
 #[test]
 fn concurrent_scope_updates_and_rotation_serialize_on_shared_context() {
-    let temporary = TempDir::new().expect("temporary directory");
+    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_race";
     let configuration_roots =
         write_scope_configuration(&temporary, bundle_name);
@@ -95,7 +95,7 @@ fn concurrent_scope_updates_and_rotation_serialize_on_shared_context() {
 
 #[test]
 fn admitted_send_survives_narrowing_without_teardown() {
-    let temporary = TempDir::new().expect("temporary directory");
+    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_admitted";
     let configuration_roots =
         write_scope_configuration(&temporary, bundle_name);
@@ -214,7 +214,7 @@ fn scope_update_progresses_while_a_principal_probe_is_stalled() {
     // socket paths must fit sun_path (104 bytes on macOS), which
     // runner-controlled TMPDIR layouts can exceed, failing the bind with
     // "file name too long" for reasons unrelated to the behavior under test.
-    let temporary = TempDir::new().expect("temporary directory");
+    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_stall";
     let configuration_roots =
         write_scope_configuration(&temporary, bundle_name);
@@ -359,7 +359,7 @@ fn scope_update_progresses_while_a_principal_probe_is_stalled() {
 /// `shared_serial_narrow_then_send_denies`), which fix each order exactly.
 #[test]
 fn raced_admission_and_narrowing_resolve_safely_smoke() {
-    let temporary = TempDir::new().expect("temporary directory");
+    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_raceorder";
     let configuration_roots =
         write_scope_configuration(&temporary, bundle_name);
@@ -467,7 +467,7 @@ fn raced_admission_and_narrowing_resolve_safely_smoke() {
 /// all on one peer connection sharing the admin lock with the updater.
 #[test]
 fn shared_serial_narrow_then_send_denies() {
-    let temporary = TempDir::new().expect("temporary directory");
+    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_sharedserial";
     let configuration_roots =
         write_scope_configuration(&temporary, bundle_name);
@@ -574,7 +574,7 @@ fn shared_serial_narrow_then_send_denies() {
 /// the lock stays free during the pause so the update can commit.
 #[test]
 fn gated_update_before_final_admission_denies() {
-    let temporary = TempDir::new().expect("temporary directory");
+    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_gate";
     let configuration_roots =
         write_scope_configuration(&temporary, bundle_name);
