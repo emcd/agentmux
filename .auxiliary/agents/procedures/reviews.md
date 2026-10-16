@@ -1,6 +1,6 @@
 # Delegated Review Flow
 
-Use this flow when multiple team members can access the same repository through branches or linked worktrees.
+Use this flow when multiple team members can access the same repository through branches or clones.
 
 ## Roles
 
@@ -33,7 +33,7 @@ The agreed `<local-integration-base>` is a Git ref in the current repository, su
 3. If the base is current and the merge is otherwise clear, merge approved review branches with `--no-ff` when preserving a delegated-work or lane boundary; this creates a clear integration point and avoids mutually rebasing branches into increasingly long histories.
 4. Merge/push only after explicit human approval.
 
-Prefer reviewing commits by hash. Use an explicit worktree path only for uncommitted diffs or commits in a different repository. Use patch artifacts only as a fallback when the reviewer cannot access the repository, branch, or worktree directly.
+Prefer reviewing commits by hash. Use an explicit clone path only for uncommitted diffs or commits in a different repository. Use patch artifacts only as a fallback when the reviewer cannot access the repository, branch, or clone directly.
 
 # Review Request Packet
 
@@ -92,6 +92,6 @@ In an interactive human terminal you may instead run `git rebase -i --autosquash
 
 If the result is wrong, recover with `git reset --hard ORIG_HEAD` — git sets `ORIG_HEAD` to the exact pre-rebase position regardless of how far back `<local-integration-base>` was.
 
-For example, run `git rebase master` from the worktree branch when the coordinator says to rebase onto local `master`. Do not write `git rebase /path/to/repo/master`; that is a filesystem path, not a Git ref.
+For example, run `git pull --rebase origin master` from the clone when the coordinator says to sync with local `master`. Do not write `git rebase /path/to/repo/master`; that is a filesystem path, not a Git ref.
 
 If `git commit` fails because a hook rejects it, assume no commit was created unless Git clearly reports otherwise. Fix the hook finding, restage the intended files, and rerun the same `git commit` command. Do not use `git commit --amend` to recover from a failed commit attempt.
