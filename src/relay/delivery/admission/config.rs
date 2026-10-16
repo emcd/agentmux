@@ -7,7 +7,8 @@ use serde_json::json;
 use crate::relay::DeliveryConfiguration;
 use crate::runtime::inscriptions::emit_inscription;
 
-const INSCRIPTION_CONFIGURATION_CONFLICT: &str = "relay.delivery.configuration.conflict";
+const INSCRIPTION_CONFIGURATION_CONFLICT: &str =
+    "relay.delivery.configuration.conflict";
 
 /// The four admission quota limits, projected out of the `[delivery]` table.
 ///
@@ -27,8 +28,10 @@ impl From<DeliveryConfiguration> for AdmissionLimits {
         Self {
             queued_envelopes_max: configuration.queued_envelopes_max,
             queued_bytes_max: configuration.queued_bytes_max,
-            queued_envelopes_per_target_max: configuration.queued_envelopes_per_target_max,
-            queued_bytes_per_target_max: configuration.queued_bytes_per_target_max,
+            queued_envelopes_per_target_max: configuration
+                .queued_envelopes_per_target_max,
+            queued_bytes_per_target_max: configuration
+                .queued_bytes_per_target_max,
         }
     }
 }
@@ -47,7 +50,8 @@ impl Default for AdmissionLimits {
 /// Before startup publishes — in tests, and on any path that never hosts a relay
 /// — reads yield the documented defaults, which is what a missing `relay.toml`
 /// resolves to anyway.
-static DELIVERY_CONFIGURATION: OnceLock<DeliveryConfiguration> = OnceLock::new();
+static DELIVERY_CONFIGURATION: OnceLock<DeliveryConfiguration> =
+    OnceLock::new();
 
 /// Publishes the resolved `[delivery]` table for the process. Called once, during
 /// relay startup, before the accept loop can admit anything.

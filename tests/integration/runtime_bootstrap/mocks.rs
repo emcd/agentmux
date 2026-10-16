@@ -26,8 +26,9 @@ use std::{
 };
 
 use rmcp::model::{
-    CallToolRequest, CallToolRequestParams, ClientCapabilities, ClientJsonRpcMessage,
-    Implementation, InitializeRequest, InitializeRequestParams, InitializedNotification, RequestId,
+    CallToolRequest, CallToolRequestParams, ClientCapabilities,
+    ClientJsonRpcMessage, Implementation, InitializeRequest,
+    InitializeRequestParams, InitializedNotification, RequestId,
 };
 use serde_json::{Map, Value, json};
 use tokio::{
@@ -49,7 +50,10 @@ pub(super) struct FakeRelay {
 }
 
 impl FakeRelay {
-    pub(super) fn start(socket_path: std::path::PathBuf, responder: RelayResponder) -> Self {
+    pub(super) fn start(
+        socket_path: std::path::PathBuf,
+        responder: RelayResponder,
+    ) -> Self {
         if socket_path.exists() {
             fs::remove_file(&socket_path).expect("remove stale socket");
         }
@@ -59,7 +63,8 @@ impl FakeRelay {
                 .expect("relay socket parent should exist"),
         )
         .expect("create relay socket parent");
-        let listener = UnixListener::bind(&socket_path).expect("bind fake relay");
+        let listener =
+            UnixListener::bind(&socket_path).expect("bind fake relay");
         listener
             .set_nonblocking(true)
             .expect("set fake relay listener nonblocking");
@@ -75,10 +80,12 @@ impl FakeRelay {
                 match listener.accept() {
                     Ok((stream, _address)) => {
                         handle_connection(stream, &requests_inner, &responder);
-                    }
-                    Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                    },
+                    Err(source)
+                        if source.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
                         thread::sleep(Duration::from_millis(10));
-                    }
+                    },
                     Err(_) => break,
                 }
             }
@@ -93,12 +100,18 @@ impl FakeRelay {
         }
     }
 
-    pub(super) fn requests_for_operation(&self, operation: &str) -> Vec<Value> {
+    pub(super) fn requests_for_operation(
+        &self,
+        operation: &str,
+    ) -> Vec<Value> {
         self.requests
             .lock()
             .expect("fake relay requests lock")
             .iter()
-            .filter(|request| request.get("operation").and_then(Value::as_str) == Some(operation))
+            .filter(|request| {
+                request.get("operation").and_then(Value::as_str)
+                    == Some(operation)
+            })
             .cloned()
             .collect::<Vec<_>>()
     }
@@ -134,22 +147,27 @@ fn handle_connection(
             Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(10));
                 continue;
-            }
-            Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
+            },
+            Err(source)
+                if source.kind() == std::io::ErrorKind::Interrupted =>
+            {
+                continue;
+            },
             Err(source) => panic!("read fake relay request: {source:?}"),
         };
         if bytes == 0 {
             return;
         }
-        let decoded: Value =
-            serde_json::from_str(line.trim_end()).expect("decode fake relay request");
+        let decoded: Value = serde_json::from_str(line.trim_end())
+            .expect("decode fake relay request");
         if decoded.get("frame").and_then(Value::as_str) == Some("hello") {
             let hello_ack = json!({
                 "frame": "hello_ack",
                 "schema_version": decoded["schema_version"],
                 "principal_id": decoded["principal_id"],
             });
-            let text = serde_json::to_string(&hello_ack).expect("encode hello ack");
+            let text =
+                serde_json::to_string(&hello_ack).expect("encode hello ack");
             stream
                 .write_all(text.as_bytes())
                 .expect("write fake relay hello ack");
@@ -172,7 +190,8 @@ fn handle_connection(
                 "request_id": decoded.get("request_id").cloned().unwrap_or(Value::Null),
                 "response": response,
             });
-            let text = serde_json::to_string(&framed).expect("encode fake relay response");
+            let text = serde_json::to_string(&framed)
+                .expect("encode fake relay response");
             stream
                 .write_all(text.as_bytes())
                 .expect("write fake relay response");
@@ -186,7 +205,8 @@ fn handle_connection(
             .expect("fake relay requests lock")
             .push(decoded.clone());
         let response = responder(&decoded);
-        let text = serde_json::to_string(&response).expect("encode fake relay response");
+        let text = serde_json::to_string(&response)
+            .expect("encode fake relay response");
         stream
             .write_all(text.as_bytes())
             .expect("write fake relay response");
@@ -266,7 +286,8 @@ impl McpHarness {
         arguments: Map<String, Value>,
     ) -> Value {
         let request = CallToolRequest::new(
-            CallToolRequestParams::new(name.to_string()).with_arguments(arguments),
+            CallToolRequestParams::new(name.to_string())
+                .with_arguments(arguments),
         );
         self.send(ClientJsonRpcMessage::request(
             request.into(),
@@ -277,7 +298,8 @@ impl McpHarness {
     }
 
     async fn send(&mut self, message: ClientJsonRpcMessage) {
-        let line = serde_json::to_string(&message).expect("encode mcp request");
+        let line =
+            serde_json::to_string(&message).expect("encode mcp request");
         self.stdin
             .write_all(line.as_bytes())
             .await
@@ -312,11 +334,11 @@ impl McpHarness {
                     .expect("read mcp stderr");
                 panic!("mcp process closed stdout; stderr: {stderr}");
             }
-            let decoded: Value =
-                serde_json::from_str(line.trim_end()).expect("decode mcp response");
-            let response_id = decoded
-                .get("id")
-                .and_then(|id_value| serde_json::from_value::<RequestId>(id_value.clone()).ok());
+            let decoded: Value = serde_json::from_str(line.trim_end())
+                .expect("decode mcp response");
+            let response_id = decoded.get("id").and_then(|id_value| {
+                serde_json::from_value::<RequestId>(id_value.clone()).ok()
+            });
             if response_id == Some(expected.clone()) {
                 return decoded;
             }
@@ -330,8 +352,13 @@ impl Drop for McpHarness {
     }
 }
 
-pub(super) fn write_bundle_configuration(config_root: &Path, bundle_name: &str, sessions: &[&str]) {
-    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+pub(super) fn write_bundle_configuration(
+    config_root: &Path,
+    bundle_name: &str,
+    sessions: &[&str],
+) {
+    fs::create_dir_all(config_root.join("bundles"))
+        .expect("create bundles directory");
     fs::write(
         config_root.join("coders.toml"),
         r#"
@@ -384,7 +411,8 @@ pub(super) fn write_bundle_configuration_with_directories(
     bundle_name: &str,
     sessions: &[(&str, &Path)],
 ) {
-    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+    fs::create_dir_all(config_root.join("bundles"))
+        .expect("create bundles directory");
     fs::write(
         config_root.join("coders.toml"),
         r#"
@@ -446,14 +474,19 @@ pub(super) fn decode_tool_payload(response: &Value) -> Value {
         .and_then(|result| result.get("content"))
         .and_then(Value::as_array)
         .and_then(|items| items.first())
-        .unwrap_or_else(|| panic!("missing result.content in response: {response}"));
+        .unwrap_or_else(|| {
+            panic!("missing result.content in response: {response}")
+        });
 
     if let Some(json_payload) = content.get("json") {
         return json_payload.clone();
     }
-    let text = content
-        .get("text")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("missing content.text in response: {response}"));
+    let text =
+        content
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| {
+                panic!("missing content.text in response: {response}")
+            });
     serde_json::from_str(text).expect("decode content.text as json")
 }

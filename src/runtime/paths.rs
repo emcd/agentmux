@@ -7,8 +7,8 @@ use std::{
 };
 
 use crate::configuration::{
-    CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, ConfigurationRoots, ConfigurationRootsError,
-    STATE_DIRECTORY_ENVIRONMENT_VARIABLE,
+    CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, ConfigurationRoots,
+    ConfigurationRootsError, STATE_DIRECTORY_ENVIRONMENT_VARIABLE,
 };
 
 use super::error::RuntimeError;
@@ -82,11 +82,14 @@ impl RuntimeRoots {
     ///
     /// Returns `RuntimeError::HomeDirectoryUnavailable` if `HOME` is not
     /// available and no explicit or XDG paths are configured.
-    pub fn resolve(overrides: &RuntimeRootOverrides) -> Result<Self, RuntimeError> {
+    pub fn resolve(
+        overrides: &RuntimeRootOverrides,
+    ) -> Result<Self, RuntimeError> {
         let (configuration_roots, configuration_root_source) =
             resolve_configuration_roots(overrides)?;
         let state_root = resolve_state_root(overrides)?;
-        let inscriptions_root = resolve_inscriptions_root(overrides, &state_root);
+        let inscriptions_root =
+            resolve_inscriptions_root(overrides, &state_root);
         Ok(Self {
             configuration_roots,
             state_root,
@@ -115,9 +118,13 @@ impl BundleRuntimePaths {
     ///
     /// Returns `RuntimeError::InvalidBundleName` when bundle name contains
     /// unsupported characters.
-    pub fn resolve(state_root: &Path, bundle_name: &str) -> Result<Self, RuntimeError> {
+    pub fn resolve(
+        state_root: &Path,
+        bundle_name: &str,
+    ) -> Result<Self, RuntimeError> {
         validate_bundle_name(bundle_name)?;
-        let runtime_directory = state_root.join(BUNDLES_DIRECTORY).join(bundle_name);
+        let runtime_directory =
+            state_root.join(BUNDLES_DIRECTORY).join(bundle_name);
         Ok(Self {
             state_root: state_root.to_path_buf(),
             bundle_name: bundle_name.to_string(),
@@ -159,7 +166,9 @@ impl RelayRuntimePaths {
 
 /// Resolves the tmux socket path for one bundle runtime directory.
 #[must_use]
-pub fn tmux_socket_path_for_runtime_directory(runtime_directory: &Path) -> PathBuf {
+pub fn tmux_socket_path_for_runtime_directory(
+    runtime_directory: &Path,
+) -> PathBuf {
     runtime_directory.join(TMUX_SOCKET_FILE)
 }
 
@@ -239,7 +248,9 @@ pub fn credential_file_mode() -> u32 {
 /// # Errors
 ///
 /// Returns a security error when an existing path is owned by another user.
-pub fn ensure_bundle_runtime_directory(paths: &BundleRuntimePaths) -> Result<(), RuntimeError> {
+pub fn ensure_bundle_runtime_directory(
+    paths: &BundleRuntimePaths,
+) -> Result<(), RuntimeError> {
     ensure_directory_secure(&paths.runtime_directory)
 }
 
@@ -250,7 +261,9 @@ pub fn ensure_bundle_runtime_directory(paths: &BundleRuntimePaths) -> Result<(),
 /// # Errors
 ///
 /// Returns a security error when an existing path is owned by another user.
-pub fn ensure_relay_runtime_directory(paths: &RelayRuntimePaths) -> Result<(), RuntimeError> {
+pub fn ensure_relay_runtime_directory(
+    paths: &RelayRuntimePaths,
+) -> Result<(), RuntimeError> {
     ensure_directory_secure(&paths.state_root)
 }
 
@@ -259,7 +272,9 @@ pub fn ensure_relay_runtime_directory(paths: &RelayRuntimePaths) -> Result<(), R
 /// # Errors
 ///
 /// Returns `RuntimeError::SecurityForeignOwned` for foreign-owned artifacts.
-pub fn ensure_existing_artifact_is_owned(path: &Path) -> Result<(), RuntimeError> {
+pub fn ensure_existing_artifact_is_owned(
+    path: &Path,
+) -> Result<(), RuntimeError> {
     if !path.exists() {
         return Ok(());
     }
@@ -277,14 +292,17 @@ fn resolve_configuration_roots(
     overrides: &RuntimeRootOverrides,
 ) -> Result<(ConfigurationRoots, ConfigurationRootSource), RuntimeError> {
     if !overrides.configuration_layers.is_empty() {
-        let roots = ConfigurationRoots::from_elements(overrides.configuration_layers.clone())
-            .map_err(invalid_configuration_layers)?;
+        let roots = ConfigurationRoots::from_elements(
+            overrides.configuration_layers.clone(),
+        )
+        .map_err(invalid_configuration_layers)?;
         return Ok((
             normalize_configuration_roots(&roots)?,
             ConfigurationRootSource::CommandLine,
         ));
     }
-    if let Some(value) = env::var(CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE).ok()
+    if let Some(value) =
+        env::var(CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE).ok()
         && let Some(roots) = ConfigurationRoots::from_environment_value(&value)
             .map_err(invalid_configuration_layers)?
     {
@@ -301,12 +319,17 @@ fn resolve_configuration_roots(
     }
     let home_directory = resolve_home_directory()?;
     Ok((
-        ConfigurationRoots::single(configuration_root_from_sources(None, &home_directory)),
+        ConfigurationRoots::single(configuration_root_from_sources(
+            None,
+            &home_directory,
+        )),
         ConfigurationRootSource::Default,
     ))
 }
 
-fn invalid_configuration_layers(source: ConfigurationRootsError) -> RuntimeError {
+fn invalid_configuration_layers(
+    source: ConfigurationRootsError,
+) -> RuntimeError {
     RuntimeError::validation(
         "validation_invalid_configuration_layers",
         source.to_string(),
@@ -320,7 +343,9 @@ fn invalid_configuration_layers(source: ConfigurationRootsError) -> RuntimeError
 /// the relay socket, both locks, the ready sentinel, the principal store, peer
 /// credentials — sits at this root rather than beneath a bundle, so isolating a
 /// deployment means naming a distinct root and nothing else does it.
-fn resolve_state_root(overrides: &RuntimeRootOverrides) -> Result<PathBuf, RuntimeError> {
+fn resolve_state_root(
+    overrides: &RuntimeRootOverrides,
+) -> Result<PathBuf, RuntimeError> {
     if let Some(path) = overrides.state_root.clone() {
         return normalize_state_root(&path);
     }
@@ -358,7 +383,8 @@ fn normalize_configuration_roots(
             )
         })?);
     }
-    ConfigurationRoots::from_elements(absolute).map_err(invalid_configuration_layers)
+    ConfigurationRoots::from_elements(absolute)
+        .map_err(invalid_configuration_layers)
 }
 
 /// Normalizes a resolved state root to a non-empty absolute path.
@@ -390,7 +416,10 @@ fn normalize_state_root(path: &Path) -> Result<PathBuf, RuntimeError> {
 
 /// Resolves the inscriptions root, which defaults beneath the state root and so
 /// follows it without separate selection.
-fn resolve_inscriptions_root(overrides: &RuntimeRootOverrides, state_root: &Path) -> PathBuf {
+fn resolve_inscriptions_root(
+    overrides: &RuntimeRootOverrides,
+    state_root: &Path,
+) -> PathBuf {
     overrides
         .inscriptions_root
         .clone()
@@ -421,7 +450,8 @@ fn env_directory(variable_name: &str) -> Option<PathBuf> {
 pub(crate) fn is_valid_bundle_name(bundle_name: &str) -> bool {
     !bundle_name.is_empty()
         && bundle_name.chars().all(|character| {
-            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+            character.is_ascii_alphanumeric()
+                || matches!(character, '-' | '_' | '.')
         })
 }
 
@@ -450,13 +480,22 @@ fn ensure_directory_secure(path: &Path) -> Result<(), RuntimeError> {
         ));
     }
     ensure_current_user_owns(path)?;
-    fs::set_permissions(path, fs::Permissions::from_mode(DIRECTORY_MODE_OWNER_ONLY))
-        .map_err(|source| RuntimeError::io(format!("set mode 0700 on {}", path.display()), source))
+    fs::set_permissions(
+        path,
+        fs::Permissions::from_mode(DIRECTORY_MODE_OWNER_ONLY),
+    )
+    .map_err(|source| {
+        RuntimeError::io(
+            format!("set mode 0700 on {}", path.display()),
+            source,
+        )
+    })
 }
 
 fn ensure_current_user_owns(path: &Path) -> Result<(), RuntimeError> {
-    let metadata = fs::metadata(path)
-        .map_err(|source| RuntimeError::io(format!("read metadata {}", path.display()), source))?;
+    let metadata = fs::metadata(path).map_err(|source| {
+        RuntimeError::io(format!("read metadata {}", path.display()), source)
+    })?;
     let expected_uid = current_effective_uid();
     let actual_uid = metadata.uid();
     if actual_uid == expected_uid {
@@ -485,7 +524,10 @@ fn configuration_root_from_sources(
         .join(APPLICATION_DIRECTORY)
 }
 
-fn state_root_from_sources(xdg_state_home: Option<&Path>, home_directory: &Path) -> PathBuf {
+fn state_root_from_sources(
+    xdg_state_home: Option<&Path>,
+    home_directory: &Path,
+) -> PathBuf {
     if let Some(path) = xdg_state_home {
         return path.join(APPLICATION_DIRECTORY);
     }

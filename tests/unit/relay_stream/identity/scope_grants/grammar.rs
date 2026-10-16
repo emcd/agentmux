@@ -4,9 +4,11 @@ use super::*;
 fn new_peer_canonicalizes_set_scope_in_store() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_canon";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "canon@RELAY";
 
     register_peer(
@@ -28,9 +30,11 @@ fn new_peer_canonicalizes_set_scope_in_store() {
 fn new_peer_rejects_malformed_scopes() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_malformed";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     // Each case names a distinct peer so a rejected registration cannot shadow
     // a later case; every rejection must be a scope validation failure.

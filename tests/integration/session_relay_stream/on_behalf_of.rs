@@ -37,7 +37,8 @@ fn ingress_send_to_ui_display(
     relay_principal_id: &str,
     on_behalf_of: Option<&str>,
 ) -> (Value, Value) {
-    let (mut ui_client, ui_handle) = spawn_relay_stream(configuration_roots, bundle_paths);
+    let (mut ui_client, ui_handle) =
+        spawn_relay_stream(configuration_roots, bundle_paths);
     let ui_read = ui_client.try_clone().expect("clone ui stream");
     let mut ui_reader = BufReader::new(ui_read);
     send_json(&mut ui_client, hello_payload(bundle_name, "display"));
@@ -94,7 +95,8 @@ fn local_send_to_ui_display_payload(
     bundle_name: &str,
     on_behalf_of: Option<String>,
 ) -> Value {
-    let (mut ui_client, ui_handle) = spawn_relay_stream(configuration_roots, bundle_paths);
+    let (mut ui_client, ui_handle) =
+        spawn_relay_stream(configuration_roots, bundle_paths);
     let ui_read = ui_client.try_clone().expect("clone ui stream");
     let mut ui_reader = BufReader::new(ui_read);
     send_json(&mut ui_client, hello_payload(bundle_name, "display"));
@@ -148,15 +150,20 @@ fn local_send_to_ui_display_payload(
 fn cross_relay_send_stamps_on_behalf_of_from_authenticated_origin() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots =
+        write_cross_relay_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
     // Register the requester as a store-backed session so its Hello yields a
     // verified `authenticated_identity` the origin can stamp as on_behalf_of.
     let requester_principal = format!("alpha@{bundle_name}");
-    write_authenticated_session_store(&bundle_paths.state_root, requester_principal.as_str());
+    write_authenticated_session_store(
+        &bundle_paths.state_root,
+        requester_principal.as_str(),
+    );
 
     let peer_socket = temporary.path().join("peer.sock");
     let peer_response = json!({
@@ -206,10 +213,12 @@ fn cross_relay_send_stamps_on_behalf_of_from_authenticated_origin() {
 fn cross_relay_send_stamps_on_behalf_of_from_socket_trust_origin() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots =
+        write_cross_relay_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
     // No principal store entry for the requester: it Hellos as socket-trust and
     // is admitted on its own claim, which is the ordinary case on a relay
@@ -261,10 +270,12 @@ fn cross_relay_send_stamps_on_behalf_of_from_socket_trust_origin() {
 fn cross_relay_raww_stamps_on_behalf_of_from_socket_trust_origin() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots =
+        write_cross_relay_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
 
     let peer_socket = temporary.path().join("peer.sock");
@@ -302,10 +313,12 @@ fn cross_relay_raww_stamps_on_behalf_of_from_socket_trust_origin() {
 fn cross_relay_send_discards_a_requester_supplied_on_behalf_of() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots =
+        write_cross_relay_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
 
     let peer_socket = temporary.path().join("peer.sock");
@@ -344,10 +357,12 @@ fn cross_relay_send_discards_a_requester_supplied_on_behalf_of() {
 fn cross_relay_ingress_surfaces_on_behalf_of_in_delivered_envelope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     let relay_principal_id = unique_relay_principal_id();
     write_ingress_peer_store(
         &bundle_paths.state_root,
@@ -395,10 +410,12 @@ fn peer_name_of(principal_id: &str) -> String {
 fn cross_relay_ingress_names_the_origin_and_the_asserting_peer() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     let relay_principal_id = unique_relay_principal_id();
     write_ingress_peer_store(
         &bundle_paths.state_root,
@@ -436,10 +453,12 @@ fn cross_relay_ingress_names_the_origin_and_the_asserting_peer() {
 fn cross_relay_ingress_without_an_origin_names_the_peer_qualified_once() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     let relay_principal_id = unique_relay_principal_id();
     write_ingress_peer_store(
         &bundle_paths.state_root,
@@ -476,11 +495,14 @@ fn cross_relay_ingress_composes_a_non_routable_origin_unaltered() {
     for origin in ["app@EXTERNAL", "not-a-principal"] {
         let temporary = TempDir::new().expect("temporary directory");
         let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-        let configuration_roots =
-            write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+        let configuration_roots = write_bundle_configuration_with_ui_member(
+            &temporary,
+            &bundle_name,
+        );
         let state_root = temporary.path().join("state");
         let bundle_paths =
-            BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+            BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+                .expect("bundle paths");
         let relay_principal_id = unique_relay_principal_id();
         write_ingress_peer_store(
             &bundle_paths.state_root,
@@ -512,10 +534,12 @@ fn cross_relay_ingress_composes_a_non_routable_origin_unaltered() {
 fn cross_relay_ingress_ignores_on_behalf_of_for_authorization() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     let relay_principal_id = unique_relay_principal_id();
     // The scope names a different bundle, so the target is out of scope. Setting
     // on_behalf_of must not widen the peer's authority.
@@ -553,10 +577,12 @@ fn cross_relay_ingress_ignores_on_behalf_of_for_authorization() {
 fn local_send_drops_self_asserted_on_behalf_of() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
 
     // A non-relay requester sets on_behalf_of directly; the spoof gate must drop
     // it so it never reaches the delivered envelope.
@@ -576,10 +602,12 @@ fn local_send_drops_self_asserted_on_behalf_of() {
 fn local_send_omits_on_behalf_of_by_default() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
 
     // Regression: an ordinary local delivery carries no on_behalf_of.
     let payload = local_send_to_ui_display_payload(

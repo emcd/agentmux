@@ -27,7 +27,9 @@ struct DropFixture {
     request_log: Arc<Mutex<Vec<Value>>>,
 }
 
-fn drop_fixture(response: RelayResponse) -> (DropFixture, std::thread::JoinHandle<()>) {
+fn drop_fixture(
+    response: RelayResponse,
+) -> (DropFixture, std::thread::JoinHandle<()>) {
     let temporary = TempDir::new().expect("temporary directory");
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("state");
@@ -35,15 +37,22 @@ fn drop_fixture(response: RelayResponse) -> (DropFixture, std::thread::JoinHandl
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &["tui"]);
+    write_bundle_configuration(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["tui"],
+    );
     write_tui_configuration(
         &config_root,
         Some("alpha"),
         Some("user"),
         &[("user", "default", Some("Operator"))],
     );
-    let alpha_paths = BundleRuntimePaths::resolve(&state_root, "alpha").expect("alpha paths");
-    ensure_bundle_runtime_directory(&alpha_paths).expect("ensure alpha runtime directory");
+    let alpha_paths = BundleRuntimePaths::resolve(&state_root, "alpha")
+        .expect("alpha paths");
+    ensure_bundle_runtime_directory(&alpha_paths)
+        .expect("ensure alpha runtime directory");
 
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let mut responses = HashMap::new();
@@ -90,7 +99,9 @@ fn session_drop_response() -> RelayResponse {
         schema_version: "1".to_string(),
         principal_id: "worker@alpha".to_string(),
         principal_type: "session".to_string(),
-        credential_path: Some("/state/sessions/worker/identity.psk".to_string()),
+        credential_path: Some(
+            "/state/sessions/worker/identity.psk".to_string(),
+        ),
     }
 }
 
@@ -106,7 +117,8 @@ fn drop_peer_json_output_carries_the_payload_fields() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode drop payload");
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("decode drop payload");
     assert_eq!(payload["principal_id"], "worker@alpha");
     assert_eq!(payload["principal_type"], "session");
     assert_eq!(
@@ -158,7 +170,8 @@ fn drop_peer_json_omits_the_credential_path_for_a_peer_relay() {
     relay_thread.join().expect("join fake relay");
     assert!(output.status.success(), "drop should succeed");
 
-    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode drop payload");
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("decode drop payload");
     // Absent, not null: the field is omitted for a principal the relay owns no
     // credential location for, matching the relay and MCP renderings.
     assert!(

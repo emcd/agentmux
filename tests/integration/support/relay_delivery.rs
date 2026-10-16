@@ -23,7 +23,10 @@ pub(crate) fn tmux_available() -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn tmux_command(socket: &Path, arguments: &[&str]) -> std::process::Output {
+pub(crate) fn tmux_command(
+    socket: &Path,
+    arguments: &[&str],
+) -> std::process::Output {
     StdCommand::new("tmux")
         .arg("-S")
         .arg(socket)
@@ -52,10 +55,18 @@ impl Drop for TmuxServerGuard {
     }
 }
 
-pub(crate) fn wait_for_pane_contains(socket: &Path, target: &str, needle: &str, timeout: Duration) {
+pub(crate) fn wait_for_pane_contains(
+    socket: &Path,
+    target: &str,
+    needle: &str,
+    timeout: Duration,
+) {
     let started = Instant::now();
     loop {
-        let output = tmux_command(socket, &["capture-pane", "-p", "-t", target, "-S", "-40"]);
+        let output = tmux_command(
+            socket,
+            &["capture-pane", "-p", "-t", target, "-S", "-40"],
+        );
         assert!(
             output.status.success(),
             "failed to capture pane for {target}: {}",
@@ -73,8 +84,15 @@ pub(crate) fn wait_for_pane_contains(socket: &Path, target: &str, needle: &str, 
     }
 }
 
-pub(crate) fn capture_pane(socket: &Path, target: &str, lines: &str) -> String {
-    let output = tmux_command(socket, &["capture-pane", "-p", "-t", target, "-S", lines]);
+pub(crate) fn capture_pane(
+    socket: &Path,
+    target: &str,
+    lines: &str,
+) -> String {
+    let output = tmux_command(
+        socket,
+        &["capture-pane", "-p", "-t", target, "-S", lines],
+    );
     assert!(
         output.status.success(),
         "failed to capture pane for {target}: {}",
@@ -106,7 +124,12 @@ pub(crate) fn write_bundle_configuration(
             coder_session_id: None,
         })
         .collect::<Vec<_>>();
-    write_bundle_configuration_members(root, bundle_name, &coders, &session_specs)
+    write_bundle_configuration_members(
+        root,
+        bundle_name,
+        &coders,
+        &session_specs,
+    )
 }
 
 #[derive(Clone)]
@@ -147,16 +170,22 @@ pub(crate) fn write_bundle_configuration_members(
             .as_str(),
         );
         if let Some(prompt_regex) = coder.prompt_regex.as_deref() {
-            coders_toml.push_str(format!("prompt-regex = \"{}\"\n", prompt_regex).as_str());
+            coders_toml.push_str(
+                format!("prompt-regex = \"{}\"\n", prompt_regex).as_str(),
+            );
         }
         if let Some(lines) = coder.prompt_inspect_lines {
-            coders_toml.push_str(format!("prompt-inspect-lines = {lines}\n").as_str());
+            coders_toml.push_str(
+                format!("prompt-inspect-lines = {lines}\n").as_str(),
+            );
         }
         if let Some(column) = coder.prompt_idle_column {
-            coders_toml.push_str(format!("prompt-idle-column = {column}\n").as_str());
+            coders_toml
+                .push_str(format!("prompt-idle-column = {column}\n").as_str());
         }
     }
-    fs::write(config_root.join("coders.toml"), coders_toml).expect("write coders config");
+    fs::write(config_root.join("coders.toml"), coders_toml)
+        .expect("write coders config");
     fs::write(
         config_root.join("policies.toml"),
         r#"
@@ -176,9 +205,12 @@ send = "home"
     .expect("write policies config");
     fs::write(config_root.join("users.toml"), "").expect("write users config");
 
-    let mut bundle_toml = String::from("format-version = 1\nautostart = true\n");
+    let mut bundle_toml =
+        String::from("format-version = 1\nautostart = true\n");
     for session in sessions {
-        bundle_toml.push_str(format!("\n[[sessions]]\nid = \"{}\"\n", session.id).as_str());
+        bundle_toml.push_str(
+            format!("\n[[sessions]]\nid = \"{}\"\n", session.id).as_str(),
+        );
         if let Some(name) = session.name.as_deref() {
             bundle_toml.push_str(format!("name = \"{}\"\n", name).as_str());
         }
@@ -191,7 +223,10 @@ send = "home"
             .as_str(),
         );
         if let Some(coder_session_id) = session.coder_session_id.as_deref() {
-            bundle_toml.push_str(format!("coder-session-id = \"{}\"\n", coder_session_id).as_str());
+            bundle_toml.push_str(
+                format!("coder-session-id = \"{}\"\n", coder_session_id)
+                    .as_str(),
+            );
         }
     }
     fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml)
@@ -226,8 +261,14 @@ pub(crate) fn write_bundle_with_pubsub_member(
     }];
     // Reuse the helper to lay down coders/policies/users; then re-write the bundle
     // file to add the bare pubsub session alongside the tmux one.
-    let config_root = write_bundle_configuration_members(root, bundle_name, &coders, &sessions);
-    let mut bundle_toml = String::from("format-version = 1\nautostart = true\n");
+    let config_root = write_bundle_configuration_members(
+        root,
+        bundle_name,
+        &coders,
+        &sessions,
+    );
+    let mut bundle_toml =
+        String::from("format-version = 1\nautostart = true\n");
     bundle_toml.push_str(
         format!(
             "\n[[sessions]]\nid = \"{tmux_session}\"\nname = \"{tmux_session}\"\ndirectory = \"/tmp\"\ncoder = \"default\"\n",
@@ -276,12 +317,21 @@ pub(crate) fn write_bundle_configuration_with_environment(
         coder: "default".to_string(),
         coder_session_id: None,
     }];
-    let config_root = write_bundle_configuration_members(root, bundle_name, &coders, &sessions);
+    let config_root = write_bundle_configuration_members(
+        root,
+        bundle_name,
+        &coders,
+        &sessions,
+    );
 
-    let mut bundle_toml = String::from("format-version = 1\nautostart = true\n");
+    let mut bundle_toml =
+        String::from("format-version = 1\nautostart = true\n");
     for (name, value) in environment {
         bundle_toml.push_str(
-            format!("\n[[environment]]\nname = \"{name}\"\nvalue = \"{value}\"\n").as_str(),
+            format!(
+                "\n[[environment]]\nname = \"{name}\"\nvalue = \"{value}\"\n"
+            )
+            .as_str(),
         );
     }
     bundle_toml.push_str(
@@ -348,7 +398,8 @@ value = "{pid}"
         log = log_file.display(),
         pid = pid_file.display(),
     );
-    fs::write(config_root.join("coders.toml"), coders).expect("write coders config");
+    fs::write(config_root.join("coders.toml"), coders)
+        .expect("write coders config");
 
     fs::write(
         config_root.join("policies.toml"),
@@ -369,7 +420,8 @@ send = "home"
     .expect("write policies config");
     fs::write(config_root.join("users.toml"), "").expect("write users config");
 
-    let mut bundle_toml = String::from("format-version = 1\nautostart = true\n");
+    let mut bundle_toml =
+        String::from("format-version = 1\nautostart = true\n");
     for session in sessions {
         bundle_toml.push_str(
             format!(
@@ -423,7 +475,11 @@ done
         .expect("set ACP hang stub executable");
 }
 
-pub(crate) fn spawn_session(socket: &Path, session_name: &str, shell_command: &str) {
+pub(crate) fn spawn_session(
+    socket: &Path,
+    session_name: &str,
+    shell_command: &str,
+) {
     let output = tmux_command(
         socket,
         &[
@@ -443,7 +499,11 @@ pub(crate) fn spawn_session(socket: &Path, session_name: &str, shell_command: &s
     );
 }
 
-pub(crate) fn write_fake_tmux_script(script_path: &Path, attempts_file: &Path, log_file: &Path) {
+pub(crate) fn write_fake_tmux_script(
+    script_path: &Path,
+    attempts_file: &Path,
+    log_file: &Path,
+) {
     let body = format!(
         r##"#!/usr/bin/env bash
 set -euo pipefail
@@ -740,7 +800,9 @@ impl RelayChildGuard {
         }
     }
 
-    pub(crate) async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+    pub(crate) async fn wait(
+        &mut self,
+    ) -> std::io::Result<std::process::ExitStatus> {
         // Safety: `self.child` is Some while this method is called; it is never
         // taken concurrently because `&mut self` is exclusive.
         let child = self
@@ -776,7 +838,7 @@ impl Drop for RelayChildGuard {
         };
         match child.try_wait() {
             Ok(Some(_)) => return,
-            Ok(None) => {}
+            Ok(None) => {},
             Err(_) => return,
         }
         #[cfg(unix)]
@@ -795,7 +857,7 @@ impl Drop for RelayChildGuard {
                         break;
                     }
                     std::thread::sleep(WAIT_POLL_INTERVAL);
-                }
+                },
                 Err(_) => return,
             }
         }
@@ -812,7 +874,7 @@ impl Drop for RelayChildGuard {
                         break;
                     }
                     std::thread::sleep(Duration::from_millis(20));
-                }
+                },
                 Err(_) => break,
             }
         }

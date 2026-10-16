@@ -65,7 +65,8 @@ impl TestRuntime {
         // runtime normalizes the state root it is given and reports resolved
         // paths back, so a relative fixture root would leave assertions naming
         // a path the runtime never produces.
-        let temporary = TempDir::with_prefix("mcp-").expect("create temporary root");
+        let temporary =
+            TempDir::with_prefix("mcp-").expect("create temporary root");
         let root = temporary.path().to_path_buf();
         let config_root = root.join("config");
         let state_root = root.join("state");
@@ -87,7 +88,8 @@ impl TestRuntime {
             relay_socket.display()
         );
 
-        fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+        fs::create_dir_all(config_root.join("bundles"))
+            .expect("create bundles directory");
         fs::create_dir_all(&state_root).expect("create state root");
         write_bundle_configuration(
             &config_root,
@@ -114,7 +116,10 @@ pub(crate) struct FakeRelay {
 }
 
 impl FakeRelay {
-    pub(crate) fn start(socket_path: PathBuf, responder: RelayResponder) -> Self {
+    pub(crate) fn start(
+        socket_path: PathBuf,
+        responder: RelayResponder,
+    ) -> Self {
         let mut routes: HashMap<String, RelayResponder> = HashMap::new();
         routes.insert(BUNDLE_NAME.to_string(), responder);
         routes.insert("GLOBAL".to_string(), default_empty_global_responder());
@@ -135,7 +140,8 @@ impl FakeRelay {
         // the fixture addresses its socket exactly as the relay addresses its
         // own — including the parent-directory form Linux uses to stay
         // independent of how deep the state root sits.
-        let listener = bind_unix_listener(&socket_path).expect("bind fake relay");
+        let listener =
+            bind_unix_listener(&socket_path).expect("bind fake relay");
         listener
             .set_nonblocking(true)
             .expect("set fake relay listener nonblocking");
@@ -156,11 +162,18 @@ impl FakeRelay {
                         let routes = Arc::clone(&routes);
                         let requests_for_conn = Arc::clone(&requests_inner);
                         let envelopes_for_conn = Arc::clone(&envelopes_inner);
-                        handle_connection(stream, &requests_for_conn, &envelopes_for_conn, &routes);
-                    }
-                    Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                        handle_connection(
+                            stream,
+                            &requests_for_conn,
+                            &envelopes_for_conn,
+                            &routes,
+                        );
+                    },
+                    Err(source)
+                        if source.kind() == std::io::ErrorKind::WouldBlock =>
+                    {
                         thread::sleep(Duration::from_millis(10));
-                    }
+                    },
                     Err(_) => break,
                 }
             }
@@ -176,17 +189,26 @@ impl FakeRelay {
         }
     }
 
-    pub(crate) fn requests_for_operation(&self, operation: &str) -> Vec<Value> {
+    pub(crate) fn requests_for_operation(
+        &self,
+        operation: &str,
+    ) -> Vec<Value> {
         self.requests
             .lock()
             .expect("fake relay requests lock")
             .iter()
-            .filter(|request| request.get("operation").and_then(Value::as_str) == Some(operation))
+            .filter(|request| {
+                request.get("operation").and_then(Value::as_str)
+                    == Some(operation)
+            })
             .cloned()
             .collect::<Vec<_>>()
     }
 
-    pub(crate) fn envelopes_for_operation(&self, operation: &str) -> Vec<Value> {
+    pub(crate) fn envelopes_for_operation(
+        &self,
+        operation: &str,
+    ) -> Vec<Value> {
         self.envelopes
             .lock()
             .expect("fake relay envelopes lock")
@@ -235,15 +257,19 @@ fn handle_connection(
             Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(Duration::from_millis(10));
                 continue;
-            }
-            Err(source) if source.kind() == std::io::ErrorKind::Interrupted => continue,
+            },
+            Err(source)
+                if source.kind() == std::io::ErrorKind::Interrupted =>
+            {
+                continue;
+            },
             Err(source) => panic!("read fake relay request: {source:?}"),
         };
         if bytes == 0 {
             return;
         }
-        let decoded: Value =
-            serde_json::from_str(line.trim_end()).expect("decode fake relay request");
+        let decoded: Value = serde_json::from_str(line.trim_end())
+            .expect("decode fake relay request");
         if decoded.get("frame").and_then(Value::as_str) == Some("hello") {
             // A session principal_id is `<session>@<bundle>`; the routing bundle
             // is the namespace after the final `@`.
@@ -261,7 +287,8 @@ fn handle_connection(
                 "schema_version": decoded["schema_version"],
                 "principal_id": decoded["principal_id"],
             });
-            let text = serde_json::to_string(&hello_ack).expect("encode hello ack");
+            let text =
+                serde_json::to_string(&hello_ack).expect("encode hello ack");
             stream
                 .write_all(text.as_bytes())
                 .expect("write fake relay hello ack");
@@ -300,7 +327,8 @@ fn handle_connection(
                 "request_id": decoded.get("request_id").cloned().unwrap_or(Value::Null),
                 "response": response,
             });
-            let text = serde_json::to_string(&framed).expect("encode fake relay response");
+            let text = serde_json::to_string(&framed)
+                .expect("encode fake relay response");
             stream
                 .write_all(text.as_bytes())
                 .expect("write fake relay response");
@@ -314,7 +342,8 @@ fn handle_connection(
             .expect("fake relay requests lock")
             .push(decoded.clone());
         let response = responder(&decoded);
-        let text = serde_json::to_string(&response).expect("encode fake relay response");
+        let text = serde_json::to_string(&response)
+            .expect("encode fake relay response");
         stream
             .write_all(text.as_bytes())
             .expect("write fake relay response");
@@ -369,9 +398,12 @@ impl McpHarness {
     /// cannot be created. That combination — roots present, association
     /// complete, readiness `Unavailable` — is the one a gate on association
     /// alone lets through, so it is the shape worth building a harness for.
-    pub(crate) async fn spawn_with_retained_fault(runtime: &TestRuntime) -> Self {
+    pub(crate) async fn spawn_with_retained_fault(
+        runtime: &TestRuntime,
+    ) -> Self {
         let blocker = runtime.root.join("inscriptions-blocker");
-        std::fs::write(&blocker, b"not a directory").expect("write inscriptions blocker");
+        std::fs::write(&blocker, b"not a directory")
+            .expect("write inscriptions blocker");
 
         let mut command = Command::new(env!("CARGO_BIN_EXE_agentmux"));
         command
@@ -392,7 +424,8 @@ impl McpHarness {
             .stderr(std::process::Stdio::null());
         strip_bring_up_context(&mut command);
 
-        let mut child = command.spawn().expect("spawn faulted agentmux host mcp");
+        let mut child =
+            command.spawn().expect("spawn faulted agentmux host mcp");
         let stdin = child.stdin.take().expect("take mcp stdin");
         let stdout = child.stdout.take().expect("take mcp stdout");
         let mut harness = Self {
@@ -441,11 +474,15 @@ impl McpHarness {
     }
 
     async fn initialize(&mut self) {
-        let initialize =
-            rmcp::model::InitializeRequest::new(rmcp::model::InitializeRequestParams::new(
+        let initialize = rmcp::model::InitializeRequest::new(
+            rmcp::model::InitializeRequestParams::new(
                 rmcp::model::ClientCapabilities::default(),
-                rmcp::model::Implementation::new("agentmux-contract-tests", "0.0.0"),
-            ));
+                rmcp::model::Implementation::new(
+                    "agentmux-contract-tests",
+                    "0.0.0",
+                ),
+            ),
+        );
         self.send(rmcp::model::ClientJsonRpcMessage::request(
             initialize.into(),
             rmcp::model::RequestId::Number(1),
@@ -493,7 +530,8 @@ impl McpHarness {
         arguments: Map<String, Value>,
     ) -> Value {
         let request = rmcp::model::CallToolRequest::new(
-            rmcp::model::CallToolRequestParams::new(name.to_string()).with_arguments(arguments),
+            rmcp::model::CallToolRequestParams::new(name.to_string())
+                .with_arguments(arguments),
         );
         self.send(rmcp::model::ClientJsonRpcMessage::request(
             request.into(),
@@ -504,7 +542,8 @@ impl McpHarness {
     }
 
     async fn send(&mut self, message: rmcp::model::ClientJsonRpcMessage) {
-        let line = serde_json::to_string(&message).expect("encode mcp request");
+        let line =
+            serde_json::to_string(&message).expect("encode mcp request");
         self.stdin
             .write_all(line.as_bytes())
             .await
@@ -532,10 +571,13 @@ impl McpHarness {
                 .await
                 .expect("read mcp response line");
             assert!(count > 0, "mcp process closed stdout");
-            let decoded: Value =
-                serde_json::from_str(line.trim_end()).expect("decode mcp response");
+            let decoded: Value = serde_json::from_str(line.trim_end())
+                .expect("decode mcp response");
             let response_id = decoded.get("id").and_then(|id_value| {
-                serde_json::from_value::<rmcp::model::RequestId>(id_value.clone()).ok()
+                serde_json::from_value::<rmcp::model::RequestId>(
+                    id_value.clone(),
+                )
+                .ok()
             });
             if response_id == Some(expected.clone()) {
                 return decoded;
@@ -550,8 +592,13 @@ impl Drop for McpHarness {
     }
 }
 
-pub(crate) fn write_bundle_configuration(config_root: &Path, bundle_name: &str, sessions: &[&str]) {
-    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+pub(crate) fn write_bundle_configuration(
+    config_root: &Path,
+    bundle_name: &str,
+    sessions: &[&str],
+) {
+    fs::create_dir_all(config_root.join("bundles"))
+        .expect("create bundles directory");
     fs::write(
         config_root.join("coders.toml"),
         r#"
@@ -603,8 +650,8 @@ send = "home"
 /// don't care about its content: returns a `down` bundle with no sessions, the
 /// shape the real relay produces when no relay-wide principals are registered.
 pub(crate) fn default_empty_global_responder() -> RelayResponder {
-    Arc::new(
-        |request| match request.get("operation").and_then(Value::as_str) {
+    Arc::new(|request| {
+        match request.get("operation").and_then(Value::as_str) {
             Some("list") => json!({
                 "kind": "list",
                 "schema_version": "1",
@@ -627,8 +674,8 @@ pub(crate) fn default_empty_global_responder() -> RelayResponder {
                     "message": "unexpected operation",
                 },
             }),
-        },
-    )
+        }
+    })
 }
 
 pub(crate) fn decode_tool_payload(response: &Value) -> Value {
@@ -644,15 +691,20 @@ pub(crate) fn decode_tool_payload(response: &Value) -> Value {
         .and_then(|result| result.get("content"))
         .and_then(Value::as_array)
         .and_then(|items| items.first())
-        .unwrap_or_else(|| panic!("missing result.content in response: {response}"));
+        .unwrap_or_else(|| {
+            panic!("missing result.content in response: {response}")
+        });
 
     if let Some(json_payload) = content.get("json") {
         return json_payload.clone();
     }
-    let text = content
-        .get("text")
-        .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("missing content.text in response: {response}"));
+    let text =
+        content
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| {
+                panic!("missing content.text in response: {response}")
+            });
     serde_json::from_str(text).expect("decode content.text as json")
 }
 
@@ -670,9 +722,9 @@ pub(crate) fn error_code(response: &Value) -> Option<&str> {
 /// `field` rather than returning a handler-level `validation_invalid_params`
 /// code.
 pub(crate) fn assert_param_deserialize_error(response: &Value, field: &str) {
-    let result = response
-        .get("result")
-        .unwrap_or_else(|| panic!("expected tool error result in response: {response}"));
+    let result = response.get("result").unwrap_or_else(|| {
+        panic!("expected tool error result in response: {response}")
+    });
     assert_eq!(
         result.get("isError").and_then(Value::as_bool),
         Some(true),
@@ -684,23 +736,28 @@ pub(crate) fn assert_param_deserialize_error(response: &Value, field: &str) {
         .and_then(|content| content.first())
         .and_then(|content| content.get("text"))
         .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("missing tool error text in response: {response}"));
+        .unwrap_or_else(|| {
+            panic!("missing tool error text in response: {response}")
+        });
     assert!(
         message.contains(field),
         "expected deserialize error naming '{field}', got: {message}"
     );
 }
 
-pub(crate) fn assert_unknown_field_error(response: &Value, expected_fields: &[&str]) {
+pub(crate) fn assert_unknown_field_error(
+    response: &Value,
+    expected_fields: &[&str],
+) {
     assert_eq!(error_code(response), Some("validation_invalid_params"));
     let fields = response["error"]["data"]["details"]["fields"]
         .as_array()
         .unwrap_or_else(|| panic!("missing unknown-field details: {response}"))
         .iter()
         .map(|value| {
-            value
-                .as_str()
-                .unwrap_or_else(|| panic!("unknown-field entry must be string: {response}"))
+            value.as_str().unwrap_or_else(|| {
+                panic!("unknown-field entry must be string: {response}")
+            })
         })
         .collect::<Vec<_>>();
     assert_eq!(fields, expected_fields);

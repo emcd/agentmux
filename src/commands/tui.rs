@@ -9,17 +9,24 @@ use std::{
 use crate::{
     configuration::{ConfigurationRoots, load_bundle_group_memberships},
     runtime::{
-        bootstrap::{BootstrapOptions, SpawnedRelay, bootstrap_relay, resolve_relay_program},
+        bootstrap::{
+            BootstrapOptions, SpawnedRelay, bootstrap_relay,
+            resolve_relay_program,
+        },
         error::RuntimeError,
         paths::{RelayRuntimePaths, RuntimeRoots},
         starter::ensure_starter_configuration_layout,
-        tui_session::{load_ui_binding_configuration, resolve_tui_launch_identity},
+        tui_session::{
+            load_ui_binding_configuration, resolve_tui_launch_identity,
+        },
     },
 };
 
 use super::{RuntimeArguments, TuiArguments, shared};
 
-pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError> {
+pub(super) fn run_agentmux_tui(
+    arguments: &[String],
+) -> Result<(), RuntimeError> {
     if arguments
         .iter()
         .any(|value| value == "--help" || value == "-h")
@@ -36,11 +43,12 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
     // eager bundle load here would crash startup.
     // Resolve available bundles first and seed the browsing context from the
     // first one when no bundle is configured; the operator picks from there.
-    let available_bundles = load_bundle_group_memberships(&roots.configuration_roots)
-        .map_err(shared::map_bundle_load_error)?
-        .into_iter()
-        .map(|membership| membership.bundle_name)
-        .collect::<Vec<_>>();
+    let available_bundles =
+        load_bundle_group_memberships(&roots.configuration_roots)
+            .map_err(shared::map_bundle_load_error)?
+            .into_iter()
+            .map(|membership| membership.bundle_name)
+            .collect::<Vec<_>>();
     let resolved_session = resolve_tui_launch_identity(
         &roots.configuration_roots,
         parsed.bundle_name.as_deref(),
@@ -77,7 +85,9 @@ pub(super) fn run_agentmux_tui(arguments: &[String]) -> Result<(), RuntimeError>
 // process exits and returns the shell to the operator.
 const OWNED_RELAY_STOP_GRACE: Duration = Duration::from_millis(6_000);
 
-fn parse_tui_arguments(arguments: &[String]) -> Result<TuiArguments, RuntimeError> {
+fn parse_tui_arguments(
+    arguments: &[String],
+) -> Result<TuiArguments, RuntimeError> {
     let mut parsed = TuiArguments {
         bundle_name: None,
         session_selector: None,
@@ -86,28 +96,38 @@ fn parse_tui_arguments(arguments: &[String]) -> Result<TuiArguments, RuntimeErro
     };
     let mut index = 0usize;
     while index < arguments.len() {
-        if shared::parse_runtime_flag(arguments, &mut index, &mut parsed.runtime)? {
+        if shared::parse_runtime_flag(
+            arguments,
+            &mut index,
+            &mut parsed.runtime,
+        )? {
             index += 1;
             continue;
         }
         match arguments[index].as_str() {
             "--bundle" | "--bundle-name" => {
-                parsed.bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?);
-            }
+                parsed.bundle_name = Some(shared::take_value(
+                    arguments, &mut index, "--bundle",
+                )?);
+            },
             "--as-session" => {
-                parsed.session_selector =
-                    Some(shared::take_value(arguments, &mut index, "--as-session")?);
-            }
+                parsed.session_selector = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--as-session",
+                )?);
+            },
             "--lines" => {
-                let value = shared::take_value(arguments, &mut index, "--lines")?;
+                let value =
+                    shared::take_value(arguments, &mut index, "--lines")?;
                 parsed.lines = Some(shared::parse_look_lines(value.as_str())?);
-            }
+            },
             unknown => {
                 return Err(RuntimeError::InvalidArgument {
                     argument: unknown.to_string(),
                     message: "unknown argument".to_string(),
                 });
-            }
+            },
         }
         index += 1;
     }
@@ -137,18 +157,20 @@ fn ensure_tui_relay_available(
     let relay_command = relay_program.clone();
     // The spawn closure runs on the calling thread, so a single-threaded cell
     // is sufficient to hand the spawned child back out of `bootstrap_relay`.
-    let spawned: Rc<RefCell<Option<SpawnedRelay>>> = Rc::new(RefCell::new(None));
+    let spawned: Rc<RefCell<Option<SpawnedRelay>>> =
+        Rc::new(RefCell::new(None));
     let spawned_inner = Rc::clone(&spawned);
-    let outcome = bootstrap_relay(paths, BootstrapOptions::default(), move || {
-        let child = spawn_relay_host_for_tui(
-            relay_command.clone(),
-            configuration_roots.clone(),
-            state_root.clone(),
-            inscriptions_root.clone(),
-        )?;
-        *spawned_inner.borrow_mut() = Some(SpawnedRelay::new(child));
-        Ok(())
-    });
+    let outcome =
+        bootstrap_relay(paths, BootstrapOptions::default(), move || {
+            let child = spawn_relay_host_for_tui(
+                relay_command.clone(),
+                configuration_roots.clone(),
+                state_root.clone(),
+                inscriptions_root.clone(),
+            )?;
+            *spawned_inner.borrow_mut() = Some(SpawnedRelay::new(child));
+            Ok(())
+        });
     match outcome {
         Ok(report) if report.spawned_relay => Ok(spawned.borrow_mut().take()),
         Ok(_) => Ok(None),
@@ -165,7 +187,7 @@ fn ensure_tui_relay_available(
                 relay.stop(OWNED_RELAY_STOP_GRACE);
             }
             Err(error)
-        }
+        },
     }
 }
 

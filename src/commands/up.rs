@@ -2,7 +2,9 @@ use crate::runtime::error::RuntimeError;
 
 use super::{BundleAction, bundle};
 
-pub(super) fn run_agentmux_up(arguments: &[String]) -> Result<(), RuntimeError> {
+pub(super) fn run_agentmux_up(
+    arguments: &[String],
+) -> Result<(), RuntimeError> {
     if arguments
         .iter()
         .any(|value| value == "--help" || value == "-h")

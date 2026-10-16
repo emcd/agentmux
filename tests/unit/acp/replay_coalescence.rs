@@ -73,7 +73,10 @@ fn tail_of_buffer_same_kind_user_entry_extends_in_place() {
     coalesce_replay_entries_on_append(
         &mut buffer,
         vec![ReplayEntry::User {
-            lines: vec!["streaming-delta-1".to_string(), "delta-2".to_string()],
+            lines: vec![
+                "streaming-delta-1".to_string(),
+                "delta-2".to_string(),
+            ],
             source: UserSource::ReaderThread,
         }],
     );
@@ -140,11 +143,15 @@ fn invocation_entries_never_merge_across_adjacency() {
         "two distinct tool calls remain two separate entries"
     );
     match &buffer[0] {
-        ReplayEntry::Invocation { call_id, .. } => assert_eq!(call_id, "call-A"),
+        ReplayEntry::Invocation { call_id, .. } => {
+            assert_eq!(call_id, "call-A")
+        },
         _ => panic!("expected first entry to be call-A Invocation"),
     }
     match &buffer[1] {
-        ReplayEntry::Invocation { call_id, .. } => assert_eq!(call_id, "call-B"),
+        ReplayEntry::Invocation { call_id, .. } => {
+            assert_eq!(call_id, "call-B")
+        },
         _ => panic!("expected second entry to be call-B Invocation"),
     }
 }
@@ -186,7 +193,7 @@ fn update_merging_is_update_kind_aware() {
     match &buffer[1] {
         ReplayEntry::Update { update_kind, .. } => {
             assert_eq!(update_kind, "plan_execution");
-        }
+        },
         _ => panic!("expected Update entry at index 1"),
     }
 }
@@ -230,7 +237,10 @@ fn cap_is_enforced_after_coalescence() {
 
     let mut pending_calls: std::collections::HashMap<String, PendingToolCall> =
         std::collections::HashMap::new();
-    enforce_replay_buffer_cap_and_maintain_positions(&mut buffer, &mut pending_calls);
+    enforce_replay_buffer_cap_and_maintain_positions(
+        &mut buffer,
+        &mut pending_calls,
+    );
 
     assert_eq!(
         buffer.len(),
@@ -244,7 +254,7 @@ fn cap_is_enforced_after_coalescence() {
                 update_kind, "post",
                 "most recent entry remains at the tail after cap eviction"
             );
-        }
+        },
         _ => panic!("expected Update entry at the tail after coalescence"),
     }
     let evicted = &buffer[0];
@@ -254,7 +264,7 @@ fn cap_is_enforced_after_coalescence() {
                 update_kind, "fill-002",
                 "fill-000 and fill-001 were evicted to maintain the cap"
             );
-        }
+        },
         _ => panic!("expected an Update entry at index 0 after cap eviction"),
     }
 }
@@ -323,7 +333,10 @@ fn coalescence_reduces_entry_count_before_cap_check() {
     );
     let mut pending_calls: std::collections::HashMap<String, PendingToolCall> =
         std::collections::HashMap::new();
-    enforce_replay_buffer_cap_and_maintain_positions(&mut buffer, &mut pending_calls);
+    enforce_replay_buffer_cap_and_maintain_positions(
+        &mut buffer,
+        &mut pending_calls,
+    );
     assert_eq!(
         buffer.len(),
         1000,
@@ -376,8 +389,10 @@ fn reader_thread_user_does_not_merge_into_prompt_origin_user_tail() {
             assert_eq!(*source_0, UserSource::PromptPath);
             assert_eq!(lines_1, &vec!["echoed-from-server".to_string()]);
             assert_eq!(*source_1, UserSource::ReaderThread);
-        }
-        _ => panic!("expected two distinct User entries with sources preserved"),
+        },
+        _ => {
+            panic!("expected two distinct User entries with sources preserved")
+        },
     }
 }
 
@@ -444,10 +459,13 @@ fn prompt_path_append_preserves_user_boundary_on_consecutive_submissions() {
         "two back-to-back prompts through the non-coalescing append remain two entries"
     );
     match (&buffer[0], &buffer[1]) {
-        (ReplayEntry::User { lines: lines_0, .. }, ReplayEntry::User { lines: lines_1, .. }) => {
+        (
+            ReplayEntry::User { lines: lines_0, .. },
+            ReplayEntry::User { lines: lines_1, .. },
+        ) => {
             assert_eq!(lines_0, &vec!["first-prompt".to_string()]);
             assert_eq!(lines_1, &vec!["second-prompt".to_string()]);
-        }
+        },
         _ => panic!("expected two distinct User entries"),
     }
 }

@@ -13,7 +13,9 @@ use crate::{configuration::SessionType, transports::StructuredEntry};
 // vocabulary type without embedding it (e.g. the `read_worker_readiness`
 // stringify over `WorkerReadinessState`) imports it from `crate::transports`
 // directly rather than through this re-export.
-pub use crate::protocol::{DeliveryPayloadMode, LookFreshness, LookSnapshotSource, SendOutcome};
+pub use crate::protocol::{
+    DeliveryPayloadMode, LookFreshness, LookSnapshotSource, SendOutcome,
+};
 
 /// Declared session type for one listed bundle session.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -102,7 +104,8 @@ pub struct StartupFailureRecord {
 }
 
 /// Lead phrase for a bundle in which nothing reached ready state.
-pub const NO_READY_SESSION_LEAD: &str = "no configured session reached ready state";
+pub const NO_READY_SESSION_LEAD: &str =
+    "no configured session reached ready state";
 
 /// Lead phrase for a bundle that came up with at least one session ready and at
 /// least one session failing to start.
@@ -159,7 +162,10 @@ pub fn fold_startup_failures(
         })
         .collect::<Vec<_>>();
     Some(FoldedStartupFailures {
-        reason: format!("{lead} ({} failed) -- {joined}", failed_startups.len()),
+        reason: format!(
+            "{lead} ({} failed) -- {joined}",
+            failed_startups.len()
+        ),
         details: json!({ "failed_sessions": failed_sessions }),
     })
 }
@@ -314,9 +320,14 @@ impl RelayError {
                 .or_else(|| details.get("session_id"))
                 .and_then(Value::as_str)
             {
-                return format!("{} (session {session}: {cause})", self.message);
+                return format!(
+                    "{} (session {session}: {cause})",
+                    self.message
+                );
             }
-            if let Some(bundle) = details.get("bundle_name").and_then(Value::as_str) {
+            if let Some(bundle) =
+                details.get("bundle_name").and_then(Value::as_str)
+            {
                 return format!("{} (bundle {bundle}: {cause})", self.message);
             }
             return format!("{}: {cause}", self.message);

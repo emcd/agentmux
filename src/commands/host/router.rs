@@ -25,8 +25,11 @@ pub(in crate::commands) async fn run_agentmux_host(
                 help::print_host_relay_help();
                 return Ok(());
             }
-            relay::run_relay_host(arguments::parse_host_relay_arguments(&arguments[1..])?).await
-        }
+            relay::run_relay_host(arguments::parse_host_relay_arguments(
+                &arguments[1..],
+            )?)
+            .await
+        },
         "mcp" => {
             if arguments[1..]
                 .iter()
@@ -40,8 +43,11 @@ pub(in crate::commands) async fn run_agentmux_host(
             // above still exits: it is an operator at a shell, not a client
             // negotiating a tool surface. No partially parsed value survives a
             // failed parse -- the whole result is discarded.
-            mcp::run_mcp_host(arguments::parse_host_mcp_arguments(&arguments[1..])).await
-        }
+            mcp::run_mcp_host(arguments::parse_host_mcp_arguments(
+                &arguments[1..],
+            ))
+            .await
+        },
         unknown => Err(RuntimeError::InvalidArgument {
             argument: unknown.to_string(),
             message: "unknown host mode; expected relay or mcp".to_string(),

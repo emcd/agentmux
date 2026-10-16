@@ -38,9 +38,21 @@ fn same_session_pending_choices_order_fifo_by_enqueued_at() {
     // Requests arrive for one session out of enqueued_at order (the relay may
     // replay or reorder on the wire); the pending list must present them FIFO by
     // enqueued_at regardless of arrival order.
-    state.inject_choice_request("req-c", "acp@agentmux", Some("2026-06-24T00:00:03Z"));
-    state.inject_choice_request("req-a", "acp@agentmux", Some("2026-06-24T00:00:01Z"));
-    state.inject_choice_request("req-b", "acp@agentmux", Some("2026-06-24T00:00:02Z"));
+    state.inject_choice_request(
+        "req-c",
+        "acp@agentmux",
+        Some("2026-06-24T00:00:03Z"),
+    );
+    state.inject_choice_request(
+        "req-a",
+        "acp@agentmux",
+        Some("2026-06-24T00:00:01Z"),
+    );
+    state.inject_choice_request(
+        "req-b",
+        "acp@agentmux",
+        Some("2026-06-24T00:00:02Z"),
+    );
 
     assert_eq!(
         state.pending_choice_request_ids(),
@@ -54,8 +66,16 @@ fn pending_choices_tie_break_by_request_id_and_sink_missing_enqueued_at() {
     let mut state = make_state();
     // Two requests share an enqueued_at: ties break deterministically by
     // choice_request_id. A request with no enqueued_at sorts last.
-    state.inject_choice_request("req-z", "acp@agentmux", Some("2026-06-24T00:00:01Z"));
-    state.inject_choice_request("req-a", "acp@agentmux", Some("2026-06-24T00:00:01Z"));
+    state.inject_choice_request(
+        "req-z",
+        "acp@agentmux",
+        Some("2026-06-24T00:00:01Z"),
+    );
+    state.inject_choice_request(
+        "req-a",
+        "acp@agentmux",
+        Some("2026-06-24T00:00:01Z"),
+    );
     state.inject_choice_request("req-m", "acp@agentmux", None);
 
     assert_eq!(
@@ -121,13 +141,13 @@ fn look_choice_resolution_without_pending_request_is_validation_error() {
     match state.resolve_selected_look_choice_selected() {
         Err(RuntimeError::Validation { code, .. }) => {
             assert_eq!(code, "validation_unknown_choice_request");
-        }
+        },
         other => panic!("unexpected result: {other:?}"),
     }
     match state.resolve_selected_look_choice_cancelled() {
         Err(RuntimeError::Validation { code, .. }) => {
             assert_eq!(code, "validation_unknown_choice_request");
-        }
+        },
         other => panic!("unexpected result: {other:?}"),
     }
 }
@@ -135,8 +155,18 @@ fn look_choice_resolution_without_pending_request_is_validation_error() {
 #[test]
 fn look_pending_choices_are_filtered_to_the_active_target() {
     let mut state = make_state();
-    state.record_stream_events(&[choice_requested("msg-1", "perm-1", "acp@agentmux", &[])]);
-    state.record_stream_events(&[choice_requested("msg-2", "perm-2", "relay@agentmux", &[])]);
+    state.record_stream_events(&[choice_requested(
+        "msg-1",
+        "perm-1",
+        "acp@agentmux",
+        &[],
+    )]);
+    state.record_stream_events(&[choice_requested(
+        "msg-2",
+        "perm-2",
+        "relay@agentmux",
+        &[],
+    )]);
     // The stored choice target is the canonical payload id, so the active
     // interaction target is matched in the same canonical form.
     state.set_interaction_target("acp@agentmux");

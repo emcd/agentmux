@@ -12,7 +12,9 @@ use tempfile::TempDir;
 fn overlong_socket_path(base: &std::path::Path) -> std::path::PathBuf {
     const OVERSHOOT: usize = 60;
     let mut directory = base.to_path_buf();
-    while directory.join("relay.sock").as_os_str().len() <= UNIX_SOCKET_PATH_MAXIMUM + OVERSHOOT {
+    while directory.join("relay.sock").as_os_str().len()
+        <= UNIX_SOCKET_PATH_MAXIMUM + OVERSHOOT
+    {
         directory = directory.join("deeply-nested-directory");
     }
     std::fs::create_dir_all(&directory).expect("create deep directory");
@@ -42,8 +44,10 @@ fn an_overlong_path_binds_and_connects_on_linux() {
         "fixture must exceed the limit"
     );
 
-    let listener = bind_unix_listener(&socket).expect("bind through the parent directory");
-    connect_unix_stream(&socket).expect("connect through the parent directory");
+    let listener = bind_unix_listener(&socket)
+        .expect("bind through the parent directory");
+    connect_unix_stream(&socket)
+        .expect("connect through the parent directory");
     drop(listener);
 }
 
@@ -56,7 +60,8 @@ fn an_overlong_path_is_refused_with_the_limit_named() {
     let temporary = TempDir::new().expect("temporary");
     let socket = overlong_socket_path(temporary.path());
 
-    let error = bind_unix_listener(&socket).expect_err("an overlong path must be refused");
+    let error = bind_unix_listener(&socket)
+        .expect_err("an overlong path must be refused");
     assert_eq!(error.kind(), std::io::ErrorKind::InvalidInput);
     let message = error.to_string();
     assert!(
@@ -81,16 +86,23 @@ fn a_searchable_but_unreadable_parent_still_serves_its_socket() {
     std::fs::create_dir(&directory).expect("create socket directory");
     let socket = directory.join("relay.sock");
 
-    let listener = bind_unix_listener(&socket).expect("bind before tightening the mode");
-    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o111))
-        .expect("make the directory searchable but unreadable");
+    let listener =
+        bind_unix_listener(&socket).expect("bind before tightening the mode");
+    std::fs::set_permissions(
+        &directory,
+        std::fs::Permissions::from_mode(0o111),
+    )
+    .expect("make the directory searchable but unreadable");
 
     let outcome = connect_unix_stream(&socket);
 
     // Restored before asserting, so a failure does not leave the temporary
     // directory undeletable.
-    std::fs::set_permissions(&directory, std::fs::Permissions::from_mode(0o755))
-        .expect("restore the directory mode");
+    std::fs::set_permissions(
+        &directory,
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .expect("restore the directory mode");
     outcome.expect("connect must not require read permission on the parent");
     drop(listener);
 }

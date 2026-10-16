@@ -17,25 +17,29 @@ pub mod ui;
 
 pub use crate::acp::{AcpDriverServices, AcpTransport, AcpWorkerDriver};
 pub use crate::protocol::{
-    DeliveryPayloadMode, LookFreshness, LookSnapshotPayload, LookSnapshotSource, PackingUnitId,
-    PartitionError, SendOutcome, StructuredEntry, SubmissionEvidence, ToolCallStatus,
-    WorkerFailureReason, WorkerReadinessState,
+    DeliveryPayloadMode, LookFreshness, LookSnapshotPayload,
+    LookSnapshotSource, PackingUnitId, PartitionError, SendOutcome,
+    StructuredEntry, SubmissionEvidence, ToolCallStatus, WorkerFailureReason,
+    WorkerReadinessState,
 };
 #[cfg(feature = "pty")]
 pub use crate::pty::{PtyTargetConfiguration, PtyTransport};
 pub use crate::tmux::TmuxTransport;
 pub(crate) use contract::stopped_before_submission_outcome;
 pub use contract::{
-    ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage,
-    DeliveryWriter, GenerationFence, LookMode, MailboxConsumer, OutputView, PeekDimensions,
-    PlannedWrite, PromptReadinessTemplate, SingleDeliveryOutcome, StartupContext, ThingToChoose,
-    Transport, TransportError, TransportHealth, TransportImpl, TransportReadiness, TransportStatus,
-    UnreachableSince, receipt_runs, run_delivery_executor,
+    ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope,
+    DeliveryExecutorContext, DeliveryMessage, DeliveryWriter, GenerationFence,
+    LookMode, MailboxConsumer, OutputView, PeekDimensions, PlannedWrite,
+    PromptReadinessTemplate, SingleDeliveryOutcome, StartupContext,
+    ThingToChoose, Transport, TransportError, TransportHealth, TransportImpl,
+    TransportReadiness, TransportStatus, UnreachableSince, receipt_runs,
+    run_delivery_executor,
 };
 pub use diagnostics::{
-    DIAGNOSTIC_MESSAGE_IDS_MAXIMUM, DeliveryDiagnosticContext, emit_delivery_progress,
+    DIAGNOSTIC_MESSAGE_IDS_MAXIMUM, DeliveryDiagnosticContext,
+    emit_delivery_progress,
 };
 pub use ui::{
-    UiBroadcastFn, UiBroadcastStatus, UiIncomingMessage, UiOutcomePhase, UiPhaseFn, UiTransport,
-    UiTransportServices,
+    UiBroadcastFn, UiBroadcastStatus, UiIncomingMessage, UiOutcomePhase,
+    UiPhaseFn, UiTransport, UiTransportServices,
 };

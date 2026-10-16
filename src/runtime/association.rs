@@ -5,9 +5,9 @@ use std::{fs, path::Path};
 use serde::Deserialize;
 
 use crate::configuration::{
-    ASSOCIATION_FILE, BUNDLE_ENVIRONMENT_VARIABLE, BundleConfiguration, ConfigurationError,
-    ConfigurationRoots, SESSION_ENVIRONMENT_VARIABLE, effective_configuration_path,
-    infer_sender_from_working_directory,
+    ASSOCIATION_FILE, BUNDLE_ENVIRONMENT_VARIABLE, BundleConfiguration,
+    ConfigurationError, ConfigurationRoots, SESSION_ENVIRONMENT_VARIABLE,
+    effective_configuration_path, infer_sender_from_working_directory,
 };
 
 use super::error::RuntimeError;
@@ -46,12 +46,15 @@ pub fn load_local_mcp_overrides(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<Option<McpAssociationOverrides>, RuntimeError> {
     let path =
-        effective_configuration_path(configuration_roots, ASSOCIATION_FILE).map_err(|source| {
-            RuntimeError::validation(
-                "validation_unreadable_configuration_layer",
-                format!("failed to resolve local MCP override file: {source}"),
-            )
-        })?;
+        effective_configuration_path(configuration_roots, ASSOCIATION_FILE)
+            .map_err(|source| {
+                RuntimeError::validation(
+                    "validation_unreadable_configuration_layer",
+                    format!(
+                        "failed to resolve local MCP override file: {source}"
+                    ),
+                )
+            })?;
     if !path.exists() {
         return Ok(None);
     }
@@ -61,15 +64,17 @@ pub fn load_local_mcp_overrides(
             source,
         )
     })?;
-    let parsed = toml::from_str::<McpAssociationOverrideFile>(&raw).map_err(|source| {
-        RuntimeError::validation(
-            "validation_invalid_arguments",
-            format!(
-                "malformed local MCP override file {}: {source}",
-                path.display()
-            ),
-        )
-    })?;
+    let parsed = toml::from_str::<McpAssociationOverrideFile>(&raw).map_err(
+        |source| {
+            RuntimeError::validation(
+                "validation_invalid_arguments",
+                format!(
+                    "malformed local MCP override file {}: {source}",
+                    path.display()
+                ),
+            )
+        },
+    )?;
     Ok(Some(McpAssociationOverrides {
         bundle_name: parsed.bundle_name.and_then(normalize_string),
         session_name: parsed.session_name.and_then(normalize_string),
@@ -174,45 +179,52 @@ pub fn resolve_association(
     local_overrides: Option<&McpAssociationOverrides>,
     default_bundle: Option<&str>,
 ) -> AssociationCandidates {
-    let bundle = candidate(cli.bundle_name.clone(), AssociationSource::CommandLine)
-        .or_else(|| {
-            candidate(
-                environment.bundle_name.clone(),
-                AssociationSource::Environment,
-            )
-        })
-        .or_else(|| {
-            candidate(
-                local_overrides.and_then(|overrides| overrides.bundle_name.clone()),
-                AssociationSource::AssociationFile,
-            )
-        })
-        .or_else(|| {
-            candidate(
-                default_bundle.map(ToString::to_string),
-                AssociationSource::DefaultBundle,
-            )
-        });
-    let session = candidate(cli.session_name.clone(), AssociationSource::CommandLine)
-        .or_else(|| {
-            candidate(
-                environment.session_name.clone(),
-                AssociationSource::Environment,
-            )
-        })
-        .or_else(|| {
-            candidate(
-                local_overrides.and_then(|overrides| overrides.session_name.clone()),
-                AssociationSource::AssociationFile,
-            )
-        });
+    let bundle =
+        candidate(cli.bundle_name.clone(), AssociationSource::CommandLine)
+            .or_else(|| {
+                candidate(
+                    environment.bundle_name.clone(),
+                    AssociationSource::Environment,
+                )
+            })
+            .or_else(|| {
+                candidate(
+                    local_overrides
+                        .and_then(|overrides| overrides.bundle_name.clone()),
+                    AssociationSource::AssociationFile,
+                )
+            })
+            .or_else(|| {
+                candidate(
+                    default_bundle.map(ToString::to_string),
+                    AssociationSource::DefaultBundle,
+                )
+            });
+    let session =
+        candidate(cli.session_name.clone(), AssociationSource::CommandLine)
+            .or_else(|| {
+                candidate(
+                    environment.session_name.clone(),
+                    AssociationSource::Environment,
+                )
+            })
+            .or_else(|| {
+                candidate(
+                    local_overrides
+                        .and_then(|overrides| overrides.session_name.clone()),
+                    AssociationSource::AssociationFile,
+                )
+            });
     AssociationCandidates { bundle, session }
 }
 
 /// Pairs a tier's value with that tier, dropping it when the tier supplied
 /// nothing. Blank normalizes to absent so a tier cannot claim a turn with an
 /// empty string.
-fn candidate(value: Option<String>, source: AssociationSource) -> Option<AssociationCandidate> {
+fn candidate(
+    value: Option<String>,
+    source: AssociationSource,
+) -> Option<AssociationCandidate> {
     value
         .and_then(normalize_string)
         .map(|value| AssociationCandidate { value, source })
@@ -265,7 +277,8 @@ pub fn resolve_sender_session(
     working_directory: &Path,
 ) -> Result<Option<String>, RuntimeError> {
     if let Some(candidate_session_name) = candidate_session_name {
-        return validate_sender_session(bundle, candidate_session_name).map(Some);
+        return validate_sender_session(bundle, candidate_session_name)
+            .map(Some);
     }
     infer_sender_from_working_directory(bundle, working_directory)
         .map_err(map_sender_inference_error)

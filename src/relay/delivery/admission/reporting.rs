@@ -20,7 +20,8 @@ use super::config::delivery_configuration;
 use super::ledger::{AdmissionTargetKey, TargetUsage, lock_ledger};
 
 const INSCRIPTION_UNDELIVERED_AGGREGATE: &str = "relay.delivery.undelivered";
-const INSCRIPTION_UNDELIVERED_WARNING: &str = "relay.delivery.undelivered.warning";
+const INSCRIPTION_UNDELIVERED_WARNING: &str =
+    "relay.delivery.undelivered.warning";
 
 /// Reporting cadence and threshold for the undelivered queue.
 ///
@@ -42,8 +43,12 @@ pub struct UndeliveredReporting {
 impl From<DeliveryConfiguration> for UndeliveredReporting {
     fn from(configuration: DeliveryConfiguration) -> Self {
         Self {
-            warning: Duration::from_millis(configuration.undelivered_warning_ms),
-            interval: Duration::from_millis(configuration.undelivered_report_interval_ms),
+            warning: Duration::from_millis(
+                configuration.undelivered_warning_ms,
+            ),
+            interval: Duration::from_millis(
+                configuration.undelivered_report_interval_ms,
+            ),
         }
     }
 }
@@ -88,14 +93,13 @@ pub fn report_undelivered_queue(reporting: UndeliveredReporting) {
     // unguarded entries and computes its own totals rather than reading the
     // all-state quota counters.
     let mut oldest: HashMap<AdmissionTargetKey, Instant> = HashMap::new();
-    let mut pending_per_target: HashMap<AdmissionTargetKey, TargetUsage> = HashMap::new();
+    let mut pending_per_target: HashMap<AdmissionTargetKey, TargetUsage> =
+        HashMap::new();
     let mut pending_envelopes_total: usize = 0;
     let mut pending_bytes_total: u64 = 0;
-    for entry in state
-        .entries
-        .values()
-        .filter(|entry| entry.state == QueueEntryState::Queued && entry.guard.is_none())
-    {
+    for entry in state.entries.values().filter(|entry| {
+        entry.state == QueueEntryState::Queued && entry.guard.is_none()
+    }) {
         oldest
             .entry(entry.target.clone())
             .and_modify(|current| {
@@ -104,7 +108,8 @@ pub fn report_undelivered_queue(reporting: UndeliveredReporting) {
                 }
             })
             .or_insert(entry.admitted_at);
-        let usage = pending_per_target.entry(entry.target.clone()).or_default();
+        let usage =
+            pending_per_target.entry(entry.target.clone()).or_default();
         usage.envelopes += 1;
         usage.bytes += entry.canonical_bytes;
         pending_envelopes_total += 1;
@@ -190,5 +195,6 @@ pub fn report_undelivered_queue(reporting: UndeliveredReporting) {
 }
 
 fn duration_ms(now: Instant, since: Instant) -> u64 {
-    u64::try_from(now.saturating_duration_since(since).as_millis()).unwrap_or(u64::MAX)
+    u64::try_from(now.saturating_duration_since(since).as_millis())
+        .unwrap_or(u64::MAX)
 }

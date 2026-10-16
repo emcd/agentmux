@@ -65,7 +65,8 @@ async fn a_cooperative_stop_never_invokes_forced_termination() {
     let mut generation = ControllableGeneration::new(true, false);
     let terminate_calls = Arc::clone(&generation.terminate_calls);
 
-    let outcome = acknowledge_fence(&mut generation, Duration::from_millis(200)).await;
+    let outcome =
+        acknowledge_fence(&mut generation, Duration::from_millis(200)).await;
 
     assert_eq!(outcome.verdict, FenceVerdict::Positive);
     assert_eq!(outcome.resolution, FenceResolution::Cooperative);
@@ -85,7 +86,8 @@ async fn an_unresponsive_generation_escalates_and_then_ceases() {
     let fence_calls = Arc::clone(&generation.fence_calls);
     let terminate_calls = Arc::clone(&generation.terminate_calls);
 
-    let outcome = acknowledge_fence(&mut generation, Duration::from_millis(200)).await;
+    let outcome =
+        acknowledge_fence(&mut generation, Duration::from_millis(200)).await;
 
     assert_eq!(outcome.verdict, FenceVerdict::Positive);
     assert_eq!(outcome.resolution, FenceResolution::Forced);
@@ -104,7 +106,8 @@ async fn an_unresponsive_generation_escalates_and_then_ceases() {
 async fn a_generation_that_never_ceases_is_fenced_negative() {
     let mut generation = ControllableGeneration::new(false, false);
 
-    let outcome = acknowledge_fence(&mut generation, Duration::from_millis(100)).await;
+    let outcome =
+        acknowledge_fence(&mut generation, Duration::from_millis(100)).await;
 
     assert_eq!(outcome.verdict, FenceVerdict::Negative);
     assert_eq!(outcome.resolution, FenceResolution::Unobserved);
@@ -158,7 +161,8 @@ async fn an_already_ceased_generation_costs_no_observation_time() {
     generation.ceased.store(true, Ordering::SeqCst);
 
     let started = Instant::now();
-    let outcome = acknowledge_fence(&mut generation, Duration::from_secs(30)).await;
+    let outcome =
+        acknowledge_fence(&mut generation, Duration::from_secs(30)).await;
 
     assert_eq!(outcome.verdict, FenceVerdict::Positive);
     assert_eq!(outcome.resolution, FenceResolution::Cooperative);

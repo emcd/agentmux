@@ -4,9 +4,11 @@ use super::*;
 fn drop_revokes_the_peer_connection_and_isolates_re_registration() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_dropbind";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "stale@RELAY";
     let target = format!("alpha@{bundle_name}");
 
@@ -18,7 +20,8 @@ fn drop_revokes_the_peer_connection_and_isolates_re_registration() {
         Some("*"),
     );
 
-    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -62,10 +65,17 @@ fn drop_revokes_the_peer_connection_and_isolates_re_registration() {
         Some("*"),
     );
     assert_ne!(fresh_psk, psk);
-    let stale_hello = hello_first_frame(&configuration_roots, &bundle_paths, peer_id, &psk, true);
+    let stale_hello = hello_first_frame(
+        &configuration_roots,
+        &bundle_paths,
+        peer_id,
+        &psk,
+        true,
+    );
     assert_eq!(stale_hello["response"]["kind"], "error");
     assert_eq!(
-        stale_hello["response"]["error"]["code"], "validation_unrecognized_credential",
+        stale_hello["response"]["error"]["code"],
+        "validation_unrecognized_credential",
         "superseded credential must not authenticate: {stale_hello:?}"
     );
 
@@ -86,9 +96,11 @@ fn drop_revokes_the_peer_connection_and_isolates_re_registration() {
 fn rotation_revokes_a_live_peer_session_with_typed_frame() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_rotrevoke";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "rotrevoke@RELAY";
 
     let psk = register_peer(
@@ -99,7 +111,8 @@ fn rotation_revokes_a_live_peer_session_with_typed_frame() {
         Some("*"),
     );
 
-    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -136,10 +149,17 @@ fn rotation_revokes_a_live_peer_session_with_typed_frame() {
         .as_str()
         .expect("rotated psk")
         .to_string();
-    let stale = hello_first_frame(&configuration_roots, &bundle_paths, peer_id, &psk, true);
+    let stale = hello_first_frame(
+        &configuration_roots,
+        &bundle_paths,
+        peer_id,
+        &psk,
+        true,
+    );
     assert_eq!(stale["response"]["kind"], "error");
     assert_eq!(
-        stale["response"]["error"]["code"], "validation_unrecognized_credential",
+        stale["response"]["error"]["code"],
+        "validation_unrecognized_credential",
         "superseded credential must not authenticate: {stale:?}"
     );
     let accepted = hello_first_frame(

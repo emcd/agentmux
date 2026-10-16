@@ -12,15 +12,20 @@
 //! result is [`super::reporting`]'s job, not this module's.
 
 use crate::relay::delivery::admission::{ResolvedMember, TerminalTransition};
-use crate::relay::delivery::guard::{GuardKey, GuardTrigger, SubmissionEvidence};
+use crate::relay::delivery::guard::{
+    GuardKey, GuardTrigger, SubmissionEvidence,
+};
 use crate::relay::{AsyncDeliveryTask, RelayError, SendOutcome, SendResult};
 
 use super::reporting::report_terminal_outcome;
 
-const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
+const DROPPED_ON_SHUTDOWN_REASON: &str =
+    "relay shutdown requested before delivery";
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 
-pub(in crate::relay::delivery) fn complete_task_on_shutdown(task: &AsyncDeliveryTask) {
+pub(in crate::relay::delivery) fn complete_task_on_shutdown(
+    task: &AsyncDeliveryTask,
+) {
     complete_task_outcome(
         task,
         Ok(SendResult {
@@ -48,8 +53,12 @@ pub(in crate::relay::delivery) fn complete_task_on_shutdown(task: &AsyncDelivery
 ///
 /// `Some((None, _))` is the receipt case — reportable, with no recorded evidence
 /// because nothing was ever admitted to record any against.
-fn resolve_terminal_transition(task: &AsyncDeliveryTask) -> Option<TerminalResolution> {
-    match crate::relay::delivery::admission::terminalize(task.message_id.as_str()) {
+fn resolve_terminal_transition(
+    task: &AsyncDeliveryTask,
+) -> Option<TerminalResolution> {
+    match crate::relay::delivery::admission::terminalize(
+        task.message_id.as_str(),
+    ) {
         TerminalTransition::Won {
             evidence,
             bound,
@@ -61,11 +70,13 @@ fn resolve_terminal_transition(task: &AsyncDeliveryTask) -> Option<TerminalResol
         }),
         TerminalTransition::AlreadyTerminal => None,
         // Never admitted, so nothing else can be racing to resolve it.
-        TerminalTransition::NoReservation if !task.admitted => Some(TerminalResolution {
-            evidence: None,
-            bound: false,
-            guard: None,
-        }),
+        TerminalTransition::NoReservation if !task.admitted => {
+            Some(TerminalResolution {
+                evidence: None,
+                bound: false,
+                guard: None,
+            })
+        },
         // Admitted, but its reservation is gone: the winner already terminalized
         // it and cleaned up. Reporting here would be the duplicate.
         TerminalTransition::NoReservation => None,
@@ -368,7 +379,9 @@ mod evidence_authority_tests {
             message_id: "message".to_string(),
             outcome,
             reason_code: Some(reason_code.to_string()),
-            reason: Some("the producer's own account of what happened".to_string()),
+            reason: Some(
+                "the producer's own account of what happened".to_string(),
+            ),
             details: None,
         }
     }
@@ -467,7 +480,9 @@ mod evidence_authority_tests {
         ] {
             let (label, is_label) = match outcome {
                 SendOutcome::Delivered => ("delivered", true),
-                SendOutcome::DroppedOnShutdown => ("dropped_on_shutdown", true),
+                SendOutcome::DroppedOnShutdown => {
+                    ("dropped_on_shutdown", true)
+                },
                 SendOutcome::Failed => ("failed", true),
                 SendOutcome::NotSubmitted => ("not_submitted", true),
                 SendOutcome::SubmissionUnknown => ("submission_unknown", true),
@@ -536,7 +551,9 @@ mod unbound_resolution_tests {
     fn an_unbound_member_resolves_not_submitted_under_any_trigger() {
         let temporary = tempfile::TempDir::new().expect("temporary");
         let inscriptions = temporary.path().join("inscriptions.log");
-        let _ = crate::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+        let _ = crate::runtime::inscriptions::configure_process_inscriptions(
+            &inscriptions,
+        );
 
         for trigger in [
             GuardTrigger::GracefulShutdown,
@@ -589,12 +606,16 @@ mod unbound_resolution_tests {
             let completed = std::fs::read_to_string(&inscriptions)
                 .expect("inscriptions file")
                 .lines()
-                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .filter_map(|line| {
+                    serde_json::from_str::<serde_json::Value>(line).ok()
+                })
                 .find(|record| {
                     record["event"] == "relay.send.async.completed"
                         && record["details"]["message_id"] == message_id
                 })
-                .unwrap_or_else(|| panic!("{trigger:?} reported no terminal outcome"));
+                .unwrap_or_else(|| {
+                    panic!("{trigger:?} reported no terminal outcome")
+                });
 
             assert_eq!(
                 completed["details"]["outcome"], "not_submitted",

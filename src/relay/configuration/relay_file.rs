@@ -14,7 +14,8 @@ use crate::configuration::{ConfigurationRoots, relay_configuration_path};
 use crate::relay::{RelayError, errors::map_config, relay_error};
 
 use super::delivery::{
-    DeliveryConfiguration, RawRelayDeliverySection, resolve_delivery_configuration,
+    DeliveryConfiguration, RawRelayDeliverySection,
+    resolve_delivery_configuration,
 };
 
 const DEFAULT_CHOICES_PENDING_MAX: usize = 256;
@@ -104,7 +105,8 @@ pub(in crate::relay) struct RelayFileConfiguration {
 pub(in crate::relay) fn load_relay_file_configuration(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<RelayFileConfiguration, RelayError> {
-    let path = relay_configuration_path(configuration_roots).map_err(map_config)?;
+    let path =
+        relay_configuration_path(configuration_roots).map_err(map_config)?;
     if !path.exists() {
         return Ok(RelayFileConfiguration {
             watch_bundles: None,
@@ -124,22 +126,26 @@ pub(in crate::relay) fn load_relay_file_configuration(
             })),
         )
     })?;
-    let parsed = toml::from_str::<RawRelayFile>(raw.as_str()).map_err(|source| {
-        relay_error(
-            "validation_invalid_arguments",
-            "failed to parse relay configuration",
-            Some(json!({
-                "path": path.display().to_string(),
-                "cause": source.to_string(),
-            })),
-        )
-    })?;
-    let delivery = resolve_delivery_configuration(parsed.delivery, path.as_path())?;
+    let parsed =
+        toml::from_str::<RawRelayFile>(raw.as_str()).map_err(|source| {
+            relay_error(
+                "validation_invalid_arguments",
+                "failed to parse relay configuration",
+                Some(json!({
+                    "path": path.display().to_string(),
+                    "cause": source.to_string(),
+                })),
+            )
+        })?;
+    let delivery =
+        resolve_delivery_configuration(parsed.delivery, path.as_path())?;
     let choices_pending_max = parsed
         .choices
         .and_then(|choices| choices.pending_max)
         .unwrap_or(DEFAULT_CHOICES_PENDING_MAX);
-    if !(MIN_CHOICES_PENDING_MAX..=MAX_CHOICES_PENDING_MAX).contains(&choices_pending_max) {
+    if !(MIN_CHOICES_PENDING_MAX..=MAX_CHOICES_PENDING_MAX)
+        .contains(&choices_pending_max)
+    {
         return Err(relay_error(
             "validation_invalid_arguments",
             "relay choices pending-max is out of supported range",
@@ -162,10 +168,15 @@ pub(in crate::relay) fn load_relay_file_configuration(
     // fail-fast at load. Duplicate `connect-as` stays allowed: the presented
     // identity is receiver-issued and two peers may legitimately issue this
     // relay the same one.
-    let mut seen_aliases: HashSet<String> = HashSet::with_capacity(peers.capacity());
+    let mut seen_aliases: HashSet<String> =
+        HashSet::with_capacity(peers.capacity());
     for (index, peer) in parsed.peers.into_iter().enumerate() {
-        let alias =
-            validate_peer_id_token(peer.alias.as_str(), "peers.alias", index, path.as_path())?;
+        let alias = validate_peer_id_token(
+            peer.alias.as_str(),
+            "peers.alias",
+            index,
+            path.as_path(),
+        )?;
         if !seen_aliases.insert(alias.clone()) {
             return Err(relay_error(
                 "validation_invalid_arguments",

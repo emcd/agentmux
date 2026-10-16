@@ -17,9 +17,10 @@ use std::path::PathBuf;
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use agentmux::tui::{
-    Action, BindingConfiguration, BindingContext, ConfiguredAction, ConfiguredBinding,
-    EffectiveBindings, HelpSection, TuiLaunchOptions, default_binding, help_bindings,
-    interaction_choice_hint, interaction_write_hint, parse_chord, picker_hint,
+    Action, BindingConfiguration, BindingContext, ConfiguredAction,
+    ConfiguredBinding, EffectiveBindings, HelpSection, TuiLaunchOptions,
+    default_binding, help_bindings, interaction_choice_hint,
+    interaction_write_hint, parse_chord, picker_hint,
     workbench::{Workbench, WorkbenchField},
 };
 
@@ -47,7 +48,11 @@ fn defaults() -> EffectiveBindings {
 
 /// One row, speaking for both capability classes as an unqualified row in a
 /// file does.
-fn row(context: BindingContext, chord: &str, action: Action) -> ConfiguredBinding {
+fn row(
+    context: BindingContext,
+    chord: &str,
+    action: Action,
+) -> ConfiguredBinding {
     let configured = ConfiguredAction::Invoke(action);
     ConfiguredBinding {
         context,
@@ -59,7 +64,11 @@ fn row(context: BindingContext, chord: &str, action: Action) -> ConfiguredBindin
 
 /// A binding group holding one row, for the cases that ask what a
 /// configuration does to presentation.
-fn one_row(context: BindingContext, chord: &str, action: Action) -> BindingConfiguration {
+fn one_row(
+    context: BindingContext,
+    chord: &str,
+    action: Action,
+) -> BindingConfiguration {
     BindingConfiguration {
         presets: Vec::new(),
         preset_rows: Vec::new(),
@@ -72,7 +81,10 @@ fn one_row(context: BindingContext, chord: &str, action: Action) -> BindingConfi
 ///
 /// A list rather than an `Option`, because the defect these cases guard is a
 /// chord advertised under *two* behaviors when it reaches one.
-fn presented_under(sections: &[HelpSection], chord: &str) -> Vec<&'static str> {
+fn presented_under(
+    sections: &[HelpSection],
+    chord: &str,
+) -> Vec<&'static str> {
     sections
         .iter()
         .flat_map(|section| section.entries.iter())
@@ -86,10 +98,9 @@ fn presented_lines(sections: &[HelpSection]) -> Vec<String> {
     sections
         .iter()
         .flat_map(|section| {
-            section
-                .entries
-                .iter()
-                .map(|entry| format!("{}: {}", entry.chords, entry.description))
+            section.entries.iter().map(|entry| {
+                format!("{}: {}", entry.chords, entry.description)
+            })
         })
         .collect()
 }
@@ -289,9 +300,10 @@ fn every_context_that_binds_anything_contributes_to_the_help() {
     let entries = entries(&sections);
 
     for context in BindingContext::ALL {
-        let binds_anything = chord_space()
-            .into_iter()
-            .any(|(code, modifiers)| default_binding(context, code, modifiers).is_some());
+        let binds_anything =
+            chord_space().into_iter().any(|(code, modifiers)| {
+                default_binding(context, code, modifiers).is_some()
+            });
         if !binds_anything {
             continue;
         }
@@ -318,7 +330,8 @@ fn every_binding_the_table_resolves_is_presented_by_the_row_that_answers_it() {
 
     for context in BindingContext::ALL {
         for (code, modifiers) in chord_space() {
-            let Some(action) = default_binding(context, code, modifiers) else {
+            let Some(action) = default_binding(context, code, modifiers)
+            else {
                 continue;
             };
             let description = action.describe();
@@ -326,7 +339,8 @@ fn every_binding_the_table_resolves_is_presented_by_the_row_that_answers_it() {
                 entries.iter().any(|entry| {
                     entry.description == description
                         && entry.sources.iter().any(|source| {
-                            source.context == context && source.matches(code, modifiers)
+                            source.context == context
+                                && source.matches(code, modifiers)
                         })
                 }),
                 "{context:?} resolves {code:?}+{modifiers:?} to {action:?}, and no source \
@@ -350,8 +364,9 @@ fn every_folded_chord_is_covered_by_one_that_is_shown() {
             .collect::<Vec<_>>();
         for folded in entry.sources.iter().filter(|source| !source.shown) {
             let duplicate = shown.contains(&folded.chord.as_str());
-            let modified_enter = matches!(folded.chord.as_str(), "Shift+Enter" | "Ctrl+Enter")
-                && shown.contains(&"Enter");
+            let modified_enter =
+                matches!(folded.chord.as_str(), "Shift+Enter" | "Ctrl+Enter")
+                    && shown.contains(&"Enter");
             assert!(
                 duplicate || modified_enter,
                 "{:?} folds {:?} out of {:?} under no stated rule",
@@ -384,11 +399,13 @@ fn no_context_binds_an_undeclared_modifier_on_enter() {
         BindingContext::ComposeMessage,
     ] {
         assert!(
-            default_binding(context, KeyCode::Enter, KeyModifiers::ALT).is_none(),
+            default_binding(context, KeyCode::Enter, KeyModifiers::ALT)
+                .is_none(),
             "{context:?} still binds an Enter chord no row declares"
         );
         assert!(
-            default_binding(context, KeyCode::Enter, KeyModifiers::SHIFT).is_some(),
+            default_binding(context, KeyCode::Enter, KeyModifiers::SHIFT)
+                .is_some(),
             "{context:?} lost one of the three declared Enter chords"
         );
     }
@@ -467,7 +484,9 @@ fn a_hint_strip_presents_only_the_context_it_annotates() {
     // satisfied by an empty strip. The choice pane advertises fewer: it prints
     // its bindings in a block title, which does not wrap, so it carries the two
     // decisions and leaves navigation to the help overlay.
-    assert!(picker_hint(&defaults(), BindingContext::PickerSessions).len() >= 3);
+    assert!(
+        picker_hint(&defaults(), BindingContext::PickerSessions).len() >= 3
+    );
     assert!(interaction_write_hint(&defaults()).len() >= 3);
     assert!(interaction_choice_hint(&defaults()).len() >= 2);
 }
@@ -489,13 +508,19 @@ fn the_chord_a_hint_prints_resolves_to_the_behavior_it_names() {
             .sources
             .iter()
             .find(|source| source.shown && source.chord == printed)
-            .unwrap_or_else(|| panic!("no source backs the printed chord {printed:?}"));
+            .unwrap_or_else(|| {
+                panic!("no source backs the printed chord {printed:?}")
+            });
         let resolved = chord_space()
             .into_iter()
             .filter(|(code, modifiers)| source.matches(*code, *modifiers))
-            .filter_map(|(code, modifiers)| default_binding(source.context, code, modifiers))
+            .filter_map(|(code, modifiers)| {
+                default_binding(source.context, code, modifiers)
+            })
             .next()
-            .unwrap_or_else(|| panic!("{:?} resolves nothing for {printed:?}", source.context));
+            .unwrap_or_else(|| {
+                panic!("{:?} resolves nothing for {printed:?}", source.context)
+            });
         assert_eq!(
             resolved.describe(),
             entry.description,

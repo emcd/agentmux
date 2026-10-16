@@ -72,14 +72,22 @@ fn parser_replaces_pending_with_completed_in_place() {
     let mut pending = HashMap::new();
     let mut buffer = Vec::new();
 
-    parse_replay_entries_from_params(&tool_call_params("call-A"), &mut pending, &mut buffer);
+    parse_replay_entries_from_params(
+        &tool_call_params("call-A"),
+        &mut pending,
+        &mut buffer,
+    );
     assert_eq!(buffer.len(), 1, "Pending A pushes one entry");
     assert_eq!(call_id_of(&buffer[0]), "call-A");
     assert_eq!(invocation_status(&buffer[0]), ToolCallStatus::Pending);
     assert!(invocation_result(&buffer[0]).is_none());
 
     let update_params = tool_call_update_params("call-A", json!({"ok": true}));
-    parse_replay_entries_from_params(&update_params, &mut pending, &mut buffer);
+    parse_replay_entries_from_params(
+        &update_params,
+        &mut pending,
+        &mut buffer,
+    );
 
     assert_eq!(
         buffer.len(),
@@ -116,8 +124,16 @@ fn parser_replaces_pending_by_call_id_with_no_cross_contamination() {
     let mut pending = HashMap::new();
     let mut buffer = Vec::new();
 
-    parse_replay_entries_from_params(&tool_call_params("call-A"), &mut pending, &mut buffer);
-    parse_replay_entries_from_params(&tool_call_params("call-B"), &mut pending, &mut buffer);
+    parse_replay_entries_from_params(
+        &tool_call_params("call-A"),
+        &mut pending,
+        &mut buffer,
+    );
+    parse_replay_entries_from_params(
+        &tool_call_params("call-B"),
+        &mut pending,
+        &mut buffer,
+    );
     assert_eq!(buffer.len(), 2);
     assert_eq!(call_id_of(&buffer[0]), "call-A");
     assert_eq!(call_id_of(&buffer[1]), "call-B");
@@ -143,7 +159,8 @@ fn parser_replaces_pending_by_call_id_with_no_cross_contamination() {
     assert_eq!(invocation_status(&buffer[1]), ToolCallStatus::Completed);
     let result_a = invocation_result(&buffer[0]).expect("A result populated");
     assert_eq!(result_a["result"]["a"], 2);
-    let result_b_post = invocation_result(&buffer[1]).expect("B result still populated");
+    let result_b_post =
+        invocation_result(&buffer[1]).expect("B result still populated");
     assert_eq!(result_b_post["result"]["b"], 1);
     assert!(
         pending.is_empty(),
@@ -160,13 +177,19 @@ fn parser_terminal_update_without_prior_call_pushes_completed_orphan() {
     let mut pending = HashMap::new();
     let mut buffer = Vec::new();
 
-    let update_params = tool_call_update_params("call-orphan", json!({"ok": false}));
-    parse_replay_entries_from_params(&update_params, &mut pending, &mut buffer);
+    let update_params =
+        tool_call_update_params("call-orphan", json!({"ok": false}));
+    parse_replay_entries_from_params(
+        &update_params,
+        &mut pending,
+        &mut buffer,
+    );
 
     assert_eq!(buffer.len(), 1);
     assert_eq!(call_id_of(&buffer[0]), "call-orphan");
     assert_eq!(invocation_status(&buffer[0]), ToolCallStatus::Completed);
-    let result = invocation_result(&buffer[0]).expect("orphan result populated");
+    let result =
+        invocation_result(&buffer[0]).expect("orphan result populated");
     assert_eq!(result["result"]["ok"], false);
     assert!(
         pending.is_empty(),
@@ -198,7 +221,11 @@ fn parser_with_cap_shift_keeps_recorded_position_consistent() {
         })
         .collect();
 
-    parse_replay_entries_from_params(&tool_call_params("call-A"), &mut pending, &mut buffer);
+    parse_replay_entries_from_params(
+        &tool_call_params("call-A"),
+        &mut pending,
+        &mut buffer,
+    );
     assert_eq!(buffer.len(), 996);
     assert_eq!(pending.get("call-A").map(|p| p.buffer_position), Some(995));
 
@@ -227,7 +254,11 @@ fn parser_with_cap_shift_keeps_recorded_position_consistent() {
     );
 
     let update_params = tool_call_update_params("call-A", json!({"ok": true}));
-    parse_replay_entries_from_params(&update_params, &mut pending, &mut buffer);
+    parse_replay_entries_from_params(
+        &update_params,
+        &mut pending,
+        &mut buffer,
+    );
     assert_eq!(
         buffer.len(),
         1000,
@@ -255,7 +286,11 @@ fn parser_falls_through_when_pending_was_evicted_by_cap() {
     let mut pending = HashMap::new();
     let mut buffer = Vec::new();
 
-    parse_replay_entries_from_params(&tool_call_params("call-A"), &mut pending, &mut buffer);
+    parse_replay_entries_from_params(
+        &tool_call_params("call-A"),
+        &mut pending,
+        &mut buffer,
+    );
     assert_eq!(buffer.len(), 1);
     assert_eq!(pending.get("call-A").map(|p| p.buffer_position), Some(0));
 
@@ -279,7 +314,11 @@ fn parser_falls_through_when_pending_was_evicted_by_cap() {
     );
 
     let update_params = tool_call_update_params("call-A", json!({"ok": true}));
-    parse_replay_entries_from_params(&update_params, &mut pending, &mut buffer);
+    parse_replay_entries_from_params(
+        &update_params,
+        &mut pending,
+        &mut buffer,
+    );
 
     assert_eq!(
         buffer.len(),
@@ -298,7 +337,11 @@ fn parser_buffer_aware_test_re_export_is_callable_with_explicit_buffer() {
     // Smoke test for the test re-export signature in `src/acp/mod.rs`.
     let mut pending: HashMap<String, PendingToolCall> = HashMap::new();
     let mut buffer = Vec::new();
-    parse_replay_entries_from_params(&tool_call_params("call-X"), &mut pending, &mut buffer);
+    parse_replay_entries_from_params(
+        &tool_call_params("call-X"),
+        &mut pending,
+        &mut buffer,
+    );
     assert_eq!(pending.len(), 1);
     assert_eq!(buffer.len(), 1);
 }
@@ -324,7 +367,11 @@ fn prompt_path_cap_drain_maintains_pending_position_and_completes_in_place() {
 
     // Reader-thread ingestion records a Pending tool call near the tail.
     let mut pending = HashMap::new();
-    parse_replay_entries_from_params(&tool_call_params("call-A"), &mut pending, &mut buffer);
+    parse_replay_entries_from_params(
+        &tool_call_params("call-A"),
+        &mut pending,
+        &mut buffer,
+    );
     assert_eq!(pending.get("call-A").map(|p| p.buffer_position), Some(999));
 
     // A prompt-path append overflows the cap. The cap-maintain helper
@@ -356,7 +403,11 @@ fn prompt_path_cap_drain_maintains_pending_position_and_completes_in_place() {
     // position maintenance this would have indexed the wrong entry or
     // panicked.
     let update_params = tool_call_update_params("call-A", json!({"ok": true}));
-    parse_replay_entries_from_params(&update_params, &mut pending, &mut buffer);
+    parse_replay_entries_from_params(
+        &update_params,
+        &mut pending,
+        &mut buffer,
+    );
 
     assert_eq!(
         buffer.len(),

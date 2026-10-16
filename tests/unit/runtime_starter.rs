@@ -14,7 +14,10 @@ fn defaulted_roots(configuration_root: &Path) -> RuntimeRoots {
     roots_from(configuration_root, ConfigurationRootSource::Default)
 }
 
-fn roots_from(configuration_root: &Path, source: ConfigurationRootSource) -> RuntimeRoots {
+fn roots_from(
+    configuration_root: &Path,
+    source: ConfigurationRootSource,
+) -> RuntimeRoots {
     RuntimeRoots {
         configuration_roots: ConfigurationRoots::single(configuration_root),
         state_root: configuration_root.join("state"),
@@ -47,7 +50,8 @@ fn creates_starter_configuration_files_when_missing() {
     let coders_text = fs::read_to_string(coders).expect("read coders.toml");
     assert!(coders_text.contains("format-version = 1"));
     assert!(coders_text.contains("[[coders]]"));
-    let policies_text = fs::read_to_string(policies).expect("read policies.toml");
+    let policies_text =
+        fs::read_to_string(policies).expect("read policies.toml");
     assert!(policies_text.contains("format-version = 1"));
     assert!(policies_text.contains("[[policies]]"));
     let users_text = fs::read_to_string(users).expect("read users.toml");
@@ -77,7 +81,8 @@ fn creates_starter_configuration_files_when_missing() {
         "relay.toml template must have no active (uncommented) keys",
     );
 
-    let bundle_text = fs::read_to_string(example_bundle).expect("read example bundle");
+    let bundle_text =
+        fs::read_to_string(example_bundle).expect("read example bundle");
     assert!(bundle_text.contains("format-version = 1"));
     assert!(bundle_text.contains("[[sessions]]"));
 }
@@ -86,28 +91,34 @@ fn creates_starter_configuration_files_when_missing() {
 fn preserves_existing_configuration_files() {
     let temporary = TempDir::new().expect("temporary");
     let configuration_root = temporary.path().join("config");
-    fs::create_dir_all(configuration_root.join("bundles")).expect("create bundle dir");
+    fs::create_dir_all(configuration_root.join("bundles"))
+        .expect("create bundle dir");
     let coders = configuration_root.join("coders.toml");
     let policies = configuration_root.join("policies.toml");
     let users = configuration_root.join("users.toml");
     let relay = configuration_root.join("relay.toml");
     let example_bundle = configuration_root.join("bundles/example.toml");
-    fs::write(&coders, "format-version = 1\n# custom coders\n").expect("write coders");
-    fs::write(&policies, "format-version = 1\n# custom policies\n").expect("write policies");
+    fs::write(&coders, "format-version = 1\n# custom coders\n")
+        .expect("write coders");
+    fs::write(&policies, "format-version = 1\n# custom policies\n")
+        .expect("write policies");
     fs::write(
         &users,
         "default-session = \"custom@GLOBAL\"\n# custom users\n",
     )
     .expect("write users");
-    fs::write(&relay, "watch-bundles = false\n# custom relay\n").expect("write relay");
-    fs::write(&example_bundle, "format-version = 1\n# custom bundle\n").expect("write bundle");
+    fs::write(&relay, "watch-bundles = false\n# custom relay\n")
+        .expect("write relay");
+    fs::write(&example_bundle, "format-version = 1\n# custom bundle\n")
+        .expect("write bundle");
 
     ensure_starter_configuration_layout(&defaulted_roots(&configuration_root))
         .expect("starter layout");
 
     let coders_text = fs::read_to_string(coders).expect("read coders.toml");
     assert_eq!(coders_text, "format-version = 1\n# custom coders\n");
-    let policies_text = fs::read_to_string(policies).expect("read policies.toml");
+    let policies_text =
+        fs::read_to_string(policies).expect("read policies.toml");
     assert_eq!(policies_text, "format-version = 1\n# custom policies\n");
     let users_text = fs::read_to_string(users).expect("read users.toml");
     assert_eq!(
@@ -116,7 +127,8 @@ fn preserves_existing_configuration_files() {
     );
     let relay_text = fs::read_to_string(relay).expect("read relay.toml");
     assert_eq!(relay_text, "watch-bundles = false\n# custom relay\n");
-    let bundle_text = fs::read_to_string(example_bundle).expect("read example bundle");
+    let bundle_text =
+        fs::read_to_string(example_bundle).expect("read example bundle");
     assert_eq!(bundle_text, "format-version = 1\n# custom bundle\n");
 }
 
@@ -124,9 +136,11 @@ fn preserves_existing_configuration_files() {
 fn skips_example_seed_when_bundles_directory_already_has_toml() {
     let temporary = TempDir::new().expect("temporary");
     let configuration_root = temporary.path().join("config");
-    fs::create_dir_all(configuration_root.join("bundles")).expect("create bundle dir");
+    fs::create_dir_all(configuration_root.join("bundles"))
+        .expect("create bundle dir");
     let operator_bundle = configuration_root.join("bundles/production.toml");
-    fs::write(&operator_bundle, "format-version = 1\n# operator bundle\n").expect("write bundle");
+    fs::write(&operator_bundle, "format-version = 1\n# operator bundle\n")
+        .expect("write bundle");
 
     ensure_starter_configuration_layout(&defaulted_roots(&configuration_root))
         .expect("starter layout");
@@ -136,7 +150,8 @@ fn skips_example_seed_when_bundles_directory_already_has_toml() {
         !example_bundle.exists(),
         "expected example.toml to stay unseeded when a real bundle is present"
     );
-    let operator_text = fs::read_to_string(&operator_bundle).expect("read operator bundle");
+    let operator_text =
+        fs::read_to_string(&operator_bundle).expect("read operator bundle");
     assert_eq!(operator_text, "format-version = 1\n# operator bundle\n");
 }
 
@@ -149,8 +164,11 @@ fn refuses_to_scaffold_an_explicitly_named_root() {
         ConfigurationRootSource::CommandLine,
         ConfigurationRootSource::Environment,
     ] {
-        let error = ensure_starter_configuration_layout(&roots_from(&configuration_root, source))
-            .expect_err("naming an absent root should fault rather than scaffold");
+        let error = ensure_starter_configuration_layout(&roots_from(
+            &configuration_root,
+            source,
+        ))
+        .expect_err("naming an absent root should fault rather than scaffold");
         assert!(
             error
                 .to_string()
@@ -168,7 +186,8 @@ fn refuses_to_scaffold_an_explicitly_named_root() {
 fn leaves_an_existing_explicitly_named_root_unscaffolded() {
     let temporary = TempDir::new().expect("temporary");
     let configuration_root = temporary.path().join("config");
-    fs::create_dir_all(&configuration_root).expect("create configuration root");
+    fs::create_dir_all(&configuration_root)
+        .expect("create configuration root");
 
     ensure_starter_configuration_layout(&roots_from(
         &configuration_root,

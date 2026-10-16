@@ -9,8 +9,9 @@ use ratatui::{
 use super::super::super::actions;
 use super::super::super::state::{AppState, PickerColumn};
 use super::super::super::status::{
-    BundleStatusDisplay, BundleStatusSeverity, RecipientReadiness, bundle_status_severity,
-    format_bundle_status_line, format_recipient_picker_label, format_startup_failure_lines,
+    BundleStatusDisplay, BundleStatusSeverity, RecipientReadiness,
+    bundle_status_severity, format_bundle_status_line,
+    format_recipient_picker_label, format_startup_failure_lines,
 };
 use super::super::geometry::centered_rect;
 
@@ -26,7 +27,10 @@ const HINT_GAP: &str = "   ";
 /// active-bundle switching; the session column (right) lists the active
 /// bundle's recipients. A column-scoped filter narrows whichever column has
 /// focus. Two entry points open this overlay, one focused on each column.
-pub(in crate::tui::render) fn render_picker_overlay(frame: &mut Frame, state: &mut AppState) {
+pub(in crate::tui::render) fn render_picker_overlay(
+    frame: &mut Frame,
+    state: &mut AppState,
+) {
     let popup = centered_rect(72, 72, frame.area());
     frame.render_widget(Clear, popup);
     let block = Block::default().borders(Borders::ALL).title("Picker");
@@ -55,7 +59,8 @@ pub(in crate::tui::render) fn render_picker_overlay(frame: &mut Frame, state: &m
         .split(inner);
 
     frame.render_widget(Paragraph::new(status_lines), sections[0]);
-    frame.render_widget(Paragraph::new(picker_filter_line(state)), sections[1]);
+    frame
+        .render_widget(Paragraph::new(picker_filter_line(state)), sections[1]);
 
     let columns = Layout::default()
         .direction(Direction::Horizontal)
@@ -72,10 +77,17 @@ pub(in crate::tui::render) fn render_picker_overlay(frame: &mut Frame, state: &m
     // the defect this replaced: the strip lost a whole binding with nothing to
     // show for it.
     let visible = hint_lines.len().min(usize::from(sections[3].height));
-    frame.render_widget(Paragraph::new(hint_lines[..visible].to_vec()), sections[3]);
+    frame.render_widget(
+        Paragraph::new(hint_lines[..visible].to_vec()),
+        sections[3],
+    );
 }
 
-fn render_bundle_column(frame: &mut Frame, area: ratatui::layout::Rect, state: &mut AppState) {
+fn render_bundle_column(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    state: &mut AppState,
+) {
     let focused = state.picker_focus == PickerColumn::Bundles;
     let block = column_block("Bundles", focused);
     let items = if state.available_bundles.is_empty() {
@@ -109,7 +121,11 @@ fn render_bundle_column(frame: &mut Frame, area: ratatui::layout::Rect, state: &
     frame.render_stateful_widget(list, area, &mut state.picker_bundle_state);
 }
 
-fn render_session_column(frame: &mut Frame, area: ratatui::layout::Rect, state: &mut AppState) {
+fn render_session_column(
+    frame: &mut Frame,
+    area: ratatui::layout::Rect,
+    state: &mut AppState,
+) {
     let focused = state.picker_focus == PickerColumn::Sessions;
     let block = column_block("Sessions", focused);
     let items = if state.recipients.is_empty() {
@@ -120,7 +136,8 @@ fn render_session_column(frame: &mut Frame, area: ratatui::layout::Rect, state: 
             .into_iter()
             .filter_map(|index| state.recipients.get(index))
             .map(|recipient| {
-                let readiness = RecipientReadiness::from_ready(recipient.ready);
+                let readiness =
+                    RecipientReadiness::from_ready(recipient.ready);
                 let label = format_recipient_picker_label(
                     recipient.session_name.as_str(),
                     recipient.display_name.as_deref(),
@@ -203,7 +220,9 @@ fn picker_hint_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut used = 0usize;
-    for entry in actions::picker_hint(&state.bindings, actions::binding_context(state)) {
+    for entry in
+        actions::picker_hint(&state.bindings, actions::binding_context(state))
+    {
         let chord = entry.primary_chord().to_string();
         // The qualified description is preferred, because it is what separates
         // the two entries that both read as `Enter`. Where it cannot fit a row
@@ -211,7 +230,8 @@ fn picker_hint_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
         // says which column is worse than one clipped mid-word, and splitting
         // an entry across rows is not on offer.
         let qualified = format!(" {}", entry.description);
-        let text = if chord.chars().count() + qualified.chars().count() > width {
+        let text = if chord.chars().count() + qualified.chars().count() > width
+        {
             format!(" {}", entry.detail())
         } else {
             qualified
@@ -258,7 +278,9 @@ fn recipient_readiness_style(readiness: RecipientReadiness) -> Style {
 /// by [`STARTUP_FAILURE_PICKER_MAX_LINES`]). The failures carry the real cause
 /// each session failed with, so the operator sees them here rather than relying
 /// on the generic error path.
-fn bundle_status_lines(status: Option<&BundleStatusDisplay>) -> Vec<Line<'static>> {
+fn bundle_status_lines(
+    status: Option<&BundleStatusDisplay>,
+) -> Vec<Line<'static>> {
     let Some(status) = status else {
         return vec![Line::from(Span::styled(
             "(bundle status pending list refresh)",
@@ -287,7 +309,7 @@ fn bundle_status_severity_style(severity: BundleStatusSeverity) -> Style {
         BundleStatusSeverity::Degraded => Style::default().fg(Color::Yellow),
         BundleStatusSeverity::HostedDown => {
             Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-        }
+        },
         BundleStatusSeverity::Unhosted => Style::default().fg(Color::DarkGray),
     }
 }
@@ -313,13 +335,16 @@ mod tests {
         let mut state = AppState::new(TuiLaunchOptions {
             namespace: "agentmux".to_string(),
             sender_session: "tui".to_string(),
-            relay_socket: std::path::PathBuf::from("/tmp/agentmux-picker-render.sock"),
+            relay_socket: std::path::PathBuf::from(
+                "/tmp/agentmux-picker-render.sock",
+            ),
             look_lines: None,
             available_bundles: vec!["agentmux".to_string()],
             bindings: None,
         });
         state.open_picker();
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        let mut terminal =
+            Terminal::new(TestBackend::new(width, height)).expect("terminal");
         terminal
             .draw(|frame| render_picker_overlay(frame, &mut state))
             .expect("draw");
@@ -341,16 +366,22 @@ mod tests {
         // narrower cases bracket it so a change to the packing shows up as a
         // failure here rather than as a strip quietly losing its last binding.
         let defaults = EffectiveBindings::default();
-        for (width, height) in [(120, 44), (90, 30), (70, 24), (60, 20), (50, 16)] {
+        for (width, height) in
+            [(120, 44), (90, 30), (70, 24), (60, 20), (50, 16)]
+        {
             let text = rendered(width, height);
             // The sessions column, which is where `open_picker` leaves focus
             // and therefore what the rendered strip above was drawn for.
-            for entry in actions::picker_hint(&defaults, BindingContext::PickerSessions) {
+            for entry in
+                actions::picker_hint(&defaults, BindingContext::PickerSessions)
+            {
                 // Either wording is acceptable; losing the entry is not. The
                 // unqualified form is the documented degradation where the
                 // qualified one cannot fit a row.
-                let qualified = format!("{} {}", entry.primary_chord(), entry.description);
-                let plain = format!("{} {}", entry.primary_chord(), entry.detail());
+                let qualified =
+                    format!("{} {}", entry.primary_chord(), entry.description);
+                let plain =
+                    format!("{} {}", entry.primary_chord(), entry.detail());
                 assert!(
                     text.contains(&qualified) || text.contains(&plain),
                     "{qualified:?} is missing at {width}x{height}:\n{text}"

@@ -12,26 +12,28 @@ use rmcp::{
 use serde_json::json;
 
 use crate::configuration::{
-    BundleConfiguration, load_bundle_configuration, load_bundle_group_memberships,
+    BundleConfiguration, load_bundle_configuration,
+    load_bundle_group_memberships,
 };
 use crate::mcp::errors::{
-    internal_tool_error, map_configuration_error, map_relay_error, map_relay_request_failure,
-    map_runtime_error, validation_tool_error,
+    internal_tool_error, map_configuration_error, map_relay_error,
+    map_relay_request_failure, map_runtime_error, validation_tool_error,
 };
 use crate::mcp::params::{
-    LIST_COMMAND_DECISIONS, LIST_COMMAND_NAMESPACES, LIST_COMMAND_PRINCIPALS, LIST_COMMAND_RELAYS,
-    LIST_SESSIONS_SCHEMA_VERSION, ListArgs, ListDecisionsArgs, ListNamespacesArgs, ListParams,
-    ListRelaysArgs,
+    LIST_COMMAND_DECISIONS, LIST_COMMAND_NAMESPACES, LIST_COMMAND_PRINCIPALS,
+    LIST_COMMAND_RELAYS, LIST_SESSIONS_SCHEMA_VERSION, ListArgs,
+    ListDecisionsArgs, ListNamespacesArgs, ListParams, ListRelaysArgs,
 };
 use crate::mcp::server::{McpServer, service::RelayCallError};
 use crate::mcp::validation::{
-    is_relay_unavailable_error, parse_meta_tool_args, validate_list_decisions_args,
-    validate_list_namespaces_args, validate_list_params, validate_list_principals_args,
+    is_relay_unavailable_error, parse_meta_tool_args,
+    validate_list_decisions_args, validate_list_namespaces_args,
+    validate_list_params, validate_list_principals_args,
     validate_list_relays_args,
 };
 use crate::relay::{
-    ListedBundle, ListedBundleState, ListedSession, RelayRequest, RelayResponse,
-    load_startup_failures,
+    ListedBundle, ListedBundleState, ListedSession, RelayRequest,
+    RelayResponse, load_startup_failures,
 };
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{BundleRuntimePaths, RelayRuntimePaths};
@@ -61,7 +63,10 @@ impl McpServer {
         }
     }
 
-    fn list_principals(&self, params: &ListParams) -> Result<CallToolResult, McpError> {
+    fn list_principals(
+        &self,
+        params: &ListParams,
+    ) -> Result<CallToolResult, McpError> {
         let parsed_args = parse_meta_tool_args::<ListArgs>(params.args.clone()).map_err(|reason| {
             validation_tool_error(
                 "validation_invalid_params",
@@ -98,11 +103,16 @@ impl McpServer {
             }),
         );
         let mut bundles = match namespace.as_deref() {
-            Some("*") => self.list_sessions_all_bundles(requester_session.as_str())?,
+            Some("*") => {
+                self.list_sessions_all_bundles(requester_session.as_str())?
+            },
             Some("GLOBAL") => Vec::new(),
             Some(bundle_name) => {
-                vec![self.list_sessions_single_bundle(bundle_name, requester_session.as_str())?]
-            }
+                vec![self.list_sessions_single_bundle(
+                    bundle_name,
+                    requester_session.as_str(),
+                )?]
+            },
             None => {
                 let bundle_name = self
                     .home_bundle_name()
@@ -118,7 +128,7 @@ impl McpServer {
                     bundle_name.as_str(),
                     requester_session.as_str(),
                 )?]
-            }
+            },
         };
         bundles.push(self.list_global_sessions(requester_session.as_str())?);
         let response = json!({
@@ -135,7 +145,10 @@ impl McpServer {
         Ok(CallToolResult::success(vec![Content::json(response)?]))
     }
 
-    fn list_decisions(&self, params: &ListParams) -> Result<CallToolResult, McpError> {
+    fn list_decisions(
+        &self,
+        params: &ListParams,
+    ) -> Result<CallToolResult, McpError> {
         let args =
             parse_meta_tool_args::<ListDecisionsArgs>(params.args.clone()).map_err(|reason| {
                 validation_tool_error(
@@ -172,7 +185,7 @@ impl McpServer {
                     }),
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
-            }
+            },
             Ok(RelayResponse::Error { error }) => {
                 emit_inscription(
                     "mcp.tool.list.decisions.relay_error",
@@ -183,7 +196,7 @@ impl McpServer {
                     }),
                 );
                 Err(map_relay_error(error))
-            }
+            },
             Ok(other) => {
                 emit_inscription(
                     "mcp.tool.list.decisions.unexpected_response",
@@ -194,10 +207,11 @@ impl McpServer {
                     "relay returned unexpected response variant",
                     Some(json!({"response": other})),
                 ))
-            }
-            Err(source) => {
-                Err(self.map_relay_call_error("mcp.tool.list.decisions.io_error", source))
-            }
+            },
+            Err(source) => Err(self.map_relay_call_error(
+                "mcp.tool.list.decisions.io_error",
+                source,
+            )),
         }
     }
 
@@ -216,7 +230,9 @@ impl McpServer {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            .expect("foreign principal discovery validated a concrete namespace");
+            .expect(
+                "foreign principal discovery validated a concrete namespace",
+            );
         emit_inscription(
             "mcp.tool.list.principals.request",
             &json!({"relay": relay, "namespace": namespace}),
@@ -241,15 +257,22 @@ impl McpServer {
                     &json!({"relay": relay, "namespace": namespace, "bundle_count": bundle_count}),
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
-            }
-            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.list.principals", other)),
-            Err(source) => {
-                Err(self.map_relay_call_error("mcp.tool.list.principals.io_error", source))
-            }
+            },
+            Ok(other) => Err(self.map_nonsuccess_relay_response(
+                "mcp.tool.list.principals",
+                other,
+            )),
+            Err(source) => Err(self.map_relay_call_error(
+                "mcp.tool.list.principals.io_error",
+                source,
+            )),
         }
     }
 
-    fn list_namespaces(&self, params: &ListParams) -> Result<CallToolResult, McpError> {
+    fn list_namespaces(
+        &self,
+        params: &ListParams,
+    ) -> Result<CallToolResult, McpError> {
         let args =
             parse_meta_tool_args::<ListNamespacesArgs>(params.args.clone()).map_err(|reason| {
                 validation_tool_error(
@@ -268,7 +291,10 @@ impl McpServer {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty());
-        emit_inscription("mcp.tool.list.namespaces.request", &json!({"relay": relay}));
+        emit_inscription(
+            "mcp.tool.list.namespaces.request",
+            &json!({"relay": relay}),
+        );
         let request = RelayRequest::DiscoverNamespaces {
             relay: relay.map(str::to_string),
         };
@@ -292,15 +318,22 @@ impl McpServer {
                     &json!({"relay": relay, "namespace_count": namespace_count}),
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
-            }
-            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.list.namespaces", other)),
-            Err(source) => {
-                Err(self.map_relay_call_error("mcp.tool.list.namespaces.io_error", source))
-            }
+            },
+            Ok(other) => Err(self.map_nonsuccess_relay_response(
+                "mcp.tool.list.namespaces",
+                other,
+            )),
+            Err(source) => Err(self.map_relay_call_error(
+                "mcp.tool.list.namespaces.io_error",
+                source,
+            )),
         }
     }
 
-    fn list_relays(&self, params: &ListParams) -> Result<CallToolResult, McpError> {
+    fn list_relays(
+        &self,
+        params: &ListParams,
+    ) -> Result<CallToolResult, McpError> {
         let args = parse_meta_tool_args::<ListRelaysArgs>(params.args.clone()).map_err(|reason| {
             validation_tool_error(
                 "validation_invalid_params",
@@ -330,9 +363,13 @@ impl McpServer {
                     &json!({"relay_count": relay_count}),
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
-            }
-            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.list.relays", other)),
-            Err(source) => Err(self.map_relay_call_error("mcp.tool.list.relays.io_error", source)),
+            },
+            Ok(other) => Err(self
+                .map_nonsuccess_relay_response("mcp.tool.list.relays", other)),
+            Err(source) => Err(self.map_relay_call_error(
+                "mcp.tool.list.relays.io_error",
+                source,
+            )),
         }
     }
 
@@ -341,12 +378,18 @@ impl McpServer {
         bundle_name: &str,
         requester_session: &str,
     ) -> Result<ListedBundle, McpError> {
-        let bundle_paths =
-            BundleRuntimePaths::resolve(&self.state.configuration.state_root, bundle_name)
-                .map_err(map_runtime_error)?;
-        let relay_paths = RelayRuntimePaths::resolve(&self.state.configuration.state_root);
-        let bundle = load_bundle_configuration(self.require_configuration_roots()?, bundle_name)
-            .map_err(map_configuration_error)?;
+        let bundle_paths = BundleRuntimePaths::resolve(
+            &self.state.configuration.state_root,
+            bundle_name,
+        )
+        .map_err(map_runtime_error)?;
+        let relay_paths =
+            RelayRuntimePaths::resolve(&self.state.configuration.state_root);
+        let bundle = load_bundle_configuration(
+            self.require_configuration_roots()?,
+            bundle_name,
+        )
+        .map_err(map_configuration_error)?;
         let relay_socket = relay_paths.relay_socket;
         let request = RelayRequest::List {
             requester_session: Some(requester_session.to_string()),
@@ -371,11 +414,15 @@ impl McpServer {
                 if is_relay_unavailable_error(&source)
                     && self.home_bundle_name() == Some(bundle_name) =>
             {
-                Ok(self.synthesize_down_bundle(&bundle, &relay_socket, &bundle_paths))
-            }
+                Ok(self.synthesize_down_bundle(
+                    &bundle,
+                    &relay_socket,
+                    &bundle_paths,
+                ))
+            },
             Err(RelayCallError::Io(source)) => {
                 Err(map_relay_request_failure(&relay_socket, source))
-            }
+            },
             Err(RelayCallError::NotReady(fault)) => Err(fault),
         }
     }
@@ -384,12 +431,15 @@ impl McpServer {
         &self,
         requester_session: &str,
     ) -> Result<Vec<ListedBundle>, McpError> {
-        let memberships = load_bundle_group_memberships(self.require_configuration_roots()?)
-            .map_err(map_configuration_error)?;
+        let memberships =
+            load_bundle_group_memberships(self.require_configuration_roots()?)
+                .map_err(map_configuration_error)?;
         let mut bundles = Vec::with_capacity(memberships.len());
         for membership in memberships {
-            let listed = self
-                .list_sessions_single_bundle(membership.bundle_name.as_str(), requester_session)?;
+            let listed = self.list_sessions_single_bundle(
+                membership.bundle_name.as_str(),
+                requester_session,
+            )?;
             bundles.push(listed);
         }
         Ok(bundles)
@@ -403,7 +453,10 @@ impl McpServer {
     /// with no sessions, not an error. A relay-unavailable failure mirrors
     /// the home-bundle fallback: the response carries an empty `GLOBAL` view
     /// rather than failing the entire `list` call.
-    fn list_global_sessions(&self, requester_session: &str) -> Result<ListedBundle, McpError> {
+    fn list_global_sessions(
+        &self,
+        requester_session: &str,
+    ) -> Result<ListedBundle, McpError> {
         let request = RelayRequest::List {
             requester_session: Some(requester_session.to_string()),
         };
@@ -415,10 +468,15 @@ impl McpServer {
                 "relay returned unexpected response variant",
                 Some(json!({"response": other})),
             )),
-            Err(RelayCallError::Io(source)) if is_relay_unavailable_error(&source) => {
+            Err(RelayCallError::Io(source))
+                if is_relay_unavailable_error(&source) =>
+            {
                 Ok(synthesize_empty_global_bundle())
-            }
-            Err(source) => Err(self.map_relay_call_error("mcp.tool.list.global.io_error", source)),
+            },
+            Err(source) => Err(self.map_relay_call_error(
+                "mcp.tool.list.global.io_error",
+                source,
+            )),
         }
     }
 
@@ -439,7 +497,10 @@ impl McpServer {
         let (state_reason_code, state_reason) = if relay_socket.exists() {
             (
                 Some("relay_unavailable".to_string()),
-                Some("relay socket is present but relay is unavailable".to_string()),
+                Some(
+                    "relay socket is present but relay is unavailable"
+                        .to_string(),
+                ),
             )
         } else {
             (
@@ -475,7 +536,8 @@ fn synthesize_empty_global_bundle() -> ListedBundle {
         startup_health: None,
         state_reason_code: Some("relay_unavailable".to_string()),
         state_reason: Some(
-            "relay is unavailable; GLOBAL session registry not enumerable".to_string(),
+            "relay is unavailable; GLOBAL session registry not enumerable"
+                .to_string(),
         ),
         startup_failure_count: 0,
         recent_startup_failures: Vec::new(),
@@ -484,7 +546,9 @@ fn synthesize_empty_global_bundle() -> ListedBundle {
     }
 }
 
-fn list_sessions_from_bundle_configuration(bundle: &BundleConfiguration) -> Vec<ListedSession> {
+fn list_sessions_from_bundle_configuration(
+    bundle: &BundleConfiguration,
+) -> Vec<ListedSession> {
     bundle
         .members
         .iter()

@@ -19,8 +19,10 @@ fn introspect_request(
     identity_token: &str,
     target_session: &str,
 ) -> Value {
-    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
-    let mut reader = BufReader::new(client.try_clone().expect("clone introspect stream"));
+    let (mut client, join) =
+        spawn_relay_connection(configuration_roots, bundle_paths);
+    let mut reader =
+        BufReader::new(client.try_clone().expect("clone introspect stream"));
     send_json(
         &mut client,
         json!({
@@ -61,9 +63,11 @@ fn introspect_request(
 fn application_principal_introspects_active_session() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_introspect_ok";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let target_principal_id = format!("alpha@{bundle_name}");
     // Unique application id per test: the relay-wide registry keys on the
     // `principal_id`, so a shared `@EXTERNAL` id collides across parallel runs.
@@ -126,9 +130,11 @@ fn application_principal_introspects_active_session() {
 fn session_principal_introspect_is_denied() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_introspect_denied";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     // A socket-trust session principal: accepted at Hello (enforcement off) but
     // granted no introspection rights.
@@ -161,9 +167,11 @@ fn session_principal_introspect_is_denied() {
 fn introspect_rejects_bare_target_session_before_authorization() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_introspect_bare";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let response = introspect_request(
         &configuration_roots,
@@ -194,9 +202,11 @@ fn introspect_rejects_bare_target_session_before_authorization() {
 fn application_principal_receives_identity_snapshot_on_connect() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_snapshot_connect";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let target_principal_id = format!("alpha@{bundle_name}");
     // Unique application id per test: the relay-wide registry keys on the
     // `principal_id`, so a shared `@EXTERNAL` id collides across parallel runs.
@@ -219,8 +229,10 @@ fn application_principal_receives_identity_snapshot_on_connect() {
         Some(bundle_name),
     );
 
-    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
-    let mut reader = BufReader::new(client.try_clone().expect("clone app stream"));
+    let (mut client, join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let mut reader =
+        BufReader::new(client.try_clone().expect("clone app stream"));
     send_json(
         &mut client,
         json!({

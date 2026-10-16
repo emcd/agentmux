@@ -36,7 +36,10 @@ pub fn resolve_relay_bool_setting(
 /// environment variable, surfacing a structured error for anything else. Split
 /// from process-env reading so the validation is unit-testable without mutating
 /// process state.
-pub fn parse_relay_bool_env_value(variable: &str, value: &str) -> Result<bool, RelayError> {
+pub fn parse_relay_bool_env_value(
+    variable: &str,
+    value: &str,
+) -> Result<bool, RelayError> {
     match value {
         "true" => Ok(true),
         "false" => Ok(false),
@@ -55,9 +58,13 @@ pub fn parse_relay_bool_env_value(variable: &str, value: &str) -> Result<bool, R
 /// Reads a canonical boolean environment override. Returns `Ok(None)` when the
 /// variable is absent (or holds non-UTF-8, treated as absent), `Ok(Some(_))` for
 /// exactly `true`/`false`, and a structured error for any other value.
-pub(super) fn relay_bool_env_override(variable: &str) -> Result<Option<bool>, RelayError> {
+pub(super) fn relay_bool_env_override(
+    variable: &str,
+) -> Result<Option<bool>, RelayError> {
     match std::env::var(variable).ok() {
         None => Ok(None),
-        Some(value) => parse_relay_bool_env_value(variable, value.as_str()).map(Some),
+        Some(value) => {
+            parse_relay_bool_env_value(variable, value.as_str()).map(Some)
+        },
     }
 }

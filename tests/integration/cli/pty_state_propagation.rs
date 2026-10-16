@@ -33,10 +33,20 @@ const MEMBER_BLANK_STATE_ROOT: &str = "";
 /// Writes a bundle whose single member is a Pty target declaring its own
 /// `AGENTMUX_STATE_DIRECTORY`, with an initial command that records the value
 /// it was actually spawned with.
-fn write_pty_bundle(config_root: &std::path::Path, report: &std::path::Path, declared: &str) {
+fn write_pty_bundle(
+    config_root: &std::path::Path,
+    report: &std::path::Path,
+    declared: &str,
+) {
     // Reuse the shared scaffolding for coders/policies/users, then replace the
     // bundle file with a Pty member.
-    write_bundle_configuration_with_options(config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
     fs::write(
         config_root.join("coders.toml"),
         format!(
@@ -113,7 +123,8 @@ fn assert_lazy_pty_spawn_carries_the_relays_state_root(declared: &str) {
     let state_root = temporary.path().join("named-state");
     let inscriptions_root = temporary.path().join("inscriptions");
     let report = temporary.path().join("child-state-directory");
-    fs::create_dir_all(config_root.join("bundles")).expect("create config root");
+    fs::create_dir_all(config_root.join("bundles"))
+        .expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
     write_pty_bundle(&config_root, &report, declared);
@@ -210,14 +221,18 @@ fn assert_lazy_pty_spawn_carries_the_relays_state_root(declared: &str) {
 
 #[test]
 fn a_lazily_spawned_pty_member_receives_the_relays_state_root() {
-    assert_lazy_pty_spawn_carries_the_relays_state_root(MEMBER_DECLARED_STATE_ROOT);
+    assert_lazy_pty_spawn_carries_the_relays_state_root(
+        MEMBER_DECLARED_STATE_ROOT,
+    );
 }
 
 // The blank declaration, which reads as absent everywhere else and so is the case
 // an upsert-if-absent implementation would leave to the child.
 #[test]
 fn a_lazily_spawned_pty_member_survives_a_blank_declaration() {
-    assert_lazy_pty_spawn_carries_the_relays_state_root(MEMBER_BLANK_STATE_ROOT);
+    assert_lazy_pty_spawn_carries_the_relays_state_root(
+        MEMBER_BLANK_STATE_ROOT,
+    );
 }
 
 #[test]
@@ -232,7 +247,8 @@ fn a_send_to_a_held_pty_bundle_does_not_spawn_and_resolves_held() {
     let state_root = temporary.path().join("named-state");
     let inscriptions_root = temporary.path().join("inscriptions");
     let report = temporary.path().join("child-state-directory");
-    fs::create_dir_all(config_root.join("bundles")).expect("create config root");
+    fs::create_dir_all(config_root.join("bundles"))
+        .expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
     write_pty_bundle(&config_root, &report, MEMBER_DECLARED_STATE_ROOT);
@@ -285,7 +301,8 @@ fn a_send_to_a_held_pty_bundle_does_not_spawn_and_resolves_held() {
     let stderr = String::from_utf8_lossy(&send.stderr);
     let stdout = String::from_utf8_lossy(&send.stdout);
     assert!(
-        stderr.contains("runtime_bundle_held") || stdout.contains("runtime_bundle_held"),
+        stderr.contains("runtime_bundle_held")
+            || stdout.contains("runtime_bundle_held"),
         "send to a held bundle must resolve as held/unavailable, not queued; stderr: {stderr} stdout: {stdout}"
     );
     // Must not have spawned the Pty child — the lazy path is blocked by the

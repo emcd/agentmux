@@ -42,13 +42,17 @@ mod startup;
 
 /// A bracketed (`-p`) paste of the message body into the target pane.
 fn is_body_paste_line(line: &str) -> bool {
-    line.contains(" paste-buffer ") && line.contains("-t %1") && line.contains(" -p ")
+    line.contains(" paste-buffer ")
+        && line.contains("-t %1")
+        && line.contains(" -p ")
 }
 
 /// The unbracketed paste carrying the submit carriage return. Distinguished
 /// from the body paste by the absence of the `-p` (bracketed) flag.
 fn is_submit_paste_line(line: &str) -> bool {
-    line.contains(" paste-buffer ") && line.contains("-t %1") && !line.contains(" -p ")
+    line.contains(" paste-buffer ")
+        && line.contains("-t %1")
+        && !line.contains(" -p ")
 }
 
 /// Every pane envelope the fake tmux has been asked to paste, in no particular
@@ -79,9 +83,11 @@ fn read_paste_buffer_content(log_file: &Path, paste_line: &str) -> String {
         .skip_while(|token| *token != "-b")
         .nth(1)
         .expect("paste-buffer command should include -b NAME");
-    let buffer_path = PathBuf::from(format!("{}.buffer.{buffer_name}", log_file.display()));
-    fs::read_to_string(&buffer_path)
-        .unwrap_or_else(|error| panic!("read paste buffer file {}: {error}", buffer_path.display()))
+    let buffer_path =
+        PathBuf::from(format!("{}.buffer.{buffer_name}", log_file.display()));
+    fs::read_to_string(&buffer_path).unwrap_or_else(|error| {
+        panic!("read paste buffer file {}: {error}", buffer_path.display())
+    })
 }
 
 /// Graceful shutdown helper used by normal-path cleanup — SIGTERM + bounded
@@ -94,7 +100,9 @@ fn read_paste_buffer_content(log_file: &Path, paste_line: &str) -> String {
 /// Uses `HARNESS_CHILD_WAIT_DEFAULT` (10s) rather than a tighter bound so
 /// the helper is not tighter than the relay's own 5000ms shutdown-work
 /// deadline plus nested drain/fence budgets (src/relay/README.md).
-async fn shutdown_relay_gracefully(child: &mut crate::support::relay_delivery::RelayChildGuard) {
+async fn shutdown_relay_gracefully(
+    child: &mut crate::support::relay_delivery::RelayChildGuard,
+) {
     let pid = child.id().expect("relay pid");
     let pid = i32::try_from(pid).expect("relay pid fits i32");
     // SAFETY: `child` is the relay process this test spawned; `kill` with
@@ -110,11 +118,11 @@ async fn shutdown_relay_gracefully(child: &mut crate::support::relay_delivery::R
                 status.success(),
                 "relay should exit cleanly after SIGTERM, status={status}"
             );
-        }
+        },
         Err(_) => {
             // Escalation only after graceful window — see fallback comments above.
             child.start_kill().expect("kill relay after timeout");
             panic!("timed out waiting for relay to exit after SIGTERM");
-        }
+        },
     }
 }

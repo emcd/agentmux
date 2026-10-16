@@ -12,7 +12,8 @@ fn acp_worker_state_transitions_busy_then_available() {
         update_count: 1,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let response = dispatch_send(&config_root, &tmux_socket);
@@ -23,7 +24,12 @@ fn acp_worker_state_transitions_busy_then_available() {
     // 1s prompt delay the worker is mid-turn and must report busy, then
     // converge back to available once the turn completes.
     assert!(
-        wait_for_worker_state(temporary.path(), "bravo", "busy", Duration::from_secs(2)),
+        wait_for_worker_state(
+            temporary.path(),
+            "bravo",
+            "busy",
+            Duration::from_secs(2)
+        ),
         "expected worker_state=busy while the ACP turn is in flight"
     );
     assert!(
@@ -45,7 +51,8 @@ fn acp_request_permission_keeps_worker_busy_while_pending_decision() {
         request_permission_on_prompt: true,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let response = dispatch_send(&config_root, &tmux_socket);
@@ -53,7 +60,12 @@ fn acp_request_permission_keeps_worker_busy_while_pending_decision() {
     assert_eq!(result.outcome, SendOutcome::Queued);
 
     assert!(
-        wait_for_worker_state(temporary.path(), "bravo", "busy", Duration::from_secs(2)),
+        wait_for_worker_state(
+            temporary.path(),
+            "bravo",
+            "busy",
+            Duration::from_secs(2)
+        ),
         "expected worker_state=busy while ACP requested permission"
     );
     assert!(
@@ -83,8 +95,10 @@ fn acp_worker_state_stays_available_after_protocol_error() {
         fail_prompt: true,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     assert!(
@@ -114,7 +128,8 @@ fn acp_async_queue_overflow_returns_runtime_queue_full() {
         prompt_delay_sec: 1,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let mut overflow_response = None::<RelayResponse>;
@@ -128,18 +143,20 @@ fn acp_async_queue_overflow_returns_runtime_queue_full() {
                     overflow_response = Some(response);
                     break;
                 }
-            }
+            },
             Err(error) => {
                 if error.code == "runtime_acp_queue_full" {
                     overflow_response = Some(RelayResponse::Error { error });
                     break;
                 }
-            }
+            },
         }
     }
 
     let Some(RelayResponse::Error { error }) = overflow_response else {
-        panic!("expected at least one runtime_acp_queue_full overflow response");
+        panic!(
+            "expected at least one runtime_acp_queue_full overflow response"
+        );
     };
     assert_eq!(error.code, "runtime_acp_queue_full");
     let details = error.details.expect("overflow details");

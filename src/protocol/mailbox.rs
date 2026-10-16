@@ -53,7 +53,9 @@ impl EntrySequence {
 /// serve. [`next_sequence`](Self::next_sequence) is the only way to get from one
 /// to the other, so the "cursor plus one" rule is expressed once rather than
 /// re-derived at each call site.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Default,
+)]
 pub struct CursorPosition(u64);
 
 impl CursorPosition {

@@ -6,7 +6,9 @@ use serde_json::json;
 
 use crate::protocol::identity::ConsumerBinding;
 use crate::protocol::mailbox::EntryRange;
-use crate::protocol::operations::{DeclareAccepted, DeclareRejection, DeclareResult};
+use crate::protocol::operations::{
+    DeclareAccepted, DeclareRejection, DeclareResult,
+};
 use crate::runtime::inscriptions::emit_inscription;
 
 use super::super::super::guard::{GuardKey, PackingUnitId};
@@ -36,7 +38,10 @@ use super::generation::active_generation;
 /// for different remedies — acknowledge what you hold, versus ask for a different
 /// range — so naming the wrong one sends a caller somewhere it cannot make
 /// progress.
-pub(in crate::relay) fn declare(binding: &ConsumerBinding, range: EntryRange) -> DeclareResult {
+pub(in crate::relay) fn declare(
+    binding: &ConsumerBinding,
+    range: EntryRange,
+) -> DeclareResult {
     let Ok(mut state) = lock_ledger() else {
         return Err(DeclareRejection::UnknownTarget);
     };
@@ -138,14 +143,17 @@ pub(in crate::relay) fn declare(binding: &ConsumerBinding, range: EntryRange) ->
 /// Scoped to the caller's generation. A worker supervising its own generation
 /// must not arm its watchdog on a declaration a successor made, and after a
 /// replacement the outgoing declaration is resolved rather than inherited.
-pub(in crate::relay) fn declaration_age(binding: &ConsumerBinding) -> Option<Duration> {
+pub(in crate::relay) fn declaration_age(
+    binding: &ConsumerBinding,
+) -> Option<Duration> {
     let state = lock_ledger().ok()?;
     let key = target_key(&binding.target);
     if active_generation(&state, &key) != Some(binding.generation) {
         return None;
     }
     let outstanding = state.mailboxes.get(&key)?.outstanding?;
-    (outstanding.generation == binding.generation).then(|| outstanding.declared_at.elapsed())
+    (outstanding.generation == binding.generation)
+        .then(|| outstanding.declared_at.elapsed())
 }
 
 /// A declaration binds one well-formed range, and only one at a time.
@@ -198,7 +206,8 @@ mod mailbox_declaration_tests {
             "a range past what the mailbox holds is refused"
         );
 
-        let accepted = declare(&bound, range(1, 3)).expect("a well-formed range binds");
+        let accepted =
+            declare(&bound, range(1, 3)).expect("a well-formed range binds");
         assert_eq!(accepted.range, range(1, 3));
 
         // The teeth of the single-outstanding rule. The identical range passes
@@ -298,7 +307,9 @@ mod declaration_serialization_tests {
     use super::super::super::super::fence::FenceVerdict;
     use super::super::super::super::guard::SubmissionEvidence;
     use super::super::super::lock_boundary;
-    use super::super::fixtures::{claim, mail, peeked, place, range, reserved_envelopes, target};
+    use super::super::fixtures::{
+        claim, mail, peeked, place, range, reserved_envelopes, target,
+    };
     use super::super::generation::replace_consumer_generation;
     use super::*;
 
@@ -329,8 +340,12 @@ mod declaration_serialization_tests {
             let target = target(namespace);
             let generation = outgoing.generation;
             boundary.spawn(move || {
-                replace_consumer_generation(&target, generation, FenceVerdict::Positive)
-                    .expect("a fenced incumbent is replaced")
+                replace_consumer_generation(
+                    &target,
+                    generation,
+                    FenceVerdict::Positive,
+                )
+                .expect("a fenced incumbent is replaced")
             })
         };
         // The replacement has reached the boundary and cannot cross it. A flip
@@ -342,7 +357,8 @@ mod declaration_serialization_tests {
         boundary.release();
         let declared = declaring.join().expect("the declaring thread");
         let replacement = replacing.join().expect("the replacing thread");
-        let incoming = ConsumerBinding::new(target(namespace), replacement.generation);
+        let incoming =
+            ConsumerBinding::new(target(namespace), replacement.generation);
 
         assert_eq!(
             declared
@@ -387,7 +403,8 @@ mod declaration_serialization_tests {
             FenceVerdict::Positive,
         )
         .expect("a fenced incumbent is replaced");
-        let incoming = ConsumerBinding::new(target(namespace), replacement.generation);
+        let incoming =
+            ConsumerBinding::new(target(namespace), replacement.generation);
 
         assert_eq!(
             declare(&outgoing, range(1, 3)),

@@ -3,15 +3,21 @@
 use std::sync::{Arc, Mutex};
 
 use crate::acp::client::AcpStdioClient;
-use crate::acp::permission::{ChoiceCorrelation, build_acp_permission_handler};
+use crate::acp::permission::{
+    ChoiceCorrelation, build_acp_permission_handler,
+};
 use crate::acp::{
     DispatchHandler, PermissionHandler, PermissionResponder, PromptCompletion,
     PromptCompletionHandler, PromptDispatchOutcome,
 };
 use crate::runtime::signals::shutdown_requested;
-use crate::transports::{ChoiceMade, SubmissionEvidence, WorkerReadinessState};
+use crate::transports::{
+    ChoiceMade, SubmissionEvidence, WorkerReadinessState,
+};
 
-use super::state::{ACP_PROMPT_WAIT_POLL_INTERVAL, AcpSharedState, raise_respawn_signal};
+use super::state::{
+    ACP_PROMPT_WAIT_POLL_INTERVAL, AcpSharedState, raise_respawn_signal,
+};
 
 /// ACP runtime state shared across turn submission functions.
 pub(crate) struct TurnContext<'a> {
@@ -25,14 +31,20 @@ pub(crate) struct TurnContext<'a> {
 /// global registry when a mirror is installed. Centralizes the per-turn readiness
 /// transitions inside the delivery task so the relay worker no longer drives
 /// `mark_busy` / `mirror_settled_readiness`.
-pub(crate) fn set_turn_readiness(ctx: &TurnContext, state: WorkerReadinessState) {
+pub(crate) fn set_turn_readiness(
+    ctx: &TurnContext,
+    state: WorkerReadinessState,
+) {
     set_shared_readiness(ctx.shared, state);
 }
 
 /// Writes `state` to the shared readiness slot and mirrors it to the relay global
 /// registry when a mirror is installed. Shared by [`set_turn_readiness`] and the
 /// `on_dispatched` Busy transition (which holds the `Arc` directly).
-pub(crate) fn set_shared_readiness(shared: &AcpSharedState, state: WorkerReadinessState) {
+pub(crate) fn set_shared_readiness(
+    shared: &AcpSharedState,
+    state: WorkerReadinessState,
+) {
     *shared.readiness.lock().expect("readiness mutex") = state;
     if let Some(mirror) = shared.mirror_state.as_ref() {
         mirror(state);
@@ -75,8 +87,10 @@ pub(crate) fn submit_turn(
     head_message_id: &str,
     decider_sessions: &[String],
 ) -> (SubmissionEvidence, Option<TurnObservation>) {
-    let pending_choice: Arc<Mutex<Option<ChoiceMade>>> = Arc::new(Mutex::new(None));
-    let completion_slot: Arc<Mutex<Option<PromptCompletion>>> = Arc::new(Mutex::new(None));
+    let pending_choice: Arc<Mutex<Option<ChoiceMade>>> =
+        Arc::new(Mutex::new(None));
+    let completion_slot: Arc<Mutex<Option<PromptCompletion>>> =
+        Arc::new(Mutex::new(None));
 
     let head_message_id = head_message_id.to_string();
 
@@ -96,28 +110,37 @@ pub(crate) fn submit_turn(
             chooser.clone(),
             correlation,
             Arc::clone(&pending_choice),
-            Arc::new(move |handle| shared_for_executors.note_permission_executor(handle)),
+            Arc::new(move |handle| {
+                shared_for_executors.note_permission_executor(handle)
+            }),
         );
         let wrapped: PermissionHandler = Box::new(move |req, responder| {
             (inner)(req, responder);
         });
         wrapped
     } else {
-        let wrapped: PermissionHandler = Box::new(|_req, mut responder: PermissionResponder| {
-            responder.respond(None);
-        });
+        let wrapped: PermissionHandler =
+            Box::new(|_req, mut responder: PermissionResponder| {
+                responder.respond(None);
+            });
         wrapped
     };
 
     let completion_writer = Arc::clone(&completion_slot);
     let on_completion: PromptCompletionHandler = Box::new(move |completion| {
-        *completion_writer.lock().expect("completion slot mutex") = Some(completion);
+        *completion_writer.lock().expect("completion slot mutex") =
+            Some(completion);
     });
 
     // `Submitted` is returned immediately after the framed write succeeds,
     // before replay-buffer locks or `on_dispatched` — so the member evidence is
     // recorded (resolved below) before either can block or panic.
-    let dispatch = client.prompt(ctx.session_id, prompt, Some(on_permission), on_completion);
+    let dispatch = client.prompt(
+        ctx.session_id,
+        prompt,
+        Some(on_permission),
+        on_completion,
+    );
 
     match dispatch {
         PromptDispatchOutcome::Submitted => {
@@ -133,20 +156,20 @@ pub(crate) fn submit_turn(
                     pending_choice,
                 }),
             )
-        }
+        },
         PromptDispatchOutcome::TransportUnavailable { reason: _ } => {
             // A stdin write or flush error without proof that zero bytes left
             // cannot assert non-delivery.
             set_turn_readiness(ctx, WorkerReadinessState::Unavailable);
             raise_respawn_signal(respawn_needed_tx);
             (SubmissionEvidence::SubmissionUnknown, None)
-        }
+        },
         PromptDispatchOutcome::SerializationFailed(_) => {
             // Active-prompt refusal and serialization failure are positive
             // non-delivery: nothing was written. The transport is healthy, so
             // readiness stays as it was, and there is no turn to observe.
             (SubmissionEvidence::NotSubmitted, None)
-        }
+        },
     }
 }
 
@@ -218,7 +241,8 @@ pub(crate) fn observe_acp_turn(
         .expect("completion slot mutex")
         .take();
     let pending = pending_choice.lock().expect("pending_choice mutex").take();
-    let (final_state, requires_respawn) = build_acp_turn_observability(completion, pending);
+    let (final_state, requires_respawn) =
+        build_acp_turn_observability(completion, pending);
     set_turn_readiness(ctx, final_state);
     if requires_respawn {
         raise_respawn_signal(respawn_needed_tx);
@@ -251,14 +275,19 @@ pub(crate) fn build_acp_turn_observability(
     };
 
     match completion {
-        PromptCompletion::Completed { stop_reason } => match stop_reason.as_str() {
-            "end_turn" | "max_tokens" | "max_turn_requests" | "refusal" => {
-                (WorkerReadinessState::Available, false)
+        PromptCompletion::Completed { stop_reason } => {
+            match stop_reason.as_str() {
+                "end_turn" | "max_tokens" | "max_turn_requests"
+                | "refusal" => (WorkerReadinessState::Available, false),
+                "cancelled" => (WorkerReadinessState::Available, false),
+                _ => (WorkerReadinessState::Available, false),
             }
-            "cancelled" => (WorkerReadinessState::Available, false),
-            _ => (WorkerReadinessState::Available, false),
         },
-        PromptCompletion::ProtocolError(_) => (WorkerReadinessState::Available, false),
-        PromptCompletion::ConnectionClosed { .. } => (WorkerReadinessState::Unavailable, true),
+        PromptCompletion::ProtocolError(_) => {
+            (WorkerReadinessState::Available, false)
+        },
+        PromptCompletion::ConnectionClosed { .. } => {
+            (WorkerReadinessState::Unavailable, true)
+        },
     }
 }

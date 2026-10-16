@@ -14,10 +14,14 @@ use super::*;
 /// `expires_at` in the past, expiring its credential without disturbing the
 /// credential hash. The store is loaded fresh on the next Hello, so the patched
 /// expiry takes effect on the very next connection.
-fn expire_principal_in_store(bundle_paths: &BundleRuntimePaths, principal_id: &str) {
+fn expire_principal_in_store(
+    bundle_paths: &BundleRuntimePaths,
+    principal_id: &str,
+) {
     let path = principal_store_file(bundle_paths);
     let raw = std::fs::read_to_string(&path).expect("read principal store");
-    let mut store: Value = serde_json::from_str(&raw).expect("parse principal store");
+    let mut store: Value =
+        serde_json::from_str(&raw).expect("parse principal store");
     let record = store["principals"]
         .as_array_mut()
         .expect("principals array in store")
@@ -42,8 +46,10 @@ fn hello_frame_and_eof(
     principal_id: &str,
     identity_token: &str,
 ) -> (Value, bool) {
-    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
-    let mut reader = BufReader::new(client.try_clone().expect("clone hello stream"));
+    let (mut client, join) =
+        spawn_relay_connection(configuration_roots, bundle_paths);
+    let mut reader =
+        BufReader::new(client.try_clone().expect("clone hello stream"));
     send_json(
         &mut client,
         json!({
@@ -70,9 +76,11 @@ fn hello_frame_and_eof(
 fn expired_principal_receives_runtime_identity_expired_before_close() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_expired_teardown";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
@@ -85,8 +93,12 @@ fn expired_principal_receives_runtime_identity_expired_before_close() {
     // Backdate the registered credential's expiry; the PSK itself is unchanged.
     expire_principal_in_store(&bundle_paths, &principal_id);
 
-    let (frame, closed) =
-        hello_frame_and_eof(&configuration_roots, &bundle_paths, &principal_id, &psk);
+    let (frame, closed) = hello_frame_and_eof(
+        &configuration_roots,
+        &bundle_paths,
+        &principal_id,
+        &psk,
+    );
 
     assert_eq!(
         frame["frame"], "response",
@@ -115,9 +127,11 @@ fn expired_principal_receives_runtime_identity_expired_before_close() {
 fn typed_identity_error_codes_are_distinct_from_relay_unavailable() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_typed_codes";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     // Expiry path: an expired credential is rejected at Hello.
     let expired_id = format!("alpha@{bundle_name}");
@@ -149,8 +163,10 @@ fn typed_identity_error_codes_are_distinct_from_relay_unavailable() {
         &revoked_id,
         None,
     );
-    let (mut live_client, live_join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
-    let mut live_reader = BufReader::new(live_client.try_clone().expect("clone live stream"));
+    let (mut live_client, live_join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let mut live_reader =
+        BufReader::new(live_client.try_clone().expect("clone live stream"));
     send_json(
         &mut live_client,
         json!({

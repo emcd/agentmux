@@ -32,8 +32,10 @@ fn symlink_ancestor(
     std::fs::create_dir_all(state_root).expect("create state root");
     let external = temporary.path().join(format!("external-{dir_name}"));
     std::fs::create_dir_all(&external).expect("create external directory");
-    std::fs::write(external.join("marker"), "untouched").expect("write marker");
-    std::os::unix::fs::symlink(&external, state_root.join(dir_name)).expect("symlink ancestor");
+    std::fs::write(external.join("marker"), "untouched")
+        .expect("write marker");
+    std::os::unix::fs::symlink(&external, state_root.join(dir_name))
+        .expect("symlink ancestor");
     external
 }
 
@@ -51,7 +53,8 @@ fn assert_invalid_credential_path(response: &Value) {
         "expected error: {response:?}"
     );
     assert_eq!(
-        response["response"]["error"]["code"], "validation_invalid_credential_path",
+        response["response"]["error"]["code"],
+        "validation_invalid_credential_path",
         "wrong code: {response:?}"
     );
 }
@@ -70,9 +73,11 @@ fn config_destination_request(principal_id: &str) -> Value {
 fn new_peer_config_rejects_symlinked_bundles_ancestor() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_bundles";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let external = symlink_ancestor(&temporary, &state_root, "bundles");
 
     let response = operator_request(
@@ -91,7 +96,8 @@ fn new_peer_config_rejects_symlinked_bundles_ancestor() {
     // The rejected destination registers nothing: the same principal
     // registers cleanly once the ancestor is real.
     std::fs::remove_file(state_root.join("bundles")).expect("remove symlink");
-    std::fs::create_dir_all(state_root.join("bundles")).expect("restore bundles");
+    std::fs::create_dir_all(state_root.join("bundles"))
+        .expect("restore bundles");
     let retry = operator_request(
         &configuration_roots,
         &bundle_paths,
@@ -110,9 +116,11 @@ fn new_peer_config_rejects_symlinked_bundles_ancestor() {
 fn change_psk_config_rejects_symlinked_ancestor_without_rotating() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_rotate";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
     let psk = register_peer(
         &configuration_roots,
@@ -156,12 +164,15 @@ fn change_psk_config_rejects_symlinked_ancestor_without_rotating() {
 fn store_load_rejects_symlinked_identity() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_load";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let external = symlink_ancestor(&temporary, &state_root, "identity");
     let decoy = "{\"format_version\": 1, \"principals\": []}";
-    std::fs::write(external.join("principals.json"), decoy).expect("write decoy store");
+    std::fs::write(external.join("principals.json"), decoy)
+        .expect("write decoy store");
 
     let frame = hello_first_frame(
         &configuration_roots,
@@ -171,11 +182,13 @@ fn store_load_rejects_symlinked_identity() {
         false,
     );
     assert_eq!(
-        frame["response"]["error"]["code"], "validation_invalid_credential_path",
+        frame["response"]["error"]["code"],
+        "validation_invalid_credential_path",
         "load must abort, not read outside: {frame:?}"
     );
     assert_eq!(
-        std::fs::read_to_string(external.join("principals.json")).expect("read decoy"),
+        std::fs::read_to_string(external.join("principals.json"))
+            .expect("read decoy"),
         decoy,
         "store load must neither read nor change the symlink target"
     );
@@ -190,13 +203,20 @@ fn store_load_rejects_symlinked_identity() {
 fn store_persist_rejects_symlinked_identity() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_persist";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let external = temporary.path().join("external-identity");
     std::fs::create_dir_all(&external).expect("create external directory");
-    std::fs::write(external.join("marker"), "untouched").expect("write marker");
-    let _guard = arm_ancestor_exchange(state_root.clone(), "identity", external.clone());
+    std::fs::write(external.join("marker"), "untouched")
+        .expect("write marker");
+    let _guard = arm_ancestor_exchange(
+        state_root.clone(),
+        "identity",
+        external.clone(),
+    );
 
     let response = operator_request(
         &configuration_roots,
@@ -238,13 +258,17 @@ fn arm_ancestor_exchange(
 fn sink_commit_aborts_on_ancestor_exchange() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_exchange_sink";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let external = temporary.path().join("external-exchange");
     std::fs::create_dir_all(&external).expect("create external directory");
-    std::fs::write(external.join("marker"), "untouched").expect("write marker");
-    let _guard = arm_ancestor_exchange(state_root.clone(), "bundles", external.clone());
+    std::fs::write(external.join("marker"), "untouched")
+        .expect("write marker");
+    let _guard =
+        arm_ancestor_exchange(state_root.clone(), "bundles", external.clone());
 
     let response = operator_request(
         &configuration_roots,
@@ -259,7 +283,8 @@ fn sink_commit_aborts_on_ancestor_exchange() {
         "no credential may publish through the exchanged ancestor"
     );
     // The staged temp is discarded with the abort: no residue remains.
-    let residue: Vec<_> = walkdir_tmp_residue(&state_root.join("bundles.orig"));
+    let residue: Vec<_> =
+        walkdir_tmp_residue(&state_root.join("bundles.orig"));
     assert!(
         residue.is_empty(),
         "aborted commit must clean its temp: {residue:?}"
@@ -272,9 +297,11 @@ fn sink_commit_aborts_on_ancestor_exchange() {
 fn install_commit_aborts_on_ancestor_exchange() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_exchange_slot";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = "bravo@RELAY".to_string();
     let psk = register_peer(
         &configuration_roots,
@@ -285,8 +312,10 @@ fn install_commit_aborts_on_ancestor_exchange() {
     );
     let external = temporary.path().join("external-slot");
     std::fs::create_dir_all(&external).expect("create external directory");
-    std::fs::write(external.join("marker"), "untouched").expect("write marker");
-    let _guard = arm_ancestor_exchange(state_root.clone(), "peers", external.clone());
+    std::fs::write(external.join("marker"), "untouched")
+        .expect("write marker");
+    let _guard =
+        arm_ancestor_exchange(state_root.clone(), "peers", external.clone());
 
     let response = operator_request(
         &configuration_roots,
@@ -318,7 +347,9 @@ fn walkdir_tmp_residue(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
             let path = entry.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.extension().and_then(|value| value.to_str()) == Some("tmp") {
+            } else if path.extension().and_then(|value| value.to_str())
+                == Some("tmp")
+            {
                 residue.push(path);
             }
         }
@@ -332,9 +363,11 @@ fn walkdir_tmp_residue(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 fn path_sink_through_symlinked_parent_still_succeeds() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_path_ok";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let real = temporary.path().join("real-out");
     std::fs::create_dir_all(&real).expect("create output directory");
     std::os::unix::fs::symlink(&real, temporary.path().join("linked-out"))
@@ -367,9 +400,11 @@ fn path_sink_through_symlinked_parent_still_succeeds() {
 fn config_sink_refuses_symlinked_final_target() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_final";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let session_dir = state_root
         .join("bundles")
         .join(bundle_name)
@@ -378,7 +413,8 @@ fn config_sink_refuses_symlinked_final_target() {
     std::fs::create_dir_all(&session_dir).expect("create session directory");
     let external = temporary.path().join("external-final");
     std::fs::create_dir_all(&external).expect("create external directory");
-    std::fs::write(external.join("marker"), "untouched").expect("write marker");
+    std::fs::write(external.join("marker"), "untouched")
+        .expect("write marker");
     std::os::unix::fs::symlink(
         external.join("stolen.psk"),
         session_dir.join("identity.psk"),
@@ -409,9 +445,11 @@ fn config_sink_refuses_symlinked_final_target() {
 fn issuance_response_carries_psk_while_file_sinks_omit_it() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_boundary";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let issued = operator_request(
         &configuration_roots,
@@ -459,9 +497,11 @@ fn issuance_response_carries_psk_while_file_sinks_omit_it() {
 fn new_peer_config_dir_sync_failure_preserves_registration() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_sink_new";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
     let session_dir = state_root
         .join("bundles")
@@ -469,7 +509,8 @@ fn new_peer_config_dir_sync_failure_preserves_registration() {
         .join("sessions")
         .join("alpha");
     std::fs::create_dir_all(&session_dir).expect("create session directory");
-    std::fs::write(session_dir.join(".fault-dir-sync"), "").expect("arm dir-sync fault");
+    std::fs::write(session_dir.join(".fault-dir-sync"), "")
+        .expect("arm dir-sync fault");
 
     let response = operator_request(
         &configuration_roots,
@@ -482,7 +523,8 @@ fn new_peer_config_dir_sync_failure_preserves_registration() {
         "expected uncertainty error: {response:?}"
     );
     assert_eq!(
-        response["response"]["error"]["code"], "internal_credential_durability_uncertain",
+        response["response"]["error"]["code"],
+        "internal_credential_durability_uncertain",
         "wrong code: {response:?}"
     );
     let slot = session_dir.join("identity.psk");
@@ -516,9 +558,11 @@ fn new_peer_config_dir_sync_failure_preserves_registration() {
 fn change_psk_config_dir_sync_failure_preserves_rotation() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_sink_rotate";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
     let old_psk = register_peer(
         &configuration_roots,
@@ -533,7 +577,8 @@ fn change_psk_config_dir_sync_failure_preserves_rotation() {
         .join("sessions")
         .join("alpha");
     std::fs::create_dir_all(&session_dir).expect("create session directory");
-    std::fs::write(session_dir.join(".fault-dir-sync"), "").expect("arm dir-sync fault");
+    std::fs::write(session_dir.join(".fault-dir-sync"), "")
+        .expect("arm dir-sync fault");
 
     let response = operator_request(
         &configuration_roots,
@@ -550,7 +595,8 @@ fn change_psk_config_dir_sync_failure_preserves_rotation() {
         "expected uncertainty error: {response:?}"
     );
     assert_eq!(
-        response["response"]["error"]["code"], "internal_credential_durability_uncertain",
+        response["response"]["error"]["code"],
+        "internal_credential_durability_uncertain",
         "wrong code: {response:?}"
     );
 

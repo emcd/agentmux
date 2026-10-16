@@ -21,7 +21,9 @@ use super::*;
 fn a_terminal_outcome_names_the_entry_it_resolved_under() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -48,8 +50,8 @@ fn a_terminal_outcome_names_the_entry_it_resolved_under() {
         "relay.send.async.completed",
         std::time::Duration::from_secs(45),
     );
-    let record: serde_json::Value =
-        serde_json::from_str(completed.as_str()).expect("completed inscription is json");
+    let record: serde_json::Value = serde_json::from_str(completed.as_str())
+        .expect("completed inscription is json");
     let payload = record
         .get("details")
         .expect("completed inscription carries a details object");
@@ -85,7 +87,9 @@ fn a_terminal_outcome_names_the_entry_it_resolved_under() {
 fn a_declared_partition_names_its_unit_and_members() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -110,8 +114,8 @@ fn a_declared_partition_names_its_unit_and_members() {
         "relay.delivery.partition.declared",
         std::time::Duration::from_secs(45),
     );
-    let record: serde_json::Value =
-        serde_json::from_str(declared.as_str()).expect("declaration inscription is json");
+    let record: serde_json::Value = serde_json::from_str(declared.as_str())
+        .expect("declaration inscription is json");
     let payload = record
         .get("details")
         .expect("declaration carries a details object");
@@ -168,7 +172,9 @@ fn a_declared_partition_names_its_unit_and_members() {
 fn an_enqueued_entry_precedes_the_partition_that_binds_it() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -201,8 +207,8 @@ fn an_enqueued_entry_precedes_the_partition_that_binds_it() {
         std::time::Duration::from_secs(45),
     );
 
-    let record: serde_json::Value =
-        serde_json::from_str(enqueued.as_str()).expect("enqueue inscription is json");
+    let record: serde_json::Value = serde_json::from_str(enqueued.as_str())
+        .expect("enqueue inscription is json");
     let payload = record
         .get("details")
         .expect("the enqueue carries a details object");
@@ -223,19 +229,25 @@ fn an_enqueued_entry_precedes_the_partition_that_binds_it() {
     // The same member, and the enqueue first. Read the whole log rather than
     // relying on the two awaits above, because each returns as soon as its own
     // event appears and neither says which was written first.
-    let log = std::fs::read_to_string(&inscriptions).expect("inscriptions readable");
+    let log =
+        std::fs::read_to_string(&inscriptions).expect("inscriptions readable");
     let position = |event: &str| {
         log.lines()
-            .position(|line| line.contains(format!("\"event\":\"{event}\"").as_str()))
+            .position(|line| {
+                line.contains(format!("\"event\":\"{event}\"").as_str())
+            })
             .unwrap_or_else(|| panic!("no {event} in the log: {log}"))
     };
     assert!(
-        position("relay.delivery.mailbox.enqueued") < position("relay.delivery.partition.declared"),
+        position("relay.delivery.mailbox.enqueued")
+            < position("relay.delivery.partition.declared"),
         "the entry is enqueued before its partition is declared: {log}"
     );
     let partition = log
         .lines()
-        .find(|line| line.contains("\"event\":\"relay.delivery.partition.declared\""))
+        .find(|line| {
+            line.contains("\"event\":\"relay.delivery.partition.declared\"")
+        })
         .expect("the partition is in the log");
     assert!(
         partition.contains(member),
@@ -249,7 +261,9 @@ fn an_enqueued_entry_precedes_the_partition_that_binds_it() {
 fn a_member_produces_exactly_one_terminal_record() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
     // No tmux server backs this socket, so the target is unreachable and the
     // member resolves on the dwell rather than on a write that never happens.
     configure_short_unreachable_dwell();

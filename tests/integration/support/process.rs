@@ -89,7 +89,10 @@ impl RelayChildGuard {
     /// Consumes the guard, waits for the child with the given budget, and
     /// returns the captured output. Convenience over `into_inner` +
     /// `wait_with_output_bounded`.
-    pub(crate) fn wait_with_output(self, budget: Duration) -> io::Result<Output> {
+    pub(crate) fn wait_with_output(
+        self,
+        budget: Duration,
+    ) -> io::Result<Output> {
         match self.into_inner() {
             Some(child) => wait_with_output_bounded(child, budget),
             None => Err(io::Error::new(
@@ -126,7 +129,7 @@ impl Drop for RelayChildGuard {
         // Already exited — nothing to do; already reaped.
         match child.try_wait() {
             Ok(Some(_)) => return,
-            Ok(None) => {}
+            Ok(None) => {},
             Err(_) => return,
         }
         // Graceful termination first: the relay's shutdown fence reaps its
@@ -149,7 +152,7 @@ impl Drop for RelayChildGuard {
                         break;
                     }
                     thread::sleep(WAIT_POLL_INTERVAL);
-                }
+                },
                 Err(_) => return,
             }
         }
@@ -165,7 +168,8 @@ impl Drop for RelayChildGuard {
 /// quickly rather than hanging the suite. On timeout, the child is
 /// sent SIGKILL and the wait returns an io::Error; callers typically
 /// surface that as a test panic.
-pub(crate) const HARNESS_CHILD_WAIT_DEFAULT: Duration = Duration::from_secs(10);
+pub(crate) const HARNESS_CHILD_WAIT_DEFAULT: Duration =
+    Duration::from_secs(10);
 
 /// Poll interval for `wait_with_output_bounded`. Small enough that
 /// a healthy child exiting near the deadline is observed with
@@ -201,7 +205,10 @@ pub(crate) const WAIT_POLL_INTERVAL: Duration = Duration::from_millis(50);
 ///    drainer threads internally; this helper reproduces that
 ///    behavior so the bounded-wait convention does not introduce a
 ///    new pipe-full deadlock class.
-pub(crate) fn wait_with_output_bounded(mut child: Child, budget: Duration) -> io::Result<Output> {
+pub(crate) fn wait_with_output_bounded(
+    mut child: Child,
+    budget: Duration,
+) -> io::Result<Output> {
     drop(child.stdin.take());
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -224,7 +231,7 @@ pub(crate) fn wait_with_output_bounded(mut child: Child, budget: Duration) -> io
                     ));
                 }
                 thread::sleep(WAIT_POLL_INTERVAL);
-            }
+            },
             Err(error) => break Err(error),
         }
     };
@@ -237,7 +244,9 @@ pub(crate) fn wait_with_output_bounded(mut child: Child, budget: Duration) -> io
     })
 }
 
-fn spawn_drainer<R: Read + Send + 'static>(mut reader: R) -> thread::JoinHandle<Vec<u8>> {
+fn spawn_drainer<R: Read + Send + 'static>(
+    mut reader: R,
+) -> thread::JoinHandle<Vec<u8>> {
     thread::spawn(move || {
         let mut buf = Vec::new();
         let _ = reader.read_to_end(&mut buf);
@@ -277,7 +286,8 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn chatty child");
-        let output = wait_with_output_bounded(child, Duration::from_secs(5)).expect("chatty wait");
+        let output = wait_with_output_bounded(child, Duration::from_secs(5))
+            .expect("chatty wait");
         assert!(output.status.success(), "chatty child should succeed");
         assert!(
             output.stdout.len() >= 200_000,
@@ -295,7 +305,8 @@ mod tests {
             .stderr(Stdio::piped())
             .spawn()
             .expect("spawn silent child");
-        let output = wait_with_output_bounded(child, Duration::from_secs(5)).expect("silent wait");
+        let output = wait_with_output_bounded(child, Duration::from_secs(5))
+            .expect("silent wait");
         assert!(output.status.success(), "true should succeed");
         assert!(output.stdout.is_empty(), "stdout should be empty");
         assert!(output.stderr.is_empty(), "stderr should be empty");
@@ -323,7 +334,8 @@ mod tests {
             .spawn()
             .expect("spawn hung child");
         let started = Instant::now();
-        let result = wait_with_output_bounded(child, Duration::from_millis(500));
+        let result =
+            wait_with_output_bounded(child, Duration::from_millis(500));
         let elapsed = started.elapsed();
         assert!(
             result.is_err(),

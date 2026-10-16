@@ -13,8 +13,9 @@ use std::{
 use tempfile::TempDir;
 
 use agentmux::configuration::{
-    ConfigurationRoots, effective_bundle_definitions, effective_configuration_path,
-    load_bundle_configuration, load_bundle_group_memberships, load_ui_configuration,
+    ConfigurationRoots, effective_bundle_definitions,
+    effective_configuration_path, load_bundle_configuration,
+    load_bundle_group_memberships, load_ui_configuration,
 };
 use agentmux::relay::load_relay_runtime_configuration;
 
@@ -55,13 +56,17 @@ fn write_bundle(layer: &Path, bundle_name: &str, body: &str) {
     let bundles = layer.join("bundles");
     fs::create_dir_all(&bundles).expect("create bundles directory");
     fs::write(layer.join("coders.toml"), ACP_CODER).expect("write coders");
-    fs::write(bundles.join(format!("{bundle_name}.toml")), body).expect("write bundle");
+    fs::write(bundles.join(format!("{bundle_name}.toml")), body)
+        .expect("write bundle");
 }
 
 /// The two-layer list every shadowing test uses, override first.
 fn layered(override_layer: &Path, base: &Path) -> ConfigurationRoots {
-    ConfigurationRoots::from_elements([override_layer.to_path_buf(), base.to_path_buf()])
-        .expect("layer list")
+    ConfigurationRoots::from_elements([
+        override_layer.to_path_buf(),
+        base.to_path_buf(),
+    ])
+    .expect("layer list")
 }
 
 #[test]
@@ -77,7 +82,8 @@ fn an_earlier_layer_shadows_a_later_one() {
     );
 
     let loaded =
-        load_bundle_configuration(&layered(&override_layer, &base), "alpha").expect("load bundle");
+        load_bundle_configuration(&layered(&override_layer, &base), "alpha")
+            .expect("load bundle");
     assert_eq!(loaded.members[0].id, "overridden");
 }
 
@@ -87,10 +93,12 @@ fn a_file_only_a_later_layer_holds_is_reached() {
     let base = layer(&temporary, "base");
     let override_layer = layer(&temporary, "rnd");
     write_bundle(&base, "alpha", &bundle_body(&temporary, "base"));
-    fs::create_dir_all(override_layer.join("bundles")).expect("create empty override bundles");
+    fs::create_dir_all(override_layer.join("bundles"))
+        .expect("create empty override bundles");
 
     let loaded =
-        load_bundle_configuration(&layered(&override_layer, &base), "alpha").expect("load bundle");
+        load_bundle_configuration(&layered(&override_layer, &base), "alpha")
+            .expect("load bundle");
     assert_eq!(loaded.members[0].id, "base");
 }
 
@@ -106,8 +114,10 @@ fn the_first_layer_wins_across_three_layers() {
     write_bundle(&middle, "alpha", &bundle_body(&temporary, "middle"));
     write_bundle(&first, "alpha", &bundle_body(&temporary, "first"));
 
-    let roots = ConfigurationRoots::from_elements([first, middle, base]).expect("layer list");
-    let loaded = load_bundle_configuration(&roots, "alpha").expect("load bundle");
+    let roots = ConfigurationRoots::from_elements([first, middle, base])
+        .expect("layer list");
+    let loaded =
+        load_bundle_configuration(&roots, "alpha").expect("load bundle");
     assert_eq!(loaded.members[0].id, "first");
 }
 
@@ -145,8 +155,10 @@ fn bundle_directories_union_by_identifier() {
     // Whole-directory replacement would force a layer redefining one bundle to
     // restate every other one.
     let definitions =
-        effective_bundle_definitions(&layered(&override_layer, &base)).expect("enumeration");
-    let identifiers: Vec<&str> = definitions.keys().map(String::as_str).collect();
+        effective_bundle_definitions(&layered(&override_layer, &base))
+            .expect("enumeration");
+    let identifiers: Vec<&str> =
+        definitions.keys().map(String::as_str).collect();
     assert_eq!(identifiers, ["alpha", "beta"]);
     assert_eq!(definitions["alpha"], base.join("bundles/alpha.toml"));
     assert_eq!(
@@ -170,11 +182,12 @@ fn enumeration_includes_a_bundle_only_one_layer_defines() {
     // Enumeration feeds relay startup/autostart, group operations, TUI choices,
     // and every all-bundle listing. Reading only one directory would leave a
     // bundle loadable by name but invisible to all of them.
-    let names: Vec<String> = load_bundle_group_memberships(&layered(&override_layer, &base))
-        .expect("load memberships")
-        .into_iter()
-        .map(|membership| membership.bundle_name)
-        .collect();
+    let names: Vec<String> =
+        load_bundle_group_memberships(&layered(&override_layer, &base))
+            .expect("load memberships")
+            .into_iter()
+            .map(|membership| membership.bundle_name)
+            .collect();
     assert_eq!(names, ["alpha", "beta"]);
 }
 
@@ -202,7 +215,8 @@ coder = "acp"
     );
 
     let memberships =
-        load_bundle_group_memberships(&layered(&override_layer, &base)).expect("load memberships");
+        load_bundle_group_memberships(&layered(&override_layer, &base))
+            .expect("load memberships");
     assert_eq!(memberships.len(), 1);
     assert_eq!(memberships[0].bundle_name, "alpha");
     assert_eq!(memberships[0].groups, ["overridden"]);
@@ -213,12 +227,17 @@ fn relay_settings_resolve_through_the_layer_list() {
     let temporary = TempDir::new().expect("temporary");
     let base = layer(&temporary, "base");
     let override_layer = layer(&temporary, "rnd");
-    fs::write(base.join("relay.toml"), "watch-bundles = true\n").expect("write base relay.toml");
+    fs::write(base.join("relay.toml"), "watch-bundles = true\n")
+        .expect("write base relay.toml");
     fs::write(override_layer.join("relay.toml"), "watch-bundles = false\n")
         .expect("write override relay.toml");
 
-    let loaded = load_relay_runtime_configuration(&layered(&override_layer, &base), None, None)
-        .expect("load relay settings");
+    let loaded = load_relay_runtime_configuration(
+        &layered(&override_layer, &base),
+        None,
+        None,
+    )
+    .expect("load relay settings");
     assert!(
         !loaded.watch_bundles,
         "relay.toml must resolve through the same lookup as every other file"
@@ -230,12 +249,17 @@ fn a_malformed_relay_file_does_not_fall_through_to_a_later_layer() {
     let temporary = TempDir::new().expect("temporary");
     let base = layer(&temporary, "base");
     let override_layer = layer(&temporary, "rnd");
-    fs::write(base.join("relay.toml"), "watch-bundles = true\n").expect("write base relay.toml");
+    fs::write(base.join("relay.toml"), "watch-bundles = true\n")
+        .expect("write base relay.toml");
     fs::write(override_layer.join("relay.toml"), "watch-bundles = [\n")
         .expect("write malformed override relay.toml");
 
-    load_relay_runtime_configuration(&layered(&override_layer, &base), None, None)
-        .expect_err("a malformed file must fault rather than fall through");
+    load_relay_runtime_configuration(
+        &layered(&override_layer, &base),
+        None,
+        None,
+    )
+    .expect_err("a malformed file must fault rather than fall through");
 }
 
 #[test]
@@ -248,7 +272,11 @@ fn a_missing_file_reports_against_the_base_layer() {
     // creation site a reader would infer; naming the override layer would
     // suggest the file must be created in the layer that exists to shadow one.
     assert_eq!(
-        effective_configuration_path(&layered(&override_layer, &base), "ui.toml").expect("lookup"),
+        effective_configuration_path(
+            &layered(&override_layer, &base),
+            "ui.toml"
+        )
+        .expect("lookup"),
         base.join("ui.toml")
     );
 }
@@ -292,10 +320,13 @@ coder = "acp"
     write_bundle(&override_layer, "beta", body);
 
     let roots = layered(&override_layer, &base);
-    let from_base = load_bundle_configuration(&roots, "alpha").expect("load base bundle");
-    let from_override = load_bundle_configuration(&roots, "beta").expect("load override bundle");
+    let from_base =
+        load_bundle_configuration(&roots, "alpha").expect("load base bundle");
+    let from_override = load_bundle_configuration(&roots, "beta")
+        .expect("load override bundle");
     assert_eq!(
-        from_base.members[0].working_directory, from_override.members[0].working_directory,
+        from_base.members[0].working_directory,
+        from_override.members[0].working_directory,
         "a layer must not become a resolution base for the paths it supplies"
     );
 }

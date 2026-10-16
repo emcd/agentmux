@@ -36,15 +36,22 @@ fn new_peer_fixture(
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &["tui"]);
+    write_bundle_configuration(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["tui"],
+    );
     write_tui_configuration(
         &config_root,
         Some("alpha"),
         Some("user"),
         &[("user", "default", Some("Operator"))],
     );
-    let alpha_paths = BundleRuntimePaths::resolve(&state_root, "alpha").expect("alpha paths");
-    ensure_bundle_runtime_directory(&alpha_paths).expect("ensure alpha runtime directory");
+    let alpha_paths = BundleRuntimePaths::resolve(&state_root, "alpha")
+        .expect("alpha paths");
+    ensure_bundle_runtime_directory(&alpha_paths)
+        .expect("ensure alpha runtime directory");
 
     let mut responses = HashMap::new();
     responses.insert(
@@ -81,7 +88,10 @@ fn new_peer_fixture(
     )
 }
 
-fn run_new_peer(fixture: &NewPeerFixture, extra: &[&str]) -> std::process::Output {
+fn run_new_peer(
+    fixture: &NewPeerFixture,
+    extra: &[&str],
+) -> std::process::Output {
     let mut args = vec!["new", "peer", "rnd-main@RELAY", "--scope", "all"];
     args.extend_from_slice(extra);
     Command::new(env!("CARGO_BIN_EXE_agentmux"))
@@ -101,7 +111,9 @@ fn run_new_peer(fixture: &NewPeerFixture, extra: &[&str]) -> std::process::Outpu
 fn scope_advisory() -> Vec<RelayDiagnostic> {
     vec![RelayDiagnostic {
         code: "advisory_scope_resembles_policy_tier".to_string(),
-        message: "ingress scope 'all' is a policy-tier value, not an ingress scope".to_string(),
+        message:
+            "ingress scope 'all' is a policy-tier value, not an ingress scope"
+                .to_string(),
     }]
 }
 
@@ -147,8 +159,8 @@ fn new_peer_json_mode_keeps_the_advisory_off_stdout() {
 
     // A caller parsing stdout as JSON must still get parseable JSON, so the
     // advisory belongs on stderr in this mode too.
-    let payload: Value =
-        serde_json::from_slice(&output.stdout).expect("stdout must remain parseable JSON");
+    let payload: Value = serde_json::from_slice(&output.stdout)
+        .expect("stdout must remain parseable JSON");
     assert_eq!(payload["principal_id"], "rnd-main@RELAY");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(

@@ -51,7 +51,10 @@ use anyhow::{Context, Result, anyhow};
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
+    },
 };
 use libghostty_vt::{
     Terminal, TerminalOptions,
@@ -143,7 +146,8 @@ fn main() -> Result<()> {
 
     terminal
         .on_pty_write(|_t, data| {
-            PTY_RESPONSE_BUF.with(|buf| buf.borrow_mut().extend_from_slice(data));
+            PTY_RESPONSE_BUF
+                .with(|buf| buf.borrow_mut().extend_from_slice(data));
         })
         .map_err(|e| anyhow!("on_pty_write: {e}"))?;
 
@@ -161,8 +165,9 @@ fn main() -> Result<()> {
     terminal
         .on_device_attributes(|_t| {
             use libghostty_vt::terminal::{
-                ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType,
-                PrimaryDeviceAttributes, SecondaryDeviceAttributes,
+                ConformanceLevel, DeviceAttributeFeature, DeviceAttributes,
+                DeviceType, PrimaryDeviceAttributes,
+                SecondaryDeviceAttributes,
             };
             Some(DeviceAttributes {
                 primary: PrimaryDeviceAttributes::new(
@@ -207,11 +212,11 @@ fn main() -> Result<()> {
                     if tx_bytes.send(chunk.clone()).is_err() {
                         break;
                     }
-                }
+                },
                 Err(e) => {
                     eprintln!("[pty reader] {e}");
                     break;
-                }
+                },
             }
         }
         eprintln!("[pty reader] exited");
@@ -221,9 +226,11 @@ fn main() -> Result<()> {
     let mut stdout = std::io::stdout();
     execute!(stdout, EnterAlternateScreen).context("EnterAlternateScreen")?;
     let backend = CrosstermBackend::new(stdout);
-    let mut ratatui_term = RatatuiTerminal::new(backend).context("ratatui Terminal::new")?;
+    let mut ratatui_term =
+        RatatuiTerminal::new(backend).context("ratatui Terminal::new")?;
 
-    let run_result = run_loop(&mut ratatui_term, &mut terminal, rx_bytes, pty_master);
+    let run_result =
+        run_loop(&mut ratatui_term, &mut terminal, rx_bytes, pty_master);
 
     disable_raw_mode().ok();
     execute!(ratatui_term.backend_mut(), LeaveAlternateScreen).ok();
@@ -233,7 +240,9 @@ fn main() -> Result<()> {
     run_result
 }
 
-fn parse_args(args: &[String]) -> Result<(String, Vec<String>, Option<PathBuf>, TermProtocol)> {
+fn parse_args(
+    args: &[String],
+) -> Result<(String, Vec<String>, Option<PathBuf>, TermProtocol)> {
     let mut program: Option<String> = None;
     let mut program_args: Vec<String> = Vec::new();
     let mut cwd: Option<PathBuf> = None;
@@ -244,14 +253,14 @@ fn parse_args(args: &[String]) -> Result<(String, Vec<String>, Option<PathBuf>, 
             "-C" | "--cwd" => {
                 cwd = args.get(i + 1).map(PathBuf::from);
                 i += 2;
-            }
+            },
             "--term-protocol" => {
-                let value = args
-                    .get(i + 1)
-                    .ok_or_else(|| anyhow!("--term-protocol requires a value"))?;
+                let value = args.get(i + 1).ok_or_else(|| {
+                    anyhow!("--term-protocol requires a value")
+                })?;
                 term_protocol = Some(parse_term_protocol(value)?);
                 i += 2;
-            }
+            },
             other => {
                 if program.is_none() {
                     program = Some(other.to_string());
@@ -259,7 +268,7 @@ fn parse_args(args: &[String]) -> Result<(String, Vec<String>, Option<PathBuf>, 
                     program_args.push(other.to_string());
                 }
                 i += 1;
-            }
+            },
         }
     }
     let program = program.unwrap_or_else(|| "/bin/bash".to_string());
@@ -289,7 +298,7 @@ fn parse_term_protocol(value: &str) -> Result<TermProtocol> {
                 "invalid --term-protocol {other:?}; expected one of: \
                  xterm-256color, xterm-kitty, alacritty, foot, wezterm, screen-256color"
             ));
-        }
+        },
     })
 }
 
@@ -300,7 +309,8 @@ fn run_loop(
     pty_master: Arc<PtyMaster>,
 ) -> Result<()> {
     let mut enc = KeyEnc::new().map_err(|e| anyhow!("KeyEnc::new: {e}"))?;
-    let mut key_event = KeyEventBuf::new().map_err(|e| anyhow!("KeyEventBuf::new: {e}"))?;
+    let mut key_event =
+        KeyEventBuf::new().map_err(|e| anyhow!("KeyEventBuf::new: {e}"))?;
     let mut encoded: Vec<u8> = Vec::with_capacity(64);
 
     loop {
@@ -380,7 +390,8 @@ fn handle_key(
             .write_all(encoded)
             .map_err(|e| anyhow!("pty write: {e}"))?;
     }
-    Ok(key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
+    Ok(key.modifiers.contains(KeyModifiers::CONTROL)
+        && key.code == KeyCode::Char('c'))
 }
 
 fn crossterm_mods_to_libghostty(m: KeyModifiers) -> Mods {
@@ -461,7 +472,7 @@ fn render_screen(frame: &mut Frame<'_>, terminal: &Terminal<'_, '_>) {
                 frame.area(),
             );
             return;
-        }
+        },
     };
 
     let bytes = match formatter.format_alloc(None) {
@@ -473,7 +484,7 @@ fn render_screen(frame: &mut Frame<'_>, terminal: &Terminal<'_, '_>) {
                 frame.area(),
             );
             return;
-        }
+        },
     };
     let text = std::str::from_utf8(&bytes).unwrap_or("<non-utf8>");
 
@@ -506,7 +517,8 @@ fn render_screen(frame: &mut Frame<'_>, terminal: &Terminal<'_, '_>) {
     let cursor_x = terminal.cursor_x().unwrap_or(0);
     let cursor_y = terminal.cursor_y().unwrap_or(0);
     if cursor_x < inner.width && cursor_y < inner.height {
-        let cursor_block = Rect::new(inner.x + cursor_x, inner.y + cursor_y, 1, 1);
+        let cursor_block =
+            Rect::new(inner.x + cursor_x, inner.y + cursor_y, 1, 1);
         frame.render_widget(
             Paragraph::new("").style(Style::default().bg(Color::Gray)),
             cursor_block,

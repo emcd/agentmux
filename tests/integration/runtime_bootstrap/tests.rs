@@ -54,8 +54,8 @@ fn concurrent_bootstrap_spawns_single_relay() {
             barrier.wait();
             bootstrap_relay(&paths, options, || {
                 if spawn_count.fetch_add(1, Ordering::SeqCst) == 0 {
-                    let bound =
-                        UnixListener::bind(&paths.relay_socket).expect("bind relay listener");
+                    let bound = UnixListener::bind(&paths.relay_socket)
+                        .expect("bind relay listener");
                     *listener.lock().expect("listener lock") = Some(bound);
                     fs::write(&paths.relay_ready_sentinel, b"")
                         .expect("write relay ready sentinel");
@@ -95,8 +95,11 @@ fn bootstrap_removes_stale_socket_before_spawn() {
             !paths.relay_socket.exists(),
             "stale socket should be removed"
         );
-        listener = Some(UnixListener::bind(&paths.relay_socket).expect("bind listener"));
-        fs::write(&paths.relay_ready_sentinel, b"").expect("write relay ready sentinel");
+        listener = Some(
+            UnixListener::bind(&paths.relay_socket).expect("bind listener"),
+        );
+        fs::write(&paths.relay_ready_sentinel, b"")
+            .expect("write relay ready sentinel");
         Ok(())
     })
     .expect("bootstrap should succeed");
@@ -132,7 +135,8 @@ async fn mcp_initializes_without_active_bundle_context() {
     assert_eq!(help_payload["namespace"], "agentmux");
 
     let mut send_arguments = Map::new();
-    send_arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    send_arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     send_arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("alpha".to_string())]),
@@ -176,7 +180,8 @@ async fn mcp_unknown_bundle_starts_green_and_reports_at_tool_time() {
     assert_eq!(decode_tool_payload(&help_response)["namespace"], "agentmux");
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("alpha".to_string())]),
@@ -213,8 +218,8 @@ async fn mcp_associates_from_the_injected_bring_up_environment() {
     let relay_socket = state_root.join("relay.sock");
     let relay = FakeRelay::start(
         relay_socket,
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
@@ -234,8 +239,8 @@ async fn mcp_associates_from_the_injected_bring_up_environment() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
 
     // The channel through which bring-up states the identity it is starting,
@@ -258,7 +263,8 @@ async fn mcp_associates_from_the_injected_bring_up_environment() {
     .await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),
@@ -292,8 +298,8 @@ async fn mcp_resolves_session_by_matching_declared_member_directories() {
     let relay_socket = state_root.join("relay.sock");
     let relay = FakeRelay::start(
         relay_socket,
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
@@ -313,8 +319,8 @@ async fn mcp_resolves_session_by_matching_declared_member_directories() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
 
     // Bundle from the default tier, session from nothing at all: the working
@@ -336,7 +342,8 @@ async fn mcp_resolves_session_by_matching_declared_member_directories() {
     .await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),
@@ -352,7 +359,8 @@ async fn mcp_resolves_session_by_matching_declared_member_directories() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_retains_an_uncreatable_inscriptions_path_while_still_serving_the_protocol() {
+async fn mcp_retains_an_uncreatable_inscriptions_path_while_still_serving_the_protocol()
+ {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path().to_path_buf();
     let workspace = root.join("outside");
@@ -392,7 +400,8 @@ async fn mcp_retains_an_uncreatable_inscriptions_path_while_still_serving_the_pr
     assert_eq!(decode_tool_payload(&help_response)["namespace"], "agentmux");
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),
@@ -459,7 +468,8 @@ async fn mcp_reports_argument_faults_ahead_of_a_retained_startup_fault() {
     ];
     let mut request_id = 2;
     for (tool, arguments) in malformed {
-        let arguments = arguments.as_object().expect("arguments object").clone();
+        let arguments =
+            arguments.as_object().expect("arguments object").clone();
         let response = harness.call_tool(request_id, tool, arguments).await;
         assert_eq!(
             response["error"]["data"]["code"],
@@ -495,7 +505,8 @@ async fn mcp_reports_argument_faults_ahead_of_a_retained_startup_fault() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_refuses_an_invalid_session_selector_rather_than_binding_the_directory_match() {
+async fn mcp_refuses_an_invalid_session_selector_rather_than_binding_the_directory_match()
+ {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path().to_path_buf();
     let workspace = root.join("master");
@@ -545,7 +556,8 @@ async fn mcp_refuses_an_invalid_session_selector_rather_than_binding_the_directo
     .await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),
@@ -582,8 +594,8 @@ async fn mcp_reaches_the_relay_of_the_named_state_directory() {
     let relay_socket = state_root.join("relay.sock");
     let relay = FakeRelay::start(
         relay_socket,
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("list") => json!({
                     "kind": "list",
                     "schema_version": "1",
@@ -604,8 +616,8 @@ async fn mcp_reaches_the_relay_of_the_named_state_directory() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
 
     let mut harness = McpHarness::spawn_with_environment(
@@ -675,7 +687,8 @@ async fn mcp_retains_absent_configuration_root_fault_until_tool_time() {
     assert_eq!(decode_tool_payload(&help_response)["namespace"], "agentmux");
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("alpha".to_string())]),
@@ -707,7 +720,8 @@ async fn mcp_retains_absent_configuration_root_fault_until_tool_time() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn mcp_reports_malformed_request_on_its_own_terms_not_the_retained_fault() {
+async fn mcp_reports_malformed_request_on_its_own_terms_not_the_retained_fault()
+ {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path().to_path_buf();
     let workspace = root.join("outside");
@@ -729,7 +743,8 @@ async fn mcp_reports_malformed_request_on_its_own_terms_not_the_retained_fault()
     // A malformed call must report its own defect. Reporting the retained
     // startup fault instead would send the caller to fix the wrong thing.
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert("targets".to_string(), Value::Array(Vec::new()));
     arguments.insert("broadcast".to_string(), Value::Bool(false));
     let response = harness.call_tool(2, "send", arguments).await;
@@ -773,7 +788,8 @@ async fn mcp_unknown_flag_does_not_erase_the_tool_surface() {
     assert_eq!(decode_tool_payload(&help_response)["namespace"], "agentmux");
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("alpha".to_string())]),

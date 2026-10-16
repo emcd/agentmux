@@ -23,23 +23,24 @@ use keyboard::KeyboardEnhancementSession;
 
 pub(crate) use actions::context_actions;
 pub use actions::{
-    Action, AffectedClasses, BindingConfiguration, BindingContext, CapabilityClass, ChordError,
-    ChordPattern, ConfiguredAction, ConfiguredBinding, EffectiveBindings, HelpEntry, HelpSection,
-    HelpSource, PrimaryModifier, UnreachableAction, binding_for, context_bindings, default_binding,
-    default_help_bindings, help_bindings, interaction_choice_hint, interaction_write_hint,
-    parse_chord, picker_hint, primary_modifier, quit_unreachable, typing_binding,
-    unreachable_actions,
+    Action, AffectedClasses, BindingConfiguration, BindingContext,
+    CapabilityClass, ChordError, ChordPattern, ConfiguredAction,
+    ConfiguredBinding, EffectiveBindings, HelpEntry, HelpSection, HelpSource,
+    PrimaryModifier, UnreachableAction, binding_for, context_bindings,
+    default_binding, default_help_bindings, help_bindings,
+    interaction_choice_hint, interaction_write_hint, parse_chord, picker_hint,
+    primary_modifier, quit_unreachable, typing_binding, unreachable_actions,
 };
 pub use keyboard::{KeyboardEnhancement, format_keyboard_enhancement_lines};
 pub use state::TuiLaunchOptions;
 pub use status::{
-    BundleStatusDisplay, BundleStatusSeverity, RecipientReadiness, StartupFailureSummary,
-    bundle_status_severity, format_bundle_status_line, format_recipient_picker_label,
-    format_startup_failure_lines,
+    BundleStatusDisplay, BundleStatusSeverity, RecipientReadiness,
+    StartupFailureSummary, bundle_status_severity, format_bundle_status_line,
+    format_recipient_picker_label, format_startup_failure_lines,
 };
 pub use target::{
-    autocomplete_recipient_input, merge_tui_targets, parse_tui_target_identifier,
-    sender_bound_bundle,
+    autocomplete_recipient_input, merge_tui_targets,
+    parse_tui_target_identifier, sender_bound_bundle,
 };
 
 struct TerminalRestoreGuard;
@@ -57,7 +58,8 @@ pub fn run(options: TuiLaunchOptions) -> Result<(), RuntimeError> {
     // reply is not swallowed by the loop's input drain.
     let keyboard_session = KeyboardEnhancementSession::activate();
     let _signal_handlers = install_shutdown_signal_handlers()?;
-    let result = run_loop(&mut terminal, options, keyboard_session.enhancement());
+    let result =
+        run_loop(&mut terminal, options, keyboard_session.enhancement());
     // Explicit so the pop happens while the terminal is still in the mode the
     // flags were pushed in, rather than relying on where the binding above sits
     // relative to the restore guard. On a panic the declaration order (session
@@ -82,7 +84,9 @@ fn run_loop(
         if needs_redraw {
             terminal
                 .draw(|frame| render::render(frame, &mut state))
-                .map_err(|source| RuntimeError::io("render tui frame", source))?;
+                .map_err(|source| {
+                    RuntimeError::io("render tui frame", source)
+                })?;
             needs_redraw = false;
         }
 
@@ -91,11 +95,12 @@ fn run_loop(
         // unresponsive); handling input first keeps keystrokes from queueing
         // behind that stall.
         let mut handled_input = false;
-        while event::poll(Duration::ZERO)
-            .map_err(|source| RuntimeError::io("poll terminal events", source))?
-        {
-            let event =
-                event::read().map_err(|source| RuntimeError::io("read terminal event", source))?;
+        while event::poll(Duration::ZERO).map_err(|source| {
+            RuntimeError::io("poll terminal events", source)
+        })? {
+            let event = event::read().map_err(|source| {
+                RuntimeError::io("read terminal event", source)
+            })?;
             handled_input = true;
             needs_redraw = true;
             if matches!(event, Event::Resize(_, _)) {
@@ -114,8 +119,9 @@ fn run_loop(
             continue;
         }
 
-        event::poll(Duration::from_millis(80))
-            .map_err(|source| RuntimeError::io("poll terminal events", source))?;
+        event::poll(Duration::from_millis(80)).map_err(|source| {
+            RuntimeError::io("poll terminal events", source)
+        })?;
     }
     Ok(())
 }

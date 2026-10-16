@@ -126,7 +126,8 @@ fn with_short_address<T>(
     // turn a deep-but-absent state root into a path-length fault when the truth
     // is that no relay lives there.
     let directory = open_directory_reference(parent)?;
-    let reference = PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
+    let reference =
+        PathBuf::from(format!("/proc/self/fd/{}", directory.as_raw_fd()));
     // `/proc` is not always mounted, even on Linux. A reference that does not
     // resolve back to the directory just opened is unusable.
     if !reference.is_dir() {
@@ -151,8 +152,10 @@ fn with_short_address<T>(
 /// would reject a socket the kernel is willing to serve.
 #[cfg(target_os = "linux")]
 fn open_directory_reference(parent: &Path) -> io::Result<OwnedFd> {
-    let path = CString::new(parent.as_os_str().as_bytes())
-        .map_err(|source| io::Error::new(io::ErrorKind::InvalidInput, source))?;
+    let path =
+        CString::new(parent.as_os_str().as_bytes()).map_err(|source| {
+            io::Error::new(io::ErrorKind::InvalidInput, source)
+        })?;
     // SAFETY: `path` is a valid NUL-terminated C string that outlives the call,
     // and the returned descriptor is handed straight to `OwnedFd`, which owns
     // the close.

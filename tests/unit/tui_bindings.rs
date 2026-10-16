@@ -36,7 +36,11 @@ fn control(character: char) -> (KeyCode, KeyModifiers) {
 
 /// Resolves a chord the way dispatch will: the global rows first, then the
 /// surface the workbench is on.
-fn resolve_here(workbench: &Workbench, code: KeyCode, modifiers: KeyModifiers) -> Option<Action> {
+fn resolve_here(
+    workbench: &Workbench,
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> Option<Action> {
     workbench
         .binding_lookup_order()
         .into_iter()
@@ -48,12 +52,17 @@ fn every_context_is_listed_once_in_declaration_order() {
     // `position` matches on every variant, so a context added later fails to
     // compile until it is placed in `ALL` too. This pins the two together.
     for (index, context) in BindingContext::ALL.iter().enumerate() {
-        assert_eq!(context.position(), index, "{context:?} is misplaced in ALL");
+        assert_eq!(
+            context.position(),
+            index,
+            "{context:?} is misplaced in ALL"
+        );
     }
 }
 
 #[test]
-fn the_active_binding_context_follows_the_open_surface_then_the_focused_field() {
+fn the_active_binding_context_follows_the_open_surface_then_the_focused_field()
+{
     let mut workbench = binding_workbench();
     workbench.set_focus(WorkbenchField::To);
     assert_eq!(workbench.binding_context(), BindingContext::ComposeTo);
@@ -209,7 +218,9 @@ fn enter_binds_the_three_declared_chords_and_no_other_modifier_set() {
 /// Every modifier set a terminal can report other than the three `Enter` rows
 /// declare. Swept rather than sampled, so a shape that answered under some
 /// unlisted combination could not hide in the gap between examples.
-fn undeclared_enter_modifier_sets(declared: &[KeyModifiers]) -> Vec<KeyModifiers> {
+fn undeclared_enter_modifier_sets(
+    declared: &[KeyModifiers],
+) -> Vec<KeyModifiers> {
     (0..=KeyModifiers::all().bits())
         .filter_map(KeyModifiers::from_bits)
         .filter(|modifiers| !declared.contains(modifiers))
@@ -255,7 +266,8 @@ fn a_control_chord_does_not_match_a_further_modifier() {
 
 #[test]
 fn each_context_keeps_the_enter_action_its_handler_had() {
-    let bare = |context| default_binding(context, KeyCode::Enter, KeyModifiers::NONE);
+    let bare =
+        |context| default_binding(context, KeyCode::Enter, KeyModifiers::NONE);
     assert_eq!(
         bare(BindingContext::ComposeTo),
         Some(Action::AcceptToCompletion)
@@ -289,9 +301,12 @@ fn each_context_keeps_the_enter_action_its_handler_had() {
 #[test]
 fn every_context_binding_enter_also_binds_both_modified_enters() {
     for context in BindingContext::ALL {
-        let bare = default_binding(context, KeyCode::Enter, KeyModifiers::NONE);
-        let shifted = default_binding(context, KeyCode::Enter, KeyModifiers::SHIFT);
-        let controlled = default_binding(context, KeyCode::Enter, KeyModifiers::CONTROL);
+        let bare =
+            default_binding(context, KeyCode::Enter, KeyModifiers::NONE);
+        let shifted =
+            default_binding(context, KeyCode::Enter, KeyModifiers::SHIFT);
+        let controlled =
+            default_binding(context, KeyCode::Enter, KeyModifiers::CONTROL);
         if bare.is_none() {
             assert!(
                 shifted.is_none() && controlled.is_none(),
@@ -311,12 +326,14 @@ fn every_context_binding_enter_also_binds_both_modified_enters() {
 }
 
 #[test]
-fn modified_enter_resolves_to_the_same_action_as_bare_enter_in_every_context() {
+fn modified_enter_resolves_to_the_same_action_as_bare_enter_in_every_context()
+{
     // Capability neutrality, asserted over the whole table rather than context
     // by context: a row added later cannot reintroduce a chord that only works
     // on terminals which disambiguate modified keys.
     for context in BindingContext::ALL {
-        let bare = default_binding(context, KeyCode::Enter, KeyModifiers::NONE);
+        let bare =
+            default_binding(context, KeyCode::Enter, KeyModifiers::NONE);
         assert_eq!(
             default_binding(context, KeyCode::Enter, KeyModifiers::SHIFT),
             bare,
@@ -355,7 +372,8 @@ fn shift_enter_in_the_message_field_sends_the_message() {
 }
 
 #[test]
-fn control_j_inserts_a_newline_exactly_in_the_contexts_that_own_a_text_draft() {
+fn control_j_inserts_a_newline_exactly_in_the_contexts_that_own_a_text_draft()
+{
     let (code, modifiers) = control('j');
     assert_eq!(
         default_binding(BindingContext::ComposeMessage, code, modifiers),
@@ -453,12 +471,17 @@ fn the_viewport_chords_reach_the_help_overlay_and_nothing_else() {
     ];
     for (code, action) in viewport {
         assert_eq!(
-            default_binding(BindingContext::HelpOverlay, code, KeyModifiers::NONE),
+            default_binding(
+                BindingContext::HelpOverlay,
+                code,
+                KeyModifiers::NONE
+            ),
             Some(action),
             "the help overlay does not bind {code:?}"
         );
     }
-    let scroll_actions: Vec<Action> = viewport.iter().map(|(_, action)| *action).collect();
+    let scroll_actions: Vec<Action> =
+        viewport.iter().map(|(_, action)| *action).collect();
     for context in BindingContext::ALL {
         if context == BindingContext::HelpOverlay {
             continue;
@@ -466,7 +489,8 @@ fn the_viewport_chords_reach_the_help_overlay_and_nothing_else() {
         for (code, _) in viewport {
             let resolved = default_binding(context, code, KeyModifiers::NONE);
             assert!(
-                resolved.is_none_or(|action| !scroll_actions.contains(&action)),
+                resolved
+                    .is_none_or(|action| !scroll_actions.contains(&action)),
                 "{context:?} resolves {code:?} to {resolved:?}, a help-overlay viewport action"
             );
         }

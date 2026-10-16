@@ -10,7 +10,8 @@ use super::helpers::*;
 /// The exact remedy string the server advertises for an unassociated MCP
 /// server, shared by the error `details`, the help association block, and the
 /// `get_info` instructions.
-const CANONICAL_REMEDY: &str = "agentmux host mcp --bundle <name> --session-name <id>";
+const CANONICAL_REMEDY: &str =
+    "agentmux host mcp --bundle <name> --session-name <id>";
 
 /// Asserts a response is the canonical unassociated-server rejection: a
 /// validation-shaped JSON-RPC error (`invalid_params`, not `internal_error`)
@@ -36,7 +37,9 @@ fn assert_unassociated(response: &Value) {
     );
 }
 
-fn arguments(pairs: impl IntoIterator<Item = (&'static str, Value)>) -> Map<String, Value> {
+fn arguments(
+    pairs: impl IntoIterator<Item = (&'static str, Value)>,
+) -> Map<String, Value> {
     pairs
         .into_iter()
         .map(|(key, value)| (key.to_string(), value))
@@ -70,7 +73,10 @@ async fn unassociated_server_rejects_every_relay_backed_tool() {
         .call_tool(
             3,
             "look",
-            arguments([("target_session", Value::String("bravo".to_string()))]),
+            arguments([(
+                "target_session",
+                Value::String("bravo".to_string()),
+            )]),
         )
         .await;
     assert_unassociated(&look);
@@ -218,7 +224,8 @@ async fn unassociated_server_help_and_get_info_surface_remedy() {
         harness.instructions()
     );
 
-    let payload = decode_tool_payload(&harness.call_tool(2, "help", Map::new()).await);
+    let payload =
+        decode_tool_payload(&harness.call_tool(2, "help", Map::new()).await);
     assert_eq!(payload["association"]["associated"], false);
     assert_eq!(payload["association"]["remedy"], CANONICAL_REMEDY);
 }
@@ -240,7 +247,8 @@ async fn associated_server_help_and_get_info_surface_association() {
         harness.instructions()
     );
 
-    let payload = decode_tool_payload(&harness.call_tool(2, "help", Map::new()).await);
+    let payload =
+        decode_tool_payload(&harness.call_tool(2, "help", Map::new()).await);
     assert_eq!(payload["association"]["associated"], true);
     assert_eq!(payload["association"]["namespace"], BUNDLE_NAME);
     assert_eq!(payload["association"]["session"], SENDER_SESSION);

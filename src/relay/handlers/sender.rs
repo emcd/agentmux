@@ -7,10 +7,13 @@
 use serde_json::json;
 
 use crate::configuration::{
-    BundleConfiguration, BundleMember, TargetConfiguration, TmuxTargetConfiguration,
+    BundleConfiguration, BundleMember, TargetConfiguration,
+    TmuxTargetConfiguration,
 };
 
-use super::super::authorization::{AuthorizationContext, has_ui_session, ui_session_display_name};
+use super::super::authorization::{
+    AuthorizationContext, has_ui_session, ui_session_display_name,
+};
 use super::super::{RelayError, relay_error};
 
 #[derive(Clone, Debug)]
@@ -68,14 +71,22 @@ pub(super) fn resolve_sender_in_namespace(
     detail_field: &str,
 ) -> Result<SenderIdentity, RelayError> {
     match home_bundle {
-        Some(home_bundle) => {
-            resolve_sender_identity(home_bundle, authorization, requester_session, detail_field)
-        }
-        None if has_ui_session(authorization, requester_session) => Ok(SenderIdentity {
-            session_id: requester_session.to_string(),
-            display_name: ui_session_display_name(authorization, requester_session)
+        Some(home_bundle) => resolve_sender_identity(
+            home_bundle,
+            authorization,
+            requester_session,
+            detail_field,
+        ),
+        None if has_ui_session(authorization, requester_session) => {
+            Ok(SenderIdentity {
+                session_id: requester_session.to_string(),
+                display_name: ui_session_display_name(
+                    authorization,
+                    requester_session,
+                )
                 .map(ToString::to_string),
-        }),
+            })
+        },
         None => Err(relay_error(
             "validation_unknown_sender",
             "sender session is not configured",
@@ -103,8 +114,11 @@ pub(super) fn resolve_sender_identity(
     if has_ui_session(authorization, sender_session) {
         return Ok(SenderIdentity {
             session_id: sender_session.to_string(),
-            display_name: ui_session_display_name(authorization, sender_session)
-                .map(ToString::to_string),
+            display_name: ui_session_display_name(
+                authorization,
+                sender_session,
+            )
+            .map(ToString::to_string),
         });
     }
     Err(relay_error(

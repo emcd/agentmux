@@ -21,14 +21,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use agentmux::relay::{RelayRequest, RelayResponse, SendOutcome, request_relay};
+use agentmux::relay::{
+    RelayRequest, RelayResponse, SendOutcome, request_relay,
+};
 use serde_json::Value;
 use tempfile::TempDir;
 use tokio::time::sleep;
 
 use crate::support::relay_delivery::{
-    spawn_relay_with_fake_tmux_and_env, wait_for_relay_ready, write_bundle_configuration,
-    write_fake_tmux_script,
+    spawn_relay_with_fake_tmux_and_env, wait_for_relay_ready,
+    write_bundle_configuration, write_fake_tmux_script,
 };
 
 use super::*;
@@ -67,7 +69,8 @@ const SENDS: usize = 4;
 async fn the_mailbox_returns_to_empty_as_its_executor_drains_it() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
     let state_root = temporary.path().join("state");
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");
@@ -102,12 +105,14 @@ async fn the_mailbox_returns_to_empty_as_its_executor_drains_it() {
 
     shutdown_relay_gracefully(&mut child).await;
 
-    let inscriptions = fs::read_to_string(&inscriptions_path).expect("read relay inscriptions");
+    let inscriptions = fs::read_to_string(&inscriptions_path)
+        .expect("read relay inscriptions");
     let enqueued: Vec<Value> =
         inscription_details(&inscriptions, "relay.delivery.mailbox.enqueued")
             .into_iter()
             .filter(|details| {
-                details.get("target_session").and_then(Value::as_str) == Some("alpha")
+                details.get("target_session").and_then(Value::as_str)
+                    == Some("alpha")
             })
             .collect();
     assert_eq!(
@@ -186,12 +191,14 @@ async fn the_mailbox_returns_to_empty_as_its_executor_drains_it() {
     // `admission::terminal`'s own inline test, which races eight resolvers at a
     // barrier. This assertion guards against a future second resolver reaching
     // the live delivery path; it does not establish that one is handled.
-    let completed = inscription_details(&inscriptions, "relay.send.async.completed");
+    let completed =
+        inscription_details(&inscriptions, "relay.send.async.completed");
     for message_id in &message_ids {
         let owned: Vec<&Value> = completed
             .iter()
             .filter(|details| {
-                details.get("message_id").and_then(Value::as_str) == Some(message_id.as_str())
+                details.get("message_id").and_then(Value::as_str)
+                    == Some(message_id.as_str())
             })
             .collect();
         assert_eq!(
@@ -233,7 +240,8 @@ async fn the_mailbox_returns_to_empty_as_its_executor_drains_it() {
 async fn the_delivered_envelope_carries_the_stamp_the_mailbox_stored() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
     let state_root = temporary.path().join("state");
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");
@@ -266,15 +274,19 @@ async fn the_delivered_envelope_carries_the_stamp_the_mailbox_stored() {
     shutdown_relay_gracefully(&mut child).await;
     let envelopes = read_all_paste_buffers(temporary.path());
 
-    let inscriptions = fs::read_to_string(&inscriptions_path).expect("read relay inscriptions");
-    let metadata = inscription_details(&inscriptions, "relay.send.envelope.metadata");
-    let enqueued = inscription_details(&inscriptions, "relay.delivery.mailbox.enqueued");
+    let inscriptions = fs::read_to_string(&inscriptions_path)
+        .expect("read relay inscriptions");
+    let metadata =
+        inscription_details(&inscriptions, "relay.send.envelope.metadata");
+    let enqueued =
+        inscription_details(&inscriptions, "relay.delivery.mailbox.enqueued");
     let mut stamps = Vec::with_capacity(SENDS);
     for message_id in &message_ids {
         let owned: Vec<&Value> = metadata
             .iter()
             .filter(|details| {
-                details.get("message_id").and_then(Value::as_str) == Some(message_id.as_str())
+                details.get("message_id").and_then(Value::as_str)
+                    == Some(message_id.as_str())
             })
             .collect();
         assert_eq!(
@@ -310,7 +322,9 @@ async fn the_delivered_envelope_carries_the_stamp_the_mailbox_stored() {
         // statement that nothing was delivered twice.
         let rendered: Vec<&String> = envelopes
             .iter()
-            .filter(|content| content.contains(&format!("Message-Id: {message_id}")))
+            .filter(|content| {
+                content.contains(&format!("Message-Id: {message_id}"))
+            })
             .collect();
         assert_eq!(
             rendered.len(),
@@ -379,10 +393,15 @@ async fn send_one(relay_socket: &Path, index: usize) -> String {
 async fn wait_for_completed_send(inscriptions_path: &Path, message_id: &str) {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        let inscriptions = fs::read_to_string(inscriptions_path).unwrap_or_default();
-        let completed = inscription_details(&inscriptions, "relay.send.async.completed")
-            .into_iter()
-            .any(|details| details.get("message_id").and_then(Value::as_str) == Some(message_id));
+        let inscriptions =
+            fs::read_to_string(inscriptions_path).unwrap_or_default();
+        let completed =
+            inscription_details(&inscriptions, "relay.send.async.completed")
+                .into_iter()
+                .any(|details| {
+                    details.get("message_id").and_then(Value::as_str)
+                        == Some(message_id)
+                });
         if completed {
             return;
         }
@@ -400,13 +419,18 @@ fn inscription_details(inscriptions: &str, event: &str) -> Vec<Value> {
     inscriptions
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|record| record.get("event").and_then(Value::as_str) == Some(event))
+        .filter(|record| {
+            record.get("event").and_then(Value::as_str) == Some(event)
+        })
         .filter_map(|record| record.get("details").cloned())
         .collect()
 }
 
 /// One RFC 822-style header's value from rendered pane-envelope text.
-fn header_value<'text>(envelope: &'text str, header: &str) -> Option<&'text str> {
+fn header_value<'text>(
+    envelope: &'text str,
+    header: &str,
+) -> Option<&'text str> {
     let prefix = format!("{header}: ");
     envelope
         .lines()

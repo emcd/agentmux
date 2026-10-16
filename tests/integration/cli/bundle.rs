@@ -19,7 +19,9 @@ fn up_requires_selector_argument() {
     assert!(!output.status.success(), "command should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("invalid argument <bundle-id>|--group: missing selector"),
+        stderr.contains(
+            "invalid argument <bundle-id>|--group: missing selector"
+        ),
         "unexpected stderr: {stderr}"
     );
 }
@@ -47,7 +49,13 @@ fn up_and_down_report_idempotent_transitions() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
@@ -185,14 +193,18 @@ impl BundleCliHarness {
     /// reach them together. Member ids are keyed to the one shared fake tmux, so
     /// they must be distinct across bundles for the per-session failure controls
     /// to name one bundle's member.
-    fn start_bundles(bundles: &[(&str, &[&str])], groups: Option<&[&str]>) -> Self {
+    fn start_bundles(
+        bundles: &[(&str, &[&str])],
+        groups: Option<&[&str]>,
+    ) -> Self {
         let temporary = TempDir::new().expect("temporary");
         let config_root = temporary.path().join("config");
         let state_root = temporary.path().join("state");
         let inscriptions_root = temporary.path().join("inscriptions");
         fs::create_dir_all(&config_root).expect("create config root");
         fs::create_dir_all(&state_root).expect("create state root");
-        fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+        fs::create_dir_all(&inscriptions_root)
+            .expect("create inscriptions root");
         for (bundle_name, members) in bundles {
             write_bundle_configuration_with_options(
                 &config_root,
@@ -249,7 +261,9 @@ impl BundleCliHarness {
             ])
             .env("AGENTMUX_TMUX_COMMAND", &self.fake_tmux)
             .output()
-            .unwrap_or_else(|source| panic!("run agentmux {arguments:?}: {source}"))
+            .unwrap_or_else(|source| {
+                panic!("run agentmux {arguments:?}: {source}")
+            })
     }
 }
 
@@ -263,7 +277,8 @@ impl Drop for BundleCliHarness {
 }
 
 #[test]
-fn up_reports_a_partially_started_bundle_as_degraded_and_names_the_failed_session() {
+fn up_reports_a_partially_started_bundle_as_degraded_and_names_the_failed_session()
+ {
     let harness = BundleCliHarness::start(&["a", "u"]);
     // `u` is created like any other member; it just never yields a pane, so it
     // is the created-but-not-ready case rather than a creation failure.
@@ -280,7 +295,9 @@ fn up_reports_a_partially_started_bundle_as_degraded_and_names_the_failed_sessio
     assert_eq!(summary["changed_any"], true);
     let failed_sessions = summary["bundles"][0]["details"]["failed_sessions"]
         .as_array()
-        .unwrap_or_else(|| panic!("expected failed_sessions detail: {summary}"));
+        .unwrap_or_else(|| {
+            panic!("expected failed_sessions detail: {summary}")
+        });
     assert_eq!(failed_sessions.len(), 1, "unexpected detail: {summary}");
     assert_eq!(failed_sessions[0]["session_id"], "u");
 
@@ -292,9 +309,11 @@ fn up_reports_a_partially_started_bundle_as_degraded_and_names_the_failed_sessio
 
     // The failure `up` reported has to be the one a following `list` reports, or
     // the two surfaces tell the operator different stories about one bundle.
-    let listed = harness.run(&["list", "principals", "--namespace", "alpha", "--json"]);
+    let listed =
+        harness.run(&["list", "principals", "--namespace", "alpha", "--json"]);
     assert!(listed.status.success(), "list should succeed");
-    let listed_json: Value = serde_json::from_slice(&listed.stdout).expect("decode list payload");
+    let listed_json: Value =
+        serde_json::from_slice(&listed.stdout).expect("decode list payload");
     let failures = listed_json["bundle"]["recent_startup_failures"]
         .as_array()
         .expect("startup failures array");
@@ -328,7 +347,9 @@ fn up_continues_reconciling_after_a_member_fails_to_be_created() {
     assert_eq!(summary["bundles"][0]["outcome"], "degraded");
     let failed_sessions = summary["bundles"][0]["details"]["failed_sessions"]
         .as_array()
-        .unwrap_or_else(|| panic!("expected failed_sessions detail: {summary}"));
+        .unwrap_or_else(|| {
+            panic!("expected failed_sessions detail: {summary}")
+        });
     assert_eq!(failed_sessions.len(), 1, "unexpected detail: {summary}");
     assert_eq!(failed_sessions[0]["session_id"], "a");
     assert_eq!(
@@ -344,15 +365,19 @@ fn up_continues_reconciling_after_a_member_fails_to_be_created() {
     );
 
     // The member after the failed bootstrap must still have been attempted.
-    let listed = harness.run(&["list", "principals", "--namespace", "alpha", "--json"]);
-    let listed_json: Value = serde_json::from_slice(&listed.stdout).expect("decode list payload");
+    let listed =
+        harness.run(&["list", "principals", "--namespace", "alpha", "--json"]);
+    let listed_json: Value =
+        serde_json::from_slice(&listed.stdout).expect("decode list payload");
     let principals = listed_json["bundle"]["principals"]
         .as_array()
         .expect("principals array");
     let surviving = principals
         .iter()
         .find(|principal| principal["id"] == "u@alpha")
-        .unwrap_or_else(|| panic!("expected surviving member in list: {listed_json}"));
+        .unwrap_or_else(|| {
+            panic!("expected surviving member in list: {listed_json}")
+        });
     assert_eq!(
         surviving["ready"], true,
         "the member after the failed bootstrap should still be up: {listed_json}"
@@ -379,7 +404,9 @@ fn up_reports_a_bundle_with_no_ready_session_as_failed() {
     assert_eq!(summary["changed_any"], false);
     let failed_sessions = summary["bundles"][0]["details"]["failed_sessions"]
         .as_array()
-        .unwrap_or_else(|| panic!("expected failed_sessions detail: {summary}"));
+        .unwrap_or_else(|| {
+            panic!("expected failed_sessions detail: {summary}")
+        });
     assert_eq!(failed_sessions.len(), 2, "unexpected detail: {summary}");
 
     assert!(
@@ -395,8 +422,10 @@ fn up_reports_a_bundle_with_no_ready_session_as_failed() {
 
 #[test]
 fn up_exits_non_zero_when_one_bundle_of_a_group_fails() {
-    let harness =
-        BundleCliHarness::start_bundles(&[("alpha", &["a"]), ("beta", &["b"])], Some(&["dev"]));
+    let harness = BundleCliHarness::start_bundles(
+        &[("alpha", &["a"]), ("beta", &["b"])],
+        Some(&["dev"]),
+    );
     // Only `beta`'s member is held unready, so the run genuinely mixes: `alpha`
     // comes up whole and `beta` has nothing serving.
     mark_fake_tmux_session_unready(&harness.fake_tmux, "b");
@@ -459,7 +488,13 @@ fn down_reports_relay_unavailable_when_relay_is_not_running() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
 
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
@@ -491,7 +526,13 @@ fn up_rejects_caller_whose_policy_lacks_updown() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
     write_tui_configuration(
         &config_root,
         None,
@@ -564,7 +605,13 @@ fn up_succeeds_for_operator_policy_with_updown_capability() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
@@ -634,7 +681,13 @@ fn an_earlier_policies_layer_governs_relay_authorization() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
     let override_layer = temporary.path().join("override");
     fs::create_dir_all(&override_layer).expect("create override layer");
     fs::write(
@@ -774,9 +827,13 @@ fn host_relay_summary_json_omits_group_name() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let summary_line = stdout
         .lines()
-        .find(|line| line.trim_start().starts_with('{') && line.contains("\"host_mode\""))
+        .find(|line| {
+            line.trim_start().starts_with('{')
+                && line.contains("\"host_mode\"")
+        })
         .expect("find startup summary json line");
-    let payload: Value = serde_json::from_str(summary_line).expect("parse summary payload");
+    let payload: Value =
+        serde_json::from_str(summary_line).expect("parse summary payload");
     let payload_object = payload.as_object().expect("summary payload object");
     assert_eq!(
         payload_object

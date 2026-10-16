@@ -5,7 +5,10 @@ use regex::Regex;
 use crate::configuration::{
     ConfigurationError,
     fields::normalize_field,
-    raw::{AcpTarget, PtyTarget, RawAcpTarget, RawPtyTarget, RawTmuxTarget, TmuxTarget},
+    raw::{
+        AcpTarget, PtyTarget, RawAcpTarget, RawPtyTarget, RawTmuxTarget,
+        TmuxTarget,
+    },
     types::{AcpChannel, NameValueEntry, PromptReadinessTemplate},
 };
 
@@ -17,13 +20,17 @@ pub(in crate::configuration) fn validate_tmux_target(
     if normalize_field(target.initial_command.as_str()).is_empty() {
         return Err(ConfigurationError::invalid(
             coders_path,
-            format!("coder '{coder_id}' tmux initial-command must be non-empty"),
+            format!(
+                "coder '{coder_id}' tmux initial-command must be non-empty"
+            ),
         ));
     }
     if normalize_field(target.resume_command.as_str()).is_empty() {
         return Err(ConfigurationError::invalid(
             coders_path,
-            format!("coder '{coder_id}' tmux resume-command must be non-empty"),
+            format!(
+                "coder '{coder_id}' tmux resume-command must be non-empty"
+            ),
         ));
     }
 
@@ -31,16 +38,25 @@ pub(in crate::configuration) fn validate_tmux_target(
         if normalize_field(prompt_regex).is_empty() {
             return Err(ConfigurationError::invalid(
                 coders_path,
-                format!("coder '{coder_id}' tmux prompt-regex must be non-empty when set"),
+                format!(
+                    "coder '{coder_id}' tmux prompt-regex must be non-empty when set"
+                ),
             ));
         }
-        compile_prompt_regex(prompt_regex, coders_path, coder_id, "tmux prompt-regex")?;
+        compile_prompt_regex(
+            prompt_regex,
+            coders_path,
+            coder_id,
+            "tmux prompt-regex",
+        )?;
     }
 
     if matches!(target.prompt_inspect_lines, Some(0)) {
         return Err(ConfigurationError::invalid(
             coders_path,
-            format!("coder '{coder_id}' tmux prompt-inspect-lines must be greater than zero"),
+            format!(
+                "coder '{coder_id}' tmux prompt-inspect-lines must be greater than zero"
+            ),
         ));
     }
 
@@ -63,49 +79,68 @@ pub(in crate::configuration) fn validate_acp_target(
             let Some(command) = target.command.as_deref() else {
                 return Err(ConfigurationError::invalid(
                     coders_path,
-                    format!("coder '{coder_id}' ACP stdio target requires non-empty command"),
+                    format!(
+                        "coder '{coder_id}' ACP stdio target requires non-empty command"
+                    ),
                 ));
             };
             if normalize_field(command).is_empty() {
                 return Err(ConfigurationError::invalid(
                     coders_path,
-                    format!("coder '{coder_id}' ACP stdio target requires non-empty command"),
+                    format!(
+                        "coder '{coder_id}' ACP stdio target requires non-empty command"
+                    ),
                 ));
             }
             if target.url.is_some() {
                 return Err(ConfigurationError::invalid(
                     coders_path,
-                    format!("coder '{coder_id}' ACP stdio target must not set url"),
+                    format!(
+                        "coder '{coder_id}' ACP stdio target must not set url"
+                    ),
                 ));
             }
             if !target.headers.is_empty() {
                 return Err(ConfigurationError::invalid(
                     coders_path,
-                    format!("coder '{coder_id}' ACP stdio target must not set headers"),
+                    format!(
+                        "coder '{coder_id}' ACP stdio target must not set headers"
+                    ),
                 ));
             }
-        }
+        },
         AcpChannel::Http => {
             let Some(url) = target.url.as_deref() else {
                 return Err(ConfigurationError::invalid(
                     coders_path,
-                    format!("coder '{coder_id}' ACP http target requires non-empty url"),
+                    format!(
+                        "coder '{coder_id}' ACP http target requires non-empty url"
+                    ),
                 ));
             };
             if normalize_field(url).is_empty() {
                 return Err(ConfigurationError::invalid(
                     coders_path,
-                    format!("coder '{coder_id}' ACP http target requires non-empty url"),
+                    format!(
+                        "coder '{coder_id}' ACP http target requires non-empty url"
+                    ),
                 ));
             }
             if target.command.is_some() {
                 return Err(ConfigurationError::invalid(
                     coders_path,
-                    format!("coder '{coder_id}' ACP http target must not set stdio-only fields"),
+                    format!(
+                        "coder '{coder_id}' ACP http target must not set stdio-only fields"
+                    ),
                 ));
             }
-            validate_name_value_entries(&target.headers, coders_path, coder_id, "headers")?;
-        }
+            validate_name_value_entries(
+                &target.headers,
+                coders_path,
+                coder_id,
+                "headers",
+            )?;
+        },
     }
 
     Ok(AcpTarget {
@@ -130,13 +165,17 @@ fn validate_name_value_entries(
         if normalize_field(entry.name.as_str()).is_empty() {
             return Err(ConfigurationError::invalid(
                 path,
-                format!("coder '{coder_id}' {field_name} entry {index} has empty name"),
+                format!(
+                    "coder '{coder_id}' {field_name} entry {index} has empty name"
+                ),
             ));
         }
         if normalize_field(entry.value.as_str()).is_empty() {
             return Err(ConfigurationError::invalid(
                 path,
-                format!("coder '{coder_id}' {field_name} entry {index} has empty value"),
+                format!(
+                    "coder '{coder_id}' {field_name} entry {index} has empty value"
+                ),
             ));
         }
     }
@@ -180,7 +219,9 @@ pub(in crate::configuration) fn validate_environment_entries(
         if entry.value.contains('\0') {
             return Err(ConfigurationError::invalid(
                 path,
-                format!("{context} environment entry {index} value must not contain NUL"),
+                format!(
+                    "{context} environment entry {index} value must not contain NUL"
+                ),
             ));
         }
     }
@@ -227,7 +268,9 @@ pub(in crate::configuration) fn validate_pty_target(
     if normalize_field(target.initial_command.as_str()).is_empty() {
         return Err(ConfigurationError::invalid(
             coders_path,
-            format!("coder '{coder_id}' pty initial-command must be non-empty"),
+            format!(
+                "coder '{coder_id}' pty initial-command must be non-empty"
+            ),
         ));
     }
     if normalize_field(target.resume_command.as_str()).is_empty() {
@@ -240,15 +283,24 @@ pub(in crate::configuration) fn validate_pty_target(
         if normalize_field(prompt_regex).is_empty() {
             return Err(ConfigurationError::invalid(
                 coders_path,
-                format!("coder '{coder_id}' pty prompt-regex must be non-empty when set"),
+                format!(
+                    "coder '{coder_id}' pty prompt-regex must be non-empty when set"
+                ),
             ));
         }
-        compile_prompt_regex(prompt_regex, coders_path, coder_id, "pty prompt-regex")?;
+        compile_prompt_regex(
+            prompt_regex,
+            coders_path,
+            coder_id,
+            "pty prompt-regex",
+        )?;
     }
     if matches!(target.prompt_inspect_lines, Some(0)) {
         return Err(ConfigurationError::invalid(
             coders_path,
-            format!("coder '{coder_id}' pty prompt-inspect-lines must be greater than zero"),
+            format!(
+                "coder '{coder_id}' pty prompt-inspect-lines must be greater than zero"
+            ),
         ));
     }
     if matches!(target.cols, Some(0)) {

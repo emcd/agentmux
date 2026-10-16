@@ -75,13 +75,19 @@ mod transport;
 // re-exporting (rather than redefining) keeps the two in lockstep.
 pub use crate::configuration::PromptReadinessTemplate;
 
-pub use choices::{ChoiceMade, ChoiceToMake, Chooser, StartupContext, ThingToChoose};
+pub use choices::{
+    ChoiceMade, ChoiceToMake, Chooser, StartupContext, ThingToChoose,
+};
 pub(crate) use delivery::stopped_before_submission_outcome;
 pub use delivery::{DeliveryEnvelope, DeliveryMessage, SingleDeliveryOutcome};
 pub use dispatch::{PeekDimensions, TransportImpl};
 pub use executor::{
-    DeliveryExecutorContext, DeliveryWriter, MailboxConsumer, PlannedWrite, receipt_runs,
-    run_delivery_executor,
+    DeliveryExecutorContext, DeliveryWriter, MailboxConsumer, PlannedWrite,
+    receipt_runs, run_delivery_executor,
 };
-pub use status::{LookMode, TransportError, TransportReadiness, TransportStatus};
-pub use transport::{GenerationFence, OutputView, Transport, TransportHealth, UnreachableSince};
+pub use status::{
+    LookMode, TransportError, TransportReadiness, TransportStatus,
+};
+pub use transport::{
+    GenerationFence, OutputView, Transport, TransportHealth, UnreachableSince,
+};

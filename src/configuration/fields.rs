@@ -4,7 +4,10 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::{ConfigurationError, GLOBAL_SESSION_SUFFIX, RESERVED_GROUP_ALL, SESSION_ID_LENGTH_MAX};
+use super::{
+    ConfigurationError, GLOBAL_SESSION_SUFFIX, RESERVED_GROUP_ALL,
+    SESSION_ID_LENGTH_MAX,
+};
 
 pub(super) fn validate_bundle_groups(
     groups: &[String],
@@ -41,7 +44,9 @@ pub(super) fn validate_bundle_groups(
 
 fn is_reserved_group_name(group: &str) -> bool {
     group.chars().all(|character| {
-        character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        character.is_ascii_uppercase()
+            || character.is_ascii_digit()
+            || character == '_'
     })
 }
 
@@ -64,7 +69,9 @@ pub(super) fn validate_format_version(
     }
     Err(ConfigurationError::invalid(
         path,
-        format!("unsupported format-version '{version}'; expected '{expected}'"),
+        format!(
+            "unsupported format-version '{version}'; expected '{expected}'"
+        ),
     ))
 }
 
@@ -93,9 +100,9 @@ pub(super) fn validate_project_name(
     let conforming = !value.is_empty()
         && value != "."
         && value != ".."
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+        && value.bytes().all(|byte| {
+            byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+        });
     if conforming {
         return Ok(());
     }
@@ -130,11 +137,16 @@ pub(super) fn validate_project_name_from(
     }
     Err(ConfigurationError::invalid(
         path,
-        format!("{context} '{rule}' must be 'session-directory-basename' or 'bundle-name'"),
+        format!(
+            "{context} '{rule}' must be 'session-directory-basename' or 'bundle-name'"
+        ),
     ))
 }
 
-pub(super) fn validate_session_id(path: &Path, session_id: &str) -> Result<(), ConfigurationError> {
+pub(super) fn validate_session_id(
+    path: &Path,
+    session_id: &str,
+) -> Result<(), ConfigurationError> {
     let mut characters = session_id.chars();
     let Some(first) = characters.next() else {
         return Err(ConfigurationError::invalid(
@@ -145,12 +157,14 @@ pub(super) fn validate_session_id(path: &Path, session_id: &str) -> Result<(), C
     if !first.is_ascii_alphabetic() {
         return Err(ConfigurationError::invalid(
             path,
-            format!("session id '{session_id}' must start with an ASCII alphabetic character"),
+            format!(
+                "session id '{session_id}' must start with an ASCII alphabetic character"
+            ),
         ));
     }
-    if !characters
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-    {
+    if !characters.all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+    }) {
         return Err(ConfigurationError::invalid(
             path,
             format!(
@@ -161,7 +175,9 @@ pub(super) fn validate_session_id(path: &Path, session_id: &str) -> Result<(), C
     if session_id.len() > SESSION_ID_LENGTH_MAX {
         return Err(ConfigurationError::invalid(
             path,
-            format!("session id '{session_id}' exceeds max length {SESSION_ID_LENGTH_MAX}"),
+            format!(
+                "session id '{session_id}' exceeds max length {SESSION_ID_LENGTH_MAX}"
+            ),
         ));
     }
     Ok(())

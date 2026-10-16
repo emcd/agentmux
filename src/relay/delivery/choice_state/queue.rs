@@ -24,7 +24,8 @@ use serde_json::Value;
 
 use super::{ChoicesQueueState, PendingChoiceRequest};
 
-static CHOICES_QUEUES: OnceLock<Mutex<HashMap<PathBuf, ChoicesQueueState>>> = OnceLock::new();
+static CHOICES_QUEUES: OnceLock<Mutex<HashMap<PathBuf, ChoicesQueueState>>> =
+    OnceLock::new();
 
 fn choices_queues() -> &'static Mutex<HashMap<PathBuf, ChoicesQueueState>> {
     CHOICES_QUEUES.get_or_init(|| Mutex::new(HashMap::new()))
@@ -57,7 +58,9 @@ pub(super) fn sort_pending_by_sequence(pending: &mut [PendingChoiceRequest]) {
     });
 }
 
-pub(super) fn pending_choice_option_ids(record: &PendingChoiceRequest) -> Vec<String> {
+pub(super) fn pending_choice_option_ids(
+    record: &PendingChoiceRequest,
+) -> Vec<String> {
     record
         .requested_details
         .get("options")

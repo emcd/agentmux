@@ -10,7 +10,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const ENVELOPE_SCHEMA_VERSION: &str = "1";
-pub const RESERVED_PATH_POINTER_CONTENT_TYPE: &str = "application/vnd.agentmux.path-pointer+json";
+pub const RESERVED_PATH_POINTER_CONTENT_TYPE: &str =
+    "application/vnd.agentmux.path-pointer+json";
 pub const PROMPT_TOKENS_MAX_DEFAULT: usize = 4096;
 
 const REQUIRED_HEADER_MESSAGE_ID: &str = "Message-Id";
@@ -196,12 +197,17 @@ pub fn render_envelope(input: &EnvelopeRenderInput) -> String {
 }
 
 /// Parses and validates one injected envelope.
-pub fn parse_envelope(text: &str) -> Result<ParsedEnvelope, EnvelopeParseError> {
+pub fn parse_envelope(
+    text: &str,
+) -> Result<ParsedEnvelope, EnvelopeParseError> {
     let lines = text.lines().collect::<Vec<_>>();
-    let index = first_non_empty_line(&lines)
-        .ok_or_else(|| EnvelopeParseError::new("missing leading boundary marker"))?;
-    let (boundary, header_start_index) = parse_leading_boundary_marker(&lines, index)?;
-    let (headers, body_start_index) = parse_header_block(&lines, header_start_index)?;
+    let index = first_non_empty_line(&lines).ok_or_else(|| {
+        EnvelopeParseError::new("missing leading boundary marker")
+    })?;
+    let (boundary, header_start_index) =
+        parse_leading_boundary_marker(&lines, index)?;
+    let (headers, body_start_index) =
+        parse_header_block(&lines, header_start_index)?;
     validate_required_headers(&headers)?;
     let message_id = headers
         .get(REQUIRED_HEADER_MESSAGE_ID)
@@ -213,7 +219,8 @@ pub fn parse_envelope(text: &str) -> Result<ParsedEnvelope, EnvelopeParseError> 
             "MIME boundary token must match Message-Id-derived boundary",
         ));
     }
-    let (parts, had_closing_boundary) = parse_mime_parts(&lines, body_start_index, &boundary)?;
+    let (parts, had_closing_boundary) =
+        parse_mime_parts(&lines, body_start_index, &boundary)?;
     if !had_closing_boundary {
         return Err(EnvelopeParseError::new(
             "missing MIME closing boundary terminator",
@@ -232,8 +239,15 @@ pub fn parse_envelope(text: &str) -> Result<ParsedEnvelope, EnvelopeParseError> 
 
     let reserved_path_pointer_parts = parts
         .iter()
-        .filter(|part| mime_type_matches(&part.content_type, RESERVED_PATH_POINTER_CONTENT_TYPE))
-        .filter_map(|part| serde_json::from_str::<Value>(part.body.trim()).ok())
+        .filter(|part| {
+            mime_type_matches(
+                &part.content_type,
+                RESERVED_PATH_POINTER_CONTENT_TYPE,
+            )
+        })
+        .filter_map(|part| {
+            serde_json::from_str::<Value>(part.body.trim()).ok()
+        })
         .collect::<Vec<_>>();
 
     let from = parse_address(
@@ -290,10 +304,14 @@ pub fn render_address(address: &AddressIdentity) -> String {
 }
 
 /// Parses one address token in `Display Name <session:session_name>` syntax.
-pub fn parse_address(raw: &str) -> Result<AddressIdentity, EnvelopeParseError> {
+pub fn parse_address(
+    raw: &str,
+) -> Result<AddressIdentity, EnvelopeParseError> {
     let value = raw.trim();
     let start = value.rfind("<session:").ok_or_else(|| {
-        EnvelopeParseError::new("address is missing <session:...> identity token")
+        EnvelopeParseError::new(
+            "address is missing <session:...> identity token",
+        )
     })?;
     if !value.ends_with('>') {
         return Err(EnvelopeParseError::new(
@@ -322,7 +340,9 @@ pub fn parse_address(raw: &str) -> Result<AddressIdentity, EnvelopeParseError> {
 }
 
 /// Splits addresses from comma-separated list.
-pub fn parse_address_list(raw: &str) -> Result<Vec<AddressIdentity>, EnvelopeParseError> {
+pub fn parse_address_list(
+    raw: &str,
+) -> Result<Vec<AddressIdentity>, EnvelopeParseError> {
     raw.split(',')
         .map(str::trim)
         .filter(|value| !value.is_empty())
@@ -335,8 +355,12 @@ pub fn estimate_prompt_tokens(text: &str, profile: TokenizerProfile) -> usize {
     let chars = text.chars().count();
     let lines = text.lines().count();
     let estimate = match profile {
-        TokenizerProfile::Characters0Point3 => (chars * 3).div_ceil(10) + (lines / 12),
-        TokenizerProfile::WhitespaceRough => text.split_whitespace().count() + (lines / 10),
+        TokenizerProfile::Characters0Point3 => {
+            (chars * 3).div_ceil(10) + (lines / 12)
+        },
+        TokenizerProfile::WhitespaceRough => {
+            text.split_whitespace().count() + (lines / 10)
+        },
     };
     estimate.max(1)
 }
@@ -377,7 +401,9 @@ pub fn batch_envelope_groups(
         }
 
         let candidate = format!("{current}\n\n{envelope}");
-        if estimate_prompt_tokens(&candidate, settings.tokenizer_profile) <= budget {
+        if estimate_prompt_tokens(&candidate, settings.tokenizer_profile)
+            <= budget
+        {
             current = candidate;
             member_count += 1;
             continue;
@@ -407,8 +433,10 @@ pub fn parse_tokenizer_profile(value: &str) -> Option<TokenizerProfile> {
     match normalized.as_str() {
         "characters_0_point_3" | "character_0_point_3" | "chars_0_point_3" => {
             Some(TokenizerProfile::Characters0Point3)
-        }
-        "whitespace" | "whitespace_rough" => Some(TokenizerProfile::WhitespaceRough),
+        },
+        "whitespace" | "whitespace_rough" => {
+            Some(TokenizerProfile::WhitespaceRough)
+        },
         _ => None,
     }
 }
@@ -447,7 +475,9 @@ fn parse_header_block(
             .ok_or_else(|| EnvelopeParseError::new("malformed header line"))?;
         let key = name.trim().to_string();
         if key.is_empty() {
-            return Err(EnvelopeParseError::new("header name must be non-empty"));
+            return Err(EnvelopeParseError::new(
+                "header name must be non-empty",
+            ));
         }
         if !seen.insert(key.clone()) {
             return Err(EnvelopeParseError::new(format!(
@@ -461,7 +491,9 @@ fn parse_header_block(
     ))
 }
 
-fn validate_required_headers(headers: &BTreeMap<String, String>) -> Result<(), EnvelopeParseError> {
+fn validate_required_headers(
+    headers: &BTreeMap<String, String>,
+) -> Result<(), EnvelopeParseError> {
     let required = [
         REQUIRED_HEADER_MESSAGE_ID,
         REQUIRED_HEADER_DATE,
@@ -482,12 +514,14 @@ fn parse_leading_boundary_marker(
     lines: &[&str],
     index: usize,
 ) -> Result<(String, usize), EnvelopeParseError> {
-    let marker = lines
-        .get(index)
-        .map(|value| value.trim())
-        .ok_or_else(|| EnvelopeParseError::new("missing leading boundary marker"))?;
+    let marker =
+        lines.get(index).map(|value| value.trim()).ok_or_else(|| {
+            EnvelopeParseError::new("missing leading boundary marker")
+        })?;
     if !marker.starts_with("--") {
-        return Err(EnvelopeParseError::new("missing leading boundary marker"));
+        return Err(EnvelopeParseError::new(
+            "missing leading boundary marker",
+        ));
     }
     if marker == "--" || marker.ends_with("--") {
         return Err(EnvelopeParseError::new(
@@ -527,7 +561,9 @@ fn parse_mime_parts(
             return Ok((parts, true));
         }
         if marker != boundary_marker {
-            return Err(EnvelopeParseError::new("invalid MIME boundary marker"));
+            return Err(EnvelopeParseError::new(
+                "invalid MIME boundary marker",
+            ));
         }
         index += 1;
 
@@ -536,7 +572,9 @@ fn parse_mime_parts(
         let content_type = part_headers
             .get(PART_HEADER_CONTENT_TYPE)
             .cloned()
-            .ok_or_else(|| EnvelopeParseError::new("MIME part is missing Content-Type"))?;
+            .ok_or_else(|| {
+                EnvelopeParseError::new("MIME part is missing Content-Type")
+            })?;
 
         let mut body_lines = Vec::<String>::new();
         while index < lines.len() {

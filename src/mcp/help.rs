@@ -4,13 +4,16 @@ use serde_json::json;
 
 use super::errors::validation_tool_error;
 use super::params::{
-    CHANGE_COMMAND_PSK, CHANGE_COMMAND_SCOPE, CHOOSE_OUTCOME_SELECTED, ChangePskArgs,
-    ChangeScopeArgs, ChooseParams, DROP_COMMAND_PEER, DropPeerArgs, HelpParams, LINK_COMMAND_PEER,
-    LIST_COMMAND_DECISIONS, LIST_COMMAND_NAMESPACES, LIST_COMMAND_PRINCIPALS, LIST_COMMAND_RELAYS,
-    LinkPeerArgs, ListArgs, ListDecisionsArgs, ListNamespacesArgs, ListRelaysArgs, LookParams,
-    NAMESPACE_AGENTMUX, NEW_COMMAND_PEER, NewPeerArgs, RawwParams, SendParams, TOOL_CHANGE,
-    TOOL_CHOOSE, TOOL_DROP, TOOL_HELP, TOOL_LINK, TOOL_LIST, TOOL_LOOK, TOOL_NEW, TOOL_RAWW,
-    TOOL_SEND, TOOL_UPDOWN, UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs,
+    CHANGE_COMMAND_PSK, CHANGE_COMMAND_SCOPE, CHOOSE_OUTCOME_SELECTED,
+    ChangePskArgs, ChangeScopeArgs, ChooseParams, DROP_COMMAND_PEER,
+    DropPeerArgs, HelpParams, LINK_COMMAND_PEER, LIST_COMMAND_DECISIONS,
+    LIST_COMMAND_NAMESPACES, LIST_COMMAND_PRINCIPALS, LIST_COMMAND_RELAYS,
+    LinkPeerArgs, ListArgs, ListDecisionsArgs, ListNamespacesArgs,
+    ListRelaysArgs, LookParams, NAMESPACE_AGENTMUX, NEW_COMMAND_PEER,
+    NewPeerArgs, RawwParams, SendParams, TOOL_CHANGE, TOOL_CHOOSE, TOOL_DROP,
+    TOOL_HELP, TOOL_LINK, TOOL_LIST, TOOL_LOOK, TOOL_NEW, TOOL_RAWW,
+    TOOL_SEND, TOOL_UPDOWN, UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP,
+    UpdownArgs,
 };
 
 pub(super) fn help_tool(
@@ -377,5 +380,6 @@ fn command_help(
 }
 
 fn json_schema_for<T: JsonSchema>() -> serde_json::Value {
-    serde_json::to_value(schemars::schema_for!(T)).unwrap_or(serde_json::Value::Null)
+    serde_json::to_value(schemars::schema_for!(T))
+        .unwrap_or(serde_json::Value::Null)
 }

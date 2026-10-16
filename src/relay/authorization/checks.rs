@@ -14,11 +14,13 @@ use crate::{
 use super::super::canonical_session_id;
 use super::super::identity::peer_scope_covers_target;
 use super::super::routing::{
-    Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget, ScopeTier,
-    required_tier,
+    Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget,
+    ScopeTier, required_tier,
 };
 use super::context::{AuthorizationContext, PolicyControls, PolicyScope};
-use super::resolution::{controls_for_requester, resolve_relay_principal_controls};
+use super::resolution::{
+    controls_for_requester, resolve_relay_principal_controls,
+};
 
 /// How the dispatch spine authorizes a request's requester against a route.
 ///
@@ -45,7 +47,9 @@ impl RouteAuthorization<'_> {
         route: &ResolvedRoute,
     ) -> Result<(), RelayError> {
         match self {
-            Self::Policy(context) => authorize_route(dispatch_namespace, context, profile, route),
+            Self::Policy(context) => {
+                authorize_route(dispatch_namespace, context, profile, route)
+            },
             Self::Ingress { scope } => authorize_ingress(*scope, route),
         }
     }
@@ -91,7 +95,10 @@ pub(in crate::relay) fn authorize_relay_action(
     family: RelayActionFamily,
     action: &str,
 ) -> Result<(), RelayError> {
-    let controls = resolve_relay_principal_controls(configuration_roots, requester_principal_id)?;
+    let controls = resolve_relay_principal_controls(
+        configuration_roots,
+        requester_principal_id,
+    )?;
     let scope_map = match family {
         RelayActionFamily::New => &controls.new_controls,
         RelayActionFamily::Change => &controls.change_controls,
@@ -125,7 +132,10 @@ pub(in crate::relay) fn requester_list_reaches_all(
     configuration_roots: &ConfigurationRoots,
     requester_principal_id: &str,
 ) -> Result<bool, RelayError> {
-    let controls = resolve_relay_principal_controls(configuration_roots, requester_principal_id)?;
+    let controls = resolve_relay_principal_controls(
+        configuration_roots,
+        requester_principal_id,
+    )?;
     Ok(controls.list.allows(PolicyScope::All))
 }
 
@@ -140,7 +150,8 @@ pub(in crate::relay) fn authorize_discovery_origin(
     configuration_roots: &ConfigurationRoots,
     requester_principal_id: &str,
 ) -> Result<(), RelayError> {
-    if requester_list_reaches_all(configuration_roots, requester_principal_id)? {
+    if requester_list_reaches_all(configuration_roots, requester_principal_id)?
+    {
         return Ok(());
     }
     Err(authorization_forbidden(
@@ -184,7 +195,9 @@ pub(in crate::relay) fn authorize_route(
     let minimum = minimum_scope_for_tier(required_tier(route));
     let target_identifiers = route_target_identifiers(route);
     let (target_session, targets) = match profile.addressing {
-        Addressing::SingleTarget => (target_identifiers.first().map(String::as_str), None),
+        Addressing::SingleTarget => {
+            (target_identifiers.first().map(String::as_str), None)
+        },
         Addressing::MultiTarget => (None, Some(target_identifiers.as_slice())),
         Addressing::BundleEnumerate => (None, None),
     };
@@ -224,14 +237,17 @@ pub(in crate::relay) fn authorize_route(
 /// onward peer is configured, so a peer can never use the receiving relay as a
 /// hop in this slice. Multi-hop cross-relay routing (relay chaining) is out of
 /// scope for this slice and would need its own trust-propagation design.
-pub(in crate::relay) fn reject_cross_relay_ingress(target: &ResolvedTarget) -> RelayError {
-    let target_label = match (target.session_id.as_deref(), target.relay_id.as_deref()) {
-        (Some(session_id), Some(relay_id)) => format!(
-            "{}!{relay_id}",
-            canonical_session_id(session_id, target.namespace.as_str())
-        ),
-        _ => target.namespace.clone(),
-    };
+pub(in crate::relay) fn reject_cross_relay_ingress(
+    target: &ResolvedTarget,
+) -> RelayError {
+    let target_label =
+        match (target.session_id.as_deref(), target.relay_id.as_deref()) {
+            (Some(session_id), Some(relay_id)) => format!(
+                "{}!{relay_id}",
+                canonical_session_id(session_id, target.namespace.as_str())
+            ),
+            _ => target.namespace.clone(),
+        };
     relay_error(
         "authorization_forbidden",
         "a peer relay ingress requester may not address a cross-relay target",
@@ -243,12 +259,16 @@ pub(in crate::relay) fn reject_cross_relay_ingress(target: &ResolvedTarget) -> R
     )
 }
 
-fn authorize_ingress(scope: Option<&str>, route: &ResolvedRoute) -> Result<(), RelayError> {
+fn authorize_ingress(
+    scope: Option<&str>,
+    route: &ResolvedRoute,
+) -> Result<(), RelayError> {
     for target in &route.targets {
         let Some(session_id) = target.session_id.as_deref() else {
             continue;
         };
-        let canonical = canonical_session_id(session_id, target.namespace.as_str());
+        let canonical =
+            canonical_session_id(session_id, target.namespace.as_str());
         if !peer_scope_covers_target(scope, canonical.as_str()) {
             return Err(relay_error(
                 "authorization_forbidden",
@@ -265,7 +285,10 @@ fn authorize_ingress(scope: Option<&str>, route: &ResolvedRoute) -> Result<(), R
     Ok(())
 }
 
-fn scope_for_capability(controls: &PolicyControls, capability: Capability) -> PolicyScope {
+fn scope_for_capability(
+    controls: &PolicyControls,
+    capability: Capability,
+) -> PolicyScope {
     match capability {
         Capability::Look => controls.look,
         Capability::Send => controls.send,
@@ -291,7 +314,10 @@ fn route_target_identifiers(route: &ResolvedRoute) -> Vec<String> {
         .iter()
         .filter_map(|target| {
             target.session_id.as_ref().map(|session_id| {
-                canonical_session_id(session_id.as_str(), target.namespace.as_str())
+                canonical_session_id(
+                    session_id.as_str(),
+                    target.namespace.as_str(),
+                )
             })
         })
         .collect()
@@ -299,7 +325,9 @@ fn route_target_identifiers(route: &ResolvedRoute) -> Vec<String> {
 
 fn tier_denial_reason(minimum: PolicyScope) -> &'static str {
     match minimum {
-        PolicyScope::All => "policy scope does not permit cross-bundle access (requires all)",
+        PolicyScope::All => {
+            "policy scope does not permit cross-bundle access (requires all)"
+        },
         _ => "policy scope does not permit this access",
     }
 }
@@ -328,7 +356,9 @@ pub(in crate::relay) fn authorize_choose(
         },
     )
     .map_err(|mut error| {
-        if let Some(object) = error.details.as_mut().and_then(Value::as_object_mut) {
+        if let Some(object) =
+            error.details.as_mut().and_then(Value::as_object_mut)
+        {
             object.insert(
                 "choice_request_id".to_string(),
                 Value::String(choice_request_id.to_string()),

@@ -12,8 +12,9 @@ use super::raw::{RawBindings, RawUiFile};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use crate::tui::{
-    Action, BindingConfiguration, BindingContext, CapabilityClass, ChordPattern, ConfiguredAction,
-    ConfiguredBinding, PrimaryModifier, context_actions, parse_chord, quit_unreachable,
+    Action, BindingConfiguration, BindingContext, CapabilityClass,
+    ChordPattern, ConfiguredAction, ConfiguredBinding, PrimaryModifier,
+    context_actions, parse_chord, quit_unreachable,
 };
 
 /// One binding set this build ships: the name an operator writes under
@@ -84,9 +85,11 @@ pub fn embedded_binding_preset(
     artifact: &str,
     text: &str,
 ) -> Result<Vec<ConfiguredBinding>, ConfigurationError> {
-    let internal = |message: String| ConfigurationError::malformed_embedded(artifact, message);
-    let parsed =
-        toml::from_str::<RawUiFile>(text).map_err(|source| internal(source.to_string()))?;
+    let internal = |message: String| {
+        ConfigurationError::malformed_embedded(artifact, message)
+    };
+    let parsed = toml::from_str::<RawUiFile>(text)
+        .map_err(|source| internal(source.to_string()))?;
     let raw = parsed
         .bindings
         .ok_or_else(|| internal("it declares no bindings group".to_owned()))?;
@@ -106,7 +109,9 @@ pub fn embedded_binding_preset(
     // out and re-reported against the artifact instead.
     match validate_binding_group(&raw, Path::new(artifact)) {
         Ok(group) => Ok(group.rows),
-        Err(ConfigurationError::InvalidConfiguration { message, .. }) => Err(internal(message)),
+        Err(ConfigurationError::InvalidConfiguration { message, .. }) => {
+            Err(internal(message))
+        },
         Err(other) => Err(internal(other.to_string())),
     }
 }
@@ -123,7 +128,10 @@ fn resolve_presets(
             .iter()
             .find(|preset| preset.name == name)
             .ok_or_else(|| {
-                ConfigurationError::invalid(path, format!("unknown binding preset: {name}"))
+                ConfigurationError::invalid(
+                    path,
+                    format!("unknown binding preset: {name}"),
+                )
             })?;
         rows.extend(embedded_binding_preset(
             &format!("binding set {}", preset.name),
@@ -148,7 +156,10 @@ pub(super) fn validate_binding_group(
 
     let preset_rows = resolve_presets(&raw.presets, path)?;
 
-    let primary_modifier_on_macos = match raw.primary_modifier_on_macos.as_deref() {
+    let primary_modifier_on_macos = match raw
+        .primary_modifier_on_macos
+        .as_deref()
+    {
         None => None,
         Some("control") => Some(PrimaryModifier::Control),
         Some("command") => Some(PrimaryModifier::Command),
@@ -156,13 +167,15 @@ pub(super) fn validate_binding_group(
             return Err(invalid(format!(
                 "primary-modifier-on-macos must be control or command, not {other}"
             )));
-        }
+        },
     };
 
     let mut rows = Vec::new();
     for (context_name, chords) in &raw.contexts {
         let context = BindingContext::from_configuration_name(context_name)
-            .ok_or_else(|| invalid(format!("unknown binding context: {context_name}")))?;
+            .ok_or_else(|| {
+                invalid(format!("unknown binding context: {context_name}"))
+            })?;
         // Two spellings can denote one keystroke -- "ctrl+j" and "control+j",
         // or a control chord written in either case -- and a symbolic chord can
         // land on a literal one once resolved. Left alone, which of them takes
@@ -170,18 +183,26 @@ pub(super) fn validate_binding_group(
         // which is an accidental precedence rule rather than a declared one.
         let mut claimed: Vec<(ResolvedChord, &str)> = Vec::new();
         for (chord_text, value) in chords {
-            let chord = parse_chord(chord_text)
-                .map_err(|error| invalid(format!("in {context_name}: {error}")))?;
+            let chord = parse_chord(chord_text).map_err(|error| {
+                invalid(format!("in {context_name}: {error}"))
+            })?;
             for resolved in resolutions_of(chord) {
-                if let Some((_, earlier)) = claimed.iter().find(|(seen, _)| *seen == resolved) {
+                if let Some((_, earlier)) =
+                    claimed.iter().find(|(seen, _)| *seen == resolved)
+                {
                     return Err(invalid(format!(
                         "in {context_name}: {chord_text} and {earlier} denote the same chord"
                     )));
                 }
                 claimed.push((resolved, chord_text));
             }
-            let (enhanced, standard) =
-                capability_columns(value, chord_text, context, context_name, &invalid)?;
+            let (enhanced, standard) = capability_columns(
+                value,
+                chord_text,
+                context,
+                context_name,
+                &invalid,
+            )?;
             if enhanced.is_none() && standard.is_none() {
                 return Err(invalid(format!(
                     "in {context_name}: {chord_text} names no action for either terminal class"
@@ -209,7 +230,9 @@ pub(super) fn validate_binding_group(
     // terminal falls into is not knowable when they write the file — so the
     // answer has to be the same here, where a probe has happened, and at
     // pre-flight, where none has.
-    if let Some(classes) = quit_unreachable(Some(&configuration), cfg!(target_os = "macos")) {
+    if let Some(classes) =
+        quit_unreachable(Some(&configuration), cfg!(target_os = "macos"))
+    {
         return Err(invalid(format!(
             "no chord quits the TUI under {}",
             classes.describe()
@@ -263,12 +286,20 @@ fn capability_columns(
     context: BindingContext,
     context_name: &str,
     invalid: &impl Fn(String) -> ConfigurationError,
-) -> Result<(Option<ConfiguredAction>, Option<ConfiguredAction>), ConfigurationError> {
+) -> Result<
+    (Option<ConfiguredAction>, Option<ConfiguredAction>),
+    ConfigurationError,
+> {
     match value {
         toml::Value::String(name) => {
-            let action = resolve_configured_action(name, context, context_name, invalid)?;
+            let action = resolve_configured_action(
+                name,
+                context,
+                context_name,
+                invalid,
+            )?;
             Ok((Some(action), Some(action)))
-        }
+        },
         toml::Value::Table(columns) => {
             // Keyed off the classes themselves rather than off written-out
             // names, so the columns a file may declare and the classes a report
@@ -300,7 +331,7 @@ fn capability_columns(
                 )));
             }
             Ok((resolved[0], resolved[1]))
-        }
+        },
         other => Err(invalid(format!(
             "in {context_name}: {chord_text} maps to {}, not an action name or a table of them",
             other.type_str()

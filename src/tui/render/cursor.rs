@@ -3,12 +3,19 @@ use ratatui::{Frame, layout::Rect};
 use super::super::state::{AppState, FocusField, ScreenMode};
 use super::frame::INTERACTION_RAWW_PANE_HEIGHT;
 use super::geometry::{
-    compose_message_layout, compose_message_visible_start, compose_titled_block, raww_titled_block,
-    split_workbench_rows,
+    compose_message_layout, compose_message_visible_start,
+    compose_titled_block, raww_titled_block, split_workbench_rows,
 };
 
-pub(super) fn render_active_cursor(frame: &mut Frame, area: Rect, state: &AppState) {
-    if state.help_overlay_open || state.picker_open || state.events_overlay_open {
+pub(super) fn render_active_cursor(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+) {
+    if state.help_overlay_open
+        || state.picker_open
+        || state.events_overlay_open
+    {
         return;
     }
     match state.mode {
@@ -44,7 +51,10 @@ fn render_raww_cursor(frame: &mut Frame, area: Rect, state: &AppState) {
     ));
 }
 
-fn compose_cursor_position(inner_area: Rect, state: &AppState) -> Option<(u16, u16)> {
+fn compose_cursor_position(
+    inner_area: Rect,
+    state: &AppState,
+) -> Option<(u16, u16)> {
     if inner_area.width == 0 || inner_area.height < 2 {
         return None;
     }
@@ -64,16 +74,20 @@ fn compose_cursor_position(inner_area: Rect, state: &AppState) -> Option<(u16, u
         FocusField::To => {
             let prefix_width = "To: ".chars().count() as u16;
             let field_width = inner_width.saturating_sub(prefix_width);
-            let cursor_column = visible_cursor_column_count(state.to_cursor_column(), field_width);
+            let cursor_column = visible_cursor_column_count(
+                state.to_cursor_column(),
+                field_width,
+            );
             (
                 inner_left
                     .saturating_add(prefix_width)
                     .saturating_add(cursor_column),
                 inner_top,
             )
-        }
+        },
         FocusField::Message => {
-            let message_view_height = inner_area.height.saturating_sub(1) as usize;
+            let message_view_height =
+                inner_area.height.saturating_sub(1) as usize;
             if message_view_height == 0 {
                 return None;
             }
@@ -91,12 +105,15 @@ fn compose_cursor_position(inner_area: Rect, state: &AppState) -> Option<(u16, u
                 .cursor_row
                 .saturating_sub(start)
                 .saturating_add(1);
-            let cursor_column = visible_cursor_column_count(message_layout.cursor_col, inner_width);
+            let cursor_column = visible_cursor_column_count(
+                message_layout.cursor_col,
+                inner_width,
+            );
             (
                 inner_left.saturating_add(cursor_column),
                 inner_top.saturating_add(cursor_row as u16),
             )
-        }
+        },
     };
 
     Some((raw_x.min(inner_right), raw_y.min(inner_bottom)))
@@ -110,7 +127,8 @@ fn visible_cursor_column_count(count: usize, width: u16) -> u16 {
 }
 
 fn interaction_raww_pane_area(area: Rect) -> Rect {
-    let raww_height = INTERACTION_RAWW_PANE_HEIGHT.min(area.height.saturating_sub(2).max(1));
+    let raww_height =
+        INTERACTION_RAWW_PANE_HEIGHT.min(area.height.saturating_sub(2).max(1));
     let raww_y = area
         .y
         .saturating_add(area.height)

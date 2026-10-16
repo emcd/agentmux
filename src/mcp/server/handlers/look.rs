@@ -44,7 +44,10 @@ impl McpServer {
         // inspection still works. Done after sender resolution so an unassociated
         // server fails as `validation_unassociated_server` regardless of target
         // shape.
-        let target_session = qualify_target(&params.target_session, self.associated_namespace())?;
+        let target_session = qualify_target(
+            &params.target_session,
+            self.associated_namespace(),
+        )?;
 
         let request = RelayRequest::Look {
             requester_session,
@@ -63,13 +66,22 @@ impl McpServer {
                 snapshot,
             }) => {
                 let mut response_map = serde_json::Map::new();
-                response_map.insert("schema_version".to_string(), Value::String(schema_version));
+                response_map.insert(
+                    "schema_version".to_string(),
+                    Value::String(schema_version),
+                );
                 response_map.insert(
                     "requester_session".to_string(),
                     Value::String(requester_session),
                 );
-                response_map.insert("target_session".to_string(), Value::String(target_session));
-                response_map.insert("captured_at".to_string(), Value::String(captured_at));
+                response_map.insert(
+                    "target_session".to_string(),
+                    Value::String(target_session),
+                );
+                response_map.insert(
+                    "captured_at".to_string(),
+                    Value::String(captured_at),
+                );
                 if let Some(identity) = authenticated_identity {
                     response_map.insert(
                         "authenticated_identity".to_string(),
@@ -77,15 +89,24 @@ impl McpServer {
                     );
                 }
                 if let Some(delegate) = on_behalf_of {
-                    response_map.insert("on_behalf_of".to_string(), Value::String(delegate));
+                    response_map.insert(
+                        "on_behalf_of".to_string(),
+                        Value::String(delegate),
+                    );
                 }
                 let snapshot_count = match snapshot {
                     LookSnapshotPayload::Lines { snapshot_lines } => {
                         let count = snapshot_lines.len();
-                        response_map.insert("snapshot_format".to_string(), json!("lines"));
-                        response_map.insert("snapshot_lines".to_string(), json!(snapshot_lines));
+                        response_map.insert(
+                            "snapshot_format".to_string(),
+                            json!("lines"),
+                        );
+                        response_map.insert(
+                            "snapshot_lines".to_string(),
+                            json!(snapshot_lines),
+                        );
                         count
-                    }
+                    },
                     LookSnapshotPayload::StructuredEntriesV1 {
                         snapshot_entries,
                         entries_total,
@@ -100,24 +121,38 @@ impl McpServer {
                             "snapshot_format".to_string(),
                             json!("structured_entries_v1"),
                         );
-                        response_map
-                            .insert("snapshot_entries".to_string(), json!(snapshot_entries));
-                        response_map.insert("entries_total".to_string(), json!(entries_total));
+                        response_map.insert(
+                            "snapshot_entries".to_string(),
+                            json!(snapshot_entries),
+                        );
+                        response_map.insert(
+                            "entries_total".to_string(),
+                            json!(entries_total),
+                        );
                         response_map.insert(
                             "returned_entries_count".to_string(),
                             json!(returned_entries_count),
                         );
-                        response_map.insert("freshness".to_string(), json!(freshness));
-                        response_map.insert("snapshot_source".to_string(), json!(snapshot_source));
+                        response_map
+                            .insert("freshness".to_string(), json!(freshness));
+                        response_map.insert(
+                            "snapshot_source".to_string(),
+                            json!(snapshot_source),
+                        );
                         if let Some(value) = stale_reason_code {
-                            response_map
-                                .insert("stale_reason_code".to_string(), Value::String(value));
+                            response_map.insert(
+                                "stale_reason_code".to_string(),
+                                Value::String(value),
+                            );
                         }
                         if let Some(value) = snapshot_age_ms {
-                            response_map.insert("snapshot_age_ms".to_string(), json!(value));
+                            response_map.insert(
+                                "snapshot_age_ms".to_string(),
+                                json!(value),
+                            );
                         }
                         count
-                    }
+                    },
                 };
                 let response = Value::Object(response_map);
                 emit_inscription(
@@ -130,9 +165,14 @@ impl McpServer {
                     }),
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
-            }
-            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.look", other)),
-            Err(source) => Err(self.map_relay_call_error("mcp.tool.look.io_error", source)),
+            },
+            Ok(other) => {
+                Err(self.map_nonsuccess_relay_response("mcp.tool.look", other))
+            },
+            Err(source) => {
+                Err(self
+                    .map_relay_call_error("mcp.tool.look.io_error", source))
+            },
         }
     }
 }

@@ -3,7 +3,8 @@ use serde_json::{Map, Value, json};
 use crate::{
     commands::{RelayHostStartupBundle, RelayHostStartupSummary, shared},
     relay::{
-        NO_READY_SESSION_LEAD, PARTIAL_STARTUP_LEAD, StartupFailureRecord, fold_startup_failures,
+        NO_READY_SESSION_LEAD, PARTIAL_STARTUP_LEAD, StartupFailureRecord,
+        fold_startup_failures,
     },
     runtime::error::RuntimeError,
     runtime::inscriptions::emit_inscription,
@@ -43,9 +44,12 @@ pub(super) fn build_startup_summary(
     }
 }
 
-pub(super) fn startup_summary_payload(summary: &RelayHostStartupSummary) -> Value {
+pub(super) fn startup_summary_payload(
+    summary: &RelayHostStartupSummary,
+) -> Value {
     let mut payload = Map::<String, Value>::new();
-    payload.insert("schema_version".to_string(), json!(summary.schema_version));
+    payload
+        .insert("schema_version".to_string(), json!(summary.schema_version));
     payload.insert("host_mode".to_string(), json!(summary.host_mode));
     payload.insert(
         "bundles".to_string(),
@@ -98,11 +102,16 @@ pub(super) fn render_startup_summary(summary: &RelayHostStartupSummary) {
         ),
     }
     for bundle in &summary.bundles {
-        shared::render_failed_sessions(bundle.bundle_name.as_str(), bundle.details.as_ref());
+        shared::render_failed_sessions(
+            bundle.bundle_name.as_str(),
+            bundle.details.as_ref(),
+        );
     }
 }
 
-pub(super) fn hosted_startup_bundle(bundle_name: &str) -> RelayHostStartupBundle {
+pub(super) fn hosted_startup_bundle(
+    bundle_name: &str,
+) -> RelayHostStartupBundle {
     RelayHostStartupBundle {
         bundle_name: bundle_name.to_string(),
         outcome: "hosted".to_string(),
@@ -137,7 +146,8 @@ pub(super) fn failed_autostart_bundle(
     bundle_name: &str,
     failed_startups: &[StartupFailureRecord],
 ) -> RelayHostStartupBundle {
-    let (reason, details) = folded_reason(NO_READY_SESSION_LEAD, failed_startups);
+    let (reason, details) =
+        folded_reason(NO_READY_SESSION_LEAD, failed_startups);
     RelayHostStartupBundle {
         bundle_name: bundle_name.to_string(),
         outcome: "failed".to_string(),
@@ -157,7 +167,8 @@ pub(super) fn degraded_startup_bundle(
     bundle_name: &str,
     failed_startups: &[StartupFailureRecord],
 ) -> RelayHostStartupBundle {
-    let (reason, details) = folded_reason(PARTIAL_STARTUP_LEAD, failed_startups);
+    let (reason, details) =
+        folded_reason(PARTIAL_STARTUP_LEAD, failed_startups);
     RelayHostStartupBundle {
         bundle_name: bundle_name.to_string(),
         outcome: "degraded".to_string(),
@@ -167,7 +178,10 @@ pub(super) fn degraded_startup_bundle(
     }
 }
 
-fn folded_reason(lead: &str, failed_startups: &[StartupFailureRecord]) -> (String, Option<Value>) {
+fn folded_reason(
+    lead: &str,
+    failed_startups: &[StartupFailureRecord],
+) -> (String, Option<Value>) {
     match fold_startup_failures(lead, failed_startups) {
         Some(folded) => (folded.reason, Some(folded.details)),
         None => (lead.to_string(), None),

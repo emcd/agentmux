@@ -10,9 +10,11 @@ use crate::transports::WorkerReadinessState;
 
 /// Slice length for the single-flight ACP prompt-completion wait. Bounds how
 /// long the blocking thread parks before re-checking the shutdown gate.
-pub(crate) const ACP_PROMPT_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(100);
+pub(crate) const ACP_PROMPT_WAIT_POLL_INTERVAL: Duration =
+    Duration::from_millis(100);
 /// Poll cadence for the look prime-wait.
-pub(crate) const ACP_LOOK_PRIME_POLL_INTERVAL: Duration = Duration::from_millis(25);
+pub(crate) const ACP_LOOK_PRIME_POLL_INTERVAL: Duration =
+    Duration::from_millis(25);
 /// Default ACP look window applied when the caller omits a window size. ACP
 /// replay entries are far larger than tmux lines (each can be a full message or
 /// tool invocation), so a small default keeps the response under the MCP payload
@@ -58,7 +60,8 @@ impl AcpSharedState {
 /// `MirrorStateFn`), so the internal delivery task mirrors its own Busy/settled
 /// transitions and the relay worker no longer drives `mark_busy` /
 /// `mirror_settled_readiness`.
-pub(crate) type ReadinessMirror = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
+pub(crate) type ReadinessMirror =
+    Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
 
 /// The in-flight bootstraps of one generation, and whether that generation has
 /// been told to end.
@@ -70,7 +73,9 @@ pub(crate) struct BootstrapRegistry {
 }
 
 impl BootstrapRegistry {
-    pub(crate) fn records(&self) -> std::sync::MutexGuard<'_, Vec<BootstrapRecord>> {
+    pub(crate) fn records(
+        &self,
+    ) -> std::sync::MutexGuard<'_, Vec<BootstrapRecord>> {
         self.records.lock().expect("bootstrap registry mutex")
     }
 
@@ -127,7 +132,9 @@ impl BootstrapInFlight {
     pub(crate) fn publish_generation(&self, generation: AcpGenerationHandle) {
         {
             let mut records = self.bootstraps.records();
-            if let Some(record) = records.iter_mut().find(|record| record.id == self.id) {
+            if let Some(record) =
+                records.iter_mut().find(|record| record.id == self.id)
+            {
                 record.generation = Some(generation);
             }
         }

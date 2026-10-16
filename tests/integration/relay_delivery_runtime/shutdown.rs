@@ -7,14 +7,16 @@ use std::{
 };
 
 use agentmux::relay::{
-    RelayRequest, RelayResponse, RelayStreamSession, SendOutcome, request_relay,
+    RelayRequest, RelayResponse, RelayStreamSession, SendOutcome,
+    request_relay,
 };
 use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
 
 use crate::support::relay_delivery::{
-    spawn_relay_with_fake_tmux, spawn_relay_with_fake_tmux_and_env, wait_for_relay_ready,
-    write_acp_hang_bundle_configuration, write_bundle_configuration, write_fake_tmux_script,
+    spawn_relay_with_fake_tmux, spawn_relay_with_fake_tmux_and_env,
+    wait_for_relay_ready, write_acp_hang_bundle_configuration,
+    write_bundle_configuration, write_fake_tmux_script,
 };
 
 /// How long a relay host gets to exit after a termination signal.
@@ -145,8 +147,10 @@ async fn relay_sigterm_reaps_in_flight_acp_turn_without_sigkill() {
             // SIGKILL is escalation only after the graceful SIGTERM window
             // (the generation fence's bounded reap) failed — not a bypass.
             child.start_kill().expect("kill relay after timeout");
-            panic!("relay did not exit within 15s of SIGTERM with an in-flight ACP turn");
-        }
+            panic!(
+                "relay did not exit within 15s of SIGTERM with an in-flight ACP turn"
+            );
+        },
     };
     assert!(
         status.success(),
@@ -160,8 +164,8 @@ async fn relay_sigterm_reaps_in_flight_acp_turn_without_sigkill() {
     // The in-flight ACP turn resolved `delivered` at its framed write (the hang
     // stub logged the `session/prompt` request before going silent), so shutdown
     // does not downgrade it to `dropped_on_shutdown`.
-    let inscriptions =
-        fs::read_to_string(inscriptions_root.join("relay.log")).expect("read relay inscriptions");
+    let inscriptions = fs::read_to_string(inscriptions_root.join("relay.log"))
+        .expect("read relay inscriptions");
     assert!(
         inscriptions.contains("\"event\":\"relay.send.async.completed\"")
             && inscriptions.contains("\"outcome\":\"delivered\""),
@@ -206,7 +210,8 @@ async fn relay_sigterm_reaps_in_flight_acp_turn_without_sigkill() {
 async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
     let state_root = temporary.path().join("state");
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");
@@ -261,7 +266,7 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
                  which is past its own shutdown watchdog: the watchdog thread \
                  failed to force the exit"
             );
-        }
+        },
     };
     assert!(
         status.success(),
@@ -282,8 +287,8 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
         "shutdown should reap tmux server when no sessions remain, log={log:?}"
     );
 
-    let inscriptions =
-        fs::read_to_string(inscriptions_root.join("relay.log")).expect("read relay inscriptions");
+    let inscriptions = fs::read_to_string(inscriptions_root.join("relay.log"))
+        .expect("read relay inscriptions");
     assert!(
         inscriptions.contains("\"event\":\"relay.send.async.completed\"")
             && inscriptions.contains("\"outcome\":\"dropped_on_shutdown\""),
@@ -292,10 +297,12 @@ async fn relay_sigint_prunes_owned_sessions_and_reaps_tmux_server() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn relay_sigint_ignores_server_exited_unexpectedly_during_shutdown_cleanup() {
+async fn relay_sigint_ignores_server_exited_unexpectedly_during_shutdown_cleanup()
+ {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
     let state_root = temporary.path().join("state");
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");
@@ -334,7 +341,7 @@ async fn relay_sigint_ignores_server_exited_unexpectedly_during_shutdown_cleanup
                  which is past its own shutdown watchdog: the watchdog thread \
                  failed to force the exit"
             );
-        }
+        },
     };
     assert!(
         status.success(),
@@ -360,7 +367,8 @@ async fn relay_sigint_ignores_server_exited_unexpectedly_during_shutdown_cleanup
 async fn relay_sigint_exits_with_active_stream_connection() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
     let state_root = temporary.path().join("state");
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");
@@ -409,7 +417,7 @@ async fn relay_sigint_exits_with_active_stream_connection() {
                  which is past its own shutdown watchdog: the watchdog thread \
                  failed to force the exit"
             );
-        }
+        },
     };
     assert!(
         status.success(),

@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
 use agentmux::acp::replay::append_replay_entries;
-use agentmux::acp::{PendingToolCall, REPLAY_BUFFER_MAX_ENTRIES, ReplayEntry, UserSource};
+use agentmux::acp::{
+    PendingToolCall, REPLAY_BUFFER_MAX_ENTRIES, ReplayEntry, UserSource,
+};
 
 fn user_entry(label: &str) -> ReplayEntry {
     user_entry_with_source(label, UserSource::ReaderThread)

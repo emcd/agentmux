@@ -64,14 +64,24 @@ fn feed_character(
     }
     match (quote, character) {
         (QuoteState::Outside, '\\') => (quote, boundary, true),
-        (QuoteState::Outside, '\'') => (QuoteState::InsideSingle, BoundaryState::InWord, false),
-        (QuoteState::Outside, '"') => (QuoteState::InsideDouble, BoundaryState::InWord, false),
-        (QuoteState::Outside, ' ' | '\t' | '\n') => (quote, BoundaryState::AtBoundary, false),
+        (QuoteState::Outside, '\'') => {
+            (QuoteState::InsideSingle, BoundaryState::InWord, false)
+        },
+        (QuoteState::Outside, '"') => {
+            (QuoteState::InsideDouble, BoundaryState::InWord, false)
+        },
+        (QuoteState::Outside, ' ' | '\t' | '\n') => {
+            (quote, BoundaryState::AtBoundary, false)
+        },
         (QuoteState::Outside, _) => (quote, BoundaryState::InWord, false),
-        (QuoteState::InsideSingle, '\'') => (QuoteState::Outside, BoundaryState::InWord, false),
+        (QuoteState::InsideSingle, '\'') => {
+            (QuoteState::Outside, BoundaryState::InWord, false)
+        },
         (QuoteState::InsideSingle, _) => (quote, BoundaryState::InWord, false),
         (QuoteState::InsideDouble, '\\') => (quote, boundary, true),
-        (QuoteState::InsideDouble, '"') => (QuoteState::Outside, BoundaryState::InWord, false),
+        (QuoteState::InsideDouble, '"') => {
+            (QuoteState::Outside, BoundaryState::InWord, false)
+        },
         (QuoteState::InsideDouble, _) => (quote, BoundaryState::InWord, false),
     }
 }
@@ -80,12 +90,14 @@ fn feed_character(
 /// the alternation matches `{{name}}` whole rather than its inner
 /// single-brace span.
 fn placeholder_pattern(path: &Path) -> Result<Regex, ConfigurationError> {
-    Regex::new(r"\{\{([a-z][a-z0-9_-]*)\}\}|\{([a-z][a-z0-9_-]*)\}").map_err(|source| {
-        ConfigurationError::invalid(
-            path,
-            format!("internal placeholder regex failure: {source}"),
-        )
-    })
+    Regex::new(r"\{\{([a-z][a-z0-9_-]*)\}\}|\{([a-z][a-z0-9_-]*)\}").map_err(
+        |source| {
+            ConfigurationError::invalid(
+                path,
+                format!("internal placeholder regex failure: {source}"),
+            )
+        },
+    )
 }
 
 /// Feeds one template character at its byte offset, tracking the word-span
@@ -100,10 +112,12 @@ fn feed_tracked(
     words: &mut Vec<(usize, usize)>,
 ) -> LexerState {
     let next = feed_character(state.0, state.1, state.2, character);
-    if state.1 == BoundaryState::AtBoundary && next.1 == BoundaryState::InWord {
+    if state.1 == BoundaryState::AtBoundary && next.1 == BoundaryState::InWord
+    {
         *word_start = byte;
     }
-    if state.1 == BoundaryState::InWord && next.1 == BoundaryState::AtBoundary {
+    if state.1 == BoundaryState::InWord && next.1 == BoundaryState::AtBoundary
+    {
         words.push((*word_start, byte));
     }
     next
@@ -120,7 +134,8 @@ fn feed_tracked_text(
 ) -> LexerState {
     let mut state = state;
     for (offset, character) in text.char_indices() {
-        state = feed_tracked(state, base + offset, character, word_start, words);
+        state =
+            feed_tracked(state, base + offset, character, word_start, words);
     }
     state
 }
@@ -137,7 +152,12 @@ struct ScanWalk {
 
 /// Feeds one template slice through the tracked lexer, returning the end
 /// state and recording word-span events.
-fn feed_walk(walk: &mut ScanWalk, template: &str, begin: usize, end: usize) -> LexerState {
+fn feed_walk(
+    walk: &mut ScanWalk,
+    template: &str,
+    begin: usize,
+    end: usize,
+) -> LexerState {
     walk.state = feed_tracked_text(
         walk.state,
         &template[begin..end],
@@ -175,7 +195,11 @@ fn record_occurrence(
 
 /// Closes the trailing word when the template ends inside one, then
 /// resolves every occurrence's word end from the closed word spans.
-fn close_scan(walk: &mut ScanWalk, occurrences: &mut Vec<PlaceholderContext>, template_len: usize) {
+fn close_scan(
+    walk: &mut ScanWalk,
+    occurrences: &mut Vec<PlaceholderContext>,
+    template_len: usize,
+) {
     if walk.state.1 == BoundaryState::InWord {
         walk.words.push((walk.word_start, template_len));
     }
@@ -183,7 +207,9 @@ fn close_scan(walk: &mut ScanWalk, occurrences: &mut Vec<PlaceholderContext>, te
         occurrence.word_end = walk
             .words
             .iter()
-            .find(|(begin, end)| *begin <= occurrence.begin && occurrence.begin < *end)
+            .find(|(begin, end)| {
+                *begin <= occurrence.begin && occurrence.begin < *end
+            })
             .map(|(_, end)| *end)
             .expect("placeholder occurrence sits inside a scanned word");
     }
@@ -221,7 +247,15 @@ fn is_shell_literal_safe(byte: u8) -> bool {
     byte.is_ascii_alphanumeric()
         || matches!(
             byte,
-            b'-' | b'_' | b'.' | b':' | b'/' | b'=' | b',' | b'+' | b'@' | b'%'
+            b'-' | b'_'
+                | b'.'
+                | b':'
+                | b'/'
+                | b'='
+                | b','
+                | b'+'
+                | b'@'
+                | b'%'
         )
 }
 
@@ -237,7 +271,8 @@ fn is_assignment_shape(prefix_through_equals: &str) -> bool {
         Some(first) if first.is_ascii_alphabetic() || first == '_' => (),
         _ => return false,
     }
-    characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
+    characters
+        .all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
 /// Names the adjacent placeholder kind of one occurrence overlapping a
@@ -265,7 +300,9 @@ fn check_adjacent_placeholder(
         )),
         OccurrenceKind::Unknown => Err(ConfigurationError::invalid(
             path,
-            format!("session '{session_id}' template has unknown placeholder '{text}'"),
+            format!(
+                "session '{session_id}' template has unknown placeholder '{text}'"
+            ),
         )),
     }
 }
@@ -290,7 +327,10 @@ fn check_directory_placement(
     let overlaps: Vec<&PlaceholderContext> = scan
         .occurrences
         .iter()
-        .filter(|other| other.begin < occurrence.word_end && other.end > occurrence.word_begin)
+        .filter(|other| {
+            other.begin < occurrence.word_end
+                && other.end > occurrence.word_begin
+        })
         .collect();
     let lettered = letter_composed_word(
         template,
@@ -372,7 +412,11 @@ fn letter_composed_word(
         for byte in template[cursor..overlap.begin].bytes() {
             push_literal_byte(&mut lettered, byte, path, session_id)?;
         }
-        check_adjacent_placeholder(&template[overlap.begin..overlap.end], path, session_id)?;
+        check_adjacent_placeholder(
+            &template[overlap.begin..overlap.end],
+            path,
+            session_id,
+        )?;
         lettered.push('A');
         cursor = overlap.end;
     }
@@ -423,20 +467,28 @@ fn classify_template_placeholders(
     for (index, occurrence) in scan.occurrences.iter().enumerate() {
         let text = &template[occurrence.begin..occurrence.end];
         match occurrence_kind(text) {
-            OccurrenceKind::CoderSessionId => usage.uses_coder_session_id = true,
-            OccurrenceKind::BundleSessionId => usage.uses_bundle_session_id = true,
+            OccurrenceKind::CoderSessionId => {
+                usage.uses_coder_session_id = true
+            },
+            OccurrenceKind::BundleSessionId => {
+                usage.uses_bundle_session_id = true
+            },
             OccurrenceKind::BundleName => usage.uses_bundle_name = true,
             OccurrenceKind::SessionDirectory => {
-                check_directory_placement(template, scan, index, path, session_id)?;
+                check_directory_placement(
+                    template, scan, index, path, session_id,
+                )?;
                 usage.uses_session_directory = true;
-            }
+            },
             OccurrenceKind::ProjectName => usage.uses_project_name = true,
             OccurrenceKind::Unknown => {
                 return Err(ConfigurationError::invalid(
                     path,
-                    format!("session '{session_id}' template has unknown placeholder '{text}'"),
+                    format!(
+                        "session '{session_id}' template has unknown placeholder '{text}'"
+                    ),
                 ));
-            }
+            },
         }
     }
     Ok(usage)
@@ -529,7 +581,7 @@ fn resolve_project_name(
         Some("bundle-name") => source.bundle_id.to_string(),
         Some("session-directory-basename") | None => {
             directory_basename(source.directory, path, session_id)?
-        }
+        },
         Some(rule) => {
             return Err(ConfigurationError::invalid(
                 path,
@@ -538,7 +590,7 @@ fn resolve_project_name(
                      'session-directory-basename' or 'bundle-name'"
                 ),
             ));
-        }
+        },
     };
     validate_project_name(
         resolved.as_str(),
@@ -572,16 +624,20 @@ fn append_occurrence_value(
     substitution: &TemplateSubstitution,
 ) -> Result<(), ConfigurationError> {
     match occurrence_kind(text) {
-        OccurrenceKind::CoderSessionId => rendered.push_str(
-            substitution
-                .coder_session_id
-                .expect("classifier requires a coder-session-id value when used"),
-        ),
-        OccurrenceKind::BundleSessionId => rendered.push_str(substitution.session_id),
-        OccurrenceKind::BundleName => rendered.push_str(substitution.bundle_id),
+        OccurrenceKind::CoderSessionId => {
+            rendered.push_str(substitution.coder_session_id.expect(
+                "classifier requires a coder-session-id value when used",
+            ))
+        },
+        OccurrenceKind::BundleSessionId => {
+            rendered.push_str(substitution.session_id)
+        },
+        OccurrenceKind::BundleName => {
+            rendered.push_str(substitution.bundle_id)
+        },
         OccurrenceKind::SessionDirectory => {
             rendered.push_str(&shell_quote_word(substitution.directory));
-        }
+        },
         OccurrenceKind::ProjectName => rendered.push_str(
             substitution
                 .project_name
@@ -595,7 +651,7 @@ fn append_occurrence_value(
                     substitution.session_id
                 ),
             ));
-        }
+        },
     }
     Ok(())
 }
@@ -605,7 +661,8 @@ fn apply_substitutions(
     scan: &TemplateScan,
     substitution: &TemplateSubstitution,
 ) -> Result<String, ConfigurationError> {
-    let mut rendered = String::with_capacity(template.len() + substitution.directory.len());
+    let mut rendered =
+        String::with_capacity(template.len() + substitution.directory.len());
     let mut cursor = 0;
     for occurrence in &scan.occurrences {
         rendered.push_str(&template[cursor..occurrence.begin]);
@@ -649,7 +706,8 @@ pub(in crate::configuration) fn render_command_template(
 ) -> Result<String, ConfigurationError> {
     let pattern = placeholder_pattern(path)?;
     let scan = scan_template(template, &pattern);
-    let usage = classify_template_placeholders(template, &scan, path, session_id)?;
+    let usage =
+        classify_template_placeholders(template, &scan, path, session_id)?;
     require_coder_session_id(&usage, coder_session_id, path, session_id)?;
     let project_name = usage
         .uses_project_name
@@ -683,7 +741,9 @@ fn require_coder_session_id(
     if usage.uses_coder_session_id && coder_session_id.is_none() {
         return Err(ConfigurationError::invalid(
             path,
-            format!("session '{session_id}' requires coder-session-id for template"),
+            format!(
+                "session '{session_id}' requires coder-session-id for template"
+            ),
         ));
     }
     Ok(())

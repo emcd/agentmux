@@ -5,9 +5,13 @@ use std::time::Duration;
 
 use agentmux::envelope::PromptBatchSettings;
 use agentmux::protocol::DeliveryDoorbell;
-use agentmux::protocol::mailbox::{EntrySequence, MailboxEntry, MailboxPayload};
+use agentmux::protocol::mailbox::{
+    EntrySequence, MailboxEntry, MailboxPayload,
+};
 use agentmux::tmux::{TmuxTransport, coalescing_runs, render_paste_text};
-use agentmux::transports::{DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage, Transport};
+use agentmux::transports::{
+    DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage, Transport,
+};
 
 use crate::stub_mailbox::StubMailbox;
 
@@ -22,7 +26,10 @@ fn delivery_context(mailbox: &Arc<StubMailbox>) -> DeliveryExecutorContext {
 
 fn envelope(is_receipt: bool) -> DeliveryEnvelope {
     DeliveryEnvelope {
-        message_id: format!("msg-{}", if is_receipt { "receipt" } else { "peer" }),
+        message_id: format!(
+            "msg-{}",
+            if is_receipt { "receipt" } else { "peer" }
+        ),
         message: DeliveryMessage {
             body: "test body".to_string(),
             created_at: "2026-08-07T00:00:00Z".to_string(),

@@ -5,8 +5,9 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::configuration::{
-    BundleConfiguration, BundleMember, ConfigurationRoots, TargetConfiguration,
-    inject_spawn_state_directory, load_bundle_configuration, load_tui_configuration,
+    BundleConfiguration, BundleMember, ConfigurationRoots,
+    TargetConfiguration, inject_spawn_state_directory,
+    load_bundle_configuration, load_tui_configuration,
 };
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::BundleRuntimePaths;
@@ -17,16 +18,20 @@ use super::startup_state::{
 };
 use super::stream::register_configured_session;
 use super::{
-    BundleStartupReport, ReconciliationReport, RelayError, ShutdownReport, StartupFailureRecord,
-    map_config, map_tui_config, relay_error,
+    BundleStartupReport, ReconciliationReport, RelayError, ShutdownReport,
+    StartupFailureRecord, map_config, map_tui_config, relay_error,
 };
-use crate::relay::authorization::{choices_pending_max, load_authorization_context};
+use crate::relay::authorization::{
+    choices_pending_max, load_authorization_context,
+};
 use crate::relay::delivery::{
-    initialize_acp_target_for_startup, stop_workers_for_bundle, wait_for_bundle_workers_stopped,
+    initialize_acp_target_for_startup, stop_workers_for_bundle,
+    wait_for_bundle_workers_stopped,
 };
 use crate::tmux::lifecycle::{
-    TmuxLifecycleError, cleanup_tmux_server_when_unowned, create_member_with_retry,
-    list_owned_sessions, prune_owned_session, session_exists, startup_tmux_member,
+    TmuxLifecycleError, cleanup_tmux_server_when_unowned,
+    create_member_with_retry, list_owned_sessions, prune_owned_session,
+    session_exists, startup_tmux_member,
 };
 
 /// Room beyond the generation fence's own budget for a stopping worker to finish
@@ -50,8 +55,13 @@ pub(super) fn reconcile_bundle(
     paths: &BundleRuntimePaths,
 ) -> Result<ReconciliationReport, RelayError> {
     let bundle = load_hosted_bundle(configuration_roots, paths)?;
-    let authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
-    reconcile_loaded_bundle(&bundle, paths, choices_pending_max(&authorization))
+    let authorization =
+        load_authorization_context(configuration_roots, Some(&bundle))?;
+    reconcile_loaded_bundle(
+        &bundle,
+        paths,
+        choices_pending_max(&authorization),
+    )
 }
 
 /// Validates a bundle's configuration exactly as startup does — bundle and
@@ -69,8 +79,10 @@ pub(super) fn preflight_bundle_configuration(
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
 ) -> Result<(), RelayError> {
-    let bundle = load_bundle_configuration(configuration_roots, bundle_name).map_err(map_config)?;
-    let _authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
+    let bundle = load_bundle_configuration(configuration_roots, bundle_name)
+        .map_err(map_config)?;
+    let _authorization =
+        load_authorization_context(configuration_roots, Some(&bundle))?;
     Ok(())
 }
 
@@ -107,12 +119,16 @@ pub(super) fn shutdown_bundle_runtime(
     // constant keeps a relay configured for slow targets from reporting a
     // teardown incomplete that its own settings said to wait for.
     let stop_timeout = Duration::from_millis(
-        crate::relay::delivery::admission::delivery_configuration().fence_observation_timeout_ms
+        crate::relay::delivery::admission::delivery_configuration()
+            .fence_observation_timeout_ms
             + BUNDLE_WORKER_STOP_MARGIN_MS,
     );
     report.signalled_worker_count = signalled;
-    report.unstopped_worker_count =
-        wait_for_bundle_workers_stopped(bundle_name, runtime_directory, stop_timeout);
+    report.unstopped_worker_count = wait_for_bundle_workers_stopped(
+        bundle_name,
+        runtime_directory,
+        stop_timeout,
+    );
     let mut owned_sessions = list_owned_sessions(tmux_socket)?;
     owned_sessions.sort();
     for session_name in owned_sessions {
@@ -144,7 +160,10 @@ pub(super) fn stamp_hosted_bundle(
     paths: &BundleRuntimePaths,
 ) -> BundleConfiguration {
     for member in &mut bundle.members {
-        inject_spawn_state_directory(&mut member.environment, paths.state_root.as_path());
+        inject_spawn_state_directory(
+            &mut member.environment,
+            paths.state_root.as_path(),
+        );
     }
     bundle
 }
@@ -163,8 +182,11 @@ pub(super) fn load_hosted_bundle(
     configuration_roots: &ConfigurationRoots,
     paths: &BundleRuntimePaths,
 ) -> Result<BundleConfiguration, RelayError> {
-    let bundle = load_bundle_configuration(configuration_roots, paths.bundle_name.as_str())
-        .map_err(map_config)?;
+    let bundle = load_bundle_configuration(
+        configuration_roots,
+        paths.bundle_name.as_str(),
+    )
+    .map_err(map_config)?;
     Ok(stamp_hosted_bundle(bundle, paths))
 }
 
@@ -182,7 +204,8 @@ pub(super) fn startup_bundle(
     paths: &BundleRuntimePaths,
 ) -> Result<BundleStartupReport, RelayError> {
     let bundle = load_hosted_bundle(configuration_roots, paths)?;
-    let authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
+    let authorization =
+        load_authorization_context(configuration_roots, Some(&bundle))?;
     startup_loaded_bundle(&bundle, paths, choices_pending_max(&authorization))
 }
 
@@ -198,7 +221,9 @@ pub(super) fn startup_bundle(
 pub(super) fn register_configured_relay_wide_principals(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<(), RelayError> {
-    let Some(users) = load_tui_configuration(configuration_roots).map_err(map_tui_config)? else {
+    let Some(users) =
+        load_tui_configuration(configuration_roots).map_err(map_tui_config)?
+    else {
         return Ok(());
     };
     for session in &users.sessions {
@@ -253,7 +278,8 @@ pub(super) fn register_configured_bundle(
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
 ) -> Result<(), RelayError> {
-    let bundle = load_bundle_configuration(configuration_roots, bundle_name).map_err(map_config)?;
+    let bundle = load_bundle_configuration(configuration_roots, bundle_name)
+        .map_err(map_config)?;
     register_configured_bundle_principals(&bundle)
 }
 
@@ -338,7 +364,7 @@ pub(super) fn reconcile_loaded_bundle(
             Ok(()) => {
                 report.bootstrap_session = Some(bootstrap_member.id.clone());
                 report.created_sessions.push(bootstrap_member.id.clone());
-            }
+            },
             Err(error) => report
                 .failed_startups
                 .push(creation_failure_record(&bootstrap_member, &error)),
@@ -355,13 +381,17 @@ pub(super) fn reconcile_loaded_bundle(
                     Ok(()) => Ok(member.id.clone()),
                     // Boxed so the failure path does not widen every worker's
                     // result to the size of a whole failure record.
-                    Err(error) => Err(Box::new(creation_failure_record(&member, &error))),
+                    Err(error) => {
+                        Err(Box::new(creation_failure_record(&member, &error)))
+                    },
                 }
             }));
         }
         for handle in handles {
             match handle.join() {
-                Ok(Ok(created_session)) => report.created_sessions.push(created_session),
+                Ok(Ok(created_session)) => {
+                    report.created_sessions.push(created_session)
+                },
                 Ok(Err(failure)) => report.failed_startups.push(*failure),
                 // A panicked worker leaves the pass unable to say whether that
                 // member was created, so it stays a whole-operation failure
@@ -372,7 +402,7 @@ pub(super) fn reconcile_loaded_bundle(
                         "reconciliation worker thread panicked",
                         None,
                     ));
-                }
+                },
             }
         }
     }
@@ -437,7 +467,8 @@ fn creation_failure_record(
         session_id: member.id.clone(),
         transport: member.target.session_type().into(),
         code: "runtime_startup_failed".to_string(),
-        reason: "failed to create tmux session during reconciliation".to_string(),
+        reason: "failed to create tmux session during reconciliation"
+            .to_string(),
         timestamp: startup_timestamp(),
         sequence: 0,
         details: Some(json!({
@@ -483,7 +514,9 @@ fn startup_member(
     choices_pending_max: usize,
 ) -> Result<(), (String, String, Option<serde_json::Value>)> {
     match &member.target {
-        TargetConfiguration::Tmux(_) => startup_tmux_member(tmux_socket, member),
+        TargetConfiguration::Tmux(_) => {
+            startup_tmux_member(tmux_socket, member)
+        },
         TargetConfiguration::Acp(_) => initialize_acp_target_for_startup(
             bundle_name,
             runtime_directory,
@@ -529,10 +562,15 @@ fn startup_members(
             choices_pending_max,
         ) {
             Ok(()) => {
-                clear_session_startup_failures(runtime_directory, member.id.as_str())?;
+                clear_session_startup_failures(
+                    runtime_directory,
+                    member.id.as_str(),
+                )?;
                 ready_session_count += 1;
-            }
-            Err(error) => failed_startups.push(member_failure_record(member, error)),
+            },
+            Err(error) => {
+                failed_startups.push(member_failure_record(member, error))
+            },
         }
     }
     Ok((ready_session_count, failed_startups))
@@ -554,7 +592,9 @@ fn startup_loaded_bundle(
 
     let mut stale_owned = list_owned_sessions(tmux_socket)?
         .into_iter()
-        .filter(|session_name| !configured_tmux_sessions.contains(session_name))
+        .filter(|session_name| {
+            !configured_tmux_sessions.contains(session_name)
+        })
         .collect::<Vec<_>>();
     stale_owned.sort();
     for session_name in stale_owned {

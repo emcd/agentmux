@@ -80,7 +80,10 @@ impl ConfineError {
 /// resolves to `None` when `create` is false (absent path, not an error);
 /// when `create` holds, the root is created first, mirroring the previous
 /// `create_dir_all` behavior for a not-yet-existing state tree.
-fn open_confined_root(state_root: &Path, create: bool) -> Result<Option<OwnedFd>, ConfineError> {
+fn open_confined_root(
+    state_root: &Path,
+    create: bool,
+) -> Result<Option<OwnedFd>, ConfineError> {
     let path = cstring_from_path(state_root).ok_or_else(|| {
         ConfineError::io(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -91,13 +94,17 @@ fn open_confined_root(state_root: &Path, create: bool) -> Result<Option<OwnedFd>
         // `O_NOFOLLOW | O_DIRECTORY` refuses a symlinked state root rather
         // than anchoring the traversal outside the tree.
         Ok(fd) => Ok(Some(fd)),
-        Err(source) if source.kind() == io::ErrorKind::NotFound && !create => Ok(None),
+        Err(source) if source.kind() == io::ErrorKind::NotFound && !create => {
+            Ok(None)
+        },
         Err(source) if source.kind() == io::ErrorKind::NotFound => {
             fs::create_dir_all(state_root).map_err(ConfineError::io)?;
             open_at(libc::AT_FDCWD, &path, open_dir_flags(), 0)
                 .map(Some)
-                .map_err(|source| map_dir_open_error(libc::AT_FDCWD, &path, source))
-        }
+                .map_err(|source| {
+                    map_dir_open_error(libc::AT_FDCWD, &path, source)
+                })
+        },
         Err(source) => Err(map_dir_open_error(libc::AT_FDCWD, &path, source)),
     }
 }
@@ -123,7 +130,9 @@ fn walk_confined(
         })?;
         match open_at(current.as_raw_fd(), &cname, open_dir_flags(), 0) {
             Ok(child) => current = child,
-            Err(source) if source.kind() == io::ErrorKind::NotFound && create => {
+            Err(source)
+                if source.kind() == io::ErrorKind::NotFound && create =>
+            {
                 // `mkdirat` derives the directory from the retained parent
                 // handle, so a concurrently exchanged ancestor cannot redirect
                 // the creation. The mode casts to `libc::mode_t`, which is
@@ -149,13 +158,17 @@ fn walk_confined(
                 sync_fd(&current).map_err(ConfineError::io)?;
                 let reopen_fd = current.as_raw_fd();
                 current = open_at(reopen_fd, &cname, open_dir_flags(), 0)
-                    .map_err(|source| map_dir_open_error(reopen_fd, &cname, source))?;
-            }
-            Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
+                    .map_err(|source| {
+                        map_dir_open_error(reopen_fd, &cname, source)
+                    })?;
+            },
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                return Ok(None);
+            },
             Err(source) => {
                 let parent_fd = current.as_raw_fd();
                 return Err(map_dir_open_error(parent_fd, &cname, source));
-            }
+            },
         }
     }
     Ok(Some(current))
@@ -165,7 +178,9 @@ fn walk_confined(
 /// name, rejecting absolute paths and parent-directory escapes: confined
 /// targets are always constructed below the anchor, never addressed through
 /// it.
-fn split_confined_relative(relative: &Path) -> Result<(Vec<&Path>, &Path), ConfineError> {
+fn split_confined_relative(
+    relative: &Path,
+) -> Result<(Vec<&Path>, &Path), ConfineError> {
     if relative.is_absolute() {
         return Err(ConfineError::io(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -176,13 +191,15 @@ fn split_confined_relative(relative: &Path) -> Result<(Vec<&Path>, &Path), Confi
     for component in relative.components() {
         match component {
             Component::Normal(name) => parents.push(Path::new(name)),
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
+            Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => {
                 return Err(ConfineError::io(io::Error::new(
                     io::ErrorKind::InvalidInput,
                     "confined target escapes anchor",
                 )));
-            }
-            Component::CurDir => {}
+            },
+            Component::CurDir => {},
         }
     }
     let Some(file_name) = parents.pop() else {
@@ -232,7 +249,11 @@ pub(crate) fn confined_stage(
     let file = open_at(
         parent.as_raw_fd(),
         &tmp_name,
-        libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        libc::O_WRONLY
+            | libc::O_CREAT
+            | libc::O_EXCL
+            | libc::O_NOFOLLOW
+            | libc::O_CLOEXEC,
         CONFINED_FILE_MODE,
     )
     .map_err(|source| map_open_error(source, &target.display().to_string()))?;
@@ -241,7 +262,9 @@ pub(crate) fn confined_stage(
     // under the process umask, so reassert it on the retained handle.
     file.set_permissions(fs::Permissions::from_mode(CONFINED_FILE_MODE))
         .map_err(ConfineError::io)?;
-    if let Err(source) = io::Write::write_all(&mut file, bytes).and_then(|()| file.sync_all()) {
+    if let Err(source) =
+        io::Write::write_all(&mut file, bytes).and_then(|()| file.sync_all())
+    {
         remove_relative(&parent, &tmp_name);
         return Err(ConfineError::io(source));
     }
@@ -277,15 +300,22 @@ pub(crate) fn confined_read(
         return Ok(None);
     };
     let final_name = cname_of(file_name)?;
-    let file = match open_at(parent.as_raw_fd(), &final_name, open_file_flags(), 0) {
-        Ok(file) => fs::File::from(file),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(source) => {
-            return Err(map_open_error(source, &target.display().to_string()));
-        }
-    };
+    let file =
+        match open_at(parent.as_raw_fd(), &final_name, open_file_flags(), 0) {
+            Ok(file) => fs::File::from(file),
+            Err(source) if source.kind() == io::ErrorKind::NotFound => {
+                return Ok(None);
+            },
+            Err(source) => {
+                return Err(map_open_error(
+                    source,
+                    &target.display().to_string(),
+                ));
+            },
+        };
     let mut bytes = Vec::new();
-    io::Read::read_to_end(&mut io::BufReader::new(file), &mut bytes).map_err(ConfineError::io)?;
+    io::Read::read_to_end(&mut io::BufReader::new(file), &mut bytes)
+        .map_err(ConfineError::io)?;
     Ok(Some(bytes))
 }
 
@@ -345,10 +375,13 @@ impl ConfinedWrite {
         }
         if fault_seam_present(&self.parent, ".fault-dir-sync") {
             return Err(ConfineError::DirSync {
-                source: io::Error::other("injected fault: .fault-dir-sync present"),
+                source: io::Error::other(
+                    "injected fault: .fault-dir-sync present",
+                ),
             });
         }
-        sync_fd(&self.parent).map_err(|source| ConfineError::DirSync { source })?;
+        sync_fd(&self.parent)
+            .map_err(|source| ConfineError::DirSync { source })?;
         Ok(self.display_path)
     }
 
@@ -373,7 +406,8 @@ impl ConfinedWrite {
                 "confined anchor vanished before commit",
             )));
         };
-        let Some(fresh) = walk_confined(root.as_fd(), &components, false)? else {
+        let Some(fresh) = walk_confined(root.as_fd(), &components, false)?
+        else {
             return Err(ConfineError::io(io::Error::new(
                 io::ErrorKind::NotFound,
                 "confined parent vanished before commit",
@@ -401,7 +435,11 @@ fn fd_identity(fd: BorrowedFd) -> Result<(u64, u64), ConfineError> {
 
 /// Derives the sibling temp file name for `target` without touching the
 /// filesystem: only the file-name mapping of [`unique_temp_path`] is used.
-fn temp_file_name(state_root: &Path, target: &Path, tag: &str) -> Result<CString, ConfineError> {
+fn temp_file_name(
+    state_root: &Path,
+    target: &Path,
+    tag: &str,
+) -> Result<CString, ConfineError> {
     let tmp = unique_temp_path(&state_root.join(target), tag);
     cname_of(tmp.file_name().map(Path::new).unwrap_or(target))
 }
@@ -440,11 +478,18 @@ fn open_file_flags() -> libc::c_int {
 ///
 /// The caller supplies a valid open directory handle and a NUL-terminated
 /// name; the call performs no other memory access.
-fn open_at(parent: RawFd, name: &CString, flags: libc::c_int, mode: u32) -> io::Result<OwnedFd> {
+fn open_at(
+    parent: RawFd,
+    name: &CString,
+    flags: libc::c_int,
+    mode: u32,
+) -> io::Result<OwnedFd> {
     // Variadic `openat` takes the mode through `...`, so it passes as
     // `c_uint` (with `mode_t` range preserved); `mkdirat` takes `mode_t`
     // directly at its own call site.
-    let fd = unsafe { libc::openat(parent, name.as_ptr(), flags, mode as libc::c_uint) };
+    let fd = unsafe {
+        libc::openat(parent, name.as_ptr(), flags, mode as libc::c_uint)
+    };
     if fd < 0 {
         return Err(io::Error::last_os_error());
     }
@@ -469,12 +514,18 @@ fn map_open_error(source: io::Error, component: &str) -> ConfineError {
 
 /// Maps a no-follow *directory* open failure, disambiguating the `ENOTDIR`
 /// a symlink-to-directory produces from a genuine non-directory.
-fn map_dir_open_error(parent: RawFd, name: &CString, source: io::Error) -> ConfineError {
+fn map_dir_open_error(
+    parent: RawFd,
+    name: &CString,
+    source: io::Error,
+) -> ConfineError {
     if source.raw_os_error() == Some(libc::ELOOP) {
         let component = name.to_string_lossy().into_owned();
         return ConfineError::symlink(component.as_str());
     }
-    if source.raw_os_error() == Some(libc::ENOTDIR) && is_symlink_at(parent, name) {
+    if source.raw_os_error() == Some(libc::ENOTDIR)
+        && is_symlink_at(parent, name)
+    {
         let component = name.to_string_lossy().into_owned();
         return ConfineError::symlink(component.as_str());
     }
@@ -515,7 +566,9 @@ fn fault_seam_present(parent: &OwnedFd, seam: &str) -> bool {
     let Ok(name) = CString::new(seam) else {
         return false;
     };
-    unsafe { libc::faccessat(parent.as_raw_fd(), name.as_ptr(), libc::F_OK, 0) == 0 }
+    unsafe {
+        libc::faccessat(parent.as_raw_fd(), name.as_ptr(), libc::F_OK, 0) == 0
+    }
 }
 
 /// Syncs a retained directory handle so a just-renamed entry is durable.
@@ -525,7 +578,10 @@ fn sync_fd(dir: &OwnedFd) -> io::Result<()> {
 
 /// Rejects the `.` / `..` / empty segments that must never appear in a
 /// constructed confined target.
-fn check_component_name(raw: &[u8], component: &Path) -> Result<(), ConfineError> {
+fn check_component_name(
+    raw: &[u8],
+    component: &Path,
+) -> Result<(), ConfineError> {
     if raw.is_empty() || raw == b"." || raw == b".." {
         return Err(ConfineError::io(io::Error::new(
             io::ErrorKind::InvalidInput,

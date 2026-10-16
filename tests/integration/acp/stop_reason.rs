@@ -12,8 +12,10 @@ fn acp_cancelled_stop_reason_is_accepted_for_async_dispatch() {
         stop_reason: "cancelled".to_string(),
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 }
@@ -25,8 +27,10 @@ fn acp_turn_timeout_is_accepted_for_async_dispatch() {
         prompt_delay_sec: 1,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 }
@@ -51,7 +55,8 @@ fn acp_does_not_terminalize_a_delayed_but_completing_turn() {
         prompt_delay_sec: 1,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
 
     // Subscribe BEFORE bootstrap so the watch's `None` initial value is
     // the seed `last_seen`. Any subsequent transition is detectable.
@@ -62,7 +67,8 @@ fn acp_does_not_terminalize_a_delayed_but_completing_turn() {
     // watch (`Initializing → Available → Busy`). `dispatch_send` returns
     // once the stub logs `session/prompt` or the worker becomes
     // unavailable, whichever comes first.
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     assert_eq!(send_result(response).outcome, SendOutcome::Queued);
 
     // Drive the watch through a deadline well before the 1 s stub completion.
@@ -84,7 +90,11 @@ fn acp_does_not_terminalize_a_delayed_but_completing_turn() {
     let busy_at = observed
         .iter()
         .position(|state| *state == WorkerReadinessState::Busy)
-        .unwrap_or_else(|| panic!("expected Busy post-dispatch transition; observed={observed:?}"));
+        .unwrap_or_else(|| {
+            panic!(
+                "expected Busy post-dispatch transition; observed={observed:?}"
+            )
+        });
 
     // Nothing at all may follow `Busy` inside the window. Naming the forbidden
     // states instead would only reject the respawn shape the deleted prime
@@ -119,8 +129,10 @@ fn acp_does_not_terminalize_a_delayed_but_completing_turn() {
 fn acp_successful_terminal_stop_reason_is_accepted_for_async_dispatch() {
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     assert_eq!(result.reason_code, None);
@@ -135,23 +147,28 @@ fn acp_first_activity_acceptance_prevents_late_turn_timeout_failure() {
         update_count: 1,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     assert_eq!(result.reason_code, None);
 }
 
 #[test]
-fn acp_async_send_returns_on_dispatch_without_waiting_for_terminal_stop_reason() {
+fn acp_async_send_returns_on_dispatch_without_waiting_for_terminal_stop_reason()
+ {
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         prompt_delay_sec: 2,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let started_at = Instant::now();
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let elapsed = started_at.elapsed();
     let result = send_result(response);
 

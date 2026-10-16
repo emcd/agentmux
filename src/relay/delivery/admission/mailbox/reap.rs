@@ -153,7 +153,9 @@ mod mailbox_reap_tests {
     use crate::protocol::operations::PeekRejection;
 
     use super::super::super::terminal::terminalize;
-    use super::super::fixtures::{claim, mail, peeked, place, request, target, target_generation};
+    use super::super::fixtures::{
+        claim, mail, peeked, place, request, target, target_generation,
+    };
     use super::super::generation::claim_consumer_generation;
     use super::super::peek::peek;
     use super::*;
@@ -226,7 +228,10 @@ mod mailbox_reap_tests {
             .expect("the reaped target is free to claim");
         assert_eq!(
             peeked(
-                &crate::protocol::identity::ConsumerBinding::new(target(namespace), inherited),
+                &crate::protocol::identity::ConsumerBinding::new(
+                    target(namespace),
+                    inherited
+                ),
                 10,
                 1_000
             ),
@@ -295,7 +300,9 @@ mod mailbox_reap_tests {
     }
 
     /// A generation this target has not issued, for naming one it does not hold.
-    fn stale_of(binding: &crate::protocol::identity::ConsumerBinding) -> ConsumerGenerationId {
+    fn stale_of(
+        binding: &crate::protocol::identity::ConsumerBinding,
+    ) -> ConsumerGenerationId {
         ConsumerGenerationId::new(binding.generation.value() + 7)
     }
 }

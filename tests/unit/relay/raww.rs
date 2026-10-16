@@ -60,7 +60,11 @@ fn raww_rejects_relay_wide_target_as_unsupported_operation() {
     // diagnostic is actionable.
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
-    write_tui_configuration_with_session_id(&config_root, "default", "ui@GLOBAL");
+    write_tui_configuration_with_session_id(
+        &config_root,
+        "default",
+        "ui@GLOBAL",
+    );
     agentmux::relay::register_configured_relay_wide_principals(&config_root)
         .expect("register declared relay-wide principals");
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -191,7 +195,9 @@ send = "home"
         "party",
         &tmux_socket,
     )
-    .expect_err("raww should be denied when the policy omits the raww control");
+    .expect_err(
+        "raww should be denied when the policy omits the raww control",
+    );
 
     assert_eq!(response.code, "authorization_forbidden");
     let details = response.details.expect("authorization details");

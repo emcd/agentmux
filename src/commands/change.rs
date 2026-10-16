@@ -8,13 +8,16 @@ use crate::{
     },
     runtime::{
         error::RuntimeError, paths::RelayRuntimePaths,
-        starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
+        starter::ensure_starter_configuration_layout,
+        tui_session::resolve_tui_session_identity,
     },
 };
 
 use super::{ChangePskArguments, ChangeScopeArguments, shared};
 
-pub(super) fn run_agentmux_change(arguments: &[String]) -> Result<(), RuntimeError> {
+pub(super) fn run_agentmux_change(
+    arguments: &[String],
+) -> Result<(), RuntimeError> {
     if arguments
         .iter()
         .any(|value| value == "--help" || value == "-h")
@@ -63,7 +66,9 @@ fn run_change_psk(arguments: &[String]) -> Result<(), RuntimeError> {
             destination,
         },
     )
-    .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;
+    .map_err(|source| {
+        shared::map_relay_request_failure(&relay_paths.relay_socket, source)
+    })?;
 
     match response {
         RelayResponse::ChangePsk {
@@ -81,23 +86,25 @@ fn run_change_psk(arguments: &[String]) -> Result<(), RuntimeError> {
                 });
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&payload).map_err(|source| {
-                        RuntimeError::io(
-                            "encode change psk response json",
-                            std::io::Error::other(source),
-                        )
-                    })?
+                    serde_json::to_string_pretty(&payload).map_err(
+                        |source| {
+                            RuntimeError::io(
+                                "encode change psk response json",
+                                std::io::Error::other(source),
+                            )
+                        }
+                    )?
                 );
             } else {
                 println!("principal_id={principal_id}");
                 match (psk.as_deref(), written_path.as_deref()) {
                     (Some(value), _) => println!("psk={value}"),
                     (None, Some(path)) => println!("psk written to {path}"),
-                    (None, None) => {}
+                    (None, None) => {},
                 }
             }
             Ok(())
-        }
+        },
         RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
         other => Err(RuntimeError::validation(
             "internal_unexpected_failure",
@@ -126,7 +133,9 @@ fn run_change_scope(arguments: &[String]) -> Result<(), RuntimeError> {
             scope: parsed.scope.clone(),
         },
     )
-    .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;
+    .map_err(|source| {
+        shared::map_relay_request_failure(&relay_paths.relay_socket, source)
+    })?;
 
     match response {
         RelayResponse::ChangeScope {
@@ -149,19 +158,23 @@ fn run_change_scope(arguments: &[String]) -> Result<(), RuntimeError> {
                 });
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&payload).map_err(|source| {
-                        RuntimeError::io(
-                            "encode change scope response json",
-                            std::io::Error::other(source),
-                        )
-                    })?
+                    serde_json::to_string_pretty(&payload).map_err(
+                        |source| {
+                            RuntimeError::io(
+                                "encode change scope response json",
+                                std::io::Error::other(source),
+                            )
+                        }
+                    )?
                 );
             } else {
                 println!("principal_id={principal_id} scope={scope}");
             }
             Ok(())
-        }
-        RelayResponse::Error { error } if error.code == "internal_store_durability_uncertain" => {
+        },
+        RelayResponse::Error { error }
+            if error.code == "internal_store_durability_uncertain" =>
+        {
             // The replacement is published and effective but its crash
             // durability is uncertain: preserve the effective grant in
             // machine-readable form on both surfaces instead of dropping the
@@ -195,11 +208,16 @@ fn run_change_scope(arguments: &[String]) -> Result<(), RuntimeError> {
                     })?
                 );
             } else {
-                println!("principal_id={principal_id} scope={scope} durability=uncertain");
+                println!(
+                    "principal_id={principal_id} scope={scope} durability=uncertain"
+                );
             }
-            eprintln!("agentmux change scope: {}: {}", error.code, error.message);
+            eprintln!(
+                "agentmux change scope: {}: {}",
+                error.code, error.message
+            );
             Err(shared::map_relay_error(error))
-        }
+        },
         RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
         other => Err(RuntimeError::validation(
             "internal_unexpected_failure",
@@ -208,7 +226,9 @@ fn run_change_scope(arguments: &[String]) -> Result<(), RuntimeError> {
     }
 }
 
-fn parse_change_psk_arguments(arguments: &[String]) -> Result<ChangePskArguments, RuntimeError> {
+fn parse_change_psk_arguments(
+    arguments: &[String],
+) -> Result<ChangePskArguments, RuntimeError> {
     let mut principal_id: Option<String> = None;
     let mut output_path: Option<String> = None;
     let mut write_to_config = false;
@@ -224,22 +244,30 @@ fn parse_change_psk_arguments(arguments: &[String]) -> Result<ChangePskArguments
         }
         match arguments[index].as_str() {
             "--output" => {
-                output_path = Some(shared::take_value(arguments, &mut index, "--output")?)
-            }
+                output_path = Some(shared::take_value(
+                    arguments, &mut index, "--output",
+                )?)
+            },
             "--write-config" => write_to_config = true,
             "--bundle" | "--bundle-name" => {
-                bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?)
-            }
+                bundle_name = Some(shared::take_value(
+                    arguments, &mut index, "--bundle",
+                )?)
+            },
             "--as-session" => {
-                session_selector = Some(shared::take_value(arguments, &mut index, "--as-session")?)
-            }
+                session_selector = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--as-session",
+                )?)
+            },
             "--json" => output_json = true,
             value if value.starts_with('-') => {
                 return Err(RuntimeError::InvalidArgument {
                     argument: value.to_string(),
                     message: "unknown argument".to_string(),
                 });
-            }
+            },
             value => {
                 if principal_id.is_some() {
                     return Err(RuntimeError::InvalidArgument {
@@ -248,7 +276,7 @@ fn parse_change_psk_arguments(arguments: &[String]) -> Result<ChangePskArguments
                     });
                 }
                 principal_id = Some(value.to_string());
-            }
+            },
         }
         index += 1;
     }
@@ -286,20 +314,29 @@ fn parse_change_scope_arguments(
             continue;
         }
         match arguments[index].as_str() {
-            "--scope" => scope = Some(shared::take_value(arguments, &mut index, "--scope")?),
+            "--scope" => {
+                scope =
+                    Some(shared::take_value(arguments, &mut index, "--scope")?)
+            },
             "--bundle" | "--bundle-name" => {
-                bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?)
-            }
+                bundle_name = Some(shared::take_value(
+                    arguments, &mut index, "--bundle",
+                )?)
+            },
             "--as-session" => {
-                session_selector = Some(shared::take_value(arguments, &mut index, "--as-session")?)
-            }
+                session_selector = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--as-session",
+                )?)
+            },
             "--json" => output_json = true,
             value if value.starts_with('-') => {
                 return Err(RuntimeError::InvalidArgument {
                     argument: value.to_string(),
                     message: "unknown argument".to_string(),
                 });
-            }
+            },
             value => {
                 if principal_id.is_some() {
                     return Err(RuntimeError::InvalidArgument {
@@ -308,7 +345,7 @@ fn parse_change_scope_arguments(
                     });
                 }
                 principal_id = Some(value.to_string());
-            }
+            },
         }
         index += 1;
     }
@@ -332,7 +369,8 @@ fn parse_change_scope_arguments(
     if !is_relay_principal_id(normalized_principal) {
         return Err(RuntimeError::validation(
             "validation_invalid_principal_id",
-            "change scope applies only to peer relay principals (<id>@RELAY)".to_string(),
+            "change scope applies only to peer relay principals (<id>@RELAY)"
+                .to_string(),
         ));
     }
     if let Err(error) = parse_peer_scope(Some(scope.as_str())) {

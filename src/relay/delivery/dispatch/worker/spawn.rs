@@ -11,10 +11,13 @@ use std::sync::OnceLock;
 use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver};
 
 use crate::protocol::DeliveryDoorbell;
-use crate::protocol::identity::{ConsumerBinding, ConsumerGenerationId, DeliveryTargetId};
+use crate::protocol::identity::{
+    ConsumerBinding, ConsumerGenerationId, DeliveryTargetId,
+};
 use crate::relay::delivery::LedgerMailboxConsumer;
 use crate::relay::delivery::admission::{
-    GenerationRejection, claim_consumer_generation, register_doorbell, replace_consumer_generation,
+    GenerationRejection, claim_consumer_generation, register_doorbell,
+    replace_consumer_generation,
 };
 use crate::relay::delivery::async_worker::report_resolved_member;
 use crate::relay::delivery::fence::FenceVerdict;
@@ -25,7 +28,9 @@ use crate::{configuration::BundleMember, envelope::PromptBatchSettings};
 use super::super::super::async_worker::{
     AsyncWorkerKey, WorkerOwner, bind_worker_consumer_generation,
 };
-use super::super::envelope::{build_acp_driver_services, build_worker_transport};
+use super::super::envelope::{
+    build_acp_driver_services, build_worker_transport,
+};
 use super::super::payload::resolve_target_member;
 use super::run::run_async_delivery_worker;
 
@@ -62,12 +67,14 @@ pub(in crate::relay::delivery::dispatch) enum WorkerTransportSource {
 #[derive(Clone)]
 pub(in crate::relay::delivery::dispatch) struct WorkerTransportContext {
     pub(in crate::relay::delivery::dispatch) namespace: String,
-    pub(in crate::relay::delivery::dispatch) runtime_directory: std::path::PathBuf,
+    pub(in crate::relay::delivery::dispatch) runtime_directory:
+        std::path::PathBuf,
     pub(in crate::relay::delivery::dispatch) target_session: String,
     /// `None` only for a relay-wide (UI) target. A configured coder target whose
     /// member is missing fails resolution instead of arriving here as `None`,
     /// which is what lets the builder treat absence as "UI" without a second flag.
-    pub(in crate::relay::delivery::dispatch) target_member: Option<BundleMember>,
+    pub(in crate::relay::delivery::dispatch) target_member:
+        Option<BundleMember>,
 }
 
 impl WorkerTransportContext {
@@ -88,7 +95,8 @@ impl WorkerTransportContext {
 #[derive(Clone)]
 pub(in crate::relay::delivery::dispatch) struct AcpWorkerBootstrap {
     pub(in crate::relay::delivery::dispatch) target_member: BundleMember,
-    pub(in crate::relay::delivery::dispatch) runtime_directory: std::path::PathBuf,
+    pub(in crate::relay::delivery::dispatch) runtime_directory:
+        std::path::PathBuf,
     /// Per-bundle choice-queue bound, captured into the chooser closure at worker
     /// construction so it no longer rides every delivery task and choice.
     pub(in crate::relay::delivery::dispatch) choices_pending_max: usize,
@@ -128,7 +136,8 @@ fn delivery_runtime_handle() -> Handle {
     if let Ok(handle) = Handle::try_current() {
         return handle;
     }
-    static DELIVERY_RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    static DELIVERY_RUNTIME: OnceLock<tokio::runtime::Runtime> =
+        OnceLock::new();
     DELIVERY_RUNTIME
         .get_or_init(|| {
             tokio::runtime::Builder::new_multi_thread()
@@ -218,8 +227,14 @@ pub(super) async fn build_generation(
     let binding = ConsumerBinding::new(target.clone(), generation);
     let doorbell = register_generation_doorbell(&target);
     let delivery = executor_context(&binding, doorbell);
-    let transport =
-        build_transport(key, source, batch_settings, readiness_changed, delivery).await?;
+    let transport = build_transport(
+        key,
+        source,
+        batch_settings,
+        readiness_changed,
+        delivery,
+    )
+    .await?;
     Ok(BuiltGeneration { transport, binding })
 }
 
@@ -238,8 +253,12 @@ fn executor_context(
     DeliveryExecutorContext {
         consumer: LedgerMailboxConsumer::bind(binding.clone()),
         doorbell,
-        poll_interval: std::time::Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS),
-        unreachable_dwell: std::time::Duration::from_millis(delivery.unreachable_dwell_ms),
+        poll_interval: std::time::Duration::from_millis(
+            ASYNC_WORKER_POLL_INTERVAL_MS,
+        ),
+        unreachable_dwell: std::time::Duration::from_millis(
+            delivery.unreachable_dwell_ms,
+        ),
     }
 }
 
@@ -261,17 +280,23 @@ fn issue_consumer_generation(
             // Positive by construction: this arm is reached only from the
             // positive branch of a fence verdict the worker has already
             // observed, and the ledger refuses anything else.
-            let replacement = replace_consumer_generation(target, outgoing, FenceVerdict::Positive)
-                .map_err(|rejection| generation_failure(step, rejection))?;
+            let replacement = replace_consumer_generation(
+                target,
+                outgoing,
+                FenceVerdict::Positive,
+            )
+            .map_err(|rejection| generation_failure(step, rejection))?;
             for member in &replacement.resolved {
                 report_resolved_member(
                     member,
                     None,
-                    Some("the delivery generation was replaced before this unit was acknowledged"),
+                    Some(
+                        "the delivery generation was replaced before this unit was acknowledged",
+                    ),
                 );
             }
             Ok(replacement.generation)
-        }
+        },
     }
 }
 
@@ -285,7 +310,10 @@ fn issue_consumer_generation(
 /// elected to carry and unregisters, so the next send may elect a fresh one —
 /// where taking the target anyway would put two consumers on one mailbox, which
 /// is the single condition every generation check exists to exclude.
-fn generation_failure(step: ConsumerGenerationStep, rejection: GenerationRejection) -> RelayError {
+fn generation_failure(
+    step: ConsumerGenerationStep,
+    rejection: GenerationRejection,
+) -> RelayError {
     relay_error(
         "internal_unexpected_failure",
         "the relay could not take this target's mailbox for a new delivery generation",
@@ -334,7 +362,9 @@ fn consumer_target(key: &AsyncWorkerKey) -> DeliveryTargetId {
 /// order leaves at worst a stale registration for a generation whose construction
 /// failed, and nothing rings one of those, since an entry reaches a mailbox only
 /// through a worker's own intake and that worker is about to end.
-fn register_generation_doorbell(target: &DeliveryTargetId) -> DeliveryDoorbell {
+fn register_generation_doorbell(
+    target: &DeliveryTargetId,
+) -> DeliveryDoorbell {
     let doorbell = DeliveryDoorbell::new();
     let ring = doorbell.clone();
     register_doorbell(target, std::sync::Arc::new(move || ring.ring()));
@@ -369,12 +399,19 @@ async fn build_transport(
                 driver.start_bootstrap();
             }
             Ok(transport)
-        }
+        },
         WorkerTransportSource::Direct(context) => {
             let notify = std::sync::Arc::clone(readiness_changed);
             let readiness_notifier: crate::tmux::ReadinessNotifier =
                 std::sync::Arc::new(move || notify.notify_waiters());
-            build_worker_transport(context, key, batch_settings, readiness_notifier, delivery).await
-        }
+            build_worker_transport(
+                context,
+                key,
+                batch_settings,
+                readiness_notifier,
+                delivery,
+            )
+            .await
+        },
     }
 }

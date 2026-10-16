@@ -27,7 +27,9 @@ fn undelivered_reporting_counts_waiting_entries_and_not_declared_ones() {
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
     configure_long_unreachable_dwell();
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
@@ -77,7 +79,8 @@ fn undelivered_reporting_counts_waiting_entries_and_not_declared_ones() {
     // subscriber, so it terminalizes at once — which is exactly why the
     // aggregate below counts three and not four. A resolved member is not an
     // undelivered one.
-    let completions = read_inscriptions(&inscriptions, "relay.send.async.completed");
+    let completions =
+        read_inscriptions(&inscriptions, "relay.send.async.completed");
     assert_eq!(
         completions.len(),
         1,
@@ -88,10 +91,12 @@ fn undelivered_reporting_counts_waiting_entries_and_not_declared_ones() {
         "no member held on an unreachable tmux target may resolve here: {completions:?}"
     );
 
-    let aggregates = read_inscriptions(&inscriptions, "relay.delivery.undelivered");
+    let aggregates =
+        read_inscriptions(&inscriptions, "relay.delivery.undelivered");
     assert_eq!(aggregates.len(), 1, "one pass emits one aggregate");
     let record: serde_json::Value =
-        serde_json::from_str(aggregates[0].as_str()).expect("aggregate is json");
+        serde_json::from_str(aggregates[0].as_str())
+            .expect("aggregate is json");
     let details = record.get("details").expect("aggregate carries details");
     assert_eq!(
         details
@@ -153,7 +158,9 @@ fn a_backlogged_target_warns_once_while_the_aggregate_repeats() {
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
     configure_long_unreachable_dwell();
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
@@ -191,7 +198,8 @@ fn a_backlogged_target_warns_once_while_the_aggregate_repeats() {
     report_undelivered_queue(reporting);
     report_undelivered_queue(reporting);
 
-    let warnings = read_inscriptions(&inscriptions, "relay.delivery.undelivered.warning");
+    let warnings =
+        read_inscriptions(&inscriptions, "relay.delivery.undelivered.warning");
     assert_eq!(
         warnings.len(),
         1,
@@ -267,7 +275,9 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let fake_tmux = temporary.path().join("fake-tmux");
     let busy_file = temporary.path().join("target-busy");
@@ -282,11 +292,13 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
     // terminalize the very reservation the mix depends on. The dwell is
     // lengthened alongside it so a stray unobservable moment cannot resolve a
     // waiting member either.
-    agentmux::relay::configure_delivery(agentmux::relay::DeliveryConfiguration {
-        submission_timeout_ms: 60_000,
-        unreachable_dwell_ms: 600_000,
-        ..Default::default()
-    });
+    agentmux::relay::configure_delivery(
+        agentmux::relay::DeliveryConfiguration {
+            submission_timeout_ms: 60_000,
+            unreachable_dwell_ms: 600_000,
+            ..Default::default()
+        },
+    );
 
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
@@ -355,19 +367,22 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
         3,
         "all three members must be admitted against the one target"
     );
-    let completions = read_inscriptions(&inscriptions, "relay.send.async.completed");
+    let completions =
+        read_inscriptions(&inscriptions, "relay.send.async.completed");
     assert!(
         completions.is_empty(),
         "no member may resolve while the paste is still in flight: {completions:?}"
     );
-    let declarations = read_inscriptions(&inscriptions, "relay.delivery.partition.declared");
+    let declarations =
+        read_inscriptions(&inscriptions, "relay.delivery.partition.declared");
     assert_eq!(
         declarations.len(),
         1,
         "only the member that met a prompt may be declared: {declarations:?}"
     );
 
-    let warnings = read_inscriptions(&inscriptions, "relay.delivery.undelivered.warning");
+    let warnings =
+        read_inscriptions(&inscriptions, "relay.delivery.undelivered.warning");
     assert_eq!(warnings.len(), 1, "one backlogged target warns once");
     let record: serde_json::Value =
         serde_json::from_str(warnings[0].as_str()).expect("warning is json");
@@ -403,10 +418,12 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
 
     // The aggregate is read beside the warning so the two cannot be satisfied by
     // different states of the queue.
-    let aggregates = read_inscriptions(&inscriptions, "relay.delivery.undelivered");
+    let aggregates =
+        read_inscriptions(&inscriptions, "relay.delivery.undelivered");
     assert_eq!(aggregates.len(), 1, "one pass emits one aggregate");
     let record: serde_json::Value =
-        serde_json::from_str(aggregates[0].as_str()).expect("aggregate is json");
+        serde_json::from_str(aggregates[0].as_str())
+            .expect("aggregate is json");
     assert_eq!(
         record
             .get("details")

@@ -11,7 +11,9 @@ use std::path::PathBuf;
 
 use serde_json::json;
 
-use crate::configuration::{BundleConfiguration, ConfigurationRoots, load_bundle_configuration};
+use crate::configuration::{
+    BundleConfiguration, ConfigurationRoots, load_bundle_configuration,
+};
 
 use super::super::authorization::{
     AuthorizationContext, RouteAuthorization, load_authorization_context,
@@ -20,7 +22,8 @@ use super::super::catalog::BundleCatalog;
 use super::super::lifecycle::{load_hosted_bundle, stamp_hosted_bundle};
 use super::super::routing::{OperationProfile, ResolvedRoute};
 use super::super::{
-    GLOBAL_NAMESPACE, RELAY_NAMESPACE, RelayError, RelayResponse, map_config, relay_error,
+    GLOBAL_NAMESPACE, RELAY_NAMESPACE, RelayError, RelayResponse, map_config,
+    relay_error,
 };
 
 /// The dispatch spine for target operations.
@@ -40,7 +43,10 @@ pub(super) fn run_target_operation<Prepared>(
     profile: OperationProfile,
     resolve: impl FnOnce() -> Result<ResolvedRoute, RelayError>,
     prepare: impl FnOnce(&ResolvedRoute) -> Result<Prepared, RelayError>,
-    execute: impl FnOnce(&ResolvedRoute, Prepared) -> Result<RelayResponse, RelayError>,
+    execute: impl FnOnce(
+        &ResolvedRoute,
+        Prepared,
+    ) -> Result<RelayResponse, RelayError>,
 ) -> Result<RelayResponse, RelayError> {
     let route = resolve()?;
     let prepared = prepare(&route)?;
@@ -57,12 +63,18 @@ pub(super) fn load_home_context(
     home_namespace: &str,
     configuration_roots: &ConfigurationRoots,
 ) -> Result<(Option<BundleConfiguration>, AuthorizationContext), RelayError> {
-    let home_bundle = if home_namespace == GLOBAL_NAMESPACE || home_namespace == RELAY_NAMESPACE {
+    let home_bundle = if home_namespace == GLOBAL_NAMESPACE
+        || home_namespace == RELAY_NAMESPACE
+    {
         None
     } else {
-        Some(load_bundle_configuration(configuration_roots, home_namespace).map_err(map_config)?)
+        Some(
+            load_bundle_configuration(configuration_roots, home_namespace)
+                .map_err(map_config)?,
+        )
     };
-    let authorization = load_authorization_context(configuration_roots, home_bundle.as_ref())?;
+    let authorization =
+        load_authorization_context(configuration_roots, home_bundle.as_ref())?;
     Ok((home_bundle, authorization))
 }
 
@@ -99,7 +111,7 @@ pub(super) fn resolve_target_bundle(
     let bundle = match home_bundle {
         Some(home_bundle) if target_namespace == home_namespace => {
             stamp_hosted_bundle(home_bundle.clone(), &paths)
-        }
+        },
         _ => load_hosted_bundle(configuration_roots, &paths)?,
     };
     Ok((bundle, paths.runtime_directory.clone()))

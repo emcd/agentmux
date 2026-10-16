@@ -37,7 +37,8 @@ coder = "shell"
         ),
     );
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(loaded.groups, vec!["dev".to_string(), "login".to_string()]);
 }
 
@@ -72,7 +73,8 @@ coder = "shell"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string().contains("reserved"),
         "unexpected error: {err}"
@@ -110,7 +112,8 @@ coder = "shell"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string().contains("invalid group name"),
         "unexpected error: {err}"
@@ -172,9 +175,10 @@ coder = "shell"
     )
     .expect("write bravo");
 
-    let memberships =
-        agentmux::configuration::load_bundle_group_memberships(&ConfigurationRoots::single(&root))
-            .expect("load memberships");
+    let memberships = agentmux::configuration::load_bundle_group_memberships(
+        &ConfigurationRoots::single(&root),
+    )
+    .expect("load memberships");
     assert_eq!(memberships.len(), 2);
     assert_eq!(memberships[0].bundle_name, "alpha");
     assert!(memberships[0].autostart);

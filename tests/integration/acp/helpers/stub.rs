@@ -247,7 +247,8 @@ while IFS= read -r line; do
 done
 "#;
     fs::write(path, script).expect("write ACP stub");
-    let mut permissions = fs::metadata(path).expect("stub metadata").permissions();
+    let mut permissions =
+        fs::metadata(path).expect("stub metadata").permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions).expect("chmod ACP stub");
 }

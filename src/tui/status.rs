@@ -13,7 +13,8 @@
 //!   are still `ready=false`, and the operator needs the per-session detail.
 
 use crate::relay::{
-    ListedBundle, ListedBundleStartupHealth, ListedBundleState, StartupFailureRecord,
+    ListedBundle, ListedBundleStartupHealth, ListedBundleState,
+    StartupFailureRecord,
 };
 
 /// Snapshot of bundle-level status fields used by the TUI list view.
@@ -104,7 +105,9 @@ pub fn format_bundle_status_line(status: &BundleStatusDisplay) -> String {
 /// bundle status header so the operator sees why individual sessions failed,
 /// not just the aggregate count. `reason` is placed last because it is free
 /// text that may contain spaces.
-pub fn format_startup_failure_lines(status: &BundleStatusDisplay) -> Vec<String> {
+pub fn format_startup_failure_lines(
+    status: &BundleStatusDisplay,
+) -> Vec<String> {
     status
         .startup_failures
         .iter()
@@ -135,10 +138,14 @@ pub enum BundleStatusSeverity {
     Unhosted,
 }
 
-pub fn bundle_status_severity(status: &BundleStatusDisplay) -> BundleStatusSeverity {
+pub fn bundle_status_severity(
+    status: &BundleStatusDisplay,
+) -> BundleStatusSeverity {
     match (status.hosted, &status.state) {
         (true, ListedBundleState::Up) => match status.startup_health {
-            Some(ListedBundleStartupHealth::Healthy) => BundleStatusSeverity::Healthy,
+            Some(ListedBundleStartupHealth::Healthy) => {
+                BundleStatusSeverity::Healthy
+            },
             _ => BundleStatusSeverity::Degraded,
         },
         (true, ListedBundleState::Down) => BundleStatusSeverity::HostedDown,
@@ -191,7 +198,9 @@ fn listed_bundle_state_token(state: &ListedBundleState) -> &'static str {
     }
 }
 
-fn listed_bundle_startup_health_token(health: &ListedBundleStartupHealth) -> &'static str {
+fn listed_bundle_startup_health_token(
+    health: &ListedBundleStartupHealth,
+) -> &'static str {
     match health {
         ListedBundleStartupHealth::Healthy => "healthy",
         ListedBundleStartupHealth::Degraded => "degraded",

@@ -269,7 +269,9 @@ impl Action {
             Self::NavigateInteractionUp => "Write: cursor up / scroll",
             Self::NavigateInteractionDown => "Write: cursor down / scroll",
             Self::ScrollInteractionSnapshotPageUp => "Scroll look snapshot up",
-            Self::ScrollInteractionSnapshotPageDown => "Scroll look snapshot down",
+            Self::ScrollInteractionSnapshotPageDown => {
+                "Scroll look snapshot down"
+            },
             Self::MoveNextChoiceRequest => "Choice: next request",
             Self::MovePreviousChoiceRequest => "Choice: previous request",
             Self::MoveNextChoiceOption => "Choice: next ACP option",
@@ -292,7 +294,10 @@ impl Action {
     ///
     /// Returns the `RuntimeError` the underlying state operation produced, for
     /// the actions that reach the relay.
-    pub(crate) fn apply(self, state: &mut AppState) -> Result<(), RuntimeError> {
+    pub(crate) fn apply(
+        self,
+        state: &mut AppState,
+    ) -> Result<(), RuntimeError> {
         match self {
             Self::Quit => state.request_quit(),
             Self::ToggleHelpOverlay => state.toggle_help_overlay(),
@@ -306,7 +311,7 @@ impl Action {
             Self::ToggleMode => {
                 state.dismiss_surfaces();
                 return state.toggle_mode();
-            }
+            },
             Self::OpenPicker => state.open_picker(),
             Self::OpenBundlePicker => state.open_bundle_picker(),
             Self::ClosePicker => state.close_picker(),
@@ -315,17 +320,19 @@ impl Action {
             Self::CyclePreviousFocus => state.cycle_focus_backward(),
             Self::AcceptToCompletion => {
                 state.accept_active_to_completion();
-            }
+            },
             Self::SendMessage => return state.send_message(),
             Self::InsertMessageNewline => state.insert_newline_if_message(),
-            Self::AutocompleteRecipient => state.autocomplete_active_recipient_field(),
+            Self::AutocompleteRecipient => {
+                state.autocomplete_active_recipient_field()
+            },
             Self::ClearToField => state.clear_to_field(),
             Self::MoveNextToCompletion => {
                 state.move_to_completion_selection(1);
-            }
+            },
             Self::MovePreviousToCompletion => {
                 state.move_to_completion_selection(-1);
-            }
+            },
             Self::MoveMessageCursorUp => state.move_message_cursor_up(),
             Self::MoveMessageCursorDown => state.move_message_cursor_down(),
             Self::MoveMessageCursorLeft => state.move_message_cursor_left(),
@@ -337,37 +344,73 @@ impl Action {
             Self::MoveToFieldCursorHome => state.move_to_field_cursor_home(),
             Self::MoveToFieldCursorEnd => state.move_to_field_cursor_end(),
             Self::DeleteComposeCharacter => state.backspace(),
-            Self::InsertComposeCharacter(character) => state.insert_character(character),
-            Self::SnapChatHistoryToLatest => state.snap_chat_history_to_latest(),
-            Self::ScrollChatHistoryPageUp => state.scroll_chat_history_page_up(),
-            Self::ScrollChatHistoryPageDown => state.scroll_chat_history_page_down(),
-            Self::DispatchRaww => return state.dispatch_raww_from_interaction(),
+            Self::InsertComposeCharacter(character) => {
+                state.insert_character(character)
+            },
+            Self::SnapChatHistoryToLatest => {
+                state.snap_chat_history_to_latest()
+            },
+            Self::ScrollChatHistoryPageUp => {
+                state.scroll_chat_history_page_up()
+            },
+            Self::ScrollChatHistoryPageDown => {
+                state.scroll_chat_history_page_down()
+            },
+            Self::DispatchRaww => {
+                return state.dispatch_raww_from_interaction();
+            },
             Self::InsertRawwNewline => state.insert_newline_in_raww(),
             Self::DeleteRawwCharacter => state.backspace_raww(),
-            Self::InsertRawwCharacter(character) => state.insert_character_in_raww(character),
+            Self::InsertRawwCharacter(character) => {
+                state.insert_character_in_raww(character)
+            },
             Self::MoveRawwCursorLeft => state.move_raww_cursor_left(),
             Self::MoveRawwCursorRight => state.move_raww_cursor_right(),
             Self::MoveRawwCursorHome => state.move_raww_cursor_home(),
             Self::MoveRawwCursorEnd => state.move_raww_cursor_end(),
             Self::NavigateInteractionUp => state.navigate_interaction_up(),
             Self::NavigateInteractionDown => state.navigate_interaction_down(),
-            Self::ScrollInteractionSnapshotPageUp => state.scroll_interaction_snapshot_page_up(),
+            Self::ScrollInteractionSnapshotPageUp => {
+                state.scroll_interaction_snapshot_page_up()
+            },
             Self::ScrollInteractionSnapshotPageDown => {
                 state.scroll_interaction_snapshot_page_down()
-            }
-            Self::MoveNextChoiceRequest => state.move_look_choice_request_selection(1),
-            Self::MovePreviousChoiceRequest => state.move_look_choice_request_selection(-1),
-            Self::MoveNextChoiceOption => state.move_look_choice_option_selection(1),
-            Self::MovePreviousChoiceOption => state.move_look_choice_option_selection(-1),
-            Self::ResolveChoiceSelected => return state.resolve_selected_look_choice_selected(),
-            Self::ResolveChoiceCancelled => return state.resolve_selected_look_choice_cancelled(),
+            },
+            Self::MoveNextChoiceRequest => {
+                state.move_look_choice_request_selection(1)
+            },
+            Self::MovePreviousChoiceRequest => {
+                state.move_look_choice_request_selection(-1)
+            },
+            Self::MoveNextChoiceOption => {
+                state.move_look_choice_option_selection(1)
+            },
+            Self::MovePreviousChoiceOption => {
+                state.move_look_choice_option_selection(-1)
+            },
+            Self::ResolveChoiceSelected => {
+                return state.resolve_selected_look_choice_selected();
+            },
+            Self::ResolveChoiceCancelled => {
+                return state.resolve_selected_look_choice_cancelled();
+            },
             Self::TogglePickerFocus => state.toggle_picker_focus(),
             Self::MoveNextPickerSelection => state.move_picker_selection(1),
-            Self::MovePreviousPickerSelection => state.move_picker_selection(-1),
-            Self::CommitPickerBundle => return state.commit_selected_picker_bundle(),
-            Self::CommitPickerSession => return state.commit_selected_picker_session(),
-            Self::DeletePickerFilterCharacter => state.picker_filter_backspace(),
-            Self::AppendPickerFilterCharacter(character) => state.picker_filter_push(character),
+            Self::MovePreviousPickerSelection => {
+                state.move_picker_selection(-1)
+            },
+            Self::CommitPickerBundle => {
+                return state.commit_selected_picker_bundle();
+            },
+            Self::CommitPickerSession => {
+                return state.commit_selected_picker_session();
+            },
+            Self::DeletePickerFilterCharacter => {
+                state.picker_filter_backspace()
+            },
+            Self::AppendPickerFilterCharacter(character) => {
+                state.picker_filter_push(character)
+            },
         }
         Ok(())
     }

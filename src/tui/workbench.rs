@@ -8,8 +8,9 @@ use crate::runtime::error::RuntimeError;
 use super::{
     Action, BindingContext, EffectiveBindings, HelpSection, actions, input,
     state::{
-        AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField, PendingChoiceEntry,
-        PickerColumn, Recipient, ScreenMode, TuiLaunchOptions,
+        AppState, ChatHistoryDirection, ChatHistoryEntry, FocusField,
+        PendingChoiceEntry, PickerColumn, Recipient, ScreenMode,
+        TuiLaunchOptions,
     },
 };
 
@@ -55,7 +56,10 @@ impl Workbench {
         }
     }
 
-    pub fn dispatch_event(&mut self, event: Event) -> Result<(), RuntimeError> {
+    pub fn dispatch_event(
+        &mut self,
+        event: Event,
+    ) -> Result<(), RuntimeError> {
         input::handle_event(&mut self.state, event)
     }
 
@@ -66,7 +70,10 @@ impl Workbench {
     /// # Errors
     ///
     /// Returns the `RuntimeError` the underlying operation produced.
-    pub fn apply_action(&mut self, action: Action) -> Result<(), RuntimeError> {
+    pub fn apply_action(
+        &mut self,
+        action: Action,
+    ) -> Result<(), RuntimeError> {
         action.apply(&mut self.state)
     }
 
@@ -256,7 +263,11 @@ impl Workbench {
     /// that draws the overlay itself supplies the same two numbers; a caller
     /// that only wants to drive the offset can supply them directly, which is
     /// the same seam `set_chat_history_viewport_height` opens for chat history.
-    pub fn set_help_overlay_viewport(&mut self, page_rows: usize, maximum_scroll: usize) {
+    pub fn set_help_overlay_viewport(
+        &mut self,
+        page_rows: usize,
+        maximum_scroll: usize,
+    ) {
         self.state
             .set_help_overlay_viewport(page_rows, maximum_scroll);
     }
@@ -324,7 +335,8 @@ impl Workbench {
             "requested_kind": "approval",
         });
         if let Some(enqueued_at) = enqueued_at {
-            payload["enqueued_at"] = serde_json::Value::String(enqueued_at.to_string());
+            payload["enqueued_at"] =
+                serde_json::Value::String(enqueued_at.to_string());
         }
         self.state.record_stream_events(&[RelayStreamEvent {
             event_type: "choices.requested".to_string(),
@@ -412,13 +424,17 @@ impl Workbench {
 
     /// Resolves the selected look choice as a selection, discarding the internal
     /// request payload so only the success/validation outcome is observable.
-    pub fn resolve_selected_look_choice_selected(&mut self) -> Result<(), RuntimeError> {
+    pub fn resolve_selected_look_choice_selected(
+        &mut self,
+    ) -> Result<(), RuntimeError> {
         self.state.resolve_selected_look_choice_selected()
     }
 
     /// Resolves the selected look choice as a cancellation, discarding the
     /// internal request payload so only the success/validation outcome shows.
-    pub fn resolve_selected_look_choice_cancelled(&mut self) -> Result<(), RuntimeError> {
+    pub fn resolve_selected_look_choice_cancelled(
+        &mut self,
+    ) -> Result<(), RuntimeError> {
         self.state.resolve_selected_look_choice_cancelled()
     }
 

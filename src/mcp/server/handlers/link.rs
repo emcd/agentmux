@@ -20,7 +20,9 @@ use crate::runtime::inscriptions::emit_inscription;
 use crate::mcp::errors::validation_tool_error;
 use crate::mcp::params::{LINK_COMMAND_PEER, LinkParams, LinkPeerArgs};
 use crate::mcp::server::McpServer;
-use crate::mcp::validation::{parse_meta_tool_args, validate_link_params, validate_link_peer_args};
+use crate::mcp::validation::{
+    parse_meta_tool_args, validate_link_params, validate_link_peer_args,
+};
 
 #[tool_router(router = tool_router_link, vis = "pub(crate)")]
 impl McpServer {
@@ -49,7 +51,7 @@ impl McpServer {
                     },
                 )?;
                 self.link_peer(args)
-            }
+            },
             other => Err(validation_tool_error(
                 "validation_invalid_params",
                 "link command must be \"peer\"",
@@ -58,7 +60,10 @@ impl McpServer {
         }
     }
 
-    fn link_peer(&self, args: LinkPeerArgs) -> Result<CallToolResult, McpError> {
+    fn link_peer(
+        &self,
+        args: LinkPeerArgs,
+    ) -> Result<CallToolResult, McpError> {
         validate_link_peer_args(&args)?;
         let alias = args
             .alias
@@ -105,9 +110,13 @@ impl McpServer {
                 written_path,
             }) => {
                 let mut response = Map::new();
-                response.insert("schema_version".to_string(), json!(schema_version));
+                response.insert(
+                    "schema_version".to_string(),
+                    json!(schema_version),
+                );
                 response.insert("alias".to_string(), json!(alias));
-                response.insert("written_path".to_string(), json!(written_path));
+                response
+                    .insert("written_path".to_string(), json!(written_path));
                 emit_inscription(
                     "mcp.tool.link.peer.success",
                     &json!({
@@ -118,9 +127,10 @@ impl McpServer {
                 Ok(CallToolResult::success(vec![Content::json(
                     Value::Object(response),
                 )?]))
-            }
+            },
             Ok(other) => Err(map_unexpected_link_response(&alias, other)),
-            Err(source) => Err(self.map_relay_call_error("mcp.tool.link.peer.io_error", source)),
+            Err(source) => Err(self
+                .map_relay_call_error("mcp.tool.link.peer.io_error", source)),
         }
     }
 }
@@ -130,7 +140,10 @@ impl McpServer {
 /// a PSK, so the shared mapper's full-payload inscription and details are
 /// unsafe for this tool. Only the alias (already caller-supplied) and the
 /// outcome travel to observability and the caller.
-fn map_unexpected_link_response(alias: &str, response: RelayResponse) -> McpError {
+fn map_unexpected_link_response(
+    alias: &str,
+    response: RelayResponse,
+) -> McpError {
     match response {
         RelayResponse::Error { error } => {
             emit_inscription(
@@ -140,8 +153,12 @@ fn map_unexpected_link_response(alias: &str, response: RelayResponse) -> McpErro
                     "code": error.code.clone(),
                 }),
             );
-            validation_tool_error(error.code.as_str(), error.message.as_str(), None)
-        }
+            validation_tool_error(
+                error.code.as_str(),
+                error.message.as_str(),
+                None,
+            )
+        },
         _ => {
             emit_inscription(
                 "mcp.tool.link.peer.unexpected_response",
@@ -152,6 +169,6 @@ fn map_unexpected_link_response(alias: &str, response: RelayResponse) -> McpErro
                 "relay returned an unexpected response for link peer",
                 None,
             )
-        }
+        },
     }
 }

@@ -22,7 +22,13 @@ fn spawn_with_declared_state_root(
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
     declare_member_state_directory(&config_root, "alpha", declared);
 
     let fake_tmux = temporary.path().join("fake-tmux.sh");
@@ -69,7 +75,8 @@ fn spawn_with_declared_state_root(
         String::from_utf8_lossy(&up.stderr)
     );
 
-    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux)).expect("read fake tmux log");
+    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux))
+        .expect("read fake tmux log");
     let new_session = recorded_new_session(&log).to_string();
 
     shutdown_relay_if_present(&state_root, "alpha");
@@ -108,8 +115,18 @@ fn a_spawned_member_receives_the_relays_state_root_over_its_own_declaration() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
-    declare_member_state_directory(&config_root, "alpha", MEMBER_DECLARED_STATE_ROOT);
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
+    declare_member_state_directory(
+        &config_root,
+        "alpha",
+        MEMBER_DECLARED_STATE_ROOT,
+    );
 
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
@@ -151,7 +168,8 @@ fn a_spawned_member_receives_the_relays_state_root_over_its_own_declaration() {
         .expect("run agentmux up");
     assert!(up.status.success(), "up should succeed");
 
-    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux)).expect("read fake tmux log");
+    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux))
+        .expect("read fake tmux log");
     let new_session = recorded_new_session(&log);
 
     assert!(

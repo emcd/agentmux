@@ -99,7 +99,8 @@ fn write_bundle_configuration(
             .as_str(),
         );
     }
-    fs::write(config_root.join("coders.toml"), coders_toml).expect("write coders");
+    fs::write(config_root.join("coders.toml"), coders_toml)
+        .expect("write coders");
     fs::write(
         config_root.join("policies.toml"),
         r#"
@@ -175,13 +176,21 @@ fn reconciliation_creates_missing_members_and_sets_owned_metadata() {
         &[
             CoderSpec {
                 id: "alpha-coder".to_string(),
-                initial_command: "sh -lc 'printf alpha > alpha.started; exec sleep 45'".to_string(),
-                resume_command: "sh -lc 'printf alpha > alpha.started; exec sleep 45'".to_string(),
+                initial_command:
+                    "sh -lc 'printf alpha > alpha.started; exec sleep 45'"
+                        .to_string(),
+                resume_command:
+                    "sh -lc 'printf alpha > alpha.started; exec sleep 45'"
+                        .to_string(),
             },
             CoderSpec {
                 id: "bravo-coder".to_string(),
-                initial_command: "sh -lc 'printf bravo > bravo.started; exec sleep 45'".to_string(),
-                resume_command: "sh -lc 'printf bravo > bravo.started; exec sleep 45'".to_string(),
+                initial_command:
+                    "sh -lc 'printf bravo > bravo.started; exec sleep 45'"
+                        .to_string(),
+                resume_command:
+                    "sh -lc 'printf bravo > bravo.started; exec sleep 45'"
+                        .to_string(),
             },
         ],
         &[
@@ -200,11 +209,13 @@ fn reconciliation_creates_missing_members_and_sets_owned_metadata() {
         ],
     );
 
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
-    let report = reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
+    let report =
+        reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
     assert_eq!(report.bootstrap_session.as_deref(), Some("alpha"));
     assert_eq!(report.pruned_sessions, Vec::<String>::new());
     assert_eq!(report.created_sessions.len(), 2);
@@ -227,7 +238,8 @@ fn reconciliation_creates_missing_members_and_sets_owned_metadata() {
 }
 
 #[test]
-fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions() {
+fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions()
+ {
     if !tmux_available() {
         eprintln!("skipping reconciliation test because tmux is unavailable");
         return;
@@ -250,7 +262,8 @@ fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions
             coder: "default".to_string(),
         }],
     );
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -282,7 +295,8 @@ fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions
         String::from_utf8_lossy(&mark_stale.stderr)
     );
 
-    let report = reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
+    let report =
+        reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
     assert_eq!(report.created_sessions, Vec::<String>::new());
     assert_eq!(report.pruned_sessions, vec!["stale".to_string()]);
 
@@ -322,11 +336,13 @@ fn reconciliation_evaluates_readiness_and_reports_it_alongside_what_changed() {
             coder: "default".to_string(),
         }],
     );
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
-    let created = reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
+    let created =
+        reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
     assert_eq!(created.created_sessions, vec!["alpha".to_string()]);
     assert_eq!(created.ready_session_count, 1);
     assert!(created.failed_startups.is_empty());
@@ -334,7 +350,8 @@ fn reconciliation_evaluates_readiness_and_reports_it_alongside_what_changed() {
     // The second pass creates nothing, so a report that counted only what it
     // changed would say the bundle has no ready session. Readiness is evaluated
     // for members the pass did not create, so the count survives.
-    let unchanged = reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
+    let unchanged =
+        reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
     assert_eq!(unchanged.created_sessions, Vec::<String>::new());
     assert_eq!(unchanged.ready_session_count, 1);
     assert!(unchanged.failed_startups.is_empty());
@@ -374,7 +391,8 @@ fn reconciliation_registers_configured_members_in_unified_registry() {
             },
         ],
     );
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 

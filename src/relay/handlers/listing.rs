@@ -4,19 +4,28 @@ use serde_json::json;
 
 use crate::{
     configuration::{BundleConfiguration, TargetConfiguration},
-    runtime::{inscriptions::emit_inscription, paths::tmux_socket_path_for_runtime_directory},
+    runtime::{
+        inscriptions::emit_inscription,
+        paths::tmux_socket_path_for_runtime_directory,
+    },
 };
 
-use super::super::authorization::{AuthorizationContext, RouteAuthorization, choices_pending_max};
+use super::super::authorization::{
+    AuthorizationContext, RouteAuthorization, choices_pending_max,
+};
 use super::super::delivery::acp_session_is_ready;
-use super::super::lifecycle::{reconcile_loaded_bundle, shutdown_bundle_runtime};
+use super::super::lifecycle::{
+    reconcile_loaded_bundle, shutdown_bundle_runtime,
+};
 use super::super::routing::{
-    Addressing, Capability, OperationProfile, requester_home_namespace, resolve_list_route,
+    Addressing, Capability, OperationProfile, requester_home_namespace,
+    resolve_list_route,
 };
 use super::super::{
-    BundleCatalog, BundleTransitionEntry, HostingIntent, ListedBundle, ListedBundleStartupHealth,
-    ListedBundleState, ListedSession, NO_READY_SESSION_LEAD, PARTIAL_STARTUP_LEAD, RelayError,
-    RelayResponse, SCHEMA_VERSION, StartupFailureRecord, canonical_session_id,
+    BundleCatalog, BundleTransitionEntry, HostingIntent, ListedBundle,
+    ListedBundleStartupHealth, ListedBundleState, ListedSession,
+    NO_READY_SESSION_LEAD, PARTIAL_STARTUP_LEAD, RelayError, RelayResponse,
+    SCHEMA_VERSION, StartupFailureRecord, canonical_session_id,
     fold_startup_failures, load_startup_failures, relay_error,
 };
 use super::routed::run_target_operation;
@@ -36,16 +45,21 @@ pub(super) fn handle_bundle_up(
     // From the catalog rather than derived from `runtime_directory`: the entry
     // carries the state root the hosting relay actually resolved, and that is
     // the root every member it spawns has to be pointed at.
-    let paths = catalog.lookup(bundle.bundle_name.as_str()).ok_or_else(|| {
-        relay_error(
-            "internal_unexpected_failure",
-            "bundle is not present in the runtime catalog",
-            Some(json!({ "bundle_name": bundle.bundle_name })),
-        )
-    })?;
+    let paths =
+        catalog.lookup(bundle.bundle_name.as_str()).ok_or_else(|| {
+            relay_error(
+                "internal_unexpected_failure",
+                "bundle is not present in the runtime catalog",
+                Some(json!({ "bundle_name": bundle.bundle_name })),
+            )
+        })?;
     // The reconcile pass starts every configured member, ACP targets included,
     // so it needs the same pending-choice bound the startup path passes.
-    let report = reconcile_loaded_bundle(bundle, &paths, choices_pending_max(authorization))?;
+    let report = reconcile_loaded_bundle(
+        bundle,
+        &paths,
+        choices_pending_max(authorization),
+    )?;
     let changed = report.bootstrap_session.is_some()
         || !report.created_sessions.is_empty()
         || !report.pruned_sessions.is_empty();
@@ -112,7 +126,8 @@ fn partially_started_entry(
     } else {
         NO_READY_SESSION_LEAD
     };
-    let (reason, details) = match fold_startup_failures(lead, failed_startups) {
+    let (reason, details) = match fold_startup_failures(lead, failed_startups)
+    {
         Some(folded) => (folded.reason, Some(folded.details)),
         None => (lead.to_string(), None),
     };
@@ -135,7 +150,8 @@ pub(super) fn handle_bundle_down(
     // the bundle. Set unconditionally (even on an already-unhosted no-op) because
     // the operator's request to keep it down is the authoritative signal.
     catalog.set_intent(bundle.bundle_name.as_str(), HostingIntent::Hold);
-    let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
+    let tmux_socket =
+        tmux_socket_path_for_runtime_directory(runtime_directory);
     let report = shutdown_bundle_runtime(
         bundle.bundle_name.as_str(),
         runtime_directory,
@@ -204,7 +220,8 @@ pub(in crate::relay) fn handle_list_routed(
     enumerate_runtime_directory: &Path,
     requester_session: Option<String>,
 ) -> Result<RelayResponse, RelayError> {
-    let tmux_socket = tmux_socket_path_for_runtime_directory(enumerate_runtime_directory);
+    let tmux_socket =
+        tmux_socket_path_for_runtime_directory(enumerate_runtime_directory);
     let requester_session = requester_session.ok_or_else(|| {
         relay_error(
             "validation_unknown_sender",
@@ -259,7 +276,11 @@ fn execute_list(
     tmux_socket: &Path,
     requester_session_id: &str,
 ) -> Result<RelayResponse, RelayError> {
-    let bundle = build_listed_bundle(enumerate_bundle, enumerate_runtime_directory, tmux_socket)?;
+    let bundle = build_listed_bundle(
+        enumerate_bundle,
+        enumerate_runtime_directory,
+        tmux_socket,
+    )?;
     emit_inscription(
         "relay.list.response",
         &json!({
@@ -296,7 +317,10 @@ pub(in crate::relay) fn build_listed_bundle(
         .members
         .iter()
         .map(|member| ListedSession {
-            id: canonical_session_id(member.id.as_str(), enumerate_bundle.bundle_name.as_str()),
+            id: canonical_session_id(
+                member.id.as_str(),
+                enumerate_bundle.bundle_name.as_str(),
+            ),
             name: member.name.clone(),
             transport: member.target.session_type().into(),
             ready: session_ready_for_list(
@@ -308,20 +332,23 @@ pub(in crate::relay) fn build_listed_bundle(
         })
         .collect::<Vec<_>>();
 
-    let recent_startup_failures =
-        load_startup_failures(enumerate_runtime_directory).map_err(|cause| {
-            relay_error(
-                "internal_unexpected_failure",
-                "failed to load startup failure history",
-                Some(json!({
-                    "namespace": enumerate_bundle.bundle_name,
-                    "cause": cause,
-                })),
-            )
-        })?;
+    let recent_startup_failures = load_startup_failures(
+        enumerate_runtime_directory,
+    )
+    .map_err(|cause| {
+        relay_error(
+            "internal_unexpected_failure",
+            "failed to load startup failure history",
+            Some(json!({
+                "namespace": enumerate_bundle.bundle_name,
+                "cause": cause,
+            })),
+        )
+    })?;
     let startup_failure_count = recent_startup_failures.len();
     let configured_session_count = enumerate_bundle.members.len();
-    let ready_session_count = sessions.iter().filter(|session| session.ready).count();
+    let ready_session_count =
+        sessions.iter().filter(|session| session.ready).count();
     let (state, startup_health, state_reason_code, state_reason) =
         list_bundle_state(configured_session_count, ready_session_count);
     let hosted = ready_session_count > 0;
@@ -359,7 +386,7 @@ fn session_ready_for_list(
     match member.target {
         TargetConfiguration::Tmux(_) => {
             resolve_active_pane_target(tmux_socket, member.id.as_str()).is_ok()
-        }
+        },
         TargetConfiguration::Acp(_) => acp_session_is_ready(
             bundle.bundle_name.as_str(),
             runtime_directory,

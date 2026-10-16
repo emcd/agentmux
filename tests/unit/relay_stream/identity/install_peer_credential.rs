@@ -18,7 +18,8 @@ fn install_peer_credential_as(
     alias: &str,
     psk: &str,
 ) -> Value {
-    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(configuration_roots, bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -87,9 +88,11 @@ fn install_paths(
     String,
     std::path::PathBuf,
 ) {
-    let configuration_roots = write_identity_configuration(temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("{alias}@RELAY");
     let slot = state_root.join("peers").join(format!("{alias}.psk"));
     (configuration_roots, bundle_paths, principal_id, slot)
@@ -205,7 +208,8 @@ fn install_peer_credential_requires_alias_referent() {
 fn install_peer_credential_rejects_unsafe_alias() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_alias";
-    let (configuration_roots, bundle_paths, _, _) = install_paths(&temporary, bundle_name, "bravo");
+    let (configuration_roots, bundle_paths, _, _) =
+        install_paths(&temporary, bundle_name, "bravo");
 
     for alias in [
         "../escape",
@@ -229,7 +233,8 @@ fn install_peer_credential_rejects_unsafe_alias() {
             "expected error for alias {alias:?}: {response:?}"
         );
         assert_eq!(
-            response["response"]["error"]["code"], "validation_invalid_credential_path",
+            response["response"]["error"]["code"],
+            "validation_invalid_credential_path",
             "wrong code for alias {alias:?}: {response:?}"
         );
     }
@@ -294,8 +299,10 @@ fn install_peer_credential_rejects_symlinked_ancestor() {
     let state_root = temporary.path().join("state");
     let external = temporary.path().join("external");
     std::fs::create_dir_all(&external).expect("create external directory");
-    std::fs::write(external.join("marker"), "untouched").expect("write marker");
-    std::os::unix::fs::symlink(&external, state_root.join("peers")).expect("symlink peers");
+    std::fs::write(external.join("marker"), "untouched")
+        .expect("write marker");
+    std::os::unix::fs::symlink(&external, state_root.join("peers"))
+        .expect("symlink peers");
 
     let response = install_peer_credential(
         &configuration_roots,
@@ -309,7 +316,8 @@ fn install_peer_credential_rejects_symlinked_ancestor() {
         "expected error: {response:?}"
     );
     assert_eq!(
-        response["response"]["error"]["code"], "validation_invalid_credential_path",
+        response["response"]["error"]["code"],
+        "validation_invalid_credential_path",
         "wrong code: {response:?}"
     );
     assert_eq!(
@@ -342,7 +350,8 @@ fn write_limited_configuration(
     temporary: &TempDir,
     bundle_name: &str,
 ) -> (ConfigurationRoots, String, String, String) {
-    let configuration_roots = write_identity_configuration(temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(temporary, bundle_name);
     std::fs::write(
         configuration_roots.base_layer().join("policies.toml"),
         r#"
@@ -450,7 +459,8 @@ fn install_absent_slot_succeeds_with_provision_only_authority() {
     let (configuration_roots, provisioner, _, _) =
         write_limited_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let register = operator_request(
         &configuration_roots,
         &bundle_paths,
@@ -476,9 +486,11 @@ fn install_absent_slot_succeeds_with_provision_only_authority() {
 fn install_absent_slot_refuses_rotation_only_authority() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_absent_change";
-    let (configuration_roots, _, rotator, _) = write_limited_configuration(&temporary, bundle_name);
+    let (configuration_roots, _, rotator, _) =
+        write_limited_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let register = operator_request(
         &configuration_roots,
         &bundle_paths,
@@ -510,7 +522,8 @@ fn install_different_content_splits_authority() {
     let (configuration_roots, provisioner, rotator, _) =
         write_limited_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let register = operator_request(
         &configuration_roots,
         &bundle_paths,
@@ -571,7 +584,8 @@ fn install_identical_retry_succeeds_with_provision_only_authority() {
     let (configuration_roots, provisioner, _, _) =
         write_limited_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let register = operator_request(
         &configuration_roots,
         &bundle_paths,
@@ -620,7 +634,8 @@ fn install_refuses_control_free_caller() {
     let (configuration_roots, _, _, bystander) =
         write_limited_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let register = operator_request(
         &configuration_roots,
         &bundle_paths,
@@ -654,7 +669,8 @@ fn install_dir_sync_failure_stays_published_as_uncertain() {
         &principal_id,
         None,
     );
-    std::fs::create_dir_all(slot.parent().expect("slot parent")).expect("create peers dir");
+    std::fs::create_dir_all(slot.parent().expect("slot parent"))
+        .expect("create peers dir");
     std::fs::write(
         slot.parent().expect("slot parent").join(".fault-dir-sync"),
         "",
@@ -673,7 +689,8 @@ fn install_dir_sync_failure_stays_published_as_uncertain() {
         "expected error: {response:?}"
     );
     assert_eq!(
-        response["response"]["error"]["code"], "internal_peer_credential_durability_uncertain",
+        response["response"]["error"]["code"],
+        "internal_peer_credential_durability_uncertain",
         "wrong code: {response:?}"
     );
     assert_eq!(
@@ -695,7 +712,8 @@ fn install_gate_denies_before_state_inspection() {
     let (configuration_roots, _, _, bystander) =
         write_limited_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     // Absent state root: the gate denies before the empty-store path could
     // report an unknown principal.

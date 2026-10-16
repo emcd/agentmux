@@ -42,7 +42,9 @@ impl TextSink {
         match self {
             Self::Compose => Action::InsertComposeCharacter(character),
             Self::Raww => Action::InsertRawwCharacter(character),
-            Self::PickerFilter => Action::AppendPickerFilterCharacter(character),
+            Self::PickerFilter => {
+                Action::AppendPickerFilterCharacter(character)
+            },
         }
     }
 
@@ -140,7 +142,9 @@ pub fn default_binding(
 }
 
 /// Every row one context declares, in the order they are consulted.
-pub(crate) fn default_rows(context: BindingContext) -> impl Iterator<Item = &'static ContextRow> {
+pub(crate) fn default_rows(
+    context: BindingContext,
+) -> impl Iterator<Item = &'static ContextRow> {
     BINDINGS
         .iter()
         .find(move |group| group.context == context)
@@ -156,13 +160,20 @@ pub(crate) fn default_rows(context: BindingContext) -> impl Iterator<Item = &'st
 /// filed under in that context is always already decided. Reading it from here
 /// is what keeps an operator's row in the section its behavior belongs to
 /// rather than in one a configuration would otherwise have to name.
-pub(crate) fn default_section(context: BindingContext, action: Action) -> Option<DisplaySection> {
+pub(crate) fn default_section(
+    context: BindingContext,
+    action: Action,
+) -> Option<DisplaySection> {
     default_rows(context)
         .find(|row| row.action == BoundAction::Fixed(action))
         .map(|row| row.section)
 }
 
-const fn row(chord: Chord, action: Action, section: DisplaySection) -> ContextRow {
+const fn row(
+    chord: Chord,
+    action: Action,
+    section: DisplaySection,
+) -> ContextRow {
     ContextRow {
         chord,
         action: BoundAction::Fixed(action),

@@ -59,13 +59,19 @@ pub(crate) fn build_acp_permission_handler(
             let handle = std::thread::Builder::new()
                 .name("acp-permission-resolver".to_string())
                 .spawn(move || {
-                    let choice = build_choice_to_make(&correlation, &permission_request);
+                    let choice = build_choice_to_make(
+                        &correlation,
+                        &permission_request,
+                    );
                     let made = (chooser)(choice);
                     let response_option_id = match &made {
-                        ChoiceMade::Chosen { option_id, .. } => Some(option_id.clone()),
+                        ChoiceMade::Chosen { option_id, .. } => {
+                            Some(option_id.clone())
+                        },
                         ChoiceMade::Cancelled { .. } => None,
                     };
-                    *writer.lock().expect("pending_choice_outcome mutex") = Some(made);
+                    *writer.lock().expect("pending_choice_outcome mutex") =
+                        Some(made);
                     responder.respond(response_option_id);
                 })
                 .expect("spawn ACP permission resolver thread");
@@ -76,7 +82,8 @@ pub(crate) fn build_acp_permission_handler(
 
 /// Hands a spawned permission resolver's handle to whatever owns the
 /// generation's executor set.
-pub(crate) type RetainExecutorFn = Arc<dyn Fn(std::thread::JoinHandle<()>) + Send + Sync>;
+pub(crate) type RetainExecutorFn =
+    Arc<dyn Fn(std::thread::JoinHandle<()>) + Send + Sync>;
 
 fn build_choice_to_make(
     correlation: &ChoiceCorrelation,

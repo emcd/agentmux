@@ -17,24 +17,34 @@ pub(in crate::acp) fn startup_bundle(
     tmux_socket: &Path,
 ) -> Result<(), agentmux::relay::RelayError> {
     ensure_fast_respawn_for_tests();
-    let runtime_directory = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
+    let runtime_directory =
+        tmux_socket.parent().unwrap_or_else(|| Path::new("."));
     let mut paths = flat_bundle_paths(runtime_directory);
     paths.tmux_socket = tmux_socket.to_path_buf();
     let _ = agentmux::relay::startup_bundle(config_root, &paths)?;
     Ok(())
 }
 
-pub(in crate::acp) fn persisted_state_path(root: &Path, target_session: &str) -> PathBuf {
+pub(in crate::acp) fn persisted_state_path(
+    root: &Path,
+    target_session: &str,
+) -> PathBuf {
     root.join("sessions")
         .join(target_session)
         .join("state.json")
 }
 
-pub(in crate::acp) fn read_worker_state(root: &Path, target_session: &str) -> Option<String> {
-    agentmux::relay::read_worker_readiness("party", root, target_session).map(ToString::to_string)
+pub(in crate::acp) fn read_worker_state(
+    root: &Path,
+    target_session: &str,
+) -> Option<String> {
+    agentmux::relay::read_worker_readiness("party", root, target_session)
+        .map(ToString::to_string)
 }
 
-pub(in crate::acp) fn send_result(response: RelayResponse) -> agentmux::relay::SendResult {
+pub(in crate::acp) fn send_result(
+    response: RelayResponse,
+) -> agentmux::relay::SendResult {
     let RelayResponse::Send { results, .. } = response else {
         panic!("expected send response");
     };

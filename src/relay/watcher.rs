@@ -26,21 +26,24 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::configuration::{
-    ConfigurationRoots, bundle_configuration_path, effective_bundle_definitions,
-    load_bundle_configuration,
+    ConfigurationRoots, bundle_configuration_path,
+    effective_bundle_definitions, load_bundle_configuration,
 };
 use crate::runtime::error::RuntimeError;
 use crate::runtime::inscriptions::emit_inscription;
-use crate::runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory};
+use crate::runtime::paths::{
+    BundleRuntimePaths, ensure_bundle_runtime_directory,
+};
 
 use super::catalog::{BundleCatalog, HostingIntent};
 use super::lifecycle::{
-    register_configured_bundle_principals, shutdown_bundle_runtime, startup_bundle,
+    register_configured_bundle_principals, shutdown_bundle_runtime,
+    startup_bundle,
 };
 use super::stream::evict_streams_for_bundle;
 use super::{
-    NO_READY_SESSION_LEAD, PARTIAL_STARTUP_LEAD, RelayError, RelayResponse, StartupFailureRecord,
-    fold_startup_failures,
+    NO_READY_SESSION_LEAD, PARTIAL_STARTUP_LEAD, RelayError, RelayResponse,
+    StartupFailureRecord, fold_startup_failures,
 };
 
 /// Debounce window for coalescing rapid filesystem events. Long enough to ride
@@ -111,12 +114,13 @@ pub fn spawn_bundle_watcher(
     let state_root = state_root.as_ref().to_path_buf();
 
     let (sender, receiver) = mpsc::channel::<DebounceEventResult>();
-    let mut debouncer = new_debouncer(BUNDLE_WATCH_DEBOUNCE, None, sender).map_err(|source| {
-        RuntimeError::validation(
-            "runtime_bundle_watch_unavailable",
-            format!("failed to create bundle file watcher: {source}"),
-        )
-    })?;
+    let mut debouncer = new_debouncer(BUNDLE_WATCH_DEBOUNCE, None, sender)
+        .map_err(|source| {
+            RuntimeError::validation(
+                "runtime_bundle_watch_unavailable",
+                format!("failed to create bundle file watcher: {source}"),
+            )
+        })?;
     // One recursive watch per layer, rather than per bundles directory, so a
     // bundles directory created after startup is observed without re-arming
     // anything. Every layer is watched because a change in any of them can
@@ -124,9 +128,8 @@ pub fn spawn_bundle_watcher(
     // and by content fingerprints, so an event from an unrelated file under a
     // layer costs one re-scan and changes nothing.
     for layer in configuration_roots.layers() {
-        debouncer
-            .watch(layer, RecursiveMode::Recursive)
-            .map_err(|source| {
+        debouncer.watch(layer, RecursiveMode::Recursive).map_err(
+            |source| {
                 RuntimeError::validation(
                     "runtime_bundle_watch_unavailable",
                     format!(
@@ -134,7 +137,8 @@ pub fn spawn_bundle_watcher(
                         layer.display()
                     ),
                 )
-            })?;
+            },
+        )?;
     }
 
     let watched_roots = configuration_roots.clone();
@@ -149,22 +153,31 @@ pub fn spawn_bundle_watcher(
     let consumer = thread::Builder::new()
         .name("agentmux-bundle-watcher".to_string())
         .spawn(move || {
-            run_bundle_watch_loop(&receiver, BUNDLE_WATCH_SWEEP_INTERVAL, |wake| match wake {
-                WatchWake::Reconcile => {
-                    reconcile_bundles(
-                        &configuration_roots,
-                        &state_root,
-                        &catalog,
-                        &mut state,
-                        no_autostart,
-                    );
-                }
-                WatchWake::Failed(cause) => {
-                    emit_inscription("relay.bundle.watch.error", &json!({ "cause": cause }));
-                }
-            });
+            run_bundle_watch_loop(
+                &receiver,
+                BUNDLE_WATCH_SWEEP_INTERVAL,
+                |wake| match wake {
+                    WatchWake::Reconcile => {
+                        reconcile_bundles(
+                            &configuration_roots,
+                            &state_root,
+                            &catalog,
+                            &mut state,
+                            no_autostart,
+                        );
+                    },
+                    WatchWake::Failed(cause) => {
+                        emit_inscription(
+                            "relay.bundle.watch.error",
+                            &json!({ "cause": cause }),
+                        );
+                    },
+                },
+            );
         })
-        .map_err(|source| RuntimeError::io("spawn bundle watcher thread", source))?;
+        .map_err(|source| {
+            RuntimeError::io("spawn bundle watcher thread", source)
+        })?;
 
     emit_inscription(
         "relay.bundle.watch.started",
@@ -226,15 +239,17 @@ pub fn run_bundle_watch_loop(
                 }
                 on_wake(WatchWake::Reconcile);
                 sweep_deadline = Instant::now() + sweep_interval;
-            }
+            },
             // An error is reported but does not reconcile, so it leaves the
             // deadline alone: whatever the backend failed to tell us is exactly
             // what the next sweep is for.
-            Ok(Err(errors)) => on_wake(WatchWake::Failed(format!("{errors:?}"))),
+            Ok(Err(errors)) => {
+                on_wake(WatchWake::Failed(format!("{errors:?}")))
+            },
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 on_wake(WatchWake::Reconcile);
                 sweep_deadline = Instant::now() + sweep_interval;
-            }
+            },
             // The debouncer was dropped: watching has stopped for good.
             Err(mpsc::RecvTimeoutError::Disconnected) => return,
         }
@@ -277,16 +292,17 @@ fn reconcile_bundles(
     // another route, so this holds the last successful reconciliation and waits
     // — the layer becoming readable again is itself a filesystem event, which
     // brings the next pass.
-    let on_disk: HashSet<String> = match effective_bundle_definitions(configuration_roots) {
-        Ok(definitions) => definitions.into_keys().collect(),
-        Err(error) => {
-            emit_inscription(
-                "relay.bundle.reconcile_suppressed_unreadable_layer",
-                &json!({ "cause": error.to_string() }),
-            );
-            return;
-        }
-    };
+    let on_disk: HashSet<String> =
+        match effective_bundle_definitions(configuration_roots) {
+            Ok(definitions) => definitions.into_keys().collect(),
+            Err(error) => {
+                emit_inscription(
+                    "relay.bundle.reconcile_suppressed_unreadable_layer",
+                    &json!({ "cause": error.to_string() }),
+                );
+                return;
+            },
+        };
     let loaded = catalog.loaded_bundle_names();
 
     // Disappeared: loaded bundles whose file is no longer on disk.
@@ -296,11 +312,12 @@ fn reconcile_bundles(
 
     // New or modified bundles present on disk.
     for bundle_name in &on_disk {
-        let fingerprint = match fingerprint_bundle_file(configuration_roots, bundle_name) {
-            Ok(fingerprint) => fingerprint,
-            // The file vanished between scan and read; a later event reconciles it.
-            Err(_) => continue,
-        };
+        let fingerprint =
+            match fingerprint_bundle_file(configuration_roots, bundle_name) {
+                Ok(fingerprint) => fingerprint,
+                // The file vanished between scan and read; a later event reconciles it.
+                Err(_) => continue,
+            };
         if loaded.contains(bundle_name) {
             if state.fingerprints.get(bundle_name) == Some(&fingerprint) {
                 continue;
@@ -373,7 +390,7 @@ fn load_new_bundle(
                 fingerprint,
             );
             return;
-        }
+        },
     };
     if let Err(source) = ensure_bundle_runtime_directory(&paths) {
         record_load_failure(
@@ -389,22 +406,25 @@ fn load_new_bundle(
     // The same rule applied at boot: a per-bundle `autostart = false` or a
     // relay-wide `--no-autostart` holds the bundle. A held bundle is registered
     // (its members become offline registry shells) but not started.
-    let configuration = match load_bundle_configuration(configuration_roots, bundle_name) {
-        Ok(configuration) => configuration,
-        Err(source) => {
-            record_load_failure(
-                bundle_name,
-                &source.to_string(),
-                None,
-                None,
-                state,
-                fingerprint,
-            );
-            return;
-        }
-    };
+    let configuration =
+        match load_bundle_configuration(configuration_roots, bundle_name) {
+            Ok(configuration) => configuration,
+            Err(source) => {
+                record_load_failure(
+                    bundle_name,
+                    &source.to_string(),
+                    None,
+                    None,
+                    state,
+                    fingerprint,
+                );
+                return;
+            },
+        };
     if no_autostart || !configuration.autostart {
-        if let Err(error) = register_configured_bundle_principals(&configuration) {
+        if let Err(error) =
+            register_configured_bundle_principals(&configuration)
+        {
             record_load_failure(
                 bundle_name,
                 &error.message,
@@ -449,7 +469,7 @@ fn load_new_bundle(
                     "failed_sessions": partial_startup_detail(&report.failed_startups),
                 }),
             );
-        }
+        },
         Ok(report) => {
             record_no_ready_session_failure(
                 bundle_name,
@@ -457,7 +477,7 @@ fn load_new_bundle(
                 state,
                 fingerprint,
             );
-        }
+        },
         Err(error) => {
             record_load_failure(
                 bundle_name,
@@ -467,7 +487,7 @@ fn load_new_bundle(
                 state,
                 fingerprint,
             );
-        }
+        },
     }
 }
 
@@ -482,8 +502,10 @@ fn reload_bundle(
     fingerprint: [u8; 32],
     state: &mut ReconcileState,
 ) {
-    let evicted_session_count =
-        evict_streams_for_bundle(bundle_name, &bundle_reloaded_response(bundle_name));
+    let evicted_session_count = evict_streams_for_bundle(
+        bundle_name,
+        &bundle_reloaded_response(bundle_name),
+    );
     let paths = match BundleRuntimePaths::resolve(state_root, bundle_name) {
         Ok(paths) => paths,
         Err(source) => {
@@ -498,13 +520,16 @@ fn reload_bundle(
                 fingerprint,
             );
             return;
-        }
+        },
     };
     // Tear the existing runtime down before reloading. A teardown *error* should
     // not block the attempt — it reports what tmux could not be asked, which the
     // restart may well fix.
-    let teardown =
-        shutdown_bundle_runtime(bundle_name, &paths.runtime_directory, &paths.tmux_socket);
+    let teardown = shutdown_bundle_runtime(
+        bundle_name,
+        &paths.runtime_directory,
+        &paths.tmux_socket,
+    );
 
     // A worker still registered here is different in kind, and must block the
     // restart. The startup pass is idempotent for a registered worker: it would
@@ -560,7 +585,7 @@ fn reload_bundle(
                     "failed_sessions": partial_startup_detail(&report.failed_startups),
                 }),
             );
-        }
+        },
         outcome => {
             // The teardown already happened; a failed reload leaves the bundle
             // unloaded so new connections fail fast with validation_unknown_bundle.
@@ -582,18 +607,28 @@ fn reload_bundle(
                     fingerprint,
                 ),
             }
-        }
+        },
     }
 }
 
 /// Unloads a bundle whose file disappeared: evict every active session, remove it
 /// from the catalog so new connections fail fast, and tear the runtime down.
-fn unload_bundle(catalog: &BundleCatalog, bundle_name: &str, state: &mut ReconcileState) {
+fn unload_bundle(
+    catalog: &BundleCatalog,
+    bundle_name: &str,
+    state: &mut ReconcileState,
+) {
     let removed = catalog.remove(bundle_name);
-    let evicted_session_count =
-        evict_streams_for_bundle(bundle_name, &bundle_unloaded_response(bundle_name));
+    let evicted_session_count = evict_streams_for_bundle(
+        bundle_name,
+        &bundle_unloaded_response(bundle_name),
+    );
     if let Some(paths) = removed {
-        let _ = shutdown_bundle_runtime(bundle_name, &paths.runtime_directory, &paths.tmux_socket);
+        let _ = shutdown_bundle_runtime(
+            bundle_name,
+            &paths.runtime_directory,
+            &paths.tmux_socket,
+        );
     }
     state.fingerprints.remove(bundle_name);
     state.failed.remove(bundle_name);
@@ -619,8 +654,11 @@ fn unload_bundle(catalog: &BundleCatalog, bundle_name: &str, state: &mut Reconci
 /// A load that succeeds partially is still a success, so it is not recorded as a
 /// failed load — but the sessions that did fail have to appear somewhere, or the
 /// only trace of them is a `ready_session_count` lower than the operator expected.
-fn partial_startup_detail(failed_startups: &[StartupFailureRecord]) -> Option<serde_json::Value> {
-    fold_startup_failures(PARTIAL_STARTUP_LEAD, failed_startups).map(|folded| folded.details)
+fn partial_startup_detail(
+    failed_startups: &[StartupFailureRecord],
+) -> Option<serde_json::Value> {
+    fold_startup_failures(PARTIAL_STARTUP_LEAD, failed_startups)
+        .map(|folded| folded.details)
 }
 
 fn record_no_ready_session_failure(

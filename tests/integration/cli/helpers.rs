@@ -20,7 +20,13 @@ pub(super) fn write_bundle_configuration(
     groups: Option<&[&str]>,
     sessions: &[&str],
 ) {
-    write_bundle_configuration_with_options(config_root, bundle_name, groups, sessions, None);
+    write_bundle_configuration_with_options(
+        config_root,
+        bundle_name,
+        groups,
+        sessions,
+        None,
+    );
 }
 
 pub(super) fn write_bundle_configuration_with_options(
@@ -30,7 +36,8 @@ pub(super) fn write_bundle_configuration_with_options(
     sessions: &[&str],
     autostart: Option<bool>,
 ) {
-    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+    fs::create_dir_all(config_root.join("bundles"))
+        .expect("create bundles directory");
     fs::write(
         config_root.join("coders.toml"),
         r#"
@@ -125,7 +132,8 @@ pub(super) fn write_bundle_configuration_with_member_directories(
     groups: Option<&[&str]>,
     members: &[(&str, &Path)],
 ) {
-    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+    fs::create_dir_all(config_root.join("bundles"))
+        .expect("create bundles directory");
     fs::write(
         config_root.join("coders.toml"),
         r#"
@@ -259,7 +267,8 @@ pub(super) fn write_tui_configuration(
         }
         body.push_str("\n[sessions.ui]\n");
     }
-    fs::write(config_root.join("users.toml"), body).expect("write users config");
+    fs::write(config_root.join("users.toml"), body)
+        .expect("write users config");
 }
 
 pub(super) fn parse_summary_json_line(stdout: &[u8]) -> Value {
@@ -306,7 +315,10 @@ pub(super) fn fake_tmux_query_failure_file(script_path: &Path) -> PathBuf {
 
 /// Marks `session_id` as created-but-never-ready for the fake tmux at
 /// `script_path`.
-pub(super) fn mark_fake_tmux_session_unready(script_path: &Path, session_id: &str) {
+pub(super) fn mark_fake_tmux_session_unready(
+    script_path: &Path,
+    session_id: &str,
+) {
     let path = fake_tmux_unready_sessions_file(script_path);
     let mut existing = fs::read_to_string(&path).unwrap_or_default();
     existing.push_str(session_id);
@@ -330,19 +342,26 @@ pub(super) fn fake_tmux_create_failure_file(script_path: &Path) -> PathBuf {
 }
 
 /// Makes the fake tmux refuse to create `session_id`.
-pub(super) fn fail_fake_tmux_session_creation(script_path: &Path, session_id: &str) {
+pub(super) fn fail_fake_tmux_session_creation(
+    script_path: &Path,
+    session_id: &str,
+) {
     let path = fake_tmux_create_failure_file(script_path);
     let mut existing = fs::read_to_string(&path).unwrap_or_default();
     existing.push_str(session_id);
     existing.push('\n');
-    fs::write(&path, existing).expect("write fake tmux create failure sessions");
+    fs::write(&path, existing)
+        .expect("write fake tmux create failure sessions");
 }
 
 pub(super) fn fake_tmux_kill_after_create_file(script_path: &Path) -> PathBuf {
     script_path.with_extension("kill-after-create")
 }
 
-pub(super) fn kill_fake_tmux_session_after_create(script_path: &Path, session_id: &str) {
+pub(super) fn kill_fake_tmux_session_after_create(
+    script_path: &Path,
+    session_id: &str,
+) {
     fs::write(
         fake_tmux_kill_after_create_file(script_path),
         format!("{session_id}\n"),
@@ -354,7 +373,10 @@ pub(super) fn fake_tmux_malformed_id_file(script_path: &Path) -> PathBuf {
     script_path.with_extension("malformed-id")
 }
 
-pub(super) fn fail_fake_tmux_session_id_report(script_path: &Path, session_id: &str) {
+pub(super) fn fail_fake_tmux_session_id_report(
+    script_path: &Path,
+    session_id: &str,
+) {
     fs::write(
         fake_tmux_malformed_id_file(script_path),
         format!("{session_id}\n"),
@@ -377,8 +399,11 @@ pub(super) fn fail_fake_tmux_session_id_report_raw(
     fs::write(&path, existing).expect("write fake tmux malformed-id sentinel");
 }
 
-pub(super) fn read_fake_tmux_owned_sessions(script_path: &Path) -> Vec<String> {
-    let content = fs::read_to_string(script_path.with_extension("owned")).unwrap_or_default();
+pub(super) fn read_fake_tmux_owned_sessions(
+    script_path: &Path,
+) -> Vec<String> {
+    let content = fs::read_to_string(script_path.with_extension("owned"))
+        .unwrap_or_default();
     content
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -648,11 +673,13 @@ esac
         malformed_id = malformed_id_file.display(),
     );
     fs::write(path, body).expect("write fake tmux script");
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).expect("set fake tmux executable");
+    fs::set_permissions(path, fs::Permissions::from_mode(0o755))
+        .expect("set fake tmux executable");
 }
 
 pub(super) fn shutdown_relay_if_present(state_root: &Path, bundle_name: &str) {
-    let bundle_paths = BundleRuntimePaths::resolve(state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(state_root, bundle_name)
+        .expect("bundle paths");
     let relay_paths = RelayRuntimePaths::resolve(state_root);
     let _ = bundle_paths;
     let Some(pid) = fs::read_to_string(&relay_paths.relay_lock_file)
@@ -673,20 +700,25 @@ pub(super) fn shutdown_relay_if_present(state_root: &Path, bundle_name: &str) {
 }
 
 pub(super) fn wait_for_relay_ready(state_root: &Path, bundle_name: &str) {
-    let bundle_paths = BundleRuntimePaths::resolve(state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(state_root, bundle_name)
+        .expect("bundle paths");
     let relay_paths = RelayRuntimePaths::resolve(state_root);
     let deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < deadline {
         // The sentinel is published only after signal handlers are installed
         // and the accept loop is spawned. Pairing it with socket existence
         // closes the early-startup race (issues/relay/20).
-        if relay_paths.relay_ready_sentinel.exists() && relay_paths.relay_socket.exists() {
+        if relay_paths.relay_ready_sentinel.exists()
+            && relay_paths.relay_socket.exists()
+        {
             return;
         }
         thread::sleep(Duration::from_millis(20));
     }
-    let startup_failures =
-        fs::read_to_string(bundle_paths.runtime_directory.join("startup_failures.json")).ok();
+    let startup_failures = fs::read_to_string(
+        bundle_paths.runtime_directory.join("startup_failures.json"),
+    )
+    .ok();
     let relay_lock = fs::read_to_string(&relay_paths.relay_lock_file).ok();
     panic!(
         "timed out waiting for relay socket {}; startup_failures={startup_failures:?}; relay_lock={relay_lock:?}",
@@ -709,7 +741,8 @@ pub(super) fn spawn_fake_relay_for_bundles(
     }
     let parent = socket_path.parent().expect("relay socket parent");
     fs::create_dir_all(parent).expect("create relay socket parent");
-    let listener = UnixListener::bind(socket_path).expect("bind fake relay socket");
+    let listener =
+        UnixListener::bind(socket_path).expect("bind fake relay socket");
     listener
         .set_nonblocking(true)
         .expect("set fake relay listener nonblocking");
@@ -723,23 +756,28 @@ pub(super) fn spawn_fake_relay_for_bundles(
                     stream
                         .set_nonblocking(false)
                         .expect("set accepted stream blocking");
-                    let mut reader =
-                        BufReader::new(stream.try_clone().expect("clone fake relay stream"));
+                    let mut reader = BufReader::new(
+                        stream.try_clone().expect("clone fake relay stream"),
+                    );
 
                     let mut hello_line = String::new();
                     reader
                         .read_line(&mut hello_line)
                         .expect("read fake relay hello");
-                    let hello: Value = serde_json::from_str(hello_line.trim_end())
-                        .expect("decode fake relay hello");
-                    assert_eq!(hello.get("frame").and_then(Value::as_str), Some("hello"));
+                    let hello: Value =
+                        serde_json::from_str(hello_line.trim_end())
+                            .expect("decode fake relay hello");
+                    assert_eq!(
+                        hello.get("frame").and_then(Value::as_str),
+                        Some("hello")
+                    );
                     let hello_ack = json!({
                         "frame": "hello_ack",
                         "schema_version": ENVELOPE_SCHEMA_VERSION,
                         "principal_id": hello.get("principal_id").cloned().unwrap_or(Value::Null),
                     });
-                    let encoded_ack =
-                        serde_json::to_string(&hello_ack).expect("encode fake relay hello_ack");
+                    let encoded_ack = serde_json::to_string(&hello_ack)
+                        .expect("encode fake relay hello_ack");
                     stream
                         .write_all(encoded_ack.as_bytes())
                         .expect("write fake relay hello_ack");
@@ -750,12 +788,12 @@ pub(super) fn spawn_fake_relay_for_bundles(
                     reader
                         .read_line(&mut request_line)
                         .expect("read fake relay request");
-                    let envelope: Value = serde_json::from_str(request_line.trim_end())
-                        .expect("decode fake relay request envelope");
-                    let request = envelope
-                        .get("request")
-                        .cloned()
-                        .expect("fake relay request envelope missing 'request' field");
+                    let envelope: Value =
+                        serde_json::from_str(request_line.trim_end())
+                            .expect("decode fake relay request envelope");
+                    let request = envelope.get("request").cloned().expect(
+                        "fake relay request envelope missing 'request' field",
+                    );
                     let bundle_name = envelope
                         .get("namespace")
                         .and_then(Value::as_str)
@@ -774,19 +812,23 @@ pub(super) fn spawn_fake_relay_for_bundles(
                         "request_id": envelope.get("request_id").cloned().unwrap_or(Value::Null),
                         "response": response,
                     });
-                    let encoded =
-                        serde_json::to_string(&response_frame).expect("encode fake relay response");
+                    let encoded = serde_json::to_string(&response_frame)
+                        .expect("encode fake relay response");
                     stream
                         .write_all(encoded.as_bytes())
                         .expect("write fake relay response");
                     stream.write_all(b"\n").expect("write fake relay newline");
                     stream.flush().expect("flush fake relay response");
                     served += 1;
-                }
-                Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                },
+                Err(source)
+                    if source.kind() == std::io::ErrorKind::WouldBlock =>
+                {
                     thread::sleep(Duration::from_millis(10));
-                }
-                Err(source) => panic!("accept fake relay connection: {source}"),
+                },
+                Err(source) => {
+                    panic!("accept fake relay connection: {source}")
+                },
             }
         }
         let _ = fs::remove_file(socket_path);
@@ -807,7 +849,8 @@ pub(super) fn spawn_fake_relay_once(
     }
     let parent = socket_path.parent().expect("relay socket parent");
     fs::create_dir_all(parent).expect("create relay socket parent");
-    let listener = UnixListener::bind(socket_path).expect("bind fake relay socket");
+    let listener =
+        UnixListener::bind(socket_path).expect("bind fake relay socket");
     listener
         .set_nonblocking(true)
         .expect("set fake relay listener nonblocking");
@@ -822,23 +865,28 @@ pub(super) fn spawn_fake_relay_once(
                     stream
                         .set_nonblocking(false)
                         .expect("set accepted stream blocking");
-                    let mut reader =
-                        BufReader::new(stream.try_clone().expect("clone fake relay stream"));
+                    let mut reader = BufReader::new(
+                        stream.try_clone().expect("clone fake relay stream"),
+                    );
 
                     let mut hello_line = String::new();
                     reader
                         .read_line(&mut hello_line)
                         .expect("read fake relay hello");
-                    let hello: Value = serde_json::from_str(hello_line.trim_end())
-                        .expect("decode fake relay hello");
-                    assert_eq!(hello.get("frame").and_then(Value::as_str), Some("hello"));
+                    let hello: Value =
+                        serde_json::from_str(hello_line.trim_end())
+                            .expect("decode fake relay hello");
+                    assert_eq!(
+                        hello.get("frame").and_then(Value::as_str),
+                        Some("hello")
+                    );
                     let hello_ack = json!({
                         "frame": "hello_ack",
                         "schema_version": ENVELOPE_SCHEMA_VERSION,
                         "principal_id": hello.get("principal_id").cloned().unwrap_or(Value::Null),
                     });
-                    let encoded_ack =
-                        serde_json::to_string(&hello_ack).expect("encode fake relay hello_ack");
+                    let encoded_ack = serde_json::to_string(&hello_ack)
+                        .expect("encode fake relay hello_ack");
                     stream
                         .write_all(encoded_ack.as_bytes())
                         .expect("write fake relay hello_ack");
@@ -849,21 +897,24 @@ pub(super) fn spawn_fake_relay_once(
                     reader
                         .read_line(&mut request_line)
                         .expect("read fake relay request");
-                    let envelope: Value = serde_json::from_str(request_line.trim_end())
-                        .expect("decode fake relay request envelope");
-                    let request = envelope
-                        .get("request")
-                        .cloned()
-                        .expect("fake relay request envelope missing 'request' field");
-                    request_log.lock().expect("request log lock").push(request);
+                    let envelope: Value =
+                        serde_json::from_str(request_line.trim_end())
+                            .expect("decode fake relay request envelope");
+                    let request = envelope.get("request").cloned().expect(
+                        "fake relay request envelope missing 'request' field",
+                    );
+                    request_log
+                        .lock()
+                        .expect("request log lock")
+                        .push(request);
 
                     let response_frame = json!({
                         "frame": "response",
                         "request_id": envelope.get("request_id").cloned().unwrap_or(Value::Null),
                         "response": response,
                     });
-                    let encoded =
-                        serde_json::to_string(&response_frame).expect("encode fake relay response");
+                    let encoded = serde_json::to_string(&response_frame)
+                        .expect("encode fake relay response");
                     stream
                         .write_all(encoded.as_bytes())
                         .expect("write fake relay response");
@@ -871,11 +922,15 @@ pub(super) fn spawn_fake_relay_once(
                     stream.flush().expect("flush fake relay response");
                     let _ = fs::remove_file(socket_path);
                     return;
-                }
-                Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                },
+                Err(source)
+                    if source.kind() == std::io::ErrorKind::WouldBlock =>
+                {
                     thread::sleep(Duration::from_millis(10));
-                }
-                Err(source) => panic!("accept fake relay connection: {source}"),
+                },
+                Err(source) => {
+                    panic!("accept fake relay connection: {source}")
+                },
             }
         }
         panic!("timed out waiting for fake relay request");

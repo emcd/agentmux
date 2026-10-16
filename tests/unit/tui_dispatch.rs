@@ -18,9 +18,11 @@ use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 
 use agentmux::runtime::error::RuntimeError;
 use agentmux::tui::{
-    Action, BindingConfiguration, BindingContext, ConfiguredAction, ConfiguredBinding,
-    TuiLaunchOptions, default_binding, parse_chord,
-    workbench::{Workbench, WorkbenchField, WorkbenchMode, WorkbenchPickerColumn},
+    Action, BindingConfiguration, BindingContext, ConfiguredAction,
+    ConfiguredBinding, TuiLaunchOptions, default_binding, parse_chord,
+    workbench::{
+        Workbench, WorkbenchField, WorkbenchMode, WorkbenchPickerColumn,
+    },
 };
 
 /// Builds a workbench from public launch options alone. The relay socket is
@@ -106,7 +108,9 @@ fn observe(workbench: &Workbench) -> Observed {
             .into_iter()
             .map(str::to_string)
             .collect(),
-        last_selected_recipient: workbench.last_selected_recipient().map(str::to_string),
+        last_selected_recipient: workbench
+            .last_selected_recipient()
+            .map(str::to_string),
         pending_choice_request_ids: workbench
             .pending_choice_request_ids()
             .into_iter()
@@ -404,14 +408,17 @@ fn dispatching_a_chord_and_applying_its_bound_action_leave_the_same_state() {
 
         // Resolution as dispatch performs it, done here out of public parts:
         // the lookup order, then the first context in it that binds the chord.
-        let resolved = applied
-            .binding_lookup_order()
-            .into_iter()
-            .find_map(|context| default_binding(context, case.code, case.modifiers));
+        let resolved =
+            applied
+                .binding_lookup_order()
+                .into_iter()
+                .find_map(|context| {
+                    default_binding(context, case.code, case.modifiers)
+                });
 
-        let dispatched_outcome = outcome(
-            dispatched.dispatch_event(Event::Key(KeyEvent::new(case.code, case.modifiers))),
-        );
+        let dispatched_outcome = outcome(dispatched.dispatch_event(
+            Event::Key(KeyEvent::new(case.code, case.modifiers)),
+        ));
         let applied_outcome = match resolved {
             Some(action) => outcome(applied.apply_action(action)),
             // Nothing binds the chord, so the applying side does nothing and
@@ -438,7 +445,9 @@ fn workbench_with_configured_newline() -> Workbench {
     Workbench::new(TuiLaunchOptions {
         namespace: "agentmux".to_string(),
         sender_session: "tui".to_string(),
-        relay_socket: PathBuf::from("/tmp/agentmux-dispatch-configured-relay.sock"),
+        relay_socket: PathBuf::from(
+            "/tmp/agentmux-dispatch-configured-relay.sock",
+        ),
         look_lines: None,
         available_bundles: vec!["agentmux".to_string()],
         bindings: Some(BindingConfiguration {
@@ -447,7 +456,8 @@ fn workbench_with_configured_newline() -> Workbench {
             primary_modifier_on_macos: None,
             rows: vec![ConfiguredBinding {
                 context: BindingContext::ComposeMessage,
-                chord: parse_chord("ctrl+n").expect("the fixture chord parses"),
+                chord: parse_chord("ctrl+n")
+                    .expect("the fixture chord parses"),
                 enhanced: Some(inserts),
                 standard: Some(inserts),
             }],
@@ -456,8 +466,10 @@ fn workbench_with_configured_newline() -> Workbench {
 }
 
 #[test]
-fn dispatch_resolves_against_the_configured_table_rather_than_the_compiled_one() {
-    const CONFIGURED: KeyEvent = KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
+fn dispatch_resolves_against_the_configured_table_rather_than_the_compiled_one()
+ {
+    const CONFIGURED: KeyEvent =
+        KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL);
 
     // The compiled table binds nothing to this chord in the message field, and
     // that is the premise the rest of the test rests on: without it, the chord

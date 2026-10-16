@@ -22,12 +22,14 @@ mod loading;
 mod resolution;
 
 pub(in crate::relay) use checks::{
-    RelayActionFamily, RouteAuthorization, authorize_choose, authorize_choose_for_list,
-    authorize_discovery_origin, authorize_relay_action, authorize_route, authorize_updown,
+    RelayActionFamily, RouteAuthorization, authorize_choose,
+    authorize_choose_for_list, authorize_discovery_origin,
+    authorize_relay_action, authorize_route, authorize_updown,
     reject_cross_relay_ingress, requester_list_reaches_all,
 };
 pub(in crate::relay) use context::AuthorizationContext;
 pub(in crate::relay) use loading::load_authorization_context;
 pub(in crate::relay) use resolution::{
-    choices_pending_max, choose_authorized_ui_sessions, has_ui_session, ui_session_display_name,
+    choices_pending_max, choose_authorized_ui_sessions, has_ui_session,
+    ui_session_display_name,
 };

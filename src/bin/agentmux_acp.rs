@@ -10,7 +10,10 @@ use agentmux::acp::{AcpStdioClient, PermissionRequest, ReplayEntry};
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{
+        EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
+        enable_raw_mode,
+    },
 };
 use ratatui::{
     Frame, Terminal,
@@ -97,7 +100,7 @@ impl App {
             AppEvent::PromptComplete(stop_reason) => {
                 self.prompt_active = false;
                 self.status = format!("Ready (last: {stop_reason})");
-            }
+            },
             AppEvent::Error(err) => {
                 self.prompt_active = false;
                 self.add_message(Message {
@@ -105,7 +108,7 @@ impl App {
                     text: format!("Error: {err}"),
                 });
                 self.status = "Error".to_string();
-            }
+            },
         }
     }
 }
@@ -133,13 +136,15 @@ fn replay_entries_to_messages(entries: Vec<ReplayEntry>) -> Vec<Message> {
                 result,
             } => {
                 let status_label = format!("{:?}", status);
-                let invocation_text = serde_json::to_string_pretty(&invocation)
-                    .unwrap_or_else(|_| invocation.to_string());
+                let invocation_text =
+                    serde_json::to_string_pretty(&invocation)
+                        .unwrap_or_else(|_| invocation.to_string());
                 let result_text = result.map(|r| {
                     format!(
                         "\n--- result ({}) ---\n{}",
                         status_label,
-                        serde_json::to_string_pretty(&r).unwrap_or_else(|_| r.to_string())
+                        serde_json::to_string_pretty(&r)
+                            .unwrap_or_else(|_| r.to_string())
                     )
                 });
                 Message {
@@ -156,7 +161,7 @@ fn replay_entries_to_messages(entries: Vec<ReplayEntry>) -> Vec<Message> {
                         result_text.unwrap_or_default()
                     ),
                 }
-            }
+            },
             ReplayEntry::Update { update_kind, lines } => Message {
                 role: MessageRole::System,
                 text: if lines.is_empty() {
@@ -178,11 +183,13 @@ fn main() -> anyhow::Result<()> {
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--session-id" => session_id = args.next(),
-            "-C" | "--cd" | "--current-directory" => working_directory = args.next(),
+            "-C" | "--cd" | "--current-directory" => {
+                working_directory = args.next()
+            },
             _ if arg.starts_with('-') => {
                 eprintln!("unknown option: {arg}");
                 std::process::exit(1);
-            }
+            },
             _ => command = Some(arg),
         }
     }
@@ -265,7 +272,7 @@ fn run_tui(
                             role: MessageRole::System,
                             text: format!("stderr: {line}"),
                         }));
-                    }
+                    },
                     _ => break,
                 }
             }
@@ -289,7 +296,9 @@ fn run_tui(
         if event::poll(Duration::from_millis(50))?
             && let Event::Key(key) = event::read()?
         {
-            if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
+            if key.modifiers.contains(KeyModifiers::CONTROL)
+                && key.code == KeyCode::Char('c')
+            {
                 break;
             }
             if app.prompt_active {
@@ -314,7 +323,9 @@ fn run_tui(
                         },
                     );
                     let (completion_tx, completion_rx) =
-                        std::sync::mpsc::channel::<agentmux::acp::PromptCompletion>();
+                        std::sync::mpsc::channel::<
+                            agentmux::acp::PromptCompletion,
+                        >();
                     let on_completion: agentmux::acp::PromptCompletionHandler =
                         Box::new(move |completion| {
                             let _ = completion_tx.send(completion);
@@ -374,21 +385,21 @@ fn run_tui(
                     // (including a second Enter) don't fire immediately
                     drain_event_buffer();
                     continue;
-                }
+                },
                 KeyCode::Backspace => {
                     app.input.pop();
                     app.history_index = None;
-                }
+                },
                 KeyCode::Char(c) => {
                     app.input.push(c);
                     app.history_index = None;
-                }
+                },
                 KeyCode::PageUp => {
                     app.scroll_offset = app.scroll_offset.saturating_add(10);
-                }
+                },
                 KeyCode::PageDown => {
                     app.scroll_offset = app.scroll_offset.saturating_sub(10);
-                }
+                },
                 KeyCode::Up if !app.history.is_empty() => {
                     let new_index = match app.history_index {
                         None => app.history.len() - 1,
@@ -399,20 +410,20 @@ fn run_tui(
                     }
                     app.history_index = Some(new_index);
                     app.input = app.history[new_index].clone();
-                }
+                },
                 KeyCode::Down => match app.history_index {
                     Some(idx) if idx + 1 < app.history.len() => {
                         let new_index = idx + 1;
                         app.history_index = Some(new_index);
                         app.input = app.history[new_index].clone();
-                    }
+                    },
                     Some(_) => {
                         app.history_index = None;
                         app.input = app.input_draft.clone();
-                    }
-                    None => {}
+                    },
+                    None => {},
                 },
-                _ => {}
+                _ => {},
             }
         }
 
@@ -496,17 +507,30 @@ fn draw(frame: &mut Frame, app: &App) {
         .iter()
         .flat_map(|msg| {
             let (label, label_style, body_style) = match msg.role {
-                MessageRole::User => ("[User]", user_label_style, user_body_style),
-                MessageRole::Assistant => ("[Agent]", assistant_label_style, assistant_body_style),
-                MessageRole::Thinking => ("[Cognition]", thinking_label_style, thinking_body_style),
-                MessageRole::ToolCall => ("[Invocation]", tool_label_style, tool_body_style),
-                MessageRole::System => ("[System]", system_label_style, system_body_style),
+                MessageRole::User => {
+                    ("[User]", user_label_style, user_body_style)
+                },
+                MessageRole::Assistant => {
+                    ("[Agent]", assistant_label_style, assistant_body_style)
+                },
+                MessageRole::Thinking => {
+                    ("[Cognition]", thinking_label_style, thinking_body_style)
+                },
+                MessageRole::ToolCall => {
+                    ("[Invocation]", tool_label_style, tool_body_style)
+                },
+                MessageRole::System => {
+                    ("[System]", system_label_style, system_body_style)
+                },
             };
             let mut lines = Vec::new();
             // Blank line separator before each message
             lines.push(Line::raw(""));
             // Label on its own line
-            lines.push(Line::from(Span::styled(label.to_string(), label_style)));
+            lines.push(Line::from(Span::styled(
+                label.to_string(),
+                label_style,
+            )));
             // Wrap body text to full available width
             for text_line in msg.text.split('\n') {
                 for wrapped in wrap_text(text_line, available_width) {
@@ -535,8 +559,8 @@ fn draw(frame: &mut Frame, app: &App) {
         " History (PgUp/PgDn) ".to_string()
     };
 
-    let history =
-        Paragraph::new(visible_lines).block(Block::default().borders(Borders::TOP).title(title));
+    let history = Paragraph::new(visible_lines)
+        .block(Block::default().borders(Borders::TOP).title(title));
     frame.render_widget(history, chunks[1]);
 
     // Input area

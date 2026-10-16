@@ -11,7 +11,9 @@ use crate::transports::PeekDimensions;
 
 use super::super::guard::QueueEntryState;
 use super::config::{AdmissionLimits, delivery_configuration};
-use super::ledger::{AdmissionTargetKey, AdmittedEntry, TargetUsage, lock_ledger};
+use super::ledger::{
+    AdmissionTargetKey, AdmittedEntry, TargetUsage, lock_ledger,
+};
 
 const ERROR_CODE_QUEUE_FULL: &str = "runtime_delivery_queue_full";
 const ERROR_CODE_PAYLOAD_TOO_LARGE: &str = "validation_payload_too_large";
@@ -25,7 +27,10 @@ const ERROR_CODE_PAYLOAD_TOO_LARGE: &str = "validation_payload_too_large";
 /// will deliver an entry; the delivery worker's task-shaped wrapper delegates to
 /// it so the two cannot disagree about a target's transport kind.
 #[must_use]
-pub(in crate::relay) fn target_is_relay_wide(bundle_name: &str, target_session: &str) -> bool {
+pub(in crate::relay) fn target_is_relay_wide(
+    bundle_name: &str,
+    target_session: &str,
+) -> bool {
     let principal = canonical_session_id(target_session, bundle_name);
     crate::relay::stream::registry_target_is_relay_wide(principal.as_str())
         .unwrap_or_else(|| bundle_name == crate::relay::GLOBAL_NAMESPACE)
@@ -98,7 +103,8 @@ pub(super) fn admit_with_limits(
     // A session type with no delivery path is refused before any quota is
     // considered: nothing is accepted, so nothing may be reserved, queued, or
     // authorized on its behalf.
-    let Some(dimensions) = PeekDimensions::for_session_type(session_type) else {
+    let Some(dimensions) = PeekDimensions::for_session_type(session_type)
+    else {
         return Err(crate::relay::session_type_not_implemented(
             target.target_session.as_str(),
             session_type,
@@ -118,10 +124,14 @@ pub(super) fn admit_with_limits(
     }
 
     let mut state = lock_ledger()?;
-    let target_usage = state.per_target.get(&target).copied().unwrap_or_default();
-    if let Some(exhausted) =
-        first_exhausted_limit(&state.global, &target_usage, canonical_bytes, limits)
-    {
+    let target_usage =
+        state.per_target.get(&target).copied().unwrap_or_default();
+    if let Some(exhausted) = first_exhausted_limit(
+        &state.global,
+        &target_usage,
+        canonical_bytes,
+        limits,
+    ) {
         return Err(queue_full_error(
             &target,
             canonical_bytes,
@@ -176,7 +186,8 @@ pub(in crate::relay) fn rollback_admission(message_id: &str) {
         return;
     };
     state.global.envelopes = state.global.envelopes.saturating_sub(1);
-    state.global.bytes = state.global.bytes.saturating_sub(entry.canonical_bytes);
+    state.global.bytes =
+        state.global.bytes.saturating_sub(entry.canonical_bytes);
     if let Some(usage) = state.per_target.get_mut(&entry.target) {
         usage.envelopes = usage.envelopes.saturating_sub(1);
         usage.bytes = usage.bytes.saturating_sub(entry.canonical_bytes);

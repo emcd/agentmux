@@ -54,7 +54,8 @@ fn host_relay_watcher_loads_new_bundle_file_at_runtime() {
     assert_bundle_watch_started(&inscriptions_root);
 
     // The bravo bundle does not exist yet: Hello is rejected as unknown.
-    let before = relay_hello_first_frame(&state_root, "b@bravo", "socket-trust");
+    let before =
+        relay_hello_first_frame(&state_root, "b@bravo", "socket-trust");
     // Add the bravo bundle file at runtime; the watcher should load it.
     write_bundle_configuration_with_options(
         &config_root,
@@ -63,9 +64,12 @@ fn host_relay_watcher_loads_new_bundle_file_at_runtime() {
         &["b"],
         Some(true),
     );
-    let added = poll_hello_first_frame(&state_root, "b@bravo", "socket-trust", |frame| {
-        frame["frame"] == "hello_ack"
-    });
+    let added = poll_hello_first_frame(
+        &state_root,
+        "b@bravo",
+        "socket-trust",
+        |frame| frame["frame"] == "hello_ack",
+    );
 
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child
@@ -85,7 +89,8 @@ fn host_relay_watcher_loads_new_bundle_file_at_runtime() {
         added["frame"],
         "hello_ack",
         "expected hello_ack after add: {added:?}; relay inscriptions: {}",
-        fs::read_to_string(inscriptions_root.join("relay.log")).unwrap_or_default()
+        fs::read_to_string(inscriptions_root.join("relay.log"))
+            .unwrap_or_default()
     );
     assert_eq!(added["principal_id"], "b@bravo");
 }
@@ -142,12 +147,18 @@ fn host_relay_watcher_loads_non_autostart_bundle_held_without_starting() {
         &["b"],
         Some(false),
     );
-    let loaded_held =
-        poll_inscription_event(&inscriptions_root, "relay.bundle.loaded_held", "bravo");
+    let loaded_held = poll_inscription_event(
+        &inscriptions_root,
+        "relay.bundle.loaded_held",
+        "bravo",
+    );
     // The held bundle is nonetheless known: Hello to one of its members succeeds.
-    let known = poll_hello_first_frame(&state_root, "b@bravo", "socket-trust", |frame| {
-        frame["frame"] == "hello_ack"
-    });
+    let known = poll_hello_first_frame(
+        &state_root,
+        "b@bravo",
+        "socket-trust",
+        |frame| frame["frame"] == "hello_ack",
+    );
 
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child
@@ -158,7 +169,8 @@ fn host_relay_watcher_loads_non_autostart_bundle_held_without_starting() {
     assert!(
         loaded_held,
         "expected relay.bundle.loaded_held for the non-autostart runtime add; relay inscriptions: {}",
-        fs::read_to_string(inscriptions_root.join("relay.log")).unwrap_or_default()
+        fs::read_to_string(inscriptions_root.join("relay.log"))
+            .unwrap_or_default()
     );
     assert_eq!(
         known["frame"], "hello_ack",
@@ -171,7 +183,8 @@ fn host_relay_watcher_loads_non_autostart_bundle_held_without_starting() {
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .any(|entry| {
-            entry["event"] == "relay.bundle.loaded" && entry["details"]["bundle_name"] == "bravo"
+            entry["event"] == "relay.bundle.loaded"
+                && entry["details"]["bundle_name"] == "bravo"
         });
     assert!(
         !started,
@@ -224,7 +237,8 @@ fn host_relay_watcher_unloads_removed_bundle_file_at_runtime() {
 
     let (_stream, mut reader, hello) =
         relay_hello_keepalive(&state_root, "a@alpha", "socket-trust");
-    fs::remove_file(config_root.join("bundles").join("alpha.toml")).expect("remove bundle file");
+    fs::remove_file(config_root.join("bundles").join("alpha.toml"))
+        .expect("remove bundle file");
     // The active session's connection receives the typed unload frame.
     let eviction = expect_watcher_signal(
         read_next_frame(&mut reader),
@@ -233,7 +247,8 @@ fn host_relay_watcher_unloads_removed_bundle_file_at_runtime() {
     );
     // The catalog is updated before the eviction frame is written, so a new
     // Hello to the unloaded bundle is now rejected as unknown.
-    let after = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
+    let after =
+        relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child

@@ -14,11 +14,14 @@ use crate::runtime::inscriptions::emit_inscription;
 
 use crate::mcp::errors::validation_tool_error;
 use crate::mcp::params::ChangeScopeArgs;
-use crate::mcp::params::{CHANGE_COMMAND_PSK, CHANGE_COMMAND_SCOPE, ChangeParams, ChangePskArgs};
+use crate::mcp::params::{
+    CHANGE_COMMAND_PSK, CHANGE_COMMAND_SCOPE, ChangeParams, ChangePskArgs,
+};
 use crate::mcp::server::McpServer;
 use crate::mcp::validation::{
-    parse_meta_tool_args, resolve_credential_destination, validate_change_params,
-    validate_change_psk_args, validate_change_scope_args,
+    parse_meta_tool_args, resolve_credential_destination,
+    validate_change_params, validate_change_psk_args,
+    validate_change_scope_args,
 };
 
 #[tool_router(router = tool_router_change, vis = "pub(crate)")]
@@ -48,7 +51,7 @@ impl McpServer {
                     },
                 )?;
                 self.change_psk(args)
-            }
+            },
             CHANGE_COMMAND_SCOPE => {
                 let args = parse_meta_tool_args::<ChangeScopeArgs>(params.args.clone()).map_err(
                     |reason| {
@@ -63,7 +66,7 @@ impl McpServer {
                     },
                 )?;
                 self.change_scope(args)
-            }
+            },
             other => Err(validation_tool_error(
                 "validation_invalid_params",
                 "change command must be \"psk\" or \"scope\"",
@@ -72,7 +75,10 @@ impl McpServer {
         }
     }
 
-    fn change_psk(&self, args: ChangePskArgs) -> Result<CallToolResult, McpError> {
+    fn change_psk(
+        &self,
+        args: ChangePskArgs,
+    ) -> Result<CallToolResult, McpError> {
         validate_change_psk_args(&args)?;
         let principal_id = args
             .principal_id
@@ -115,13 +121,20 @@ impl McpServer {
                 // `written_path` only when a file was written (per the
                 // mcp-tool-surface success-payload contract).
                 let mut response = Map::new();
-                response.insert("schema_version".to_string(), json!(schema_version));
-                response.insert("principal_id".to_string(), json!(principal_id));
+                response.insert(
+                    "schema_version".to_string(),
+                    json!(schema_version),
+                );
+                response
+                    .insert("principal_id".to_string(), json!(principal_id));
                 if let Some(psk) = psk {
                     response.insert("psk".to_string(), json!(psk));
                 }
                 if let Some(written_path) = &written_path {
-                    response.insert("written_path".to_string(), json!(written_path));
+                    response.insert(
+                        "written_path".to_string(),
+                        json!(written_path),
+                    );
                 }
                 emit_inscription(
                     "mcp.tool.change.psk.success",
@@ -133,13 +146,18 @@ impl McpServer {
                 Ok(CallToolResult::success(vec![Content::json(
                     Value::Object(response),
                 )?]))
-            }
-            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.change.psk", other)),
-            Err(source) => Err(self.map_relay_call_error("mcp.tool.change.psk.io_error", source)),
+            },
+            Ok(other) => Err(self
+                .map_nonsuccess_relay_response("mcp.tool.change.psk", other)),
+            Err(source) => Err(self
+                .map_relay_call_error("mcp.tool.change.psk.io_error", source)),
         }
     }
 
-    fn change_scope(&self, args: ChangeScopeArgs) -> Result<CallToolResult, McpError> {
+    fn change_scope(
+        &self,
+        args: ChangeScopeArgs,
+    ) -> Result<CallToolResult, McpError> {
         validate_change_scope_args(&args)?;
         let principal_id = args
             .principal_id
@@ -183,8 +201,12 @@ impl McpServer {
                 diagnostics,
             }) => {
                 let mut response = Map::new();
-                response.insert("schema_version".to_string(), json!(schema_version));
-                response.insert("principal_id".to_string(), json!(principal_id));
+                response.insert(
+                    "schema_version".to_string(),
+                    json!(schema_version),
+                );
+                response
+                    .insert("principal_id".to_string(), json!(principal_id));
                 response.insert("scope".to_string(), json!(scope));
                 if !diagnostics.is_empty() {
                     response.insert(
@@ -209,9 +231,15 @@ impl McpServer {
                 Ok(CallToolResult::success(vec![Content::json(
                     Value::Object(response),
                 )?]))
-            }
-            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.change.scope", other)),
-            Err(source) => Err(self.map_relay_call_error("mcp.tool.change.scope.io_error", source)),
+            },
+            Ok(other) => Err(self.map_nonsuccess_relay_response(
+                "mcp.tool.change.scope",
+                other,
+            )),
+            Err(source) => Err(self.map_relay_call_error(
+                "mcp.tool.change.scope.io_error",
+                source,
+            )),
         }
     }
 }

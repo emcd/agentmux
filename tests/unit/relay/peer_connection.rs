@@ -17,20 +17,27 @@ use tempfile::TempDir;
 /// `schema_version` and `principal_id`, so the test needs no knowledge of the
 /// wire schema version. The listener is bound before returning so the manager
 /// cannot dial ahead of it.
-fn spawn_stub_peer(socket_path: &std::path::Path) -> mpsc::Receiver<serde_json::Value> {
-    let listener = UnixListener::bind(socket_path).expect("bind stub peer socket");
+fn spawn_stub_peer(
+    socket_path: &std::path::Path,
+) -> mpsc::Receiver<serde_json::Value> {
+    let listener =
+        UnixListener::bind(socket_path).expect("bind stub peer socket");
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let Ok((stream, _)) = listener.accept() else {
             return;
         };
-        let mut reader = BufReader::new(stream.try_clone().expect("clone stub stream"));
+        let mut reader =
+            BufReader::new(stream.try_clone().expect("clone stub stream"));
         let mut line = String::new();
         if reader.read_line(&mut line).is_ok()
-            && let Ok(frame) = serde_json::from_str::<serde_json::Value>(line.trim_end())
+            && let Ok(frame) =
+                serde_json::from_str::<serde_json::Value>(line.trim_end())
         {
-            let schema_version = frame.get("schema_version").cloned().unwrap_or(json!(""));
-            let principal_id = frame.get("principal_id").cloned().unwrap_or(json!(""));
+            let schema_version =
+                frame.get("schema_version").cloned().unwrap_or(json!(""));
+            let principal_id =
+                frame.get("principal_id").cloned().unwrap_or(json!(""));
             let mut stream = stream;
             let ack = json!({
                 "frame": "hello_ack",
@@ -54,20 +61,24 @@ fn spawn_answering_stub_peer(
     socket_path: &std::path::Path,
     response: serde_json::Value,
 ) -> mpsc::Receiver<serde_json::Value> {
-    let listener = UnixListener::bind(socket_path).expect("bind stub peer socket");
+    let listener =
+        UnixListener::bind(socket_path).expect("bind stub peer socket");
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let Ok((stream, _)) = listener.accept() else {
             return;
         };
-        let mut reader = BufReader::new(stream.try_clone().expect("clone stub stream"));
+        let mut reader =
+            BufReader::new(stream.try_clone().expect("clone stub stream"));
         let mut stream = stream;
         // Hello -> HelloAck (echo schema_version + principal_id).
         let mut hello_line = String::new();
         if reader.read_line(&mut hello_line).is_err() {
             return;
         }
-        let Ok(hello) = serde_json::from_str::<serde_json::Value>(hello_line.trim_end()) else {
+        let Ok(hello) =
+            serde_json::from_str::<serde_json::Value>(hello_line.trim_end())
+        else {
             return;
         };
         let ack = json!({
@@ -80,7 +91,9 @@ fn spawn_answering_stub_peer(
         // Request -> Response (echo the request's wire id for correlation).
         let mut request_line = String::new();
         if reader.read_line(&mut request_line).is_ok()
-            && let Ok(request) = serde_json::from_str::<serde_json::Value>(request_line.trim_end())
+            && let Ok(request) = serde_json::from_str::<serde_json::Value>(
+                request_line.trim_end(),
+            )
         {
             let response_frame = json!({
                 "frame": "response",
@@ -108,19 +121,23 @@ fn spawn_reconnecting_stub_peer(
     socket_path: &std::path::Path,
     connection_total: usize,
 ) -> mpsc::Receiver<serde_json::Value> {
-    let listener = UnixListener::bind(socket_path).expect("bind stub peer socket");
+    let listener =
+        UnixListener::bind(socket_path).expect("bind stub peer socket");
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         for _ in 0..connection_total {
             let Ok((stream, _)) = listener.accept() else {
                 return;
             };
-            let mut reader = BufReader::new(stream.try_clone().expect("clone stub stream"));
+            let mut reader =
+                BufReader::new(stream.try_clone().expect("clone stub stream"));
             let mut line = String::new();
             if reader.read_line(&mut line).is_err() {
                 return;
             }
-            let Ok(hello) = serde_json::from_str::<serde_json::Value>(line.trim_end()) else {
+            let Ok(hello) =
+                serde_json::from_str::<serde_json::Value>(line.trim_end())
+            else {
                 return;
             };
             let mut stream = stream;
@@ -140,13 +157,22 @@ fn spawn_reconnecting_stub_peer(
     receiver
 }
 
-fn write_peer_credential(state_root: &std::path::Path, alias: &str, psk: &str) {
+fn write_peer_credential(
+    state_root: &std::path::Path,
+    alias: &str,
+    psk: &str,
+) {
     let peers_dir = state_root.join("peers");
     std::fs::create_dir_all(&peers_dir).expect("create peers dir");
-    std::fs::write(peers_dir.join(format!("{alias}.psk")), psk).expect("write peer psk");
+    std::fs::write(peers_dir.join(format!("{alias}.psk")), psk)
+        .expect("write peer psk");
 }
 
-fn peer(alias: &str, connect_as: &str, address: &std::path::Path) -> PeerConfiguration {
+fn peer(
+    alias: &str,
+    connect_as: &str,
+    address: &std::path::Path,
+) -> PeerConfiguration {
     PeerConfiguration {
         alias: alias.to_string(),
         address: address.to_string_lossy().into_owned(),
@@ -298,7 +324,7 @@ fn forward_returns_the_peer_response() {
             assert_eq!(status, "queued");
             assert_eq!(target_session, "claude@myapp");
             assert_eq!(request_id.as_deref(), Some("origin-1"));
-        }
+        },
         other => panic!("expected a forwarded raww response, got {other:?}"),
     }
 
@@ -376,6 +402,7 @@ fn presented_principal_id_qualifies_configured_connect_as() {
 #[test]
 fn manager_without_peers_is_not_configured() {
     let temporary = TempDir::new().expect("temporary");
-    let manager = PeerConnectionManager::from_configuration(temporary.path(), &[]);
+    let manager =
+        PeerConnectionManager::from_configuration(temporary.path(), &[]);
     assert!(!manager.is_configured());
 }

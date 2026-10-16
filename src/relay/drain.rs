@@ -73,7 +73,10 @@ impl ConnectionDrainCoordinator {
     /// Waits up to `timeout` for every registered worker to exit, sampling the
     /// remaining count on a short poll interval. Returns the drain outcome
     /// either way; the caller decides how to report abandoned workers.
-    pub async fn wait_for_drain(&self, timeout: Duration) -> ConnectionDrainReport {
+    pub async fn wait_for_drain(
+        &self,
+        timeout: Duration,
+    ) -> ConnectionDrainReport {
         let deadline = Instant::now() + timeout;
         loop {
             let remaining = self.active_worker_count.load(Ordering::SeqCst);
@@ -84,16 +87,23 @@ impl ConnectionDrainCoordinator {
             if now >= deadline {
                 return self.drain_report(true);
             }
-            let poll = (deadline - now).min(Duration::from_millis(DRAIN_WAIT_POLL_INTERVAL_MS));
+            let poll = (deadline - now)
+                .min(Duration::from_millis(DRAIN_WAIT_POLL_INTERVAL_MS));
             tokio::time::sleep(poll).await;
         }
     }
 
     fn drain_report(&self, timed_out: bool) -> ConnectionDrainReport {
         ConnectionDrainReport {
-            drained_worker_count: self.drained_worker_count.load(Ordering::SeqCst),
-            remaining_worker_count: self.active_worker_count.load(Ordering::SeqCst),
-            remaining_serving_count: self.serving_worker_count.load(Ordering::SeqCst),
+            drained_worker_count: self
+                .drained_worker_count
+                .load(Ordering::SeqCst),
+            remaining_worker_count: self
+                .active_worker_count
+                .load(Ordering::SeqCst),
+            remaining_serving_count: self
+                .serving_worker_count
+                .load(Ordering::SeqCst),
             timed_out,
         }
     }

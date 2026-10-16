@@ -7,8 +7,8 @@ use std::{
 
 use agentmux::{
     relay::{
-        ListedBundleState, RelayRequest, RelayResponse, handle_request, reconcile_bundle,
-        shutdown_bundle_runtime,
+        ListedBundleState, RelayRequest, RelayResponse, handle_request,
+        reconcile_bundle, shutdown_bundle_runtime,
     },
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
@@ -82,7 +82,8 @@ directory = "{directory}"
 coder = "shell"
 "#
     );
-    fs::write(bundles.join(format!("{bundle_name}.toml")), body).expect("write bundle config");
+    fs::write(bundles.join(format!("{bundle_name}.toml")), body)
+        .expect("write bundle config");
     ConfigurationRoots::single(config_root)
 }
 
@@ -105,20 +106,24 @@ fn list_bundle(
 #[test]
 fn list_reports_hosted_round_trip_for_tmux_bundle() {
     if !tmux_available() {
-        eprintln!("skipping hosted round-trip test because tmux is unavailable");
+        eprintln!(
+            "skipping hosted round-trip test because tmux is unavailable"
+        );
         return;
     }
 
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
     let config_root = write_tmux_bundle(temporary.path(), bundle_name);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard {
         socket: paths.tmux_socket.clone(),
     };
 
-    let pre_response = list_bundle(&config_root, bundle_name, &paths.runtime_directory);
+    let pre_response =
+        list_bundle(&config_root, bundle_name, &paths.runtime_directory);
     let RelayResponse::List {
         bundle: pre_bundle, ..
     } = pre_response
@@ -137,7 +142,8 @@ fn list_reports_hosted_round_trip_for_tmux_bundle() {
 
     reconcile_bundle(&config_root, &paths).expect("reconcile bundle hosting");
 
-    let hosted_response = list_bundle(&config_root, bundle_name, &paths.runtime_directory);
+    let hosted_response =
+        list_bundle(&config_root, bundle_name, &paths.runtime_directory);
     let RelayResponse::List {
         bundle: hosted_bundle,
         ..
@@ -154,10 +160,15 @@ fn list_reports_hosted_round_trip_for_tmux_bundle() {
         "every tmux session should report ready=true after reconcile"
     );
 
-    shutdown_bundle_runtime(bundle_name, &paths.runtime_directory, &paths.tmux_socket)
-        .expect("shutdown bundle runtime");
+    shutdown_bundle_runtime(
+        bundle_name,
+        &paths.runtime_directory,
+        &paths.tmux_socket,
+    )
+    .expect("shutdown bundle runtime");
 
-    let post_response = list_bundle(&config_root, bundle_name, &paths.runtime_directory);
+    let post_response =
+        list_bundle(&config_root, bundle_name, &paths.runtime_directory);
     let RelayResponse::List {
         bundle: post_bundle,
         ..

@@ -14,8 +14,8 @@
 use std::path::Path;
 
 use agentmux::relay::{
-    ListedSessionTransport, StartupFailureRecord, append_startup_failure, load_startup_failures,
-    note_session_served_successfully,
+    ListedSessionTransport, StartupFailureRecord, append_startup_failure,
+    load_startup_failures, note_session_served_successfully,
 };
 use tempfile::TempDir;
 
@@ -32,7 +32,10 @@ fn failure(session_id: &str, reason: &str) -> StartupFailureRecord {
 }
 
 /// The reasons still on record for one session, in history order.
-fn recorded_reasons(runtime_directory: &Path, session_id: &str) -> Vec<String> {
+fn recorded_reasons(
+    runtime_directory: &Path,
+    session_id: &str,
+) -> Vec<String> {
     load_startup_failures(runtime_directory)
         .expect("load startup failures")
         .into_iter()
@@ -47,14 +50,18 @@ fn a_successful_serve_clears_the_failure_that_preceded_it() {
     // below cannot be satisfied by clearing having broken outright.
     let temporary = TempDir::new().expect("temporary");
     let runtime_directory = temporary.path();
-    append_startup_failure(runtime_directory, failure("alpha", "first failure"))
-        .expect("append first failure");
+    append_startup_failure(
+        runtime_directory,
+        failure("alpha", "first failure"),
+    )
+    .expect("append first failure");
     assert_eq!(
         recorded_reasons(runtime_directory, "alpha"),
         ["first failure"]
     );
 
-    note_session_served_successfully(runtime_directory, "alpha").expect("note first recovery");
+    note_session_served_successfully(runtime_directory, "alpha")
+        .expect("note first recovery");
 
     assert!(
         recorded_reasons(runtime_directory, "alpha").is_empty(),
@@ -72,18 +79,26 @@ fn a_second_failure_and_recovery_clears_the_second_record_too() {
     let temporary = TempDir::new().expect("temporary");
     let runtime_directory = temporary.path();
 
-    append_startup_failure(runtime_directory, failure("alpha", "first failure"))
-        .expect("append first failure");
-    note_session_served_successfully(runtime_directory, "alpha").expect("note first recovery");
-    append_startup_failure(runtime_directory, failure("alpha", "second failure"))
-        .expect("append second failure");
+    append_startup_failure(
+        runtime_directory,
+        failure("alpha", "first failure"),
+    )
+    .expect("append first failure");
+    note_session_served_successfully(runtime_directory, "alpha")
+        .expect("note first recovery");
+    append_startup_failure(
+        runtime_directory,
+        failure("alpha", "second failure"),
+    )
+    .expect("append second failure");
     assert_eq!(
         recorded_reasons(runtime_directory, "alpha"),
         ["second failure"],
         "the second failure must be recorded after the first cycle cleared"
     );
 
-    note_session_served_successfully(runtime_directory, "alpha").expect("note second recovery");
+    note_session_served_successfully(runtime_directory, "alpha")
+        .expect("note second recovery");
 
     assert!(
         recorded_reasons(runtime_directory, "alpha").is_empty(),
@@ -97,12 +112,19 @@ fn clearing_one_session_leaves_another_session_untouched() {
     // silently absolve a different one that is still failing.
     let temporary = TempDir::new().expect("temporary");
     let runtime_directory = temporary.path();
-    append_startup_failure(runtime_directory, failure("alpha", "alpha failure"))
-        .expect("append alpha failure");
-    append_startup_failure(runtime_directory, failure("bravo", "bravo failure"))
-        .expect("append bravo failure");
+    append_startup_failure(
+        runtime_directory,
+        failure("alpha", "alpha failure"),
+    )
+    .expect("append alpha failure");
+    append_startup_failure(
+        runtime_directory,
+        failure("bravo", "bravo failure"),
+    )
+    .expect("append bravo failure");
 
-    note_session_served_successfully(runtime_directory, "alpha").expect("note alpha recovery");
+    note_session_served_successfully(runtime_directory, "alpha")
+        .expect("note alpha recovery");
 
     assert!(recorded_reasons(runtime_directory, "alpha").is_empty());
     assert_eq!(
@@ -121,14 +143,22 @@ fn pruning_non_members_removes_renamed_sessions_and_keeps_members() {
     // forever: no future serve can clear a session id that no longer exists.
     let temporary = TempDir::new().expect("temporary");
     let runtime_directory = temporary.path();
-    append_startup_failure(runtime_directory, failure("cistella", "old failure"))
-        .expect("append stale failure");
-    append_startup_failure(runtime_directory, failure("cistella-o", "live failure"))
-        .expect("append live failure");
+    append_startup_failure(
+        runtime_directory,
+        failure("cistella", "old failure"),
+    )
+    .expect("append stale failure");
+    append_startup_failure(
+        runtime_directory,
+        failure("cistella-o", "live failure"),
+    )
+    .expect("append live failure");
 
-    let members: HashSet<String> = ["cistella-o".to_string()].into_iter().collect();
+    let members: HashSet<String> =
+        ["cistella-o".to_string()].into_iter().collect();
     assert_eq!(
-        prune_startup_failures_for_non_members(runtime_directory, &members).expect("prune"),
+        prune_startup_failures_for_non_members(runtime_directory, &members)
+            .expect("prune"),
         1,
         "exactly the non-member record goes"
     );
@@ -142,7 +172,8 @@ fn pruning_non_members_removes_renamed_sessions_and_keeps_members() {
 
     // Pruning an already-clean history writes nothing and reports zero.
     assert_eq!(
-        prune_startup_failures_for_non_members(runtime_directory, &members).expect("reprune"),
+        prune_startup_failures_for_non_members(runtime_directory, &members)
+            .expect("reprune"),
         0,
         "second prune is a no-op"
     );

@@ -1,8 +1,8 @@
 use crate::runtime::error::RuntimeError;
 
 use super::{
-    AppState, FocusField, ScreenMode, ToCompletionState, current_recipient_token_context,
-    matching_recipient_candidates,
+    AppState, FocusField, ScreenMode, ToCompletionState,
+    current_recipient_token_context, matching_recipient_candidates,
 };
 
 impl AppState {
@@ -57,7 +57,7 @@ impl AppState {
                 if self.to_cursor_index == self.to_field.len() {
                     self.maybe_autocomplete_at_prefixed_token();
                 }
-            }
+            },
             FocusField::Message => self.insert_character_in_message(character),
         }
     }
@@ -87,10 +87,10 @@ impl AppState {
                 if self.to_cursor_index == self.to_field.len() {
                     self.maybe_autocomplete_at_prefixed_token();
                 }
-            }
+            },
             FocusField::Message => {
                 self.backspace_message();
-            }
+            },
         }
     }
 
@@ -124,17 +124,23 @@ impl AppState {
         if self.focus != FocusField::To || self.to_cursor_index == 0 {
             return;
         }
-        self.to_cursor_index =
-            super::text_util::previous_char_boundary(self.to_field.as_str(), self.to_cursor_index);
+        self.to_cursor_index = super::text_util::previous_char_boundary(
+            self.to_field.as_str(),
+            self.to_cursor_index,
+        );
         self.clear_to_completion();
     }
 
     pub fn move_to_field_cursor_right(&mut self) {
-        if self.focus != FocusField::To || self.to_cursor_index >= self.to_field.len() {
+        if self.focus != FocusField::To
+            || self.to_cursor_index >= self.to_field.len()
+        {
             return;
         }
-        self.to_cursor_index =
-            super::text_util::next_char_boundary(self.to_field.as_str(), self.to_cursor_index);
+        self.to_cursor_index = super::text_util::next_char_boundary(
+            self.to_field.as_str(),
+            self.to_cursor_index,
+        );
         self.clear_to_completion();
     }
 
@@ -197,11 +203,12 @@ impl AppState {
                 if completion_state.candidates.is_empty() {
                     return None;
                 }
-                completion_state.candidate_index = super::text_util::wrap_index(
-                    completion_state.candidate_index,
-                    delta,
-                    completion_state.candidates.len(),
-                );
+                completion_state.candidate_index =
+                    super::text_util::wrap_index(
+                        completion_state.candidate_index,
+                        delta,
+                        completion_state.candidates.len(),
+                    );
                 Some((
                     completion_state.token_start,
                     completion_state.leading_ws,
@@ -213,7 +220,11 @@ impl AppState {
                 ))
             })
         {
-            self.apply_to_completion_candidate(token_start, leading_ws, candidate.as_str());
+            self.apply_to_completion_candidate(
+                token_start,
+                leading_ws,
+                candidate.as_str(),
+            );
             return true;
         }
         false
@@ -234,7 +245,8 @@ impl AppState {
     }
 
     pub fn move_message_cursor_left(&mut self) {
-        if self.focus != FocusField::Message || self.message_cursor_index == 0 {
+        if self.focus != FocusField::Message || self.message_cursor_index == 0
+        {
             return;
         }
         self.message_cursor_index = super::text_util::previous_char_boundary(
@@ -333,13 +345,18 @@ impl AppState {
         }
 
         let candidates = self.recipient_completion_candidates();
-        let matched = matching_recipient_candidates(&context.query, &candidates);
+        let matched =
+            matching_recipient_candidates(&context.query, &candidates);
         if matched.is_empty() {
             return false;
         }
 
         let candidate = matched.first().cloned().unwrap_or_default();
-        self.apply_to_completion_candidate(context.token_start, context.leading_ws, &candidate);
+        self.apply_to_completion_candidate(
+            context.token_start,
+            context.leading_ws,
+            &candidate,
+        );
         self.to_completion = Some(ToCompletionState {
             token_start: context.token_start,
             leading_ws: context.leading_ws,
@@ -357,7 +374,8 @@ impl AppState {
         if self.focus != FocusField::To {
             return;
         }
-        let Some(context) = current_recipient_token_context(&self.to_field) else {
+        let Some(context) = current_recipient_token_context(&self.to_field)
+        else {
             return;
         };
         if !context.at_prefixed || context.query.is_empty() {
@@ -365,12 +383,17 @@ impl AppState {
         }
 
         let candidates = self.recipient_completion_candidates();
-        let matched = matching_recipient_candidates(&context.query, &candidates);
+        let matched =
+            matching_recipient_candidates(&context.query, &candidates);
         if matched.is_empty() {
             return;
         }
         let candidate = matched.first().cloned().unwrap_or_default();
-        self.apply_to_completion_candidate(context.token_start, context.leading_ws, &candidate);
+        self.apply_to_completion_candidate(
+            context.token_start,
+            context.leading_ws,
+            &candidate,
+        );
         self.to_completion = Some(ToCompletionState {
             token_start: context.token_start,
             leading_ws: context.leading_ws,
@@ -454,18 +477,21 @@ impl AppState {
     }
 
     fn move_message_cursor_vertical(&mut self, delta: isize) {
-        let line_ranges = super::text_util::line_ranges(self.message_field.as_str());
+        let line_ranges =
+            super::text_util::line_ranges(self.message_field.as_str());
         if line_ranges.is_empty() {
             return;
         }
-        let (current_line, current_column) = super::text_util::line_and_column_for_index(
-            self.message_field.as_str(),
-            self.message_cursor_index,
-        );
+        let (current_line, current_column) =
+            super::text_util::line_and_column_for_index(
+                self.message_field.as_str(),
+                self.message_cursor_index,
+            );
         let target_line = if delta.is_negative() {
             current_line.saturating_sub(delta.unsigned_abs())
         } else {
-            (current_line + delta as usize).min(line_ranges.len().saturating_sub(1))
+            (current_line + delta as usize)
+                .min(line_ranges.len().saturating_sub(1))
         };
         if target_line == current_line {
             return;
@@ -473,11 +499,12 @@ impl AppState {
         let preferred_column = self
             .message_cursor_preferred_column
             .unwrap_or(current_column);
-        self.message_cursor_index = super::text_util::cursor_index_for_line_column(
-            self.message_field.as_str(),
-            line_ranges[target_line],
-            preferred_column,
-        );
+        self.message_cursor_index =
+            super::text_util::cursor_index_for_line_column(
+                self.message_field.as_str(),
+                line_ranges[target_line],
+                preferred_column,
+            );
         self.message_cursor_preferred_column = Some(preferred_column);
     }
 }

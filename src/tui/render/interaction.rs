@@ -14,14 +14,19 @@ use super::super::state::AppState;
 use super::frame::INTERACTION_RAWW_PANE_HEIGHT;
 use super::geometry::{raww_titled_block, wrap_text};
 
-pub(super) fn render_interaction_mode(frame: &mut Frame, area: Rect, state: &mut AppState) {
+pub(super) fn render_interaction_mode(
+    frame: &mut Frame,
+    area: Rect,
+    state: &mut AppState,
+) {
     let raww_visible = state.interaction_raww_region_visible();
     let region_height = if raww_visible {
         INTERACTION_RAWW_PANE_HEIGHT
     } else {
         interaction_choice_pane_height(area.height)
     };
-    let region_height = region_height.min(area.height.saturating_sub(2).max(1));
+    let region_height =
+        region_height.min(area.height.saturating_sub(2).max(1));
 
     let rows = Layout::default()
         .direction(Direction::Vertical)
@@ -48,12 +53,20 @@ pub(super) fn render_interaction_mode(frame: &mut Frame, area: Rect, state: &mut
 /// naming the behavior instead. Naming a chord the table does not declare is
 /// the transcription this module no longer does, and a prompt to press nothing
 /// is worse than one that says what to reach for.
-fn pane_chord(state: &AppState, context: BindingContext, action: Action) -> Option<String> {
+fn pane_chord(
+    state: &AppState,
+    context: BindingContext,
+    action: Action,
+) -> Option<String> {
     actions::binding_for(&state.bindings, context, action)
         .map(|entry| entry.primary_chord().to_string())
 }
 
-fn render_interaction_target_header(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_interaction_target_header(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+) {
     let label = match state.look_target.as_deref() {
         Some(target) => format!("  Interaction target: {target}  "),
         // With no target there are no pending choices, so the write pane is the
@@ -99,7 +112,11 @@ fn write_pane_hint(state: &AppState) -> String {
     format!("({advertised})")
 }
 
-fn render_interaction_raww_pane(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_interaction_raww_pane(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+) {
     let block = raww_titled_block("  Write  ");
     let inner = block.inner(area);
     let lines: Vec<Line<'static>> = if state.raww_draft.is_empty() {
@@ -108,7 +125,12 @@ fn render_interaction_raww_pane(frame: &mut Frame, area: Rect, state: &AppState)
         // to the pane edge is worse than one that takes a second row.
         wrap_text(&write_pane_hint(state), inner.width as usize)
             .into_iter()
-            .map(|line| Line::from(Span::styled(line, Style::default().fg(Color::DarkGray))))
+            .map(|line| {
+                Line::from(Span::styled(
+                    line,
+                    Style::default().fg(Color::DarkGray),
+                ))
+            })
             .collect()
     } else {
         state
@@ -134,21 +156,23 @@ fn render_look_snapshot(frame: &mut Frame, area: Rect, state: &AppState) {
                 "Look Snapshot target={} captured_at={}",
                 target, captured_at
             )
-        }
+        },
         (Some(target), None) => format!("Look Snapshot target={}", target),
         _ => "Look Snapshot".to_string(),
     };
     let content_width = area.width.saturating_sub(2) as usize;
     let all_lines = match state.look_snapshot_format {
         Some(super::super::state::LookSnapshotFormat::StructuredEntriesV1) => {
-            let rendered =
-                render_acp_snapshot_entries(state.look_snapshot_entries.as_slice(), content_width);
+            let rendered = render_acp_snapshot_entries(
+                state.look_snapshot_entries.as_slice(),
+                content_width,
+            );
             if rendered.is_empty() {
                 vec![Line::from("(no snapshot captured)")]
             } else {
                 rendered
             }
-        }
+        },
         _ => {
             if state.look_snapshot_lines.is_empty() {
                 vec![Line::from("(no snapshot captured)")]
@@ -161,7 +185,7 @@ fn render_look_snapshot(frame: &mut Frame, area: Rect, state: &AppState) {
                 }
                 lines
             }
-        }
+        },
     };
     let viewport_height = area.height.saturating_sub(2) as usize;
     let effective_scroll = if all_lines.is_empty() {
@@ -224,7 +248,11 @@ fn choice_pane_title(state: &AppState, width: u16) -> String {
     }
 }
 
-fn render_look_choice_section(frame: &mut Frame, area: Rect, state: &AppState) {
+fn render_look_choice_section(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AppState,
+) {
     let inner_width = area.width.saturating_sub(2);
     let lines = render_look_choice_lines(state, inner_width);
     let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false }).block(
@@ -235,19 +263,40 @@ fn render_look_choice_section(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(paragraph, area);
 }
 
-fn render_acp_snapshot_entries(entries: &[StructuredEntry], width: usize) -> Vec<Line<'static>> {
+fn render_acp_snapshot_entries(
+    entries: &[StructuredEntry],
+    width: usize,
+) -> Vec<Line<'static>> {
     let mut rendered = Vec::<Line<'static>>::new();
     for entry in entries {
         match entry {
             StructuredEntry::User { lines } => {
-                push_labeled_lines(&mut rendered, "user", Color::Green, lines, width);
-            }
+                push_labeled_lines(
+                    &mut rendered,
+                    "user",
+                    Color::Green,
+                    lines,
+                    width,
+                );
+            },
             StructuredEntry::Agent { lines } => {
-                push_labeled_lines(&mut rendered, "agent", Color::Cyan, lines, width);
-            }
+                push_labeled_lines(
+                    &mut rendered,
+                    "agent",
+                    Color::Cyan,
+                    lines,
+                    width,
+                );
+            },
             StructuredEntry::Cognition { lines } => {
-                push_labeled_lines(&mut rendered, "cognition", Color::Yellow, lines, width);
-            }
+                push_labeled_lines(
+                    &mut rendered,
+                    "cognition",
+                    Color::Yellow,
+                    lines,
+                    width,
+                );
+            },
             StructuredEntry::Invocation {
                 call_id,
                 status,
@@ -255,17 +304,36 @@ fn render_acp_snapshot_entries(entries: &[StructuredEntry], width: usize) -> Vec
                 result,
             } => {
                 let status_label = format!("{:?}", status);
-                let label = format!("tool_call {} [{}]", call_id, status_label);
-                push_labeled_json(&mut rendered, &label, Color::Magenta, invocation, width);
+                let label =
+                    format!("tool_call {} [{}]", call_id, status_label);
+                push_labeled_json(
+                    &mut rendered,
+                    &label,
+                    Color::Magenta,
+                    invocation,
+                    width,
+                );
                 if let Some(result) = result {
-                    push_labeled_json(&mut rendered, "result", Color::Blue, result, width);
+                    push_labeled_json(
+                        &mut rendered,
+                        "result",
+                        Color::Blue,
+                        result,
+                        width,
+                    );
                 }
-            }
+            },
             StructuredEntry::Update { update_kind, lines } => {
                 let mut update_lines = vec![format!("kind: {update_kind}")];
                 update_lines.extend(lines.iter().cloned());
-                push_labeled_lines(&mut rendered, "update", Color::White, &update_lines, width);
-            }
+                push_labeled_lines(
+                    &mut rendered,
+                    "update",
+                    Color::White,
+                    &update_lines,
+                    width,
+                );
+            },
         }
     }
     rendered
@@ -278,8 +346,9 @@ fn push_labeled_json(
     value: &Value,
     width: usize,
 ) {
-    let payload = serde_json::to_string_pretty(value)
-        .unwrap_or_else(|_| serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string()));
+    let payload = serde_json::to_string_pretty(value).unwrap_or_else(|_| {
+        serde_json::to_string(value).unwrap_or_else(|_| "{}".to_string())
+    });
     let lines = payload.lines().map(ToString::to_string).collect::<Vec<_>>();
     push_labeled_lines(rendered, label, color, lines.as_slice(), width);
 }
@@ -333,20 +402,33 @@ fn no_options_prompt(state: &AppState) -> String {
 /// Where the operator goes when a session has nothing to decide, generated from
 /// the choice pane's own bindings.
 fn empty_choice_prompt(state: &AppState) -> String {
-    let choose = pane_chord(state, BindingContext::InteractionChoice, Action::OpenPicker)
-        .map_or_else(
-            || "Open the picker".to_string(),
-            |chord| format!("Press {chord}"),
-        );
-    let switch = pane_chord(state, BindingContext::InteractionChoice, Action::ToggleMode)
-        .map_or_else(
-            || "switch modes".to_string(),
-            |chord| format!("press {chord}"),
-        );
-    format!("{choose} to choose another session, or {switch} for Communication.")
+    let choose = pane_chord(
+        state,
+        BindingContext::InteractionChoice,
+        Action::OpenPicker,
+    )
+    .map_or_else(
+        || "Open the picker".to_string(),
+        |chord| format!("Press {chord}"),
+    );
+    let switch = pane_chord(
+        state,
+        BindingContext::InteractionChoice,
+        Action::ToggleMode,
+    )
+    .map_or_else(
+        || "switch modes".to_string(),
+        |chord| format!("press {chord}"),
+    );
+    format!(
+        "{choose} to choose another session, or {switch} for Communication."
+    )
 }
 
-fn render_look_choice_lines(state: &AppState, width: u16) -> Vec<Line<'static>> {
+fn render_look_choice_lines(
+    state: &AppState,
+    width: u16,
+) -> Vec<Line<'static>> {
     let pending = state.look_pending_choices();
     if pending.is_empty() {
         return vec![
@@ -418,7 +500,9 @@ mod tests {
         AppState::new(TuiLaunchOptions {
             namespace: "agentmux".to_string(),
             sender_session: "tui".to_string(),
-            relay_socket: std::path::PathBuf::from("/tmp/agentmux-choice-render.sock"),
+            relay_socket: std::path::PathBuf::from(
+                "/tmp/agentmux-choice-render.sock",
+            ),
             look_lines: None,
             available_bundles: vec!["agentmux".to_string()],
             bindings: None,
@@ -443,9 +527,12 @@ mod tests {
     }
 
     fn draw(state: &AppState, width: u16, height: u16) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+        let mut terminal =
+            Terminal::new(TestBackend::new(width, height)).expect("terminal");
         terminal
-            .draw(|frame| render_look_choice_section(frame, frame.area(), state))
+            .draw(|frame| {
+                render_look_choice_section(frame, frame.area(), state)
+            })
             .expect("draw");
         let buffer = terminal.backend().buffer().clone();
         (0..buffer.area.height)
@@ -489,19 +576,22 @@ mod tests {
         // the function to agree with itself; this asks whether any *start* of an
         // advertised binding reached the buffer without the rest of it.
         let idle = workbench();
-        let advertised: Vec<String> = actions::interaction_choice_hint(&idle.bindings)
-            .into_iter()
-            .map(|entry| {
-                format!(
-                    "{} {}",
-                    entry.primary_chord(),
-                    entry.detail().to_lowercase()
-                )
-            })
-            .collect();
+        let advertised: Vec<String> =
+            actions::interaction_choice_hint(&idle.bindings)
+                .into_iter()
+                .map(|entry| {
+                    format!(
+                        "{} {}",
+                        entry.primary_chord(),
+                        entry.detail().to_lowercase()
+                    )
+                })
+                .collect();
         assert!(!advertised.is_empty(), "the choice pane advertises nothing");
 
-        for (width, height) in [(120, 20), (90, 18), (80, 16), (70, 14), (60, 12), (50, 10)] {
+        for (width, height) in
+            [(120, 20), (90, 18), (80, 16), (70, 14), (60, 12), (50, 10)]
+        {
             let text = flowed(&draw(&idle, width, height));
             for phrase in &advertised {
                 let start: String = phrase.chars().take(8).collect();

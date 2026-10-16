@@ -19,11 +19,13 @@ mod send;
 mod sender;
 
 pub(in crate::relay) use discovery::{
-    DiscoveryContext, handle_discover_namespaces, handle_discover_principals, handle_list_relays,
+    DiscoveryContext, handle_discover_namespaces, handle_discover_principals,
+    handle_list_relays,
 };
 pub(in crate::relay) use dispatch::{
-    build_identity_snapshot_event, emit_choices_snapshot_for_ui_registration, handle_global_list,
-    handle_identity_admin_request, handle_identity_introspect, handle_request,
+    build_identity_snapshot_event, emit_choices_snapshot_for_ui_registration,
+    handle_global_list, handle_identity_admin_request,
+    handle_identity_introspect, handle_request,
 };
 pub(in crate::relay) use listing::handle_list_routed;
 pub(in crate::relay) use look::handle_look_routed;

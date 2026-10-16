@@ -66,7 +66,10 @@ impl ConfigurationError {
         }
     }
 
-    pub(super) fn unreadable_layer(path: impl Into<PathBuf>, source: io::Error) -> Self {
+    pub(super) fn unreadable_layer(
+        path: impl Into<PathBuf>,
+        source: io::Error,
+    ) -> Self {
         Self::UnreadableConfigurationLayer {
             path: path.into(),
             source,
@@ -129,7 +132,7 @@ impl Display for ConfigurationError {
                     path.display(),
                     message
                 )
-            }
+            },
             Self::InvalidGroupName { path, group_name } => write!(
                 formatter,
                 "invalid group name '{}' in {}",
@@ -148,7 +151,9 @@ impl Display for ConfigurationError {
                 path.display(),
                 source
             ),
-            Self::Io { context, source } => write!(formatter, "{context}: {source}"),
+            Self::Io { context, source } => {
+                write!(formatter, "{context}: {source}")
+            },
             Self::MalformedEmbeddedArtifact { artifact, message } => write!(
                 formatter,
                 "internal defect: the {artifact} built into this binary is malformed: {message}"
@@ -160,9 +165,10 @@ impl Display for ConfigurationError {
 impl Error for ConfigurationError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Io { source, .. } | Self::UnreadableConfigurationLayer { source, .. } => {
+            Self::Io { source, .. }
+            | Self::UnreadableConfigurationLayer { source, .. } => {
                 Some(source)
-            }
+            },
             _ => None,
         }
     }

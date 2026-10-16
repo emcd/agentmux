@@ -149,8 +149,11 @@ fn write_stateful_fake_tmux(
             pasted_file.to_str().expect("pasted path is utf-8"),
         );
     std::fs::write(script_path, body).expect("write stateful fake tmux");
-    std::fs::set_permissions(script_path, std::fs::Permissions::from_mode(0o755))
-        .expect("set stateful fake tmux executable");
+    std::fs::set_permissions(
+        script_path,
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .expect("set stateful fake tmux executable");
 }
 
 /// Republishes the bundle's coder with a prompt-readiness template.

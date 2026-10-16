@@ -8,15 +8,21 @@ mod reachability;
 
 pub use action::Action;
 pub use bindings::default_binding;
-pub use chord::{ChordError, ChordPattern, PrimaryModifier, parse_chord, primary_modifier};
+pub use chord::{
+    ChordError, ChordPattern, PrimaryModifier, parse_chord, primary_modifier,
+};
 pub use context::BindingContext;
 pub(crate) use context::{binding_context, binding_lookup_order};
 pub use effective::{
-    BindingConfiguration, CapabilityClass, ConfiguredAction, ConfiguredBinding, EffectiveBindings,
+    BindingConfiguration, CapabilityClass, ConfiguredAction,
+    ConfiguredBinding, EffectiveBindings,
 };
 pub(crate) use help::context_actions;
 pub use help::{
-    HelpEntry, HelpSection, HelpSource, binding_for, context_bindings, default_help_bindings,
-    help_bindings, interaction_choice_hint, interaction_write_hint, picker_hint, typing_binding,
+    HelpEntry, HelpSection, HelpSource, binding_for, context_bindings,
+    default_help_bindings, help_bindings, interaction_choice_hint,
+    interaction_write_hint, picker_hint, typing_binding,
 };
-pub use reachability::{AffectedClasses, UnreachableAction, quit_unreachable, unreachable_actions};
+pub use reachability::{
+    AffectedClasses, UnreachableAction, quit_unreachable, unreachable_actions,
+};

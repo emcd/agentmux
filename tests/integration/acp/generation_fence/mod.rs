@@ -10,7 +10,9 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use agentmux::relay::{DeliveryConfiguration, SendOutcome, configure_delivery};
+use agentmux::relay::{
+    DeliveryConfiguration, SendOutcome, configure_delivery,
+};
 
 use super::helpers::*;
 
@@ -102,7 +104,10 @@ fn await_inscription(path: &Path, event: &str, scope: &str) -> String {
 ///
 /// One writer opens releases one reader, and the bundle brings its members up
 /// one at a time, so this has to keep offering rather than release once.
-fn await_dispatch_thread(finished: &std::sync::mpsc::Receiver<()>, root: &Path) {
+fn await_dispatch_thread(
+    finished: &std::sync::mpsc::Receiver<()>,
+    root: &Path,
+) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         release_hung_initialize(root);
@@ -159,7 +164,9 @@ fn completions_for(path: &Path, message_id: &str) -> usize {
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).ok()
+        })
         .filter(|record| {
             record["event"] == "relay.send.async.completed"
                 && record["details"]["message_id"] == message_id
@@ -172,12 +179,16 @@ fn outcome_for(path: &Path, message_id: &str) -> Option<String> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).ok()
+        })
         .find(|record| {
             record["event"] == "relay.send.async.completed"
                 && record["details"]["message_id"] == message_id
         })
-        .and_then(|record| record["details"]["outcome"].as_str().map(str::to_string))
+        .and_then(|record| {
+            record["details"]["outcome"].as_str().map(str::to_string)
+        })
 }
 
 /// Polls until one message has a terminal resolution, then returns its outcome.

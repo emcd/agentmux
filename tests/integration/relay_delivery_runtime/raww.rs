@@ -5,13 +5,15 @@ use std::{
     time::{Duration, Instant},
 };
 
-use agentmux::relay::{ListedSessionTransport, RelayRequest, RelayResponse, request_relay};
+use agentmux::relay::{
+    ListedSessionTransport, RelayRequest, RelayResponse, request_relay,
+};
 use tempfile::TempDir;
 use tokio::time::sleep;
 
 use crate::support::relay_delivery::{
-    spawn_relay_with_fake_tmux, wait_for_relay_ready, write_bundle_configuration,
-    write_fake_tmux_script,
+    spawn_relay_with_fake_tmux, wait_for_relay_ready,
+    write_bundle_configuration, write_fake_tmux_script,
 };
 
 use super::*;
@@ -20,7 +22,8 @@ use super::*;
 async fn relay_raww_tmux_default_queues_and_appends_enter() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
     let state_root = temporary.path().join("state");
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");
@@ -119,7 +122,8 @@ async fn relay_raww_tmux_default_queues_and_appends_enter() {
 async fn relay_raww_tmux_no_enter_omits_enter_command() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
     let state_root = temporary.path().join("state");
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");

@@ -10,10 +10,14 @@ use std::sync::Arc;
 
 use crate::configuration::SessionType;
 use crate::envelope::AddressIdentity;
-use crate::protocol::identity::{ConsumerBinding, ConsumerGenerationId, DeliveryTargetId};
+use crate::protocol::identity::{
+    ConsumerBinding, ConsumerGenerationId, DeliveryTargetId,
+};
 use crate::protocol::mailbox::{EntryRange, EntrySequence, MailboxPayload};
 use crate::protocol::message::{DeliveryEnvelope, DeliveryMessage};
-use crate::protocol::operations::{AckResult, MemberAcknowledgment, PeekRequest};
+use crate::protocol::operations::{
+    AckResult, MemberAcknowledgment, PeekRequest,
+};
 
 use super::super::super::guard::PackingUnitId;
 use super::super::admit::admit;
@@ -38,7 +42,10 @@ pub(super) fn target(namespace: &str) -> DeliveryTargetId {
 /// A binding naming a generation of the caller's choosing, for the cases that
 /// need one the relay did not issue.
 pub(super) fn binding(namespace: &str, generation: u64) -> ConsumerBinding {
-    ConsumerBinding::new(target(namespace), ConsumerGenerationId::new(generation))
+    ConsumerBinding::new(
+        target(namespace),
+        ConsumerGenerationId::new(generation),
+    )
 }
 
 /// Takes the target's generation from the relay and binds to it.
@@ -49,7 +56,8 @@ pub(super) fn binding(namespace: &str, generation: u64) -> ConsumerBinding {
 /// sequence starts fresh, and a test that named the number instead of taking it
 /// would be re-asserting the sequence rather than using it.
 pub(super) fn claim(namespace: &str) -> ConsumerBinding {
-    let issued = claim_consumer_generation(&target(namespace)).expect("the fixture target is free");
+    let issued = claim_consumer_generation(&target(namespace))
+        .expect("the fixture target is free");
     ConsumerBinding::new(target(namespace), issued)
 }
 
@@ -126,11 +134,15 @@ pub(super) fn raw(content: &str) -> MailboxPayload {
 /// reported under, the target it names, and the `admitted` flag that tells the
 /// terminal transition this entry held a reservation. The rest is the minimum a
 /// task will construct with.
-pub(super) fn task(namespace: &str, message_id: &str) -> Arc<crate::relay::AsyncDeliveryTask> {
+pub(super) fn task(
+    namespace: &str,
+    message_id: &str,
+) -> Arc<crate::relay::AsyncDeliveryTask> {
     Arc::new(crate::relay::AsyncDeliveryTask {
         admitted: true,
         bundle: crate::configuration::BundleConfiguration {
-            schema_version: crate::configuration::BUNDLE_SCHEMA_VERSION.to_string(),
+            schema_version: crate::configuration::BUNDLE_SCHEMA_VERSION
+                .to_string(),
             bundle_name: namespace.to_string(),
             autostart: false,
             groups: Vec::new(),
@@ -162,7 +174,12 @@ pub(super) fn task(namespace: &str, message_id: &str) -> Arc<crate::relay::Async
 }
 
 /// Admits an entry and makes it peekable, returning its message id.
-pub(super) fn place(namespace: &str, message_id: &str, bytes: u64, payload: MailboxPayload) {
+pub(super) fn place(
+    namespace: &str,
+    message_id: &str,
+    bytes: u64,
+    payload: MailboxPayload,
+) {
     admit(
         message_id,
         admission_key(namespace),
@@ -190,10 +207,15 @@ pub(super) fn seq(value: u64) -> EntrySequence {
 }
 
 pub(super) fn range(from: u64, through: u64) -> EntryRange {
-    EntryRange::new(seq(from), seq(through)).expect("a fixture range is well-formed")
+    EntryRange::new(seq(from), seq(through))
+        .expect("a fixture range is well-formed")
 }
 
-pub(super) fn request(binding: &ConsumerBinding, entry_max: usize, bytes_max: u64) -> PeekRequest {
+pub(super) fn request(
+    binding: &ConsumerBinding,
+    entry_max: usize,
+    bytes_max: u64,
+) -> PeekRequest {
     PeekRequest {
         binding: binding.clone(),
         entry_max,
@@ -201,7 +223,11 @@ pub(super) fn request(binding: &ConsumerBinding, entry_max: usize, bytes_max: u6
     }
 }
 
-pub(super) fn peeked(binding: &ConsumerBinding, entry_max: usize, bytes_max: u64) -> Vec<u64> {
+pub(super) fn peeked(
+    binding: &ConsumerBinding,
+    entry_max: usize,
+    bytes_max: u64,
+) -> Vec<u64> {
     super::peek::peek(&request(binding, entry_max, bytes_max))
         .expect("the fixture generation is current")
         .entries

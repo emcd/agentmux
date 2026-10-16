@@ -24,7 +24,8 @@ use super::payload::build_delivery_message;
 use super::worker::{AcpWorkerBootstrap, WorkerTransportContext};
 
 use crate::relay::delivery::async_worker::{
-    AsyncWorkerKey, install_acp_worker_output_view, set_worker_failure, set_worker_readiness,
+    AsyncWorkerKey, install_acp_worker_output_view, set_worker_failure,
+    set_worker_readiness,
 };
 use crate::relay::delivery::choice_state::{
     ChoiceEventContext, build_acp_chooser, invalidate_pending_for_respawn,
@@ -34,7 +35,8 @@ use crate::relay::stream::{
     list_registered_ui_sessions_for_bundle, send_event_to_registered_ui,
 };
 use crate::relay::{
-    AsyncDeliveryTask, RelayError, errors::relay_error, identity::canonical_session_id,
+    AsyncDeliveryTask, RelayError, errors::relay_error,
+    identity::canonical_session_id,
 };
 
 use crate::configuration::{BundleMember, SessionType};
@@ -42,8 +44,9 @@ use crate::envelope::PromptBatchSettings;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::transports::{
     AcpDriverServices, ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope,
-    DeliveryExecutorContext, DeliveryMessage, StartupContext, TransportError, TransportImpl,
-    UiBroadcastStatus, UiIncomingMessage, UiOutcomePhase, UiTransportServices,
+    DeliveryExecutorContext, DeliveryMessage, StartupContext, TransportError,
+    TransportImpl, UiBroadcastStatus, UiIncomingMessage, UiOutcomePhase,
+    UiTransportServices,
 };
 
 /// Builds the [`TransportImpl`] for a non-bootstrap worker delivery, dispatching
@@ -179,14 +182,18 @@ pub(super) async fn build_worker_transport(
     };
     match target_member.target.session_type() {
         SessionType::Tmux => {
-            let transport = TransportImpl::tmux(batch_settings, Some(readiness_notifier), delivery);
+            let transport = TransportImpl::tmux(
+                batch_settings,
+                Some(readiness_notifier),
+                delivery,
+            );
             start_transport_off_runtime(
                 transport,
                 startup(target_member),
                 context.target_session.clone(),
             )
             .await
-        }
+        },
         SessionType::Ui => start_transport_inline(
             TransportImpl::ui(build_ui_transport_services(key), delivery),
             startup(target_member),
@@ -208,10 +215,12 @@ pub(super) async fn build_worker_transport(
                         prompt_readiness: pty_cfg.prompt_readiness.clone(),
                         cols: pty_cfg.cols,
                         rows: pty_cfg.rows,
-                        working_directory: target_member.working_directory.clone(),
+                        working_directory: target_member
+                            .working_directory
+                            .clone(),
                         term_protocol: pty_cfg.term_protocol,
                     }
-                }
+                },
                 _ => crate::pty::PtyTargetConfiguration {
                     initial_command: String::new(),
                     resume_command: String::new(),
@@ -219,7 +228,8 @@ pub(super) async fn build_worker_transport(
                     cols: 120,
                     rows: 40,
                     working_directory: target_member.working_directory.clone(),
-                    term_protocol: crate::configuration::TermProtocol::default(),
+                    term_protocol: crate::configuration::TermProtocol::default(
+                    ),
                 },
             };
             // Mirror ACP's `MirrorStateFn` pattern (see
@@ -262,7 +272,7 @@ pub(super) async fn build_worker_transport(
                 context.target_session.clone(),
             )
             .await
-        }
+        },
         #[cfg(not(feature = "pty"))]
         SessionType::Pty => Err(relay_error(
             "internal_unexpected_failure",
@@ -303,7 +313,9 @@ fn noop_tmux_chooser() -> Chooser {
     Arc::new(|_choice: ChoiceToMake| ChoiceMade::Cancelled {
         decided_by: String::new(),
         reason_code: "choice_unsupported".to_string(),
-        reason: Some("tmux transport does not raise operator choices".to_string()),
+        reason: Some(
+            "tmux transport does not raise operator choices".to_string(),
+        ),
     })
 }
 
@@ -399,13 +411,15 @@ pub(super) fn build_acp_driver_services(
                 let context = ChoiceEventContext {
                     runtime_directory: runtime_directory.clone(),
                     namespace: namespace.clone(),
-                    authorized_ui_sessions: list_registered_ui_sessions_for_bundle(
-                        namespace.as_str(),
-                    ),
+                    authorized_ui_sessions:
+                        list_registered_ui_sessions_for_bundle(
+                            namespace.as_str(),
+                        ),
                 };
-                if let Err(reason) =
-                    invalidate_pending_for_respawn(&context, target_session.as_str())
-                {
+                if let Err(reason) = invalidate_pending_for_respawn(
+                    &context,
+                    target_session.as_str(),
+                ) {
                     emit_inscription(
                         "relay.acp.respawn.choice_invalidate_failed",
                         &json!({
@@ -417,7 +431,11 @@ pub(super) fn build_acp_driver_services(
                 }
             })
         },
-        chooser: build_acp_chooser(namespace, runtime_directory, choices_pending_max),
+        chooser: build_acp_chooser(
+            namespace,
+            runtime_directory,
+            choices_pending_max,
+        ),
     }
 }
 
@@ -426,7 +444,9 @@ pub(super) fn build_acp_driver_services(
 /// stream registry; the transport holds them as opaque `Arc<dyn Fn>`s, so
 /// `src/transports` imports nothing from `crate::relay` (mirrors
 /// `build_acp_driver_services`).
-pub(super) fn build_ui_transport_services(key: &AsyncWorkerKey) -> UiTransportServices {
+pub(super) fn build_ui_transport_services(
+    key: &AsyncWorkerKey,
+) -> UiTransportServices {
     let namespace = key.namespace.clone();
     let target_session = key.target_session.clone();
     UiTransportServices {
@@ -444,12 +464,15 @@ pub(super) fn build_ui_transport_services(key: &AsyncWorkerKey) -> UiTransportSe
                         json!(incoming.cc_sessions)
                     },
                 });
-                if let Some(authenticated_identity) = &incoming.authenticated_identity {
+                if let Some(authenticated_identity) =
+                    &incoming.authenticated_identity
+                {
                     payload["authenticated_identity"] =
                         Value::String(authenticated_identity.clone());
                 }
                 if let Some(on_behalf_of) = &incoming.on_behalf_of {
-                    payload["on_behalf_of"] = Value::String(on_behalf_of.clone());
+                    payload["on_behalf_of"] =
+                        Value::String(on_behalf_of.clone());
                 }
                 let event = RelayStreamEvent {
                     event_type: "incoming_message".to_string(),
@@ -472,8 +495,14 @@ pub(super) fn build_ui_transport_services(key: &AsyncWorkerKey) -> UiTransportSe
             let target_session = target_session.clone();
             Arc::new(move |phase: UiOutcomePhase| {
                 let mut payload = serde_json::Map::new();
-                payload.insert("message_id".to_string(), Value::String(phase.message_id));
-                payload.insert("phase".to_string(), Value::String(phase.phase.to_string()));
+                payload.insert(
+                    "message_id".to_string(),
+                    Value::String(phase.message_id),
+                );
+                payload.insert(
+                    "phase".to_string(),
+                    Value::String(phase.phase.to_string()),
+                );
                 payload.insert(
                     "outcome".to_string(),
                     phase
@@ -482,10 +511,14 @@ pub(super) fn build_ui_transport_services(key: &AsyncWorkerKey) -> UiTransportSe
                         .unwrap_or(Value::Null),
                 );
                 if let Some(reason_code) = phase.reason_code {
-                    payload.insert("reason_code".to_string(), Value::String(reason_code));
+                    payload.insert(
+                        "reason_code".to_string(),
+                        Value::String(reason_code),
+                    );
                 }
                 if let Some(reason) = phase.reason {
-                    payload.insert("reason".to_string(), Value::String(reason));
+                    payload
+                        .insert("reason".to_string(), Value::String(reason));
                 }
                 let event = RelayStreamEvent {
                     event_type: "delivery_outcome".to_string(),
@@ -518,7 +551,10 @@ pub(super) fn build_ui_transport_services(key: &AsyncWorkerKey) -> UiTransportSe
 /// a builder that read the clock itself would restamp whatever it was asked to
 /// render — and the mailbox would then hold an envelope carrying a different
 /// `Date` from the one that reached the target.
-pub(super) fn build_ui_envelope(task: &AsyncDeliveryTask, created_at: &str) -> DeliveryEnvelope {
+pub(super) fn build_ui_envelope(
+    task: &AsyncDeliveryTask,
+    created_at: &str,
+) -> DeliveryEnvelope {
     let target_member = task
         .bundle
         .members
@@ -541,11 +577,12 @@ fn stream_send_to_broadcast_status(
 ) -> UiBroadcastStatus {
     match result {
         Ok(StreamEventSendOutcome::Delivered) => UiBroadcastStatus::Delivered,
-        Ok(StreamEventSendOutcome::NoUiEndpoint | StreamEventSendOutcome::Disconnected) => {
-            UiBroadcastStatus::NoUi
-        }
-        Err(source) => {
-            UiBroadcastStatus::Failed(format!("failed to emit relay stream event: {source}"))
-        }
+        Ok(
+            StreamEventSendOutcome::NoUiEndpoint
+            | StreamEventSendOutcome::Disconnected,
+        ) => UiBroadcastStatus::NoUi,
+        Err(source) => UiBroadcastStatus::Failed(format!(
+            "failed to emit relay stream event: {source}"
+        )),
     }
 }

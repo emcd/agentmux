@@ -11,8 +11,10 @@ fn single_layer_list_is_its_own_base() {
 
 #[test]
 fn elements_keep_the_order_they_were_supplied_in() {
-    let roots = ConfigurationRoots::from_elements(["/rnd", "/shared", "/base"].map(PathBuf::from))
-        .expect("list should build");
+    let roots = ConfigurationRoots::from_elements(
+        ["/rnd", "/shared", "/base"].map(PathBuf::from),
+    )
+    .expect("list should build");
 
     // First-wins: the first element is the override, the last is the base.
     assert_eq!(
@@ -24,15 +26,16 @@ fn elements_keep_the_order_they_were_supplied_in() {
 
 #[test]
 fn an_empty_element_is_rejected_rather_than_read_as_the_working_directory() {
-    let error = ConfigurationRoots::from_elements(["/base", ""].map(PathBuf::from))
-        .expect_err("an empty element must not contribute a layer");
+    let error =
+        ConfigurationRoots::from_elements(["/base", ""].map(PathBuf::from))
+            .expect_err("an empty element must not contribute a layer");
     assert_eq!(error, ConfigurationRootsError::EmptyElement { position: 1 });
 }
 
 #[test]
 fn an_empty_list_is_rejected() {
-    let error =
-        ConfigurationRoots::from_elements(Vec::new()).expect_err("an empty list must not build");
+    let error = ConfigurationRoots::from_elements(Vec::new())
+        .expect_err("an empty list must not build");
     assert_eq!(error, ConfigurationRootsError::EmptyList);
 }
 
@@ -49,14 +52,16 @@ fn environment_value_carrying_only_whitespace_leaves_the_variable_unset() {
     // Falling through to the tier below, rather than contributing a layer named
     // by whitespace.
     assert_eq!(
-        ConfigurationRoots::from_environment_value("   ").expect("value should parse"),
+        ConfigurationRoots::from_environment_value("   ")
+            .expect("value should parse"),
         None
     );
 }
 
 #[test]
 fn a_separator_contributing_an_empty_element_is_rejected() {
-    for (value, position) in [(":/base", 0), ("/base:", 1), ("/rnd::/base", 1)] {
+    for (value, position) in [(":/base", 0), ("/base:", 1), ("/rnd::/base", 1)]
+    {
         let error = ConfigurationRoots::from_environment_value(value)
             .expect_err("an empty element must not contribute a layer");
         assert_eq!(
@@ -71,9 +76,10 @@ fn a_separator_contributing_an_empty_element_is_rejected() {
 fn a_relative_element_is_preserved_for_the_caller_to_resolve() {
     // Resolution against the working directory is the caller's job; the list
     // does not silently absolutize, which would hide which form was supplied.
-    let roots = ConfigurationRoots::from_environment_value("relative/layer:/base")
-        .expect("value should parse")
-        .expect("value should supply a list");
+    let roots =
+        ConfigurationRoots::from_environment_value("relative/layer:/base")
+            .expect("value should parse")
+            .expect("value should supply a list");
     assert_eq!(
         roots.layers(),
         ["relative/layer", "/base"].map(PathBuf::from)

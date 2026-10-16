@@ -44,7 +44,8 @@ pub struct PromptReadinessEvaluation {
 /// the active pane. Tests inject scripted probes through this seam.
 pub trait PanePromptProbe: Send {
     /// Resolves the current prompt-readiness evaluation for the target pane.
-    fn next_evaluation(&mut self) -> Result<PromptReadinessEvaluation, String>;
+    fn next_evaluation(&mut self)
+    -> Result<PromptReadinessEvaluation, String>;
 }
 
 /// Real [`PanePromptProbe`] backed by tmux queries.
@@ -70,11 +71,16 @@ impl<'a> RealPanePromptProbe<'a> {
 }
 
 impl PanePromptProbe for RealPanePromptProbe<'_> {
-    fn next_evaluation(&mut self) -> Result<PromptReadinessEvaluation, String> {
-        let pane_target = resolve_active_pane_target(self.tmux_socket, self.target_session)?;
+    fn next_evaluation(
+        &mut self,
+    ) -> Result<PromptReadinessEvaluation, String> {
+        let pane_target =
+            resolve_active_pane_target(self.tmux_socket, self.target_session)?;
         let snapshot = capture_pane_snapshot(self.tmux_socket, &pane_target)?;
-        let activity_generation =
-            super::pane::resolve_window_activity(self.tmux_socket, pane_target.as_str());
+        let activity_generation = super::pane::resolve_window_activity(
+            self.tmux_socket,
+            pane_target.as_str(),
+        );
         let evaluation = prompt_readiness_matches(
             self.tmux_socket,
             pane_target.as_str(),
@@ -95,8 +101,10 @@ fn build_prompt_readiness_matcher(
         return Ok(None);
     };
 
-    let prompt_regex = Regex::new(template.prompt_regex.as_str())
-        .map_err(|source| format!("invalid prompt_readiness.prompt_regex: {source}"))?;
+    let prompt_regex =
+        Regex::new(template.prompt_regex.as_str()).map_err(|source| {
+            format!("invalid prompt_readiness.prompt_regex: {source}")
+        })?;
     let inspect_lines = template
         .inspect_lines
         .unwrap_or(PROMPT_INSPECT_LINES_DEFAULT)
@@ -152,7 +160,8 @@ fn compose_region_has_text(block: &str) -> bool {
         let Some(separator) = separator.strip_prefix('╹') else {
             return false;
         };
-        if separator.chars().count() < 20 || !separator.chars().all(|character| character == '▀')
+        if separator.chars().count() < 20
+            || !separator.chars().all(|character| character == '▀')
         {
             return false;
         }
@@ -174,7 +183,8 @@ fn compose_region_has_text(block: &str) -> bool {
             continue;
         }
         let after_b = trimmed.split_at('┃'.len_utf8()).1;
-        let ws_count = after_b.chars().take_while(|c| c.is_whitespace()).count();
+        let ws_count =
+            after_b.chars().take_while(|c| c.is_whitespace()).count();
         // Compose text: 2..100 leading whitespace (2..=99 inclusive),
         // then a non-whitespace char. Sidebar (100+ spaces then
         // content) and empty rows fall outside this band. Boundary:
@@ -229,7 +239,9 @@ fn prompt_readiness_matches(
     let block = ordered.join("\n");
     if !matcher.prompt_regex.is_match(block.as_str()) {
         return Ok(PromptReadinessEvaluation {
-            mismatch_reason: Some("prompt regex did not match inspected pane tail".to_string()),
+            mismatch_reason: Some(
+                "prompt regex did not match inspected pane tail".to_string(),
+            ),
             inspected_block: Some(sanitize_diagnostic_text(&block)),
             regex_matched: Some(false),
             expected_cursor_column: matcher.input_idle_cursor_column,
@@ -246,7 +258,8 @@ fn prompt_readiness_matches(
     if compose_region_has_text(&block) {
         return Ok(PromptReadinessEvaluation {
             mismatch_reason: Some(
-                "input box contains compose text in left-of-sidebar columns".to_string(),
+                "input box contains compose text in left-of-sidebar columns"
+                    .to_string(),
             ),
             inspected_block: Some(sanitize_diagnostic_text(&block)),
             regex_matched: Some(true),
@@ -356,18 +369,21 @@ mod tests {
             if let Some(rest) = trimmed.strip_prefix("prompt-regex = '") {
                 let value = rest.strip_suffix('\'').unwrap_or(rest);
                 prompt_regex = Some(value.to_string());
-            } else if let Some(rest) = trimmed.strip_prefix("prompt-inspect-lines = ")
+            } else if let Some(rest) =
+                trimmed.strip_prefix("prompt-inspect-lines = ")
                 && let Ok(n) = rest.parse::<usize>()
             {
                 inspect_lines = Some(n);
-            } else if let Some(rest) = trimmed.strip_prefix("prompt-idle-column = ")
+            } else if let Some(rest) =
+                trimmed.strip_prefix("prompt-idle-column = ")
                 && let Ok(n) = rest.parse::<usize>()
             {
                 input_idle_column = Some(n);
             }
         }
         PromptReadinessTemplate {
-            prompt_regex: prompt_regex.expect("opencode prompt-regex not found in coders.toml"),
+            prompt_regex: prompt_regex
+                .expect("opencode prompt-regex not found in coders.toml"),
             inspect_lines,
             input_idle_cursor_column: input_idle_column,
         }
@@ -399,7 +415,11 @@ mod tests {
 
     /// Replace the input-box row at `position` (top/middle/bottom)
     /// with `┃  <text>` so the new row is compose text.
-    fn mutate_input_row_with_text(snapshot: &str, position: &str, text: &str) -> String {
+    fn mutate_input_row_with_text(
+        snapshot: &str,
+        position: &str,
+        text: &str,
+    ) -> String {
         let info = info_row_idx(snapshot);
         let row = match position {
             "top" => info.saturating_sub(3),
@@ -407,7 +427,8 @@ mod tests {
             "bottom" => info.saturating_sub(1),
             _ => panic!("position must be top|middle|bottom"),
         };
-        let mut out: Vec<String> = snapshot.lines().map(String::from).collect();
+        let mut out: Vec<String> =
+            snapshot.lines().map(String::from).collect();
         out[row] = format!("  ┃  {text}");
         out.join("\n")
     }
@@ -415,7 +436,11 @@ mod tests {
     /// Replace the input-box row at `position` with `┃` followed by
     /// `n` spaces then a non-whitespace char. Used for the
     /// 99/100/101 boundary tests.
-    fn mutate_input_row_with_n_spaces(snapshot: &str, position: &str, n: usize) -> String {
+    fn mutate_input_row_with_n_spaces(
+        snapshot: &str,
+        position: &str,
+        n: usize,
+    ) -> String {
         let info = info_row_idx(snapshot);
         let row = match position {
             "top" => info.saturating_sub(3),
@@ -423,7 +448,8 @@ mod tests {
             "bottom" => info.saturating_sub(1),
             _ => panic!("position must be top|middle|bottom"),
         };
-        let mut out: Vec<String> = snapshot.lines().map(String::from).collect();
+        let mut out: Vec<String> =
+            snapshot.lines().map(String::from).collect();
         out[row] = format!("  ┃{:width$}hello", "", width = n);
         out.join("\n")
     }
@@ -433,9 +459,10 @@ mod tests {
         let matcher = matcher_for_opencode();
 
         // Read the two preserved OpenCode 1.18.9 idle captures.
-        let api_aux =
-            fs::read_to_string(fixture_path(API_AUX_FIXTURE)).expect("read api-aux fixture");
-        let editor = fs::read_to_string(fixture_path(EDITOR_FIXTURE)).expect("read editor fixture");
+        let api_aux = fs::read_to_string(fixture_path(API_AUX_FIXTURE))
+            .expect("read api-aux fixture");
+        let editor = fs::read_to_string(fixture_path(EDITOR_FIXTURE))
+            .expect("read editor fixture");
 
         // Non-OpenCode synthetic block: different separator and
         // status-row token. The OpenCode regex must not match; the
@@ -459,7 +486,8 @@ mod tests {
   ┃ unrelated content
   status ctrl+p commands";
         let multi_frame_matcher = PromptReadinessMatcher {
-            prompt_regex: Regex::new(r"(?s).*").expect("multi-frame test regex"),
+            prompt_regex: Regex::new(r"(?s).*")
+                .expect("multi-frame test regex"),
             inspect_lines: 20,
             input_idle_cursor_column: None,
         };
@@ -491,23 +519,36 @@ mod tests {
    /current ctrl+p commands";
 
         // ---- both preserved idle captures ready ----
-        let eval =
-            prompt_readiness_matches(Path::new("(test)"), "(test)", &api_aux, Some(&matcher))
-                .expect("api-aux eval");
+        let eval = prompt_readiness_matches(
+            Path::new("(test)"),
+            "(test)",
+            &api_aux,
+            Some(&matcher),
+        )
+        .expect("api-aux eval");
         assert_eq!(eval.regex_matched, Some(true), "api-aux regex must match");
         assert!(eval.ready, "api-aux idle must be ready (composes = empty)");
 
-        let eval = prompt_readiness_matches(Path::new("(test)"), "(test)", &editor, Some(&matcher))
-            .expect("editor eval");
+        let eval = prompt_readiness_matches(
+            Path::new("(test)"),
+            "(test)",
+            &editor,
+            Some(&matcher),
+        )
+        .expect("editor eval");
         assert_eq!(eval.regex_matched, Some(true), "editor regex must match");
         assert!(eval.ready, "editor idle must be ready (composes = empty)");
 
         // ---- top/middle/bottom compose rejected ----
         for position in ["top", "middle", "bottom"] {
             let snap = mutate_input_row_with_text(&api_aux, position, "hello");
-            let eval =
-                prompt_readiness_matches(Path::new("(test)"), "(test)", &snap, Some(&matcher))
-                    .expect("compose-text eval");
+            let eval = prompt_readiness_matches(
+                Path::new("(test)"),
+                "(test)",
+                &snap,
+                Some(&matcher),
+            )
+            .expect("compose-text eval");
             assert!(
                 !eval.ready,
                 "compose text in {position} input row must be rejected"
@@ -521,11 +562,16 @@ mod tests {
 
         // ---- 99/100/101 boundary (bottom row; the same shape in
         // top/middle follows from the symmetric helper) ----
-        for (n, expected_ready) in [(99usize, false), (100, true), (101, true)] {
+        for (n, expected_ready) in [(99usize, false), (100, true), (101, true)]
+        {
             let snap = mutate_input_row_with_n_spaces(&api_aux, "bottom", n);
-            let eval =
-                prompt_readiness_matches(Path::new("(test)"), "(test)", &snap, Some(&matcher))
-                    .expect("boundary eval");
+            let eval = prompt_readiness_matches(
+                Path::new("(test)"),
+                "(test)",
+                &snap,
+                Some(&matcher),
+            )
+            .expect("boundary eval");
             let label = match n {
                 99 => "compose",
                 100 => "sidebar",
@@ -539,9 +585,13 @@ mod tests {
         }
 
         // ---- non-OpenCode block unchanged (no compose check runs) ----
-        let eval =
-            prompt_readiness_matches(Path::new("(test)"), "(test)", non_opencode, Some(&matcher))
-                .expect("non-opencode eval");
+        let eval = prompt_readiness_matches(
+            Path::new("(test)"),
+            "(test)",
+            non_opencode,
+            Some(&matcher),
+        )
+        .expect("non-opencode eval");
         assert_eq!(
             eval.regex_matched,
             Some(false),

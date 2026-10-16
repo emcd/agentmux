@@ -9,16 +9,24 @@
 use serde_json::json;
 
 use crate::{
-    relay::{RelayRequest, RelayResponse, peer_scope::parse_peer_scope, request_relay},
+    relay::{
+        RelayRequest, RelayResponse, peer_scope::parse_peer_scope,
+        request_relay,
+    },
     runtime::{
         error::RuntimeError,
-        paths::{RelayRuntimePaths, RuntimeRootOverrides, RuntimeRoots, is_valid_peer_token},
+        paths::{
+            RelayRuntimePaths, RuntimeRootOverrides, RuntimeRoots,
+            is_valid_peer_token,
+        },
         starter::ensure_starter_configuration_layout,
         tui_session::resolve_tui_session_identity,
     },
 };
 
-use super::{LinkPeerArguments, LinkPeerMode, LinkPeerPairedArguments, shared};
+use super::{
+    LinkPeerArguments, LinkPeerMode, LinkPeerPairedArguments, shared,
+};
 
 /// A relay endpoint resolved from an explicit state root: configuration,
 /// socket, and operator identity for one side of the link.
@@ -28,7 +36,9 @@ struct LinkEndpoint {
     session_id: String,
 }
 
-pub(super) fn run_agentmux_link(arguments: &[String]) -> Result<(), RuntimeError> {
+pub(super) fn run_agentmux_link(
+    arguments: &[String],
+) -> Result<(), RuntimeError> {
     if arguments
         .iter()
         .any(|value| value == "--help" || value == "-h")
@@ -74,8 +84,12 @@ pub(super) fn run_agentmux_link(arguments: &[String]) -> Result<(), RuntimeError
         link_upgrade(&parsed, &issuer, &destination, &mut lines)?
     } else {
         match parsed.mode {
-            LinkPeerMode::OneWay => link_one_way(&parsed, &issuer, &destination, &mut lines)?,
-            LinkPeerMode::Paired => link_paired(&parsed, &issuer, &destination, &mut lines)?,
+            LinkPeerMode::OneWay => {
+                link_one_way(&parsed, &issuer, &destination, &mut lines)?
+            },
+            LinkPeerMode::Paired => {
+                link_paired(&parsed, &issuer, &destination, &mut lines)?
+            },
         }
     };
     if parsed.output_json {
@@ -111,8 +125,11 @@ fn resolve_link_endpoint(
         inscriptions_root,
     })?;
     ensure_starter_configuration_layout(&roots)?;
-    let resolved_session =
-        resolve_tui_session_identity(&roots.configuration_roots, bundle_name, session_selector)?;
+    let resolved_session = resolve_tui_session_identity(
+        &roots.configuration_roots,
+        bundle_name,
+        session_selector,
+    )?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     Ok(LinkEndpoint {
         socket: relay_paths.relay_socket,
@@ -133,7 +150,9 @@ fn link_request(
         endpoint.session_id.as_str(),
         request,
     )
-    .map_err(|source| shared::map_relay_request_failure(&endpoint.socket, source))
+    .map_err(|source| {
+        shared::map_relay_request_failure(&endpoint.socket, source)
+    })
 }
 
 /// Registers `alias@RELAY` on the destination, returning `Ok(())` whether
@@ -160,7 +179,11 @@ fn register_alias_referent(
         // for this direction. The record's credential stays valid-but-unheld
         // under the normal rotation lifecycle.
         RelayResponse::NewPeer { .. } => Ok(()),
-        RelayResponse::Error { error } if error.code == "validation_principal_exists" => Ok(()),
+        RelayResponse::Error { error }
+            if error.code == "validation_principal_exists" =>
+        {
+            Ok(())
+        },
         RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
         _ => Err(unexpected_link_response()),
     }
@@ -199,7 +222,9 @@ fn issue_inbound_credential(
                 "internal_unexpected_failure",
                 "relay omitted the rotated credential".to_string(),
             )),
-            RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
+            RelayResponse::Error { error } => {
+                Err(shared::map_relay_error(error))
+            },
             _ => Err(unexpected_link_response()),
         };
     }
@@ -209,7 +234,9 @@ fn issue_inbound_credential(
             "internal_unexpected_failure",
             "relay omitted the issued credential".to_string(),
         )),
-        Ok(RelayResponse::Error { error }) => Err(shared::map_relay_error(error)),
+        Ok(RelayResponse::Error { error }) => {
+            Err(shared::map_relay_error(error))
+        },
         Ok(_) => Err(unexpected_link_response()),
         Err(_) => Err(RuntimeError::validation(
             "link_issuance_unknown",
@@ -240,7 +267,9 @@ fn install_peer_slot(
         Err(_) => link_request(destination, &request)?,
     };
     match response {
-        RelayResponse::InstallPeerCredential { written_path, .. } => Ok(written_path),
+        RelayResponse::InstallPeerCredential { written_path, .. } => {
+            Ok(written_path)
+        },
         RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
         _ => Err(unexpected_link_response()),
     }
@@ -255,12 +284,21 @@ fn link_one_way(
     destination: &LinkEndpoint,
     lines: &mut Vec<String>,
 ) -> Result<serde_json::Value, RuntimeError> {
-    register_alias_referent(destination, &parsed.alias, parsed.alias_scope.clone())?;
+    register_alias_referent(
+        destination,
+        &parsed.alias,
+        parsed.alias_scope.clone(),
+    )?;
     lines.push(format!(
         "link peer: registered {}@RELAY on destination",
         parsed.alias
     ));
-    let psk = issue_inbound_credential(issuer, &parsed.connect_as, parsed.scope.clone(), false)?;
+    let psk = issue_inbound_credential(
+        issuer,
+        &parsed.connect_as,
+        parsed.scope.clone(),
+        false,
+    )?;
     lines.push(format!(
         "link peer: issued {}@RELAY on issuer",
         parsed.connect_as
@@ -290,7 +328,8 @@ fn link_upgrade(
     destination: &LinkEndpoint,
     lines: &mut Vec<String>,
 ) -> Result<serde_json::Value, RuntimeError> {
-    let psk = issue_inbound_credential(issuer, &parsed.connect_as, None, true)?;
+    let psk =
+        issue_inbound_credential(issuer, &parsed.connect_as, None, true)?;
     lines.push(format!(
         "link peer: rotated {}@RELAY on issuer",
         parsed.connect_as
@@ -320,21 +359,32 @@ fn link_paired(
     // Declared cross-equality is verified before either mint: each side's
     // declared connect-as must equal the opposite alias. This checks
     // operator-stated intent and derives nothing.
-    if parsed.connect_as != peer.peer_alias || peer.peer_connect_as != parsed.alias {
+    if parsed.connect_as != peer.peer_alias
+        || peer.peer_connect_as != parsed.alias
+    {
         return Err(RuntimeError::validation(
             "validation_invalid_params",
             "paired link requires symmetric naming: --connect-as must equal --peer-alias and --peer-connect-as must equal --alias".to_string(),
         ));
     }
-    let issuer_psk = register_paired_alias(issuer, &peer.peer_alias, peer.peer_scope.clone())?;
-    let destination_psk =
-        register_paired_alias(destination, &parsed.alias, parsed.alias_scope.clone())?;
+    let issuer_psk = register_paired_alias(
+        issuer,
+        &peer.peer_alias,
+        peer.peer_scope.clone(),
+    )?;
+    let destination_psk = register_paired_alias(
+        destination,
+        &parsed.alias,
+        parsed.alias_scope.clone(),
+    )?;
     lines.push(format!(
         "link peer: registered {}@RELAY and {}@RELAY",
         peer.peer_alias, parsed.alias
     ));
-    let destination_written = install_peer_slot(destination, &parsed.alias, &issuer_psk)?;
-    let issuer_written = install_peer_slot(issuer, &peer.peer_alias, &destination_psk)?;
+    let destination_written =
+        install_peer_slot(destination, &parsed.alias, &issuer_psk)?;
+    let issuer_written =
+        install_peer_slot(issuer, &peer.peer_alias, &destination_psk)?;
     lines.push(format!(
         "link peer: installed {destination_written} and {issuer_written}"
     ));
@@ -382,21 +432,31 @@ fn register_paired_alias(
             "internal_unexpected_failure",
             "relay omitted the issued credential".to_string(),
         )),
-        Ok(RelayResponse::Error { error }) if error.code == "validation_principal_exists" => {
+        Ok(RelayResponse::Error { error })
+            if error.code == "validation_principal_exists" =>
+        {
             Err(unknown())
-        }
-        Ok(RelayResponse::Error { error }) => Err(shared::map_relay_error(error)),
+        },
+        Ok(RelayResponse::Error { error }) => {
+            Err(shared::map_relay_error(error))
+        },
         Ok(_) => Err(unexpected_link_response()),
         Err(_) => match link_request(endpoint, &request) {
             Ok(RelayResponse::NewPeer { psk: Some(psk), .. }) => Ok(psk),
-            Ok(RelayResponse::NewPeer { .. }) => Err(RuntimeError::validation(
-                "internal_unexpected_failure",
-                "relay omitted the issued credential".to_string(),
-            )),
-            Ok(RelayResponse::Error { error }) if error.code == "validation_principal_exists" => {
+            Ok(RelayResponse::NewPeer { .. }) => {
+                Err(RuntimeError::validation(
+                    "internal_unexpected_failure",
+                    "relay omitted the issued credential".to_string(),
+                ))
+            },
+            Ok(RelayResponse::Error { error })
+                if error.code == "validation_principal_exists" =>
+            {
                 Err(unknown())
-            }
-            Ok(RelayResponse::Error { error }) => Err(shared::map_relay_error(error)),
+            },
+            Ok(RelayResponse::Error { error }) => {
+                Err(shared::map_relay_error(error))
+            },
             Ok(_) => Err(unexpected_link_response()),
             Err(_) => Err(unknown()),
         },
@@ -412,7 +472,9 @@ fn unexpected_link_response() -> RuntimeError {
     )
 }
 
-fn parse_link_arguments(arguments: &[String]) -> Result<LinkPeerArguments, RuntimeError> {
+fn parse_link_arguments(
+    arguments: &[String],
+) -> Result<LinkPeerArguments, RuntimeError> {
     let Some(subcommand) = arguments.first().map(String::as_str) else {
         return Err(RuntimeError::validation(
             "validation_invalid_params",
@@ -429,7 +491,8 @@ fn parse_link_arguments(arguments: &[String]) -> Result<LinkPeerArguments, Runti
     let mut issuer_state_root: Option<std::path::PathBuf> = None;
     let mut destination_state_root: Option<std::path::PathBuf> = None;
     let mut issuer_configuration_layers: Vec<std::path::PathBuf> = Vec::new();
-    let mut destination_configuration_layers: Vec<std::path::PathBuf> = Vec::new();
+    let mut destination_configuration_layers: Vec<std::path::PathBuf> =
+        Vec::new();
     let mut inscriptions_root: Option<std::path::PathBuf> = None;
     let mut alias: Option<String> = None;
     let mut connect_as: Option<String> = None;
@@ -452,21 +515,34 @@ fn parse_link_arguments(arguments: &[String]) -> Result<LinkPeerArguments, Runti
         match arguments[index].as_str() {
             "--issuer-state-directory" => {
                 issuer_state_root = Some(
-                    shared::take_value(arguments, &mut index, "--issuer-state-directory")?.into(),
+                    shared::take_value(
+                        arguments,
+                        &mut index,
+                        "--issuer-state-directory",
+                    )?
+                    .into(),
                 );
-            }
+            },
             "--destination-state-directory" => {
                 destination_state_root = Some(
-                    shared::take_value(arguments, &mut index, "--destination-state-directory")?
-                        .into(),
+                    shared::take_value(
+                        arguments,
+                        &mut index,
+                        "--destination-state-directory",
+                    )?
+                    .into(),
                 );
-            }
+            },
             "--issuer-configuration-directory" => {
                 issuer_configuration_layers.push(
-                    shared::take_value(arguments, &mut index, "--issuer-configuration-directory")?
-                        .into(),
+                    shared::take_value(
+                        arguments,
+                        &mut index,
+                        "--issuer-configuration-directory",
+                    )?
+                    .into(),
                 );
-            }
+            },
             "--destination-configuration-directory" => {
                 destination_configuration_layers.push(
                     shared::take_value(
@@ -476,82 +552,115 @@ fn parse_link_arguments(arguments: &[String]) -> Result<LinkPeerArguments, Runti
                     )?
                     .into(),
                 );
-            }
+            },
             "--inscriptions-directory" | "--logs-directory" => {
                 inscriptions_root = Some(
-                    shared::take_value(arguments, &mut index, "--inscriptions-directory")?.into(),
+                    shared::take_value(
+                        arguments,
+                        &mut index,
+                        "--inscriptions-directory",
+                    )?
+                    .into(),
                 );
-            }
-            "--alias" => alias = Some(shared::take_value(arguments, &mut index, "--alias")?),
+            },
+            "--alias" => {
+                alias =
+                    Some(shared::take_value(arguments, &mut index, "--alias")?)
+            },
             "--connect-as" => {
-                connect_as = Some(shared::take_value(arguments, &mut index, "--connect-as")?);
-            }
-            "--scope" => scope = Some(shared::take_value(arguments, &mut index, "--scope")?),
+                connect_as = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--connect-as",
+                )?);
+            },
+            "--scope" => {
+                scope =
+                    Some(shared::take_value(arguments, &mut index, "--scope")?)
+            },
             "--alias-scope" => {
-                alias_scope = Some(shared::take_value(arguments, &mut index, "--alias-scope")?);
-            }
+                alias_scope = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--alias-scope",
+                )?);
+            },
             "--paired" => paired = true,
             "--peer-alias" => {
-                peer_alias = Some(shared::take_value(arguments, &mut index, "--peer-alias")?);
-            }
+                peer_alias = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--peer-alias",
+                )?);
+            },
             "--peer-scope" => {
-                peer_scope = Some(shared::take_value(arguments, &mut index, "--peer-scope")?);
-            }
+                peer_scope = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--peer-scope",
+                )?);
+            },
             "--peer-connect-as" => {
                 peer_connect_as = Some(shared::take_value(
                     arguments,
                     &mut index,
                     "--peer-connect-as",
                 )?);
-            }
+            },
             "--upgrade" => upgrade = true,
             "--bundle" | "--bundle-name" => {
-                bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?);
-            }
+                bundle_name = Some(shared::take_value(
+                    arguments, &mut index, "--bundle",
+                )?);
+            },
             "--as-session" => {
-                session_selector = Some(shared::take_value(arguments, &mut index, "--as-session")?);
-            }
+                session_selector = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--as-session",
+                )?);
+            },
             "--issuer-bundle" => {
                 issuer_bundle_name = Some(shared::take_value(
                     arguments,
                     &mut index,
                     "--issuer-bundle",
                 )?);
-            }
+            },
             "--issuer-as-session" => {
                 issuer_session_selector = Some(shared::take_value(
                     arguments,
                     &mut index,
                     "--issuer-as-session",
                 )?);
-            }
+            },
             "--destination-bundle" => {
                 destination_bundle_name = Some(shared::take_value(
                     arguments,
                     &mut index,
                     "--destination-bundle",
                 )?);
-            }
+            },
             "--destination-as-session" => {
                 destination_session_selector = Some(shared::take_value(
                     arguments,
                     &mut index,
                     "--destination-as-session",
                 )?);
-            }
+            },
             "--json" => output_json = true,
             value if value.starts_with('-') => {
                 return Err(RuntimeError::InvalidArgument {
                     argument: value.to_string(),
                     message: "unknown argument".to_string(),
                 });
-            }
+            },
             value => {
                 return Err(RuntimeError::InvalidArgument {
                     argument: value.to_string(),
                     message: "unexpected positional argument".to_string(),
                 });
-            }
+            },
         }
         index += 1;
     }
@@ -632,12 +741,16 @@ fn parse_link_arguments(arguments: &[String]) -> Result<LinkPeerArguments, Runti
         else {
             return Err(RuntimeError::validation(
                 "validation_invalid_params",
-                "paired link requires a non-empty --peer-connect-as".to_string(),
+                "paired link requires a non-empty --peer-connect-as"
+                    .to_string(),
             ));
         };
         for scope_value in peer_scope.iter() {
             if let Err(error) = parse_peer_scope(Some(scope_value)) {
-                return Err(RuntimeError::validation(error.code, error.message));
+                return Err(RuntimeError::validation(
+                    error.code,
+                    error.message,
+                ));
             }
         }
         for (flag, token) in [
@@ -677,7 +790,10 @@ fn parse_link_arguments(arguments: &[String]) -> Result<LinkPeerArguments, Runti
             output_json,
         })
     } else {
-        if peer_alias.is_some() || peer_scope.is_some() || peer_connect_as.is_some() {
+        if peer_alias.is_some()
+            || peer_scope.is_some()
+            || peer_connect_as.is_some()
+        {
             return Err(RuntimeError::validation(
                 "validation_invalid_params",
                 "--peer-alias, --peer-scope, and --peer-connect-as require --paired".to_string(),

@@ -13,7 +13,8 @@ use super::{discovery_exchange, origin_fixture, spawn_origin_relay};
 
 #[test]
 fn list_relays_enumerates_configured_aliases_sorted_without_dialing() {
-    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) =
+        origin_fixture();
     let state_root = bundle_paths.state_root.clone();
     // Two aliases in reverse order; nonexistent sockets prove no dial occurs.
     let (client, handle) = spawn_origin_relay(
@@ -40,7 +41,8 @@ fn list_relays_enumerates_configured_aliases_sorted_without_dialing() {
 
 #[test]
 fn list_relays_returns_empty_when_no_peers_configured() {
-    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) =
+        origin_fixture();
     let state_root = bundle_paths.state_root.clone();
     let (client, handle) = spawn_origin_relay(
         &configuration_roots,
@@ -66,7 +68,8 @@ fn list_relays_returns_empty_when_no_peers_configured() {
 
 #[test]
 fn list_relays_requires_all_scope() {
-    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) =
+        origin_fixture();
     let state_root = bundle_paths.state_root.clone();
     // `alpha` resolves the default policy (`list = home`), below the `all` tier.
     let (client, handle) = spawn_origin_relay(
@@ -91,7 +94,8 @@ fn list_relays_requires_all_scope() {
 
 #[test]
 fn local_namespace_discovery_follows_list_scope() {
-    let (temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
+    let (temporary, bundle_name, configuration_roots, bundle_paths) =
+        origin_fixture();
     let state_root = bundle_paths.state_root.clone();
     // A second bundle the requester is not a member of, loaded into the catalog.
     let other_bundle = format!("other-{}", Uuid::new_v4().simple());
@@ -103,13 +107,18 @@ fn local_namespace_discovery_follows_list_scope() {
         "\nformat-version = 1\n\n[[sessions]]\nid = \"alpha\"\nname = \"Alpha\"\ndirectory = \"/tmp\"\ncoder = \"shell\"\n",
     )
     .expect("write second bundle");
-    let other_paths = BundleRuntimePaths::resolve(&state_root, other_bundle.as_str())
-        .expect("other bundle paths");
+    let other_paths =
+        BundleRuntimePaths::resolve(&state_root, other_bundle.as_str())
+            .expect("other bundle paths");
     let catalog = vec![bundle_paths.clone(), other_paths];
 
     // The `all`-tier operator sees every configured bundle namespace plus GLOBAL.
-    let (client, handle) =
-        spawn_origin_relay(&configuration_roots, &state_root, catalog.clone(), &[]);
+    let (client, handle) = spawn_origin_relay(
+        &configuration_roots,
+        &state_root,
+        catalog.clone(),
+        &[],
+    );
     let operator = discovery_exchange(
         client,
         handle,
@@ -130,7 +139,8 @@ fn local_namespace_discovery_follows_list_scope() {
     assert!(namespaces.contains(&other_bundle.as_str()));
 
     // A home-tier member sees only its home namespace and GLOBAL.
-    let (client, handle) = spawn_origin_relay(&configuration_roots, &state_root, catalog, &[]);
+    let (client, handle) =
+        spawn_origin_relay(&configuration_roots, &state_root, catalog, &[]);
     let member = discovery_exchange(
         client,
         handle,

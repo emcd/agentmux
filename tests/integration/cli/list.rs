@@ -40,7 +40,12 @@ fn list_global_session_resolves_without_default_bundle() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui"]);
+    write_bundle_configuration(
+        &config_root,
+        "agentmux",
+        Some(&["dev"]),
+        &["tui"],
+    );
     // No ui.toml default-bundle: the explicit canonical session must carry
     // the GLOBAL namespace on its own.
     write_tui_configuration(
@@ -101,7 +106,8 @@ fn list_global_session_resolves_without_default_bundle() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode list payload");
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("decode list payload");
     assert_eq!(payload["bundle"]["id"], "GLOBAL");
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
@@ -117,7 +123,12 @@ fn list_fanout_without_bundle_or_default_still_fails() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui"]);
+    write_bundle_configuration(
+        &config_root,
+        "agentmux",
+        Some(&["dev"]),
+        &["tui"],
+    );
     // No ui.toml default-bundle: unlike explicit GLOBAL, fan-out still
     // resolves the requester in the associated/home bundle.
     write_tui_configuration(
@@ -179,7 +190,12 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui", "master"]);
+    write_bundle_configuration(
+        &config_root,
+        "agentmux",
+        Some(&["dev"]),
+        &["tui", "master"],
+    );
     write_tui_configuration(
         &config_root,
         Some("agentmux"),
@@ -187,8 +203,10 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
         &[("user", "default", Some("Operator"))],
     );
 
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
-    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux")
+        .expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths)
+        .expect("ensure bundle runtime directory");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
@@ -240,7 +258,8 @@ fn list_sessions_single_bundle_json_uses_canonical_bundle_shape() {
     relay_thread.join().expect("join fake relay thread");
     assert!(output.status.success(), "command should succeed");
 
-    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode list payload");
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("decode list payload");
     assert_eq!(payload["schema_version"], "1");
     assert_eq!(payload["bundle"]["id"], "agentmux");
     assert_eq!(payload["bundle"]["state"], "up");
@@ -279,7 +298,12 @@ fn list_sessions_human_output_renders_per_session_startup_failures() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui", "master"]);
+    write_bundle_configuration(
+        &config_root,
+        "agentmux",
+        Some(&["dev"]),
+        &["tui", "master"],
+    );
     write_tui_configuration(
         &config_root,
         Some("agentmux"),
@@ -287,8 +311,10 @@ fn list_sessions_human_output_renders_per_session_startup_failures() {
         &[("user", "default", Some("Operator"))],
     );
 
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
-    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux")
+        .expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths)
+        .expect("ensure bundle runtime directory");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
@@ -363,7 +389,12 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
     write_bundle_configuration(&config_root, "beta", Some(&["dev"]), &["tui"]);
-    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &["tui"]);
+    write_bundle_configuration(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["tui"],
+    );
     write_tui_configuration(
         &config_root,
         Some("alpha"),
@@ -371,10 +402,14 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
         &[("user", "default", Some("Operator"))],
     );
 
-    let alpha_paths = BundleRuntimePaths::resolve(&state_root, "alpha").expect("alpha paths");
-    ensure_bundle_runtime_directory(&alpha_paths).expect("ensure alpha runtime directory");
-    let beta_paths = BundleRuntimePaths::resolve(&state_root, "beta").expect("beta paths");
-    ensure_bundle_runtime_directory(&beta_paths).expect("ensure beta runtime directory");
+    let alpha_paths = BundleRuntimePaths::resolve(&state_root, "alpha")
+        .expect("alpha paths");
+    ensure_bundle_runtime_directory(&alpha_paths)
+        .expect("ensure alpha runtime directory");
+    let beta_paths =
+        BundleRuntimePaths::resolve(&state_root, "beta").expect("beta paths");
+    ensure_bundle_runtime_directory(&beta_paths)
+        .expect("ensure beta runtime directory");
 
     let alpha_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let beta_log = Arc::new(Mutex::new(Vec::<Value>::new()));
@@ -454,7 +489,8 @@ fn list_sessions_all_json_orders_bundles_lexicographically() {
     relay_thread.join().expect("join fake relay");
     assert!(output.status.success(), "command should succeed");
 
-    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode list payload");
+    let payload: Value =
+        serde_json::from_slice(&output.stdout).expect("decode list payload");
     let bundles = payload["bundles"].as_array().expect("bundles array");
     assert_eq!(bundles.len(), 2);
     assert_eq!(bundles[0]["id"], "alpha");
@@ -478,7 +514,12 @@ fn list_sessions_all_fails_fast_on_first_authorization_denial() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "alpha", Some(&["dev"]), &["tui"]);
+    write_bundle_configuration(
+        &config_root,
+        "alpha",
+        Some(&["dev"]),
+        &["tui"],
+    );
     write_bundle_configuration(&config_root, "beta", Some(&["dev"]), &["tui"]);
     write_tui_configuration(
         &config_root,
@@ -487,8 +528,10 @@ fn list_sessions_all_fails_fast_on_first_authorization_denial() {
         &[("user", "default", Some("Operator"))],
     );
 
-    let alpha_paths = BundleRuntimePaths::resolve(&state_root, "alpha").expect("alpha paths");
-    ensure_bundle_runtime_directory(&alpha_paths).expect("ensure alpha runtime directory");
+    let alpha_paths = BundleRuntimePaths::resolve(&state_root, "alpha")
+        .expect("alpha paths");
+    ensure_bundle_runtime_directory(&alpha_paths)
+        .expect("ensure alpha runtime directory");
     let alpha_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let alpha_relay = spawn_fake_relay_once(
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
@@ -532,7 +575,8 @@ fn list_sessions_all_fails_fast_on_first_authorization_denial() {
 }
 
 #[test]
-fn list_sessions_uses_ui_session_identity_defaults_outside_associated_workspace() {
+fn list_sessions_uses_ui_session_identity_defaults_outside_associated_workspace()
+ {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("state");
@@ -556,8 +600,10 @@ fn list_sessions_uses_ui_session_identity_defaults_outside_associated_workspace(
     );
 
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, "infrastructure").expect("bundle paths");
-    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+        BundleRuntimePaths::resolve(&state_root, "infrastructure")
+            .expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths)
+        .expect("ensure bundle runtime directory");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
         &RelayRuntimePaths::resolve(&state_root).relay_socket,

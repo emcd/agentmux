@@ -41,7 +41,8 @@ fn bundle_session_list_with_namespace(
     bundle_name: &str,
     namespace: &str,
 ) -> Value {
-    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(configuration_roots, bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,

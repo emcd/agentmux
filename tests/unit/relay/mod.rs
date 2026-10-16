@@ -48,7 +48,12 @@ fn dispatch_request(
     let runtime_directory = tmux_socket
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
-    handle_request(request, configuration_roots, bundle_name, runtime_directory)
+    handle_request(
+        request,
+        configuration_roots,
+        bundle_name,
+        runtime_directory,
+    )
 }
 
 /// Shortens the unreachable dwell for a test that drives delivery at a target
@@ -66,19 +71,23 @@ fn dispatch_request(
 /// beside the bundle is read by nobody. Safe as a `OnceLock` write because
 /// nextest gives each test its own process.
 fn configure_short_unreachable_dwell() {
-    agentmux::relay::configure_delivery(agentmux::relay::DeliveryConfiguration {
-        unreachable_dwell_ms: 500,
-        ..Default::default()
-    });
+    agentmux::relay::configure_delivery(
+        agentmux::relay::DeliveryConfiguration {
+            unreachable_dwell_ms: 500,
+            ..Default::default()
+        },
+    );
 }
 
 /// A dwell long enough that no test window reaches it, for asserting that an
 /// unreachable target is *held* rather than resolved.
 fn configure_long_unreachable_dwell() {
-    agentmux::relay::configure_delivery(agentmux::relay::DeliveryConfiguration {
-        unreachable_dwell_ms: 600_000,
-        ..Default::default()
-    });
+    agentmux::relay::configure_delivery(
+        agentmux::relay::DeliveryConfiguration {
+            unreachable_dwell_ms: 600_000,
+            ..Default::default()
+        },
+    );
 }
 
 fn write_tui_configuration(roots: &ConfigurationRoots, policy: &str) {
@@ -180,11 +189,15 @@ name = "Bravo"
 directory = "/tmp"
 coder = "shell"
 "#;
-    std::fs::write(bundles.join(format!("{name}.toml")), body).expect("write bundle file");
+    std::fs::write(bundles.join(format!("{name}.toml")), body)
+        .expect("write bundle file");
     ConfigurationRoots::single(root)
 }
 
-fn write_single_member_bundle(temporary: &TempDir, name: &str) -> ConfigurationRoots {
+fn write_single_member_bundle(
+    temporary: &TempDir,
+    name: &str,
+) -> ConfigurationRoots {
     let root = temporary.path().join("config");
     let bundles = root.join("bundles");
     std::fs::create_dir_all(&bundles).expect("create bundles directory");
@@ -227,7 +240,8 @@ name = "Alpha"
 directory = "/tmp"
 coder = "shell"
 "#;
-    std::fs::write(bundles.join(format!("{name}.toml")), body).expect("write bundle file");
+    std::fs::write(bundles.join(format!("{name}.toml")), body)
+        .expect("write bundle file");
     ConfigurationRoots::single(root)
 }
 
@@ -289,7 +303,8 @@ name = "Bravo"
 directory = "/tmp"
 coder = "acp"
 "#;
-    std::fs::write(bundles.join(format!("{name}.toml")), body).expect("write bundle file");
+    std::fs::write(bundles.join(format!("{name}.toml")), body)
+        .expect("write bundle file");
     ConfigurationRoots::single(root)
 }
 
@@ -317,8 +332,10 @@ resume-command = "sh -lc 'exec sleep 45'"
     )
     .expect("write coders file");
     if let Some(policy_body) = policy_body {
-        std::fs::write(root.join("policies.toml"), policy_body).expect("write policies file");
+        std::fs::write(root.join("policies.toml"), policy_body)
+            .expect("write policies file");
     }
-    std::fs::write(bundles.join(format!("{name}.toml")), bundle_body).expect("write bundle file");
+    std::fs::write(bundles.join(format!("{name}.toml")), bundle_body)
+        .expect("write bundle file");
     ConfigurationRoots::single(root)
 }

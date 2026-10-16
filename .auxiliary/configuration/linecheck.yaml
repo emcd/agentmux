@@ -22,10 +22,10 @@ rules:
   - pattern: "src/**/*.rs"
     warn: 800
     warn_message: "Approaching the line-count limit; please consider separating concerns."
-    error: 999
+    error: 1000
     error_message: "Exceeds the line-count limit; please separate concerns."
   - pattern: "tests/**/*.rs"
     warn: 800
     warn_message: "Approaching the line-count limit; please consider separating concerns."
-    error: 999
+    error: 1000
     error_message: "Exceeds the line-count limit; please separate concerns."

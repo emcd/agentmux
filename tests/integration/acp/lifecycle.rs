@@ -18,7 +18,8 @@ use super::helpers::*;
 fn reconcile_starts_acp_members_rather_than_reporting_them_failed() {
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let paths = flat_bundle_paths(temporary.path());
 
     let report = agentmux::relay::reconcile_bundle(&config_root, &paths)
@@ -61,7 +62,8 @@ fn a_busy_acp_session_reads_ready_on_both_up_and_list() {
         never_respond_to_prompt: true,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
     let mut worker_state = subscribe_bravo_worker_state(temporary.path());
 
@@ -97,9 +99,11 @@ fn a_busy_acp_session_reads_ready_on_both_up_and_list() {
     );
     assert_eq!(bundle.state, ListedBundleState::Up);
 
-    let report =
-        agentmux::relay::reconcile_bundle(&config_root, &flat_bundle_paths(temporary.path()))
-            .expect("reconcile while a turn is in flight");
+    let report = agentmux::relay::reconcile_bundle(
+        &config_root,
+        &flat_bundle_paths(temporary.path()),
+    )
+    .expect("reconcile while a turn is in flight");
     assert!(
         report.failed_startups.is_empty(),
         "a busy member must not be recorded as a startup failure: {:?}",
@@ -115,8 +119,10 @@ fn a_busy_acp_session_reads_ready_on_both_up_and_list() {
 fn acp_send_selects_session_new_without_coder_session_id() {
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
-    let (config_root, log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, log_path) =
+        write_configuration(temporary.path(), &options);
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -144,7 +150,8 @@ fn acp_send_selects_session_new_without_coder_session_id() {
 fn acp_send_reuses_persistent_worker_across_requests() {
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
-    let (config_root, log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let first = dispatch_send(&config_root, &tmux_socket);
@@ -154,7 +161,8 @@ fn acp_send_reuses_persistent_worker_across_requests() {
     assert_eq!(first_result.outcome, SendOutcome::Queued);
     assert_eq!(second_result.outcome, SendOutcome::Queued);
 
-    let requests = wait_for_request_count(log_path.as_path(), "session/prompt", 2);
+    let requests =
+        wait_for_request_count(log_path.as_path(), "session/prompt", 2);
     // Startup-owned ACP workers initialize once per configured ACP session
     // in the bundle (alpha + bravo), and subsequent sends reuse those workers.
     assert_eq!(request_count_by_method(&requests, "initialize"), 2);
@@ -166,8 +174,10 @@ fn acp_send_reuses_persistent_worker_across_requests() {
 fn acp_initialize_request_uses_protocol_version_integer_and_client_version() {
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
-    let (config_root, log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, log_path) =
+        write_configuration(temporary.path(), &options);
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -192,8 +202,10 @@ fn acp_initialize_request_uses_protocol_version_integer_and_client_version() {
 fn acp_session_setup_requests_include_mcp_servers_array() {
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
-    let (config_root, log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, log_path) =
+        write_configuration(temporary.path(), &options);
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -209,8 +221,12 @@ fn acp_session_setup_requests_include_mcp_servers_array() {
         configured_session_id: Some("sess-configured".to_string()),
         ..AcpStubOptions::default()
     };
-    let (config_root, log_path) = write_configuration(second_temporary.path(), &options);
-    let response = dispatch_send(&config_root, &second_temporary.path().join("tmux.sock"));
+    let (config_root, log_path) =
+        write_configuration(second_temporary.path(), &options);
+    let response = dispatch_send(
+        &config_root,
+        &second_temporary.path().join("tmux.sock"),
+    );
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -230,7 +246,8 @@ fn acp_send_uses_persisted_session_id_when_config_id_is_absent() {
         update_count: 1,
         ..AcpStubOptions::default()
     };
-    let (config_root, log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let first = dispatch_send(&config_root, &tmux_socket);
@@ -262,8 +279,10 @@ fn acp_send_selects_session_load_with_configured_coder_session_id() {
         configured_session_id: Some("sess-abc".to_string()),
         ..AcpStubOptions::default()
     };
-    let (config_root, log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, log_path) =
+        write_configuration(temporary.path(), &options);
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     let log = fs::read_to_string(log_path).expect("read ACP log");
@@ -279,8 +298,12 @@ fn acp_load_failure_does_not_fallback_to_session_new() {
         configured_session_id: Some("sess-abc".to_string()),
         ..AcpStubOptions::default()
     };
-    let (config_root, log_path) = write_configuration(temporary.path(), &options);
-    assert_acp_delivery_unavailable(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, log_path) =
+        write_configuration(temporary.path(), &options);
+    assert_acp_delivery_unavailable(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(log.contains("\"method\":\"session/load\""), "log={log}");
 }
@@ -292,8 +315,12 @@ fn acp_new_failure_returns_runtime_stage_code() {
         fail_new: true,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    assert_acp_delivery_unavailable(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
+    assert_acp_delivery_unavailable(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
 }
 
 // Regression guard for the give-up policy being stage-agnostic. A worker whose
@@ -318,7 +345,8 @@ fn acp_repeated_new_failure_gives_up_instead_of_respawning_forever() {
         fail_new: true,
         ..AcpStubOptions::default()
     };
-    let (config_root, log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     // A delivery to the failed worker drives the respawn loop. Each respawn
@@ -338,7 +366,8 @@ fn acp_repeated_new_failure_gives_up_instead_of_respawning_forever() {
     let attempts_after_settle =
         request_count_by_method(&read_request_log(&log_path), "session/new");
     thread::sleep(Duration::from_secs(1));
-    let attempts_later = request_count_by_method(&read_request_log(&log_path), "session/new");
+    let attempts_later =
+        request_count_by_method(&read_request_log(&log_path), "session/new");
 
     assert_eq!(
         attempts_later, attempts_after_settle,
@@ -355,8 +384,12 @@ fn acp_missing_load_capability_returns_canonical_failure_code_and_details() {
         configured_session_id: Some("sess-abc".to_string()),
         ..AcpStubOptions::default()
     };
-    let (config_root, log_path) = write_configuration(temporary.path(), &options);
-    assert_acp_delivery_unavailable(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, log_path) =
+        write_configuration(temporary.path(), &options);
+    assert_acp_delivery_unavailable(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(!log.contains("\"method\":\"session/load\""), "log={log}");
 }
@@ -368,8 +401,12 @@ fn acp_missing_prompt_capability_returns_canonical_failure_code_and_details() {
         prompt_capability: false,
         ..AcpStubOptions::default()
     };
-    let (config_root, log_path) = write_configuration(temporary.path(), &options);
-    assert_acp_delivery_unavailable(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, log_path) =
+        write_configuration(temporary.path(), &options);
+    assert_acp_delivery_unavailable(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let log = fs::read_to_string(log_path).expect("read ACP log");
     assert!(!log.contains("\"method\":\"session/prompt\""), "log={log}");
 }
@@ -381,8 +418,12 @@ fn acp_initialize_failure_returns_canonical_runtime_code() {
         fail_initialize: true,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    assert_acp_delivery_unavailable(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
+    assert_acp_delivery_unavailable(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
 }
 
 #[test]
@@ -392,8 +433,10 @@ fn acp_prompt_failure_keeps_persistent_worker_available() {
         fail_prompt: true,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     // A JSON-RPC prompt error is a logical failure from a still-responsive
@@ -416,8 +459,10 @@ fn acp_disconnect_before_first_activity_engages_auto_respawn() {
         disconnect_on_prompt: Some("before_activity".to_string()),
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     // Auto-respawn pulls the worker out of `unavailable` as soon as it
@@ -443,8 +488,10 @@ fn acp_disconnect_after_first_activity_preserves_accepted_response() {
         update_count: 1,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let response = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
+    let response =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     assert_eq!(result.reason_code, None);
@@ -477,7 +524,11 @@ fn wait_for_any_worker_state(
     false
 }
 
-fn wait_for_log_match(log_path: &std::path::Path, needle: &str, timeout: Duration) -> bool {
+fn wait_for_log_match(
+    log_path: &std::path::Path,
+    needle: &str,
+    timeout: Duration,
+) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if let Ok(contents) = fs::read_to_string(log_path)
@@ -490,11 +541,17 @@ fn wait_for_log_match(log_path: &std::path::Path, needle: &str, timeout: Duratio
     false
 }
 
-fn wait_for_request_count(log_path: &std::path::Path, method: &str, expected: usize) -> Vec<Value> {
+fn wait_for_request_count(
+    log_path: &std::path::Path,
+    method: &str,
+    expected: usize,
+) -> Vec<Value> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let requests = read_request_log(log_path);
-        if request_count_by_method(&requests, method) >= expected || Instant::now() >= deadline {
+        if request_count_by_method(&requests, method) >= expected
+            || Instant::now() >= deadline
+        {
             return requests;
         }
         thread::sleep(Duration::from_millis(20));

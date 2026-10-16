@@ -13,7 +13,9 @@ use serde_json::{Value, json};
 
 use crate::configuration::{BundleMember, TargetConfiguration};
 
-use super::pane::{resolve_active_pane_target, run_tmux_command, run_tmux_command_capture};
+use super::pane::{
+    resolve_active_pane_target, run_tmux_command, run_tmux_command_capture,
+};
 
 const OWNERSHIP_OPTION_NAME: &str = "@agentmux_owned";
 const OWNERSHIP_OPTION_VALUE: &str = "1";
@@ -24,7 +26,8 @@ const CREATE_RETRY_JITTER_MS: u64 = 35;
 /// Canonical error code the relay applies for tmux lifecycle failures. Carried
 /// on [`TmuxLifecycleError`] so the relay `From` mapping and any in-tmux detail
 /// payloads stay in lockstep.
-pub(crate) const TMUX_LIFECYCLE_ERROR_CODE: &str = "internal_unexpected_failure";
+pub(crate) const TMUX_LIFECYCLE_ERROR_CODE: &str =
+    "internal_unexpected_failure";
 
 /// A transport-local lifecycle failure. Mirrors the relay error shape (code,
 /// message, structured details) without depending on `crate::relay`; the relay
@@ -36,7 +39,11 @@ pub(crate) struct TmuxLifecycleError {
     pub details: Option<Value>,
 }
 
-fn tmux_lifecycle_error(code: &str, message: &str, details: Option<Value>) -> TmuxLifecycleError {
+fn tmux_lifecycle_error(
+    code: &str,
+    message: &str,
+    details: Option<Value>,
+) -> TmuxLifecycleError {
     TmuxLifecycleError {
         code: code.to_string(),
         message: message.to_string(),
@@ -49,7 +56,7 @@ pub(crate) fn startup_tmux_member(
     member: &BundleMember,
 ) -> Result<(), (String, String, Option<Value>)> {
     match session_exists(tmux_socket, member.id.as_str()) {
-        Ok(true) => {}
+        Ok(true) => {},
         Ok(false) => {
             if let Err(error) = create_member_with_retry(tmux_socket, member) {
                 let cause = error
@@ -69,17 +76,18 @@ pub(crate) fn startup_tmux_member(
                     })),
                 ));
             }
-        }
+        },
         Err(reason) => {
             return Err((
                 "runtime_startup_failed".to_string(),
-                "failed to query tmux session state during startup".to_string(),
+                "failed to query tmux session state during startup"
+                    .to_string(),
                 Some(json!({
                     "session_id": member.id,
                     "cause": reason,
                 })),
             ));
-        }
+        },
     }
 
     match resolve_active_pane_target(tmux_socket, member.id.as_str()) {
@@ -108,11 +116,13 @@ pub(crate) fn create_member_with_retry(
                 let retryable = transient && attempt < CREATE_MAX_ATTEMPTS;
                 last_error = Some(reason);
                 if retryable {
-                    thread::sleep(retry_delay_for_attempt(&member.id, attempt));
+                    thread::sleep(retry_delay_for_attempt(
+                        &member.id, attempt,
+                    ));
                     continue;
                 }
                 break;
-            }
+            },
         }
     }
     Err(tmux_lifecycle_error(
@@ -125,16 +135,22 @@ pub(crate) fn create_member_with_retry(
     ))
 }
 
-fn create_member_once(tmux_socket: &Path, member: &BundleMember) -> Result<(), String> {
-    let start_command = match &member.target {
-        TargetConfiguration::Tmux(target) => target.start_command.as_str(),
-        TargetConfiguration::Acp(_) | TargetConfiguration::Pty(_) => {
-            return Err("cannot create tmux session for non-Tmux target".to_string());
-        }
-        TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
-            return Err("cannot create tmux session for ui/pubsub target".to_string());
-        }
-    };
+fn create_member_once(
+    tmux_socket: &Path,
+    member: &BundleMember,
+) -> Result<(), String> {
+    let start_command =
+        match &member.target {
+            TargetConfiguration::Tmux(target) => target.start_command.as_str(),
+            TargetConfiguration::Acp(_) | TargetConfiguration::Pty(_) => {
+                return Err("cannot create tmux session for non-Tmux target"
+                    .to_string());
+            },
+            TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
+                return Err("cannot create tmux session for ui/pubsub target"
+                    .to_string());
+            },
+        };
 
     let mut arguments = vec![
         "new-session".to_string(),
@@ -210,7 +226,9 @@ fn retry_delay_for_attempt(session_name: &str, attempt: usize) -> Duration {
         .bytes()
         .fold(0u64, |value, byte| value.wrapping_add(u64::from(byte)));
     let jitter = (hash + (attempt as u64 * 7)) % CREATE_RETRY_JITTER_MS;
-    Duration::from_millis((attempt as u64 * CREATE_RETRY_BASE_DELAY_MS) + jitter)
+    Duration::from_millis(
+        (attempt as u64 * CREATE_RETRY_BASE_DELAY_MS) + jitter,
+    )
 }
 
 fn is_transient_tmux_error(reason: &str) -> bool {
@@ -226,13 +244,18 @@ fn is_tmux_server_unavailable_error(reason: &str) -> bool {
         || lowered.contains("error connecting")
 }
 
-pub(crate) fn session_exists(tmux_socket: &Path, session_name: &str) -> Result<bool, String> {
+pub(crate) fn session_exists(
+    tmux_socket: &Path,
+    session_name: &str,
+) -> Result<bool, String> {
     let output = match run_tmux_command_capture(
         tmux_socket,
         &["has-session", "-t", &format!("={session_name}")],
     ) {
         Ok(output) => output,
-        Err(reason) if is_missing_session_error(reason.as_str()) => return Ok(false),
+        Err(reason) if is_missing_session_error(reason.as_str()) => {
+            return Ok(false);
+        },
         Err(reason) => return Err(reason),
     };
     if output.status.success() {
@@ -273,23 +296,28 @@ pub(crate) fn prune_owned_session(
     })
 }
 
-pub(crate) fn list_owned_sessions(tmux_socket: &Path) -> Result<Vec<String>, TmuxLifecycleError> {
+pub(crate) fn list_owned_sessions(
+    tmux_socket: &Path,
+) -> Result<Vec<String>, TmuxLifecycleError> {
     let output = match run_tmux_command_capture(
         tmux_socket,
         &["list-sessions", "-F", "#{session_name}\t#{@agentmux_owned}"],
     ) {
         Ok(output) => output,
-        Err(reason) if is_missing_session_error(reason.as_str()) => return Ok(Vec::new()),
+        Err(reason) if is_missing_session_error(reason.as_str()) => {
+            return Ok(Vec::new());
+        },
         Err(reason) => {
             return Err(tmux_lifecycle_error(
                 TMUX_LIFECYCLE_ERROR_CODE,
                 "failed to list tmux sessions",
                 Some(json!({"cause": reason})),
             ));
-        }
+        },
     };
     if !output.status.success() {
-        let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let reason =
+            String::from_utf8_lossy(&output.stderr).trim().to_string();
         if is_missing_session_error(reason.as_str()) {
             return Ok(Vec::new());
         }
@@ -302,7 +330,8 @@ pub(crate) fn list_owned_sessions(tmux_socket: &Path) -> Result<Vec<String>, Tmu
     let owned = String::from_utf8_lossy(&output.stdout)
         .lines()
         .filter_map(|line| {
-            let (session_name, marker) = line.split_once('\t').unwrap_or((line, ""));
+            let (session_name, marker) =
+                line.split_once('\t').unwrap_or((line, ""));
             if marker.trim() == OWNERSHIP_OPTION_VALUE {
                 return Some(session_name.to_string());
             }
@@ -321,16 +350,19 @@ pub(crate) fn cleanup_tmux_server_when_unowned(
     if !list_all_sessions(tmux_socket)?.is_empty() {
         return Ok(false);
     }
-    let output = match run_tmux_command_capture(tmux_socket, &["kill-server"]) {
+    let output = match run_tmux_command_capture(tmux_socket, &["kill-server"])
+    {
         Ok(output) => output,
-        Err(reason) if is_tmux_server_unavailable_error(reason.as_str()) => return Ok(false),
+        Err(reason) if is_tmux_server_unavailable_error(reason.as_str()) => {
+            return Ok(false);
+        },
         Err(reason) => {
             return Err(tmux_lifecycle_error(
                 TMUX_LIFECYCLE_ERROR_CODE,
                 "failed to clean up tmux socket",
                 Some(json!({"cause": reason})),
             ));
-        }
+        },
     };
     if output.status.success() {
         return Ok(true);
@@ -346,21 +378,28 @@ pub(crate) fn cleanup_tmux_server_when_unowned(
     ))
 }
 
-fn list_all_sessions(tmux_socket: &Path) -> Result<Vec<String>, TmuxLifecycleError> {
-    let output =
-        match run_tmux_command_capture(tmux_socket, &["list-sessions", "-F", "#{session_name}"]) {
-            Ok(output) => output,
-            Err(reason) if is_missing_session_error(reason.as_str()) => return Ok(Vec::new()),
-            Err(reason) => {
-                return Err(tmux_lifecycle_error(
-                    TMUX_LIFECYCLE_ERROR_CODE,
-                    "failed to list tmux sessions",
-                    Some(json!({"cause": reason})),
-                ));
-            }
-        };
+fn list_all_sessions(
+    tmux_socket: &Path,
+) -> Result<Vec<String>, TmuxLifecycleError> {
+    let output = match run_tmux_command_capture(
+        tmux_socket,
+        &["list-sessions", "-F", "#{session_name}"],
+    ) {
+        Ok(output) => output,
+        Err(reason) if is_missing_session_error(reason.as_str()) => {
+            return Ok(Vec::new());
+        },
+        Err(reason) => {
+            return Err(tmux_lifecycle_error(
+                TMUX_LIFECYCLE_ERROR_CODE,
+                "failed to list tmux sessions",
+                Some(json!({"cause": reason})),
+            ));
+        },
+    };
     if !output.status.success() {
-        let reason = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let reason =
+            String::from_utf8_lossy(&output.stderr).trim().to_string();
         if is_missing_session_error(reason.as_str()) {
             return Ok(Vec::new());
         }

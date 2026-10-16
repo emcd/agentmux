@@ -23,7 +23,8 @@ pub const SESSION_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_SESSION";
 /// at spawn rather than stamped at load. It is declared here with the other two
 /// so [`INHERITED_CONTEXT_VARIABLE_NAMES`] can be built from one list — a name
 /// held elsewhere is a name that list silently omits.
-pub const STATE_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_STATE_DIRECTORY";
+pub const STATE_DIRECTORY_ENVIRONMENT_VARIABLE: &str =
+    "AGENTMUX_STATE_DIRECTORY";
 
 /// Environment variable carrying the configuration layer list of the relay
 /// which spawned a member, and the environment tier of configuration-layer
@@ -35,7 +36,8 @@ pub const STATE_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_STATE_DIRECTORY
 /// authenticates to the relay that spawned it, because the socket, the session
 /// and peer pre-shared keys, and the principal store all resolve beneath the
 /// state root; what diverges is the set of declarations it reads.
-pub const CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE: &str = "AGENTMUX_CONFIGURATION_DIRECTORY";
+pub const CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE: &str =
+    "AGENTMUX_CONFIGURATION_DIRECTORY";
 
 /// Names of every agentmux context variable a spawned child may inherit.
 ///
@@ -152,7 +154,7 @@ impl<'a> ContextValue<'a> {
                     rendered.push(text);
                 }
                 Ok(rendered.join(&LAYER_SEPARATOR.to_string()))
-            }
+            },
         }
     }
 }
@@ -178,7 +180,9 @@ impl<'a> BringUpContext<'a> {
     /// the form it is carried rather than the form it is written. See
     /// [`ContextValue`] for why the two differ.
     #[must_use]
-    pub fn environment_entries(&self) -> Vec<(&'static str, ContextValue<'a>)> {
+    pub fn environment_entries(
+        &self,
+    ) -> Vec<(&'static str, ContextValue<'a>)> {
         vec![
             (
                 BUNDLE_ENVIRONMENT_VARIABLE,
@@ -500,7 +504,9 @@ pub enum AcpChannel {
 /// process. The closed-enum shape keeps the schema self-validating
 /// (an unknown value fails serde's enum-variant deserializer with a
 /// structured "unknown variant" error).
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(
+    Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq,
+)]
 pub enum TermProtocol {
     #[default]
     #[serde(rename = "xterm-256color")]

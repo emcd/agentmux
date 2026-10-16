@@ -61,7 +61,13 @@ fn a_relay_comes_up_under_a_state_root_longer_than_sun_path() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
 
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
@@ -109,7 +115,8 @@ fn a_relay_comes_up_under_a_state_root_longer_than_sun_path() {
         String::from_utf8_lossy(&up.stderr)
     );
 
-    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux)).expect("read fake tmux log");
+    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux))
+        .expect("read fake tmux log");
     let new_session = recorded_new_session(&log);
     assert!(
         new_session.starts_with("-S tmux.sock "),
@@ -136,7 +143,13 @@ fn a_relative_tmux_wrapper_still_resolves_against_the_launch_directory() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
 
     let wrapper_directory = temporary.path().join("wrappers");
     fs::create_dir_all(&wrapper_directory).expect("create wrapper directory");
@@ -190,8 +203,9 @@ fn a_relative_tmux_wrapper_still_resolves_against_the_launch_directory() {
         String::from_utf8_lossy(&up.stderr)
     );
 
-    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux))
-        .expect("the relative wrapper must have run and recorded its invocations");
+    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux)).expect(
+        "the relative wrapper must have run and recorded its invocations",
+    );
     assert!(
         log.contains("new-session"),
         "the wrapper must have been reached for session creation; got:\n{log}"
@@ -217,7 +231,13 @@ fn a_bare_tmux_command_resolves_through_the_launch_directorys_path() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
 
     let wrapper_directory = temporary.path().join("wrappers");
     fs::create_dir_all(&wrapper_directory).expect("create wrapper directory");
@@ -275,8 +295,9 @@ fn a_bare_tmux_command_resolves_through_the_launch_directorys_path() {
         String::from_utf8_lossy(&up.stderr)
     );
 
-    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux))
-        .expect("the wrapper on the relative PATH entry must have run and recorded");
+    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux)).expect(
+        "the wrapper on the relative PATH entry must have run and recorded",
+    );
     assert!(
         log.contains("new-session"),
         "the wrapper must have been reached for session creation; got:\n{log}"
@@ -289,8 +310,9 @@ fn a_bare_tmux_command_resolves_through_the_launch_directorys_path() {
     // rewriting a relative entry here would silently repoint coder lookups from
     // the member's directory to the relay's. The fake tmux stands where the
     // client stands, so what it recorded is what a pane would inherit.
-    let observed_path = fs::read_to_string(fake_tmux_search_path_file(&fake_tmux))
-        .expect("the wrapper must have recorded the PATH it inherited");
+    let observed_path =
+        fs::read_to_string(fake_tmux_search_path_file(&fake_tmux))
+            .expect("the wrapper must have recorded the PATH it inherited");
     assert_eq!(
         observed_path.trim(),
         search_path,
@@ -325,15 +347,23 @@ fn a_bare_tmux_command_keeps_execvp_search_order_across_relative_entries() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
 
     let shadowed_directory = temporary.path().join("wrappers-shadowed");
     let wrapper_directory = temporary.path().join("wrappers");
-    fs::create_dir_all(&shadowed_directory).expect("create shadowed directory");
+    fs::create_dir_all(&shadowed_directory)
+        .expect("create shadowed directory");
     fs::create_dir_all(&wrapper_directory).expect("create wrapper directory");
     // Same name, earlier on PATH, and not executable at all.
     let shadowed = shadowed_directory.join("fake-tmux.sh");
-    fs::write(&shadowed, "#!/usr/bin/env bash\nexit 3\n").expect("write shadowed wrapper");
+    fs::write(&shadowed, "#!/usr/bin/env bash\nexit 3\n")
+        .expect("write shadowed wrapper");
     fs::set_permissions(&shadowed, fs::Permissions::from_mode(0o644))
         .expect("make shadowed wrapper non-executable");
     let fake_tmux = wrapper_directory.join("fake-tmux.sh");
@@ -418,7 +448,13 @@ fn tmux_is_addressed_relative_to_its_own_socket_directory() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
 
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
@@ -460,7 +496,8 @@ fn tmux_is_addressed_relative_to_its_own_socket_directory() {
         .expect("run agentmux up");
     assert!(up.status.success(), "up should succeed");
 
-    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux)).expect("read fake tmux log");
+    let log = fs::read_to_string(fake_tmux_log_path(&fake_tmux))
+        .expect("read fake tmux log");
     for invocation in log.lines().filter(|line| !line.trim().is_empty()) {
         assert!(
             invocation.starts_with("-S tmux.sock "),

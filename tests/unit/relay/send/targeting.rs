@@ -80,7 +80,11 @@ fn send_accepts_global_ui_target_not_in_bundle_configuration() {
 fn send_prefers_bundle_member_when_target_id_overlaps_with_ui_session_id() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
-    write_tui_configuration_with_session_id(&config_root, "default", "alpha@GLOBAL");
+    write_tui_configuration_with_session_id(
+        &config_root,
+        "default",
+        "alpha@GLOBAL",
+    );
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let response = dispatch_request(

@@ -57,8 +57,12 @@ mod send_attribution;
 /// `new.peer`/`change.psk`/`drop.peer` at `all`, with a `@GLOBAL` operator
 /// declared in the TUI configuration so relay-wide credential administration
 /// authorizes.
-fn write_identity_configuration(temporary: &TempDir, bundle_name: &str) -> ConfigurationRoots {
-    let configuration_roots = write_bundle_configuration(temporary, bundle_name);
+fn write_identity_configuration(
+    temporary: &TempDir,
+    bundle_name: &str,
+) -> ConfigurationRoots {
+    let configuration_roots =
+        write_bundle_configuration(temporary, bundle_name);
     std::fs::write(
         configuration_roots.base_layer().join("policies.toml"),
         r#"
@@ -112,7 +116,8 @@ fn operator_request(
     bundle_name: &str,
     request: Value,
 ) -> Value {
-    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(configuration_roots, bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     let operator = global_user_id(bundle_name);
@@ -158,7 +163,8 @@ fn operator_request_on_context(
     operator: &str,
     request: Value,
 ) -> Value {
-    let (mut client, join) = spawn_relay_connection_on_context(std::sync::Arc::clone(context));
+    let (mut client, join) =
+        spawn_relay_connection_on_context(std::sync::Arc::clone(context));
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -200,11 +206,17 @@ fn register_peer(
     principal_id: &str,
     scope: Option<&str>,
 ) -> String {
-    let mut request = json!({"operation": "new_peer", "principal_id": principal_id});
+    let mut request =
+        json!({"operation": "new_peer", "principal_id": principal_id});
     if let Some(scope) = scope {
         request["scope"] = Value::String(scope.to_string());
     }
-    let response = operator_request(configuration_roots, bundle_paths, bundle_name, request);
+    let response = operator_request(
+        configuration_roots,
+        bundle_paths,
+        bundle_name,
+        request,
+    );
     assert_eq!(
         response["response"]["kind"], "new_peer",
         "new peer rejected: {response:?}"

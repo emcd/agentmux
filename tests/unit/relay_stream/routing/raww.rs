@@ -19,7 +19,8 @@ fn relay_wide_operator_raww(
     bundle_name: &str,
     target: &str,
 ) -> Value {
-    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(configuration_roots, bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     let operator_id = global_user_id(bundle_name);
     send_json(
@@ -62,7 +63,8 @@ fn bundle_session_raww(
     bundle_name: &str,
     target: &str,
 ) -> Value {
-    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(configuration_roots, bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -107,8 +109,11 @@ fn cross_bundle_raww(
     bundle_name: &str,
     target_session: &str,
 ) -> Value {
-    let (mut client, join) =
-        spawn_relay_connection_with_catalog(configuration_roots, state_root, catalog);
+    let (mut client, join) = spawn_relay_connection_with_catalog(
+        configuration_roots,
+        state_root,
+        catalog,
+    );
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -154,11 +159,13 @@ fn cross_bundle_raww(
 fn relay_wide_raww_routes_to_bundle_target_by_suffix() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_raww_to_bundle";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     write_policies_with_raww(&configuration_roots, "all");
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let response = relay_wide_operator_raww(
         &configuration_roots,
@@ -183,11 +190,13 @@ fn relay_wide_raww_routes_to_bundle_target_by_suffix() {
 fn relay_wide_raww_into_bundle_denied_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_raww_home_denied";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     write_policies_with_raww(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let response = relay_wide_operator_raww(
         &configuration_roots,
@@ -215,10 +224,12 @@ fn relay_wide_raww_into_bundle_denied_under_home_scope() {
 fn same_bundle_raww_permitted_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_same_bundle_raww_home";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_policies_with_raww(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let response = bundle_session_raww(
         &configuration_roots,
@@ -241,13 +252,19 @@ fn same_bundle_raww_permitted_under_home_scope() {
 fn relay_wide_raww_with_bare_target_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_raww_bare";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
-    let response =
-        relay_wide_operator_raww(&configuration_roots, &bundle_paths, bundle_name, "alpha");
+    let response = relay_wide_operator_raww(
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        "alpha",
+    );
 
     assert_eq!(response["response"]["kind"], "error");
     assert_eq!(
@@ -273,8 +290,10 @@ fn cross_bundle_raww_permitted_under_all_scope_resolves_peer() {
     write_ui_bundle(&configuration_roots, bundle_b);
     write_policies_with_raww(&configuration_roots, "all");
     let state_root = temporary.path().join("state");
-    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
-    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
+    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a)
+        .expect("bundle-a paths");
+    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b)
+        .expect("bundle-b paths");
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_raww(
@@ -287,7 +306,8 @@ fn cross_bundle_raww_permitted_under_all_scope_resolves_peer() {
 
     assert_eq!(response["response"]["kind"], "error");
     assert_eq!(
-        response["response"]["error"]["code"], "validation_unsupported_operation",
+        response["response"]["error"]["code"],
+        "validation_unsupported_operation",
         "cross-bundle raww resolves the peer member and reaches the capability gate"
     );
     assert_eq!(
@@ -312,8 +332,10 @@ fn cross_bundle_raww_denied_under_home_scope() {
     write_tmux_bundle(&configuration_roots, bundle_b);
     write_policies_with_raww(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
-    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
-    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
+    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a)
+        .expect("bundle-a paths");
+    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b)
+        .expect("bundle-b paths");
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_raww(

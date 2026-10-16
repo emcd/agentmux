@@ -7,7 +7,9 @@ use std::{
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::runtime::{inscriptions::emit_inscription, signals::shutdown_requested};
+use crate::runtime::{
+    inscriptions::emit_inscription, signals::shutdown_requested,
+};
 use crate::transports::{ChoiceMade, ChoiceToMake, Chooser};
 
 use super::super::{
@@ -23,18 +25,26 @@ pub(super) mod queue;
 /// `(Mutex, Condvar)` pair shared between resolver and waiter future).
 pub(super) mod waiter;
 
-use self::queue::{pending_choice_option_ids, sort_pending_by_sequence, with_queue_state};
-use self::waiter::{get_waiter, register_waiter, take_waiter, timestamp_rfc3339};
+use self::queue::{
+    pending_choice_option_ids, sort_pending_by_sequence, with_queue_state,
+};
+use self::waiter::{
+    get_waiter, register_waiter, take_waiter, timestamp_rfc3339,
+};
 
-const CHOICES_QUEUE_UNAVAILABLE_CODE: &str = "runtime_choices_queue_unavailable";
+const CHOICES_QUEUE_UNAVAILABLE_CODE: &str =
+    "runtime_choices_queue_unavailable";
 
 const CHOICE_CANCELLED_CODE: &str = "runtime_choices_request_cancelled";
-const CHOICE_INVALIDATED_BY_RESPAWN_CODE: &str = "runtime_choices_request_invalidated_by_respawn";
-const CHOICE_ALREADY_RESOLVED_CODE: &str = "runtime_choices_request_already_resolved";
+const CHOICE_INVALIDATED_BY_RESPAWN_CODE: &str =
+    "runtime_choices_request_invalidated_by_respawn";
+const CHOICE_ALREADY_RESOLVED_CODE: &str =
+    "runtime_choices_request_already_resolved";
 const CHOICES_QUEUE_FULL_CODE: &str = "runtime_choices_queue_full";
 const CHOICE_WAIT_POLL_MS: u64 = 100;
 
-type SharedWaiterState = Arc<(Mutex<Option<ChoiceResolutionOutcome>>, Condvar)>;
+type SharedWaiterState =
+    Arc<(Mutex<Option<ChoiceResolutionOutcome>>, Condvar)>;
 
 // The queue is process-local in-memory state keyed by runtime_directory. The
 // ACP server is authoritative for whether a choice request is still
@@ -138,22 +148,26 @@ fn resolve_choice_via_relay(
                 reason_code: CHOICES_QUEUE_FULL_CODE.to_string(),
                 reason: Some("choices queue is full".to_string()),
             };
-        }
+        },
         Err(_) => {
             return ChoiceMade::Cancelled {
                 decided_by: "relay".to_string(),
                 reason_code: CHOICES_QUEUE_UNAVAILABLE_CODE.to_string(),
                 reason: Some("failed to enqueue choice request".to_string()),
             };
-        }
+        },
     };
 
-    let Ok(outcome) = wait_for_choice_resolution(context, enqueued.choice_request_id.as_str())
-    else {
+    let Ok(outcome) = wait_for_choice_resolution(
+        context,
+        enqueued.choice_request_id.as_str(),
+    ) else {
         return ChoiceMade::Cancelled {
             decided_by: "relay".to_string(),
             reason_code: CHOICE_CANCELLED_CODE.to_string(),
-            reason: Some("failed while waiting for choice decision".to_string()),
+            reason: Some(
+                "failed while waiting for choice decision".to_string(),
+            ),
         };
     };
 
@@ -195,17 +209,18 @@ pub(in crate::relay) fn enqueue_choice_request(
         enqueued_at: timestamp_rfc3339(),
         sequence: 0,
     };
-    let stored = with_queue_state(context.runtime_directory.as_path(), |state| {
-        if state.pending.len() >= pending_max {
-            return Err(CHOICES_QUEUE_FULL_CODE.to_string());
-        }
-        let mut record = record;
-        record.sequence = state.next_sequence;
-        state.next_sequence = state.next_sequence.saturating_add(1);
-        state.pending.push(record.clone());
-        sort_pending_by_sequence(state.pending.as_mut_slice());
-        Ok(record)
-    })??;
+    let stored =
+        with_queue_state(context.runtime_directory.as_path(), |state| {
+            if state.pending.len() >= pending_max {
+                return Err(CHOICES_QUEUE_FULL_CODE.to_string());
+            }
+            let mut record = record;
+            record.sequence = state.next_sequence;
+            state.next_sequence = state.next_sequence.saturating_add(1);
+            state.pending.push(record.clone());
+            sort_pending_by_sequence(state.pending.as_mut_slice());
+            Ok(record)
+        })??;
     register_waiter(stored.choice_request_id.as_str())?;
     emit_choices_requested_event(context, &stored);
     super::observability::publish_choices_queue_event(
@@ -223,14 +238,17 @@ pub(in crate::relay) fn resolve_choice_request(
     context: &ChoiceEventContext,
     decision: ChoiceDecisionRequest,
 ) -> Result<ChoiceResolutionOutcome, String> {
-    let record = with_queue_state(context.runtime_directory.as_path(), |state| {
-        state
-            .pending
-            .iter()
-            .position(|record| record.choice_request_id == decision.choice_request_id)
-            .map(|index| state.pending.remove(index))
-    })?
-    .ok_or_else(|| CHOICE_ALREADY_RESOLVED_CODE.to_string())?;
+    let record =
+        with_queue_state(context.runtime_directory.as_path(), |state| {
+            state
+                .pending
+                .iter()
+                .position(|record| {
+                    record.choice_request_id == decision.choice_request_id
+                })
+                .map(|index| state.pending.remove(index))
+        })?
+        .ok_or_else(|| CHOICE_ALREADY_RESOLVED_CODE.to_string())?;
 
     let outcome = match decision.decision {
         ChoiceDecisionKind::Selected => {
@@ -252,11 +270,13 @@ pub(in crate::relay) fn resolve_choice_request(
                 option_id,
                 decided_by: decision.decided_by.clone(),
             }
-        }
+        },
         ChoiceDecisionKind::Cancelled => ChoiceResolutionOutcome::Cancelled {
             decided_by: decision.decided_by.clone(),
             reason_code: CHOICE_CANCELLED_CODE.to_string(),
-            reason: Some("choice request was cancelled by UI decision".to_string()),
+            reason: Some(
+                "choice request was cancelled by UI decision".to_string(),
+            ),
         },
     };
 
@@ -282,8 +302,8 @@ pub(in crate::relay) fn wait_for_choice_resolution(
     context: &ChoiceEventContext,
     choice_request_id: &str,
 ) -> Result<ChoiceResolutionOutcome, String> {
-    let waiter =
-        get_waiter(choice_request_id)?.ok_or_else(|| CHOICE_ALREADY_RESOLVED_CODE.to_string())?;
+    let waiter = get_waiter(choice_request_id)?
+        .ok_or_else(|| CHOICE_ALREADY_RESOLVED_CODE.to_string())?;
     let (lock, condvar) = &*waiter;
     let mut guard = lock
         .lock()
@@ -298,7 +318,10 @@ pub(in crate::relay) fn wait_for_choice_resolution(
         guard = wait.0;
         if shutdown_requested() {
             drop(guard);
-            return cancel_choice_request_on_shutdown(context, choice_request_id);
+            return cancel_choice_request_on_shutdown(
+                context,
+                choice_request_id,
+            );
         }
     }
 }
@@ -307,10 +330,14 @@ pub(in crate::relay) fn emit_choices_snapshot_then_replay(
     context: &ChoiceEventContext,
     ui_session_id: &str,
 ) -> Result<(), String> {
-    let pending = list_pending_choice_requests(context.runtime_directory.as_path())?;
+    let pending =
+        list_pending_choice_requests(context.runtime_directory.as_path())?;
     let snapshot_event = RelayStreamEvent {
         event_type: "choices.snapshot".to_string(),
-        target_session: canonical_session_id(ui_session_id, context.namespace.as_str()),
+        target_session: canonical_session_id(
+            ui_session_id,
+            context.namespace.as_str(),
+        ),
         created_at: timestamp_rfc3339(),
         payload: json!({
             "pending_count": pending.len(),
@@ -320,10 +347,22 @@ pub(in crate::relay) fn emit_choices_snapshot_then_replay(
                 .collect::<Vec<_>>(),
         }),
     };
-    let _ = send_event_to_registered_ui(context.namespace.as_str(), ui_session_id, &snapshot_event);
+    let _ = send_event_to_registered_ui(
+        context.namespace.as_str(),
+        ui_session_id,
+        &snapshot_event,
+    );
     for request in pending {
-        let event = choices_requested_event(ui_session_id, &context.namespace, &request);
-        let _ = send_event_to_registered_ui(context.namespace.as_str(), ui_session_id, &event);
+        let event = choices_requested_event(
+            ui_session_id,
+            &context.namespace,
+            &request,
+        );
+        let _ = send_event_to_registered_ui(
+            context.namespace.as_str(),
+            ui_session_id,
+            &event,
+        );
     }
     Ok(())
 }
@@ -359,19 +398,23 @@ pub(in crate::relay) fn invalidate_pending_for_respawn(
         let outcome = ChoiceResolutionOutcome::Cancelled {
             decided_by: "relay".to_string(),
             reason_code: CHOICE_INVALIDATED_BY_RESPAWN_CODE.to_string(),
-            reason: Some("ACP worker respawn invalidated the pending choice request".to_string()),
+            reason: Some(
+                "ACP worker respawn invalidated the pending choice request"
+                    .to_string(),
+            ),
         };
-        let had_pending_waiter = match take_waiter(record.choice_request_id.as_str())? {
-            Some(waiter) => {
-                let (lock, condvar) = &*waiter;
-                if let Ok(mut value) = lock.lock() {
-                    *value = Some(outcome.clone());
-                    condvar.notify_all();
-                }
-                true
-            }
-            None => false,
-        };
+        let had_pending_waiter =
+            match take_waiter(record.choice_request_id.as_str())? {
+                Some(waiter) => {
+                    let (lock, condvar) = &*waiter;
+                    if let Ok(mut value) = lock.lock() {
+                        *value = Some(outcome.clone());
+                        condvar.notify_all();
+                    }
+                    true
+                },
+                None => false,
+            };
         emit_choices_resolved_event(context, record, &outcome);
         emit_inscription(
             "relay.acp.respawn.choice_invalidated",
@@ -433,13 +476,16 @@ fn cancel_choice_request_on_shutdown(
     context: &ChoiceEventContext,
     choice_request_id: &str,
 ) -> Result<ChoiceResolutionOutcome, String> {
-    let record = with_queue_state(context.runtime_directory.as_path(), |state| {
-        state
-            .pending
-            .iter()
-            .position(|record| record.choice_request_id == choice_request_id)
-            .map(|index| state.pending.remove(index))
-    })?;
+    let record =
+        with_queue_state(context.runtime_directory.as_path(), |state| {
+            state
+                .pending
+                .iter()
+                .position(|record| {
+                    record.choice_request_id == choice_request_id
+                })
+                .map(|index| state.pending.remove(index))
+        })?;
     let Some(record) = record else {
         return Ok(ChoiceResolutionOutcome::Cancelled {
             decided_by: "relay".to_string(),
@@ -450,7 +496,9 @@ fn cancel_choice_request_on_shutdown(
     let outcome = ChoiceResolutionOutcome::Cancelled {
         decided_by: "relay".to_string(),
         reason_code: CHOICE_CANCELLED_CODE.to_string(),
-        reason: Some("relay shutdown cancelled pending choice request".to_string()),
+        reason: Some(
+            "relay shutdown cancelled pending choice request".to_string(),
+        ),
     };
     if let Some(waiter) = take_waiter(choice_request_id)? {
         let (lock, condvar) = &*waiter;
@@ -471,10 +519,21 @@ fn cancel_choice_request_on_shutdown(
     Ok(outcome)
 }
 
-fn emit_choices_requested_event(context: &ChoiceEventContext, request: &PendingChoiceRequest) {
+fn emit_choices_requested_event(
+    context: &ChoiceEventContext,
+    request: &PendingChoiceRequest,
+) {
     for ui_session_id in &context.authorized_ui_sessions {
-        let event = choices_requested_event(ui_session_id.as_str(), &context.namespace, request);
-        let _ = send_event_to_registered_ui(context.namespace.as_str(), ui_session_id, &event);
+        let event = choices_requested_event(
+            ui_session_id.as_str(),
+            &context.namespace,
+            request,
+        );
+        let _ = send_event_to_registered_ui(
+            context.namespace.as_str(),
+            ui_session_id,
+            &event,
+        );
     }
     emit_inscription(
         "relay.choices.requested",
@@ -515,7 +574,10 @@ fn emit_choices_resolved_event(
     for ui_session_id in &context.authorized_ui_sessions {
         let event = RelayStreamEvent {
             event_type: "choices.resolved".to_string(),
-            target_session: canonical_session_id(ui_session_id, context.namespace.as_str()),
+            target_session: canonical_session_id(
+                ui_session_id,
+                context.namespace.as_str(),
+            ),
             created_at: timestamp_rfc3339(),
             payload: json!({
                 "message_id": request.message_id,
@@ -527,7 +589,11 @@ fn emit_choices_resolved_event(
                 "resolved_at": timestamp_rfc3339(),
             }),
         };
-        let _ = send_event_to_registered_ui(context.namespace.as_str(), ui_session_id, &event);
+        let _ = send_event_to_registered_ui(
+            context.namespace.as_str(),
+            ui_session_id,
+            &event,
+        );
     }
     emit_inscription(
         "relay.choices.resolved",

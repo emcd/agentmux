@@ -8,12 +8,16 @@
 //! a total one differ only in the lead phrase.
 
 use agentmux::relay::{
-    FoldedStartupFailures, ListedSessionTransport, NO_READY_SESSION_LEAD, PARTIAL_STARTUP_LEAD,
-    StartupFailureRecord, fold_startup_failures,
+    FoldedStartupFailures, ListedSessionTransport, NO_READY_SESSION_LEAD,
+    PARTIAL_STARTUP_LEAD, StartupFailureRecord, fold_startup_failures,
 };
 use serde_json::json;
 
-fn failure(session_id: &str, code: &str, reason: &str) -> StartupFailureRecord {
+fn failure(
+    session_id: &str,
+    code: &str,
+    reason: &str,
+) -> StartupFailureRecord {
     StartupFailureRecord {
         session_id: session_id.to_string(),
         transport: ListedSessionTransport::Acp,

@@ -40,20 +40,23 @@ pub mod operations;
 pub mod worker;
 
 pub use delivery::{
-    DeliveryPayloadMode, PackingUnitId, PartitionError, SendOutcome, SubmissionEvidence,
+    DeliveryPayloadMode, PackingUnitId, PartitionError, SendOutcome,
+    SubmissionEvidence,
 };
 pub use doorbell::DeliveryDoorbell;
 pub use identity::{ConsumerBinding, ConsumerGenerationId, DeliveryTargetId};
 pub use look::{
-    LookFreshness, LookSnapshotPayload, LookSnapshotSource, StructuredEntry, ToolCallStatus,
+    LookFreshness, LookSnapshotPayload, LookSnapshotSource, StructuredEntry,
+    ToolCallStatus,
 };
 pub use mailbox::{
-    CursorPosition, EntryRange, EntrySequence, MailboxEntry, MailboxEntryKind, MailboxPayload,
+    CursorPosition, EntryRange, EntrySequence, MailboxEntry, MailboxEntryKind,
+    MailboxPayload,
 };
 pub use message::{DeliveryEnvelope, DeliveryMessage};
 pub use operations::{
-    AckAccepted, AckRejection, AckRequest, AckResult, DeclareAccepted, DeclareRejection,
-    DeclareRequest, DeclareResult, MemberAcknowledgment, PeekRejection, PeekRequest, PeekResponse,
-    PeekResult,
+    AckAccepted, AckRejection, AckRequest, AckResult, DeclareAccepted,
+    DeclareRejection, DeclareRequest, DeclareResult, MemberAcknowledgment,
+    PeekRejection, PeekRequest, PeekResponse, PeekResult,
 };
 pub use worker::{WorkerFailureReason, WorkerReadinessState};

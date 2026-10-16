@@ -22,7 +22,13 @@ fn host_relay_require_credentials_flag_rejects_socket_trust() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(true));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(true),
+    );
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
@@ -48,7 +54,8 @@ fn host_relay_require_credentials_flag_rejects_socket_trust() {
     );
     wait_for_relay_ready(&state_root, "alpha");
 
-    let frame = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
+    let frame =
+        relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child
@@ -79,7 +86,13 @@ fn host_relay_without_require_credentials_accepts_socket_trust() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(true));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(true),
+    );
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
@@ -104,7 +117,8 @@ fn host_relay_without_require_credentials_accepts_socket_trust() {
     );
     wait_for_relay_ready(&state_root, "alpha");
 
-    let frame = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
+    let frame =
+        relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child
@@ -128,7 +142,13 @@ fn host_relay_require_credentials_from_relay_toml_rejects_socket_trust() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(true));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(true),
+    );
     fs::write(
         config_root.join("relay.toml"),
         "require-session-credentials = true\n",
@@ -158,7 +178,8 @@ fn host_relay_require_credentials_from_relay_toml_rejects_socket_trust() {
     );
     wait_for_relay_ready(&state_root, "alpha");
 
-    let frame = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
+    let frame =
+        relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child

@@ -19,7 +19,8 @@ pub(crate) const ACP_STARTUP_PRIME_TIMEOUT_MS: u64 = 10_000;
 const ACP_STALE_REASON_WORKER_INITIALIZING: &str = "acp_worker_initializing";
 const ACP_STALE_REASON_WORKER_UNAVAILABLE: &str = "acp_worker_unavailable";
 const ACP_STALE_REASON_WORKER_RECOVERING: &str = "acp_worker_recovering";
-const ACP_STALE_REASON_SNAPSHOT_PRIME_TIMEOUT: &str = "acp_snapshot_prime_timeout";
+const ACP_STALE_REASON_SNAPSHOT_PRIME_TIMEOUT: &str =
+    "acp_snapshot_prime_timeout";
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 struct PersistedAcpSessionState {
@@ -46,7 +47,10 @@ fn acp_session_state_lock() -> &'static Mutex<()> {
     ACP_SESSION_STATE_LOCK.get_or_init(|| Mutex::new(()))
 }
 
-fn resolve_acp_session_state_path(runtime_directory: &Path, target_session: &str) -> PathBuf {
+fn resolve_acp_session_state_path(
+    runtime_directory: &Path,
+    target_session: &str,
+) -> PathBuf {
     runtime_directory
         .join(ACP_SESSIONS_DIRECTORY)
         .join(target_session)
@@ -57,7 +61,8 @@ pub(crate) fn load_persisted_acp_session_id(
     runtime_directory: &Path,
     target_session: &str,
 ) -> Result<Option<String>, String> {
-    let path = resolve_acp_session_state_path(runtime_directory, target_session);
+    let path =
+        resolve_acp_session_state_path(runtime_directory, target_session);
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;
@@ -70,7 +75,8 @@ pub(crate) fn persist_acp_session_id(
     target_session: &str,
     session_id: &str,
 ) -> Result<(), String> {
-    let path = resolve_acp_session_state_path(runtime_directory, target_session);
+    let path =
+        resolve_acp_session_state_path(runtime_directory, target_session);
     let _guard = acp_session_state_lock()
         .lock()
         .map_err(|_| "failed to lock ACP session state".to_string())?;
@@ -116,7 +122,9 @@ pub(crate) fn derive_acp_look_snapshot(
             returned_entries_count,
             freshness: LookFreshness::Stale,
             snapshot_source,
-            stale_reason_code: Some(ACP_STALE_REASON_WORKER_UNAVAILABLE.to_string()),
+            stale_reason_code: Some(
+                ACP_STALE_REASON_WORKER_UNAVAILABLE.to_string(),
+            ),
             snapshot_age_ms: None,
         };
     }
@@ -128,7 +136,9 @@ pub(crate) fn derive_acp_look_snapshot(
             returned_entries_count,
             freshness: LookFreshness::Stale,
             snapshot_source,
-            stale_reason_code: Some(ACP_STALE_REASON_WORKER_RECOVERING.to_string()),
+            stale_reason_code: Some(
+                ACP_STALE_REASON_WORKER_RECOVERING.to_string(),
+            ),
             snapshot_age_ms: None,
         };
     }
@@ -151,16 +161,17 @@ pub(crate) fn derive_acp_look_snapshot(
     }
 
     let stale_reason_code = match worker_state {
-        Some(WorkerReadinessState::Busy) | Some(WorkerReadinessState::Available) => None,
+        Some(WorkerReadinessState::Busy)
+        | Some(WorkerReadinessState::Available) => None,
         Some(WorkerReadinessState::Initializing) => {
             Some(ACP_STALE_REASON_WORKER_INITIALIZING.to_string())
-        }
+        },
         Some(WorkerReadinessState::Recovering) => {
             Some(ACP_STALE_REASON_WORKER_RECOVERING.to_string())
-        }
+        },
         Some(WorkerReadinessState::Unavailable) | None => {
             Some(ACP_STALE_REASON_WORKER_UNAVAILABLE.to_string())
-        }
+        },
     };
     let freshness = if stale_reason_code.is_some() {
         LookFreshness::Stale
@@ -184,30 +195,32 @@ fn load_persisted_acp_session_state(
     if !path.exists() {
         return Ok(None);
     }
-    let raw = fs::read_to_string(path)
-        .map_err(|source| format!("read ACP session state {} failed: {source}", path.display()))?;
-    let state = match serde_json::from_str::<PersistedAcpSessionState>(raw.as_str()) {
-        Ok(state) => state,
-        Err(source) => {
-            emit_inscription(
-                "relay.acp.session_state.parse_failed",
-                &serde_json::json!({
-                    "path": path.display().to_string(),
-                    "cause": source.to_string(),
-                }),
-            );
-            if let Err(remove_error) = fs::remove_file(path) {
+    let raw = fs::read_to_string(path).map_err(|source| {
+        format!("read ACP session state {} failed: {source}", path.display())
+    })?;
+    let state =
+        match serde_json::from_str::<PersistedAcpSessionState>(raw.as_str()) {
+            Ok(state) => state,
+            Err(source) => {
                 emit_inscription(
-                    "relay.acp.session_state.remove_failed",
+                    "relay.acp.session_state.parse_failed",
                     &serde_json::json!({
                         "path": path.display().to_string(),
-                        "cause": remove_error.to_string(),
+                        "cause": source.to_string(),
                     }),
                 );
-            }
-            return Ok(None);
-        }
-    };
+                if let Err(remove_error) = fs::remove_file(path) {
+                    emit_inscription(
+                        "relay.acp.session_state.remove_failed",
+                        &serde_json::json!({
+                            "path": path.display().to_string(),
+                            "cause": remove_error.to_string(),
+                        }),
+                    );
+                }
+                return Ok(None);
+            },
+        };
     if state.schema_version != ACP_SESSION_STATE_SCHEMA_VERSION {
         emit_inscription(
             "relay.acp.session_state.schema_mismatch",

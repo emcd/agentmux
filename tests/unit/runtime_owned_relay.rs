@@ -14,8 +14,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use agentmux::runtime::bootstrap::{BootstrapOptions, SpawnedRelay, bootstrap_relay};
-use agentmux::runtime::paths::{RelayRuntimePaths, ensure_relay_runtime_directory};
+use agentmux::runtime::bootstrap::{
+    BootstrapOptions, SpawnedRelay, bootstrap_relay,
+};
+use agentmux::runtime::paths::{
+    RelayRuntimePaths, ensure_relay_runtime_directory,
+};
 use tempfile::TempDir;
 
 fn spawn_benign_child(seconds: &str) -> Child {
@@ -96,13 +100,15 @@ fn bootstrap_spawn_yields_owned_relay_for_teardown() {
         let ready_sentinel = paths.relay_ready_sentinel.clone();
         let handle = thread::spawn(move || {
             let listener = UnixListener::bind(&relay_socket).expect("bind");
-            std::fs::write(&ready_sentinel, b"").expect("write ready sentinel");
+            std::fs::write(&ready_sentinel, b"")
+                .expect("write ready sentinel");
             thread::sleep(Duration::from_millis(250));
             drop(listener);
         });
         *listener_handle_inner.lock().expect("mutex") = Some(handle);
         // Stand-in for the relay process the TUI would own for teardown.
-        *owned_inner.borrow_mut() = Some(SpawnedRelay::new(spawn_benign_child("60")));
+        *owned_inner.borrow_mut() =
+            Some(SpawnedRelay::new(spawn_benign_child("60")));
         Ok(())
     })
     .expect("bootstrap");
@@ -113,7 +119,8 @@ fn bootstrap_spawn_yields_owned_relay_for_teardown() {
         None
     };
     assert!(report.spawned_relay);
-    let owned_relay = owned_relay.expect("a spawned relay is owned for teardown");
+    let owned_relay =
+        owned_relay.expect("a spawned relay is owned for teardown");
     owned_relay.stop(Duration::from_secs(5));
 
     if let Some(handle) = listener_handle.lock().expect("mutex").take() {
@@ -138,7 +145,8 @@ fn bootstrap_readiness_failure_after_spawn_leaves_child_for_cleanup() {
     };
     let outcome = bootstrap_relay(&paths, options, || {
         // Launch the stand-in relay but never satisfy the readiness gate.
-        *owned_inner.borrow_mut() = Some(SpawnedRelay::new(spawn_benign_child("60")));
+        *owned_inner.borrow_mut() =
+            Some(SpawnedRelay::new(spawn_benign_child("60")));
         Ok(())
     });
 
@@ -166,12 +174,14 @@ fn bootstrap_reuse_of_running_relay_yields_no_ownership() {
     // A relay is already reachable: the spawn closure must not run, the
     // `spawned_relay` flag is false, and nothing is owned for teardown.
     let (_temporary, paths) = test_paths();
-    let _listener = UnixListener::bind(&paths.relay_socket).expect("bind existing relay");
+    let _listener =
+        UnixListener::bind(&paths.relay_socket).expect("bind existing relay");
     let owned: Rc<RefCell<Option<SpawnedRelay>>> = Rc::new(RefCell::new(None));
     let owned_inner = Rc::clone(&owned);
     let report = bootstrap_relay(&paths, BootstrapOptions::default(), || {
         // Would-be capture; must never run while a relay is already reachable.
-        *owned_inner.borrow_mut() = Some(SpawnedRelay::new(spawn_benign_child("60")));
+        *owned_inner.borrow_mut() =
+            Some(SpawnedRelay::new(spawn_benign_child("60")));
         Ok(())
     })
     .expect("bootstrap");

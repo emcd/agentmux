@@ -25,7 +25,9 @@ use crate::transports::SendOutcome;
 // `src/transports` may not import `crate::relay`, so they are defined there and
 // re-exported here. The guard still owns what they *mean* — the evidence order
 // below and the outcome mapping on `SubmissionEvidence` are relay-private.
-pub(in crate::relay) use crate::transports::{PackingUnitId, SubmissionEvidence};
+pub(in crate::relay) use crate::transports::{
+    PackingUnitId, SubmissionEvidence,
+};
 
 /// Where a queue entry sits in the delivery lifecycle.
 ///
@@ -104,11 +106,13 @@ impl GuardTrigger {
     /// trigger rather than restating the evidence.
     pub(in crate::relay) fn reason(self) -> &'static str {
         match self {
-            Self::GracefulShutdown => "relay shut down before this member resolved",
+            Self::GracefulShutdown => {
+                "relay shut down before this member resolved"
+            },
             Self::BundleStop => "bundle stopped before this member resolved",
             Self::ExecutionBound => {
                 "relay execution exceeded the submission bound before this member resolved"
-            }
+            },
         }
     }
 }
@@ -137,7 +141,9 @@ impl GuardTrigger {
 /// is deliberately no rung above these two for such a member to take; see
 /// `documentation/decisions/0005-no-two-phase-acknowledgment.md` for the shape
 /// that would reintroduce one and why it is rejected.
-pub(in crate::relay) fn resolve_from_binding(unit: Option<PackingUnitId>) -> SubmissionEvidence {
+pub(in crate::relay) fn resolve_from_binding(
+    unit: Option<PackingUnitId>,
+) -> SubmissionEvidence {
     match unit {
         Some(_) => SubmissionEvidence::SubmissionUnknown,
         None => SubmissionEvidence::NotSubmitted,
@@ -185,7 +191,10 @@ mod tests {
     fn the_resolution_order_prefers_proof_then_honesty() {
         // Never bound to a unit: the binding is recorded before the unit's first
         // target-side effect, so non-delivery is provable rather than inferred.
-        assert_eq!(resolve_from_binding(None), SubmissionEvidence::NotSubmitted);
+        assert_eq!(
+            resolve_from_binding(None),
+            SubmissionEvidence::NotSubmitted
+        );
 
         // Bound, so the member's unit was in a transport's hands: partial effect
         // cannot be excluded, and the honest answer is that we do not know.

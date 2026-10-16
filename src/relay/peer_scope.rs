@@ -40,7 +40,8 @@ const PEER_NON_ADDRESSABLE_NAMESPACES: [&str; 2] = ["RELAY", "EXTERNAL"];
 /// partitions qualifies, so newly introduced namespace types are covered
 /// immediately without another grant update.
 pub(crate) fn is_peer_addressable_namespace(namespace: &str) -> bool {
-    !namespace.is_empty() && !PEER_NON_ADDRESSABLE_NAMESPACES.contains(&namespace)
+    !namespace.is_empty()
+        && !PEER_NON_ADDRESSABLE_NAMESPACES.contains(&namespace)
 }
 
 /// Returns true when `name` is a syntactically valid explicit peer-scope name.
@@ -60,7 +61,9 @@ fn is_valid_peer_namespace_name(name: &str) -> bool {
 /// rights (`Ok(None)`). Empty items, wildcard mixed with names, malformed
 /// names, and reserved non-addressable partitions are `validation_invalid_params`
 /// failures. Valid names need not exist yet.
-pub(crate) fn parse_peer_scope(scope: Option<&str>) -> Result<Option<String>, RelayError> {
+pub(crate) fn parse_peer_scope(
+    scope: Option<&str>,
+) -> Result<Option<String>, RelayError> {
     let Some(raw) = scope else {
         return Ok(None);
     };
@@ -107,7 +110,10 @@ pub(crate) fn parse_peer_scope(scope: Option<&str>) -> Result<Option<String>, Re
 /// `*` covers every addressable namespace; a set covers its named namespaces;
 /// empty/absent covers nothing. The application scope helper is unchanged and
 /// never consulted here.
-pub(crate) fn peer_scope_covers_target(scope: Option<&str>, target_principal_id: &str) -> bool {
+pub(crate) fn peer_scope_covers_target(
+    scope: Option<&str>,
+    target_principal_id: &str,
+) -> bool {
     match scope {
         None => false,
         Some(raw) => {
@@ -121,19 +127,23 @@ pub(crate) fn peer_scope_covers_target(scope: Option<&str>, target_principal_id:
                     Some((_, namespace)) if is_peer_addressable_namespace(namespace)
                 );
             }
-            let Some((_, namespace)) = split_principal_id(target_principal_id) else {
+            let Some((_, namespace)) = split_principal_id(target_principal_id)
+            else {
                 return false;
             };
             trimmed
                 .split(',')
                 .map(str::trim)
                 .any(|name| name == namespace)
-        }
+        },
     }
 }
 
 /// Whether a peer `scope` covers `namespace` for principal discovery.
-pub(crate) fn peer_scope_covers_namespace(scope: Option<&str>, namespace: &str) -> bool {
+pub(crate) fn peer_scope_covers_namespace(
+    scope: Option<&str>,
+    namespace: &str,
+) -> bool {
     match scope {
         None => false,
         Some(raw) => {
@@ -148,7 +158,7 @@ pub(crate) fn peer_scope_covers_namespace(scope: Option<&str>, namespace: &str) 
                 .split(',')
                 .map(str::trim)
                 .any(|name| name == namespace)
-        }
+        },
     }
 }
 
@@ -179,7 +189,8 @@ pub(crate) fn resolve_peer_ingress_scope(
     }
     let stored = record.credential_hash.as_bytes();
     let candidate = presented.as_bytes();
-    if stored.len() != candidate.len() || !bool::from(stored.ct_eq(candidate)) {
+    if stored.len() != candidate.len() || !bool::from(stored.ct_eq(candidate))
+    {
         return None;
     }
     record.scope.clone()
@@ -218,8 +229,11 @@ pub(crate) fn live_peer_ingress<'a>(
         .admin_lock
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let scope =
-        resolve_peer_ingress_scope(authority.state_root, peer_principal_id, credential_hash);
+    let scope = resolve_peer_ingress_scope(
+        authority.state_root,
+        peer_principal_id,
+        credential_hash,
+    );
     Ok(LivePeerIngress {
         scope,
         _guard: guard,
@@ -234,14 +248,19 @@ pub(crate) fn live_peer_ingress<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::relay::identity::{PrincipalRecord, PrincipalType, hash_token_sha256};
+    use crate::relay::identity::{
+        PrincipalRecord, PrincipalType, hash_token_sha256,
+    };
 
     #[test]
     fn peer_scope_grammar_and_credential_binding() {
         // Grammar: wildcard, sets, canonicalization, and empty/no rights.
         assert_eq!(parse_peer_scope(None).unwrap(), None);
         assert_eq!(parse_peer_scope(Some("   ")).unwrap(), None);
-        assert_eq!(parse_peer_scope(Some("*")).unwrap(), Some("*".to_string()));
+        assert_eq!(
+            parse_peer_scope(Some("*")).unwrap(),
+            Some("*".to_string())
+        );
         assert_eq!(
             parse_peer_scope(Some(" beta,alpha ,beta,GLOBAL ")).unwrap(),
             Some("GLOBAL,alpha,beta".to_string())
@@ -273,8 +292,8 @@ mod tests {
         assert!(!peer_scope_covers_namespace(Some("*"), "RELAY"));
 
         // Binding: only the exact presented credential hash authorizes.
-        let state_root =
-            std::env::temp_dir().join(format!("agentmux-peer-scope-test-{}", std::process::id()));
+        let state_root = std::env::temp_dir()
+            .join(format!("agentmux-peer-scope-test-{}", std::process::id()));
         let token = "binding-probe-psk";
         let hash = hash_token_sha256(token);
         let mut store = PrincipalStore::load(&state_root).unwrap();
@@ -288,7 +307,11 @@ mod tests {
         });
         store.persist().unwrap();
         assert_eq!(
-            resolve_peer_ingress_scope(&state_root, "probe@RELAY", Some(&hash)),
+            resolve_peer_ingress_scope(
+                &state_root,
+                "probe@RELAY",
+                Some(&hash)
+            ),
             Some("*".to_string())
         );
         assert_eq!(
@@ -301,7 +324,11 @@ mod tests {
             "a superseded credential must not inherit the record"
         );
         assert_eq!(
-            resolve_peer_ingress_scope(&state_root, "missing@RELAY", Some(&hash)),
+            resolve_peer_ingress_scope(
+                &state_root,
+                "missing@RELAY",
+                Some(&hash)
+            ),
             None
         );
         assert_eq!(

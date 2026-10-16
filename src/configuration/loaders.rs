@@ -5,29 +5,35 @@ use std::{
 };
 
 use super::{
-    BUNDLE_SCHEMA_VERSION, ConfigurationError, ConfigurationRoots, POLICIES_SCHEMA_VERSION,
+    BUNDLE_SCHEMA_VERSION, ConfigurationError, ConfigurationRoots,
+    POLICIES_SCHEMA_VERSION,
     fields::{
-        canonicalize_best_effort, normalize_field, normalize_global_session_id,
-        validate_bundle_groups, validate_bundle_name, validate_format_version,
-        validate_project_name, validate_project_name_from, validate_session_id,
+        canonicalize_best_effort, normalize_field,
+        normalize_global_session_id, validate_bundle_groups,
+        validate_bundle_name, validate_format_version, validate_project_name,
+        validate_project_name_from, validate_session_id,
     },
     paths::{
-        bundle_configuration_path, coders_configuration_path, effective_bundle_definitions,
-        policies_configuration_path, tui_configuration_path, ui_configuration_path,
+        bundle_configuration_path, coders_configuration_path,
+        effective_bundle_definitions, policies_configuration_path,
+        tui_configuration_path, ui_configuration_path,
     },
     raw::{
-        Coder, CoderTarget, RawBundleFile, RawCoder, RawCodersFile, RawPoliciesFile, RawUiFile,
-        RawUsersFile, RawUsersSession,
+        Coder, CoderTarget, RawBundleFile, RawCoder, RawCodersFile,
+        RawPoliciesFile, RawUiFile, RawUsersFile, RawUsersSession,
     },
     roots::LAYER_SEPARATOR,
     targets::{
-        ProjectNameInputs, build_session_target, select_marker_session_type, validate_acp_target,
-        validate_environment_entries, validate_pty_target, validate_tmux_target,
+        ProjectNameInputs, build_session_target, select_marker_session_type,
+        validate_acp_target, validate_environment_entries,
+        validate_pty_target, validate_tmux_target,
     },
     types::{
-        BringUpContext, BundleConfiguration, BundleGroupMembership, BundleMember,
-        CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, LayerRepresentationFault, NameValueEntry,
-        STATE_DIRECTORY_ENVIRONMENT_VARIABLE, TuiConfiguration, TuiSession, UiConfiguration,
+        BringUpContext, BundleConfiguration, BundleGroupMembership,
+        BundleMember, CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE,
+        LayerRepresentationFault, NameValueEntry,
+        STATE_DIRECTORY_ENVIRONMENT_VARIABLE, TuiConfiguration, TuiSession,
+        UiConfiguration,
     },
 };
 
@@ -47,15 +53,18 @@ pub fn load_bundle_group_memberships(
     // is enumerated, and a definition shadowing one of the same identifier in a
     // later layer is enumerated once, at the path that supplied it.
     for (bundle_name, bundle_path) in definitions {
-        let bundle_raw = fs::read_to_string(&bundle_path).map_err(|source| {
-            ConfigurationError::io(format!("read {}", bundle_path.display()), source)
-        })?;
-        let bundle_file = toml::from_str::<RawBundleFile>(&bundle_raw).map_err(|source| {
-            ConfigurationError::InvalidConfiguration {
+        let bundle_raw =
+            fs::read_to_string(&bundle_path).map_err(|source| {
+                ConfigurationError::io(
+                    format!("read {}", bundle_path.display()),
+                    source,
+                )
+            })?;
+        let bundle_file = toml::from_str::<RawBundleFile>(&bundle_raw)
+            .map_err(|source| ConfigurationError::InvalidConfiguration {
                 path: bundle_path.clone(),
                 message: source.to_string(),
-            }
-        })?;
+            })?;
         validate_format_version(
             bundle_file.format_version,
             BUNDLE_SCHEMA_VERSION,
@@ -64,7 +73,8 @@ pub fn load_bundle_group_memberships(
         if bundle_file.sessions.is_empty() {
             continue;
         }
-        let groups = validate_bundle_groups(&bundle_file.groups, &bundle_path)?;
+        let groups =
+            validate_bundle_groups(&bundle_file.groups, &bundle_path)?;
         memberships.push(BundleGroupMembership {
             bundle_name,
             autostart: bundle_file.autostart,
@@ -94,7 +104,8 @@ pub fn load_bundle_configuration(
     )?;
 
     let coders_path = coders_configuration_path(configuration_roots)?;
-    let bundle_path = bundle_configuration_path(configuration_roots, bundle_name)?;
+    let bundle_path =
+        bundle_configuration_path(configuration_roots, bundle_name)?;
 
     if !bundle_path.exists() {
         return Err(ConfigurationError::UnknownBundle {
@@ -104,24 +115,32 @@ pub fn load_bundle_configuration(
     }
 
     let coders_raw = fs::read_to_string(&coders_path).map_err(|source| {
-        ConfigurationError::io(format!("read {}", coders_path.display()), source)
+        ConfigurationError::io(
+            format!("read {}", coders_path.display()),
+            source,
+        )
     })?;
     let bundle_raw = fs::read_to_string(&bundle_path).map_err(|source| {
-        ConfigurationError::io(format!("read {}", bundle_path.display()), source)
+        ConfigurationError::io(
+            format!("read {}", bundle_path.display()),
+            source,
+        )
     })?;
 
-    let coders_file = toml::from_str::<RawCodersFile>(&coders_raw).map_err(|source| {
-        ConfigurationError::InvalidConfiguration {
-            path: coders_path.clone(),
-            message: source.to_string(),
-        }
-    })?;
-    let bundle_file = toml::from_str::<RawBundleFile>(&bundle_raw).map_err(|source| {
-        ConfigurationError::InvalidConfiguration {
-            path: bundle_path.clone(),
-            message: source.to_string(),
-        }
-    })?;
+    let coders_file =
+        toml::from_str::<RawCodersFile>(&coders_raw).map_err(|source| {
+            ConfigurationError::InvalidConfiguration {
+                path: coders_path.clone(),
+                message: source.to_string(),
+            }
+        })?;
+    let bundle_file =
+        toml::from_str::<RawBundleFile>(&bundle_raw).map_err(|source| {
+            ConfigurationError::InvalidConfiguration {
+                path: bundle_path.clone(),
+                message: source.to_string(),
+            }
+        })?;
 
     validate_loaded_configuration(
         bundle_name,
@@ -155,8 +174,9 @@ pub fn load_tui_configuration_file(
     if !path.exists() {
         return Ok(None);
     }
-    let raw = fs::read_to_string(path)
-        .map_err(|source| ConfigurationError::io(format!("read {}", path.display()), source))?;
+    let raw = fs::read_to_string(path).map_err(|source| {
+        ConfigurationError::io(format!("read {}", path.display()), source)
+    })?;
     let parsed = toml::from_str::<RawUsersFile>(&raw).map_err(|source| {
         ConfigurationError::InvalidConfiguration {
             path: path.to_path_buf(),
@@ -196,8 +216,9 @@ pub fn load_ui_configuration(
     if !path.exists() {
         return Ok(None);
     }
-    let raw = fs::read_to_string(&path)
-        .map_err(|source| ConfigurationError::io(format!("read {}", path.display()), source))?;
+    let raw = fs::read_to_string(&path).map_err(|source| {
+        ConfigurationError::io(format!("read {}", path.display()), source)
+    })?;
     let parsed = toml::from_str::<RawUiFile>(&raw).map_err(|source| {
         ConfigurationError::InvalidConfiguration {
             path: path.clone(),
@@ -232,15 +253,21 @@ pub fn load_policy_ids(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<HashSet<String>, ConfigurationError> {
     let path = policies_configuration_path(configuration_roots)?;
-    let raw = fs::read_to_string(&path)
-        .map_err(|source| ConfigurationError::io(format!("read {}", path.display()), source))?;
-    let parsed = toml::from_str::<RawPoliciesFile>(&raw).map_err(|source| {
-        ConfigurationError::InvalidConfiguration {
-            path: path.clone(),
-            message: source.to_string(),
-        }
+    let raw = fs::read_to_string(&path).map_err(|source| {
+        ConfigurationError::io(format!("read {}", path.display()), source)
     })?;
-    validate_format_version(parsed.format_version, POLICIES_SCHEMA_VERSION, &path)?;
+    let parsed =
+        toml::from_str::<RawPoliciesFile>(&raw).map_err(|source| {
+            ConfigurationError::InvalidConfiguration {
+                path: path.clone(),
+                message: source.to_string(),
+            }
+        })?;
+    validate_format_version(
+        parsed.format_version,
+        POLICIES_SCHEMA_VERSION,
+        &path,
+    )?;
 
     let mut unique = HashSet::<String>::new();
     for policy in parsed.policies {
@@ -381,8 +408,10 @@ fn validate_loaded_configuration(
         // Presence-preserving normalization: a declared key stays declared
         // even when blank, so eager validation rejects it instead of the
         // session silently falling through to another resolution source.
-        let project_name = session.project_name.as_deref().map(normalize_field);
-        let session_project_name_from = session.project_name_from.as_deref().map(normalize_field);
+        let project_name =
+            session.project_name.as_deref().map(normalize_field);
+        let session_project_name_from =
+            session.project_name_from.as_deref().map(normalize_field);
         if project_name.is_some() && session_project_name_from.is_some() {
             return Err(ConfigurationError::invalid(
                 bundle_path,
@@ -513,7 +542,9 @@ fn validate_tui_sessions(
         if policy_id.is_empty() {
             return Err(ConfigurationError::invalid(
                 path,
-                format!("users session '{canonical_id}' policy must be non-empty"),
+                format!(
+                    "users session '{canonical_id}' policy must be non-empty"
+                ),
             ));
         }
         let session_type = select_marker_session_type(
@@ -567,15 +598,19 @@ fn validate_coders(
         }
 
         let target = match (coder.tmux, coder.acp, coder.pty) {
-            (Some(tmux), None, None) => {
-                CoderTarget::Tmux(validate_tmux_target(tmux, coders_path, coder_id)?)
-            }
-            (None, Some(acp), None) => {
-                CoderTarget::Acp(validate_acp_target(acp, coders_path, coder_id)?)
-            }
-            (None, None, Some(pty)) => {
-                CoderTarget::Pty(validate_pty_target(pty, coders_path, coder_id)?)
-            }
+            (Some(tmux), None, None) => CoderTarget::Tmux(
+                validate_tmux_target(tmux, coders_path, coder_id)?,
+            ),
+            (None, Some(acp), None) => CoderTarget::Acp(validate_acp_target(
+                acp,
+                coders_path,
+                coder_id,
+            )?),
+            (None, None, Some(pty)) => CoderTarget::Pty(validate_pty_target(
+                pty,
+                coders_path,
+                coder_id,
+            )?),
             (None, None, None) => {
                 return Err(ConfigurationError::invalid(
                     coders_path,
@@ -583,7 +618,7 @@ fn validate_coders(
                         "coder '{coder_id}' must define exactly one target table ([coders.tmux], [coders.acp], or [coders.pty])"
                     ),
                 ));
-            }
+            },
             _ => {
                 return Err(ConfigurationError::invalid(
                     coders_path,
@@ -591,7 +626,7 @@ fn validate_coders(
                         "coder '{coder_id}' defines multiple target tables; expected exactly one"
                     ),
                 ));
-            }
+            },
         };
 
         validate_environment_entries(
@@ -626,7 +661,9 @@ fn merge_environment(
     let mut merged: Vec<NameValueEntry> = Vec::new();
     for layer in [coder, bundle, session] {
         for entry in layer {
-            if let Some(existing) = merged.iter_mut().find(|current| current.name == entry.name) {
+            if let Some(existing) =
+                merged.iter_mut().find(|current| current.name == entry.name)
+            {
                 existing.value = entry.value.clone();
             } else {
                 merged.push(entry.clone());
@@ -652,7 +689,10 @@ fn merge_environment(
 /// performing the spawn, not to the configuration being loaded; load-time
 /// injection would have to re-derive it, which is what propagation exists to
 /// prevent.
-pub fn inject_spawn_state_directory(environment: &mut Vec<NameValueEntry>, state_root: &Path) {
+pub fn inject_spawn_state_directory(
+    environment: &mut Vec<NameValueEntry>,
+    state_root: &Path,
+) {
     let value = state_root.display().to_string();
     if let Some(entry) = environment
         .iter_mut()

@@ -10,7 +10,8 @@ use crate::configuration::ConfigurationRoots;
 use crate::relay::authorization::{RelayActionFamily, authorize_relay_action};
 use crate::relay::confined::{ConfineError, confined_read, confined_stage};
 use crate::relay::identity::{
-    PrincipalStore, PrincipalType, invalid_credential_path, state_relative_path,
+    PrincipalStore, PrincipalType, invalid_credential_path,
+    state_relative_path,
 };
 use crate::relay::{RelayError, RelayResponse, SCHEMA_VERSION, relay_error};
 use crate::runtime::paths::{is_valid_peer_token, peer_relay_psk_path};
@@ -72,9 +73,13 @@ pub(in crate::relay) fn handle_install_peer_credential(
     .err();
     match (new_denial, change_denial) {
         (Some(denial), Some(_)) => Err(denial),
-        (new_denial, change_denial) => {
-            install_after_gate(state_root, alias, psk, new_denial, change_denial)
-        }
+        (new_denial, change_denial) => install_after_gate(
+            state_root,
+            alias,
+            psk,
+            new_denial,
+            change_denial,
+        ),
     }
 }
 
@@ -89,8 +94,11 @@ fn install_after_gate(
     change_denial: Option<RelayError>,
 ) -> Result<RelayResponse, RelayError> {
     let store = PrincipalStore::load(state_root)?;
-    let referent = store.find_by_principal_id(format!("{alias}@RELAY").as_str());
-    if !referent.is_some_and(|record| record.principal_type == PrincipalType::Relay) {
+    let referent =
+        store.find_by_principal_id(format!("{alias}@RELAY").as_str());
+    if !referent
+        .is_some_and(|record| record.principal_type == PrincipalType::Relay)
+    {
         return Err(relay_error(
             "validation_unknown_principal",
             "no relay principal registered for alias; register it with new peer first",
@@ -108,43 +116,41 @@ fn install_after_gate(
                 component.as_str(),
                 "peer credential ancestor is a symlink",
             ));
-        }
+        },
         Err(other) => {
             return Err(install_io_error(&slot_path, &other));
-        }
+        },
     };
     match slot {
         SlotState::Absent => {
             if let Some(denial) = new_denial {
                 return Err(denial);
             }
-        }
+        },
         SlotState::Identical => {
             // Either control suffices: an identical rewrite changes nothing,
             // so the gate's guarantee (at least one control held) is the
             // whole rule, preserving lost-response retry for the original
             // caller without widening authority.
-        }
+        },
         SlotState::Different => {
             if let Some(denial) = change_denial {
                 return Err(denial);
             }
-        }
+        },
     }
-    let staged =
-        confined_stage(state_root, relative, psk.as_bytes(), "cred").map_err(
-            |error| match error {
-                ConfineError::Symlink { component } => invalid_credential_path(
-                    component.as_str(),
-                    "peer credential ancestor is a symlink",
-                ),
-                ConfineError::Exchanged { component } => invalid_credential_path(
-                    component.as_str(),
-                    "peer credential ancestor changed during commit",
-                ),
-                _ => install_io_error(&slot_path, &error),
-            },
-        )?;
+    let staged = confined_stage(state_root, relative, psk.as_bytes(), "cred")
+        .map_err(|error| match error {
+            ConfineError::Symlink { component } => invalid_credential_path(
+                component.as_str(),
+                "peer credential ancestor is a symlink",
+            ),
+            ConfineError::Exchanged { component } => invalid_credential_path(
+                component.as_str(),
+                "peer credential ancestor changed during commit",
+            ),
+            _ => install_io_error(&slot_path, &error),
+        })?;
     let written_path = staged.commit().map_err(|error| match error {
         ConfineError::Symlink { component } => {
             invalid_credential_path(component.as_str(), "peer credential ancestor is a symlink")

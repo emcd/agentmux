@@ -123,7 +123,8 @@ impl UnreachableSince {
     /// no members. A `false` latches the first instant and keeps returning it.
     #[must_use]
     pub fn fold(&self, reachable: bool) -> TransportHealth {
-        let mut since = self.0.lock().expect("unreachable-since mutex poisoned");
+        let mut since =
+            self.0.lock().expect("unreachable-since mutex poisoned");
         if reachable {
             *since = None;
             return TransportHealth::Healthy;
@@ -165,7 +166,10 @@ pub trait Transport: GenerationFence {
     /// route to the same child that no supervisor is watching.
     ///
     /// [`give_output`]: Transport::give_output
-    fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError>;
+    fn startup(
+        &mut self,
+        context: StartupContext,
+    ) -> Result<TransportStatus, TransportError>;
 
     /// A monotonic marker that advances when bytes reach the target's terminal.
     ///
@@ -235,5 +239,8 @@ pub trait Transport: GenerationFence {
 /// [`look`]: OutputView::look
 pub trait OutputView: Send + Sync {
     /// Captures a snapshot of the target's current output.
-    fn look(&self, mode: LookMode) -> Result<LookSnapshotPayload, TransportError>;
+    fn look(
+        &self,
+        mode: LookMode,
+    ) -> Result<LookSnapshotPayload, TransportError>;
 }

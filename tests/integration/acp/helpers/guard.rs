@@ -43,9 +43,12 @@ impl Drop for GuardedTempDir {
         if let Ok(contents) = std::fs::read_to_string(&pid_file) {
             for line in contents.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(pid) = parts.get(1).and_then(|s| s.parse::<i32>().ok()) {
+                if let Some(pid) =
+                    parts.get(1).and_then(|s| s.parse::<i32>().ok())
+                {
                     let cmdline_path = format!("/proc/{pid}/cmdline");
-                    if let Ok(cmdline) = std::fs::read_to_string(&cmdline_path) {
+                    if let Ok(cmdline) = std::fs::read_to_string(&cmdline_path)
+                    {
                         if !cmdline.contains("acp_stub.sh") {
                             continue;
                         }
@@ -62,9 +65,12 @@ impl Drop for GuardedTempDir {
         if let Ok(contents) = std::fs::read_to_string(&pid_file) {
             for line in contents.lines() {
                 let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(pid) = parts.get(1).and_then(|s| s.parse::<i32>().ok()) {
+                if let Some(pid) =
+                    parts.get(1).and_then(|s| s.parse::<i32>().ok())
+                {
                     let cmdline_path = format!("/proc/{pid}/cmdline");
-                    if let Ok(cmdline) = std::fs::read_to_string(&cmdline_path) {
+                    if let Ok(cmdline) = std::fs::read_to_string(&cmdline_path)
+                    {
                         if !cmdline.contains("acp_stub.sh") {
                             continue;
                         }

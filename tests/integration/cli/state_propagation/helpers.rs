@@ -9,11 +9,16 @@ pub(super) const MEMBER_DECLARED_STATE_ROOT: &str = "/nowhere/member-declared";
 /// rendezvous.
 pub(super) const MEMBER_BLANK_STATE_ROOT: &str = "";
 
-pub(super) fn declare_member_state_directory(config_root: &Path, bundle_name: &str, value: &str) {
+pub(super) fn declare_member_state_directory(
+    config_root: &Path,
+    bundle_name: &str,
+    value: &str,
+) {
     let path = config_root
         .join("bundles")
         .join(format!("{bundle_name}.toml"));
-    let mut bundle = fs::read_to_string(&path).expect("read bundle configuration");
+    let mut bundle =
+        fs::read_to_string(&path).expect("read bundle configuration");
     bundle.push_str(&format!(
         "\n[[sessions.environment]]\nname = \"AGENTMUX_STATE_DIRECTORY\"\nvalue = \"{value}\"\n"
     ));

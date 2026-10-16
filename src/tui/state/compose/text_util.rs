@@ -6,7 +6,10 @@ pub(super) fn wrap_index(index: usize, delta: isize, len: usize) -> usize {
     ((index as isize + delta).rem_euclid(len)) as usize
 }
 
-pub(super) fn previous_char_boundary(value: &str, cursor_index: usize) -> usize {
+pub(super) fn previous_char_boundary(
+    value: &str,
+    cursor_index: usize,
+) -> usize {
     value[..cursor_index]
         .char_indices()
         .next_back()
@@ -34,7 +37,10 @@ pub(super) fn line_ranges(value: &str) -> Vec<(usize, usize)> {
     ranges
 }
 
-pub(super) fn line_range_for_cursor(value: &str, cursor_index: usize) -> (usize, usize) {
+pub(super) fn line_range_for_cursor(
+    value: &str,
+    cursor_index: usize,
+) -> (usize, usize) {
     let cursor_index = cursor_index.min(value.len());
     let ranges = line_ranges(value);
     for (line_index, (line_start, line_end)) in ranges.iter().enumerate() {
@@ -45,7 +51,10 @@ pub(super) fn line_range_for_cursor(value: &str, cursor_index: usize) -> (usize,
     (0, value.len())
 }
 
-pub(super) fn line_and_column_for_index(value: &str, cursor_index: usize) -> (usize, usize) {
+pub(super) fn line_and_column_for_index(
+    value: &str,
+    cursor_index: usize,
+) -> (usize, usize) {
     let ranges = line_ranges(value);
     for (line_index, (line_start, line_end)) in ranges.iter().enumerate() {
         if cursor_index <= *line_end || line_index + 1 == ranges.len() {

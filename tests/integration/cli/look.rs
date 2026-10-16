@@ -23,7 +23,12 @@ fn look_returns_canonical_json_payload() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui", "bravo"]);
+    write_bundle_configuration(
+        &config_root,
+        "agentmux",
+        Some(&["dev"]),
+        &["tui", "bravo"],
+    );
     write_tui_configuration(
         &config_root,
         Some("agentmux"),
@@ -31,8 +36,10 @@ fn look_returns_canonical_json_payload() {
         &[("user", "default", Some("Operator"))],
     );
 
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
-    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux")
+        .expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths)
+        .expect("ensure bundle runtime directory");
     let workspace_root = temporary.path().join("workspace");
     fs::create_dir_all(&workspace_root).expect("create workspace");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
@@ -46,7 +53,10 @@ fn look_returns_canonical_json_payload() {
             authenticated_identity: None,
             on_behalf_of: None,
             snapshot: LookSnapshotPayload::Lines {
-                snapshot_lines: vec!["LOOK-A".to_string(), "LOOK-B".to_string()],
+                snapshot_lines: vec![
+                    "LOOK-A".to_string(),
+                    "LOOK-B".to_string(),
+                ],
             },
         },
         Arc::clone(&request_log),
@@ -69,7 +79,8 @@ fn look_returns_canonical_json_payload() {
     relay_thread.join().expect("join fake relay thread");
 
     assert!(output.status.success(), "command should succeed");
-    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode look json payload");
+    let payload: Value = serde_json::from_slice(&output.stdout)
+        .expect("decode look json payload");
     assert_eq!(payload["schema_version"], "1");
     assert_eq!(payload["requester_session"], "user");
     assert_eq!(payload["target_session"], "bravo");
@@ -100,7 +111,12 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui", "bravo"]);
+    write_bundle_configuration(
+        &config_root,
+        "agentmux",
+        Some(&["dev"]),
+        &["tui", "bravo"],
+    );
     write_tui_configuration(
         &config_root,
         Some("agentmux"),
@@ -108,8 +124,10 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
         &[("user", "default", Some("Operator"))],
     );
 
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
-    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux")
+        .expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths)
+        .expect("ensure bundle runtime directory");
     let workspace_root = temporary.path().join("workspace");
     fs::create_dir_all(&workspace_root).expect("create workspace");
     let relay_thread = spawn_fake_relay_once(
@@ -127,7 +145,9 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
                 returned_entries_count: 0,
                 freshness: agentmux::relay::LookFreshness::Stale,
                 snapshot_source: agentmux::relay::LookSnapshotSource::None,
-                stale_reason_code: Some("acp_snapshot_prime_timeout".to_string()),
+                stale_reason_code: Some(
+                    "acp_snapshot_prime_timeout".to_string(),
+                ),
                 snapshot_age_ms: None,
             },
         },
@@ -151,7 +171,8 @@ fn look_preserves_additive_acp_freshness_fields_in_machine_output() {
     relay_thread.join().expect("join fake relay thread");
 
     assert!(output.status.success(), "command should succeed");
-    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode look json payload");
+    let payload: Value = serde_json::from_slice(&output.stdout)
+        .expect("decode look json payload");
     assert_eq!(payload["snapshot_format"], "structured_entries_v1");
     assert_eq!(payload["snapshot_entries"], serde_json::json!([]));
     assert_eq!(payload["freshness"], "stale");
@@ -170,7 +191,12 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui", "bravo"]);
+    write_bundle_configuration(
+        &config_root,
+        "agentmux",
+        Some(&["dev"]),
+        &["tui", "bravo"],
+    );
     write_tui_configuration(
         &config_root,
         Some("agentmux"),
@@ -178,8 +204,10 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
         &[("user", "default", Some("Operator"))],
     );
 
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
-    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux")
+        .expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths)
+        .expect("ensure bundle runtime directory");
     let workspace_root = temporary.path().join("workspace");
     fs::create_dir_all(&workspace_root).expect("create workspace");
     let snapshot_entries = vec![
@@ -217,7 +245,8 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
                 entries_total: snapshot_entries.len(),
                 returned_entries_count: snapshot_entries.len(),
                 freshness: agentmux::relay::LookFreshness::Fresh,
-                snapshot_source: agentmux::relay::LookSnapshotSource::LiveBuffer,
+                snapshot_source:
+                    agentmux::relay::LookSnapshotSource::LiveBuffer,
                 stale_reason_code: None,
                 snapshot_age_ms: Some(17),
             },
@@ -242,14 +271,16 @@ fn look_preserves_structured_acp_entries_in_machine_output() {
     relay_thread.join().expect("join fake relay thread");
 
     assert!(output.status.success(), "command should succeed");
-    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode look json payload");
+    let payload: Value = serde_json::from_slice(&output.stdout)
+        .expect("decode look json payload");
     assert_eq!(payload["snapshot_format"], "structured_entries_v1");
     assert_eq!(payload["freshness"], "fresh");
     assert_eq!(payload["snapshot_source"], "live_buffer");
     assert_eq!(payload["snapshot_age_ms"], serde_json::json!(17));
     assert_eq!(
         payload["snapshot_entries"],
-        serde_json::to_value(snapshot_entries).expect("serialize snapshot entries")
+        serde_json::to_value(snapshot_entries)
+            .expect("serialize snapshot entries")
     );
     assert_eq!(payload["entries_total"], serde_json::json!(5));
     assert_eq!(payload["returned_entries_count"], serde_json::json!(5));
@@ -311,7 +342,12 @@ fn look_surfaces_authorization_forbidden_from_relay() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration(&config_root, "agentmux", Some(&["dev"]), &["tui", "bravo"]);
+    write_bundle_configuration(
+        &config_root,
+        "agentmux",
+        Some(&["dev"]),
+        &["tui", "bravo"],
+    );
     write_tui_configuration(
         &config_root,
         Some("agentmux"),
@@ -321,8 +357,10 @@ fn look_surfaces_authorization_forbidden_from_relay() {
     let workspace_root = temporary.path().join("workspace");
     fs::create_dir_all(&workspace_root).expect("create workspace");
 
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
-    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux")
+        .expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths)
+        .expect("ensure bundle runtime directory");
     let relay_thread = spawn_fake_relay_once(
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Error {

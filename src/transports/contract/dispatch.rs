@@ -18,8 +18,8 @@ use crate::tmux::TmuxTransport;
 use crate::transports::ui::{UiTransport, UiTransportServices};
 
 use super::{
-    DeliveryExecutorContext, GenerationFence, OutputView, StartupContext, Transport,
-    TransportError, TransportHealth, TransportStatus,
+    DeliveryExecutorContext, GenerationFence, OutputView, StartupContext,
+    Transport, TransportError, TransportHealth, TransportStatus,
 };
 
 /// The largest run one `peek` may return, declared statically per transport and
@@ -74,10 +74,12 @@ impl PeekDimensions {
     #[must_use]
     pub fn for_session_type(session_type: SessionType) -> Option<Self> {
         match session_type {
-            SessionType::Tmux | SessionType::Acp | SessionType::Pty => Some(Self {
-                envelopes_max: PEEK_ENTRIES_MAX_COALESCING,
-                canonical_bytes_max: PEEK_CANONICAL_BYTES_MAX,
-            }),
+            SessionType::Tmux | SessionType::Acp | SessionType::Pty => {
+                Some(Self {
+                    envelopes_max: PEEK_ENTRIES_MAX_COALESCING,
+                    canonical_bytes_max: PEEK_CANONICAL_BYTES_MAX,
+                })
+            },
             // UI broadcasts one stream event per envelope and coalesces nothing,
             // so it peeks exactly one entry.
             SessionType::Ui => Some(Self {
@@ -181,7 +183,10 @@ impl TransportImpl {
     /// constructs `services` closing over its own stream registry; the transport
     /// imports nothing from `crate::relay`.
     #[must_use]
-    pub fn ui(services: UiTransportServices, delivery: DeliveryExecutorContext) -> Self {
+    pub fn ui(
+        services: UiTransportServices,
+        delivery: DeliveryExecutorContext,
+    ) -> Self {
         Self::Ui(UiTransport::new(services, delivery))
     }
 
@@ -294,18 +299,25 @@ impl TransportImpl {
     }
 
     /// Establishes the transport runtime; see [`Transport::startup`].
-    pub fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
+    pub fn startup(
+        &mut self,
+        context: StartupContext,
+    ) -> Result<TransportStatus, TransportError> {
         match self {
             Self::Acp(transport) => transport.startup(context),
             Self::Tmux(transport) => transport.startup(context),
             Self::Ui(transport) => transport.startup(context),
-            Self::Pubsub => unimplemented!("Pubsub transport not yet implemented"),
+            Self::Pubsub => {
+                unimplemented!("Pubsub transport not yet implemented")
+            },
             #[cfg(feature = "pty")]
             Self::Pty(transport) => transport.startup(context),
             #[cfg(not(feature = "pty"))]
             Self::Pty => {
-                unimplemented!("PTY transport is feature-gated; rebuild with --features pty")
-            }
+                unimplemented!(
+                    "PTY transport is feature-gated; rebuild with --features pty"
+                )
+            },
         }
     }
 
@@ -353,11 +365,11 @@ impl TransportImpl {
             // The `Pubsub` stub is refused at admission, so it never owns a
             // generation to fence. The same holds for a `Pty` that the feature
             // gate leaves unconstructible.
-            Self::Pubsub => {}
+            Self::Pubsub => {},
             #[cfg(feature = "pty")]
             Self::Pty(transport) => transport.fence_generation(),
             #[cfg(not(feature = "pty"))]
-            Self::Pty => {}
+            Self::Pty => {},
         }
     }
 
@@ -367,11 +379,11 @@ impl TransportImpl {
             Self::Acp(transport) => transport.terminate_generation(),
             Self::Tmux(transport) => transport.terminate_generation(),
             Self::Ui(transport) => transport.terminate_generation(),
-            Self::Pubsub => {}
+            Self::Pubsub => {},
             #[cfg(feature = "pty")]
             Self::Pty(transport) => transport.terminate_generation(),
             #[cfg(not(feature = "pty"))]
-            Self::Pty => {}
+            Self::Pty => {},
         }
     }
 
@@ -406,11 +418,11 @@ impl TransportImpl {
             // the `pty` feature is off, so it can never be a latched shutdown
             // target; when the feature is on, the inner `PtyTransport`
             // receives the shutdown call.
-            Self::Pubsub => {}
+            Self::Pubsub => {},
             #[cfg(feature = "pty")]
             Self::Pty(transport) => transport.shutdown(),
             #[cfg(not(feature = "pty"))]
-            Self::Pty => {}
+            Self::Pty => {},
         }
     }
 

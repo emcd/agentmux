@@ -76,7 +76,8 @@ fn bundle_picker_enter_on_active_bundle_hands_focus_to_sessions() {
 }
 
 #[test]
-fn bundle_picker_enter_on_different_bundle_switches_and_resets_bundle_scoped_state() {
+fn bundle_picker_enter_on_different_bundle_switches_and_resets_bundle_scoped_state()
+ {
     let mut state = make_state();
     state.set_recipients(&["alpha", "bravo"]);
     state
@@ -97,7 +98,8 @@ fn bundle_picker_enter_on_different_bundle_switches_and_resets_bundle_scoped_sta
         .expect("bundle picker should have a selection");
     let target_bundle = state.available_bundles()[target_index].to_string();
     assert_ne!(target_bundle, state.namespace());
-    let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
+    let result =
+        state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
     assert_eq!(state.namespace(), target_bundle.as_str());
     assert!(state.recipients().is_empty());
     assert_eq!(state.last_selected_recipient(), None);
@@ -106,10 +108,12 @@ fn bundle_picker_enter_on_different_bundle_switches_and_resets_bundle_scoped_sta
     assert!(state.picker_open());
     assert_eq!(state.picker_column(), WorkbenchPickerColumn::Sessions);
     match result {
-        Err(RuntimeError::Validation { code, .. }) => assert_eq!(code, "relay_unavailable"),
+        Err(RuntimeError::Validation { code, .. }) => {
+            assert_eq!(code, "relay_unavailable")
+        },
         Err(RuntimeError::Io { source, .. }) => {
             assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied)
-        }
+        },
         other => panic!("unexpected result: {other:?}"),
     }
 }
@@ -130,11 +134,12 @@ fn bundle_picker_enter_with_no_available_bundles_returns_validation_error() {
     assert!(state.picker_open());
     assert_eq!(state.picker_column(), WorkbenchPickerColumn::Bundles);
     assert_eq!(state.bundle_picker_selected_index(), None);
-    let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
+    let result =
+        state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
     match result {
         Err(RuntimeError::Validation { code, .. }) => {
             assert_eq!(code, "validation_unknown_target")
-        }
+        },
         other => panic!("unexpected result: {other:?}"),
     }
 }

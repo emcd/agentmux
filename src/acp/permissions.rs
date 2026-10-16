@@ -137,7 +137,9 @@ pub(super) fn send_permission_response(
     selected_option_id: Option<String>,
 ) {
     let outcome = match selected_option_id {
-        Some(option_id) => json!({"outcome": "selected", "optionId": option_id}),
+        Some(option_id) => {
+            json!({"outcome": "selected", "optionId": option_id})
+        },
         None => json!({"outcome": "cancelled"}),
     };
     let response = match serde_json::to_string(&json!({
@@ -152,7 +154,7 @@ pub(super) fn send_permission_response(
                 &json!({"cause": source.to_string()}),
             );
             return;
-        }
+        },
     };
     if let Err(source) = write_line_to_stdin(stdin, response.as_str()) {
         emit_inscription(

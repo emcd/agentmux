@@ -21,11 +21,15 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use agentmux::envelope::AddressIdentity;
-use agentmux::protocol::mailbox::{EntrySequence, MailboxEntry, MailboxPayload};
-use agentmux::protocol::{DeliveryDoorbell, DeliveryEnvelope, DeliveryMessage};
+use agentmux::protocol::mailbox::{
+    EntrySequence, MailboxEntry, MailboxPayload,
+};
+use agentmux::protocol::{
+    DeliveryDoorbell, DeliveryEnvelope, DeliveryMessage,
+};
 use agentmux::transports::{
-    DeliveryExecutorContext, DeliveryWriter, PeekDimensions, PlannedWrite, SubmissionEvidence,
-    TransportHealth, run_delivery_executor,
+    DeliveryExecutorContext, DeliveryWriter, PeekDimensions, PlannedWrite,
+    SubmissionEvidence, TransportHealth, run_delivery_executor,
 };
 
 use super::stub_mailbox::StubMailbox;
@@ -73,14 +77,20 @@ impl DeliveryWriter for AlwaysWrites {
         true
     }
 
-    fn plan(&mut self, entries: &[MailboxEntry]) -> Option<PlannedWrite<Self::Plan>> {
+    fn plan(
+        &mut self,
+        entries: &[MailboxEntry],
+    ) -> Option<PlannedWrite<Self::Plan>> {
         Some(PlannedWrite {
             entry_count: entries.len(),
             rendered: entries.len(),
         })
     }
 
-    fn write(&mut self, planned: PlannedWrite<Self::Plan>) -> Vec<SubmissionEvidence> {
+    fn write(
+        &mut self,
+        planned: PlannedWrite<Self::Plan>,
+    ) -> Vec<SubmissionEvidence> {
         vec![SubmissionEvidence::Submitted; planned.rendered]
     }
 
@@ -95,7 +105,11 @@ impl DeliveryWriter for AlwaysWrites {
     /// two counters are what let the assertions below distinguish "woken by the
     /// backstop" from "woken by a ring", which is the whole distinction the test
     /// rests on.
-    fn wait_for_work(&mut self, doorbell: &DeliveryDoorbell, timeout: Duration) {
+    fn wait_for_work(
+        &mut self,
+        doorbell: &DeliveryDoorbell,
+        timeout: Duration,
+    ) {
         self.waits.fetch_add(1, Ordering::SeqCst);
         if doorbell.wait_for(timeout) {
             self.rings_observed.fetch_add(1, Ordering::SeqCst);
@@ -112,7 +126,8 @@ fn identity(name: &str) -> AddressIdentity {
 
 fn entry(sequence: u64, message_id: &str) -> MailboxEntry {
     MailboxEntry {
-        sequence: EntrySequence::new(sequence).expect("a mailbox position is one-based"),
+        sequence: EntrySequence::new(sequence)
+            .expect("a mailbox position is one-based"),
         message_id: message_id.to_string(),
         canonical_bytes: 4,
         payload: MailboxPayload::Mail(Arc::new(DeliveryEnvelope {
@@ -181,7 +196,8 @@ fn an_entry_whose_ring_is_never_made_is_still_delivered_by_the_poll() {
         poll_interval: POLL_INTERVAL,
         unreachable_dwell: Duration::from_secs(3_600),
     };
-    let executor = std::thread::spawn(move || run_delivery_executor(writer, context));
+    let executor =
+        std::thread::spawn(move || run_delivery_executor(writer, context));
 
     // Wait until the executor has actually parked. Placing the entry before this
     // would let the loop's first pass find it, and the test would pass without
@@ -267,7 +283,10 @@ impl DeliveryWriter for BusyAfterOneTurn {
 
     /// One entry per write, which is what makes members two onward the subjects
     /// of this test rather than groupmates of member one.
-    fn plan(&mut self, entries: &[MailboxEntry]) -> Option<PlannedWrite<Self::Plan>> {
+    fn plan(
+        &mut self,
+        entries: &[MailboxEntry],
+    ) -> Option<PlannedWrite<Self::Plan>> {
         entries.first().map(|_| PlannedWrite {
             entry_count: 1,
             rendered: 1,
@@ -277,7 +296,10 @@ impl DeliveryWriter for BusyAfterOneTurn {
     /// Accepting the turn is what makes the worker busy, so the flip happens
     /// here rather than on a timer — the same ordering ACP has, where the
     /// transport publishes `Busy` on accepting a prompt.
-    fn write(&mut self, planned: PlannedWrite<Self::Plan>) -> Vec<SubmissionEvidence> {
+    fn write(
+        &mut self,
+        planned: PlannedWrite<Self::Plan>,
+    ) -> Vec<SubmissionEvidence> {
         self.writes.fetch_add(1, Ordering::SeqCst);
         self.available.store(false, Ordering::SeqCst);
         vec![SubmissionEvidence::Submitted; planned.rendered]
@@ -305,7 +327,8 @@ impl DeliveryWriter for BusyAfterOneTurn {
 /// busy — with delivery afterwards as the positive control that the absence is
 /// suspension rather than loss.
 #[test]
-fn a_target_that_goes_busy_leaves_the_rest_queued_rather_than_resolving_them() {
+fn a_target_that_goes_busy_leaves_the_rest_queued_rather_than_resolving_them()
+{
     let mailbox = Arc::new(StubMailbox::with_entries(vec![
         entry(1, "busy-1"),
         entry(2, "busy-2"),
@@ -326,7 +349,8 @@ fn a_target_that_goes_busy_leaves_the_rest_queued_rather_than_resolving_them() {
         poll_interval: POLL_INTERVAL,
         unreachable_dwell: Duration::from_secs(3_600),
     };
-    let executor = std::thread::spawn(move || run_delivery_executor(writer, context));
+    let executor =
+        std::thread::spawn(move || run_delivery_executor(writer, context));
 
     within_the_window(
         || !mailbox.acked().is_empty(),

@@ -2,7 +2,9 @@ use std::fs;
 
 use tempfile::TempDir;
 
-use agentmux::configuration::{TargetConfiguration, load_bundle_configuration};
+use agentmux::configuration::{
+    TargetConfiguration, load_bundle_configuration,
+};
 
 #[cfg(feature = "pty")]
 use agentmux::pty::tokenize_command;
@@ -47,10 +49,15 @@ coder = "conduct"
     )
 }
 
-fn start_command(bundle_name: &str, coders_toml: &str, bundle_toml: &str) -> String {
+fn start_command(
+    bundle_name: &str,
+    coders_toml: &str,
+    bundle_toml: &str,
+) -> String {
     let temporary = TempDir::new().expect("temporary");
     let root = write_config(&temporary, bundle_name, coders_toml, bundle_toml);
-    let loaded = load_bundle_configuration(&root, bundle_name).expect("load configuration");
+    let loaded = load_bundle_configuration(&root, bundle_name)
+        .expect("load configuration");
     assert_eq!(loaded.members.len(), 1);
     match &loaded.members[0].target {
         TargetConfiguration::Tmux(target) => target.start_command.clone(),
@@ -89,7 +96,12 @@ fn load_error_for_template(
 fn accepts_dir_flag_composition() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let command = command_for_template("\"cmd --dir={{session-directory}}\"", &directory, "", "");
+    let command = command_for_template(
+        "\"cmd --dir={{session-directory}}\"",
+        &directory,
+        "",
+        "",
+    );
     assert!(
         command.contains(&format!("--dir='{directory}'")),
         "expected composed dir flag, got: {command}"
@@ -116,7 +128,12 @@ fn accepts_mount_project_directory_form() {
 fn rejects_glob_affix() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_template("\"cmd {{session-directory}}*\"", &directory, "", "");
+    let error = load_error_for_template(
+        "\"cmd {{session-directory}}*\"",
+        &directory,
+        "",
+        "",
+    );
     assert!(
         error.contains("not shell-literal-safe"),
         "unexpected error: {error}"
@@ -127,7 +144,12 @@ fn rejects_glob_affix() {
 fn rejects_expansion_affix() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_template("\"cmd x${IFS}{{session-directory}}\"", &directory, "", "");
+    let error = load_error_for_template(
+        "\"cmd x${IFS}{{session-directory}}\"",
+        &directory,
+        "",
+        "",
+    );
     assert!(
         error.contains("not shell-literal-safe"),
         "unexpected error: {error}"
@@ -138,7 +160,12 @@ fn rejects_expansion_affix() {
 fn rejects_operator_affix() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_template("\"cmd {{session-directory}};next\"", &directory, "", "");
+    let error = load_error_for_template(
+        "\"cmd {{session-directory}};next\"",
+        &directory,
+        "",
+        "",
+    );
     assert!(
         error.contains("not shell-literal-safe"),
         "unexpected error: {error}"
@@ -166,7 +193,12 @@ fn rejects_comment_tilde_and_caret_affixes() {
 fn rejects_assignment_prefix() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_template("\"cmd A={{session-directory}}\"", &directory, "", "");
+    let error = load_error_for_template(
+        "\"cmd A={{session-directory}}\"",
+        &directory,
+        "",
+        "",
+    );
     assert!(
         error.contains("could form a shell assignment"),
         "unexpected error: {error}"
@@ -193,7 +225,12 @@ fn rejects_variable_composing_assignment_shape() {
 fn rejects_directory_composing_assignment_shape() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_template("\"cmd A{{session-directory}}=x\"", &directory, "", "");
+    let error = load_error_for_template(
+        "\"cmd A{{session-directory}}=x\"",
+        &directory,
+        "",
+        "",
+    );
     assert!(
         error.contains("could form a shell assignment"),
         "unexpected error: {error}"
@@ -223,8 +260,12 @@ fn rejects_coder_session_id_adjacency() {
 fn rejects_unknown_placeholder_adjacent_to_directory() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error =
-        load_error_for_template("\"cmd {{session-directory}}{{bogus}}\"", &directory, "", "");
+    let error = load_error_for_template(
+        "\"cmd {{session-directory}}{{bogus}}\"",
+        &directory,
+        "",
+        "",
+    );
     assert!(
         error.contains("unknown placeholder '{{bogus}}'"),
         "unexpected error: {error}"
@@ -235,7 +276,12 @@ fn rejects_unknown_placeholder_adjacent_to_directory() {
 fn rejects_quote_adjacent_right_of_directory() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_template("\"cmd {{session-directory}}'x'\"", &directory, "", "");
+    let error = load_error_for_template(
+        "\"cmd {{session-directory}}'x'\"",
+        &directory,
+        "",
+        "",
+    );
     assert!(
         error.contains("not shell-literal-safe"),
         "unexpected error: {error}"
@@ -246,8 +292,12 @@ fn rejects_quote_adjacent_right_of_directory() {
 fn rejects_immediate_right_escape() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error =
-        load_error_for_template("\"cmd {{session-directory}}\\\\ next\"", &directory, "", "");
+    let error = load_error_for_template(
+        "\"cmd {{session-directory}}\\\\ next\"",
+        &directory,
+        "",
+        "",
+    );
     assert!(
         error.contains("not shell-literal-safe"),
         "unexpected error: {error}"
@@ -279,8 +329,14 @@ fn pty_tokenizer_returns_composed_dir_flag_as_single_argument() {
     let special = temporary.path().join(SPECIAL_DIRECTORY_NAME);
     fs::create_dir(&special).expect("create special directory");
     let directory = special.display().to_string();
-    let command = command_for_template("\"cmd --dir={{session-directory}}\"", &directory, "", "");
-    let tokens = tokenize_command(&command).expect("tokenize rendered command");
+    let command = command_for_template(
+        "\"cmd --dir={{session-directory}}\"",
+        &directory,
+        "",
+        "",
+    );
+    let tokens =
+        tokenize_command(&command).expect("tokenize rendered command");
     assert!(
         tokens
             .iter()
@@ -329,7 +385,8 @@ fn pty_tokenizer_returns_mount_form_as_single_argument() {
         "project-name = \"web\"\n",
         "",
     );
-    let tokens = tokenize_command(&command).expect("tokenize rendered command");
+    let tokens =
+        tokenize_command(&command).expect("tokenize rendered command");
     assert!(
         tokens
             .iter()
@@ -439,7 +496,8 @@ fn resolves_project_name_from_directory_basename_by_default() {
     let named = temporary.path().join("checkout");
     fs::create_dir(&named).expect("create named directory");
     let directory = named.display().to_string();
-    let command = command_for_template("\"cmd {{project-name}}\"", &directory, "", "");
+    let command =
+        command_for_template("\"cmd {{project-name}}\"", &directory, "", "");
     assert!(
         command.contains("cmd checkout"),
         "default must yield the directory basename, got: {command}"
@@ -526,7 +584,8 @@ fn rejects_unknown_bundle_project_name_from_rule() {
         "project-name-from = \"git-remote\"\n",
     );
     assert!(
-        error.contains("must be 'session-directory-basename' or 'bundle-name'"),
+        error
+            .contains("must be 'session-directory-basename' or 'bundle-name'"),
         "unexpected error: {error}"
     );
 }
@@ -542,7 +601,8 @@ fn rejects_unknown_session_project_name_from_rule() {
         "",
     );
     assert!(
-        error.contains("must be 'session-directory-basename' or 'bundle-name'"),
+        error
+            .contains("must be 'session-directory-basename' or 'bundle-name'"),
         "unexpected error: {error}"
     );
 }
@@ -569,7 +629,12 @@ fn rejects_used_non_conforming_basename() {
     let spaced = temporary.path().join("my project");
     fs::create_dir(&spaced).expect("create spaced directory");
     let directory = spaced.display().to_string();
-    let error = load_error_for_template("\"cmd {{project-name}}\"", &directory, "", "");
+    let error = load_error_for_template(
+        "\"cmd {{project-name}}\"",
+        &directory,
+        "",
+        "",
+    );
     assert!(
         error.contains("must be a portable path segment"),
         "unexpected error: {error}"
@@ -582,7 +647,12 @@ fn loads_non_conforming_basename_without_project_name_usage() {
     let spaced = temporary.path().join("my project");
     fs::create_dir(&spaced).expect("create spaced directory");
     let directory = spaced.display().to_string();
-    let command = command_for_template("\"cmd {{session-directory}}\"", &directory, "", "");
+    let command = command_for_template(
+        "\"cmd {{session-directory}}\"",
+        &directory,
+        "",
+        "",
+    );
     assert!(
         command.contains(&format!("'{directory}'")),
         "session without project-name usage must load, got: {command}"
@@ -593,7 +663,8 @@ fn loads_non_conforming_basename_without_project_name_usage() {
 fn rejects_unknown_project_name_misspelling() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_template("\"cmd {{project-nam}}\"", &directory, "", "");
+    let error =
+        load_error_for_template("\"cmd {{project-nam}}\"", &directory, "", "");
     assert!(
         error.contains("unknown placeholder '{{project-nam}}'"),
         "unexpected error: {error}"
@@ -627,7 +698,8 @@ fn rejects_blank_bundle_project_name_from() {
         "project-name-from = \" \"\n",
     );
     assert!(
-        error.contains("must be 'session-directory-basename' or 'bundle-name'"),
+        error
+            .contains("must be 'session-directory-basename' or 'bundle-name'"),
         "unexpected error: {error}"
     );
 }
@@ -643,7 +715,8 @@ fn rejects_blank_session_project_name_from() {
         "",
     );
     assert!(
-        error.contains("must be 'session-directory-basename' or 'bundle-name'"),
+        error
+            .contains("must be 'session-directory-basename' or 'bundle-name'"),
         "unexpected error: {error}"
     );
 }
@@ -668,7 +741,12 @@ fn rejects_blank_project_name_with_rule_as_ambiguous() {
 fn substitutes_bundle_name_raw() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let command = command_for_template("\"cmd --bundle {{bundle-name}}\"", &directory, "", "");
+    let command = command_for_template(
+        "\"cmd --bundle {{bundle-name}}\"",
+        &directory,
+        "",
+        "",
+    );
     assert!(
         command.contains("cmd --bundle alpha"),
         "bundle name must substitute raw, got: {command}"
@@ -679,7 +757,8 @@ fn substitutes_bundle_name_raw() {
 fn bundle_name_stays_valid_in_quotes() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let command = command_for_template("\"cmd '{{bundle-name}}'\"", &directory, "", "");
+    let command =
+        command_for_template("\"cmd '{{bundle-name}}'\"", &directory, "", "");
     assert!(
         command.contains("cmd 'alpha'"),
         "bundle name must stay valid in any context, got: {command}"
@@ -744,7 +823,8 @@ fn rejects_bundle_filenames_with_shell_unsafe_characters() {
 fn rejects_unknown_bundle_name_misspelling() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_template("\"cmd {{bundle-nam}}\"", &directory, "", "");
+    let error =
+        load_error_for_template("\"cmd {{bundle-nam}}\"", &directory, "", "");
     assert!(
         error.contains("unknown placeholder '{{bundle-nam}}'"),
         "unexpected error: {error}"
@@ -778,9 +858,11 @@ fn placeholder_shaped_coder_session_id_stays_literal() {
         "\"conduct\"",
         "\"cmd {{coder-session-id}} {{bundle-session-id}}\"",
     );
-    let bundle = bundle_document(&directory, Some("a{{bundle-session-id}}b"), "", "");
+    let bundle =
+        bundle_document(&directory, Some("a{{bundle-session-id}}b"), "", "");
     let root = write_config(&temporary, "alpha", &coders, &bundle);
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     let TargetConfiguration::Tmux(target) = &loaded.members[0].target else {
         panic!("expected tmux target");
     };

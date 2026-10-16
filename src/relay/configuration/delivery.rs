@@ -21,7 +21,12 @@ use crate::relay::{RelayError, relay_error};
 const DELIVERY_SUBMISSION_TIMEOUT_MS: DeliveryRange =
     DeliveryRange::new("delivery.submission-timeout-ms", 5_000, 500, 60_000);
 const DELIVERY_FENCE_OBSERVATION_TIMEOUT_MS: DeliveryRange =
-    DeliveryRange::new("delivery.fence-observation-timeout-ms", 5_000, 100, 60_000);
+    DeliveryRange::new(
+        "delivery.fence-observation-timeout-ms",
+        5_000,
+        100,
+        60_000,
+    );
 /// How long a target may be *continuously* unreachable before its still-waiting
 /// members resolve.
 ///
@@ -31,8 +36,12 @@ const DELIVERY_FENCE_OBSERVATION_TIMEOUT_MS: DeliveryRange =
 /// deliberately generous: a bounce asserts something to the sender that a wait
 /// does not, so the cost of waiting slightly too long is lower than the cost of
 /// claiming a target is gone while it is restarting.
-const DELIVERY_UNREACHABLE_DWELL_MS: DeliveryRange =
-    DeliveryRange::new("delivery.unreachable-dwell-ms", 30_000, 1_000, 600_000);
+const DELIVERY_UNREACHABLE_DWELL_MS: DeliveryRange = DeliveryRange::new(
+    "delivery.unreachable-dwell-ms",
+    30_000,
+    1_000,
+    600_000,
+);
 const DELIVERY_QUEUED_ENVELOPES_MAX: DeliveryRange =
     DeliveryRange::new("delivery.queued-envelopes-max", 10_000, 1, 1_000_000);
 const DELIVERY_QUEUED_BYTES_MAX: DeliveryRange = DeliveryRange::new(
@@ -41,12 +50,13 @@ const DELIVERY_QUEUED_BYTES_MAX: DeliveryRange = DeliveryRange::new(
     1_048_576,
     4_294_967_296,
 );
-const DELIVERY_QUEUED_ENVELOPES_PER_TARGET_MAX: DeliveryRange = DeliveryRange::new(
-    "delivery.queued-envelopes-per-target-max",
-    1_000,
-    1,
-    1_000_000,
-);
+const DELIVERY_QUEUED_ENVELOPES_PER_TARGET_MAX: DeliveryRange =
+    DeliveryRange::new(
+        "delivery.queued-envelopes-per-target-max",
+        1_000,
+        1,
+        1_000_000,
+    );
 const DELIVERY_QUEUED_BYTES_PER_TARGET_MAX: DeliveryRange = DeliveryRange::new(
     "delivery.queued-bytes-per-target-max",
     33_554_432,
@@ -59,12 +69,13 @@ const DELIVERY_UNDELIVERED_WARNING_MS: DeliveryRange = DeliveryRange::new(
     60_000,
     86_400_000,
 );
-const DELIVERY_UNDELIVERED_REPORT_INTERVAL_MS: DeliveryRange = DeliveryRange::new(
-    "delivery.undelivered-report-interval-ms",
-    300_000,
-    30_000,
-    3_600_000,
-);
+const DELIVERY_UNDELIVERED_REPORT_INTERVAL_MS: DeliveryRange =
+    DeliveryRange::new(
+        "delivery.undelivered-report-interval-ms",
+        300_000,
+        30_000,
+        3_600_000,
+    );
 
 /// One `[delivery]` key's documented default and permitted range, carried
 /// together so the key name in a range error cannot drift from the bound that
@@ -78,7 +89,12 @@ struct DeliveryRange {
 }
 
 impl DeliveryRange {
-    const fn new(field: &'static str, default: u64, minimum: u64, maximum: u64) -> Self {
+    const fn new(
+        field: &'static str,
+        default: u64,
+        minimum: u64,
+        maximum: u64,
+    ) -> Self {
         Self {
             field,
             default,
@@ -90,7 +106,11 @@ impl DeliveryRange {
     /// Resolves one key: an absent value takes the documented default, a present
     /// value must fall within the range. Defaults are not range-checked because
     /// they are defined inside their own bounds.
-    fn resolve(self, supplied: Option<u64>, path: &Path) -> Result<u64, RelayError> {
+    fn resolve(
+        self,
+        supplied: Option<u64>,
+        path: &Path,
+    ) -> Result<u64, RelayError> {
         let Some(value) = supplied else {
             return Ok(self.default);
         };
@@ -177,15 +197,19 @@ impl Default for DeliveryConfiguration {
     fn default() -> Self {
         Self {
             submission_timeout_ms: DELIVERY_SUBMISSION_TIMEOUT_MS.default,
-            fence_observation_timeout_ms: DELIVERY_FENCE_OBSERVATION_TIMEOUT_MS.default,
+            fence_observation_timeout_ms:
+                DELIVERY_FENCE_OBSERVATION_TIMEOUT_MS.default,
             unreachable_dwell_ms: DELIVERY_UNREACHABLE_DWELL_MS.default,
-            queued_envelopes_max: DELIVERY_QUEUED_ENVELOPES_MAX.default as usize,
-            queued_bytes_max: DELIVERY_QUEUED_BYTES_MAX.default,
-            queued_envelopes_per_target_max: DELIVERY_QUEUED_ENVELOPES_PER_TARGET_MAX.default
+            queued_envelopes_max: DELIVERY_QUEUED_ENVELOPES_MAX.default
                 as usize,
-            queued_bytes_per_target_max: DELIVERY_QUEUED_BYTES_PER_TARGET_MAX.default,
+            queued_bytes_max: DELIVERY_QUEUED_BYTES_MAX.default,
+            queued_envelopes_per_target_max:
+                DELIVERY_QUEUED_ENVELOPES_PER_TARGET_MAX.default as usize,
+            queued_bytes_per_target_max: DELIVERY_QUEUED_BYTES_PER_TARGET_MAX
+                .default,
             undelivered_warning_ms: DELIVERY_UNDELIVERED_WARNING_MS.default,
-            undelivered_report_interval_ms: DELIVERY_UNDELIVERED_REPORT_INTERVAL_MS.default,
+            undelivered_report_interval_ms:
+                DELIVERY_UNDELIVERED_REPORT_INTERVAL_MS.default,
         }
     }
 }
@@ -198,13 +222,15 @@ pub(super) fn resolve_delivery_configuration(
     path: &Path,
 ) -> Result<DeliveryConfiguration, RelayError> {
     let section = section.unwrap_or_default();
-    let queued_envelopes_max =
-        DELIVERY_QUEUED_ENVELOPES_MAX.resolve(section.queued_envelopes_max, path)?;
-    let queued_bytes_max = DELIVERY_QUEUED_BYTES_MAX.resolve(section.queued_bytes_max, path)?;
-    let queued_envelopes_per_target_max = DELIVERY_QUEUED_ENVELOPES_PER_TARGET_MAX
-        .resolve(section.queued_envelopes_per_target_max, path)?;
-    let queued_bytes_per_target_max =
-        DELIVERY_QUEUED_BYTES_PER_TARGET_MAX.resolve(section.queued_bytes_per_target_max, path)?;
+    let queued_envelopes_max = DELIVERY_QUEUED_ENVELOPES_MAX
+        .resolve(section.queued_envelopes_max, path)?;
+    let queued_bytes_max =
+        DELIVERY_QUEUED_BYTES_MAX.resolve(section.queued_bytes_max, path)?;
+    let queued_envelopes_per_target_max =
+        DELIVERY_QUEUED_ENVELOPES_PER_TARGET_MAX
+            .resolve(section.queued_envelopes_per_target_max, path)?;
+    let queued_bytes_per_target_max = DELIVERY_QUEUED_BYTES_PER_TARGET_MAX
+        .resolve(section.queued_bytes_per_target_max, path)?;
     // A per-target limit above the relay-global one is unreachable — the global
     // check rejects first in both dimensions — so it is always a mistake rather
     // than a permissive setting, and saying so at load beats letting the operator
@@ -232,12 +258,14 @@ pub(super) fn resolve_delivery_configuration(
             .resolve(section.unreachable_dwell_ms, path)?,
         queued_envelopes_max: queued_envelopes_max as usize,
         queued_bytes_max,
-        queued_envelopes_per_target_max: queued_envelopes_per_target_max as usize,
+        queued_envelopes_per_target_max: queued_envelopes_per_target_max
+            as usize,
         queued_bytes_per_target_max,
         undelivered_warning_ms: DELIVERY_UNDELIVERED_WARNING_MS
             .resolve(section.undelivered_warning_ms, path)?,
-        undelivered_report_interval_ms: DELIVERY_UNDELIVERED_REPORT_INTERVAL_MS
-            .resolve(section.undelivered_report_interval_ms, path)?,
+        undelivered_report_interval_ms:
+            DELIVERY_UNDELIVERED_REPORT_INTERVAL_MS
+                .resolve(section.undelivered_report_interval_ms, path)?,
     })
 }
 

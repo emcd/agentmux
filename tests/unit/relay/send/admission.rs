@@ -136,7 +136,9 @@ send = "home"
 fn send_rejecting_one_target_queues_none_of_the_request() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
     let config_root = write_bundle_with_policy(
         &temporary,
         "party",
@@ -263,7 +265,8 @@ fn a_configured_quota_binds_at_admission() {
     // one broadcast attempt, so its reservation is released before the second
     // send arrives.
     send().expect("the first send fits the configured per-target quota");
-    let error = send().expect_err("the second send exceeds a per-target quota of one");
+    let error =
+        send().expect_err("the second send exceeds a per-target quota of one");
 
     assert_eq!(error.code, "runtime_delivery_queue_full");
     let details = error.details.as_ref().expect("queue-full details");

@@ -13,14 +13,18 @@ use tempfile::TempDir;
 
 use agentmux::configuration::{
     BUNDLE_ENVIRONMENT_VARIABLE, BringUpContext, BundleMember,
-    CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, ContextValue, INHERITED_CONTEXT_VARIABLE_NAMES,
-    LayerRepresentationFault, SESSION_ENVIRONMENT_VARIABLE, load_bundle_configuration,
+    CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE, ContextValue,
+    INHERITED_CONTEXT_VARIABLE_NAMES, LayerRepresentationFault,
+    SESSION_ENVIRONMENT_VARIABLE, load_bundle_configuration,
 };
 
 use super::helpers::*;
 
 /// Looks up a merged environment value by name on a resolved member.
-fn value_of<'member>(member: &'member BundleMember, name: &str) -> Option<&'member str> {
+fn value_of<'member>(
+    member: &'member BundleMember,
+    name: &str,
+) -> Option<&'member str> {
     member
         .environment
         .iter()
@@ -82,7 +86,8 @@ fn write_bundle_under_root_named(
     let bundles = root.join("bundles");
     std::fs::create_dir_all(&bundles).expect("create directories");
     std::fs::write(root.join("coders.toml"), ACP_CODER).expect("write coders");
-    std::fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml).expect("write bundle");
+    std::fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml)
+        .expect("write bundle");
     ConfigurationRoots::single(root)
 }
 
@@ -113,7 +118,8 @@ fn not_unicode_root_name() -> Option<&'static std::ffi::OsStr> {
 /// filesystem can hold. Where the non-Unicode name is unavailable, the fault
 /// itself stays covered by the rendering tests, which need no directory, and
 /// what the loader does with a fault stays covered by the separator name.
-fn unrepresentable_root_names() -> Vec<(&'static std::ffi::OsStr, &'static str)> {
+fn unrepresentable_root_names() -> Vec<(&'static std::ffi::OsStr, &'static str)>
+{
     let mut names = vec![(separator_root_name(), "contains ':'")];
     if let Some(not_unicode) = not_unicode_root_name() {
         names.push((not_unicode, "not valid Unicode"));
@@ -175,7 +181,8 @@ fn stamps_the_relays_configuration_layer_list() {
     let temporary = TempDir::new().expect("temporary");
     let root = write_plain_bundle(&temporary, "alpha", "reviewer");
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     let member = &loaded.members[0];
     assert_eq!(
         value_of(member, CONFIGURATION_DIRECTORY_ENVIRONMENT_VARIABLE),
@@ -211,7 +218,8 @@ value = "/operator/choice"
         ),
     );
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(
         value_of(
             &loaded.members[0],
@@ -241,8 +249,10 @@ fn rendering_joins_every_layer_in_declared_order() {
     // The stamped value is a search path, so a member reading it has to find
     // the layers in the precedence the relay resolved -- an override ahead of
     // the base it overrides.
-    let roots = ConfigurationRoots::from_elements(["/override", "/base"].map(PathBuf::from))
-        .expect("layer list");
+    let roots = ConfigurationRoots::from_elements(
+        ["/override", "/base"].map(PathBuf::from),
+    )
+    .expect("layer list");
     assert_eq!(
         ContextValue::Layers(&roots).render().expect("render"),
         "/override:/base"
@@ -269,7 +279,8 @@ fn rendering_reports_an_unrepresentable_layer_rather_than_approximating_it() {
         ),
     ] {
         let roots = ConfigurationRoots::single(layer.clone());
-        let Err(unrepresentable) = ContextValue::Layers(&roots).render() else {
+        let Err(unrepresentable) = ContextValue::Layers(&roots).render()
+        else {
             panic!("{layer:?}: an unrepresentable layer must not render");
         };
         assert_eq!(
@@ -303,7 +314,9 @@ fn an_unrepresentable_layer_is_rejected_where_a_member_would_be_stamped() {
         );
 
         let Err(error) = load_bundle_configuration(&root, "alpha") else {
-            panic!("{root_name:?}: an unrepresentable layer must not be stamped");
+            panic!(
+                "{root_name:?}: an unrepresentable layer must not be stamped"
+            );
         };
         let rendered = error.to_string();
         assert!(
@@ -321,8 +334,12 @@ fn an_unrepresentable_layer_loads_when_no_member_would_be_stamped() {
     let dir = temporary.path().display().to_string();
 
     for (root_name, _) in unrepresentable_root_names() {
-        let root =
-            write_bundle_under_root_named(&temporary, root_name, "alpha", &coder_less_bundle(&dir));
+        let root = write_bundle_under_root_named(
+            &temporary,
+            root_name,
+            "alpha",
+            &coder_less_bundle(&dir),
+        );
 
         let loaded = load_bundle_configuration(&root, "alpha")
             .unwrap_or_else(|error| panic!("{root_name:?}: {error}"));
@@ -373,7 +390,8 @@ fn stamps_hosting_bundle_and_member_id() {
     let temporary = TempDir::new().expect("temporary");
     let root = write_plain_bundle(&temporary, "alpha", "reviewer");
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     let member = &loaded.members[0];
     assert_eq!(value_of(member, BUNDLE_ENVIRONMENT_VARIABLE), Some("alpha"));
     assert_eq!(
@@ -433,7 +451,8 @@ value = "operator-choice"
         ),
     );
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     let member = &loaded.members[0];
     // Upsert-if-absent: declaring the name in configuration overrides what
     // bring-up would otherwise supply.
@@ -484,7 +503,8 @@ directory = "{dir}"
         ),
     );
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(loaded.members.len(), 2);
     for member in &loaded.members {
         for name in BringUpContext::VARIABLE_NAMES {

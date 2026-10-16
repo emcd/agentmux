@@ -9,17 +9,18 @@ use crate::acp::persistent_runtime::PersistentAcpWorkerRuntime;
 use crate::envelope::PromptBatchSettings;
 use crate::transports::WorkerReadinessState;
 use crate::transports::{
-    DeliveryExecutorContext, GenerationFence, OutputView, StartupContext, Transport,
-    TransportError, TransportHealth, TransportStatus, run_delivery_executor,
+    DeliveryExecutorContext, GenerationFence, OutputView, StartupContext,
+    Transport, TransportError, TransportHealth, TransportStatus,
+    run_delivery_executor,
 };
 
 use super::delivery::{
-    AcpDeliveryWriter, AcpReachability, AcpRuntimeSlot, DeliveryChannels, DeliveryTaskIdentity,
-    RuntimeInstall,
+    AcpDeliveryWriter, AcpReachability, AcpRuntimeSlot, DeliveryChannels,
+    DeliveryTaskIdentity, RuntimeInstall,
 };
 use super::state::{
-    AcpSharedState, BootstrapInFlight, BootstrapRecord, BootstrapRegistry, NEXT_BOOTSTRAP_ID,
-    ReadinessMirror, raise_respawn_signal,
+    AcpSharedState, BootstrapInFlight, BootstrapRecord, BootstrapRegistry,
+    NEXT_BOOTSTRAP_ID, ReadinessMirror, raise_respawn_signal,
 };
 
 pub struct AcpTransport {
@@ -156,7 +157,9 @@ impl AcpTransport {
 
     /// Subscribes to the stable respawn-needed signal. The driver-owned respawn
     /// monitor holds one subscription for the transport's whole life.
-    pub fn respawn_needed_subscribe(&self) -> tokio::sync::watch::Receiver<u64> {
+    pub fn respawn_needed_subscribe(
+        &self,
+    ) -> tokio::sync::watch::Receiver<u64> {
         self.respawn_needed_tx.subscribe()
     }
 
@@ -164,7 +167,8 @@ impl AcpTransport {
     #[must_use]
     pub fn respawn_signal_outstanding(&self) -> Option<u64> {
         let raised = *self.respawn_needed_tx.borrow();
-        (raised > self.respawn_retired.load(Ordering::Acquire)).then_some(raised)
+        (raised > self.respawn_retired.load(Ordering::Acquire))
+            .then_some(raised)
     }
 
     /// Marks every respawn cause up to and including `epoch` as answered, and
@@ -265,7 +269,8 @@ impl AcpTransport {
         if self.delivery_task_handle.is_some() {
             return;
         }
-        let (runtime_tx, runtime_rx) = std::sync::mpsc::channel::<RuntimeInstall>();
+        let (runtime_tx, runtime_rx) =
+            std::sync::mpsc::channel::<RuntimeInstall>();
         let respawn_needed_tx = self.respawn_needed_tx.clone();
         let shared = Arc::clone(&self.shared);
         let batch_settings = self.batch_settings;
@@ -277,7 +282,9 @@ impl AcpTransport {
         let stop = Arc::clone(&self.executor_stop);
         let reachability = AcpReachability {
             abandoned: Arc::clone(&self.reachability.abandoned),
-            unreachable_since: Arc::clone(&self.reachability.unreachable_since),
+            unreachable_since: Arc::clone(
+                &self.reachability.unreachable_since,
+            ),
         };
 
         let handle = thread::Builder::new()
@@ -500,7 +507,10 @@ impl Transport for AcpTransport {
     /// coming up behind it. Every production ACP path goes through
     /// [`AcpWorkerDriver::start_bootstrap`], so the route is gone rather than
     /// duplicated under the supervisor.
-    fn startup(&mut self, _context: StartupContext) -> Result<TransportStatus, TransportError> {
+    fn startup(
+        &mut self,
+        _context: StartupContext,
+    ) -> Result<TransportStatus, TransportError> {
         Err(TransportError {
             code: "internal_unexpected_failure".to_string(),
             reason: "ACP runtimes are established by the worker driver's supervised bootstrap"
@@ -560,10 +570,12 @@ mod executor_lifetime_tests {
     use super::*;
     use crate::protocol::mailbox::{CursorPosition, EntryRange};
     use crate::protocol::operations::{
-        AckRejection, AckResult, DeclareRejection, DeclareResult, MemberAcknowledgment,
-        PeekResponse, PeekResult,
+        AckRejection, AckResult, DeclareRejection, DeclareResult,
+        MemberAcknowledgment, PeekResponse, PeekResult,
     };
-    use crate::transports::{DeliveryExecutorContext, MailboxConsumer, PackingUnitId};
+    use crate::transports::{
+        DeliveryExecutorContext, MailboxConsumer, PackingUnitId,
+    };
 
     /// A mailbox that is always empty and counts what the executor reports.
     ///
@@ -577,7 +589,11 @@ mod executor_lifetime_tests {
     }
 
     impl MailboxConsumer for CountingConsumer {
-        fn peek(&self, _entry_max: usize, _canonical_bytes_max: u64) -> PeekResult {
+        fn peek(
+            &self,
+            _entry_max: usize,
+            _canonical_bytes_max: u64,
+        ) -> PeekResult {
             self.peeks.fetch_add(1, Ordering::Relaxed);
             Ok(PeekResponse {
                 entries: Vec::new(),
@@ -589,7 +605,11 @@ mod executor_lifetime_tests {
             Err(DeclareRejection::UnknownTarget)
         }
 
-        fn ack(&self, _unit: PackingUnitId, _members: &[MemberAcknowledgment]) -> AckResult {
+        fn ack(
+            &self,
+            _unit: PackingUnitId,
+            _members: &[MemberAcknowledgment],
+        ) -> AckResult {
             Err(AckRejection::UnknownTarget)
         }
 
@@ -610,7 +630,8 @@ mod executor_lifetime_tests {
     }
 
     #[test]
-    fn one_executor_is_spawned_before_any_runtime_and_survives_a_released_one() {
+    fn one_executor_is_spawned_before_any_runtime_and_survives_a_released_one()
+    {
         let consumer = Arc::new(CountingConsumer::default());
         let abandoned = Arc::new(AtomicBool::new(false));
         let mut transport = AcpTransport::new(

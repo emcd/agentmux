@@ -58,12 +58,14 @@ coder = "shell"
         ),
     );
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(loaded.bundle_name, "alpha");
     assert_eq!(loaded.members.len(), 2);
     assert_eq!(loaded.members[1].id, "session-b");
     assert_eq!(loaded.members[1].name.as_deref(), Some("Bravo"));
-    let TargetConfiguration::Tmux(member_a_target) = &loaded.members[0].target else {
+    let TargetConfiguration::Tmux(member_a_target) = &loaded.members[0].target
+    else {
         panic!("expected tmux target for session-a");
     };
     assert_eq!(
@@ -100,12 +102,15 @@ resume-command = "sh -lc 'exec sleep 45'"
     )
     .expect("write coders");
 
-    let err = load_bundle_configuration(&ConfigurationRoots::single(&root), "missing")
-        .expect_err("missing bundle");
+    let err = load_bundle_configuration(
+        &ConfigurationRoots::single(&root),
+        "missing",
+    )
+    .expect_err("missing bundle");
     match err {
         ConfigurationError::UnknownBundle { bundle_name, .. } => {
             assert_eq!(bundle_name, "missing");
-        }
+        },
         _ => panic!("expected unknown bundle"),
     }
 }
@@ -149,7 +154,8 @@ coder = "shell"
     let loaded = load_bundle_configuration(&root, "alpha").expect("load");
 
     let inferred =
-        infer_sender_from_working_directory(&loaded, temporary.path()).expect("infer sender");
+        infer_sender_from_working_directory(&loaded, temporary.path())
+            .expect("infer sender");
     assert_eq!(inferred.as_deref(), Some("a"));
 }
 
@@ -196,7 +202,7 @@ coder = "shell"
     match err {
         ConfigurationError::AmbiguousSender { matches, .. } => {
             assert_eq!(matches, vec!["a".to_string(), "b".to_string()]);
-        }
+        },
         _ => panic!("expected ambiguous sender error"),
     }
 }
@@ -231,7 +237,8 @@ coder = "shell"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string().contains("unsupported format-version"),
         "unexpected error: {err}"

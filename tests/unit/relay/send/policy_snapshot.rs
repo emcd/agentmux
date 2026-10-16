@@ -31,7 +31,9 @@ fn a_policy_tightening_governs_the_next_send_and_not_the_one_already_queued() {
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
     configure_long_unreachable_dwell();
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -63,7 +65,8 @@ fn a_policy_tightening_governs_the_next_send_and_not_the_one_already_queued() {
     // judged against, which is what a fresh read per request means. Without this
     // the assertions below would hold equally against a relay that read the file
     // once at startup and never again.
-    let refused = send().expect_err("a send forbidden by the policy now in effect is refused");
+    let refused = send()
+        .expect_err("a send forbidden by the policy now in effect is refused");
     assert_eq!(
         refused.code, "authorization_forbidden",
         "the tightened policy refuses the new send: {refused:?}"
@@ -79,7 +82,8 @@ fn a_policy_tightening_governs_the_next_send_and_not_the_one_already_queued() {
     // would be missing here and one blocked by it would have had to resolve to
     // get that way.
     report_undelivered_queue(UndeliveredReporting::default());
-    let aggregates = read_inscriptions(&inscriptions, "relay.delivery.undelivered");
+    let aggregates =
+        read_inscriptions(&inscriptions, "relay.delivery.undelivered");
     // A pass with nothing waiting emits no aggregate at all, so an absent record
     // reads as a queue holding nothing rather than as a reading not taken. That
     // keeps the assertion below on the claim itself — the entry is still there —
@@ -103,7 +107,8 @@ fn a_policy_tightening_governs_the_next_send_and_not_the_one_already_queued() {
     // And it was not resolved on account of the change. A re-check that found it
     // forbidden could only report that as a terminal outcome, so the absence of
     // one is what says no re-check happened.
-    let completions = read_inscriptions(&inscriptions, "relay.send.async.completed");
+    let completions =
+        read_inscriptions(&inscriptions, "relay.send.async.completed");
     assert!(
         completions.is_empty(),
         "an entry admitted under the old policy is neither purged nor re-authorized: \

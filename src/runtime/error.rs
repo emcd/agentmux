@@ -53,7 +53,10 @@ impl RuntimeError {
         }
     }
 
-    pub fn validation(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn validation(
+        code: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Self {
         Self::Validation {
             code: code.into(),
             message: message.into(),
@@ -66,16 +69,16 @@ impl Display for RuntimeError {
         match self {
             Self::HomeDirectoryUnavailable => {
                 write!(formatter, "home directory is unavailable; set HOME")
-            }
+            },
             Self::InvalidArgument { argument, message } => {
                 write!(formatter, "invalid argument {argument}: {message}")
-            }
+            },
             Self::Validation { code, message } => {
                 write!(formatter, "{code}: {message}")
-            }
+            },
             Self::InvalidBundleName { bundle_name } => {
                 write!(formatter, "invalid bundle name '{bundle_name}'")
-            }
+            },
             Self::RelayAutostartDisabled { relay_socket } => write!(
                 formatter,
                 "relay unavailable at {}; start agentmux host relay with matching --state-directory",
@@ -108,7 +111,7 @@ impl Display for RuntimeError {
             ),
             Self::Io { context, source } => {
                 write!(formatter, "{context}: {source}")
-            }
+            },
         }
     }
 }
@@ -116,7 +119,8 @@ impl Display for RuntimeError {
 impl Error for RuntimeError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
-            Self::Io { source, .. } | Self::RelaySpawnFailure { source, .. } => Some(source),
+            Self::Io { source, .. }
+            | Self::RelaySpawnFailure { source, .. } => Some(source),
             _ => None,
         }
     }

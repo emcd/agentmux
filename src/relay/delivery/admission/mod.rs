@@ -63,12 +63,13 @@ mod terminal;
 
 pub use self::config::configure_delivery;
 pub use self::reporting::{
-    UndeliveredReporting, configured_undelivered_reporting, report_undelivered_queue,
+    UndeliveredReporting, configured_undelivered_reporting,
+    report_undelivered_queue,
 };
 
 pub(in crate::relay) use self::admit::{
-    admit, canonical_payload_bytes, resolve_target_session_type, rollback_admission,
-    target_is_relay_wide,
+    admit, canonical_payload_bytes, resolve_target_session_type,
+    rollback_admission, target_is_relay_wide,
 };
 pub(in crate::relay) use self::config::delivery_configuration;
 pub(in crate::relay) use self::ledger::AdmissionTargetKey;
@@ -78,8 +79,9 @@ pub(in crate::relay) use self::ledger::AdmissionTargetKey;
 #[cfg(test)]
 pub(in crate::relay) use self::mailbox::TargetReap;
 pub(in crate::relay) use self::mailbox::{
-    Acknowledgment, EnqueueRejection, GenerationRejection, ResolvedMember, ack,
-    claim_consumer_generation, declaration_age, declare, enqueue, peek, reap_target,
-    register_doorbell, replace_consumer_generation, resolve_target_entries,
+    Acknowledgment, EnqueueRejection, GenerationRejection, ResolvedMember,
+    ack, claim_consumer_generation, declaration_age, declare, enqueue, peek,
+    reap_target, register_doorbell, replace_consumer_generation,
+    resolve_target_entries,
 };
 pub(in crate::relay) use self::terminal::{TerminalTransition, terminalize};

@@ -34,9 +34,14 @@ impl fmt::Display for CommandParseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnterminatedQuote(s) => {
-                write!(f, "unterminated quoted region in command string: {s:?}")
-            }
-            Self::Empty(s) => write!(f, "command string tokenized to empty argv: {s:?}"),
+                write!(
+                    f,
+                    "unterminated quoted region in command string: {s:?}"
+                )
+            },
+            Self::Empty(s) => {
+                write!(f, "command string tokenized to empty argv: {s:?}")
+            },
         }
     }
 }
@@ -54,9 +59,12 @@ impl std::error::Error for CommandParseError {}
 /// "sh -lc 'exec sleep 45'"   -> ["sh", "-lc", "exec sleep 45"]
 /// "/usr/local/bin/my-tool"   -> ["/usr/local/bin/my-tool"]
 /// ```
-pub fn tokenize_command(input: &str) -> Result<Vec<String>, CommandParseError> {
-    let tokens = shell_words::split(input)
-        .map_err(|e| CommandParseError::UnterminatedQuote(format!("{e}: {input:?}")))?;
+pub fn tokenize_command(
+    input: &str,
+) -> Result<Vec<String>, CommandParseError> {
+    let tokens = shell_words::split(input).map_err(|e| {
+        CommandParseError::UnterminatedQuote(format!("{e}: {input:?}"))
+    })?;
     if tokens.is_empty() {
         return Err(CommandParseError::Empty(input.to_string()));
     }
@@ -66,7 +74,9 @@ pub fn tokenize_command(input: &str) -> Result<Vec<String>, CommandParseError> {
 /// Convenience: split argv tokens into `(program, args)`. The first
 /// token is the program; the remainder are args. Returns
 /// `Err(CommandParseError::Empty)` if the input is empty.
-pub fn program_and_args(input: &str) -> StdResult<(String, Vec<String>), CommandParseError> {
+pub fn program_and_args(
+    input: &str,
+) -> StdResult<(String, Vec<String>), CommandParseError> {
     let tokens = tokenize_command(input)?;
     let mut iter = tokens.into_iter();
     let program = iter.next().expect("tokenize_command returned non-empty");
@@ -146,7 +156,8 @@ mod tests {
 
     #[test]
     fn program_and_args_splits_first_token() {
-        let (program, args) = program_and_args("codex resume abc-123").unwrap();
+        let (program, args) =
+            program_and_args("codex resume abc-123").unwrap();
         assert_eq!(program, "codex");
         assert_eq!(args, vec!["resume".to_string(), "abc-123".to_string()]);
     }

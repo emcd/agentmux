@@ -17,7 +17,9 @@ use super::*;
 fn a_sustained_unreachable_target_resolves_not_submitted() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
     // No tmux server backs this socket, so the target is unreachable from the
     // first observation and stays that way.
     configure_short_unreachable_dwell();
@@ -39,9 +41,10 @@ fn a_sustained_unreachable_target_resolves_not_submitted() {
     )
     .expect("send response");
 
-    let completed = await_inscription(&inscriptions, "relay.send.async.completed");
-    let record: serde_json::Value =
-        serde_json::from_str(completed.as_str()).expect("completed inscription is json");
+    let completed =
+        await_inscription(&inscriptions, "relay.send.async.completed");
+    let record: serde_json::Value = serde_json::from_str(completed.as_str())
+        .expect("completed inscription is json");
     let payload = record
         .get("details")
         .expect("completed inscription carries a details object");
@@ -74,7 +77,9 @@ fn a_sustained_unreachable_target_resolves_not_submitted() {
 fn an_unreachable_target_under_the_dwell_is_never_authorized() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
     configure_long_unreachable_dwell();
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");

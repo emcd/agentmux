@@ -20,11 +20,14 @@ use crate::relay::{AsyncDeliveryTask, DeliveryPayloadMode, RelayError};
 use crate::transports::TransportImpl;
 
 use super::super::super::admission::{EnqueueRejection, enqueue};
-use super::super::super::async_worker::{complete_task_refusal, release_pending_slot};
+use super::super::super::async_worker::{
+    complete_task_refusal, release_pending_slot,
+};
 use super::super::envelope::{build_coder_envelope, build_ui_envelope};
 use super::super::outcomes::now_rfc3339;
 use super::super::payload::{
-    build_delivery_message, emit_envelope_metadata_inscription, resolve_target_member,
+    build_delivery_message, emit_envelope_metadata_inscription,
+    resolve_target_member,
 };
 
 /// Builds one task's payload, stamps it once, and enqueues it into its target's
@@ -42,7 +45,8 @@ pub(super) fn take_into_mailbox(
     // One read of the clock per entry. `Date` therefore names when the relay
     // built the envelope rather than when a transport got round to writing it,
     // which is the only stamp that can be the same on both sides of the mailbox.
-    let payload = match build_payload(&task, transport, now_rfc3339().as_str()) {
+    let payload = match build_payload(&task, transport, now_rfc3339().as_str())
+    {
         Ok(payload) => payload,
         Err(error) => {
             // No payload means no entry, and no entry means nothing will ever
@@ -52,10 +56,14 @@ pub(super) fn take_into_mailbox(
             // was never submitted. The refusal's own code and message travel with
             // it, because the guard knows the member was not written but not that
             // its target member could not be resolved.
-            complete_task_refusal(&task, error.code.as_str(), error.message.as_str());
+            complete_task_refusal(
+                &task,
+                error.code.as_str(),
+                error.message.as_str(),
+            );
             release_pending_slot(pending);
             return;
-        }
+        },
     };
     if let Err(rejection) = enqueue(&task, payload) {
         // The ledger refused the position. Every shape of this is a relay-side
@@ -103,16 +111,20 @@ fn build_payload(
     match task.payload_mode {
         DeliveryPayloadMode::EnvelopeMessage => {
             let target_member = resolve_target_member(task)?;
-            let message = build_delivery_message(task, target_member, created_at);
+            let message =
+                build_delivery_message(task, target_member, created_at);
             // Emitted where the payload is built, and only here. Left at the write
             // it would describe an envelope other than the one the mailbox holds;
             // emitted at both points it would double-count. Raw input carries no
             // envelope and so emits none, exactly as before.
-            emit_envelope_metadata_inscription(&message, task.message_id.as_str());
+            emit_envelope_metadata_inscription(
+                &message,
+                task.message_id.as_str(),
+            );
             Ok(MailboxPayload::Mail(Arc::new(build_coder_envelope(
                 task, message,
             ))))
-        }
+        },
         DeliveryPayloadMode::RawInput => Ok(MailboxPayload::Raw {
             content: task.message.clone(),
             append_enter: task.append_enter,

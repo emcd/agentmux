@@ -15,8 +15,9 @@
 use std::time::Duration;
 
 use agentmux::runtime::signals::{
-    arm_shutdown_deadline, budget_within_shutdown, install_shutdown_signal_handlers,
-    register_shutdown_grace, shutdown_requested, shutdown_time_remaining,
+    arm_shutdown_deadline, budget_within_shutdown,
+    install_shutdown_signal_handlers, register_shutdown_grace,
+    shutdown_requested, shutdown_time_remaining,
 };
 
 /// With nothing armed, a step takes the bound it was configured with.
@@ -42,7 +43,8 @@ fn an_unarmed_process_leaves_every_configured_bound_alone() {
 /// for an inner step to consume the entire outer budget and leave nothing for
 /// the work behind it.
 #[test]
-fn an_armed_deadline_cuts_a_configured_bound_down_and_holds_back_the_reserve() {
+fn an_armed_deadline_cuts_a_configured_bound_down_and_holds_back_the_reserve()
+{
     arm_shutdown_deadline(Duration::from_millis(1_000));
     let remaining = shutdown_time_remaining().expect("a deadline was armed");
     assert!(
@@ -81,8 +83,10 @@ fn an_armed_deadline_cuts_a_configured_bound_down_and_holds_back_the_reserve() {
 /// A registered grace is what makes the states distinguishable: it is the
 /// positive fact that this process *will* have a deadline.
 #[test]
-fn a_shutdown_already_requested_arms_the_deadline_rather_than_reporting_none() {
-    let _handlers = install_shutdown_signal_handlers().expect("install handlers");
+fn a_shutdown_already_requested_arms_the_deadline_rather_than_reporting_none()
+{
+    let _handlers =
+        install_shutdown_signal_handlers().expect("install handlers");
     register_shutdown_grace(Duration::from_millis(400));
 
     // Raise the signal rather than simulating it, so the interleaving under test
@@ -94,7 +98,10 @@ fn a_shutdown_already_requested_arms_the_deadline_rather_than_reporting_none() {
         "the handler must have observed the signal"
     );
 
-    let fitted = budget_within_shutdown(Duration::from_secs(60), Duration::from_millis(100));
+    let fitted = budget_within_shutdown(
+        Duration::from_secs(60),
+        Duration::from_millis(100),
+    );
     assert!(
         fitted <= Duration::from_millis(400),
         "a budget taken before the watchdog arms must still fit the grace, got {fitted:?}"
@@ -135,7 +142,10 @@ fn an_exhausted_budget_yields_zero_rather_than_the_configured_bound() {
 
     assert_eq!(shutdown_time_remaining(), Some(Duration::ZERO));
     assert_eq!(
-        budget_within_shutdown(Duration::from_secs(60), Duration::from_millis(300)),
+        budget_within_shutdown(
+            Duration::from_secs(60),
+            Duration::from_millis(300)
+        ),
         Duration::ZERO,
         "an expired grace must not hand back the configured bound"
     );

@@ -6,30 +6,36 @@ use agentmux::relay::{
 };
 use agentmux::runtime::error::RuntimeError;
 use agentmux::tui::{
-    Action, BundleStatusDisplay, BundleStatusSeverity, KeyboardEnhancement, RecipientReadiness,
-    TuiLaunchOptions, autocomplete_recipient_input, bundle_status_severity,
-    format_bundle_status_line, format_keyboard_enhancement_lines, format_recipient_picker_label,
-    format_startup_failure_lines, merge_tui_targets, parse_tui_target_identifier,
-    sender_bound_bundle,
-    workbench::{Workbench, WorkbenchField, WorkbenchMode, WorkbenchPickerColumn},
+    Action, BundleStatusDisplay, BundleStatusSeverity, KeyboardEnhancement,
+    RecipientReadiness, TuiLaunchOptions, autocomplete_recipient_input,
+    bundle_status_severity, format_bundle_status_line,
+    format_keyboard_enhancement_lines, format_recipient_picker_label,
+    format_startup_failure_lines, merge_tui_targets,
+    parse_tui_target_identifier, sender_bound_bundle,
+    workbench::{
+        Workbench, WorkbenchField, WorkbenchMode, WorkbenchPickerColumn,
+    },
 };
 
 #[test]
 fn parses_local_target_identifier() {
-    let resolved = parse_tui_target_identifier("relay", Some("agentmux")).expect("target");
+    let resolved = parse_tui_target_identifier("relay", Some("agentmux"))
+        .expect("target");
     assert_eq!(resolved, "relay@agentmux");
 }
 
 #[test]
 fn rejects_slash_qualified_target_identifier() {
     let error =
-        parse_tui_target_identifier("agentmux/relay", Some("agentmux")).expect_err("must reject");
+        parse_tui_target_identifier("agentmux/relay", Some("agentmux"))
+            .expect_err("must reject");
     assert!(error.to_string().contains("validation_unknown_target"));
 }
 
 #[test]
 fn parses_at_prefixed_target_identifier() {
-    let resolved = parse_tui_target_identifier("@relay", Some("agentmux")).expect("target");
+    let resolved = parse_tui_target_identifier("@relay", Some("agentmux"))
+        .expect("target");
     assert_eq!(resolved, "relay@agentmux");
 }
 
@@ -37,21 +43,25 @@ fn parses_at_prefixed_target_identifier() {
 fn parses_session_at_active_bundle_preserves_canonical_form() {
     // The relay requires fully-qualified targets, so a canonical id matching the
     // bound bundle is emitted verbatim rather than stripped to a bare session.
-    let resolved = parse_tui_target_identifier("relay@agentmux", Some("agentmux")).expect("target");
+    let resolved =
+        parse_tui_target_identifier("relay@agentmux", Some("agentmux"))
+            .expect("target");
     assert_eq!(resolved, "relay@agentmux");
 }
 
 #[test]
 fn parses_session_at_peer_bundle_preserves_canonical_form() {
     let resolved =
-        parse_tui_target_identifier("relay@other-bundle", Some("agentmux")).expect("target");
+        parse_tui_target_identifier("relay@other-bundle", Some("agentmux"))
+            .expect("target");
     assert_eq!(resolved, "relay@other-bundle");
 }
 
 #[test]
 fn parses_global_user_target_identifier() {
     let resolved =
-        parse_tui_target_identifier("operator@GLOBAL", Some("agentmux")).expect("target");
+        parse_tui_target_identifier("operator@GLOBAL", Some("agentmux"))
+            .expect("target");
     assert_eq!(resolved, "operator@GLOBAL");
 }
 
@@ -61,13 +71,15 @@ fn relay_wide_sender_preserves_bundle_suffix_matching_display_bundle() {
     // peer-bundle suffix even when it equals the TUI's displayed active bundle.
     // The relay derives Send routing from this suffix; stripping it would strand
     // the target with no routing namespace.
-    let resolved = parse_tui_target_identifier("qa-partner@agentmux-qa", None).expect("target");
+    let resolved = parse_tui_target_identifier("qa-partner@agentmux-qa", None)
+        .expect("target");
     assert_eq!(resolved, "qa-partner@agentmux-qa");
 }
 
 #[test]
 fn relay_wide_sender_preserves_all_bundle_suffixes() {
-    let resolved = parse_tui_target_identifier("relay@agentmux", None).expect("target");
+    let resolved =
+        parse_tui_target_identifier("relay@agentmux", None).expect("target");
     assert_eq!(resolved, "relay@agentmux");
 }
 
@@ -76,40 +88,44 @@ fn relay_wide_sender_rejects_bare_target() {
     // A relay-wide sender has no bound bundle to qualify a bare target with, and
     // the relay rejects unqualified targets, so the client fails fast instead of
     // sending one the relay would reject.
-    let error = parse_tui_target_identifier("relay", None).expect_err("must reject");
+    let error =
+        parse_tui_target_identifier("relay", None).expect_err("must reject");
     assert!(error.to_string().contains("validation_unqualified_target"));
 }
 
 #[test]
 fn parses_at_prefixed_canonical_target_identifier() {
     let resolved =
-        parse_tui_target_identifier("@relay@other-bundle", Some("agentmux")).expect("target");
+        parse_tui_target_identifier("@relay@other-bundle", Some("agentmux"))
+            .expect("target");
     assert_eq!(resolved, "relay@other-bundle");
 }
 
 #[test]
 fn rejects_empty_session_in_canonical_target() {
-    let error = parse_tui_target_identifier("@@relay", Some("agentmux")).expect_err("must reject");
+    let error = parse_tui_target_identifier("@@relay", Some("agentmux"))
+        .expect_err("must reject");
     assert!(error.to_string().contains("validation_unknown_target"));
 }
 
 #[test]
 fn rejects_empty_bundle_in_canonical_target() {
-    let error = parse_tui_target_identifier("relay@", Some("agentmux")).expect_err("must reject");
+    let error = parse_tui_target_identifier("relay@", Some("agentmux"))
+        .expect_err("must reject");
     assert!(error.to_string().contains("validation_unknown_target"));
 }
 
 #[test]
 fn rejects_multiple_at_separators_in_target_identifier() {
-    let error =
-        parse_tui_target_identifier("relay@one@two", Some("agentmux")).expect_err("must reject");
+    let error = parse_tui_target_identifier("relay@one@two", Some("agentmux"))
+        .expect_err("must reject");
     assert!(error.to_string().contains("validation_unknown_target"));
 }
 
 #[test]
 fn rejects_slash_in_bundle_qualifier() {
-    let error =
-        parse_tui_target_identifier("relay@bun/dle", Some("agentmux")).expect_err("must reject");
+    let error = parse_tui_target_identifier("relay@bun/dle", Some("agentmux"))
+        .expect_err("must reject");
     assert!(error.to_string().contains("validation_unknown_target"));
 }
 
@@ -117,13 +133,16 @@ fn rejects_slash_in_bundle_qualifier() {
 fn merge_dedupes_canonical_and_bare_intra_bundle_targets() {
     // The bare `relay` qualifies to `relay@agentmux`, matching the canonical form,
     // so the two collapse to a single fully-qualified target.
-    let targets = merge_tui_targets("relay, relay@agentmux", Some("agentmux")).expect("targets");
+    let targets = merge_tui_targets("relay, relay@agentmux", Some("agentmux"))
+        .expect("targets");
     assert_eq!(targets, vec!["relay@agentmux"]);
 }
 
 #[test]
 fn merge_preserves_peer_bundle_target_alongside_local() {
-    let targets = merge_tui_targets("relay, mcp@other-bundle", Some("agentmux")).expect("targets");
+    let targets =
+        merge_tui_targets("relay, mcp@other-bundle", Some("agentmux"))
+            .expect("targets");
     assert_eq!(targets, vec!["relay@agentmux", "mcp@other-bundle"]);
 }
 
@@ -146,13 +165,15 @@ fn merge_relay_wide_sender_preserves_cross_bundle_target() {
     // A relay-wide TUI principal sending to a peer bundle must keep the
     // `@bundle` suffix so the relay can resolve routing, even when the target
     // bundle equals the displayed active bundle.
-    let targets = merge_tui_targets("qa-partner@agentmux-qa", None).expect("targets");
+    let targets =
+        merge_tui_targets("qa-partner@agentmux-qa", None).expect("targets");
     assert_eq!(targets, vec!["qa-partner@agentmux-qa"]);
 }
 
 #[test]
 fn merges_to_field_into_deterministic_targets() {
-    let targets = merge_tui_targets("relay, mcp, tui", Some("agentmux")).expect("targets");
+    let targets = merge_tui_targets("relay, mcp, tui", Some("agentmux"))
+        .expect("targets");
     assert_eq!(
         targets,
         vec!["relay@agentmux", "mcp@agentmux", "tui@agentmux"]
@@ -161,27 +182,33 @@ fn merges_to_field_into_deterministic_targets() {
 
 #[test]
 fn merge_rejects_slash_qualified_target() {
-    let error = merge_tui_targets("relay, agentmux/mcp", Some("agentmux")).expect_err("must fail");
+    let error = merge_tui_targets("relay, agentmux/mcp", Some("agentmux"))
+        .expect_err("must fail");
     assert!(error.to_string().contains("validation_unknown_target"));
 }
 
 #[test]
 fn merge_rejects_empty_target_set() {
-    let error = merge_tui_targets("", Some("agentmux")).expect_err("must fail");
+    let error =
+        merge_tui_targets("", Some("agentmux")).expect_err("must fail");
     assert!(error.to_string().contains("validation_empty_targets"));
 }
 
 #[test]
 fn autocomplete_replaces_current_token_after_comma() {
-    let candidates = vec!["relay".to_string(), "mcp".to_string(), "tui".to_string()];
-    let completed = autocomplete_recipient_input("relay, tu", &candidates).expect("completion");
+    let candidates =
+        vec!["relay".to_string(), "mcp".to_string(), "tui".to_string()];
+    let completed = autocomplete_recipient_input("relay, tu", &candidates)
+        .expect("completion");
     assert_eq!(completed, "relay, tui");
 }
 
 #[test]
 fn autocomplete_strips_at_prefix_from_current_token() {
-    let candidates = vec!["relay".to_string(), "mcp".to_string(), "tui".to_string()];
-    let completed = autocomplete_recipient_input("@tu", &candidates).expect("completion");
+    let candidates =
+        vec!["relay".to_string(), "mcp".to_string(), "tui".to_string()];
+    let completed =
+        autocomplete_recipient_input("@tu", &candidates).expect("completion");
     assert_eq!(completed, "tui");
 }
 
@@ -290,22 +317,40 @@ fn bundle_status_line_renders_hosted_down_distinct_from_unhosted() {
 
 #[test]
 fn recipient_picker_label_renders_ready_session_without_marker() {
-    let with_name =
-        format_recipient_picker_label("alpha", Some("Alpha"), RecipientReadiness::Ready);
+    let with_name = format_recipient_picker_label(
+        "alpha",
+        Some("Alpha"),
+        RecipientReadiness::Ready,
+    );
     assert_eq!(with_name, "alpha (Alpha)");
-    let without_name = format_recipient_picker_label("alpha", None, RecipientReadiness::Ready);
+    let without_name = format_recipient_picker_label(
+        "alpha",
+        None,
+        RecipientReadiness::Ready,
+    );
     assert_eq!(without_name, "alpha");
 }
 
 #[test]
 fn recipient_picker_label_appends_not_ready_marker() {
-    let labelled =
-        format_recipient_picker_label("alpha", Some("Alpha"), RecipientReadiness::NotReady);
+    let labelled = format_recipient_picker_label(
+        "alpha",
+        Some("Alpha"),
+        RecipientReadiness::NotReady,
+    );
     assert_eq!(labelled, "alpha (Alpha)  [not ready]");
-    let bare = format_recipient_picker_label("alpha", None, RecipientReadiness::NotReady);
+    let bare = format_recipient_picker_label(
+        "alpha",
+        None,
+        RecipientReadiness::NotReady,
+    );
     assert_eq!(bare, "alpha  [not ready]");
     assert_ne!(
-        format_recipient_picker_label("alpha", Some("Alpha"), RecipientReadiness::Ready),
+        format_recipient_picker_label(
+            "alpha",
+            Some("Alpha"),
+            RecipientReadiness::Ready
+        ),
         labelled,
         "ready and not-ready labels must be visibly distinct even without color"
     );
@@ -323,7 +368,11 @@ fn recipient_readiness_classifies_relay_ready_field() {
     );
 }
 
-fn startup_failure_record(session_id: &str, code: &str, reason: &str) -> StartupFailureRecord {
+fn startup_failure_record(
+    session_id: &str,
+    code: &str,
+    reason: &str,
+) -> StartupFailureRecord {
     StartupFailureRecord {
         session_id: session_id.to_string(),
         transport: ListedSessionTransport::Tmux,
@@ -425,7 +474,8 @@ fn active_keyboard_enhancement_reports_distinct_modified_enter() {
 
 #[test]
 fn unsupported_keyboard_enhancement_names_the_collapsed_modified_enter() {
-    let lines = format_keyboard_enhancement_lines(KeyboardEnhancement::Unsupported);
+    let lines =
+        format_keyboard_enhancement_lines(KeyboardEnhancement::Unsupported);
     assert_eq!(lines[0], "Kitty keyboard protocol: unsupported");
     assert_eq!(lines[1], "Enter with modifiers arrives as bare Enter");
 }
@@ -436,8 +486,10 @@ fn probe_failure_reads_differently_from_an_answered_unsupported_probe() {
     // different operator problems: the first is the terminal, the second is
     // usually a missing tty or a swallowed reply. Collapsing them would hide
     // the second behind a wrong explanation.
-    let failed = format_keyboard_enhancement_lines(KeyboardEnhancement::ProbeFailed);
-    let unsupported = format_keyboard_enhancement_lines(KeyboardEnhancement::Unsupported);
+    let failed =
+        format_keyboard_enhancement_lines(KeyboardEnhancement::ProbeFailed);
+    let unsupported =
+        format_keyboard_enhancement_lines(KeyboardEnhancement::Unsupported);
     assert_eq!(failed[0], "Kitty keyboard protocol: probe failed");
     assert_ne!(failed[0], unsupported[0]);
 }
@@ -449,7 +501,8 @@ fn probe_failure_claims_nothing_about_the_terminal() {
     // distinguish Shift+Enter") would send the operator after the wrong
     // problem, since a capable terminal reaches this outcome whenever the
     // query is swallowed.
-    let lines = format_keyboard_enhancement_lines(KeyboardEnhancement::ProbeFailed);
+    let lines =
+        format_keyboard_enhancement_lines(KeyboardEnhancement::ProbeFailed);
     assert_eq!(lines[1], "Keyboard capability is undetermined");
     assert!(
         !lines.iter().any(|line| line.contains("Terminal cannot")),
@@ -576,10 +629,12 @@ fn committing_a_picker_session_resolves_by_screen_mode() {
     assert_eq!(workbench.mode(), WorkbenchMode::Interaction);
     assert!(workbench.picker_open());
     match workbench.apply_action(Action::CommitPickerSession) {
-        Err(RuntimeError::Validation { code, .. }) => assert_eq!(code, "relay_unavailable"),
+        Err(RuntimeError::Validation { code, .. }) => {
+            assert_eq!(code, "relay_unavailable")
+        },
         Err(RuntimeError::Io { source, .. }) => {
             assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied)
-        }
+        },
         other => panic!("unexpected result: {other:?}"),
     }
 }

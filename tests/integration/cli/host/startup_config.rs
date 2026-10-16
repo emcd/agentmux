@@ -10,7 +10,8 @@ pub(super) fn write_bundle_configuration_with_tmux_and_acp_failure(
     config_root: &Path,
     bundle_name: &str,
 ) {
-    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+    fs::create_dir_all(config_root.join("bundles"))
+        .expect("create bundles directory");
     fs::write(
         config_root.join("coders.toml"),
         r#"
@@ -79,8 +80,12 @@ coder = "acp-broken"
 /// Writes a bundle whose only session is an ACP member with a missing binary,
 /// so every configured session fails to start and the autostart summary reports
 /// the bundle as `failed`.
-pub(super) fn write_all_acp_failure_bundle(config_root: &Path, bundle_name: &str) {
-    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+pub(super) fn write_all_acp_failure_bundle(
+    config_root: &Path,
+    bundle_name: &str,
+) {
+    fs::create_dir_all(config_root.join("bundles"))
+        .expect("create bundles directory");
     fs::write(
         config_root.join("coders.toml"),
         r#"
@@ -134,7 +139,8 @@ pub(super) fn write_bundle_configuration_with_invalid_policy_scope(
     config_root: &Path,
     bundle_name: &str,
 ) {
-    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+    fs::create_dir_all(config_root.join("bundles"))
+        .expect("create bundles directory");
     fs::write(
         config_root.join("coders.toml"),
         r#"
@@ -189,7 +195,8 @@ pub(super) fn write_bundle_configuration_with_kill_after_create_member(
     config_root: &Path,
     bundle_name: &str,
 ) {
-    fs::create_dir_all(config_root.join("bundles")).expect("create bundles directory");
+    fs::create_dir_all(config_root.join("bundles"))
+        .expect("create bundles directory");
     fs::write(
         config_root.join("coders.toml"),
         r#"

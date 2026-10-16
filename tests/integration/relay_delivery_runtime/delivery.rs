@@ -7,13 +7,16 @@ use std::{
     time::{Duration, Instant},
 };
 
-use agentmux::relay::{RelayRequest, RelayResponse, SendOutcome, request_relay};
+use agentmux::relay::{
+    RelayRequest, RelayResponse, SendOutcome, request_relay,
+};
 use tempfile::TempDir;
 use tokio::time::sleep;
 
 use crate::support::relay_delivery::{
-    spawn_relay_with_fake_tmux, spawn_relay_with_fake_tmux_and_env, wait_for_relay_ready,
-    write_bundle_configuration, write_bundle_with_pubsub_member, write_fake_tmux_script,
+    spawn_relay_with_fake_tmux, spawn_relay_with_fake_tmux_and_env,
+    wait_for_relay_ready, write_bundle_configuration,
+    write_bundle_with_pubsub_member, write_fake_tmux_script,
 };
 
 use super::*;
@@ -25,11 +28,16 @@ use super::*;
 /// model against the prior registry-routing default that misrouted non-UI targets
 /// to tmux.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn relay_send_to_configured_pubsub_member_is_refused_at_admission_and_skips_tmux() {
+async fn relay_send_to_configured_pubsub_member_is_refused_at_admission_and_skips_tmux()
+ {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root =
-        write_bundle_with_pubsub_member(temporary.path(), bundle_name, "alpha", "pub1");
+    let config_root = write_bundle_with_pubsub_member(
+        temporary.path(),
+        bundle_name,
+        "alpha",
+        "pub1",
+    );
     let state_root = temporary.path().join("state");
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");
@@ -62,7 +70,9 @@ async fn relay_send_to_configured_pubsub_member_is_refused_at_admission_and_skip
     )
     .expect("relay answers the send request");
     let RelayResponse::Error { error } = send_response else {
-        panic!("a pubsub target should be refused at admission, not answered with a send response");
+        panic!(
+            "a pubsub target should be refused at admission, not answered with a send response"
+        );
     };
     assert_eq!(error.code, "runtime_session_type_not_implemented");
 
@@ -73,12 +83,15 @@ async fn relay_send_to_configured_pubsub_member_is_refused_at_admission_and_skip
     let inscriptions_path = inscriptions_root.join("relay.log");
     let deadline = Instant::now() + Duration::from_secs(5);
     let inscriptions = loop {
-        let current = fs::read_to_string(&inscriptions_path).unwrap_or_default();
+        let current =
+            fs::read_to_string(&inscriptions_path).unwrap_or_default();
         if current.contains("\"event\":\"relay.send.request\"") {
             break current;
         }
         if Instant::now() >= deadline {
-            panic!("timed out waiting for the send request inscription, inscriptions={current:?}");
+            panic!(
+                "timed out waiting for the send request inscription, inscriptions={current:?}"
+            );
         }
         sleep(Duration::from_millis(50)).await;
     };
@@ -102,7 +115,8 @@ async fn relay_send_to_configured_pubsub_member_is_refused_at_admission_and_skip
 async fn relay_delivery_sends_submit_in_separate_tmux_command() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
     let state_root = temporary.path().join("state");
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");
@@ -179,7 +193,8 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
         1,
         "expected exactly one bracketed body paste for large payload, log={log:?}"
     );
-    let buffer_content = read_paste_buffer_content(&log_file, log_lines[body_indexes[0]]);
+    let buffer_content =
+        read_paste_buffer_content(&log_file, log_lines[body_indexes[0]]);
     assert!(
         buffer_content.contains("Message-Id:"),
         "expected pane envelope to include Message-Id header, content={buffer_content:?}"
@@ -215,7 +230,9 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
     let submit_index = log_lines
         .iter()
         .position(|line| is_submit_paste_line(line))
-        .expect("expected separate unbracketed carriage-return paste (the submit)");
+        .expect(
+            "expected separate unbracketed carriage-return paste (the submit)",
+        );
     assert!(
         body_indexes[0] < submit_index,
         "expected body paste before submit paste, log={log:?}"
@@ -230,20 +247,24 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
         "submit must go through paste-buffer, not send-keys, log={log:?}"
     );
 
-    let inscriptions =
-        fs::read_to_string(inscriptions_root.join("relay.log")).expect("read relay inscriptions");
+    let inscriptions = fs::read_to_string(inscriptions_root.join("relay.log"))
+        .expect("read relay inscriptions");
     // Isolate the envelope-metadata event itself: a whole-log substring scan
     // would match `bundle_name`/`namespace` carried by unrelated inscriptions
     // (e.g. relay.send.async.queued), so assert on this event's own `details`.
     let metadata_details = inscriptions
         .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).ok()
+        })
         .find(|event| {
             event.get("event").and_then(serde_json::Value::as_str)
                 == Some("relay.send.envelope.metadata")
         })
         .and_then(|event| event.get("details").cloned())
-        .expect("expected a relay.send.envelope.metadata inscription with details");
+        .expect(
+            "expected a relay.send.envelope.metadata inscription with details",
+        );
     let details = metadata_details
         .as_object()
         .expect("envelope metadata details is an object");
@@ -295,7 +316,9 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
         details
             .get("created_at")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|created| created.contains('T') && created.ends_with('Z')),
+            .is_some_and(
+                |created| created.contains('T') && created.ends_with('Z')
+            ),
         "envelope metadata must carry a UTC timestamp: {details:?}"
     );
     assert!(
@@ -316,7 +339,8 @@ async fn relay_delivery_sends_submit_in_separate_tmux_command() {
 async fn relay_async_delivery_injects_even_while_pane_in_mode() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
     let state_root = temporary.path().join("state");
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");
@@ -390,9 +414,14 @@ async fn relay_async_delivery_injects_even_while_pane_in_mode() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn relay_async_delivery_envelope_addresses_carry_canonical_ids_across_bundles() {
+async fn relay_async_delivery_envelope_addresses_carry_canonical_ids_across_bundles()
+ {
     let temporary = TempDir::new().expect("temporary");
-    let config_root = write_bundle_configuration(temporary.path(), "party", &["alpha", "bravo"]);
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        "party",
+        &["alpha", "bravo"],
+    );
     // A second namespace plus a send scope that reaches it: the fixture's
     // policies file caps send at home.
     fs::write(
@@ -475,7 +504,9 @@ send = "all"
         let envelopes = read_all_paste_buffers(temporary.path());
         let bravo = envelopes
             .iter()
-            .find(|content| content.contains("To: bravo <session:bravo@party>"))
+            .find(|content| {
+                content.contains("To: bravo <session:bravo@party>")
+            })
             .cloned();
         let zulu = envelopes
             .iter()

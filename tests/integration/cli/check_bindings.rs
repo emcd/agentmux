@@ -11,7 +11,9 @@ use tempfile::TempDir;
 
 use super::helpers::*;
 
-fn config_and_state(temporary: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+fn config_and_state(
+    temporary: &TempDir,
+) -> (std::path::PathBuf, std::path::PathBuf) {
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("state");
     fs::create_dir_all(&config_root).expect("create config root");
@@ -61,7 +63,8 @@ fn check_configuration_reports_a_displaced_behavior_without_failing() {
     let temporary = TempDir::new().expect("temporary");
     let (config_root, state_root) = config_and_state(&temporary);
     write_bundle_configuration(&config_root, "alpha", None, &["a"]);
-    fs::write(config_root.join("ui.toml"), DISPLACES_SENDING).expect("write ui.toml");
+    fs::write(config_root.join("ui.toml"), DISPLACES_SENDING)
+        .expect("write ui.toml");
 
     let output = check(&[&config_root], &state_root);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -86,7 +89,8 @@ fn check_configuration_names_the_single_class_a_finding_holds_under() {
     let temporary = TempDir::new().expect("temporary");
     let (config_root, state_root) = config_and_state(&temporary);
     write_bundle_configuration(&config_root, "alpha", None, &["a"]);
-    fs::write(config_root.join("ui.toml"), DISPLACES_SENDING_ON_ENHANCED).expect("write ui.toml");
+    fs::write(config_root.join("ui.toml"), DISPLACES_SENDING_ON_ENHANCED)
+        .expect("write ui.toml");
 
     let output = check(&[&config_root], &state_root);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -109,7 +113,8 @@ fn check_configuration_reports_no_binding_finding_for_the_shipped_defaults() {
     let temporary = TempDir::new().expect("temporary");
     let (config_root, state_root) = config_and_state(&temporary);
     write_bundle_configuration(&config_root, "alpha", None, &["a"]);
-    fs::write(config_root.join("ui.toml"), "default-bundle = \"alpha\"\n").expect("write ui.toml");
+    fs::write(config_root.join("ui.toml"), "default-bundle = \"alpha\"\n")
+        .expect("write ui.toml");
 
     let output = check(&[&config_root], &state_root);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -155,7 +160,8 @@ fn check_configuration_refuses_a_group_that_takes_the_quit_chord() {
 /// leaves quit alone, so the run succeeds. Without this, a refusal that fired
 /// on any mention of the quit character would satisfy the test above.
 #[test]
-fn check_configuration_accepts_a_group_that_takes_only_a_modified_quit_variant() {
+fn check_configuration_accepts_a_group_that_takes_only_a_modified_quit_variant()
+ {
     let temporary = TempDir::new().expect("temporary");
     let (config_root, state_root) = config_and_state(&temporary);
     write_bundle_configuration(&config_root, "alpha", None, &["a"]);
@@ -184,10 +190,12 @@ fn check_configuration_reports_the_ui_toml_the_lookup_selected() {
     // The shadowed copy is valid and configures nothing. Were the lookup to read
     // it instead, the run would succeed and report no finding, so this fails in
     // both directions rather than only on the path string.
-    fs::write(config_root.join("ui.toml"), "default-bundle = \"alpha\"\n").expect("write base");
+    fs::write(config_root.join("ui.toml"), "default-bundle = \"alpha\"\n")
+        .expect("write base");
     let override_layer = temporary.path().join("override");
     fs::create_dir_all(&override_layer).expect("create override layer");
-    fs::write(override_layer.join("ui.toml"), DISPLACES_SENDING).expect("write override");
+    fs::write(override_layer.join("ui.toml"), DISPLACES_SENDING)
+        .expect("write override");
 
     let output = check(&[&override_layer, &config_root], &state_root);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -200,7 +208,9 @@ fn check_configuration_reports_the_ui_toml_the_lookup_selected() {
         "the reported source is not the copy in effect: {stdout}"
     );
     assert!(
-        !stdout.contains(config_root.join("ui.toml").to_str().expect("base utf8")),
+        !stdout.contains(
+            config_root.join("ui.toml").to_str().expect("base utf8")
+        ),
         "the shadowed copy must not appear as a source: {stdout}"
     );
     assert!(
@@ -218,7 +228,8 @@ fn check_configuration_writes_no_configuration_artifact() {
     let temporary = TempDir::new().expect("temporary");
     let (config_root, state_root) = config_and_state(&temporary);
     write_bundle_configuration(&config_root, "alpha", None, &["a"]);
-    fs::write(config_root.join("ui.toml"), DISPLACES_SENDING).expect("write ui.toml");
+    fs::write(config_root.join("ui.toml"), DISPLACES_SENDING)
+        .expect("write ui.toml");
 
     let before = tree(&config_root);
     // Without this the comparison below would hold just as well over two empty

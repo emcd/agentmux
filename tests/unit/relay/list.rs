@@ -1,7 +1,9 @@
 //! List operation tests: configured sessions, transport reporting, policy
 //! gates.
 
-use agentmux::relay::{ListedBundleState, ListedSessionTransport, RelayRequest, RelayResponse};
+use agentmux::relay::{
+    ListedBundleState, ListedSessionTransport, RelayRequest, RelayResponse,
+};
 
 use super::*;
 

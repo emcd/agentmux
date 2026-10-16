@@ -94,7 +94,9 @@ fn send_resolves_a_composed_cross_relay_sender_as_a_target() {
             "party",
             &tmux_socket,
         )
-        .expect_err("cross-relay send has no peer manager on the non-stream path");
+        .expect_err(
+            "cross-relay send has no peer manager on the non-stream path",
+        );
         assert_eq!(
             response.code, "runtime_cross_relay_unavailable",
             "composed sender {composed} must survive resolution as a target",

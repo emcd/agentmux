@@ -6,7 +6,9 @@
 use std::sync::{Arc, Barrier};
 use std::thread;
 
-use agentmux::runtime::paths::{BundleRuntimePaths, session_identity_psk_path};
+use agentmux::runtime::paths::{
+    BundleRuntimePaths, session_identity_psk_path,
+};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -19,7 +21,8 @@ use super::*;
 fn concurrent_admin_ops_serialize_without_losing_updates() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_concurrent";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     // Declare two distinct `@GLOBAL` operators on the operator policy so the two
     // concurrent admin callers don't collide on a single operator identity claim
     // (the identity registry allows one live claim per principal id).
@@ -47,9 +50,11 @@ policy = "operator"
     )
     .expect("write two-operator users configuration");
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context =
+        shared_serve_context(&configuration_roots, &state_root, catalog);
 
     // Pre-register the session we will rotate (response mode).
     let session_id = format!("alpha@{bundle_name}");
@@ -113,8 +118,10 @@ policy = "operator"
     // The rotated credential (written to config) must authenticate against the
     // FINAL store — i.e. the store persist and credential rename were not
     // interleaved with the concurrent registration's whole-store persist.
-    let canonical = session_identity_psk_path(&state_root, bundle_name, "alpha");
-    let rotated_psk = std::fs::read_to_string(&canonical).expect("read rotated config credential");
+    let canonical =
+        session_identity_psk_path(&state_root, bundle_name, "alpha");
+    let rotated_psk = std::fs::read_to_string(&canonical)
+        .expect("read rotated config credential");
     let accepted = hello_first_frame(
         &configuration_roots,
         &bundle_paths,

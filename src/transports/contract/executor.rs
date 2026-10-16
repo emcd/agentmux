@@ -40,7 +40,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::protocol::mailbox::{EntryRange, EntrySequence, MailboxEntry};
-use crate::protocol::operations::{AckResult, DeclareResult, MemberAcknowledgment, PeekResult};
+use crate::protocol::operations::{
+    AckResult, DeclareResult, MemberAcknowledgment, PeekResult,
+};
 use crate::protocol::{DeliveryDoorbell, PackingUnitId, SubmissionEvidence};
 
 use super::{PeekDimensions, TransportHealth};
@@ -65,7 +67,11 @@ pub trait MailboxConsumer: Send + Sync {
 
     /// Terminalizes the entries a declaration bound, from what the write
     /// observed for each of them.
-    fn ack(&self, unit: PackingUnitId, members: &[MemberAcknowledgment]) -> AckResult;
+    fn ack(
+        &self,
+        unit: PackingUnitId,
+        members: &[MemberAcknowledgment],
+    ) -> AckResult;
 
     /// Resolves this target's queued-and-undeclared entries because its
     /// transport has been continuously unreachable past the relay's dwell.
@@ -132,7 +138,10 @@ pub trait DeliveryWriter {
     /// `None` leaves every peeked entry `queued` and undeclared for the next
     /// attempt, which the relay does not treat as a refusal. `entries` is never
     /// empty and is in mailbox order; a plan may cover any non-empty prefix of it.
-    fn plan(&mut self, entries: &[MailboxEntry]) -> Option<PlannedWrite<Self::Plan>>;
+    fn plan(
+        &mut self,
+        entries: &[MailboxEntry],
+    ) -> Option<PlannedWrite<Self::Plan>>;
 
     /// Writes the unit the relay has now recorded, reporting what the write
     /// observed for each member.
@@ -141,7 +150,10 @@ pub trait DeliveryWriter {
     /// only point at which a target-side effect may be produced: the declaration
     /// is already recorded, so a member reported `NotSubmitted` here is a claim
     /// the relay will pass to its sender as positive evidence of non-delivery.
-    fn write(&mut self, planned: PlannedWrite<Self::Plan>) -> Vec<SubmissionEvidence>;
+    fn write(
+        &mut self,
+        planned: PlannedWrite<Self::Plan>,
+    ) -> Vec<SubmissionEvidence>;
 
     /// Whether this generation has been asked to stop.
     ///
@@ -166,7 +178,11 @@ pub trait DeliveryWriter {
     /// Whatever an override does, it must return: the loop's stop check runs
     /// after this, and an implementation that waited forever would put the
     /// executor beyond the fence's cooperative step.
-    fn wait_for_work(&mut self, doorbell: &DeliveryDoorbell, timeout: Duration) {
+    fn wait_for_work(
+        &mut self,
+        doorbell: &DeliveryDoorbell,
+        timeout: Duration,
+    ) {
         doorbell.wait_for(timeout);
     }
 }
@@ -228,7 +244,10 @@ impl std::fmt::Debug for DeliveryExecutorContext {
 /// writes one declared unit at a time, so the ordering guarantees the mailbox
 /// provides — per-target FIFO with raw as a barrier — reach the target unaltered
 /// without any further coordination.
-pub fn run_delivery_executor<W: DeliveryWriter>(mut writer: W, context: DeliveryExecutorContext) {
+pub fn run_delivery_executor<W: DeliveryWriter>(
+    mut writer: W,
+    context: DeliveryExecutorContext,
+) {
     let mut last_activity: Option<u64> = None;
     loop {
         if writer.stop_requested() {
@@ -270,9 +289,12 @@ fn writable<W: DeliveryWriter>(
     // unobservable target reports no marker, and the comparison treats that as
     // absence rather than as a value, so the series survives an unreachable
     // stretch instead of being reset by it.
-    let advanced = activity_advanced(writer.activity_generation(), last_activity);
+    let advanced =
+        activity_advanced(writer.activity_generation(), last_activity);
     match writer.health() {
-        TransportHealth::Unreachable { since } if since.elapsed() >= context.unreachable_dwell => {
+        TransportHealth::Unreachable { since }
+            if since.elapsed() >= context.unreachable_dwell =>
+        {
             // Waiting will not make this target reachable, so its queued entries
             // are owed an answer rather than a place in a queue nothing will
             // drain. Idempotent: once the relay has resolved them there is
@@ -281,7 +303,7 @@ fn writable<W: DeliveryWriter>(
             // the executor would have to detect.
             context.consumer.resolve_unreachable();
             false
-        }
+        },
         // Unreachable but not yet past the dwell: hold, exactly as an unready
         // target is held. An unreachability that ends in time costs nothing.
         TransportHealth::Unreachable { .. } => false,
@@ -324,7 +346,10 @@ fn activity_advanced(current: u64, last: &mut Option<u64>) -> bool {
 /// asked once would decide the second unit's fate on an observation the target
 /// had already invalidated. That is the defect this whole redesign exists to
 /// close, arrived at from inside the executor.
-fn drain_target<W: DeliveryWriter>(writer: &mut W, context: &DeliveryExecutorContext) {
+fn drain_target<W: DeliveryWriter>(
+    writer: &mut W,
+    context: &DeliveryExecutorContext,
+) {
     let dimensions = writer.peek_dimensions();
     loop {
         let Ok(peeked) = context
@@ -354,7 +379,8 @@ fn drain_target<W: DeliveryWriter>(writer: &mut W, context: &DeliveryExecutorCon
         let Some((first, last)) = covered.first().zip(covered.last()) else {
             return;
         };
-        let Some(range) = EntryRange::new(first.sequence, last.sequence) else {
+        let Some(range) = EntryRange::new(first.sequence, last.sequence)
+        else {
             return;
         };
         let Ok(accepted) = context.consumer.declare(range) else {
@@ -363,7 +389,8 @@ fn drain_target<W: DeliveryWriter>(writer: &mut W, context: &DeliveryExecutorCon
             // declaration covers.
             return;
         };
-        let sequences: Vec<_> = covered.iter().map(|entry| entry.sequence).collect();
+        let sequences: Vec<_> =
+            covered.iter().map(|entry| entry.sequence).collect();
         let evidence = writer.write(planned);
         let members = acknowledgment(&sequences, &evidence);
         // Unconditional, and the whole point of splitting `write` from `plan`: a

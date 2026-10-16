@@ -15,13 +15,16 @@ use super::*;
 fn list_global_namespace_returns_registered_relay_wide_sessions() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_global_list_present";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let operator_id = global_user_id(bundle_name);
 
-    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -68,9 +71,11 @@ fn list_global_namespace_returns_registered_relay_wide_sessions() {
 fn list_global_namespace_excludes_bundle_sessions() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_global_list_excludes";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let response = bundle_session_list_with_namespace(
         &configuration_roots,
@@ -86,7 +91,8 @@ fn list_global_namespace_excludes_bundle_sessions() {
         .expect("sessions array");
     assert!(
         !sessions.iter().any(|session| {
-            session["id"] == "alpha" || session["id"] == format!("alpha@{bundle_name}")
+            session["id"] == "alpha"
+                || session["id"] == format!("alpha@{bundle_name}")
         }),
         "GLOBAL list must not include bundle sessions"
     );
@@ -100,10 +106,14 @@ fn list_global_namespace_excludes_bundle_sessions() {
 fn process_only_registration_seeds_configured_bundle_members() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_process_only_register";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
 
-    agentmux::relay::register_configured_bundle(&configuration_roots, bundle_name)
-        .expect("register configured bundle members");
+    agentmux::relay::register_configured_bundle(
+        &configuration_roots,
+        bundle_name,
+    )
+    .expect("register configured bundle members");
 
     let ids = agentmux::relay::registered_principal_ids(bundle_name);
     assert!(
@@ -125,16 +135,20 @@ fn process_only_registration_seeds_configured_bundle_members() {
 fn list_global_namespace_includes_declared_offline_relay_wide_principal() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_global_list_offline";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let operator_id = global_user_id(bundle_name);
 
     // Seed the declared relay-wide principal as a static (offline) registry entry,
     // as the host startup path does, without connecting it.
-    agentmux::relay::register_configured_relay_wide_principals(&configuration_roots)
-        .expect("register declared relay-wide principals");
+    agentmux::relay::register_configured_relay_wide_principals(
+        &configuration_roots,
+    )
+    .expect("register declared relay-wide principals");
 
     let response = bundle_session_list_with_namespace(
         &configuration_roots,

@@ -65,7 +65,8 @@ fn an_alias_naming_an_issued_relay_identity_is_accepted() {
     let temporary = TempDir::new().expect("temporary");
     let state_root = write_store(&temporary, &[("west@RELAY", "relay")]);
 
-    validate_peer_aliases(&[peer("west")], &state_root).expect("a registered alias is accepted");
+    validate_peer_aliases(&[peer("west")], &state_root)
+        .expect("a registered alias is accepted");
 }
 
 #[test]
@@ -110,8 +111,9 @@ fn the_offending_alias_is_named_when_an_earlier_peer_is_valid() {
     let temporary = TempDir::new().expect("temporary");
     let state_root = write_store(&temporary, &[("west@RELAY", "relay")]);
 
-    let error = validate_peer_aliases(&[peer("west"), peer("north")], &state_root)
-        .expect_err("a later unregistered alias must still be rejected");
+    let error =
+        validate_peer_aliases(&[peer("west"), peer("north")], &state_root)
+            .expect_err("a later unregistered alias must still be rejected");
     assert_eq!(
         alias_of(&error).as_deref(),
         Some("north"),

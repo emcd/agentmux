@@ -51,7 +51,9 @@ fn list_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     command_enum_schema(&["principals", "namespaces", "relays", "decisions"])
 }
 
-fn updown_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+fn updown_command_schema(
+    _: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
     command_enum_schema(&["up", "down"])
 }
 
@@ -59,7 +61,9 @@ fn new_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     command_enum_schema(&["peer"])
 }
 
-fn change_command_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+fn change_command_schema(
+    _: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
     command_enum_schema(&["psk", "scope"])
 }
 
@@ -79,7 +83,9 @@ pub(super) struct ListParams {
     #[schemars(schema_with = "list_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
-    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
+    #[schemars(
+        with = "std::collections::BTreeMap<String, serde_json::Value>"
+    )]
     #[serde(default)]
     pub(super) args: Value,
     /// Unknown fields captured for explicit validation.
@@ -239,7 +245,9 @@ pub(super) struct UpdownParams {
     #[schemars(schema_with = "updown_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
-    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
+    #[schemars(
+        with = "std::collections::BTreeMap<String, serde_json::Value>"
+    )]
     #[serde(default)]
     pub(super) args: Value,
     /// Unknown fields captured for explicit validation.
@@ -264,7 +272,9 @@ pub(super) struct NewParams {
     #[schemars(schema_with = "new_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
-    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
+    #[schemars(
+        with = "std::collections::BTreeMap<String, serde_json::Value>"
+    )]
     #[serde(default)]
     pub(super) args: Value,
     /// Unknown fields captured for explicit validation.
@@ -308,7 +318,9 @@ pub(super) struct ChangeParams {
     #[schemars(schema_with = "change_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
-    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
+    #[schemars(
+        with = "std::collections::BTreeMap<String, serde_json::Value>"
+    )]
     #[serde(default)]
     pub(super) args: Value,
     /// Unknown fields captured for explicit validation.
@@ -370,7 +382,9 @@ pub(super) struct DropParams {
     #[schemars(schema_with = "drop_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
-    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
+    #[schemars(
+        with = "std::collections::BTreeMap<String, serde_json::Value>"
+    )]
     #[serde(default)]
     pub(super) args: Value,
     /// Unknown fields captured for explicit validation.
@@ -399,7 +413,9 @@ pub(super) struct LinkParams {
     #[schemars(schema_with = "link_command_schema")]
     pub(super) command: String,
     /// Command-scoped arguments.
-    #[schemars(with = "std::collections::BTreeMap<String, serde_json::Value>")]
+    #[schemars(
+        with = "std::collections::BTreeMap<String, serde_json::Value>"
+    )]
     #[serde(default)]
     pub(super) args: Value,
     /// Unknown fields captured for explicit validation.

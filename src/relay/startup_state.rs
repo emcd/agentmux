@@ -33,7 +33,8 @@ static STARTUP_FAILURE_HISTORY_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 // that statement false again, so it is what evicts the entry — otherwise a
 // session that fails, recovers, and fails again keeps the second failure
 // forever, because the recovery that would clear it is deduplicated away.
-static SERVED_SESSIONS_CLEARED: OnceLock<Mutex<HashSet<(PathBuf, String)>>> = OnceLock::new();
+static SERVED_SESSIONS_CLEARED: OnceLock<Mutex<HashSet<(PathBuf, String)>>> =
+    OnceLock::new();
 
 fn startup_failure_history_lock() -> &'static Mutex<()> {
     STARTUP_FAILURE_HISTORY_LOCK.get_or_init(|| Mutex::new(()))
@@ -81,7 +82,8 @@ pub(super) fn note_session_served_successfully(
             return Ok(());
         }
     }
-    clear_startup_failures_for_session(runtime_directory, session_id).map(|_| ())
+    clear_startup_failures_for_session(runtime_directory, session_id)
+        .map(|_| ())
 }
 
 pub(super) fn clear_startup_failures_for_session(
@@ -92,7 +94,9 @@ pub(super) fn clear_startup_failures_for_session(
         .lock()
         .map_err(|_| "failed to lock startup failure history".to_string())?;
     let path = startup_failure_history_path(runtime_directory);
-    let Some(mut history) = load_persisted_startup_failure_history(path.as_path())? else {
+    let Some(mut history) =
+        load_persisted_startup_failure_history(path.as_path())?
+    else {
         return Ok(0);
     };
     let original_len = history.records.len();
@@ -119,7 +123,9 @@ pub(super) fn prune_startup_failures_for_non_members(
         .lock()
         .map_err(|_| "failed to lock startup failure history".to_string())?;
     let path = startup_failure_history_path(runtime_directory);
-    let Some(mut history) = load_persisted_startup_failure_history(path.as_path())? else {
+    let Some(mut history) =
+        load_persisted_startup_failure_history(path.as_path())?
+    else {
         return Ok(0);
     };
     let original_len = history.records.len();
@@ -141,13 +147,12 @@ pub(super) fn append_startup_failure(
         .lock()
         .map_err(|_| "failed to lock startup failure history".to_string())?;
     let path = startup_failure_history_path(runtime_directory);
-    let mut history = load_persisted_startup_failure_history(path.as_path())?.unwrap_or(
-        PersistedStartupFailureHistory {
+    let mut history = load_persisted_startup_failure_history(path.as_path())?
+        .unwrap_or(PersistedStartupFailureHistory {
             schema_version: STARTUP_FAILURE_HISTORY_SCHEMA_VERSION,
             next_sequence: 1,
             records: Vec::new(),
-        },
-    );
+        });
 
     history.schema_version = STARTUP_FAILURE_HISTORY_SCHEMA_VERSION;
     record.sequence = history.next_sequence;
@@ -171,7 +176,10 @@ pub(super) fn append_startup_failure(
 
 /// Drops the served-session cache entry for one session, so the next observed
 /// successful serve reaches the history again instead of being deduplicated.
-fn forget_served_session(runtime_directory: &Path, session_id: &str) -> Result<(), String> {
+fn forget_served_session(
+    runtime_directory: &Path,
+    session_id: &str,
+) -> Result<(), String> {
     let mut guard = served_sessions_cleared()
         .lock()
         .map_err(|_| "failed to lock served sessions cache".to_string())?;
@@ -194,7 +202,8 @@ pub(super) fn persist_and_announce_startup_failures(
 ) -> Result<Vec<StartupFailureRecord>, String> {
     let mut persisted_records = Vec::with_capacity(failures.len());
     for failure in failures {
-        let persisted = append_startup_failure(runtime_directory, failure.clone())?;
+        let persisted =
+            append_startup_failure(runtime_directory, failure.clone())?;
         emit_inscription(
             "relay.session_start_failed",
             &serde_json::json!({
@@ -230,7 +239,8 @@ fn load_persisted_startup_failure_history(
         )
     })?;
     let history =
-        serde_json::from_str::<PersistedStartupFailureHistory>(raw.as_str()).map_err(|source| {
+        serde_json::from_str::<PersistedStartupFailureHistory>(raw.as_str())
+            .map_err(|source| {
             format!(
                 "parse startup failure history {} failed: {source}",
                 path.display()

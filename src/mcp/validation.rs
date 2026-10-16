@@ -13,26 +13,36 @@ use crate::{
 
 use super::errors::validation_tool_error;
 use super::params::{
-    CHOOSE_OUTCOME_CANCELLED, CHOOSE_OUTCOME_SELECTED, ChangeParams, ChangePskArgs,
-    ChangeScopeArgs, ChooseParams, DropParams, DropPeerArgs, HelpParams, LOOK_LINES_MAX,
-    LOOK_LINES_MIN, LinkParams, LinkPeerArgs, ListArgs, ListDecisionsArgs, ListNamespacesArgs,
-    ListParams, ListRelaysArgs, LookParams, NewParams, NewPeerArgs, RawwParams, SendParams,
-    UpdownArgs, UpdownParams,
+    CHOOSE_OUTCOME_CANCELLED, CHOOSE_OUTCOME_SELECTED, ChangeParams,
+    ChangePskArgs, ChangeScopeArgs, ChooseParams, DropParams, DropPeerArgs,
+    HelpParams, LOOK_LINES_MAX, LOOK_LINES_MIN, LinkParams, LinkPeerArgs,
+    ListArgs, ListDecisionsArgs, ListNamespacesArgs, ListParams,
+    ListRelaysArgs, LookParams, NewParams, NewPeerArgs, RawwParams,
+    SendParams, UpdownArgs, UpdownParams,
 };
 
-pub(super) fn validate_list_params(params: &ListParams) -> Result<(), McpError> {
+pub(super) fn validate_list_params(
+    params: &ListParams,
+) -> Result<(), McpError> {
     validate_unknown_fields("list request", None, &params.extra_fields)
 }
 
-pub(super) fn validate_help_request(params: &HelpParams) -> Result<(), McpError> {
+pub(super) fn validate_help_request(
+    params: &HelpParams,
+) -> Result<(), McpError> {
     validate_unknown_fields("help request", None, &params.extra_fields)
 }
 
-pub(super) fn validate_updown_params(params: &UpdownParams) -> Result<(), McpError> {
+pub(super) fn validate_updown_params(
+    params: &UpdownParams,
+) -> Result<(), McpError> {
     validate_unknown_fields("updown request", None, &params.extra_fields)
 }
 
-pub(super) fn validate_updown_args(args: &UpdownArgs, command: &str) -> Result<(), McpError> {
+pub(super) fn validate_updown_args(
+    args: &UpdownArgs,
+    command: &str,
+) -> Result<(), McpError> {
     let context = format!("updown {command} command");
     validate_unknown_fields(context.as_str(), Some("args"), &args.extra_fields)
 }
@@ -67,15 +77,24 @@ pub(super) fn validate_new_params(params: &NewParams) -> Result<(), McpError> {
     validate_unknown_fields("new request", None, &params.extra_fields)
 }
 
-pub(super) fn validate_new_peer_args(args: &NewPeerArgs) -> Result<(), McpError> {
-    validate_unknown_fields("new peer command", Some("args"), &args.extra_fields)?;
+pub(super) fn validate_new_peer_args(
+    args: &NewPeerArgs,
+) -> Result<(), McpError> {
+    validate_unknown_fields(
+        "new peer command",
+        Some("args"),
+        &args.extra_fields,
+    )?;
     // Pre-submission checks on the normalized identity so malformed input
     // fails before any relay contact. A principal aiming at the relay
     // namespace with a malformed identity is rejected here; other principal
     // types keep their own scope model and pass through for the relay to
     // judge.
-    let normalized_principal = args.principal_id.as_deref().map(str::trim).unwrap_or("");
-    if normalized_principal.ends_with("@RELAY") && !is_relay_principal_id(normalized_principal) {
+    let normalized_principal =
+        args.principal_id.as_deref().map(str::trim).unwrap_or("");
+    if normalized_principal.ends_with("@RELAY")
+        && !is_relay_principal_id(normalized_principal)
+    {
         return Err(validation_tool_error(
             "validation_invalid_principal_id",
             "principal_id is not in <id>@<namespace> form",
@@ -95,16 +114,30 @@ pub(super) fn validate_new_peer_args(args: &NewPeerArgs) -> Result<(), McpError>
     Ok(())
 }
 
-pub(super) fn validate_change_params(params: &ChangeParams) -> Result<(), McpError> {
+pub(super) fn validate_change_params(
+    params: &ChangeParams,
+) -> Result<(), McpError> {
     validate_unknown_fields("change request", None, &params.extra_fields)
 }
 
-pub(super) fn validate_change_psk_args(args: &ChangePskArgs) -> Result<(), McpError> {
-    validate_unknown_fields("change psk command", Some("args"), &args.extra_fields)
+pub(super) fn validate_change_psk_args(
+    args: &ChangePskArgs,
+) -> Result<(), McpError> {
+    validate_unknown_fields(
+        "change psk command",
+        Some("args"),
+        &args.extra_fields,
+    )
 }
 
-pub(super) fn validate_change_scope_args(args: &ChangeScopeArgs) -> Result<(), McpError> {
-    validate_unknown_fields("change scope command", Some("args"), &args.extra_fields)?;
+pub(super) fn validate_change_scope_args(
+    args: &ChangeScopeArgs,
+) -> Result<(), McpError> {
+    validate_unknown_fields(
+        "change scope command",
+        Some("args"),
+        &args.extra_fields,
+    )?;
     // Shape and grammar are enforced before relay submission so invalid input
     // fails with field validation rather than an infrastructure error: the
     // target must be a peer relay principal and an explicit scope string is
@@ -125,7 +158,9 @@ pub(super) fn validate_change_scope_args(args: &ChangeScopeArgs) -> Result<(), M
         return Err(validation_tool_error(
             "validation_invalid_principal_id",
             "change scope applies only to peer relay principals (<id>@RELAY)",
-            Some(json!({"field": "principal_id", "principal_id": principal_id})),
+            Some(
+                json!({"field": "principal_id", "principal_id": principal_id}),
+            ),
         ));
     }
     let Some(scope) = args.scope.as_deref() else {
@@ -145,20 +180,36 @@ pub(super) fn validate_change_scope_args(args: &ChangeScopeArgs) -> Result<(), M
     Ok(())
 }
 
-pub(super) fn validate_drop_params(params: &DropParams) -> Result<(), McpError> {
+pub(super) fn validate_drop_params(
+    params: &DropParams,
+) -> Result<(), McpError> {
     validate_unknown_fields("drop request", None, &params.extra_fields)
 }
 
-pub(super) fn validate_drop_peer_args(args: &DropPeerArgs) -> Result<(), McpError> {
-    validate_unknown_fields("drop peer command", Some("args"), &args.extra_fields)
+pub(super) fn validate_drop_peer_args(
+    args: &DropPeerArgs,
+) -> Result<(), McpError> {
+    validate_unknown_fields(
+        "drop peer command",
+        Some("args"),
+        &args.extra_fields,
+    )
 }
 
-pub(super) fn validate_link_params(params: &LinkParams) -> Result<(), McpError> {
+pub(super) fn validate_link_params(
+    params: &LinkParams,
+) -> Result<(), McpError> {
     validate_unknown_fields("link request", None, &params.extra_fields)
 }
 
-pub(super) fn validate_link_peer_args(args: &LinkPeerArgs) -> Result<(), McpError> {
-    validate_unknown_fields("link peer command", Some("args"), &args.extra_fields)?;
+pub(super) fn validate_link_peer_args(
+    args: &LinkPeerArgs,
+) -> Result<(), McpError> {
+    validate_unknown_fields(
+        "link peer command",
+        Some("args"),
+        &args.extra_fields,
+    )?;
     // The relay enforces the shared peer-token grammar independently, but
     // malformed aliases fail here before any relay contact.
     let alias = args.alias.as_deref().map(str::trim).unwrap_or("");
@@ -172,8 +223,14 @@ pub(super) fn validate_link_peer_args(args: &LinkPeerArgs) -> Result<(), McpErro
     Ok(())
 }
 
-pub(super) fn validate_list_principals_args(args: &ListArgs) -> Result<(), McpError> {
-    validate_unknown_fields("list principals command", Some("args"), &args.extra_fields)?;
+pub(super) fn validate_list_principals_args(
+    args: &ListArgs,
+) -> Result<(), McpError> {
+    validate_unknown_fields(
+        "list principals command",
+        Some("args"),
+        &args.extra_fields,
+    )?;
     let namespace = args
         .namespace
         .as_deref()
@@ -197,7 +254,9 @@ pub(super) fn validate_list_principals_args(args: &ListArgs) -> Result<(), McpEr
                     Some(json!({"relay": relay})),
                 ));
             };
-            if namespace == "*" || matches!(namespace, "ALL" | "EXTERNAL" | "RELAY") {
+            if namespace == "*"
+                || matches!(namespace, "ALL" | "EXTERNAL" | "RELAY")
+            {
                 return Err(validation_tool_error(
                     "validation_invalid_params",
                     "foreign namespace must name one concrete namespace, not \"*\" or a reserved token",
@@ -205,7 +264,7 @@ pub(super) fn validate_list_principals_args(args: &ListArgs) -> Result<(), McpEr
                 ));
             }
             validate_concrete_namespace(namespace)
-        }
+        },
         // Local principal listing keeps its existing selector semantics.
         None => {
             if let Some(namespace) = namespace
@@ -221,7 +280,7 @@ pub(super) fn validate_list_principals_args(args: &ListArgs) -> Result<(), McpEr
                 Some("*") | None => Ok(()),
                 Some(namespace) => validate_concrete_namespace(namespace),
             }
-        }
+        },
     }
 }
 
@@ -246,8 +305,14 @@ fn validate_concrete_namespace(namespace: &str) -> Result<(), McpError> {
     ))
 }
 
-pub(super) fn validate_list_namespaces_args(args: &ListNamespacesArgs) -> Result<(), McpError> {
-    validate_unknown_fields("list namespaces command", Some("args"), &args.extra_fields)?;
+pub(super) fn validate_list_namespaces_args(
+    args: &ListNamespacesArgs,
+) -> Result<(), McpError> {
+    validate_unknown_fields(
+        "list namespaces command",
+        Some("args"),
+        &args.extra_fields,
+    )?;
     if let Some(relay) = args.relay.as_deref().map(str::trim)
         && (relay.is_empty() || relay == "*")
     {
@@ -260,15 +325,29 @@ pub(super) fn validate_list_namespaces_args(args: &ListNamespacesArgs) -> Result
     Ok(())
 }
 
-pub(super) fn validate_list_relays_args(args: &ListRelaysArgs) -> Result<(), McpError> {
-    validate_unknown_fields("list relays command", Some("args"), &args.extra_fields)
+pub(super) fn validate_list_relays_args(
+    args: &ListRelaysArgs,
+) -> Result<(), McpError> {
+    validate_unknown_fields(
+        "list relays command",
+        Some("args"),
+        &args.extra_fields,
+    )
 }
 
-pub(super) fn validate_list_decisions_args(args: &ListDecisionsArgs) -> Result<(), McpError> {
-    validate_unknown_fields("list decisions command", Some("args"), &args.extra_fields)
+pub(super) fn validate_list_decisions_args(
+    args: &ListDecisionsArgs,
+) -> Result<(), McpError> {
+    validate_unknown_fields(
+        "list decisions command",
+        Some("args"),
+        &args.extra_fields,
+    )
 }
 
-pub(super) fn parse_meta_tool_args<T: serde::de::DeserializeOwned + Default>(
+pub(super) fn parse_meta_tool_args<
+    T: serde::de::DeserializeOwned + Default,
+>(
     value: serde_json::Value,
 ) -> Result<T, String> {
     if value.is_null() {
@@ -280,13 +359,13 @@ pub(super) fn parse_meta_tool_args<T: serde::de::DeserializeOwned + Default>(
                 return Ok(T::default());
             }
             serde_json::Value::Object(map)
-        }
+        },
         other => {
             return Err(format!(
                 "args must be a JSON object, got {}",
                 json_type_name(&other)
             ));
-        }
+        },
     };
     serde_json::from_value::<T>(value).map_err(|err| err.to_string())
 }
@@ -302,7 +381,9 @@ fn json_type_name(value: &serde_json::Value) -> &'static str {
     }
 }
 
-pub(super) fn validate_send_request(params: &SendParams) -> Result<(), McpError> {
+pub(super) fn validate_send_request(
+    params: &SendParams,
+) -> Result<(), McpError> {
     validate_unknown_fields("send request", None, &params.extra_fields)?;
     let message = params.message.trim();
     if message.is_empty() {
@@ -337,7 +418,10 @@ pub(super) fn validate_send_request(params: &SendParams) -> Result<(), McpError>
 /// is rejected as `validation_unqualified_target` rather than silently borrowing
 /// one. Shared by `send`, `look`, and `raww` so bare-target ergonomics are uniform
 /// across the delivery/inspection surface.
-pub(super) fn qualify_target(target: &str, bound_bundle: Option<&str>) -> Result<String, McpError> {
+pub(super) fn qualify_target(
+    target: &str,
+    bound_bundle: Option<&str>,
+) -> Result<String, McpError> {
     if target.contains('@') {
         Ok(target.to_string())
     } else if let Some(bundle) = bound_bundle {
@@ -362,7 +446,9 @@ pub(super) fn qualify_send_targets(
         .collect()
 }
 
-pub(super) fn validate_look_request(params: &LookParams) -> Result<(), McpError> {
+pub(super) fn validate_look_request(
+    params: &LookParams,
+) -> Result<(), McpError> {
     validate_unknown_fields("look request", None, &params.extra_fields)?;
     if params.target_session.trim().is_empty() {
         return Err(validation_tool_error(
@@ -387,7 +473,9 @@ pub(super) fn validate_look_request(params: &LookParams) -> Result<(), McpError>
     Ok(())
 }
 
-pub(super) fn validate_raww_request(params: &RawwParams) -> Result<(), McpError> {
+pub(super) fn validate_raww_request(
+    params: &RawwParams,
+) -> Result<(), McpError> {
     validate_unknown_fields("raww request", None, &params.extra_fields)?;
     if params.target_session.trim().is_empty() {
         return Err(validation_tool_error(
@@ -399,7 +487,9 @@ pub(super) fn validate_raww_request(params: &RawwParams) -> Result<(), McpError>
     Ok(())
 }
 
-pub(super) fn validate_choose_request(params: &ChooseParams) -> Result<(), McpError> {
+pub(super) fn validate_choose_request(
+    params: &ChooseParams,
+) -> Result<(), McpError> {
     validate_unknown_fields("choose request", None, &params.extra_fields)?;
     let choice_request_id = params
         .choice_request_id
@@ -443,7 +533,7 @@ pub(super) fn validate_choose_request(params: &ChooseParams) -> Result<(), McpEr
                     })),
                 ));
             }
-        }
+        },
         CHOOSE_OUTCOME_CANCELLED => {
             if params.option_id.is_some() {
                 return Err(validation_tool_error(
@@ -455,14 +545,14 @@ pub(super) fn validate_choose_request(params: &ChooseParams) -> Result<(), McpEr
                     })),
                 ));
             }
-        }
+        },
         other => {
             return Err(validation_tool_error(
                 "validation_invalid_params",
                 "outcome must be \"selected\" or \"cancelled\"",
                 Some(json!({"field": "outcome", "value": other})),
             ));
-        }
+        },
     }
     Ok(())
 }
@@ -482,7 +572,8 @@ fn validate_unknown_fields(
             None => field.clone(),
         })
         .collect::<Vec<_>>();
-    let message = format!("unknown parameter(s) for {context}: {}", fields.join(", "));
+    let message =
+        format!("unknown parameter(s) for {context}: {}", fields.join(", "));
     Err(validation_tool_error(
         "validation_invalid_params",
         message.as_str(),

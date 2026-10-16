@@ -7,7 +7,9 @@
 //! completions converge here rather than racing: exactly one caller can observe
 //! [`TerminalTransition::Won`].
 
-use super::super::guard::{GuardKey, QueueEntryState, SubmissionEvidence, resolve_from_binding};
+use super::super::guard::{
+    GuardKey, QueueEntryState, SubmissionEvidence, resolve_from_binding,
+};
 use super::ledger::{LedgerState, lock_ledger};
 
 /// The outcome of attempting the single terminal transition for one member.
@@ -79,7 +81,9 @@ pub(in crate::relay) fn terminalize(message_id: &str) -> TerminalTransition {
     // members has gone. Reconciled here rather than in `release_entry` because an
     // acknowledgment manages its own declaration and would otherwise retire it
     // twice, once through this path and once through its own.
-    if let Some(mailbox) = target.and_then(|target| state.mailboxes.get_mut(&target)) {
+    if let Some(mailbox) =
+        target.and_then(|target| state.mailboxes.get_mut(&target))
+    {
         mailbox.reconcile_outstanding();
     }
     transition
@@ -111,7 +115,8 @@ pub(in crate::relay) fn release_entry(
     }
     state.entries.remove(message_id);
     state.global.envelopes = state.global.envelopes.saturating_sub(1);
-    state.global.bytes = state.global.bytes.saturating_sub(entry.canonical_bytes);
+    state.global.bytes =
+        state.global.bytes.saturating_sub(entry.canonical_bytes);
     if let Some(usage) = state.per_target.get_mut(&entry.target) {
         usage.envelopes = usage.envelopes.saturating_sub(1);
         usage.bytes = usage.bytes.saturating_sub(entry.canonical_bytes);
@@ -189,7 +194,10 @@ mod terminal_contention_tests {
                 let barrier = Arc::clone(&barrier);
                 std::thread::spawn(move || {
                     barrier.wait();
-                    if matches!(terminalize(MESSAGE), TerminalTransition::Won { .. }) {
+                    if matches!(
+                        terminalize(MESSAGE),
+                        TerminalTransition::Won { .. }
+                    ) {
                         winners.fetch_add(1, Ordering::SeqCst);
                     }
                 })

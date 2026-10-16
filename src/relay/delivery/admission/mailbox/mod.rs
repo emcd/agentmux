@@ -61,7 +61,8 @@ pub(in crate::relay) use self::declare::{declaration_age, declare};
 pub(in crate::relay) use self::doorbell::{Doorbell, register_doorbell};
 pub(in crate::relay) use self::enqueue::{EnqueueRejection, enqueue};
 pub(in crate::relay) use self::generation::{
-    GenerationRejection, claim_consumer_generation, replace_consumer_generation,
+    GenerationRejection, claim_consumer_generation,
+    replace_consumer_generation,
 };
 pub(in crate::relay) use self::peek::peek;
 #[cfg(test)]

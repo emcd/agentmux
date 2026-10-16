@@ -23,7 +23,8 @@ use crate::configuration::SessionType;
 use crate::runtime::inscriptions::emit_inscription;
 
 use super::identity::{
-    PrincipalType, canonical_session_id, classify_principal_id, split_principal_id,
+    PrincipalType, canonical_session_id, classify_principal_id,
+    split_principal_id,
 };
 use super::{RelayRequest, RelayResponse};
 
@@ -35,7 +36,8 @@ use super::{RelayRequest, RelayResponse};
 /// helpers via `super::stream::evict_*` without an extra `eviction::` step.
 pub(super) mod eviction;
 pub(crate) use self::eviction::{
-    evict_streams_for_bundle, notify_trusted_hosts_of_revocation, revoke_streams_for_identity,
+    evict_streams_for_bundle, notify_trusted_hosts_of_revocation,
+    revoke_streams_for_identity,
 };
 
 // Bounded write timeout for relay-to-client writes. A stalled client whose
@@ -241,14 +243,19 @@ static STREAM_REGISTRY: OnceLock<StreamRegistry> = OnceLock::new();
 /// Parses a qualified `principal_id` into `(session_id, namespace, class)`.
 /// Returns `None` for an unqualified id, which the unified registry rejects:
 /// every live entry is keyed by a canonical, fully-qualified principal id.
-fn parse_principal_parts(principal_id: &str) -> Option<(String, String, PrincipalType)> {
+fn parse_principal_parts(
+    principal_id: &str,
+) -> Option<(String, String, PrincipalType)> {
     let class = classify_principal_id(principal_id)?;
     let (session_id, namespace) = split_principal_id(principal_id)?;
     Some((session_id.to_string(), namespace.to_string(), class))
 }
 
-pub(super) fn parse_incoming_frame(line: &str) -> Result<IncomingFrame, io::Error> {
-    let envelope = serde_json::from_str::<IncomingEnvelope>(line).map_err(io::Error::other)?;
+pub(super) fn parse_incoming_frame(
+    line: &str,
+) -> Result<IncomingFrame, io::Error> {
+    let envelope = serde_json::from_str::<IncomingEnvelope>(line)
+        .map_err(io::Error::other)?;
     match envelope {
         IncomingEnvelope::Hello {
             schema_version,
@@ -271,7 +278,9 @@ pub(super) fn parse_incoming_frame(line: &str) -> Result<IncomingFrame, io::Erro
     }
 }
 
-pub(super) fn encode_outgoing_frame(frame: OutgoingFrame<'_>) -> Result<String, io::Error> {
+pub(super) fn encode_outgoing_frame(
+    frame: OutgoingFrame<'_>,
+) -> Result<String, io::Error> {
     serde_json::to_string(&frame).map_err(io::Error::other)
 }
 
@@ -297,17 +306,19 @@ pub(super) fn spawn_stream_writer(
                 write_half.flush().await
             };
             match timeout(relay_connection_write_timeout(), write).await {
-                Ok(Ok(())) => {}
+                Ok(Ok(())) => {},
                 Ok(Err(source)) => {
                     note_write_timeout(&source);
                     break;
-                }
+                },
                 Err(_elapsed) => {
-                    let timeout_error =
-                        io::Error::new(io::ErrorKind::TimedOut, "relay connection write timed out");
+                    let timeout_error = io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "relay connection write timed out",
+                    );
                     note_write_timeout(&timeout_error);
                     break;
-                }
+                },
             }
         }
     });
@@ -343,8 +354,10 @@ pub(super) fn register_configured_session(
     principal_id: &str,
     session_type: SessionType,
 ) -> Result<(), io::Error> {
-    let (session_id, namespace, principal_class) = parse_principal_parts(principal_id)
-        .ok_or_else(|| io::Error::other("configured principal_id is not qualified"))?;
+    let (session_id, namespace, principal_class) =
+        parse_principal_parts(principal_id).ok_or_else(|| {
+            io::Error::other("configured principal_id is not qualified")
+        })?;
     let registry = stream_registry();
     let mut entries = registry
         .entries
@@ -357,7 +370,7 @@ pub(super) fn register_configured_session(
             entry.namespace = namespace;
             entry.session_id = session_id;
             entry.principal_class = principal_class;
-        }
+        },
         None => {
             entries.insert(
                 principal_id.to_string(),
@@ -375,7 +388,7 @@ pub(super) fn register_configured_session(
                     scope: None,
                 },
             );
-        }
+        },
     }
     Ok(())
 }
@@ -395,8 +408,10 @@ pub(super) fn register_stream(
     revoke: StreamRevokeSignal,
     scope: Option<String>,
 ) -> Result<RegisterStreamOutcome, io::Error> {
-    let (session_id, namespace, principal_class) = parse_principal_parts(principal_id)
-        .ok_or_else(|| io::Error::other("hello principal_id is not a qualified principal"))?;
+    let (session_id, namespace, principal_class) =
+        parse_principal_parts(principal_id).ok_or_else(|| {
+            io::Error::other("hello principal_id is not a qualified principal")
+        })?;
     let registry = stream_registry();
     let mut entries = registry
         .entries
@@ -449,7 +464,7 @@ pub(super) fn register_stream(
             entry.authenticated_identity = authenticated_identity;
             entry.revoke = Some(revoke);
             entry.scope = scope;
-        }
+        },
         None => {
             entries.insert(
                 principal_id.to_string(),
@@ -467,9 +482,10 @@ pub(super) fn register_stream(
                     scope,
                 },
             );
-        }
+        },
     }
-    let bound_namespace = (principal_class == PrincipalType::Session).then(|| namespace.clone());
+    let bound_namespace =
+        (principal_class == PrincipalType::Session).then(|| namespace.clone());
     let requester_session = if principal_class == PrincipalType::Session {
         session_id
     } else {
@@ -501,23 +517,26 @@ pub(super) fn registration_is_current(
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
     Ok(entries
         .get(registration.principal_id.as_str())
-        .is_some_and(|entry| entry.stream_id.as_deref() == Some(registration.stream_id.as_str())))
+        .is_some_and(|entry| {
+            entry.stream_id.as_deref() == Some(registration.stream_id.as_str())
+        }))
 }
 
 /// Detaches the dynamic stream state for a dropped connection. A bundle-runtime
 /// entry keeps its static shell so a reconnect reattaches; a purely dynamic
 /// (relay-wide / UI) entry is removed entirely.
-pub(super) fn unregister_stream(registration: &StreamRegistration) -> Result<(), io::Error> {
+pub(super) fn unregister_stream(
+    registration: &StreamRegistration,
+) -> Result<(), io::Error> {
     let registry = stream_registry();
     let mut entries = registry
         .entries
         .lock()
         .map_err(|_| io::Error::other("failed to lock stream registry"))?;
     if let Some(entry) = entries.get_mut(registration.principal_id.as_str())
-        && entry
-            .stream_id
-            .as_deref()
-            .is_some_and(|stream_id| stream_id == registration.stream_id.as_str())
+        && entry.stream_id.as_deref().is_some_and(|stream_id| {
+            stream_id == registration.stream_id.as_str()
+        })
     {
         if entry.source == RegistrationSource::Stream {
             entries.remove(registration.principal_id.as_str());
@@ -540,7 +559,9 @@ pub(super) enum StreamEventSendOutcome {
 fn is_relay_wide(principal_class: PrincipalType) -> bool {
     matches!(
         principal_class,
-        PrincipalType::User | PrincipalType::Application | PrincipalType::Relay
+        PrincipalType::User
+            | PrincipalType::Application
+            | PrincipalType::Relay
     )
 }
 
@@ -549,7 +570,9 @@ fn is_relay_wide(principal_class: PrincipalType) -> bool {
 /// has not sent a Hello). The delivery layer uses this to decide stream-vs-coder
 /// delivery from the unified registry rather than a carried flag, falling back to
 /// namespace classification when the entry is absent.
-pub(in crate::relay) fn registry_target_is_relay_wide(principal_id: &str) -> Option<bool> {
+pub(in crate::relay) fn registry_target_is_relay_wide(
+    principal_id: &str,
+) -> Option<bool> {
     let registry = stream_registry();
     let entries = registry.entries.lock().ok()?;
     entries
@@ -562,7 +585,9 @@ pub(in crate::relay) fn registry_target_is_relay_wide(principal_id: &str) -> Opt
 /// to resolve a target's advertised capabilities from the unified registry: a
 /// registered target gates on its `SessionType` capabilities, an unregistered one
 /// is an unknown target.
-pub(super) fn lookup_registry_session_type(principal_id: &str) -> Option<SessionType> {
+pub(super) fn lookup_registry_session_type(
+    principal_id: &str,
+) -> Option<SessionType> {
     let registry = stream_registry();
     let entries = registry.entries.lock().ok()?;
     entries.get(principal_id).map(|entry| entry.session_type)
@@ -573,7 +598,9 @@ pub(super) fn lookup_registry_session_type(principal_id: &str) -> Option<Session
 // receives events across all bundles). Session ids are returned for
 // bundle-local entries and `principal_id`s for relay-wide entries; both forms
 // round-trip through `send_event_to_registered_ui`, which re-derives the key.
-pub(super) fn list_registered_ui_sessions_for_bundle(namespace: &str) -> Vec<String> {
+pub(super) fn list_registered_ui_sessions_for_bundle(
+    namespace: &str,
+) -> Vec<String> {
     let registry = stream_registry();
     let Ok(entries) = registry.entries.lock() else {
         return Vec::new();
@@ -603,7 +630,9 @@ pub(super) fn list_registered_ui_sessions_for_bundle(namespace: &str) -> Vec<Str
 // listing. `ready` reflects whether the entry currently holds a live stream
 // connection: a relay-wide principal is ready iff online, and a declared-but-
 // offline principal is listed with `ready = false` rather than omitted.
-pub(super) fn list_namespace_sessions(namespace: &str) -> Vec<(String, SessionType, bool)> {
+pub(super) fn list_namespace_sessions(
+    namespace: &str,
+) -> Vec<(String, SessionType, bool)> {
     let registry = stream_registry();
     let Ok(entries) = registry.entries.lock() else {
         return Vec::new();
@@ -634,9 +663,14 @@ pub(super) fn broadcast_event_to_bundle_ui(
     let mut delivered = Vec::new();
     for ui_session_id in ui_session_ids {
         let mut event = template.clone();
-        event.target_session = canonical_session_id(ui_session_id.as_str(), namespace);
+        event.target_session =
+            canonical_session_id(ui_session_id.as_str(), namespace);
         if matches!(
-            send_event_to_registered_ui(namespace, ui_session_id.as_str(), &event),
+            send_event_to_registered_ui(
+                namespace,
+                ui_session_id.as_str(),
+                &event
+            ),
             Ok(StreamEventSendOutcome::Delivered)
         ) {
             delivered.push(ui_session_id);
@@ -668,7 +702,9 @@ pub(super) fn send_event_to_registered_ui(
     let Some(writer) = writer else {
         return Ok(StreamEventSendOutcome::Disconnected);
     };
-    if write_stream_frame_to_writer(&writer, OutgoingFrame::Event { event }).is_ok() {
+    if write_stream_frame_to_writer(&writer, OutgoingFrame::Event { event })
+        .is_ok()
+    {
         return Ok(StreamEventSendOutcome::Delivered);
     }
     let mut entries = registry
@@ -694,9 +730,15 @@ pub(super) fn write_stream_frame_to_writer(
     enqueue_bytes(writer, bytes)
 }
 
-fn enqueue_bytes(writer: &SharedStreamWriter, bytes: Vec<u8>) -> Result<(), io::Error> {
+fn enqueue_bytes(
+    writer: &SharedStreamWriter,
+    bytes: Vec<u8>,
+) -> Result<(), io::Error> {
     writer.send(bytes).map_err(|SendError(_)| {
-        io::Error::new(io::ErrorKind::BrokenPipe, "stream writer task has closed")
+        io::Error::new(
+            io::ErrorKind::BrokenPipe,
+            "stream writer task has closed",
+        )
     })
 }
 
@@ -731,7 +773,9 @@ fn stream_registry() -> &'static StreamRegistry {
 /// other tests.
 #[doc(hidden)]
 #[must_use]
-pub fn second_claim_is_live_conflict_for_testing(prior_writer_open: bool) -> bool {
+pub fn second_claim_is_live_conflict_for_testing(
+    prior_writer_open: bool,
+) -> bool {
     let principal_id = format!("staleprobe{}@GLOBAL", Uuid::new_v4().simple());
     let revoke: StreamRevokeSignal = Arc::new(Notify::new());
 
@@ -753,7 +797,8 @@ pub fn second_claim_is_live_conflict_for_testing(prior_writer_open: bool) -> boo
     // The second writer's receiver is held (`_second_receiver`) only so the
     // sender stays open through registration; the live/stale decision keys on the
     // *prior* writer, whose receiver is held to end of scope in the open case.
-    let (second_writer, _second_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (second_writer, _second_receiver) =
+        mpsc::unbounded_channel::<Vec<u8>>();
     let outcome = register_stream(
         principal_id.as_str(),
         SessionType::Ui,

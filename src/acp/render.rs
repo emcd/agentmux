@@ -1,7 +1,9 @@
 use super::ReplayEntry;
 use crate::transports::StructuredEntry;
 
-pub fn replay_entries_to_snapshot_entries(entries: &[ReplayEntry]) -> Vec<StructuredEntry> {
+pub fn replay_entries_to_snapshot_entries(
+    entries: &[ReplayEntry],
+) -> Vec<StructuredEntry> {
     entries
         .iter()
         .map(|entry| match entry {
@@ -25,15 +27,19 @@ pub fn replay_entries_to_snapshot_entries(entries: &[ReplayEntry]) -> Vec<Struct
                 invocation: invocation.clone(),
                 result: result.clone(),
             },
-            ReplayEntry::Update { update_kind, lines } => StructuredEntry::Update {
-                update_kind: update_kind.clone(),
-                lines: lines.clone(),
+            ReplayEntry::Update { update_kind, lines } => {
+                StructuredEntry::Update {
+                    update_kind: update_kind.clone(),
+                    lines: lines.clone(),
+                }
             },
         })
         .collect()
 }
 
-pub fn snapshot_entries_to_plain_lines(entries: &[StructuredEntry]) -> Vec<String> {
+pub fn snapshot_entries_to_plain_lines(
+    entries: &[StructuredEntry],
+) -> Vec<String> {
     let mut lines = Vec::new();
     for entry in entries {
         match entry {
@@ -42,7 +48,7 @@ pub fn snapshot_entries_to_plain_lines(entries: &[StructuredEntry]) -> Vec<Strin
             | StructuredEntry::Cognition { lines: value }
             | StructuredEntry::Update { lines: value, .. } => {
                 lines.extend(value.clone());
-            }
+            },
             StructuredEntry::Invocation {
                 call_id,
                 status,
@@ -53,15 +59,17 @@ pub fn snapshot_entries_to_plain_lines(entries: &[StructuredEntry]) -> Vec<Strin
                     "invocation {} {:?} {}",
                     call_id,
                     status,
-                    serde_json::to_string(invocation).unwrap_or_else(|_| "{}".to_string())
+                    serde_json::to_string(invocation)
+                        .unwrap_or_else(|_| "{}".to_string())
                 ));
                 if let Some(result) = result {
                     lines.push(format!(
                         "result {}",
-                        serde_json::to_string(result).unwrap_or_else(|_| "{}".to_string())
+                        serde_json::to_string(result)
+                            .unwrap_or_else(|_| "{}".to_string())
                     ));
                 }
-            }
+            },
         }
     }
     lines

@@ -25,13 +25,13 @@ fn collect_null_unions(node: &Value, path: &str, found: &mut Vec<String>) {
             for (key, child) in map {
                 collect_null_unions(child, &format!("{path}/{key}"), found);
             }
-        }
+        },
         Value::Array(items) => {
             for (index, child) in items.iter().enumerate() {
                 collect_null_unions(child, &format!("{path}/{index}"), found);
             }
-        }
-        _ => {}
+        },
+        _ => {},
     }
 }
 
@@ -88,11 +88,12 @@ async fn help_command_schemas_are_free_of_null_unions() {
             "query".to_string(),
             Value::String((*query).to_string()),
         )]);
-        let response = harness.call_tool(2 + index as i64, "help", arguments).await;
+        let response =
+            harness.call_tool(2 + index as i64, "help", arguments).await;
         let payload = decode_tool_payload(&response);
-        let schema = payload
-            .get("args_schema")
-            .unwrap_or_else(|| panic!("help query '{query}' missing args_schema: {payload}"));
+        let schema = payload.get("args_schema").unwrap_or_else(|| {
+            panic!("help query '{query}' missing args_schema: {payload}")
+        });
         collect_null_unions(schema, query, &mut offenders);
     }
     assert!(
@@ -126,11 +127,15 @@ async fn meta_tool_command_schemas_are_flat_string_enums() {
     for (tool_name, values) in expected {
         let command = tools
             .iter()
-            .find(|tool| tool.get("name").and_then(Value::as_str) == Some(tool_name))
+            .find(|tool| {
+                tool.get("name").and_then(Value::as_str) == Some(tool_name)
+            })
             .and_then(|tool| tool.get("inputSchema"))
             .and_then(|schema| schema.get("properties"))
             .and_then(|properties| properties.get("command"))
-            .unwrap_or_else(|| panic!("tool '{tool_name}' missing command schema"));
+            .unwrap_or_else(|| {
+                panic!("tool '{tool_name}' missing command schema")
+            });
         assert_eq!(
             command.get("type").and_then(Value::as_str),
             Some("string"),
@@ -139,8 +144,14 @@ async fn meta_tool_command_schemas_are_flat_string_enums() {
         let advertised = command
             .get("enum")
             .and_then(Value::as_array)
-            .map(|entries| entries.iter().filter_map(Value::as_str).collect::<Vec<_>>())
-            .unwrap_or_else(|| panic!("tool '{tool_name}' command missing enum array: {command}"));
+            .map(|entries| {
+                entries.iter().filter_map(Value::as_str).collect::<Vec<_>>()
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "tool '{tool_name}' command missing enum array: {command}"
+                )
+            });
         assert_eq!(
             advertised, values,
             "tool '{tool_name}' command enum mismatch"

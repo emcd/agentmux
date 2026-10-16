@@ -18,19 +18,25 @@ use std::{
 };
 
 use serde_json::json;
-use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, error::SendError};
+use tokio::sync::mpsc::{
+    UnboundedReceiver, UnboundedSender, error::SendError,
+};
 
 use crate::configuration::{BundleMember, TargetConfiguration};
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::runtime::signals::shutdown_requested;
 use crate::tmux::TmuxOutputView;
-use crate::transports::{OutputView, WorkerFailureReason, WorkerReadinessState};
+use crate::transports::{
+    OutputView, WorkerFailureReason, WorkerReadinessState,
+};
 
 use crate::protocol::identity::ConsumerGenerationId;
 use crate::relay::delivery::observability;
 use crate::relay::{AsyncDeliveryTask, RelayError, relay_error};
 
-use super::terminal::{complete_task_on_shutdown, complete_task_outcome_from_trigger};
+use super::terminal::{
+    complete_task_on_shutdown, complete_task_outcome_from_trigger,
+};
 use crate::relay::delivery::guard::GuardTrigger;
 
 use std::path::{Path, PathBuf};
@@ -124,9 +130,11 @@ pub(in crate::relay::delivery) fn build_worker_key(
     }
 }
 
-static ASYNC_DELIVERY_REGISTRY: OnceLock<AsyncDeliveryRegistry> = OnceLock::new();
+static ASYNC_DELIVERY_REGISTRY: OnceLock<AsyncDeliveryRegistry> =
+    OnceLock::new();
 
-pub(in crate::relay::delivery) fn async_delivery_registry() -> &'static AsyncDeliveryRegistry {
+pub(in crate::relay::delivery) fn async_delivery_registry()
+-> &'static AsyncDeliveryRegistry {
     ASYNC_DELIVERY_REGISTRY.get_or_init(AsyncDeliveryRegistry::default)
 }
 
@@ -138,7 +146,9 @@ pub(in crate::relay::delivery) fn async_worker_count() -> usize {
         .unwrap_or(0)
 }
 
-pub(in crate::relay::delivery) fn worker_exists(key: &AsyncWorkerKey) -> Result<bool, RelayError> {
+pub(in crate::relay::delivery) fn worker_exists(
+    key: &AsyncWorkerKey,
+) -> Result<bool, RelayError> {
     let workers = async_delivery_registry().workers.lock().map_err(|_| {
         relay_error(
             "internal_unexpected_failure",
@@ -149,7 +159,9 @@ pub(in crate::relay::delivery) fn worker_exists(key: &AsyncWorkerKey) -> Result<
     Ok(workers.contains_key(key))
 }
 
-pub(in crate::relay::delivery) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
+pub(in crate::relay::delivery) fn wait_for_async_delivery_shutdown(
+    timeout: Duration,
+) -> usize {
     if !shutdown_requested() {
         return 0;
     }
@@ -250,7 +262,9 @@ pub(in crate::relay::delivery) fn try_existing_worker(
             // again; bounce the task rather than accepting it into a dead queue.
             return Ok(WorkerDispatch::Closing(task));
         }
-        if worker.bounded_acp_queue && !reserve_acp_pending_slot(worker.pending.as_ref()) {
+        if worker.bounded_acp_queue
+            && !reserve_acp_pending_slot(worker.pending.as_ref())
+        {
             return Err(relay_error(
                 ACP_ERROR_CODE_QUEUE_FULL,
                 "ACP worker queue is full",
@@ -268,7 +282,7 @@ pub(in crate::relay::delivery) fn try_existing_worker(
                 }
                 workers.remove(key);
                 return Ok(WorkerDispatch::Dropped(returned));
-            }
+            },
         }
     }
     Ok(WorkerDispatch::Missing(task))
@@ -322,13 +336,14 @@ pub(in crate::relay::delivery) fn register_worker_if_absent(
     pending: std::sync::Arc<AtomicUsize>,
     bounded_acp_queue: bool,
 ) -> Result<Option<WorkerOwner>, RelayError> {
-    let mut workers = async_delivery_registry().workers.lock().map_err(|_| {
-        relay_error(
-            "internal_unexpected_failure",
-            "failed to lock async delivery registry",
-            None,
-        )
-    })?;
+    let mut workers =
+        async_delivery_registry().workers.lock().map_err(|_| {
+            relay_error(
+                "internal_unexpected_failure",
+                "failed to lock async delivery registry",
+                None,
+            )
+        })?;
     if workers.contains_key(&key) {
         return Ok(None);
     }
@@ -376,7 +391,9 @@ pub(in crate::relay::delivery) fn mark_worker_fail_stopped(
 /// Whether this worker has been asked to stop because its bundle is being torn
 /// down. Read by the worker's own loop, which is the only thing that may act on
 /// it: the drain runs on the worker's runtime.
-pub(in crate::relay::delivery) fn worker_stop_requested(key: &AsyncWorkerKey) -> bool {
+pub(in crate::relay::delivery) fn worker_stop_requested(
+    key: &AsyncWorkerKey,
+) -> bool {
     async_delivery_registry()
         .workers
         .lock()
@@ -409,7 +426,9 @@ pub(in crate::relay) fn stop_workers_for_bundle(
     };
     let mut signalled = 0usize;
     for (key, entry) in workers.iter_mut() {
-        if key.namespace != namespace || key.runtime_directory != runtime_directory {
+        if key.namespace != namespace
+            || key.runtime_directory != runtime_directory
+        {
             continue;
         }
         if entry.fail_stopped {
@@ -466,7 +485,10 @@ fn bundle_worker_count(namespace: &str, runtime_directory: &Path) -> usize {
 /// registered, preserving the shutdown-barrier worker count until the worker
 /// finishes draining and unregisters. Called at the start of the shutdown drain
 /// to close the accept-after-drain race without dropping the count early.
-pub(in crate::relay::delivery) fn close_worker(key: &AsyncWorkerKey, owner: WorkerOwner) {
+pub(in crate::relay::delivery) fn close_worker(
+    key: &AsyncWorkerKey,
+    owner: WorkerOwner,
+) {
     if let Ok(mut workers) = async_delivery_registry().workers.lock()
         && let Some(entry) = workers.get_mut(key)
         && entry.owner == owner
@@ -588,22 +610,25 @@ pub(in crate::relay) fn get_output_view(
     member: &BundleMember,
 ) -> Option<Arc<dyn OutputView>> {
     match &member.target {
-        TargetConfiguration::Acp(_) => {
-            get_acp_worker_output_view(namespace, runtime_directory, member.id.as_str())
-        }
+        TargetConfiguration::Acp(_) => get_acp_worker_output_view(
+            namespace,
+            runtime_directory,
+            member.id.as_str(),
+        ),
         TargetConfiguration::Tmux(_) => {
-            let socket_path = tmux_socket_path_for_runtime_directory(runtime_directory);
+            let socket_path =
+                tmux_socket_path_for_runtime_directory(runtime_directory);
             Some(Arc::new(TmuxOutputView::new(
                 socket_path,
                 member.id.clone(),
             )))
-        }
+        },
         TargetConfiguration::Pty(_) => {
             // Pty sessions surface look output via the transport's own
             // PtyOutputView handle; the relay constructs the transport
             // lazily on first look request.
             None
-        }
+        },
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => None,
     }
 }
@@ -620,7 +645,9 @@ pub(in crate::relay) fn get_output_view(
 /// report a bundle as degraded — or a single-member bundle as `down` — for the
 /// whole duration of an agent's turn. The registry already treats
 /// `Available | Busy` as the healthy pair when it clears a recorded failure.
-pub(in crate::relay) fn acp_readiness_is_ready(readiness: Option<WorkerReadinessState>) -> bool {
+pub(in crate::relay) fn acp_readiness_is_ready(
+    readiness: Option<WorkerReadinessState>,
+) -> bool {
     matches!(
         readiness,
         Some(WorkerReadinessState::Available | WorkerReadinessState::Busy)
@@ -653,7 +680,9 @@ pub(crate) fn remove_workers_for_runtime_directory(runtime_directory: &Path) {
     }
 }
 
-pub(in crate::relay::delivery) fn task_uses_acp_transport(task: &AsyncDeliveryTask) -> bool {
+pub(in crate::relay::delivery) fn task_uses_acp_transport(
+    task: &AsyncDeliveryTask,
+) -> bool {
     task.bundle
         .members
         .iter()
@@ -662,7 +691,9 @@ pub(in crate::relay::delivery) fn task_uses_acp_transport(task: &AsyncDeliveryTa
         .unwrap_or(false)
 }
 
-pub(in crate::relay::delivery) fn reserve_acp_pending_slot(pending: &AtomicUsize) -> bool {
+pub(in crate::relay::delivery) fn reserve_acp_pending_slot(
+    pending: &AtomicUsize,
+) -> bool {
     let mut current = pending.load(Ordering::Relaxed);
     loop {
         if current >= ACP_PENDING_MAX {

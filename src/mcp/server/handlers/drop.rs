@@ -16,7 +16,9 @@ use crate::runtime::inscriptions::emit_inscription;
 use crate::mcp::errors::validation_tool_error;
 use crate::mcp::params::{DROP_COMMAND_PEER, DropParams, DropPeerArgs};
 use crate::mcp::server::McpServer;
-use crate::mcp::validation::{parse_meta_tool_args, validate_drop_params, validate_drop_peer_args};
+use crate::mcp::validation::{
+    parse_meta_tool_args, validate_drop_params, validate_drop_peer_args,
+};
 
 #[tool_router(router = tool_router_drop, vis = "pub(crate)")]
 impl McpServer {
@@ -44,7 +46,7 @@ impl McpServer {
                         )
                     })?;
                 self.drop_peer(args)
-            }
+            },
             other => Err(validation_tool_error(
                 "validation_invalid_params",
                 "drop command must be \"peer\"",
@@ -53,7 +55,10 @@ impl McpServer {
         }
     }
 
-    fn drop_peer(&self, args: DropPeerArgs) -> Result<CallToolResult, McpError> {
+    fn drop_peer(
+        &self,
+        args: DropPeerArgs,
+    ) -> Result<CallToolResult, McpError> {
         validate_drop_peer_args(&args)?;
         let principal_id = args
             .principal_id
@@ -89,11 +94,21 @@ impl McpServer {
                 // location, which is session principals alone (per the
                 // mcp-tool-surface success-payload contract).
                 let mut response = Map::new();
-                response.insert("schema_version".to_string(), json!(schema_version));
-                response.insert("principal_id".to_string(), json!(principal_id));
-                response.insert("principal_type".to_string(), json!(principal_type));
+                response.insert(
+                    "schema_version".to_string(),
+                    json!(schema_version),
+                );
+                response
+                    .insert("principal_id".to_string(), json!(principal_id));
+                response.insert(
+                    "principal_type".to_string(),
+                    json!(principal_type),
+                );
                 if let Some(credential_path) = &credential_path {
-                    response.insert("credential_path".to_string(), json!(credential_path));
+                    response.insert(
+                        "credential_path".to_string(),
+                        json!(credential_path),
+                    );
                 }
                 emit_inscription(
                     "mcp.tool.drop.peer.success",
@@ -105,9 +120,11 @@ impl McpServer {
                 Ok(CallToolResult::success(vec![Content::json(
                     Value::Object(response),
                 )?]))
-            }
-            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.drop.peer", other)),
-            Err(source) => Err(self.map_relay_call_error("mcp.tool.drop.peer.io_error", source)),
+            },
+            Ok(other) => Err(self
+                .map_nonsuccess_relay_response("mcp.tool.drop.peer", other)),
+            Err(source) => Err(self
+                .map_relay_call_error("mcp.tool.drop.peer.io_error", source)),
         }
     }
 }

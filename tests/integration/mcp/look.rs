@@ -7,8 +7,8 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("look") => json!({
                     "kind": "look",
                     "schema_version": "1",
@@ -25,8 +25,8 @@ async fn look_returns_snapshot_payload_and_forwards_request_shape() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -76,8 +76,8 @@ async fn look_forwards_offset_to_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("look") => json!({
                     "kind": "look",
                     "schema_version": "1",
@@ -98,8 +98,8 @@ async fn look_forwards_offset_to_relay_request() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -127,8 +127,8 @@ async fn look_preserves_additive_acp_freshness_fields() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("look") => json!({
                     "kind": "look",
                     "schema_version": "1",
@@ -150,8 +150,8 @@ async fn look_preserves_additive_acp_freshness_fields() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -176,8 +176,8 @@ async fn look_preserves_structured_acp_entries_passthrough() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("look") => json!({
                     "kind": "look",
                     "schema_version": "1",
@@ -220,8 +220,8 @@ async fn look_preserves_structured_acp_entries_passthrough() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -273,7 +273,11 @@ async fn look_rejects_invalid_lines_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive look request for invalid parameters")),
+        Arc::new(|_| {
+            panic!(
+                "relay should not receive look request for invalid parameters"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -294,7 +298,11 @@ async fn look_rejects_unknown_fields_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive look request for invalid parameters")),
+        Arc::new(|_| {
+            panic!(
+                "relay should not receive look request for invalid parameters"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -318,8 +326,8 @@ async fn look_maps_validation_errors_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("look") => json!({
                     "kind": "error",
                     "error": {
@@ -335,8 +343,8 @@ async fn look_maps_validation_errors_from_relay() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -356,8 +364,8 @@ async fn look_maps_authorization_forbidden_error_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("look") => json!({
                     "kind": "error",
                     "error": {
@@ -379,8 +387,8 @@ async fn look_maps_authorization_forbidden_error_from_relay() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -403,8 +411,8 @@ async fn look_maps_unknown_peer_bundle_error_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("look") => json!({
                     "kind": "error",
                     "error": {
@@ -422,8 +430,8 @@ async fn look_maps_unknown_peer_bundle_error_from_relay() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -445,8 +453,8 @@ async fn look_forwards_bound_bundle_on_wire_envelope() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("look") => json!({
                     "kind": "look",
                     "schema_version": "1",
@@ -463,8 +471,8 @@ async fn look_forwards_bound_bundle_on_wire_envelope() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -486,8 +494,8 @@ async fn look_surfaces_authenticated_identity_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("look") => json!({
                     "kind": "look",
                     "schema_version": "1",
@@ -505,8 +513,8 @@ async fn look_surfaces_authenticated_identity_from_relay() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -535,8 +543,8 @@ async fn look_maps_unexpected_relay_variant_to_internal_error() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("look") => json!({
                     "kind": "change_psk",
                     "schema_version": "1",
@@ -550,8 +558,8 @@ async fn look_maps_unexpected_relay_variant_to_internal_error() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 

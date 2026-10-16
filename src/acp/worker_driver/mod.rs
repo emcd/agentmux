@@ -22,6 +22,6 @@ mod services;
 
 pub use driver::AcpWorkerDriver;
 pub use services::{
-    AcpDriverServices, BroadcastUiFn, InvalidateChoicesFn, MirrorStateFn, PublishOutputFn,
-    RecordFailureFn,
+    AcpDriverServices, BroadcastUiFn, InvalidateChoicesFn, MirrorStateFn,
+    PublishOutputFn, RecordFailureFn,
 };

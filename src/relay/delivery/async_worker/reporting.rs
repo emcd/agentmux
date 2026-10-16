@@ -13,14 +13,19 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 
-use crate::configuration::{BundleConfiguration, BundleMember, TargetConfiguration};
+use crate::configuration::{
+    BundleConfiguration, BundleMember, TargetConfiguration,
+};
 use crate::runtime::inscriptions::emit_inscription;
 
 use crate::relay::delivery::guard::GuardKey;
-use crate::relay::stream::{RelayStreamEvent, StreamEventSendOutcome, send_event_to_registered_ui};
+use crate::relay::stream::{
+    RelayStreamEvent, StreamEventSendOutcome, send_event_to_registered_ui,
+};
 use crate::relay::{
-    AsyncDeliveryTask, DeliveryPayloadMode, RELAY_NAMESPACE, RelayError, SCHEMA_VERSION,
-    SendOutcome, SendResult, SenderReturnRoute, canonical_session_id,
+    AsyncDeliveryTask, DeliveryPayloadMode, RELAY_NAMESPACE, RelayError,
+    SCHEMA_VERSION, SendOutcome, SendResult, SenderReturnRoute,
+    canonical_session_id,
 };
 
 use super::registry::{WorkerDispatch, build_worker_key, try_existing_worker};
@@ -38,18 +43,19 @@ pub(super) fn report_terminal_outcome(
     // non-delivered outcome can be routed back to the sender as a receipt after the
     // observability floor is emitted below. A relay-side delivery error resolves to
     // `Failed`, matching the inscription arm.
-    let (terminal_outcome, terminal_reason_code, terminal_reason) = match &outcome {
-        Ok(result) => (
-            result.outcome.clone(),
-            result.reason_code.clone(),
-            result.reason.clone(),
-        ),
-        Err(error) => (
-            SendOutcome::Failed,
-            Some(error.code.clone()),
-            Some(error.message.clone()),
-        ),
-    };
+    let (terminal_outcome, terminal_reason_code, terminal_reason) =
+        match &outcome {
+            Ok(result) => (
+                result.outcome.clone(),
+                result.reason_code.clone(),
+                result.reason.clone(),
+            ),
+            Err(error) => (
+                SendOutcome::Failed,
+                Some(error.code.clone()),
+                Some(error.message.clone()),
+            ),
+        };
     match outcome {
         Ok(result) => {
             emit_sender_delivery_outcome_event(
@@ -76,7 +82,7 @@ pub(super) fn report_terminal_outcome(
                     "entry_sequence": guard.map(|key| key.sequence().value()),
                 }),
             );
-        }
+        },
         Err(error) => {
             emit_sender_delivery_outcome_event(
                 task.bundle.bundle_name.as_str(),
@@ -100,7 +106,7 @@ pub(super) fn report_terminal_outcome(
                     "error_code": error.code,
                 }),
             );
-        }
+        },
     }
     // With the observability floor recorded above for every terminal outcome,
     // best-effort a terminal-outcome receipt back to the sender for the
@@ -162,7 +168,13 @@ fn deliver_terminal_outcome_receipt(
     let Some(route) = task.sender_return_route.as_ref() else {
         return;
     };
-    let receipt = build_terminal_outcome_receipt(task, route, outcome, reason_code, reason);
+    let receipt = build_terminal_outcome_receipt(
+        task,
+        route,
+        outcome,
+        reason_code,
+        reason,
+    );
     let sender_key = build_worker_key(
         task.sender_namespace.as_str(),
         route.runtime_directory.as_path(),
@@ -183,35 +195,35 @@ fn deliver_terminal_outcome_receipt(
     // recorded. A draining worker and an unreadable registry are the relay's own
     // problems and count for the same reason.
     match try_existing_worker(&sender_key, receipt) {
-        Ok(WorkerDispatch::Accepted) | Ok(WorkerDispatch::Missing(_)) => {}
+        Ok(WorkerDispatch::Accepted) | Ok(WorkerDispatch::Missing(_)) => {},
         Ok(WorkerDispatch::Dropped(_)) => {
             note_outcome_notification_failure(
                 "receipt",
                 task.message_id.as_str(),
                 "sender_worker_receiver_dropped",
             );
-        }
+        },
         Ok(WorkerDispatch::Closing(_)) => {
             note_outcome_notification_failure(
                 "receipt",
                 task.message_id.as_str(),
                 "sender_worker_closing",
             );
-        }
+        },
         Ok(WorkerDispatch::FailStopped(_)) => {
             note_outcome_notification_failure(
                 "receipt",
                 task.message_id.as_str(),
                 "sender_worker_fail_stopped",
             );
-        }
+        },
         Err(error) => {
             note_outcome_notification_failure(
                 "receipt",
                 task.message_id.as_str(),
                 error.code.as_str(),
             );
-        }
+        },
     }
 }
 
@@ -340,7 +352,9 @@ pub(in crate::relay::delivery) fn emit_sender_delivery_outcome_event(
         // one, so neither may be collapsed into a failure spelling that would
         // claim more than the evidence supports.
         SendOutcome::NotSubmitted => ("not_submitted", Some("not_submitted")),
-        SendOutcome::SubmissionUnknown => ("submission_unknown", Some("submission_unknown")),
+        SendOutcome::SubmissionUnknown => {
+            ("submission_unknown", Some("submission_unknown"))
+        },
         SendOutcome::Queued => ("routed", None),
     };
     let mut payload = serde_json::Map::new();
@@ -390,16 +404,28 @@ pub(in crate::relay::delivery) fn emit_sender_delivery_outcome_event(
     // to release quota because nobody heard about it would leak the reservation
     // over a reporting problem. So the failure is counted and recorded here
     // rather than propagated.
-    match send_event_to_registered_ui(sender_namespace, sender_session, &event) {
+    match send_event_to_registered_ui(sender_namespace, sender_session, &event)
+    {
         // Nobody was listening. Not a failure — a sender with no attached UI is
         // an ordinary state, and counting it would drown the real signal.
-        Ok(StreamEventSendOutcome::Delivered | StreamEventSendOutcome::NoUiEndpoint) => {}
+        Ok(
+            StreamEventSendOutcome::Delivered
+            | StreamEventSendOutcome::NoUiEndpoint,
+        ) => {},
         Ok(StreamEventSendOutcome::Disconnected) => {
-            note_outcome_notification_failure("stream", message_id, "sender_ui_disconnected");
-        }
+            note_outcome_notification_failure(
+                "stream",
+                message_id,
+                "sender_ui_disconnected",
+            );
+        },
         Err(error) => {
-            note_outcome_notification_failure("stream", message_id, error.to_string().as_str());
-        }
+            note_outcome_notification_failure(
+                "stream",
+                message_id,
+                error.to_string().as_str(),
+            );
+        },
     }
 }
 
@@ -416,8 +442,13 @@ static OUTCOME_NOTIFICATION_FAILURES: AtomicU64 = AtomicU64::new(0);
 /// transition and released admission quota, and there is no recovery available
 /// here — the member is resolved whether or not anyone was told. Recording is
 /// the whole remedy.
-fn note_outcome_notification_failure(channel: &str, message_id: &str, reason: &str) {
-    let total = OUTCOME_NOTIFICATION_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
+fn note_outcome_notification_failure(
+    channel: &str,
+    message_id: &str,
+    reason: &str,
+) {
+    let total =
+        OUTCOME_NOTIFICATION_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
     emit_inscription(
         "relay.send.async.notification_failed",
         &json!({
@@ -455,10 +486,12 @@ mod tests {
             id: id.to_string(),
             name: Some(id.to_string()),
             working_directory: None,
-            target: TargetConfiguration::Tmux(crate::configuration::TmuxTargetConfiguration {
-                start_command: format!("run-{id}"),
-                prompt_readiness: None,
-            }),
+            target: TargetConfiguration::Tmux(
+                crate::configuration::TmuxTargetConfiguration {
+                    start_command: format!("run-{id}"),
+                    prompt_readiness: None,
+                },
+            ),
             coder_session_id: None,
             policy_id: None,
             environment: Vec::new(),
@@ -496,8 +529,11 @@ mod tests {
             Arc::new(AtomicUsize::new(0)),
             false,
         );
-        let target_key =
-            build_worker_key(target_namespace, Path::new(target_runtime), target_session);
+        let target_key = build_worker_key(
+            target_namespace,
+            Path::new(target_runtime),
+            target_session,
+        );
         let (target_tx, mut target_rx) =
             tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
         let owner = register_worker(
@@ -552,9 +588,9 @@ mod tests {
             }),
         );
 
-        let receipt = sender_rx
-            .try_recv()
-            .expect("a non-delivered outcome routes a receipt to the sender's worker");
+        let receipt = sender_rx.try_recv().expect(
+            "a non-delivered outcome routes a receipt to the sender's worker",
+        );
         assert!(receipt.is_receipt, "the routed task is a receipt");
         assert_eq!(receipt.target_session, sender_member_id);
         assert_eq!(receipt.sender_namespace, RELAY_NAMESPACE);
@@ -564,9 +600,10 @@ mod tests {
             receipt.message
         );
         assert!(
-            receipt
-                .message
-                .contains(&canonical_session_id(target_session, target_namespace)),
+            receipt.message.contains(&canonical_session_id(
+                target_session,
+                target_namespace
+            )),
             "receipt names the delivery target: {}",
             receipt.message
         );
@@ -605,10 +642,12 @@ mod receipt_non_recursion_tests {
             id: id.to_string(),
             name: Some(id.to_string()),
             working_directory: None,
-            target: TargetConfiguration::Tmux(crate::configuration::TmuxTargetConfiguration {
-                start_command: format!("run-{id}"),
-                prompt_readiness: None,
-            }),
+            target: TargetConfiguration::Tmux(
+                crate::configuration::TmuxTargetConfiguration {
+                    start_command: format!("run-{id}"),
+                    prompt_readiness: None,
+                },
+            ),
             coder_session_id: None,
             policy_id: None,
             environment: Vec::new(),

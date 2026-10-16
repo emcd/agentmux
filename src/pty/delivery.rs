@@ -30,12 +30,13 @@ use tokio::sync::mpsc;
 use crate::protocol::DeliveryDoorbell;
 use crate::protocol::mailbox::{MailboxEntry, MailboxPayload};
 use crate::transports::{
-    DeliveryWriter, PeekDimensions, PlannedWrite, SubmissionEvidence, TransportHealth,
-    UnreachableSince, WorkerReadinessState,
+    DeliveryWriter, PeekDimensions, PlannedWrite, SubmissionEvidence,
+    TransportHealth, UnreachableSince, WorkerReadinessState,
 };
 
 use super::state::{
-    LOOK_LINES_DEFAULT, PtyShared, SnapshotRequest, SnapshotResponse, prompt_satisfied,
+    LOOK_LINES_DEFAULT, PtyShared, SnapshotRequest, SnapshotResponse,
+    prompt_satisfied,
 };
 
 const RECEIPT_MARKER: &str = "--- agentmux terminal-outcome receipt ---";
@@ -126,10 +127,13 @@ impl PtyDeliveryWriter {
             self.terminal.vt_write(&bytes);
         }
         while let Ok(request) = self.snapshot_rx.try_recv() {
-            let response = render_snapshot(&mut self.terminal, request.inspect_lines);
+            let response =
+                render_snapshot(&mut self.terminal, request.inspect_lines);
             let _ = request.tx.send(response);
         }
-        if !self.departure_published && self.shared.child_exited.load(Ordering::Acquire) {
+        if !self.departure_published
+            && self.shared.child_exited.load(Ordering::Acquire)
+        {
             self.publish(WorkerReadinessState::Unavailable);
             self.departure_published = true;
         }
@@ -164,8 +168,10 @@ impl DeliveryWriter for PtyDeliveryWriter {
     type Plan = PtyWrite;
 
     fn peek_dimensions(&self) -> PeekDimensions {
-        PeekDimensions::for_session_type(crate::configuration::SessionType::Pty)
-            .expect("pty declares peek dimensions")
+        PeekDimensions::for_session_type(
+            crate::configuration::SessionType::Pty,
+        )
+        .expect("pty declares peek dimensions")
     }
 
     fn health(&self) -> TransportHealth {
@@ -190,7 +196,10 @@ impl DeliveryWriter for PtyDeliveryWriter {
         self.prompt_ready()
     }
 
-    fn plan(&mut self, entries: &[MailboxEntry]) -> Option<PlannedWrite<Self::Plan>> {
+    fn plan(
+        &mut self,
+        entries: &[MailboxEntry],
+    ) -> Option<PlannedWrite<Self::Plan>> {
         // Narrow hardening: decline when the child's departure is already
         // latched. The executor only reaches `plan` while `writable()` passed,
         // but the reader latches `child_exited` asynchronously, so readiness
@@ -206,8 +215,11 @@ impl DeliveryWriter for PtyDeliveryWriter {
         let head = entries.first()?;
         let bytes = match &head.payload {
             MailboxPayload::Mail(envelope) => {
-                let text = envelope.message.render_pane_envelope(&envelope.message_id);
-                let mut buffer = Vec::with_capacity(text.len() + RECEIPT_MARKER.len() + 2);
+                let text = envelope
+                    .message
+                    .render_pane_envelope(&envelope.message_id);
+                let mut buffer =
+                    Vec::with_capacity(text.len() + RECEIPT_MARKER.len() + 2);
                 if envelope.is_receipt {
                     buffer.extend_from_slice(RECEIPT_MARKER.as_bytes());
                     buffer.push(b'\n');
@@ -215,7 +227,7 @@ impl DeliveryWriter for PtyDeliveryWriter {
                 buffer.extend_from_slice(text.as_bytes());
                 buffer.push(b'\n');
                 buffer
-            }
+            },
             MailboxPayload::Raw {
                 content,
                 append_enter,
@@ -226,7 +238,7 @@ impl DeliveryWriter for PtyDeliveryWriter {
                     buffer.push(b'\n');
                 }
                 buffer
-            }
+            },
         };
         // One entry, always. The declaration the relay records therefore covers
         // exactly what one `write_all` carries, which is what lets a member's
@@ -237,13 +249,15 @@ impl DeliveryWriter for PtyDeliveryWriter {
         })
     }
 
-    fn write(&mut self, planned: PlannedWrite<Self::Plan>) -> Vec<SubmissionEvidence> {
+    fn write(
+        &mut self,
+        planned: PlannedWrite<Self::Plan>,
+    ) -> Vec<SubmissionEvidence> {
         self.publish(WorkerReadinessState::Busy);
         let result = (|| -> std::io::Result<()> {
-            let mut guard = self
-                .writer
-                .lock()
-                .map_err(|_| std::io::Error::other("pty writer mutex poisoned"))?;
+            let mut guard = self.writer.lock().map_err(|_| {
+                std::io::Error::other("pty writer mutex poisoned")
+            })?;
             guard.write_all(&planned.rendered.bytes)
         })();
         self.publish(WorkerReadinessState::Available);
@@ -271,7 +285,11 @@ impl DeliveryWriter for PtyDeliveryWriter {
         self.shutdown_flag.load(Ordering::Acquire)
     }
 
-    fn wait_for_work(&mut self, doorbell: &DeliveryDoorbell, timeout: Duration) {
+    fn wait_for_work(
+        &mut self,
+        doorbell: &DeliveryDoorbell,
+        timeout: Duration,
+    ) {
         // The terminal keeps being fed and keeps answering while this executor
         // waits, which no other transport has to arrange because no other
         // transport's idle thread owns anything. The wait is sliced rather than
@@ -309,7 +327,7 @@ fn render_snapshot(
                 Ok(bytes) => bytes.as_ref().to_vec(),
                 Err(_) => Vec::new(),
             }
-        }
+        },
         Err(_) => Vec::new(),
     };
     let tail = String::from_utf8_lossy(&bytes).to_string();
@@ -332,7 +350,9 @@ fn render_snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::mailbox::{EntrySequence, MailboxEntry, MailboxPayload};
+    use crate::protocol::mailbox::{
+        EntrySequence, MailboxEntry, MailboxPayload,
+    };
     use crate::pty::state::PtyConfigSnapshot;
 
     /// A departure that lands after readiness passed but before the plan must
@@ -351,19 +371,19 @@ mod tests {
         let child_exited = Arc::new(AtomicBool::new(false));
         let (_bytes_tx, bytes_rx) = mpsc::channel::<Vec<u8>>(256);
         let (snapshot_tx, snapshot_rx) = mpsc::channel::<SnapshotRequest>(64);
-        let terminal = libghostty_vt::Terminal::new(libghostty_vt::TerminalOptions {
-            cols: 120,
-            rows: 40,
-            max_scrollback: 10_000,
-        })
-        .expect("test terminal");
+        let terminal =
+            libghostty_vt::Terminal::new(libghostty_vt::TerminalOptions {
+                cols: 120,
+                rows: 40,
+                max_scrollback: 10_000,
+            })
+            .expect("test terminal");
         let mut planner = PtyDeliveryWriter::new(
             terminal,
             bytes_rx,
             snapshot_rx,
-            Arc::new(Mutex::new(
-                Box::new(std::io::Cursor::new(Vec::new())) as Box<dyn Write + Send>
-            )),
+            Arc::new(Mutex::new(Box::new(std::io::Cursor::new(Vec::new()))
+                as Box<dyn Write + Send>)),
             PtyShared {
                 config: PtyConfigSnapshot {
                     target_member_id: "test-session".to_string(),

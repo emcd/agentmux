@@ -29,8 +29,8 @@ use std::{
 
 use agentmux::{
     relay::{
-        BundleCatalog, ConnectionDrainCoordinator, RelayRequest, RelayResponse, handle_request,
-        serve_connection,
+        BundleCatalog, ConnectionDrainCoordinator, RelayRequest,
+        RelayResponse, handle_request, serve_connection,
     },
     runtime::paths::{BundleRuntimePaths, principal_store_path},
 };
@@ -51,13 +51,22 @@ fn dispatch_request(
     bundle_name: &str,
     runtime_directory: &Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    handle_request(request, configuration_roots, bundle_name, runtime_directory)
+    handle_request(
+        request,
+        configuration_roots,
+        bundle_name,
+        runtime_directory,
+    )
 }
 
-fn write_bundle_configuration(temporary: &TempDir, bundle_name: &str) -> ConfigurationRoots {
+fn write_bundle_configuration(
+    temporary: &TempDir,
+    bundle_name: &str,
+) -> ConfigurationRoots {
     let configuration_root = temporary.path().join("config");
     let bundles_directory = configuration_root.join("bundles");
-    std::fs::create_dir_all(&bundles_directory).expect("create bundles directory");
+    std::fs::create_dir_all(&bundles_directory)
+        .expect("create bundles directory");
     std::fs::write(
         configuration_root.join("coders.toml"),
         r#"
@@ -140,12 +149,14 @@ fn spawn_relay_stream(
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
 ) -> (UnixStream, thread::JoinHandle<()>) {
-    let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
+    let (server_stream, client_stream) =
+        UnixStream::pair().expect("unix stream pair");
     let root = configuration_roots.clone();
     let state_root = bundle_paths.state_root.clone();
     let catalog = BundleCatalog::from_paths([bundle_paths.clone()]);
     let handle = thread::spawn(move || {
-        run_serve_connection(server_stream, root, state_root, catalog).expect("serve connection");
+        run_serve_connection(server_stream, root, state_root, catalog)
+            .expect("serve connection");
     });
     (client_stream, handle)
 }
@@ -169,7 +180,10 @@ fn run_serve_connection(
         let stream = tokio::net::UnixStream::from_std(server_stream)?;
         // No peers configured for these tests: an empty manager never dials.
         let peer_connection_manager = std::sync::Arc::new(
-            agentmux::relay::PeerConnectionManager::from_configuration(&state_root, &[]),
+            agentmux::relay::PeerConnectionManager::from_configuration(
+                &state_root,
+                &[],
+            ),
         );
         let serve_context = agentmux::relay::ConnectionServeContext::new(
             configuration_roots,
@@ -204,16 +218,28 @@ fn read_json(reader: &mut BufReader<UnixStream>) -> Value {
     serde_json::from_str::<Value>(line.trim_end()).expect("decode payload")
 }
 
-fn read_json_with_timeout(reader: &mut BufReader<UnixStream>) -> Option<Value> {
+fn read_json_with_timeout(
+    reader: &mut BufReader<UnixStream>,
+) -> Option<Value> {
     let mut line = String::new();
     match reader.read_line(&mut line) {
         Ok(read) => {
             if read == 0 {
                 return None;
             }
-            Some(serde_json::from_str::<Value>(line.trim_end()).expect("decode payload"))
-        }
-        Err(source) if matches!(source.kind(), ErrorKind::TimedOut | ErrorKind::WouldBlock) => None,
+            Some(
+                serde_json::from_str::<Value>(line.trim_end())
+                    .expect("decode payload"),
+            )
+        },
+        Err(source)
+            if matches!(
+                source.kind(),
+                ErrorKind::TimedOut | ErrorKind::WouldBlock
+            ) =>
+        {
+            None
+        },
         Err(source) => panic!("read payload: {source}"),
     }
 }
@@ -257,13 +283,16 @@ fn collect_events_for_target(
         let Some(value) = read_json_with_timeout(reader) else {
             continue;
         };
-        if value["frame"] != "event" || value["event"]["target_session"] != target_session {
+        if value["frame"] != "event"
+            || value["event"]["target_session"] != target_session
+        {
             continue;
         }
         let terminal = value["event"]["event_type"] == "delivery_outcome"
             && value["event"]["payload"]["phase"] == "delivered"
-            && terminal_message_id
-                .is_none_or(|id| value["event"]["payload"]["message_id"].as_str() == Some(id));
+            && terminal_message_id.is_none_or(|id| {
+                value["event"]["payload"]["message_id"].as_str() == Some(id)
+            });
         events.push(value);
         if terminal {
             break;
@@ -294,7 +323,8 @@ fn write_bundle_configuration_with_ui_member(
     temporary: &TempDir,
     bundle_name: &str,
 ) -> ConfigurationRoots {
-    let configuration_roots = write_bundle_configuration(temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(temporary, bundle_name);
     let bundles_directory = configuration_roots.base_layer().join("bundles");
     std::fs::write(
         bundles_directory.join(format!("{bundle_name}.toml")),
@@ -325,7 +355,8 @@ fn write_operator_bundle_configuration(
 ) -> ConfigurationRoots {
     let configuration_root = temporary.path().join("config");
     let bundles_directory = configuration_root.join("bundles");
-    std::fs::create_dir_all(&bundles_directory).expect("create bundles directory");
+    std::fs::create_dir_all(&bundles_directory)
+        .expect("create bundles directory");
     std::fs::write(
         configuration_root.join("coders.toml"),
         r#"
@@ -397,7 +428,8 @@ fn write_cross_relay_bundle_configuration(
 ) -> ConfigurationRoots {
     let configuration_root = temporary.path().join("config");
     let bundles_directory = configuration_root.join("bundles");
-    std::fs::create_dir_all(&bundles_directory).expect("create bundles directory");
+    std::fs::create_dir_all(&bundles_directory)
+        .expect("create bundles directory");
     std::fs::write(
         configuration_root.join("coders.toml"),
         r#"
@@ -450,7 +482,8 @@ coder = "shell"
 fn write_peer_credential(state_root: &Path, alias: &str, psk: &str) {
     let peers_dir = state_root.join("peers");
     std::fs::create_dir_all(&peers_dir).expect("create peers dir");
-    std::fs::write(peers_dir.join(format!("{alias}.psk")), psk).expect("write peer psk");
+    std::fs::write(peers_dir.join(format!("{alias}.psk")), psk)
+        .expect("write peer psk");
 }
 
 // Serves one origin relay connection whose peer connection manager is configured
@@ -465,7 +498,8 @@ fn spawn_relay_stream_with_peer(
     connect_as: &str,
     peer_socket: &Path,
 ) -> (UnixStream, thread::JoinHandle<()>) {
-    let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
+    let (server_stream, client_stream) =
+        UnixStream::pair().expect("unix stream pair");
     let root = configuration_roots.clone();
     let state_root = bundle_paths.state_root.clone();
     let catalog = BundleCatalog::from_paths([bundle_paths.clone()]);
@@ -475,8 +509,14 @@ fn spawn_relay_stream_with_peer(
         connect_as: connect_as.to_string(),
     }];
     let handle = thread::spawn(move || {
-        run_serve_connection_with_peers(server_stream, root, state_root, catalog, peers)
-            .expect("serve connection");
+        run_serve_connection_with_peers(
+            server_stream,
+            root,
+            state_root,
+            catalog,
+            peers,
+        )
+        .expect("serve connection");
     });
     (client_stream, handle)
 }
@@ -498,7 +538,10 @@ fn run_serve_connection_with_peers(
     runtime.block_on(async move {
         let stream = tokio::net::UnixStream::from_std(server_stream)?;
         let peer_connection_manager = std::sync::Arc::new(
-            agentmux::relay::PeerConnectionManager::from_configuration(&state_root, &peers),
+            agentmux::relay::PeerConnectionManager::from_configuration(
+                &state_root,
+                &peers,
+            ),
         );
         let serve_context = agentmux::relay::ConnectionServeContext::new(
             configuration_roots,
@@ -522,20 +565,26 @@ fn run_serve_connection_with_peers(
 // dialer's schema_version + principal_id) and answers the single forwarded
 // request with `response`, echoing the wire request id for correlation. Returns
 // the request frame it observed.
-fn spawn_answering_peer(socket_path: &Path, response: Value) -> mpsc::Receiver<Value> {
-    let listener = UnixListener::bind(socket_path).expect("bind stub peer socket");
+fn spawn_answering_peer(
+    socket_path: &Path,
+    response: Value,
+) -> mpsc::Receiver<Value> {
+    let listener =
+        UnixListener::bind(socket_path).expect("bind stub peer socket");
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let Ok((stream, _)) = listener.accept() else {
             return;
         };
-        let mut reader = BufReader::new(stream.try_clone().expect("clone stub stream"));
+        let mut reader =
+            BufReader::new(stream.try_clone().expect("clone stub stream"));
         let mut stream = stream;
         let mut hello_line = String::new();
         if reader.read_line(&mut hello_line).is_err() {
             return;
         }
-        let Ok(hello) = serde_json::from_str::<Value>(hello_line.trim_end()) else {
+        let Ok(hello) = serde_json::from_str::<Value>(hello_line.trim_end())
+        else {
             return;
         };
         let ack = json!({
@@ -547,7 +596,8 @@ fn spawn_answering_peer(socket_path: &Path, response: Value) -> mpsc::Receiver<V
         let _ = stream.flush();
         let mut request_line = String::new();
         if reader.read_line(&mut request_line).is_ok()
-            && let Ok(request) = serde_json::from_str::<Value>(request_line.trim_end())
+            && let Ok(request) =
+                serde_json::from_str::<Value>(request_line.trim_end())
         {
             let response_frame = json!({
                 "frame": "response",
@@ -565,12 +615,16 @@ fn spawn_answering_peer(socket_path: &Path, response: Value) -> mpsc::Receiver<V
 
 // Completes a stub peer's PSK Hello handshake, echoing the dialer's
 // schema_version and principal_id. Returns whether the ack was written.
-fn ack_peer_hello(reader: &mut BufReader<UnixStream>, stream: &mut UnixStream) -> bool {
+fn ack_peer_hello(
+    reader: &mut BufReader<UnixStream>,
+    stream: &mut UnixStream,
+) -> bool {
     let mut hello_line = String::new();
     if reader.read_line(&mut hello_line).is_err() {
         return false;
     }
-    let Ok(hello) = serde_json::from_str::<Value>(hello_line.trim_end()) else {
+    let Ok(hello) = serde_json::from_str::<Value>(hello_line.trim_end())
+    else {
         return false;
     };
     let ack = json!({
@@ -591,7 +645,8 @@ fn answer_one_peer_request(
 ) -> Option<Value> {
     let mut request_line = String::new();
     reader.read_line(&mut request_line).ok()?;
-    let request = serde_json::from_str::<Value>(request_line.trim_end()).ok()?;
+    let request =
+        serde_json::from_str::<Value>(request_line.trim_end()).ok()?;
     let response_frame = json!({
         "frame": "response",
         "request_id": request.get("request_id").cloned().unwrap_or(json!(null)),
@@ -614,18 +669,22 @@ fn spawn_revoking_peer(
     socket_path: &Path,
     response: Value,
 ) -> (mpsc::Receiver<()>, mpsc::Receiver<Value>) {
-    let listener = UnixListener::bind(socket_path).expect("bind stub peer socket");
+    let listener =
+        UnixListener::bind(socket_path).expect("bind stub peer socket");
     let (closed_sender, closed_receiver) = mpsc::channel();
     let (request_sender, request_receiver) = mpsc::channel();
     thread::spawn(move || {
         let Ok((mut first, _)) = listener.accept() else {
             return;
         };
-        let mut first_reader = BufReader::new(first.try_clone().expect("clone stub stream"));
+        let mut first_reader =
+            BufReader::new(first.try_clone().expect("clone stub stream"));
         if !ack_peer_hello(&mut first_reader, &mut first) {
             return;
         }
-        if answer_one_peer_request(&mut first_reader, &mut first, &response).is_none() {
+        if answer_one_peer_request(&mut first_reader, &mut first, &response)
+            .is_none()
+        {
             return;
         }
         let revoked = json!({
@@ -650,11 +709,14 @@ fn spawn_revoking_peer(
         let Ok((mut second, _)) = listener.accept() else {
             return;
         };
-        let mut second_reader = BufReader::new(second.try_clone().expect("clone stub stream"));
+        let mut second_reader =
+            BufReader::new(second.try_clone().expect("clone stub stream"));
         if !ack_peer_hello(&mut second_reader, &mut second) {
             return;
         }
-        if let Some(request) = answer_one_peer_request(&mut second_reader, &mut second, &response) {
+        if let Some(request) =
+            answer_one_peer_request(&mut second_reader, &mut second, &response)
+        {
             let _ = request_sender.send(request);
             thread::sleep(Duration::from_millis(50));
         }
@@ -873,7 +935,11 @@ fn unique_relay_principal_id() -> String {
 // Hand-writes a principal store registering `principal_id` as a peer relay with
 // the fixed ingress credential and the given `scope` (`None` for a peer
 // registered without a scope, which the ingress gate treats as fail-closed).
-fn write_ingress_peer_store(state_root: &Path, principal_id: &str, scope: Option<&str>) {
+fn write_ingress_peer_store(
+    state_root: &Path,
+    principal_id: &str,
+    scope: Option<&str>,
+) {
     let store_path = principal_store_path(state_root);
     std::fs::create_dir_all(store_path.parent().expect("store parent"))
         .expect("create identity directory");
@@ -909,7 +975,8 @@ fn ingress_request_response(
     principal_id: &str,
     request: Value,
 ) -> Value {
-    let (mut client, handle) = spawn_relay_stream(configuration_roots, bundle_paths);
+    let (mut client, handle) =
+        spawn_relay_stream(configuration_roots, bundle_paths);
     let reader_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(reader_stream);
     send_json(

@@ -7,12 +7,17 @@ async fn send_rejects_conflicting_targets_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive send request for invalid parameters")),
+        Arc::new(|_| {
+            panic!(
+                "relay should not receive send request for invalid parameters"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),
@@ -32,12 +37,17 @@ async fn send_rejects_empty_targets_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive send request for invalid parameters")),
+        Arc::new(|_| {
+            panic!(
+                "relay should not receive send request for invalid parameters"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert("targets".to_string(), Value::Array(Vec::new()));
     arguments.insert("broadcast".to_string(), Value::Bool(false));
     let response = harness.call_tool(2, "send", arguments).await;
@@ -51,7 +61,11 @@ async fn send_rejects_empty_message_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive send request for invalid parameters")),
+        Arc::new(|_| {
+            panic!(
+                "relay should not receive send request for invalid parameters"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -73,12 +87,17 @@ async fn send_rejects_unknown_fields_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive send request for invalid parameters")),
+        Arc::new(|_| {
+            panic!(
+                "relay should not receive send request for invalid parameters"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),
@@ -95,8 +114,8 @@ async fn send_maps_unknown_sender_error_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("send") => json!({
                     "kind": "error",
                     "error": {
@@ -112,13 +131,14 @@ async fn send_maps_unknown_sender_error_from_relay() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),
@@ -134,8 +154,8 @@ async fn send_maps_authorization_forbidden_error_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("send") => json!({
                     "kind": "error",
                     "error": {
@@ -157,13 +177,14 @@ async fn send_maps_authorization_forbidden_error_from_relay() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),
@@ -183,8 +204,8 @@ async fn send_preserves_reserved_capability_label_from_relay_denial() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("send") => json!({
                     "kind": "error",
                     "error": {
@@ -205,13 +226,14 @@ async fn send_preserves_reserved_capability_label_from_relay_denial() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),
@@ -228,8 +250,8 @@ async fn send_surfaces_authenticated_identity_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
@@ -245,13 +267,14 @@ async fn send_surfaces_authenticated_identity_from_relay() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),
@@ -271,8 +294,8 @@ async fn send_omits_sender_attribution_when_relay_omits_it() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
@@ -287,13 +310,14 @@ async fn send_omits_sender_attribution_when_relay_omits_it() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),
@@ -315,8 +339,8 @@ async fn send_includes_request_id_and_display_name_when_relay_provides_them() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
@@ -332,13 +356,14 @@ async fn send_includes_request_id_and_display_name_when_relay_provides_them() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),
@@ -361,8 +386,8 @@ async fn send_qualifies_bare_target_with_bound_bundle() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
@@ -377,13 +402,14 @@ async fn send_qualifies_bare_target_with_bound_bundle() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),
@@ -407,8 +433,8 @@ async fn send_preserves_already_qualified_target() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
@@ -423,13 +449,14 @@ async fn send_preserves_already_qualified_target() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![
@@ -456,8 +483,8 @@ async fn send_omits_wire_envelope_namespace_for_suffix_routing() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("send") => json!({
                     "kind": "send",
                     "schema_version": "1",
@@ -472,13 +499,14 @@ async fn send_omits_wire_envelope_namespace_for_suffix_routing() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("message".to_string(), Value::String("hello".to_string()));
+    arguments
+        .insert("message".to_string(), Value::String("hello".to_string()));
     arguments.insert(
         "targets".to_string(),
         Value::Array(vec![Value::String("bravo".to_string())]),

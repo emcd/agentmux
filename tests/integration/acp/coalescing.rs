@@ -14,7 +14,8 @@ fn invocation_coalescing_pending_to_completed() {
         "tool": "search",
         "args": {"q": "test"}
     });
-    let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_call]});
+    let params =
+        serde_json::json!({"sessionId": "sess_1", "update": [tool_call]});
     parse_replay_entries_from_params(&params, &mut pending, &mut buffer);
 
     assert_eq!(buffer.len(), 1);
@@ -37,7 +38,8 @@ fn invocation_coalescing_pending_to_completed() {
         "toolCallId": "call_1",
         "result": {"ok": true}
     });
-    let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_result]});
+    let params =
+        serde_json::json!({"sessionId": "sess_1", "update": [tool_result]});
     parse_replay_entries_from_params(&params, &mut pending, &mut buffer);
 
     assert_eq!(buffer.len(), 1);
@@ -70,7 +72,8 @@ fn invocation_orphan_result_creates_standalone_entry() {
         "toolCallId": "call_orphan",
         "result": {"ok": false}
     });
-    let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_result]});
+    let params =
+        serde_json::json!({"sessionId": "sess_1", "update": [tool_result]});
     parse_replay_entries_from_params(&params, &mut pending, &mut buffer);
 
     assert_eq!(buffer.len(), 1);
@@ -98,7 +101,8 @@ fn tool_call_without_tool_call_id_is_dropped() {
         "sessionUpdate": "tool_call",
         "tool": "search",
     });
-    let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_call]});
+    let params =
+        serde_json::json!({"sessionId": "sess_1", "update": [tool_call]});
     parse_replay_entries_from_params(&params, &mut pending, &mut buffer);
     assert!(buffer.is_empty());
     assert!(pending.is_empty());
@@ -107,7 +111,8 @@ fn tool_call_without_tool_call_id_is_dropped() {
         "sessionUpdate": "tool_call_update",
         "result": {"ok": false},
     });
-    let params = serde_json::json!({"sessionId": "sess_1", "update": [tool_update]});
+    let params =
+        serde_json::json!({"sessionId": "sess_1", "update": [tool_update]});
     parse_replay_entries_from_params(&params, &mut pending, &mut buffer);
     assert!(buffer.is_empty());
 }

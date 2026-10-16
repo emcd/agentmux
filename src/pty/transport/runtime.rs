@@ -24,7 +24,8 @@ use tokio::sync::mpsc;
 use crate::pty::delivery::PtyDeliveryWriter;
 use crate::pty::state::{PtyShared, SnapshotRequest};
 use crate::transports::{
-    DeliveryExecutorContext, UnreachableSince, WorkerReadinessState, run_delivery_executor,
+    DeliveryExecutorContext, UnreachableSince, WorkerReadinessState,
+    run_delivery_executor,
 };
 
 use super::{PTY_VERSION_STRING, PtyMirrorStateFn, READER_IDLE_POLL};
@@ -45,25 +46,28 @@ pub(super) fn run_worker(
     unreachable_since: Arc<UnreachableSince>,
     delivery: DeliveryExecutorContext,
 ) {
-    let mut terminal = match libghostty_vt::Terminal::new(libghostty_vt::TerminalOptions {
-        cols,
-        rows,
-        max_scrollback: 10_000,
-    }) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("[pty-worker-{target_session}] Terminal::new failed: {e}");
-            publish(
-                &readiness,
-                mirror_state.as_ref(),
-                WorkerReadinessState::Unavailable,
-            );
-            if let Ok(mut child) = child.lock() {
-                let _ = child.kill();
-            }
-            return;
-        }
-    };
+    let mut terminal =
+        match libghostty_vt::Terminal::new(libghostty_vt::TerminalOptions {
+            cols,
+            rows,
+            max_scrollback: 10_000,
+        }) {
+            Ok(t) => t,
+            Err(e) => {
+                eprintln!(
+                    "[pty-worker-{target_session}] Terminal::new failed: {e}"
+                );
+                publish(
+                    &readiness,
+                    mirror_state.as_ref(),
+                    WorkerReadinessState::Unavailable,
+                );
+                if let Ok(mut child) = child.lock() {
+                    let _ = child.kill();
+                }
+                return;
+            },
+        };
 
     install_handlers(&mut terminal, writer.clone(), cols, rows);
 
@@ -143,8 +147,9 @@ fn install_handlers(
     terminal
         .on_device_attributes(|_t| {
             use libghostty_vt::terminal::{
-                ConformanceLevel, DeviceAttributeFeature, DeviceAttributes, DeviceType,
-                PrimaryDeviceAttributes, SecondaryDeviceAttributes,
+                ConformanceLevel, DeviceAttributeFeature, DeviceAttributes,
+                DeviceType, PrimaryDeviceAttributes,
+                SecondaryDeviceAttributes,
             };
             Some(DeviceAttributes {
                 primary: PrimaryDeviceAttributes::new(
@@ -184,20 +189,20 @@ pub(super) fn run_reader(
             Ok(0) => {
                 child_exited.store(true, Ordering::Release);
                 break;
-            }
+            },
             Ok(n) => {
                 let bytes = buf[..n].to_vec();
                 if bytes_tx.blocking_send(bytes).is_err() {
                     break;
                 }
-            }
+            },
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 thread::sleep(READER_IDLE_POLL);
-            }
+            },
             Err(_) => {
                 child_exited.store(true, Ordering::Release);
                 break;
-            }
+            },
         }
     }
 }

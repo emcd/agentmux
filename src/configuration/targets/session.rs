@@ -5,14 +5,18 @@ use crate::configuration::{
     fields::{normalize_field, normalize_optional},
     raw::{Coder, CoderTarget, RawSession},
     types::{
-        AcpTargetConfiguration, PtyTargetConfiguration, SessionType, TargetConfiguration,
-        TmuxTargetConfiguration,
+        AcpTargetConfiguration, PtyTargetConfiguration, SessionType,
+        TargetConfiguration, TmuxTargetConfiguration,
     },
 };
 
 use super::{
-    template::{ProjectNameInputs, ProjectNameSource, render_command_template},
-    validation::{prompt_readiness_from_pty_target, prompt_readiness_from_tmux_target},
+    template::{
+        ProjectNameInputs, ProjectNameSource, render_command_template,
+    },
+    validation::{
+        prompt_readiness_from_pty_target, prompt_readiness_from_tmux_target,
+    },
 };
 
 /// Renders the chosen coder command for one session, pairing the declared
@@ -62,7 +66,8 @@ pub(in crate::configuration) fn build_session_target(
     )?;
     match kind {
         SessionKind::Coder => {
-            let coder_session_id = normalize_optional(session.coder_session_id.as_deref());
+            let coder_session_id =
+                normalize_optional(session.coder_session_id.as_deref());
             let coder = resolve_session_coder(
                 session.coder.as_deref().unwrap_or_default(),
                 coders,
@@ -84,8 +89,11 @@ pub(in crate::configuration) fn build_session_target(
                         bundle_path,
                         session_id,
                     )?;
-                    let prompt_readiness =
-                        prompt_readiness_from_tmux_target(tmux_target, coders_path, session_id)?;
+                    let prompt_readiness = prompt_readiness_from_tmux_target(
+                        tmux_target,
+                        coders_path,
+                        session_id,
+                    )?;
                     Ok((
                         TargetConfiguration::Tmux(TmuxTargetConfiguration {
                             start_command,
@@ -93,7 +101,7 @@ pub(in crate::configuration) fn build_session_target(
                         }),
                         coder_session_id,
                     ))
-                }
+                },
                 CoderTarget::Acp(acp_target) => Ok((
                     TargetConfiguration::Acp(AcpTargetConfiguration {
                         channel: acp_target.channel,
@@ -117,8 +125,11 @@ pub(in crate::configuration) fn build_session_target(
                         bundle_path,
                         session_id,
                     )?;
-                    let prompt_readiness =
-                        prompt_readiness_from_pty_target(pty_target, coders_path, session_id)?;
+                    let prompt_readiness = prompt_readiness_from_pty_target(
+                        pty_target,
+                        coders_path,
+                        session_id,
+                    )?;
                     Ok((
                         TargetConfiguration::Pty(PtyTargetConfiguration {
                             initial_command: start_command.clone(),
@@ -126,21 +137,23 @@ pub(in crate::configuration) fn build_session_target(
                             prompt_readiness,
                             cols: pty_target.cols.unwrap_or(120),
                             rows: pty_target.rows.unwrap_or(40),
-                            term_protocol: pty_target.term_protocol.unwrap_or_default(),
+                            term_protocol: pty_target
+                                .term_protocol
+                                .unwrap_or_default(),
                         }),
                         coder_session_id,
                     ))
-                }
+                },
             }
-        }
+        },
         SessionKind::Ui => {
             reject_coder_session_id(session, bundle_path, session_id)?;
             Ok((TargetConfiguration::Ui, None))
-        }
+        },
         SessionKind::Pubsub => {
             reject_coder_session_id(session, bundle_path, session_id)?;
             Ok((TargetConfiguration::Pubsub, None))
-        }
+        },
     }
 }
 
@@ -153,7 +166,9 @@ fn reject_coder_session_id(
     if session.coder_session_id.is_some() {
         return Err(ConfigurationError::invalid(
             bundle_path,
-            format!("coder-less session '{session_id}' must not declare coder-session-id"),
+            format!(
+                "coder-less session '{session_id}' must not declare coder-session-id"
+            ),
         ));
     }
     Ok(())
@@ -169,13 +184,17 @@ fn resolve_session_coder<'a>(
     if coder_id.is_empty() {
         return Err(ConfigurationError::invalid(
             bundle_path,
-            format!("session '{session_id}' coder reference must be non-empty"),
+            format!(
+                "session '{session_id}' coder reference must be non-empty"
+            ),
         ));
     }
     coders.get(coder_id).ok_or_else(|| {
         ConfigurationError::invalid(
             bundle_path,
-            format!("session '{session_id}' references unknown coder '{coder_id}'"),
+            format!(
+                "session '{session_id}' references unknown coder '{coder_id}'"
+            ),
         )
     })
 }

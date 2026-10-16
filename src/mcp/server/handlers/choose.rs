@@ -72,21 +72,33 @@ impl McpServer {
                 // skip_serializing_if semantics (the json! re-box would otherwise
                 // force them back to null).
                 let mut response_map = serde_json::Map::new();
-                response_map.insert("schema_version".to_string(), Value::String(schema_version));
-                response_map.insert("status".to_string(), Value::String(status));
+                response_map.insert(
+                    "schema_version".to_string(),
+                    Value::String(schema_version),
+                );
+                response_map
+                    .insert("status".to_string(), Value::String(status));
                 response_map.insert(
                     "choice_request_id".to_string(),
                     Value::String(choice_request_id),
                 );
-                response_map.insert("outcome".to_string(), Value::String(outcome));
+                response_map
+                    .insert("outcome".to_string(), Value::String(outcome));
                 if let Some(decided_by) = decided_by {
-                    response_map.insert("decided_by".to_string(), Value::String(decided_by));
+                    response_map.insert(
+                        "decided_by".to_string(),
+                        Value::String(decided_by),
+                    );
                 }
                 if let Some(reason_code) = reason_code {
-                    response_map.insert("reason_code".to_string(), Value::String(reason_code));
+                    response_map.insert(
+                        "reason_code".to_string(),
+                        Value::String(reason_code),
+                    );
                 }
                 if let Some(reason) = reason {
-                    response_map.insert("reason".to_string(), Value::String(reason));
+                    response_map
+                        .insert("reason".to_string(), Value::String(reason));
                 }
                 let response = Value::Object(response_map);
                 emit_inscription(
@@ -99,9 +111,15 @@ impl McpServer {
                     }),
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
-            }
-            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.choose", other)),
-            Err(source) => Err(self.map_relay_call_error("mcp.tool.choose.io_error", source)),
+            },
+            Ok(other) => {
+                Err(self
+                    .map_nonsuccess_relay_response("mcp.tool.choose", other))
+            },
+            Err(source) => {
+                Err(self
+                    .map_relay_call_error("mcp.tool.choose.io_error", source))
+            },
         }
     }
 }

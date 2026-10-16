@@ -1,7 +1,9 @@
 //! Reading the head of a target's mailbox without advancing anything.
 
 use crate::protocol::mailbox::{MailboxEntry, MailboxEntryKind};
-use crate::protocol::operations::{PeekRejection, PeekRequest, PeekResponse, PeekResult};
+use crate::protocol::operations::{
+    PeekRejection, PeekRequest, PeekResponse, PeekResult,
+};
 
 use super::super::ledger::lock_ledger;
 use super::addressing::target_key;
@@ -95,7 +97,9 @@ pub(in crate::relay) fn peek(request: &PeekRequest) -> PeekResult {
 /// would let a change that collapsed two of them into each other still pass.
 #[cfg(test)]
 mod mailbox_peek_tests {
-    use super::super::fixtures::{binding, claim, mail, peeked, place, raw, request};
+    use super::super::fixtures::{
+        binding, claim, mail, peeked, place, raw, request,
+    };
     use super::*;
 
     #[test]
@@ -103,7 +107,12 @@ mod mailbox_peek_tests {
         let namespace = "mbx-peek";
         let bound = claim(namespace);
         for index in 1..=3 {
-            place(namespace, &format!("{namespace}-{index}"), 10, mail("body"));
+            place(
+                namespace,
+                &format!("{namespace}-{index}"),
+                10,
+                mail("body"),
+            );
         }
 
         assert_eq!(

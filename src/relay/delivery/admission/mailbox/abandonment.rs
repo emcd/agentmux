@@ -51,7 +51,9 @@ use super::resolution::{ResolvedMember, resolve_positions};
 /// than from an edge the executor would have to detect and remember — and
 /// remembering is the part that would go wrong, since an executor that had
 /// already fired once would stay silent for entries admitted afterwards.
-pub(in crate::relay) fn resolve_target_entries(binding: &ConsumerBinding) -> Vec<ResolvedMember> {
+pub(in crate::relay) fn resolve_target_entries(
+    binding: &ConsumerBinding,
+) -> Vec<ResolvedMember> {
     let Ok(mut state) = lock_ledger() else {
         return Vec::new();
     };
@@ -103,7 +105,8 @@ mod abandonment_tests {
     use super::*;
 
     #[test]
-    fn abandoning_a_target_resolves_undeclared_and_declared_entries_differently() {
+    fn abandoning_a_target_resolves_undeclared_and_declared_entries_differently()
+     {
         let namespace = "mbx-abandon";
         let bound = claim(namespace);
         for index in 1..=3 {

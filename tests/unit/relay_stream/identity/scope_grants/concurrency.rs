@@ -1,21 +1,26 @@
 use super::*;
 
-use agentmux::relay::test_hooks::{AuthorityGate, arm_authority_gate, disarm_authority_gate};
+use agentmux::relay::test_hooks::{
+    AuthorityGate, arm_authority_gate, disarm_authority_gate,
+};
 
 #[test]
 fn concurrent_scope_updates_and_rotation_serialize_on_shared_context() {
-    let temporary = TempDir::new().expect("temporary directory");
+    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_race";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let operators: Vec<String> = (1..=4)
         .map(|index| format!("raceop{index}@GLOBAL"))
         .collect();
     write_multi_operator_users(&configuration_roots, &operators);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "raced@RELAY";
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context =
+        shared_serve_context(&configuration_roots, &state_root, catalog);
 
     // Seed the peer serially so every racer starts from a known record.
     let seed = operator_request_on_context(
@@ -90,17 +95,23 @@ fn concurrent_scope_updates_and_rotation_serialize_on_shared_context() {
 
 #[test]
 fn admitted_send_survives_narrowing_without_teardown() {
-    let temporary = TempDir::new().expect("temporary directory");
+    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_admitted";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let operator_id = global_user_id(bundle_name);
-    write_multi_operator_users(&configuration_roots, std::slice::from_ref(&operator_id));
+    write_multi_operator_users(
+        &configuration_roots,
+        std::slice::from_ref(&operator_id),
+    );
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "admitted@RELAY";
     let target = format!("alpha@{bundle_name}");
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context =
+        shared_serve_context(&configuration_roots, &state_root, catalog);
 
     let seed = operator_request_on_context(
         &context,
@@ -112,11 +123,13 @@ fn admitted_send_survives_narrowing_without_teardown() {
         .as_str()
         .expect("seed psk")
         .to_string();
-    let hash_before = store_record(&bundle_paths, peer_id)["credential_hash"].clone();
+    let hash_before =
+        store_record(&bundle_paths, peer_id)["credential_hash"].clone();
 
     // One peer connection for the whole sequence: admission, narrowing, and
     // re-widening all happen without reconnecting or rotating.
-    let (mut client, join) = spawn_relay_connection_on_context(Arc::clone(&context));
+    let (mut client, join) =
+        spawn_relay_connection_on_context(Arc::clone(&context));
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -201,16 +214,22 @@ fn scope_update_progresses_while_a_principal_probe_is_stalled() {
     // socket paths must fit sun_path (104 bytes on macOS), which
     // runner-controlled TMPDIR layouts can exceed, failing the bind with
     // "file name too long" for reasons unrelated to the behavior under test.
-    let temporary = TempDir::new().expect("temporary directory");
+    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_stall";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let operator_id = global_user_id(bundle_name);
-    write_multi_operator_users(&configuration_roots, std::slice::from_ref(&operator_id));
+    write_multi_operator_users(
+        &configuration_roots,
+        std::slice::from_ref(&operator_id),
+    );
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "stalled@RELAY";
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context =
+        shared_serve_context(&configuration_roots, &state_root, catalog);
 
     let seed = operator_request_on_context(
         &context,
@@ -230,7 +249,8 @@ fn scope_update_progresses_while_a_principal_probe_is_stalled() {
 
     // Start principal discovery on a shared-context peer connection: it will
     // stall inside the readiness probe.
-    let (mut client, join) = spawn_relay_connection_on_context(Arc::clone(&context));
+    let (mut client, join) =
+        spawn_relay_connection_on_context(Arc::clone(&context));
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -339,17 +359,23 @@ fn scope_update_progresses_while_a_principal_probe_is_stalled() {
 /// `shared_serial_narrow_then_send_denies`), which fix each order exactly.
 #[test]
 fn raced_admission_and_narrowing_resolve_safely_smoke() {
-    let temporary = TempDir::new().expect("temporary directory");
+    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_raceorder";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let operator_id = global_user_id(bundle_name);
-    write_multi_operator_users(&configuration_roots, std::slice::from_ref(&operator_id));
+    write_multi_operator_users(
+        &configuration_roots,
+        std::slice::from_ref(&operator_id),
+    );
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "raceorder@RELAY";
     let target = format!("alpha@{bundle_name}");
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context =
+        shared_serve_context(&configuration_roots, &state_root, catalog);
 
     let seed = operator_request_on_context(
         &context,
@@ -373,7 +399,8 @@ fn raced_admission_and_narrowing_resolve_safely_smoke() {
     let send_psk = psk.clone();
     let send_barrier = Arc::clone(&barrier);
     let send_thread = thread::spawn(move || {
-        let (mut client, join) = spawn_relay_connection_on_context(send_context);
+        let (mut client, join) =
+            spawn_relay_connection_on_context(send_context);
         let read_stream = client.try_clone().expect("clone stream");
         let mut reader = BufReader::new(read_stream);
         send_json(
@@ -422,7 +449,7 @@ fn raced_admission_and_narrowing_resolve_safely_smoke() {
     );
     let raced = send_thread.join().expect("join send thread");
     match &raced["response"]["kind"] {
-        Value::String(kind) if kind == "send" => {}
+        Value::String(kind) if kind == "send" => {},
         _ => assert_eq!(
             raced["response"]["error"]["code"], "authorization_forbidden",
             "raced send resolves denied only under the replacement: {raced:?}"
@@ -440,17 +467,23 @@ fn raced_admission_and_narrowing_resolve_safely_smoke() {
 /// all on one peer connection sharing the admin lock with the updater.
 #[test]
 fn shared_serial_narrow_then_send_denies() {
-    let temporary = TempDir::new().expect("temporary directory");
+    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_sharedserial";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let operator_id = global_user_id(bundle_name);
-    write_multi_operator_users(&configuration_roots, std::slice::from_ref(&operator_id));
+    write_multi_operator_users(
+        &configuration_roots,
+        std::slice::from_ref(&operator_id),
+    );
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "sharedserial@RELAY";
     let target = format!("alpha@{bundle_name}");
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context =
+        shared_serve_context(&configuration_roots, &state_root, catalog);
 
     let seed = operator_request_on_context(
         &context,
@@ -463,7 +496,8 @@ fn shared_serial_narrow_then_send_denies() {
         .expect("seed psk")
         .to_string();
 
-    let (mut client, join) = spawn_relay_connection_on_context(Arc::clone(&context));
+    let (mut client, join) =
+        spawn_relay_connection_on_context(Arc::clone(&context));
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -540,17 +574,23 @@ fn shared_serial_narrow_then_send_denies() {
 /// the lock stays free during the pause so the update can commit.
 #[test]
 fn gated_update_before_final_admission_denies() {
-    let temporary = TempDir::new().expect("temporary directory");
+    let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_gate";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let operator_id = global_user_id(bundle_name);
-    write_multi_operator_users(&configuration_roots, std::slice::from_ref(&operator_id));
+    write_multi_operator_users(
+        &configuration_roots,
+        std::slice::from_ref(&operator_id),
+    );
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "gated@RELAY";
     let target = format!("alpha@{bundle_name}");
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context =
+        shared_serve_context(&configuration_roots, &state_root, catalog);
 
     let seed = operator_request_on_context(
         &context,
@@ -574,7 +614,8 @@ fn gated_update_before_final_admission_denies() {
     let send_target = target.clone();
     let send_psk = psk.clone();
     let send_thread = thread::spawn(move || {
-        let (mut client, join) = spawn_relay_connection_on_context(send_context);
+        let (mut client, join) =
+            spawn_relay_connection_on_context(send_context);
         let read_stream = client.try_clone().expect("clone stream");
         let mut reader = BufReader::new(read_stream);
         send_json(

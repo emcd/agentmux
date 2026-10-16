@@ -77,7 +77,10 @@ pub struct FenceOutcome {
 /// distinct on purpose: step 1 asks an executor that *can* observe a flag to
 /// stop, and step 3 is the destructive action for one that cannot. Collapsing
 /// them would force-terminate executors that were about to stop by themselves.
-pub async fn acknowledge_fence<G>(generation: &mut G, observation: Duration) -> FenceOutcome
+pub async fn acknowledge_fence<G>(
+    generation: &mut G,
+    observation: Duration,
+) -> FenceOutcome
 where
     G: GenerationFence + ?Sized,
 {
@@ -130,7 +133,11 @@ impl FenceInProgress {
     /// doing its own work — collecting outcomes above all — and call again.
     /// Observing is a poll rather than a join because no runtime primitive can
     /// force a thread blocked in a syscall to return.
-    pub fn advance<G>(&mut self, generation: &mut G, now: Instant) -> Option<FenceOutcome>
+    pub fn advance<G>(
+        &mut self,
+        generation: &mut G,
+        now: Instant,
+    ) -> Option<FenceOutcome>
     where
         G: GenerationFence + ?Sized,
     {
@@ -240,7 +247,10 @@ mod window_count_tests {
 
         assert!(
             fence
-                .advance(&mut generation, start + observation + observation / 2)
+                .advance(
+                    &mut generation,
+                    start + observation + observation / 2
+                )
                 .is_none(),
             "the second window is still open"
         );

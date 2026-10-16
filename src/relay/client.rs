@@ -14,11 +14,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::runtime::{
-    inscriptions::emit_inscription, paths::session_identity_psk_path, sockets::connect_unix_stream,
+    inscriptions::emit_inscription, paths::session_identity_psk_path,
+    sockets::connect_unix_stream,
 };
 
 use super::identity::SOCKET_TRUST_TOKEN;
-use super::{RelayRequest, RelayResponse, RelayStreamEvent, SCHEMA_VERSION, canonical_session_id};
+use super::{
+    RelayRequest, RelayResponse, RelayStreamEvent, SCHEMA_VERSION,
+    canonical_session_id,
+};
 
 const RELAY_STREAM_HELLO_ACK_TIMEOUT: Duration = Duration::from_secs(2);
 const RELAY_STREAM_RESPONSE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -54,7 +58,8 @@ impl ConnectRetryBackoff {
     fn next_sleep(&mut self, remaining: Duration) -> Duration {
         let nominal = self.nominal_ms;
         let jittered = rand::random_range((nominal / 2)..=nominal);
-        self.nominal_ms = nominal.saturating_mul(2).min(CONNECT_RETRY_BACKOFF_CAP_MS);
+        self.nominal_ms =
+            nominal.saturating_mul(2).min(CONNECT_RETRY_BACKOFF_CAP_MS);
         Duration::from_millis(jittered).min(remaining)
     }
 }
@@ -113,7 +118,11 @@ enum StreamServerFrame {
 impl RelayStreamSession {
     /// Creates a persistent relay stream session descriptor.
     #[must_use]
-    pub fn new(socket_path: PathBuf, namespace: String, session_id: String) -> Self {
+    pub fn new(
+        socket_path: PathBuf,
+        namespace: String,
+        session_id: String,
+    ) -> Self {
         Self {
             socket_path,
             namespace,
@@ -179,7 +188,10 @@ impl RelayStreamSession {
     /// # Errors
     ///
     /// Returns IO errors when relay transport or frame exchange fails.
-    pub fn request(&mut self, request: &RelayRequest) -> Result<RelayResponse, io::Error> {
+    pub fn request(
+        &mut self,
+        request: &RelayRequest,
+    ) -> Result<RelayResponse, io::Error> {
         let (response, _events) = self.request_with_events(request)?;
         Ok(response)
     }
@@ -229,10 +241,9 @@ impl RelayStreamSession {
             _ => Some(namespace.unwrap_or(bound.as_str())),
         };
         let result = {
-            let connection = self
-                .connection
-                .as_mut()
-                .ok_or_else(|| io::Error::other("relay stream connection is missing"))?;
+            let connection = self.connection.as_mut().ok_or_else(|| {
+                io::Error::other("relay stream connection is missing")
+            })?;
             // The write and the read share one result so they share one eviction
             // decision below. A `?` on the write instead would return from this
             // function, past that decision, leaving a dead socket cached with
@@ -247,7 +258,9 @@ impl RelayStreamSession {
                     request,
                 },
             );
-            written.and_then(|()| read_stream_response_frame(connection, request_id.as_str()))
+            written.and_then(|()| {
+                read_stream_response_frame(connection, request_id.as_str())
+            })
         };
         if let Err(source) = &result
             && is_retriable_stream_error(Some(source))
@@ -271,10 +284,9 @@ impl RelayStreamSession {
     pub fn poll_events(&mut self) -> Result<Vec<RelayStreamEvent>, io::Error> {
         self.ensure_connected()?;
         let result = {
-            let connection = self
-                .connection
-                .as_mut()
-                .ok_or_else(|| io::Error::other("relay stream connection is missing"))?;
+            let connection = self.connection.as_mut().ok_or_else(|| {
+                io::Error::other("relay stream connection is missing")
+            })?;
             poll_stream_events_nonblocking(connection)
         };
         if let Err(source) = &result
@@ -310,7 +322,9 @@ impl RelayStreamSession {
         // identical to it. `POLLHUP` separates the two without consuming the
         // frame, and is reported for a fully closed peer even when data remains
         // readable.
-        if poll_socket_revents(fd).is_some_and(|revents| revents & libc::POLLHUP != 0) {
+        if poll_socket_revents(fd)
+            .is_some_and(|revents| revents & libc::POLLHUP != 0)
+        {
             return Liveness::Dead { reason: "peer_hup" };
         }
         let mut buf = [0u8; 1];
@@ -354,38 +368,48 @@ impl RelayStreamSession {
                         }),
                     );
                     self.connection = None;
-                }
+                },
                 Liveness::Error(source) => return Err(source),
             }
         }
-        let deadline = Instant::now() + Duration::from_millis(HELLO_CONFLICT_RETRY_TIMEOUT_MS);
+        let deadline = Instant::now()
+            + Duration::from_millis(HELLO_CONFLICT_RETRY_TIMEOUT_MS);
         let mut backoff = ConnectRetryBackoff::new();
         loop {
             match self.try_connect_once() {
                 Ok(connection) => {
                     self.connection = Some(connection);
                     return Ok(());
-                }
-                Err(ConnectAttemptError::IdentityClaimConflict { message }) => {
-                    let remaining = deadline.saturating_duration_since(Instant::now());
+                },
+                Err(ConnectAttemptError::IdentityClaimConflict {
+                    message,
+                }) => {
+                    let remaining =
+                        deadline.saturating_duration_since(Instant::now());
                     if remaining.is_zero() {
                         // Surface an exhausted conflict retry as a timeout so
                         // `map_relay_request_failure` reports `relay_timeout`
                         // with the conflict message, rather than the opaque
                         // `internal_unexpected_failure` that `io::Error::other`
                         // falls through to.
-                        return Err(io::Error::new(io::ErrorKind::TimedOut, message));
+                        return Err(io::Error::new(
+                            io::ErrorKind::TimedOut,
+                            message,
+                        ));
                     }
                     thread::sleep(backoff.next_sleep(remaining));
-                }
+                },
                 Err(ConnectAttemptError::Io(source)) => {
-                    let remaining = deadline.saturating_duration_since(Instant::now());
-                    if is_retriable_connect_error(&source) && !remaining.is_zero() {
+                    let remaining =
+                        deadline.saturating_duration_since(Instant::now());
+                    if is_retriable_connect_error(&source)
+                        && !remaining.is_zero()
+                    {
                         thread::sleep(backoff.next_sleep(remaining));
                         continue;
                     }
                     return Err(source);
-                }
+                },
             }
         }
     }
@@ -414,15 +438,21 @@ impl RelayStreamSession {
                 } else {
                     trimmed.to_string()
                 }
-            }
+            },
             Err(_) => SOCKET_TRUST_TOKEN.to_string(),
         }
     }
 
-    fn try_connect_once(&self) -> Result<RelayStreamConnection, ConnectAttemptError> {
-        let principal_id = canonical_session_id(self.session_id.as_str(), self.namespace.as_str());
+    fn try_connect_once(
+        &self,
+    ) -> Result<RelayStreamConnection, ConnectAttemptError> {
+        let principal_id = canonical_session_id(
+            self.session_id.as_str(),
+            self.namespace.as_str(),
+        );
         let identity_token = self.read_identity_token();
-        let mut stream = connect_unix_stream(&self.socket_path).map_err(ConnectAttemptError::Io)?;
+        let mut stream = connect_unix_stream(&self.socket_path)
+            .map_err(ConnectAttemptError::Io)?;
         send_stream_client_frame(
             &mut stream,
             StreamClientFrame::Hello {
@@ -432,8 +462,11 @@ impl RelayStreamSession {
             },
         )
         .map_err(ConnectAttemptError::Io)?;
-        let mut reader = BufReader::new(stream.try_clone().map_err(ConnectAttemptError::Io)?);
-        if let Err(source) = stream.set_read_timeout(Some(RELAY_STREAM_HELLO_ACK_TIMEOUT))
+        let mut reader = BufReader::new(
+            stream.try_clone().map_err(ConnectAttemptError::Io)?,
+        );
+        if let Err(source) =
+            stream.set_read_timeout(Some(RELAY_STREAM_HELLO_ACK_TIMEOUT))
             && !is_ignorable_socket_option_error(&source)
         {
             return Err(ConnectAttemptError::Io(source));
@@ -442,7 +475,9 @@ impl RelayStreamSession {
             let mut line = String::new();
             let read = match reader.read_line(&mut line) {
                 Ok(read) => read,
-                Err(source) if source.kind() == io::ErrorKind::Interrupted => continue,
+                Err(source) if source.kind() == io::ErrorKind::Interrupted => {
+                    continue;
+                },
                 Err(source)
                     if source.kind() == io::ErrorKind::TimedOut
                         || source.kind() == io::ErrorKind::WouldBlock =>
@@ -451,7 +486,7 @@ impl RelayStreamSession {
                         io::ErrorKind::TimedOut,
                         "relay hello acknowledgement timed out",
                     )));
-                }
+                },
                 Err(source) => return Err(ConnectAttemptError::Io(source)),
             };
             if read == 0 {
@@ -460,23 +495,27 @@ impl RelayStreamSession {
                     "relay stream closed before hello acknowledgement",
                 )));
             }
-            let server_frame =
-                parse_server_frame(line.trim_end()).map_err(ConnectAttemptError::Io)?;
+            let server_frame = parse_server_frame(line.trim_end())
+                .map_err(ConnectAttemptError::Io)?;
             match server_frame {
                 StreamServerFrame::HelloAck {
                     schema_version,
                     principal_id: acked_principal_id,
                 } => {
                     if schema_version != SCHEMA_VERSION {
-                        return Err(ConnectAttemptError::Io(io::Error::other(format!(
-                            "relay hello acknowledgement schema version mismatch: expected {}, got {}",
-                            SCHEMA_VERSION, schema_version
-                        ))));
+                        return Err(ConnectAttemptError::Io(
+                            io::Error::other(format!(
+                                "relay hello acknowledgement schema version mismatch: expected {}, got {}",
+                                SCHEMA_VERSION, schema_version
+                            )),
+                        ));
                     }
                     if acked_principal_id != principal_id {
-                        return Err(ConnectAttemptError::Io(io::Error::other(
-                            "relay hello acknowledgement identity mismatch",
-                        )));
+                        return Err(ConnectAttemptError::Io(
+                            io::Error::other(
+                                "relay hello acknowledgement identity mismatch",
+                            ),
+                        ));
                     }
                     if let Err(source) = stream.set_read_timeout(None)
                         && !is_ignorable_socket_option_error(&source)
@@ -484,24 +523,34 @@ impl RelayStreamSession {
                         return Err(ConnectAttemptError::Io(source));
                     }
                     return Ok(RelayStreamConnection { stream, reader });
-                }
+                },
                 StreamServerFrame::Response {
                     response: RelayResponse::Error { error },
                     ..
                 } => {
-                    let message =
-                        format!("relay hello rejected [{}]: {}", error.code, error.message);
+                    let message = format!(
+                        "relay hello rejected [{}]: {}",
+                        error.code, error.message
+                    );
                     if error.code == "runtime_identity_claim_conflict" {
-                        return Err(ConnectAttemptError::IdentityClaimConflict { message });
+                        return Err(
+                            ConnectAttemptError::IdentityClaimConflict {
+                                message,
+                            },
+                        );
                     }
-                    return Err(ConnectAttemptError::Io(io::Error::other(message)));
-                }
+                    return Err(ConnectAttemptError::Io(io::Error::other(
+                        message,
+                    )));
+                },
                 StreamServerFrame::Response { response, .. } => {
-                    return Err(ConnectAttemptError::Io(io::Error::other(format!(
-                        "unexpected relay hello response frame: {response:?}",
-                    ))));
-                }
-                StreamServerFrame::Event { .. } => {}
+                    return Err(ConnectAttemptError::Io(io::Error::other(
+                        format!(
+                            "unexpected relay hello response frame: {response:?}",
+                        ),
+                    )));
+                },
+                StreamServerFrame::Event { .. } => {},
             }
         }
     }
@@ -574,13 +623,15 @@ fn read_stream_response_frame(
         let mut line = String::new();
         let read = match connection.reader.read_line(&mut line) {
             Ok(read) => read,
-            Err(source) if source.kind() == io::ErrorKind::Interrupted => continue,
+            Err(source) if source.kind() == io::ErrorKind::Interrupted => {
+                continue;
+            },
             Err(source)
                 if source.kind() == io::ErrorKind::TimedOut
                     || source.kind() == io::ErrorKind::WouldBlock =>
             {
                 continue;
-            }
+            },
             Err(source) => break Err(source),
         };
         if read == 0 {
@@ -592,7 +643,7 @@ fn read_stream_response_frame(
         let parsed = parse_server_frame(line.trim_end())?;
         match parsed {
             StreamServerFrame::Event { event } => events.push(event),
-            StreamServerFrame::HelloAck { .. } => {}
+            StreamServerFrame::HelloAck { .. } => {},
             StreamServerFrame::Response {
                 request_id: frame_request_id,
                 response,
@@ -600,7 +651,7 @@ fn read_stream_response_frame(
                 if frame_request_id.as_deref() == Some(request_id) {
                     break Ok((response, events));
                 }
-            }
+            },
         }
     };
     let reset = connection.stream.set_read_timeout(None);
@@ -626,15 +677,19 @@ fn poll_stream_events_nonblocking(
                     io::ErrorKind::UnexpectedEof,
                     "relay stream closed while polling events",
                 ));
-            }
+            },
             Ok(_) => {
                 let frame = parse_server_frame(line.trim_end())?;
                 if let StreamServerFrame::Event { event } = frame {
                     events.push(event);
                 }
-            }
-            Err(source) if source.kind() == io::ErrorKind::WouldBlock => break Ok(()),
-            Err(source) if source.kind() == io::ErrorKind::Interrupted => continue,
+            },
+            Err(source) if source.kind() == io::ErrorKind::WouldBlock => {
+                break Ok(());
+            },
+            Err(source) if source.kind() == io::ErrorKind::Interrupted => {
+                continue;
+            },
             Err(source) => break Err(source),
         }
     };

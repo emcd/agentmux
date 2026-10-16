@@ -16,8 +16,8 @@ use agentmux::{
 use tempfile::TempDir;
 
 use crate::support::relay_delivery::{
-    TmuxServerGuard, spawn_session, tmux_available, tmux_command, wait_for_pane_contains,
-    write_bundle_configuration,
+    TmuxServerGuard, spawn_session, tmux_available, tmux_command,
+    wait_for_pane_contains, write_bundle_configuration,
 };
 
 /// Counts inscriptions of one event in the process log.
@@ -36,7 +36,9 @@ fn await_inscription(path: &Path, event: &str, budget: Duration) -> String {
     let started = std::time::Instant::now();
     loop {
         let log = std::fs::read_to_string(path).unwrap_or_default();
-        if let Some(line) = log.lines().find(|line| line.contains(needle.as_str())) {
+        if let Some(line) =
+            log.lines().find(|line| line.contains(needle.as_str()))
+        {
             return line.to_string();
         }
         assert!(
@@ -71,7 +73,8 @@ fn await_inscription(path: &Path, event: &str, budget: Duration) -> String {
 /// because an in-test discriminator needs an observer-state seam that does not
 /// exist yet.
 #[test]
-fn a_transient_unreachability_resolves_nothing_and_the_member_still_delivers() {
+fn a_transient_unreachability_resolves_nothing_and_the_member_still_delivers()
+{
     use agentmux::relay::{DeliveryConfiguration, configure_delivery};
 
     if !tmux_available() {
@@ -81,7 +84,9 @@ fn a_transient_unreachability_resolves_nothing_and_the_member_still_delivers() {
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     // Long enough that this test cannot reach it. The point is that the member
     // is held by an unreachability that ends *before* the threshold, so a dwell
@@ -92,9 +97,13 @@ fn a_transient_unreachability_resolves_nothing_and_the_member_still_delivers() {
     });
 
     let bundle_name = "party";
-    let config_root =
-        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        bundle_name,
+        &["alpha", "bravo"],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
 
     // No tmux server yet: the target is unreachable from the first observation.
@@ -142,8 +151,8 @@ fn a_transient_unreachability_resolves_nothing_and_the_member_still_delivers() {
         "relay.send.async.completed",
         Duration::from_millis(15_000),
     );
-    let record: serde_json::Value =
-        serde_json::from_str(completed.as_str()).expect("completed inscription is json");
+    let record: serde_json::Value = serde_json::from_str(completed.as_str())
+        .expect("completed inscription is json");
     assert_eq!(
         record["details"]["outcome"].as_str(),
         Some("delivered"),
@@ -163,7 +172,9 @@ fn completions_for(path: &Path, message_id: &str) -> usize {
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).ok()
+        })
         .filter(|record| {
             record["event"] == "relay.send.async.completed"
                 && record["details"]["message_id"] == message_id
@@ -178,7 +189,9 @@ fn reason_code_for(path: &Path, message_id: &str) -> Option<String> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).ok()
+        })
         .find(|record| {
             record["event"] == "relay.send.async.completed"
                 && record["details"]["message_id"] == message_id
@@ -195,12 +208,16 @@ fn outcome_for(path: &Path, message_id: &str) -> Option<String> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
         .lines()
-        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).ok()
+        })
         .find(|record| {
             record["event"] == "relay.send.async.completed"
                 && record["details"]["message_id"] == message_id
         })
-        .and_then(|record| record["details"]["outcome"].as_str().map(str::to_string))
+        .and_then(|record| {
+            record["details"]["outcome"].as_str().map(str::to_string)
+        })
 }
 
 /// Queues one member for `bravo` and returns its message id.
@@ -280,7 +297,9 @@ fn a_target_flapping_across_the_dwell_resolves_every_member_exactly_once() {
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     // Long enough that the first pair cannot reach it before the server appears,
     // short enough that the third and fourth reach it inside the test.
@@ -290,9 +309,13 @@ fn a_target_flapping_across_the_dwell_resolves_every_member_exactly_once() {
     });
 
     let bundle_name = "party";
-    let config_root =
-        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        bundle_name,
+        &["alpha", "bravo"],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -319,7 +342,11 @@ fn a_target_flapping_across_the_dwell_resolves_every_member_exactly_once() {
         send_to_bravo(&config_root, &paths.runtime_directory, "FLAP-C"),
         send_to_bravo(&config_root, &paths.runtime_directory, "FLAP-D"),
     ];
-    await_all_resolved(&inscriptions, &past_dwell, Duration::from_millis(15_000));
+    await_all_resolved(
+        &inscriptions,
+        &past_dwell,
+        Duration::from_millis(15_000),
+    );
     for message_id in &past_dwell {
         assert_eq!(
             outcome_for(&inscriptions, message_id.as_str()).as_deref(),
@@ -343,7 +370,8 @@ fn a_target_flapping_across_the_dwell_resolves_every_member_exactly_once() {
     // near the threshold has members bounced that could have been delivered.
     spawn_session(&paths.tmux_socket, "bravo", "exec sleep 45");
     std::thread::sleep(Duration::from_millis(400));
-    let after_recovery = send_to_bravo(&config_root, &paths.runtime_directory, "FLAP-E");
+    let after_recovery =
+        send_to_bravo(&config_root, &paths.runtime_directory, "FLAP-E");
     await_all_resolved(
         &inscriptions,
         std::slice::from_ref(&after_recovery),
@@ -409,13 +437,17 @@ fn look_survives_the_health_gate_that_holds_raww_on_an_unreachable_target() {
     use agentmux::relay::{DeliveryConfiguration, configure_delivery};
 
     if !tmux_available() {
-        eprintln!("skipping look-versus-raww gating test because tmux is unavailable");
+        eprintln!(
+            "skipping look-versus-raww gating test because tmux is unavailable"
+        );
         return;
     }
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     // Short enough that the raww half resolves inside the test, which is what
     // establishes the health axis reads `Unreachable` before the look is issued.
@@ -425,9 +457,13 @@ fn look_survives_the_health_gate_that_holds_raww_on_an_unreachable_target() {
     });
 
     let bundle_name = "party";
-    let config_root =
-        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        bundle_name,
+        &["alpha", "bravo"],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
 
     // No tmux server is ever created here: the target is unreachable from the
@@ -456,8 +492,8 @@ fn look_survives_the_health_gate_that_holds_raww_on_an_unreachable_target() {
         "relay.send.async.completed",
         Duration::from_millis(15_000),
     );
-    let record: serde_json::Value =
-        serde_json::from_str(completed.as_str()).expect("completed inscription is json");
+    let record: serde_json::Value = serde_json::from_str(completed.as_str())
+        .expect("completed inscription is json");
     assert_eq!(
         record["details"]["reason_code"].as_str(),
         Some("delivery_target_unreachable"),

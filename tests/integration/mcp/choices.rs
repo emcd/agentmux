@@ -14,8 +14,8 @@ async fn list_decisions_returns_pending_requests_from_relay() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("choices_list") => json!({
                     "kind": "choices_list",
                     "schema_version": "1",
@@ -54,8 +54,8 @@ async fn list_decisions_returns_pending_requests_from_relay() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -88,8 +88,8 @@ async fn choose_forwards_decision_and_returns_relay_response() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("choices_pick") => json!({
                     "kind": "choices_pick",
                     "schema_version": "1",
@@ -108,8 +108,8 @@ async fn choose_forwards_decision_and_returns_relay_response() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -153,8 +153,8 @@ async fn choose_supports_cancelled_outcome_without_option_id() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("choices_pick") => json!({
                     "kind": "choices_pick",
                     "schema_version": "1",
@@ -174,8 +174,8 @@ async fn choose_supports_cancelled_outcome_without_option_id() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -210,7 +210,11 @@ async fn choose_rejects_decider_identity_fields_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive choices_pick for invalid parameters")),
+        Arc::new(|_| {
+            panic!(
+                "relay should not receive choices_pick for invalid parameters"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -236,7 +240,9 @@ async fn choose_rejects_unknown_fields() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive a request for invalid parameters")),
+        Arc::new(|_| {
+            panic!("relay should not receive a request for invalid parameters")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -262,7 +268,11 @@ async fn choose_rejects_selected_without_option_id() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive choices_pick for invalid parameters")),
+        Arc::new(|_| {
+            panic!(
+                "relay should not receive choices_pick for invalid parameters"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -284,7 +294,11 @@ async fn choose_rejects_cancelled_with_option_id() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive choices_pick for invalid parameters")),
+        Arc::new(|_| {
+            panic!(
+                "relay should not receive choices_pick for invalid parameters"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -313,11 +327,16 @@ async fn list_rejects_unknown_command_selector() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive a request for invalid command")),
+        Arc::new(|_| {
+            panic!("relay should not receive a request for invalid command")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let arguments = Map::from_iter([("command".to_string(), Value::String("garbage".to_string()))]);
+    let arguments = Map::from_iter([(
+        "command".to_string(),
+        Value::String("garbage".to_string()),
+    )]);
     let response = harness.call_tool(2, "list", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_invalid_params"));
@@ -330,7 +349,9 @@ async fn list_decisions_rejects_unknown_arg_fields() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive choices_list for invalid args")),
+        Arc::new(|_| {
+            panic!("relay should not receive choices_list for invalid args")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -357,8 +378,8 @@ async fn list_decisions_preserves_authorization_forbidden_choose_capability() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("choices_list") => json!({
                     "kind": "error",
                     "error": {
@@ -379,8 +400,8 @@ async fn list_decisions_preserves_authorization_forbidden_choose_capability() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -395,8 +416,8 @@ async fn choose_preserves_already_resolved_code_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("choices_pick") => json!({
                     "kind": "error",
                     "error": {
@@ -414,8 +435,8 @@ async fn choose_preserves_already_resolved_code_from_relay() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -442,8 +463,8 @@ async fn choose_preserves_authorization_forbidden_choose_capability() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("choices_pick") => json!({
                     "kind": "error",
                     "error": {
@@ -464,8 +485,8 @@ async fn choose_preserves_authorization_forbidden_choose_capability() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 

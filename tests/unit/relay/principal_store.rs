@@ -11,7 +11,10 @@ use tempfile::TempDir;
 /// Writes a principal-store file with one record per supplied
 /// `(principal_id, expires_at)` pair and returns the resolved state root. A
 /// `None` expiry is serialized as an absent field (never-expires).
-fn write_store(temporary: &TempDir, records: &[(&str, Option<&str>)]) -> std::path::PathBuf {
+fn write_store(
+    temporary: &TempDir,
+    records: &[(&str, Option<&str>)],
+) -> std::path::PathBuf {
     let state_root = temporary.path().join("state");
     let store_path = principal_store_path(&state_root);
     std::fs::create_dir_all(store_path.parent().expect("store parent"))
@@ -38,8 +41,10 @@ fn write_store(temporary: &TempDir, records: &[(&str, Option<&str>)]) -> std::pa
 }
 
 fn registered_ids(state_root: &std::path::Path) -> Vec<String> {
-    let raw = std::fs::read_to_string(principal_store_path(state_root)).expect("read store");
-    let value: serde_json::Value = serde_json::from_str(&raw).expect("decode store");
+    let raw = std::fs::read_to_string(principal_store_path(state_root))
+        .expect("read store");
+    let value: serde_json::Value =
+        serde_json::from_str(&raw).expect("decode store");
     let mut ids: Vec<String> = value["principals"]
         .as_array()
         .expect("principals array")
@@ -68,7 +73,8 @@ fn prune_drops_past_and_unparseable_expiries_and_keeps_future_and_absent() {
         ],
     );
 
-    let pruned = prune_principal_store(&state_root).expect("prune principal store");
+    let pruned =
+        prune_principal_store(&state_root).expect("prune principal store");
 
     assert_eq!(pruned, 2, "past + unparseable records must be pruned");
     assert_eq!(
@@ -91,7 +97,8 @@ fn prune_leaves_file_untouched_when_nothing_expired() {
     let store_path = principal_store_path(&state_root);
     let before = std::fs::read(&store_path).expect("read store before prune");
 
-    let pruned = prune_principal_store(&state_root).expect("prune principal store");
+    let pruned =
+        prune_principal_store(&state_root).expect("prune principal store");
 
     assert_eq!(pruned, 0, "no records are expired");
     let after = std::fs::read(&store_path).expect("read store after prune");
@@ -106,7 +113,8 @@ fn prune_on_missing_store_is_a_noop() {
     let temporary = TempDir::new().expect("temporary directory");
     let state_root = temporary.path().join("state");
 
-    let pruned = prune_principal_store(&state_root).expect("prune missing store");
+    let pruned =
+        prune_principal_store(&state_root).expect("prune missing store");
 
     assert_eq!(pruned, 0, "a missing store prunes nothing");
     assert!(

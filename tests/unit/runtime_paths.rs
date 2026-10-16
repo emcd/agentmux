@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
 use agentmux::runtime::paths::{
-    BundleRuntimePaths, ConfigurationRootSource, RelayRuntimePaths, RuntimeRootOverrides,
-    RuntimeRoots, ensure_bundle_runtime_directory, tmux_socket_path_for_runtime_directory,
+    BundleRuntimePaths, ConfigurationRootSource, RelayRuntimePaths,
+    RuntimeRootOverrides, RuntimeRoots, ensure_bundle_runtime_directory,
+    tmux_socket_path_for_runtime_directory,
 };
 use tempfile::TempDir;
 
@@ -36,7 +37,8 @@ fn environment_tier_selects_the_state_root() {
         std::env::set_var("XDG_STATE_HOME", "/xdg");
     }
 
-    let roots = RuntimeRoots::resolve(&unnamed_state_overrides()).expect("roots should resolve");
+    let roots = RuntimeRoots::resolve(&unnamed_state_overrides())
+        .expect("roots should resolve");
 
     assert_eq!(roots.state_root, PathBuf::from("/from-environment"));
     assert_eq!(
@@ -55,7 +57,8 @@ fn explicit_state_directory_outranks_the_environment_tier() {
 
     let mut overrides = unnamed_state_overrides();
     overrides.state_root = Some("/from-flag".into());
-    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+    let roots =
+        RuntimeRoots::resolve(&overrides).expect("roots should resolve");
 
     assert_eq!(roots.state_root, PathBuf::from("/from-flag"));
 }
@@ -71,7 +74,8 @@ fn a_blank_state_environment_value_is_absent_rather_than_empty() {
         std::env::set_var("XDG_STATE_HOME", "/xdg");
     }
 
-    let roots = RuntimeRoots::resolve(&unnamed_state_overrides()).expect("roots should resolve");
+    let roots = RuntimeRoots::resolve(&unnamed_state_overrides())
+        .expect("roots should resolve");
 
     assert_eq!(roots.state_root, PathBuf::from("/xdg/agentmux"));
 }
@@ -101,14 +105,16 @@ fn a_relative_state_root_normalizes_against_the_working_directory() {
     let mut overrides = unnamed_state_overrides();
     overrides.state_root = Some("relative-state".into());
 
-    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+    let roots =
+        RuntimeRoots::resolve(&overrides).expect("roots should resolve");
 
     assert!(
         roots.state_root.is_absolute(),
         "state root must be absolute, got {}",
         roots.state_root.display()
     );
-    let working_directory = std::env::current_dir().expect("working directory");
+    let working_directory =
+        std::env::current_dir().expect("working directory");
     assert_eq!(roots.state_root, working_directory.join("relative-state"));
     assert_eq!(
         roots.inscriptions_root,
@@ -126,11 +132,14 @@ fn a_relative_configuration_layer_normalizes_against_the_working_directory() {
     // the relay resolved.
     clear_configuration_environment();
     let mut overrides = unnamed_configuration_overrides();
-    overrides.configuration_layers = vec!["relative-config".into(), "also-relative".into()];
+    overrides.configuration_layers =
+        vec!["relative-config".into(), "also-relative".into()];
 
-    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+    let roots =
+        RuntimeRoots::resolve(&overrides).expect("roots should resolve");
 
-    let working_directory = std::env::current_dir().expect("working directory");
+    let working_directory =
+        std::env::current_dir().expect("working directory");
     let layers = roots.configuration_roots.layers();
     assert_eq!(
         layers,
@@ -158,7 +167,8 @@ fn absolutizing_a_configuration_layer_does_not_resolve_symlinks() {
     let mut overrides = unnamed_configuration_overrides();
     overrides.configuration_layers = vec![link.clone()];
 
-    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+    let roots =
+        RuntimeRoots::resolve(&overrides).expect("roots should resolve");
 
     assert_eq!(
         roots.configuration_roots.layers(),
@@ -177,7 +187,8 @@ fn build_profile_does_not_change_the_resolved_roots() {
         std::env::set_var("XDG_STATE_HOME", "/xdg");
     }
 
-    let roots = RuntimeRoots::resolve(&unnamed_state_overrides()).expect("roots should resolve");
+    let roots = RuntimeRoots::resolve(&unnamed_state_overrides())
+        .expect("roots should resolve");
 
     assert_eq!(roots.state_root, PathBuf::from("/xdg/agentmux"));
     assert_eq!(
@@ -188,8 +199,11 @@ fn build_profile_does_not_change_the_resolved_roots() {
 
 #[test]
 fn resolves_bundle_runtime_paths() {
-    let resolved = BundleRuntimePaths::resolve(std::path::Path::new("/state/root"), "party-alpha")
-        .expect("bundle should resolve");
+    let resolved = BundleRuntimePaths::resolve(
+        std::path::Path::new("/state/root"),
+        "party-alpha",
+    )
+    .expect("bundle should resolve");
     assert_eq!(
         resolved.runtime_directory,
         std::path::Path::new("/state/root/bundles/party-alpha")
@@ -202,7 +216,8 @@ fn resolves_bundle_runtime_paths() {
 
 #[test]
 fn resolves_relay_runtime_paths_at_state_root() {
-    let resolved = RelayRuntimePaths::resolve(std::path::Path::new("/state/root"));
+    let resolved =
+        RelayRuntimePaths::resolve(std::path::Path::new("/state/root"));
     assert_eq!(
         resolved.relay_socket,
         std::path::Path::new("/state/root/relay.sock")
@@ -223,8 +238,11 @@ fn resolves_relay_runtime_paths_at_state_root() {
 
 #[test]
 fn rejects_invalid_bundle_name() {
-    let err = BundleRuntimePaths::resolve(std::path::Path::new("/state/root"), "../party")
-        .expect_err("bundle should fail");
+    let err = BundleRuntimePaths::resolve(
+        std::path::Path::new("/state/root"),
+        "../party",
+    )
+    .expect_err("bundle should fail");
     assert!(
         err.to_string().contains("invalid bundle name"),
         "unexpected error: {err}"
@@ -238,7 +256,8 @@ fn resolves_roots_from_explicit_overrides() {
         state_root: Some("/state".into()),
         inscriptions_root: Some("/inscriptions".into()),
     };
-    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+    let roots =
+        RuntimeRoots::resolve(&overrides).expect("roots should resolve");
     assert_eq!(
         roots.configuration_roots.layers(),
         [PathBuf::from("/configuration")]
@@ -257,15 +276,18 @@ fn resolves_roots_from_explicit_overrides() {
 #[test]
 fn creates_bundle_runtime_directory() {
     let temporary = TempDir::new().expect("temporary");
-    let paths = BundleRuntimePaths::resolve(temporary.path(), "party-alpha").expect("paths");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), "party-alpha")
+        .expect("paths");
     ensure_bundle_runtime_directory(&paths).expect("directory");
     assert!(paths.runtime_directory.is_dir());
 }
 
 #[test]
 fn derives_tmux_socket_from_runtime_directory() {
-    let runtime_directory = std::path::Path::new("/state/root/bundles/party-alpha");
-    let tmux_socket = tmux_socket_path_for_runtime_directory(runtime_directory);
+    let runtime_directory =
+        std::path::Path::new("/state/root/bundles/party-alpha");
+    let tmux_socket =
+        tmux_socket_path_for_runtime_directory(runtime_directory);
     assert_eq!(
         tmux_socket,
         std::path::Path::new("/state/root/bundles/party-alpha/tmux.sock")
@@ -298,11 +320,14 @@ fn clear_configuration_environment() {
 fn configuration_root_resolves_from_environment_when_no_flag() {
     clear_configuration_environment();
     unsafe {
-        std::env::set_var("AGENTMUX_CONFIGURATION_DIRECTORY", "/from-environment");
+        std::env::set_var(
+            "AGENTMUX_CONFIGURATION_DIRECTORY",
+            "/from-environment",
+        );
     }
 
-    let roots =
-        RuntimeRoots::resolve(&unnamed_configuration_overrides()).expect("roots should resolve");
+    let roots = RuntimeRoots::resolve(&unnamed_configuration_overrides())
+        .expect("roots should resolve");
     assert_eq!(
         roots.configuration_roots.layers(),
         [PathBuf::from("/from-environment")]
@@ -326,7 +351,8 @@ fn a_supplied_layer_list_never_reaches_the_xdg_default() {
 
     let mut overrides = unnamed_configuration_overrides();
     overrides.configuration_layers = vec!["/typo'd".into()];
-    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+    let roots =
+        RuntimeRoots::resolve(&overrides).expect("roots should resolve");
 
     assert_eq!(
         roots.configuration_roots.layers(),
@@ -343,8 +369,8 @@ fn a_supplied_environment_list_never_reaches_the_xdg_default() {
         std::env::set_var("XDG_CONFIG_HOME", "/xdg");
     }
 
-    let roots =
-        RuntimeRoots::resolve(&unnamed_configuration_overrides()).expect("roots should resolve");
+    let roots = RuntimeRoots::resolve(&unnamed_configuration_overrides())
+        .expect("roots should resolve");
 
     assert_eq!(
         roots.configuration_roots.layers(),
@@ -363,7 +389,9 @@ fn an_empty_layer_element_is_rejected_at_resolution() {
     }
 
     let error = RuntimeRoots::resolve(&unnamed_configuration_overrides())
-        .expect_err("an empty element must fault rather than contribute a layer");
+        .expect_err(
+            "an empty element must fault rather than contribute a layer",
+        );
     assert!(
         error
             .to_string()
@@ -376,12 +404,16 @@ fn an_empty_layer_element_is_rejected_at_resolution() {
 fn explicit_flag_outranks_environment() {
     clear_configuration_environment();
     unsafe {
-        std::env::set_var("AGENTMUX_CONFIGURATION_DIRECTORY", "/from-environment");
+        std::env::set_var(
+            "AGENTMUX_CONFIGURATION_DIRECTORY",
+            "/from-environment",
+        );
     }
 
     let mut overrides = unnamed_configuration_overrides();
     overrides.configuration_layers = vec!["/from-flag".into()];
-    let roots = RuntimeRoots::resolve(&overrides).expect("roots should resolve");
+    let roots =
+        RuntimeRoots::resolve(&overrides).expect("roots should resolve");
     assert_eq!(
         roots.configuration_roots.layers(),
         [PathBuf::from("/from-flag")]

@@ -92,12 +92,15 @@ async fn help_list_query_returns_meta_tool_command_catalog() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn help_list_catalog_and_discovery_schemas_advertise_relay_and_namespace() {
+async fn help_list_catalog_and_discovery_schemas_advertise_relay_and_namespace()
+ {
     let runtime = TestRuntime::create();
     let mut harness = McpHarness::spawn(&runtime).await;
 
     // The list catalog advertises the discovery commands.
-    let catalog = decode_tool_payload(&harness.call_tool(2, "help", help_call(Some("list"))).await);
+    let catalog = decode_tool_payload(
+        &harness.call_tool(2, "help", help_call(Some("list"))).await,
+    );
     let commands = catalog["commands"].as_array().expect("commands array");
     for expected in ["list.namespaces", "list.relays"] {
         assert!(
@@ -164,7 +167,9 @@ async fn help_choose_query_returns_args_schema() {
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["command"], "choose");
-    assert!(payload["args_schema"]["properties"]["choice_request_id"].is_object());
+    assert!(
+        payload["args_schema"]["properties"]["choice_request_id"].is_object()
+    );
     assert!(payload["args_schema"]["properties"]["outcome"].is_object());
     assert!(payload["args_schema"]["properties"]["option_id"].is_object());
     assert_eq!(payload["invoke"]["tool"], "choose");
@@ -214,11 +219,14 @@ async fn help_look_query_documents_relay_qualified_limitation() {
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["command"], "look");
-    assert!(payload["args_schema"]["properties"]["target_session"].is_object());
-    let target_description = payload["args_schema"]["properties"]["target_session"]
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    assert!(
+        payload["args_schema"]["properties"]["target_session"].is_object()
+    );
+    let target_description =
+        payload["args_schema"]["properties"]["target_session"]
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
     assert!(
         target_description.contains("!<relay>")
             && target_description.contains("runtime_cross_relay_unsupported"),
@@ -242,13 +250,16 @@ async fn help_raww_query_returns_args_schema() {
     let payload = decode_tool_payload(&response);
 
     assert_eq!(payload["command"], "raww");
-    assert!(payload["args_schema"]["properties"]["target_session"].is_object());
+    assert!(
+        payload["args_schema"]["properties"]["target_session"].is_object()
+    );
     assert!(payload["args_schema"]["properties"]["text"].is_object());
     assert!(payload["args_schema"]["properties"]["no_enter"].is_object());
-    let target_description = payload["args_schema"]["properties"]["target_session"]
-        .get("description")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
+    let target_description =
+        payload["args_schema"]["properties"]["target_session"]
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
     assert!(
         target_description.contains("!<relay>")
             && target_description.contains("qa-partner@agentmux!rnd-qa"),
@@ -272,7 +283,10 @@ async fn help_rejects_unknown_fields() {
         .call_tool(
             2,
             "help",
-            Map::from_iter([("unexpected".to_string(), Value::String("value".to_string()))]),
+            Map::from_iter([(
+                "unexpected".to_string(),
+                Value::String("value".to_string()),
+            )]),
         )
         .await;
 

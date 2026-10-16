@@ -70,7 +70,8 @@ fn host_relay_no_watch_flag_disables_runtime_reconcile() {
     // Give a watcher (if one existed) ample time to reconcile, then confirm the
     // bundle is still unknown: no reconciliation happened.
     thread::sleep(WATCHER_RECONCILE_BUDGET);
-    let frame = relay_hello_first_frame(&state_root, "b@bravo", "socket-trust");
+    let frame =
+        relay_hello_first_frame(&state_root, "b@bravo", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child
@@ -107,7 +108,8 @@ fn host_relay_watch_bundles_false_from_relay_toml_disables_reconcile() {
         &["a"],
         Some(true),
     );
-    fs::write(config_root.join("relay.toml"), "watch-bundles = false\n").expect("write relay.toml");
+    fs::write(config_root.join("relay.toml"), "watch-bundles = false\n")
+        .expect("write relay.toml");
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
 
@@ -141,7 +143,8 @@ fn host_relay_watch_bundles_false_from_relay_toml_disables_reconcile() {
     // Give a watcher (if one existed) ample time to reconcile, then confirm the
     // bundle is still unknown: no reconciliation happened.
     thread::sleep(WATCHER_RECONCILE_BUDGET);
-    let frame = relay_hello_first_frame(&state_root, "b@bravo", "socket-trust");
+    let frame =
+        relay_hello_first_frame(&state_root, "b@bravo", "socket-trust");
 
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child

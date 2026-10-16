@@ -47,9 +47,9 @@ use tokio::sync::mpsc;
 use crate::configuration::BundleMember;
 use crate::configuration::TermProtocol;
 use crate::transports::{
-    DeliveryExecutorContext, GenerationFence, OutputView, StartupContext, Transport,
-    TransportError, TransportHealth, TransportReadiness, TransportStatus, UnreachableSince,
-    WorkerReadinessState,
+    DeliveryExecutorContext, GenerationFence, OutputView, StartupContext,
+    Transport, TransportError, TransportHealth, TransportReadiness,
+    TransportStatus, UnreachableSince, WorkerReadinessState,
 };
 
 /// Mirrors the worker readiness state into the relay's global registry.
@@ -90,7 +90,8 @@ const STARTUP_CLEANUP_JOIN_BOUND: Duration = Duration::from_secs(2);
 const STARTUP_CLEANUP_POLL: Duration = Duration::from_millis(10);
 /// Agentmux-pty version string returned by the `on_xtversion`
 /// callback. The relay-tui can display it for the operator.
-const PTY_VERSION_STRING: &str = concat!("agentmux-pty ", env!("CARGO_PKG_VERSION"));
+const PTY_VERSION_STRING: &str =
+    concat!("agentmux-pty ", env!("CARGO_PKG_VERSION"));
 
 type PtyChildHandle = Arc<Mutex<Box<dyn portable_pty::Child + Send + Sync>>>;
 
@@ -104,7 +105,8 @@ pub struct PtyTargetConfiguration {
     /// optional idle cursor column). Mirrors the
     /// `prompt_readiness` field of the validated
     /// `config::types::PtyTargetConfiguration`.
-    pub prompt_readiness: Option<crate::configuration::PromptReadinessTemplate>,
+    pub prompt_readiness:
+        Option<crate::configuration::PromptReadinessTemplate>,
     pub cols: u16,
     pub rows: u16,
     /// Optional working directory. When set, the worker `chdir`s
@@ -158,7 +160,9 @@ pub struct PtyTransport {
     /// Latch for the health axis; see [`Transport::health`].
     unreachable_since: Arc<UnreachableSince>,
     /// Live handle to the spawned child. `shutdown` kills and reaps.
-    child: Option<Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>>,
+    child: Option<
+        Arc<std::sync::Mutex<Box<dyn portable_pty::Child + Send + Sync>>>,
+    >,
     /// Per-transport readiness state.
     readiness: Arc<Mutex<WorkerReadinessState>>,
     /// Optional relay-provided closure that mirrors per-turn readiness
@@ -213,7 +217,7 @@ impl PtyTransport {
                         pr.input_idle_cursor_column
                             .and_then(|c| u16::try_from(c).ok()),
                     )
-                }
+                },
                 None => (None, 3, None),
             };
         let shared = PtyShared {
@@ -242,7 +246,9 @@ impl PtyTransport {
             worker_handle: None,
             reader_handle: None,
             child: None,
-            readiness: Arc::new(Mutex::new(WorkerReadinessState::Initializing)),
+            readiness: Arc::new(Mutex::new(
+                WorkerReadinessState::Initializing,
+            )),
             mirror_state,
         }
     }
@@ -297,7 +303,9 @@ impl PtyTransport {
     /// both the cross-thread and the worker-local probe see it.
     pub fn with_prompt_readiness(
         &mut self,
-        prompt_readiness: Option<crate::configuration::PromptReadinessTemplate>,
+        prompt_readiness: Option<
+            crate::configuration::PromptReadinessTemplate,
+        >,
     ) {
         let (prompt_regex, prompt_inspect_lines, prompt_idle_column) =
             match prompt_readiness.as_ref() {
@@ -310,7 +318,7 @@ impl PtyTransport {
                         pr.input_idle_cursor_column
                             .and_then(|c| u16::try_from(c).ok()),
                     )
-                }
+                },
                 None => (None, 3, None),
             };
         self.shared.config.prompt_regex = prompt_regex;
@@ -380,7 +388,10 @@ impl GenerationFence for PtyTransport {
 }
 
 impl Transport for PtyTransport {
-    fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
+    fn startup(
+        &mut self,
+        context: StartupContext,
+    ) -> Result<TransportStatus, TransportError> {
         // Re-init is gated by the `started` flag + readiness state.
         //
         // `started == false` is the never-attempted constructor
@@ -403,18 +414,20 @@ impl Transport for PtyTransport {
         // until a teardown-then-restart path lands.
         if self.started {
             match self.readiness() {
-                WorkerReadinessState::Available | WorkerReadinessState::Busy => {
+                WorkerReadinessState::Available
+                | WorkerReadinessState::Busy => {
                     return Ok(TransportStatus {
                         readiness: TransportReadiness::Ready,
                     });
-                }
+                },
                 WorkerReadinessState::Initializing => {
                     return Err(TransportError {
                         code: "pty_startup_in_progress".to_string(),
-                        reason: "Pty transport startup is already in progress".to_string(),
+                        reason: "Pty transport startup is already in progress"
+                            .to_string(),
                         details: None,
                     });
-                }
+                },
                 WorkerReadinessState::Unavailable => {
                     return Err(TransportError {
                         code: "pty_unavailable_restart_unsupported".to_string(),
@@ -424,7 +437,7 @@ impl Transport for PtyTransport {
                                 .to_string(),
                         details: None,
                     });
-                }
+                },
                 WorkerReadinessState::Recovering => {
                     return Err(TransportError {
                         code: "pty_recovering_restart_unsupported".to_string(),
@@ -433,7 +446,7 @@ impl Transport for PtyTransport {
                                 .to_string(),
                         details: None,
                     });
-                }
+                },
             }
         }
 
@@ -472,8 +485,9 @@ impl Transport for PtyTransport {
             .reader_handle
             .as_ref()
             .is_some_and(|handle| !handle.is_finished());
-        let reachable =
-            worker_live && reader_live && !self.shared.child_exited.load(Ordering::Acquire);
+        let reachable = worker_live
+            && reader_live
+            && !self.shared.child_exited.load(Ordering::Acquire);
         self.unreachable_since.fold(reachable)
     }
 

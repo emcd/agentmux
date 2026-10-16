@@ -6,8 +6,8 @@ use serde_json::{Map, Value, json};
 use std::sync::Arc;
 
 fn link_responder() -> RelayResponder {
-    Arc::new(
-        |request| match request.get("operation").and_then(Value::as_str) {
+    Arc::new(|request| {
+        match request.get("operation").and_then(Value::as_str) {
             Some("install_peer_credential") => json!({
                 "kind": "install_peer_credential",
                 "schema_version": "1",
@@ -21,15 +21,17 @@ fn link_responder() -> RelayResponder {
                     "message": "unexpected operation",
                 },
             }),
-        },
-    )
+        }
+    })
 }
 
 fn link_args(extra: Value) -> Map<String, Value> {
     let mut arguments = Map::new();
     arguments.insert("command".to_string(), Value::String("peer".to_string()));
     let mut args = json!({"alias": "bravo", "psk": "issued-secret"});
-    if let (Value::Object(args_map), Value::Object(extra_map)) = (&mut args, extra) {
+    if let (Value::Object(args_map), Value::Object(extra_map)) =
+        (&mut args, extra)
+    {
         args_map.extend(extra_map);
     }
     arguments.insert("args".to_string(), args);
@@ -39,7 +41,8 @@ fn link_args(extra: Value) -> Map<String, Value> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn link_peer_installs_into_relay_owned_slot() {
     let runtime = TestRuntime::create();
-    let relay = FakeRelay::start(runtime.relay_socket.clone(), link_responder());
+    let relay =
+        FakeRelay::start(runtime.relay_socket.clone(), link_responder());
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let response = harness.call_tool(2, "link", link_args(json!({}))).await;
@@ -62,7 +65,9 @@ async fn link_peer_rejects_missing_alias_before_relay_contact() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay must not receive link for a missing alias")),
+        Arc::new(|_| {
+            panic!("relay must not receive link for a missing alias")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -124,7 +129,9 @@ async fn link_peer_rejects_unsafe_alias_before_relay_contact() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay must not receive link for an unsafe alias")),
+        Arc::new(|_| {
+            panic!("relay must not receive link for an unsafe alias")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -163,12 +170,15 @@ async fn link_peer_rejects_unknown_command() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay must not receive link for an unknown command")),
+        Arc::new(|_| {
+            panic!("relay must not receive link for an unknown command")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("rotate".to_string()));
+    arguments
+        .insert("command".to_string(), Value::String("rotate".to_string()));
     arguments.insert("args".to_string(), json!({}));
     let response = harness.call_tool(2, "link", arguments).await;
     let error = response["error"].as_object().expect("tool error");
@@ -245,7 +255,8 @@ async fn link_peer_redacts_psk_bearing_relay_response() {
     );
     let mut harness = McpHarness::spawn(&runtime).await;
     let response = harness.call_tool(2, "link", link_args(json!({}))).await;
-    let serialized = serde_json::to_string(&response).expect("serialize tool response");
+    let serialized =
+        serde_json::to_string(&response).expect("serialize tool response");
     assert!(
         !serialized.contains("leaked-secret-psk"),
         "PSK-bearing relay response must not surface: {serialized}"

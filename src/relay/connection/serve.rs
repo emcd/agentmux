@@ -23,8 +23,9 @@ use crate::{
 
 use super::super::drain::ConnectionWorkerSlot;
 use super::super::stream::{
-    IncomingFrame, OutgoingFrame, SharedStreamWriter, StreamRegistration, StreamRevokeSignal,
-    parse_incoming_frame, spawn_stream_writer, unregister_stream, write_stream_frame_to_writer,
+    IncomingFrame, OutgoingFrame, SharedStreamWriter, StreamRegistration,
+    StreamRevokeSignal, parse_incoming_frame, spawn_stream_writer,
+    unregister_stream, write_stream_frame_to_writer,
 };
 use super::super::{IdentityIntrospectRights, RelayResponse, relay_error};
 use super::context::ConnectionServeContext;
@@ -269,7 +270,7 @@ async fn serve_connection_frames(
                     },
                 )?;
                 break;
-            }
+            },
         };
 
         // Marks this worker as mid-request until the frame's processing (and
@@ -278,8 +279,15 @@ async fn serve_connection_frames(
         let _serving = worker_slot.begin_serving();
         let outcome = match frame {
             IncomingFrame::Hello(incoming) => {
-                hello::handle_hello(incoming, &frame_context, guard, &mut binding, &revoke).await?
-            }
+                hello::handle_hello(
+                    incoming,
+                    &frame_context,
+                    guard,
+                    &mut binding,
+                    &revoke,
+                )
+                .await?
+            },
             IncomingFrame::Request {
                 request_id,
                 namespace: target_namespace,
@@ -294,7 +302,7 @@ async fn serve_connection_frames(
                     &binding,
                 )
                 .await?
-            }
+            },
         };
         if matches!(outcome, FrameOutcome::Stop) {
             break;

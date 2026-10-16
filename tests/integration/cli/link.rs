@@ -46,7 +46,8 @@ pub(super) fn spawn_operation_fake(
     }
     let parent = socket_path.parent().expect("relay socket parent");
     fs::create_dir_all(parent).expect("create relay socket parent");
-    let listener = UnixListener::bind(socket_path).expect("bind fake relay socket");
+    let listener =
+        UnixListener::bind(socket_path).expect("bind fake relay socket");
     listener
         .set_nonblocking(true)
         .expect("set fake relay listener nonblocking");
@@ -60,15 +61,20 @@ pub(super) fn spawn_operation_fake(
                     stream
                         .set_nonblocking(false)
                         .expect("set accepted stream blocking");
-                    let mut reader =
-                        BufReader::new(stream.try_clone().expect("clone fake relay stream"));
+                    let mut reader = BufReader::new(
+                        stream.try_clone().expect("clone fake relay stream"),
+                    );
                     let mut hello_line = String::new();
                     reader
                         .read_line(&mut hello_line)
                         .expect("read fake relay hello");
-                    let hello: Value = serde_json::from_str(hello_line.trim_end())
-                        .expect("decode fake relay hello");
-                    assert_eq!(hello.get("frame").and_then(Value::as_str), Some("hello"));
+                    let hello: Value =
+                        serde_json::from_str(hello_line.trim_end())
+                            .expect("decode fake relay hello");
+                    assert_eq!(
+                        hello.get("frame").and_then(Value::as_str),
+                        Some("hello")
+                    );
                     // Record the hello principal for per-side identity
                     // assertions; operation sequences filter these markers.
                     log.lock().expect("request log lock").push(json!({
@@ -79,8 +85,8 @@ pub(super) fn spawn_operation_fake(
                         "schema_version": "1",
                         "principal_id": hello.get("principal_id").cloned().unwrap_or(Value::Null),
                     });
-                    let encoded_ack =
-                        serde_json::to_string(&ack).expect("encode fake relay hello_ack");
+                    let encoded_ack = serde_json::to_string(&ack)
+                        .expect("encode fake relay hello_ack");
                     stream
                         .write_all(encoded_ack.as_bytes())
                         .expect("write fake relay hello_ack");
@@ -91,13 +97,15 @@ pub(super) fn spawn_operation_fake(
                     reader
                         .read_line(&mut request_line)
                         .expect("read fake relay request");
-                    let envelope: Value = serde_json::from_str(request_line.trim_end())
-                        .expect("decode fake relay request envelope");
-                    let request = envelope
-                        .get("request")
-                        .cloned()
-                        .expect("fake relay request envelope missing 'request' field");
-                    log.lock().expect("request log lock").push(request.clone());
+                    let envelope: Value =
+                        serde_json::from_str(request_line.trim_end())
+                            .expect("decode fake relay request envelope");
+                    let request = envelope.get("request").cloned().expect(
+                        "fake relay request envelope missing 'request' field",
+                    );
+                    log.lock()
+                        .expect("request log lock")
+                        .push(request.clone());
                     let Some(payload) = responder(request) else {
                         // Transport failure: close without answering.
                         served += 1;
@@ -108,19 +116,23 @@ pub(super) fn spawn_operation_fake(
                         "request_id": envelope.get("request_id").cloned().unwrap_or(Value::Null),
                         "response": payload,
                     });
-                    let encoded =
-                        serde_json::to_string(&response_frame).expect("encode fake relay response");
+                    let encoded = serde_json::to_string(&response_frame)
+                        .expect("encode fake relay response");
                     stream
                         .write_all(encoded.as_bytes())
                         .expect("write fake relay response");
                     stream.write_all(b"\n").expect("write fake relay newline");
                     stream.flush().expect("flush fake relay response");
                     served += 1;
-                }
-                Err(source) if source.kind() == std::io::ErrorKind::WouldBlock => {
+                },
+                Err(source)
+                    if source.kind() == std::io::ErrorKind::WouldBlock =>
+                {
                     thread::sleep(Duration::from_millis(10));
-                }
-                Err(source) => panic!("accept fake relay connection: {source}"),
+                },
+                Err(source) => {
+                    panic!("accept fake relay connection: {source}")
+                },
             }
         }
         let _ = fs::remove_file(socket_path);
@@ -131,7 +143,10 @@ pub(super) fn spawn_operation_fake(
     })
 }
 
-pub(super) fn new_peer_response(principal_id: &str, psk: Option<&str>) -> Value {
+pub(super) fn new_peer_response(
+    principal_id: &str,
+    psk: Option<&str>,
+) -> Value {
     json!({
         "kind": "new_peer",
         "schema_version": "1",
@@ -178,7 +193,8 @@ pub(super) fn link_sides() -> LinkSides {
         "destination-state",
     ];
     for dir in paths {
-        fs::create_dir_all(temporary.path().join(dir)).expect("create side directory");
+        fs::create_dir_all(temporary.path().join(dir))
+            .expect("create side directory");
     }
     let inscriptions = temporary.path().join("inscriptions");
     fs::create_dir_all(&inscriptions).expect("create inscriptions directory");
@@ -210,7 +226,10 @@ pub(super) fn destination_socket(sides: &LinkSides) -> std::path::PathBuf {
     RelayRuntimePaths::resolve(&sides.destination_state).relay_socket
 }
 
-pub(super) fn run_link(sides: &LinkSides, extra: &[&str]) -> std::process::Output {
+pub(super) fn run_link(
+    sides: &LinkSides,
+    extra: &[&str],
+) -> std::process::Output {
     let mut args = vec![
         "link",
         "peer",
@@ -261,7 +280,10 @@ fn hello_principals(log: &Arc<Mutex<Vec<Value>>>) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn assert_no_secret(output: &std::process::Output, secrets: &[&str]) {
+pub(super) fn assert_no_secret(
+    output: &std::process::Output,
+    secrets: &[&str],
+) {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     for secret in secrets {
@@ -299,7 +321,9 @@ fn link_peer_one_way_coordinates_without_rendering_psk() {
         &destination_socket(&sides),
         2,
         |request| match request.get("operation").and_then(Value::as_str) {
-            Some("new_peer") => Some(new_peer_response("bravo@RELAY", Some(DISCARDED_MINT))),
+            Some("new_peer") => {
+                Some(new_peer_response("bravo@RELAY", Some(DISCARDED_MINT)))
+            },
             Some("install_peer_credential") => {
                 assert_eq!(
                     request.get("psk").and_then(Value::as_str),
@@ -310,13 +334,14 @@ fn link_peer_one_way_coordinates_without_rendering_psk() {
                     "bravo",
                     "/fake/dest/state/peers/bravo.psk",
                 ))
-            }
+            },
             other => panic!("unexpected destination operation: {other:?}"),
         },
         Arc::clone(&destination_log),
     );
 
-    let output = run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
+    let output =
+        run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
     assert!(
         output.status.success(),
         "link failed: {}",
@@ -351,7 +376,9 @@ fn link_peer_paired_cross_installs_retained_mints() {
         &issuer_socket(&sides),
         2,
         |request| match request.get("operation").and_then(Value::as_str) {
-            Some("new_peer") => Some(new_peer_response("alpha@RELAY", Some(ISSUER_MINT))),
+            Some("new_peer") => {
+                Some(new_peer_response("alpha@RELAY", Some(ISSUER_MINT)))
+            },
             Some("install_peer_credential") => {
                 assert_eq!(
                     request.get("psk").and_then(Value::as_str),
@@ -362,7 +389,7 @@ fn link_peer_paired_cross_installs_retained_mints() {
                     "alpha",
                     "/fake/issuer/state/peers/alpha.psk",
                 ))
-            }
+            },
             other => panic!("unexpected issuer operation: {other:?}"),
         },
         Arc::clone(&issuer_log),
@@ -371,7 +398,9 @@ fn link_peer_paired_cross_installs_retained_mints() {
         &destination_socket(&sides),
         2,
         |request| match request.get("operation").and_then(Value::as_str) {
-            Some("new_peer") => Some(new_peer_response("bravo@RELAY", Some(DESTINATION_MINT))),
+            Some("new_peer") => {
+                Some(new_peer_response("bravo@RELAY", Some(DESTINATION_MINT)))
+            },
             Some("install_peer_credential") => {
                 assert_eq!(
                     request.get("psk").and_then(Value::as_str),
@@ -382,7 +411,7 @@ fn link_peer_paired_cross_installs_retained_mints() {
                     "bravo",
                     "/fake/dest/state/peers/bravo.psk",
                 ))
-            }
+            },
             other => panic!("unexpected destination operation: {other:?}"),
         },
         Arc::clone(&destination_log),
@@ -448,7 +477,8 @@ fn link_peer_paired_mismatch_contacts_no_relay() {
     );
     assert!(!output.status.success(), "mismatch link must fail");
     assert!(
-        operations(&issuer_log).is_empty() && operations(&destination_log).is_empty(),
+        operations(&issuer_log).is_empty()
+            && operations(&destination_log).is_empty(),
         "mismatch must contact no relay"
     );
     issuer.join().expect("join issuer fake");
@@ -487,7 +517,7 @@ fn link_peer_upgrade_rotates_then_installs() {
         |request| match request.get("operation").and_then(Value::as_str) {
             Some("new_peer") => {
                 panic!("upgrade performs no registration: {request:?}")
-            }
+            },
             Some("install_peer_credential") => {
                 assert_eq!(
                     request.get("psk").and_then(Value::as_str),
@@ -498,7 +528,7 @@ fn link_peer_upgrade_rotates_then_installs() {
                     "bravo",
                     "/fake/dest/state/peers/bravo.psk",
                 ))
-            }
+            },
             other => panic!("unexpected destination operation: {other:?}"),
         },
         Arc::clone(&destination_log),
@@ -552,7 +582,8 @@ fn link_peer_tolerates_existing_alias_registration() {
         Arc::clone(&destination_log),
     );
 
-    let output = run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
+    let output =
+        run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
     assert!(
         output.status.success(),
         "second-claim link failed: {}",
@@ -596,7 +627,8 @@ fn link_peer_halts_install_on_issuance_failure() {
         Arc::new(Mutex::new(Vec::new())),
     );
 
-    let output = run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
+    let output =
+        run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
     assert!(!output.status.success(), "failed issuance link must fail");
     issuer.join().expect("join issuer fake");
     destination.join().expect("join destination fake");
@@ -616,7 +648,9 @@ fn link_peer_json_output_omits_psk() {
         &destination_socket(&sides),
         2,
         |request| match request.get("operation").and_then(Value::as_str) {
-            Some("new_peer") => Some(new_peer_response("bravo@RELAY", Some(DISCARDED_MINT))),
+            Some("new_peer") => {
+                Some(new_peer_response("bravo@RELAY", Some(DISCARDED_MINT)))
+            },
             Some("install_peer_credential") => Some(install_response(
                 "bravo",
                 "/fake/dest/state/peers/bravo.psk",
@@ -640,7 +674,8 @@ fn link_peer_json_output_omits_psk() {
         !stdout.contains(ISSUER_SECRET) && !stdout.contains(DISCARDED_MINT),
         "json output renders secret material: {stdout}"
     );
-    let payload: Value = serde_json::from_str(&stdout).expect("parse link json output");
+    let payload: Value =
+        serde_json::from_str(&stdout).expect("parse link json output");
     assert_eq!(payload["alias"], "bravo");
     assert_eq!(payload["written_path"], "/fake/dest/state/peers/bravo.psk");
     assert!(
@@ -674,7 +709,9 @@ fn link_peer_rejects_unsafe_tokens_without_contact() {
         let destination = spawn_operation_fake(
             &destination_socket(&sides),
             0,
-            |_| panic!("destination must not be contacted for an unsafe token"),
+            |_| {
+                panic!("destination must not be contacted for an unsafe token")
+            },
             Arc::clone(&destination_log),
         );
         let mut args = vec!["--alias", "bravo", "--connect-as", "bravo-link"];
@@ -694,7 +731,8 @@ fn link_peer_rejects_unsafe_tokens_without_contact() {
             "must report the token grammar: {stderr}"
         );
         assert!(
-            operations(&issuer_log).is_empty() && operations(&destination_log).is_empty(),
+            operations(&issuer_log).is_empty()
+                && operations(&destination_log).is_empty(),
             "unsafe token must contact no relay"
         );
         issuer.join().expect("join issuer fake");
@@ -714,7 +752,8 @@ fn link_peer_uses_per_side_operator_identities() {
         "destination-state",
     ];
     for dir in paths {
-        fs::create_dir_all(temporary.path().join(dir)).expect("create side directory");
+        fs::create_dir_all(temporary.path().join(dir))
+            .expect("create side directory");
     }
     let inscriptions = temporary.path().join("inscriptions");
     fs::create_dir_all(&inscriptions).expect("create inscriptions directory");
@@ -750,7 +789,9 @@ fn link_peer_uses_per_side_operator_identities() {
         &RelayRuntimePaths::resolve(&destination_state).relay_socket,
         2,
         |request| match request.get("operation").and_then(Value::as_str) {
-            Some("new_peer") => Some(new_peer_response("bravo@RELAY", Some(DISCARDED_MINT))),
+            Some("new_peer") => {
+                Some(new_peer_response("bravo@RELAY", Some(DISCARDED_MINT)))
+            },
             Some("install_peer_credential") => Some(install_response(
                 "bravo",
                 "/fake/dest/state/peers/bravo.psk",

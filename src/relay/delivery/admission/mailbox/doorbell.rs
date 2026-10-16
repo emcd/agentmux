@@ -74,7 +74,10 @@ pub(in crate::relay) type Doorbell = Arc<dyn Fn() + Send + Sync>;
 /// The generation being built has no worse outcome available to it: its consumer
 /// will poll, which is what it would have done for a notification that was rung
 /// and missed.
-pub(in crate::relay) fn register_doorbell(target: &DeliveryTargetId, doorbell: Doorbell) {
+pub(in crate::relay) fn register_doorbell(
+    target: &DeliveryTargetId,
+    doorbell: Doorbell,
+) {
     let Ok(mut state) = lock_ledger() else {
         return;
     };
@@ -159,13 +162,15 @@ mod doorbell_tests {
         terminalize("mbx-doorbell-3");
         admit_only(namespace, "mbx-doorbell-4", 1);
         admit_only(namespace, "mbx-doorbell-5", 1);
-        enqueue(&task(namespace, "mbx-doorbell-5"), mail("body")).expect("enqueue");
+        enqueue(&task(namespace, "mbx-doorbell-5"), mail("body"))
+            .expect("enqueue");
         assert_eq!(
             rings.load(Ordering::SeqCst),
             1,
             "an entry that fills a position behind an unfilled one rings nothing"
         );
-        enqueue(&task(namespace, "mbx-doorbell-4"), mail("body")).expect("enqueue");
+        enqueue(&task(namespace, "mbx-doorbell-4"), mail("body"))
+            .expect("enqueue");
         assert_eq!(
             rings.load(Ordering::SeqCst),
             2,

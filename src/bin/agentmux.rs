@@ -28,7 +28,7 @@ fn main() {
         Err(source) => {
             eprintln!("agentmux: failed to build async runtime: {source}");
             std::process::exit(1);
-        }
+        },
     };
 
     let exit_code = runtime.block_on(async move {
@@ -37,7 +37,7 @@ fn main() {
             Err(err) => {
                 eprintln!("agentmux: {err}");
                 1
-            }
+            },
         }
     });
 

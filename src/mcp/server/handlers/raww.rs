@@ -44,7 +44,10 @@ impl McpServer {
         // writes still work. Done after sender resolution so an unassociated
         // server fails as `validation_unassociated_server` regardless of target
         // shape.
-        let target_session = qualify_target(&params.target_session, self.associated_namespace())?;
+        let target_session = qualify_target(
+            &params.target_session,
+            self.associated_namespace(),
+        )?;
 
         let request = RelayRequest::Raww {
             request_id: params.request_id.clone(),
@@ -68,15 +71,28 @@ impl McpServer {
                 // skip_serializing_if semantics (the json! re-box would otherwise
                 // force them back to null).
                 let mut response_map = serde_json::Map::new();
-                response_map.insert("schema_version".to_string(), Value::String(schema_version));
-                response_map.insert("status".to_string(), Value::String(status));
-                response_map.insert("target_session".to_string(), Value::String(target_session));
+                response_map.insert(
+                    "schema_version".to_string(),
+                    Value::String(schema_version),
+                );
+                response_map
+                    .insert("status".to_string(), Value::String(status));
+                response_map.insert(
+                    "target_session".to_string(),
+                    Value::String(target_session),
+                );
                 response_map.insert("transport".to_string(), json!(transport));
                 if let Some(request_id) = request_id {
-                    response_map.insert("request_id".to_string(), Value::String(request_id));
+                    response_map.insert(
+                        "request_id".to_string(),
+                        Value::String(request_id),
+                    );
                 }
                 if let Some(message_id) = message_id {
-                    response_map.insert("message_id".to_string(), Value::String(message_id));
+                    response_map.insert(
+                        "message_id".to_string(),
+                        Value::String(message_id),
+                    );
                 }
                 let response = Value::Object(response_map);
                 emit_inscription(
@@ -89,9 +105,14 @@ impl McpServer {
                     }),
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
-            }
-            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.raww", other)),
-            Err(source) => Err(self.map_relay_call_error("mcp.tool.raww.io_error", source)),
+            },
+            Ok(other) => {
+                Err(self.map_nonsuccess_relay_response("mcp.tool.raww", other))
+            },
+            Err(source) => {
+                Err(self
+                    .map_relay_call_error("mcp.tool.raww.io_error", source))
+            },
         }
     }
 }

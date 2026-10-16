@@ -7,12 +7,17 @@
 use agentmux::configuration::ConfigurationRoots;
 use tempfile::TempDir;
 
-use agentmux::configuration::{BringUpContext, BundleMember, load_bundle_configuration};
+use agentmux::configuration::{
+    BringUpContext, BundleMember, load_bundle_configuration,
+};
 
 use super::helpers::*;
 
 /// Looks up a merged environment value by name on a resolved member.
-fn value_of<'member>(member: &'member BundleMember, name: &str) -> Option<&'member str> {
+fn value_of<'member>(
+    member: &'member BundleMember,
+    name: &str,
+) -> Option<&'member str> {
     member
         .environment
         .iter()
@@ -82,7 +87,8 @@ fn session_value_overrides_bundle_and_coder() {
     let temporary = TempDir::new().expect("temporary");
     let root = write_layered_environment(&temporary);
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     let member = &loaded.members[0];
 
     // Most-specific level wins for a name declared at all three layers.
@@ -94,7 +100,8 @@ fn distinct_names_union_across_levels() {
     let temporary = TempDir::new().expect("temporary");
     let root = write_layered_environment(&temporary);
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     let member = &loaded.members[0];
 
     // Names declared at only one level all survive the merge.
@@ -158,7 +165,8 @@ coder = "acp"
         ),
     );
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(value_of(&loaded.members[0], "SHARED"), Some("bundle"));
 }
 
@@ -202,7 +210,8 @@ coder = "acp"
         ),
     );
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(loaded.members.len(), 2);
     for member in &loaded.members {
         assert_eq!(value_of(member, "OPENCODE_ENABLE_EXA"), Some("1"));
@@ -249,7 +258,8 @@ coder = "acp"
         ),
     );
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(value_of(&loaded.members[0], "PER_SESSION"), Some("yes"));
     // Member b carries the stamped context but none of a's declared entries.
     assert_eq!(value_of(&loaded.members[1], "PER_SESSION"), None);
@@ -292,7 +302,8 @@ coder = "acp"
     // An environment name is an OS env-var key; '=' is unrepresentable and must
     // fail at load, not panic at spawn (`Command::env`) or produce a malformed
     // tmux `-e BAD=KEY=x`.
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string()
             .contains("coder 'acp' environment entry 0 name 'BAD=KEY' must not contain '=' or NUL"),
@@ -334,7 +345,8 @@ coder = "acp"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string()
             .contains("bundle 'alpha' environment entry 0 has empty name"),
@@ -378,6 +390,7 @@ value = ""
 
     // An empty string is a legitimate OS environment value; only a *missing*
     // value field is rejected (by serde, as the field is required).
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(value_of(&loaded.members[0], "EMPTY_OK"), Some(""));
 }
