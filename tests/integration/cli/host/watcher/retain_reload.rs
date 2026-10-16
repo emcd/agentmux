@@ -9,7 +9,9 @@ use tempfile::TempDir;
 use super::super::*;
 use super::hello_keepalive::*;
 use super::inscriptions::*;
-use crate::support::permissions::{deny_directory_access, report_permission_fixture_skip};
+use crate::support::permissions::{
+    deny_directory_access, report_permission_fixture_skip,
+};
 
 // A layer that becomes unreadable at runtime holds the last successful
 // reconciliation rather than tearing the catalog down. Enumeration is ground
@@ -81,15 +83,19 @@ fn host_relay_watcher_retains_the_catalog_when_a_layer_becomes_unreadable() {
     // bundle and fails on the layer it cannot read, while a torn-down one would
     // have forgotten it and answered `validation_unknown_bundle` — the same
     // answer it gives for a bundle the operator deleted.
-    let during = relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
+    let during =
+        relay_hello_first_frame(&state_root, "a@alpha", "socket-trust");
     // Restored before shutdown so the relay's own teardown is not fighting a
     // directory it cannot traverse.
     drop(restore);
     // Readable again, and serving without an intervening reload: the runtime
     // that answers here is the one that was running before the layer went dark.
-    let after = poll_hello_first_frame(&state_root, "a@alpha", "socket-trust", |frame| {
-        frame["frame"] == "hello_ack"
-    });
+    let after = poll_hello_first_frame(
+        &state_root,
+        "a@alpha",
+        "socket-trust",
+        |frame| frame["frame"] == "hello_ack",
+    );
 
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child
@@ -104,7 +110,8 @@ fn host_relay_watcher_retains_the_catalog_when_a_layer_becomes_unreadable() {
         "expected relay.bundle.reconcile_suppressed_unreadable_layer; relay inscriptions: {inscriptions}"
     );
     assert_eq!(
-        during["response"]["error"]["code"], "validation_unreadable_configuration_layer",
+        during["response"]["error"]["code"],
+        "validation_unreadable_configuration_layer",
         "a retained bundle must fail on the unreadable layer rather than be forgotten: \
          {during:?}; relay inscriptions: {inscriptions}"
     );
@@ -123,7 +130,9 @@ fn host_relay_watcher_retains_the_catalog_when_a_layer_becomes_unreadable() {
                 .filter(|event| {
                     matches!(
                         *event,
-                        "relay.bundle.unloaded" | "relay.bundle.reloaded" | "relay.bundle.loaded"
+                        "relay.bundle.unloaded"
+                            | "relay.bundle.reloaded"
+                            | "relay.bundle.loaded"
                     )
                 })
                 .map(str::to_string)
@@ -195,9 +204,12 @@ fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
         &inscriptions_root,
     );
     // After reload the bundle is still loaded: a fresh Hello succeeds.
-    let after = poll_hello_first_frame(&state_root, "a@alpha", "socket-trust", |frame| {
-        frame["frame"] == "hello_ack"
-    });
+    let after = poll_hello_first_frame(
+        &state_root,
+        "a@alpha",
+        "socket-trust",
+        |frame| frame["frame"] == "hello_ack",
+    );
 
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child
@@ -218,7 +230,8 @@ fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
         after["frame"],
         "hello_ack",
         "expected hello_ack after reload: {after:?}; relay inscriptions: {}",
-        fs::read_to_string(inscriptions_root.join("relay.log")).unwrap_or_default()
+        fs::read_to_string(inscriptions_root.join("relay.log"))
+            .unwrap_or_default()
     );
     assert_eq!(after["principal_id"], "a@alpha");
 }
@@ -229,7 +242,8 @@ fn host_relay_watcher_reloads_modified_bundle_file_at_runtime() {
 // transitions must reload, since the relay now tracks a different file for edits
 // and deletions.
 #[test]
-fn host_relay_watcher_reloads_when_a_byte_identical_earlier_layer_appears_and_is_removed() {
+fn host_relay_watcher_reloads_when_a_byte_identical_earlier_layer_appears_and_is_removed()
+ {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("state");
@@ -279,28 +293,35 @@ fn host_relay_watcher_reloads_when_a_byte_identical_earlier_layer_appears_and_is
 
     let (_appearance_stream, mut appearance_reader, appearance_hello) =
         relay_hello_keepalive(&state_root, "a@alpha", "socket-trust");
-    fs::copy(&base_bundle, &override_bundle).expect("copy base bundle into the earlier layer");
+    fs::copy(&base_bundle, &override_bundle)
+        .expect("copy base bundle into the earlier layer");
     let appearance_eviction = expect_watcher_signal(
         read_next_frame(&mut appearance_reader),
         "earlier-layer appearance reload eviction frame",
         &inscriptions_root,
     );
-    let after_appearance =
-        poll_hello_first_frame(&state_root, "a@alpha", "socket-trust", |frame| {
-            frame["frame"] == "hello_ack"
-        });
+    let after_appearance = poll_hello_first_frame(
+        &state_root,
+        "a@alpha",
+        "socket-trust",
+        |frame| frame["frame"] == "hello_ack",
+    );
 
     let (_removal_stream, mut removal_reader, removal_hello) =
         relay_hello_keepalive(&state_root, "a@alpha", "socket-trust");
-    fs::remove_file(&override_bundle).expect("remove the earlier-layer bundle");
+    fs::remove_file(&override_bundle)
+        .expect("remove the earlier-layer bundle");
     let removal_eviction = expect_watcher_signal(
         read_next_frame(&mut removal_reader),
         "earlier-layer removal reload eviction frame",
         &inscriptions_root,
     );
-    let after_removal = poll_hello_first_frame(&state_root, "a@alpha", "socket-trust", |frame| {
-        frame["frame"] == "hello_ack"
-    });
+    let after_removal = poll_hello_first_frame(
+        &state_root,
+        "a@alpha",
+        "socket-trust",
+        |frame| frame["frame"] == "hello_ack",
+    );
 
     shutdown_relay_if_present(&state_root, "alpha");
     let output = child
@@ -310,14 +331,16 @@ fn host_relay_watcher_reloads_when_a_byte_identical_earlier_layer_appears_and_is
 
     assert_eq!(appearance_hello["frame"], "hello_ack");
     assert_eq!(
-        appearance_eviction["response"]["error"]["code"], "runtime_bundle_reloaded",
+        appearance_eviction["response"]["error"]["code"],
+        "runtime_bundle_reloaded",
         "an earlier layer appearing over identical base content must reload: \
          {appearance_eviction:?}"
     );
     assert_eq!(after_appearance["frame"], "hello_ack");
     assert_eq!(removal_hello["frame"], "hello_ack");
     assert_eq!(
-        removal_eviction["response"]["error"]["code"], "runtime_bundle_reloaded",
+        removal_eviction["response"]["error"]["code"],
+        "runtime_bundle_reloaded",
         "removing an earlier layer to reveal identical base content must reload: \
          {removal_eviction:?}"
     );

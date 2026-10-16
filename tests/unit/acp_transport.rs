@@ -17,8 +17,8 @@ use agentmux::envelope::PromptBatchSettings;
 use agentmux::protocol::DeliveryDoorbell;
 use agentmux::relay::{LookFreshness, LookSnapshotSource};
 use agentmux::transports::{
-    DeliveryExecutorContext, LookMode, LookSnapshotPayload, Transport, UnreachableSince,
-    WorkerReadinessState,
+    DeliveryExecutorContext, LookMode, LookSnapshotPayload, Transport,
+    UnreachableSince, WorkerReadinessState,
 };
 
 use crate::stub_mailbox::StubMailbox;
@@ -49,7 +49,12 @@ fn reachable() -> AcpReachability {
 }
 
 fn test_transport() -> AcpTransport {
-    AcpTransport::new(test_batch_settings(), None, delivery_context(), reachable())
+    AcpTransport::new(
+        test_batch_settings(),
+        None,
+        delivery_context(),
+        reachable(),
+    )
 }
 
 const TEST_MAX_PROMPT_TOKENS: usize = 4096;
@@ -153,7 +158,8 @@ fn acp_output_view_zero_prime_timeout_returns_immediately() {
 /// Retirement bounds the epoch it classified rather than clearing what is
 /// current, so the newer cause outlives the older cause's answer by arithmetic.
 #[test]
-fn retiring_a_classified_cause_leaves_a_cause_published_since_it_outstanding() {
+fn retiring_a_classified_cause_leaves_a_cause_published_since_it_outstanding()
+{
     let transport = test_transport();
     assert_eq!(
         transport.respawn_signal_outstanding(),
@@ -171,7 +177,8 @@ fn retiring_a_classified_cause_leaves_a_cause_published_since_it_outstanding() {
     transport.signal_respawn();
 
     let remaining = transport.retire_respawn_signal(classified);
-    let remaining = remaining.expect("the cause published since must still be outstanding");
+    let remaining = remaining
+        .expect("the cause published since must still be outstanding");
     assert!(
         remaining > classified,
         "retirement must bound only the classified cause, leaving the newer one to be answered"

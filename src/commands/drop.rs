@@ -4,13 +4,16 @@ use crate::{
     relay::{RelayRequest, RelayResponse, request_relay},
     runtime::{
         error::RuntimeError, paths::RelayRuntimePaths,
-        starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
+        starter::ensure_starter_configuration_layout,
+        tui_session::resolve_tui_session_identity,
     },
 };
 
 use super::{DropPeerArguments, shared};
 
-pub(super) fn run_agentmux_drop(arguments: &[String]) -> Result<(), RuntimeError> {
+pub(super) fn run_agentmux_drop(
+    arguments: &[String],
+) -> Result<(), RuntimeError> {
     if arguments
         .iter()
         .any(|value| value == "--help" || value == "-h")
@@ -37,7 +40,9 @@ pub(super) fn run_agentmux_drop(arguments: &[String]) -> Result<(), RuntimeError
             principal_id: parsed.principal_id.clone(),
         },
     )
-    .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;
+    .map_err(|source| {
+        shared::map_relay_request_failure(&relay_paths.relay_socket, source)
+    })?;
 
     match response {
         RelayResponse::DropPeer {
@@ -51,24 +56,35 @@ pub(super) fn run_agentmux_drop(arguments: &[String]) -> Result<(), RuntimeError
                 // null for a principal the relay owns no credential location
                 // for, matching what the relay and the MCP tool emit.
                 let mut payload = Map::new();
-                payload.insert("schema_version".to_string(), json!(schema_version));
-                payload.insert("principal_id".to_string(), json!(principal_id));
-                payload.insert("principal_type".to_string(), json!(principal_type));
+                payload.insert(
+                    "schema_version".to_string(),
+                    json!(schema_version),
+                );
+                payload
+                    .insert("principal_id".to_string(), json!(principal_id));
+                payload.insert(
+                    "principal_type".to_string(),
+                    json!(principal_type),
+                );
                 if let Some(path) = credential_path.as_deref() {
                     payload.insert("credential_path".to_string(), json!(path));
                 }
                 let payload = Value::Object(payload);
                 println!(
                     "{}",
-                    serde_json::to_string_pretty(&payload).map_err(|source| {
-                        RuntimeError::io(
-                            "encode drop peer response json",
-                            std::io::Error::other(source),
-                        )
-                    })?
+                    serde_json::to_string_pretty(&payload).map_err(
+                        |source| {
+                            RuntimeError::io(
+                                "encode drop peer response json",
+                                std::io::Error::other(source),
+                            )
+                        }
+                    )?
                 );
             } else {
-                println!("principal_id={principal_id} principal_type={principal_type}");
+                println!(
+                    "principal_id={principal_id} principal_type={principal_type}"
+                );
                 // Reported rather than deleted: once the record is gone the file
                 // authenticates nothing, and the relay cannot know where the
                 // operator distributed it.
@@ -77,7 +93,7 @@ pub(super) fn run_agentmux_drop(arguments: &[String]) -> Result<(), RuntimeError
                 }
             }
             Ok(())
-        }
+        },
         RelayResponse::Error { error } => Err(shared::map_relay_error(error)),
         other => Err(RuntimeError::validation(
             "internal_unexpected_failure",
@@ -86,7 +102,9 @@ pub(super) fn run_agentmux_drop(arguments: &[String]) -> Result<(), RuntimeError
     }
 }
 
-fn parse_drop_arguments(arguments: &[String]) -> Result<DropPeerArguments, RuntimeError> {
+fn parse_drop_arguments(
+    arguments: &[String],
+) -> Result<DropPeerArguments, RuntimeError> {
     let Some(subcommand) = arguments.first().map(String::as_str) else {
         return Err(RuntimeError::validation(
             "validation_invalid_params",
@@ -113,18 +131,24 @@ fn parse_drop_arguments(arguments: &[String]) -> Result<DropPeerArguments, Runti
         }
         match arguments[index].as_str() {
             "--bundle" | "--bundle-name" => {
-                bundle_name = Some(shared::take_value(arguments, &mut index, "--bundle")?)
-            }
+                bundle_name = Some(shared::take_value(
+                    arguments, &mut index, "--bundle",
+                )?)
+            },
             "--as-session" => {
-                session_selector = Some(shared::take_value(arguments, &mut index, "--as-session")?)
-            }
+                session_selector = Some(shared::take_value(
+                    arguments,
+                    &mut index,
+                    "--as-session",
+                )?)
+            },
             "--json" => output_json = true,
             value if value.starts_with('-') => {
                 return Err(RuntimeError::InvalidArgument {
                     argument: value.to_string(),
                     message: "unknown argument".to_string(),
                 });
-            }
+            },
             value => {
                 if principal_id.is_some() {
                     return Err(RuntimeError::InvalidArgument {
@@ -133,7 +157,7 @@ fn parse_drop_arguments(arguments: &[String]) -> Result<DropPeerArguments, Runti
                     });
                 }
                 principal_id = Some(value.to_string());
-            }
+            },
         }
         index += 1;
     }

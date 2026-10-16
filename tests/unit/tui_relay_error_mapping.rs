@@ -56,8 +56,8 @@ const FRAME_WAIT_BUDGET: Duration = Duration::from_secs(5);
 /// already guaranteed when it does.
 fn arm_frame_wait(stream: &UnixStream) {
     match stream.set_read_timeout(Some(FRAME_WAIT_BUDGET)) {
-        Ok(()) => {}
-        Err(source) if source.kind() == ErrorKind::InvalidInput => {}
+        Ok(()) => {},
+        Err(source) if source.kind() == ErrorKind::InvalidInput => {},
         Err(source) => panic!("set frame read timeout: {source}"),
     }
 }
@@ -81,10 +81,14 @@ fn write_json_line(stream: &mut UnixStream, value: &Value) {
 
 /// Stub relay: complete the hello handshake, then answer the first `list`
 /// request with a canonical relay error carrying `code`.
-fn serve_list_error(listener: UnixListener, code: &'static str) -> thread::JoinHandle<()> {
+fn serve_list_error(
+    listener: UnixListener,
+    code: &'static str,
+) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept client");
-        let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+        let mut reader =
+            BufReader::new(stream.try_clone().expect("clone stream"));
 
         let hello = read_json_line(&mut reader);
         assert_eq!(hello["frame"], "hello");
@@ -152,8 +156,10 @@ fn refresh_preserves_authorization_forbidden_code() {
                 code, "authorization_forbidden",
                 "relay authorization code must be preserved verbatim",
             );
-        }
-        other => panic!("expected a preserved machine-readable code, got {other:?}"),
+        },
+        other => {
+            panic!("expected a preserved machine-readable code, got {other:?}")
+        },
     }
 
     server.join().expect("join stub relay");

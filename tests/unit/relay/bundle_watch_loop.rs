@@ -87,7 +87,8 @@ fn access_batch() -> DebounceEventResult {
 
 fn batch(kind: EventKind) -> DebounceEventResult {
     Ok(vec![DebouncedEvent::new(
-        Event::new(kind).add_path(PathBuf::from("/nonexistent/bundles/alpha.toml")),
+        Event::new(kind)
+            .add_path(PathBuf::from("/nonexistent/bundles/alpha.toml")),
         Instant::now(),
     )])
 }

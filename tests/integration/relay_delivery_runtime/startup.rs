@@ -21,7 +21,8 @@ use super::*;
 async fn relay_startup_retries_transient_tmux_create_failures() {
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
     let state_root = temporary.path().join("state");
     let fake_tmux_script = temporary.path().join("fake-tmux.sh");
     let attempts_file = temporary.path().join("attempts.txt");
@@ -98,10 +99,9 @@ async fn relay_creates_tmux_session_with_environment_flags() {
     let deadline = Instant::now() + Duration::from_secs(5);
     let new_session_line = loop {
         let log = fs::read_to_string(&log_file).unwrap_or_default();
-        if let Some(line) = log
-            .lines()
-            .find(|line| line.contains("new-session") && line.contains("-s alpha"))
-        {
+        if let Some(line) = log.lines().find(|line| {
+            line.contains("new-session") && line.contains("-s alpha")
+        }) {
             break line.to_string();
         }
         assert!(

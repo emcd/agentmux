@@ -77,11 +77,12 @@ fn picker_enter_in_interaction_mode_requires_selected_recipient() {
     // column; with no recipients there is nothing to select.
     assert!(state.picker_open());
     assert_eq!(state.picker_column(), WorkbenchPickerColumn::Sessions);
-    let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
+    let result =
+        state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
     match result {
         Err(RuntimeError::Validation { code, .. }) => {
             assert_eq!(code, "validation_unknown_target")
-        }
+        },
         other => panic!("unexpected result: {other:?}"),
     }
 }
@@ -96,14 +97,15 @@ fn picker_enter_in_interaction_mode_attempts_look_for_selected_target() {
     // The picker auto-opens on the session column with the lone recipient
     // selected, so Enter attempts a look against it.
     assert!(state.picker_open());
-    let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
+    let result =
+        state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
     match result {
         Err(RuntimeError::Validation { code, .. }) => {
             assert_eq!(code, "relay_unavailable")
-        }
+        },
         Err(RuntimeError::Io { source, .. }) => {
             assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied)
-        }
+        },
         other => panic!("unexpected result: {other:?}"),
     }
 }

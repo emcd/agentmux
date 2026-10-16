@@ -7,7 +7,9 @@ use std::{
 };
 
 use agentmux::{
-    relay::{LookSnapshotPayload, RelayRequest, RelayResponse, handle_request},
+    relay::{
+        LookSnapshotPayload, RelayRequest, RelayResponse, handle_request,
+    },
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
 use tempfile::TempDir;
@@ -35,7 +37,12 @@ fn dispatch_request(
     bundle_name: &str,
     runtime_directory: &Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    handle_request(request, configuration_roots, bundle_name, runtime_directory)
+    handle_request(
+        request,
+        configuration_roots,
+        bundle_name,
+        runtime_directory,
+    )
 }
 
 struct TmuxServerGuard {
@@ -58,10 +65,18 @@ impl Drop for TmuxServerGuard {
     }
 }
 
-fn wait_for_pane_contains(socket: &Path, target: &str, needle: &str, timeout: Duration) {
+fn wait_for_pane_contains(
+    socket: &Path,
+    target: &str,
+    needle: &str,
+    timeout: Duration,
+) {
     let started = Instant::now();
     loop {
-        let output = tmux_command(socket, &["capture-pane", "-p", "-t", target, "-S", "-40"]);
+        let output = tmux_command(
+            socket,
+            &["capture-pane", "-p", "-t", target, "-S", "-40"],
+        );
         assert!(
             output.status.success(),
             "failed to capture pane for {target}: {}",
@@ -160,9 +175,13 @@ fn relay_look_returns_oldest_to_newest_snapshot_lines() {
 
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root =
-        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        bundle_name,
+        &["alpha", "bravo"],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -214,9 +233,13 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
 
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root =
-        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        bundle_name,
+        &["alpha", "bravo"],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -250,9 +273,10 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
     )
     .expect("look response");
     let RelayResponse::Look {
-        snapshot: LookSnapshotPayload::Lines {
-            snapshot_lines: omitted_lines,
-        },
+        snapshot:
+            LookSnapshotPayload::Lines {
+                snapshot_lines: omitted_lines,
+            },
         ..
     } = omitted_bundle
     else {
@@ -272,9 +296,10 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
     )
     .expect("look response");
     let RelayResponse::Look {
-        snapshot: LookSnapshotPayload::Lines {
-            snapshot_lines: matching_lines,
-        },
+        snapshot:
+            LookSnapshotPayload::Lines {
+                snapshot_lines: matching_lines,
+            },
         ..
     } = matching_bundle
     else {

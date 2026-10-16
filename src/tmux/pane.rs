@@ -3,7 +3,9 @@ use std::{
     ffi::OsStr,
     io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Output, Stdio},
+    process::{
+        Child, ChildStderr, ChildStdout, Command, ExitStatus, Output, Stdio,
+    },
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -65,7 +67,8 @@ thread_local! {
 /// Publishes this thread's tmux invocations into `slot` for the rest of its
 /// life. Called by a generation's executor as it starts.
 pub(crate) fn publish_tmux_invocations(slot: TmuxInvocationSlot) {
-    PUBLISHED_INVOCATIONS.with(|published| *published.borrow_mut() = Some(slot));
+    PUBLISHED_INVOCATIONS
+        .with(|published| *published.borrow_mut() = Some(slot));
 }
 
 /// Signals whichever tmux client invocation `slot` currently holds.
@@ -103,17 +106,20 @@ impl PublishedInvocation {
     /// An invocation started behind an already-terminating generation is ended at
     /// once rather than refused: refusing would leave a spawned child owned by
     /// nobody, and the caller still needs something to reap.
-    fn record(mut child: Child) -> (Self, Option<ChildStdout>, Option<ChildStderr>) {
+    fn record(
+        mut child: Child,
+    ) -> (Self, Option<ChildStdout>, Option<ChildStderr>) {
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
-        let slot = PUBLISHED_INVOCATIONS.with(|published| published.borrow().clone());
+        let slot =
+            PUBLISHED_INVOCATIONS.with(|published| published.borrow().clone());
         let owned = match slot {
             Some(slot) => {
                 let published = match slot.child.lock() {
                     Ok(mut held) => {
                         *held = Some(child);
                         None
-                    }
+                    },
                     // A poisoned slot means the generation's supervision is
                     // already broken; keep ownership locally so the child is
                     // still reaped rather than leaked.
@@ -135,13 +141,13 @@ impl PublishedInvocation {
                             slot: Some(slot),
                             unpublished: None,
                         }
-                    }
+                    },
                     Some(child) => Self {
                         slot: None,
                         unpublished: Some(child),
                     },
                 }
-            }
+            },
             None => Self {
                 slot: None,
                 unpublished: Some(child),
@@ -174,13 +180,12 @@ impl PublishedInvocation {
         let poll = Duration::from_millis(INVOCATION_REAP_POLL_MS);
         loop {
             {
-                let mut held = slot
-                    .child
-                    .lock()
-                    .map_err(|_| io::Error::other("tmux invocation slot poisoned"))?;
-                let child = held
-                    .as_mut()
-                    .ok_or_else(|| io::Error::other("tmux invocation was already reaped"))?;
+                let mut held = slot.child.lock().map_err(|_| {
+                    io::Error::other("tmux invocation slot poisoned")
+                })?;
+                let child = held.as_mut().ok_or_else(|| {
+                    io::Error::other("tmux invocation was already reaped")
+                })?;
                 if slot.is_terminating() {
                     let _ = child.kill();
                 }
@@ -247,7 +252,10 @@ pub(crate) fn resolve_active_pane_target(
 /// elsewhere — a cross-session misdelivery that every relay-side log still
 /// attributes to the target. A name mismatch therefore fails closed: the
 /// caller reports provable non-delivery rather than reaching the wrong pane.
-fn parse_active_pane_target(target_session: &str, stdout: &str) -> Result<String, String> {
+fn parse_active_pane_target(
+    target_session: &str,
+    stdout: &str,
+) -> Result<String, String> {
     let (session_name, pane_id) = stdout
         .trim()
         .split_once(' ')
@@ -316,9 +324,9 @@ pub(crate) fn resolve_cursor_column(
         &["display-message", "-p", "-t", pane_target, "#{cursor_x}"],
     )?;
     let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    value
-        .parse::<usize>()
-        .map_err(|source| format!("failed to parse tmux cursor_x '{value}': {source}"))
+    value.parse::<usize>().map_err(|source| {
+        format!("failed to parse tmux cursor_x '{value}': {source}")
+    })
 }
 
 /// Reads the pane's window-activity marker: tmux's own record of when bytes last
@@ -330,7 +338,10 @@ pub(crate) fn resolve_cursor_column(
 /// be read is simply never suppressed on this basis. Reporting an error instead
 /// would make an unreadable marker look like activity, which is the one reading
 /// the signal must never invent.
-pub(crate) fn resolve_window_activity(tmux_socket: &Path, pane_target: &str) -> u64 {
+pub(crate) fn resolve_window_activity(
+    tmux_socket: &Path,
+    pane_target: &str,
+) -> u64 {
     let Ok(output) = run_tmux_command(
         tmux_socket,
         &[
@@ -367,7 +378,12 @@ pub(crate) fn inject_literal_text(
         // early, and the submit is unbracketed so the bare CR is delivered as a
         // real Enter. Guarded by `append_enter` so a `raww` body-only write
         // (`no_enter=true`) injects no submit.
-        paste_into_pane(tmux_socket, pane_target, "\r", PasteMode::Unbracketed)?;
+        paste_into_pane(
+            tmux_socket,
+            pane_target,
+            "\r",
+            PasteMode::Unbracketed,
+        )?;
     }
     Ok(())
 }
@@ -402,7 +418,11 @@ fn next_paste_buffer_name() -> String {
     )
 }
 
-fn load_tmux_buffer(tmux_socket: &Path, buffer_name: &str, text: &str) -> Result<(), String> {
+fn load_tmux_buffer(
+    tmux_socket: &Path,
+    buffer_name: &str,
+    text: &str,
+) -> Result<(), String> {
     let mut command = tmux_command(tmux_socket);
     command
         .args(["load-buffer", "-b", buffer_name, "-"])
@@ -414,7 +434,8 @@ fn load_tmux_buffer(tmux_socket: &Path, buffer_name: &str, text: &str) -> Result
         .get_current_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "<no working directory>".to_string());
-    let working_directory_path = command.get_current_dir().map(|path| path.to_path_buf());
+    let working_directory_path =
+        command.get_current_dir().map(|path| path.to_path_buf());
     let mut child = command.spawn().map_err(|source| {
         let working_dir_status = match &working_directory_path {
             Some(path) if path.is_dir() => "present",
@@ -431,10 +452,9 @@ fn load_tmux_buffer(tmux_socket: &Path, buffer_name: &str, text: &str) -> Result
     // blocks in `write_all` with nothing left to interrupt it. Publishing after
     // the write left exactly that interval with an empty slot, so the fence's
     // forced step had nothing to signal — the one case it exists for.
-    let stdin = child
-        .stdin
-        .take()
-        .ok_or_else(|| "failed to capture tmux load-buffer stdin".to_string())?;
+    let stdin = child.stdin.take().ok_or_else(|| {
+        "failed to capture tmux load-buffer stdin".to_string()
+    })?;
     let (owned, stdout, stderr) = PublishedInvocation::record(child);
     let write_result = {
         let mut stdin = stdin;
@@ -449,7 +469,8 @@ fn load_tmux_buffer(tmux_socket: &Path, buffer_name: &str, text: &str) -> Result
     let drained = drain_invocation_pipes(stdout, stderr);
     let status = owned.reap().map_err(|source| source.to_string())?;
     write_result?;
-    let (_stdout, stderr_bytes) = drained.map_err(|source| source.to_string())?;
+    let (_stdout, stderr_bytes) =
+        drained.map_err(|source| source.to_string())?;
     if status.success() {
         return Ok(());
     }
@@ -498,7 +519,8 @@ pub(crate) fn run_tmux_command_capture(
         .get_current_dir()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "<no working directory>".to_string());
-    let working_directory_path = command.get_current_dir().map(|path| path.to_path_buf());
+    let working_directory_path =
+        command.get_current_dir().map(|path| path.to_path_buf());
     let child = command.spawn().map_err(|source| {
         let working_dir_status = match &working_directory_path {
             Some(path) if path.is_dir() => "present",
@@ -541,10 +563,10 @@ fn tmux_command(tmux_socket: &Path) -> Command {
     match tmux_socket.parent().zip(tmux_socket.file_name()) {
         Some((directory, file_name)) => {
             command.current_dir(directory).arg("-S").arg(file_name);
-        }
+        },
         None => {
             command.arg("-S").arg(tmux_socket);
-        }
+        },
     }
     command
 }
@@ -574,7 +596,8 @@ fn resolve_tmux_program() -> std::ffi::OsString {
             .map(PathBuf::into_os_string)
             .unwrap_or_else(|_| program.clone().into());
     }
-    resolve_program_on_search_path(program.as_str()).unwrap_or_else(|| program.into())
+    resolve_program_on_search_path(program.as_str())
+        .unwrap_or_else(|| program.into())
 }
 
 /// Resolves a bare program name against `PATH` from the current working
@@ -592,7 +615,9 @@ fn resolve_tmux_program() -> std::ffi::OsString {
 /// working directory cannot reach that lookup — and when no entry holds an
 /// executable candidate, which leaves the bare name for `execvp` to fail on so
 /// the operator sees an error naming what they configured.
-fn resolve_program_on_search_path(program: &str) -> Option<std::ffi::OsString> {
+fn resolve_program_on_search_path(
+    program: &str,
+) -> Option<std::ffi::OsString> {
     let search_path = std::env::var_os("PATH")?;
     std::env::split_paths(&search_path)
         .map(|entry| {
@@ -602,8 +627,12 @@ fn resolve_program_on_search_path(program: &str) -> Option<std::ffi::OsString> {
                 entry
             }
         })
-        .filter_map(|directory| std::path::absolute(directory.join(program)).ok())
-        .find(|candidate| candidate.is_file() && effective_user_can_execute(candidate))
+        .filter_map(|directory| {
+            std::path::absolute(directory.join(program)).ok()
+        })
+        .find(|candidate| {
+            candidate.is_file() && effective_user_can_execute(candidate)
+        })
         .map(PathBuf::into_os_string)
 }
 

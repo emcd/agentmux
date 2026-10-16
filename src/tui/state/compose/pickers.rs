@@ -99,10 +99,15 @@ impl AppState {
     /// The offset is re-clamped here rather than at the point of use, so a
     /// terminal resized smaller while the overlay is open cannot leave it
     /// scrolled past its own content.
-    pub fn set_help_overlay_viewport(&mut self, page_rows: usize, maximum_scroll: usize) {
+    pub fn set_help_overlay_viewport(
+        &mut self,
+        page_rows: usize,
+        maximum_scroll: usize,
+    ) {
         self.help_overlay_page_rows = page_rows;
         self.help_overlay_maximum_scroll = maximum_scroll;
-        self.help_overlay_scroll = self.help_overlay_scroll.min(maximum_scroll);
+        self.help_overlay_scroll =
+            self.help_overlay_scroll.min(maximum_scroll);
     }
 
     pub fn help_overlay_scroll(&self) -> usize {
@@ -114,8 +119,8 @@ impl AppState {
     }
 
     pub fn scroll_help_overlay_down(&mut self) {
-        self.help_overlay_scroll =
-            (self.help_overlay_scroll + 1).min(self.help_overlay_maximum_scroll);
+        self.help_overlay_scroll = (self.help_overlay_scroll + 1)
+            .min(self.help_overlay_maximum_scroll);
     }
 
     pub fn scroll_help_overlay_page_up(&mut self) {
@@ -125,8 +130,9 @@ impl AppState {
     }
 
     pub fn scroll_help_overlay_page_down(&mut self) {
-        self.help_overlay_scroll = (self.help_overlay_scroll + self.help_overlay_page_rows.max(1))
-            .min(self.help_overlay_maximum_scroll);
+        self.help_overlay_scroll = (self.help_overlay_scroll
+            + self.help_overlay_page_rows.max(1))
+        .min(self.help_overlay_maximum_scroll);
     }
 
     pub fn scroll_help_overlay_to_start(&mut self) {
@@ -215,7 +221,8 @@ impl AppState {
             );
             return;
         };
-        self.to_field = append_recipient_token(&self.to_field, session_name.as_str());
+        self.to_field =
+            append_recipient_token(&self.to_field, session_name.as_str());
         self.snap_to_field_cursor_to_end();
         self.last_selected_recipient = Some(session_name.clone());
         self.close_picker();
@@ -230,12 +237,14 @@ impl AppState {
     ///
     /// Returns the `RuntimeError` from the relay `Look` that Interaction-mode
     /// entry performs.
-    pub fn commit_selected_picker_session(&mut self) -> Result<(), RuntimeError> {
+    pub fn commit_selected_picker_session(
+        &mut self,
+    ) -> Result<(), RuntimeError> {
         match self.mode {
             ScreenMode::Communication => {
                 self.insert_picker_selection();
                 Ok(())
-            }
+            },
             ScreenMode::Interaction => self.enter_interaction_from_picker(),
         }
     }
@@ -256,7 +265,9 @@ impl AppState {
             .map(|recipient| recipient.session_name.clone())
     }
 
-    pub(in crate::tui::state) fn selected_picker_bundle(&self) -> Option<String> {
+    pub(in crate::tui::state) fn selected_picker_bundle(
+        &self,
+    ) -> Option<String> {
         let real = self.selected_bundle_real_index()?;
         self.available_bundles.get(real).cloned()
     }
@@ -292,11 +303,11 @@ impl AppState {
             PickerColumn::Sessions => {
                 let any = !self.visible_session_indices().is_empty();
                 self.picker_session_state.select(any.then_some(0));
-            }
+            },
             PickerColumn::Bundles => {
                 let any = !self.visible_bundle_indices().is_empty();
                 self.picker_bundle_state.select(any.then_some(0));
-            }
+            },
         }
     }
 
@@ -308,11 +319,11 @@ impl AppState {
             PickerColumn::Sessions => {
                 let real = self.selected_session_real_index();
                 self.picker_session_state.select(real);
-            }
+            },
             PickerColumn::Bundles => {
                 let real = self.selected_bundle_real_index();
                 self.picker_bundle_state.select(real);
-            }
+            },
         }
     }
 

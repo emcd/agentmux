@@ -29,8 +29,8 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use crate::support::relay_delivery::{
-    spawn_relay_with_fake_tmux, wait_for_relay_ready, write_bundle_configuration,
-    write_fake_tmux_script,
+    spawn_relay_with_fake_tmux, wait_for_relay_ready,
+    write_bundle_configuration, write_fake_tmux_script,
 };
 
 /// Bounds every wait in this test, so a regression that never produces the
@@ -39,7 +39,10 @@ const RECOVERY_BUDGET: Duration = Duration::from_secs(5);
 
 /// Grants credential administration to the operator principal, and binds the
 /// relay-wide user session to it.
-fn write_credential_admin_configuration(configuration_roots: &ConfigurationRoots, operator: &str) {
+fn write_credential_admin_configuration(
+    configuration_roots: &ConfigurationRoots,
+    operator: &str,
+) {
     fs::write(
         configuration_roots.base_layer().join("policies.toml"),
         r#"
@@ -89,12 +92,18 @@ policy = "operator"
 
 /// Issues one credential-administration request as the operator over a
 /// throwaway connection, and returns the response frame's `response` object.
-fn operator_request(socket_path: &Path, operator: &str, request: Value) -> Value {
-    let mut client = UnixStream::connect(socket_path).expect("connect operator stream");
+fn operator_request(
+    socket_path: &Path,
+    operator: &str,
+    request: Value,
+) -> Value {
+    let mut client =
+        UnixStream::connect(socket_path).expect("connect operator stream");
     client
         .set_read_timeout(Some(RECOVERY_BUDGET))
         .expect("bound operator reads");
-    let mut reader = BufReader::new(client.try_clone().expect("clone operator stream"));
+    let mut reader =
+        BufReader::new(client.try_clone().expect("clone operator stream"));
     write_frame(
         &mut client,
         &json!({
@@ -134,9 +143,9 @@ fn write_frame(stream: &mut UnixStream, payload: &Value) {
 
 fn read_frame(reader: &mut BufReader<UnixStream>) -> Value {
     let mut line = String::new();
-    reader
-        .read_line(&mut line)
-        .unwrap_or_else(|source| panic!("no frame within {RECOVERY_BUDGET:?}: {source}"));
+    reader.read_line(&mut line).unwrap_or_else(|source| {
+        panic!("no frame within {RECOVERY_BUDGET:?}: {source}")
+    });
     serde_json::from_str(line.trim_end()).expect("decode frame")
 }
 
@@ -148,16 +157,18 @@ fn list_request() -> RelayRequest {
 
 fn assert_list_response(response: &RelayResponse, context: &str) {
     match response {
-        RelayResponse::List { .. } => {}
+        RelayResponse::List { .. } => {},
         other => panic!("{context}: unexpected response {other:?}"),
     }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_revoked_session_redials_and_recovers_once_its_credential_is_refreshed() {
+async fn a_revoked_session_redials_and_recovers_once_its_credential_is_refreshed()
+ {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party";
-    let configuration_roots = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let configuration_roots =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
     let operator = "operator@GLOBAL";
     write_credential_admin_configuration(&configuration_roots, operator);
 
@@ -180,7 +191,8 @@ async fn a_revoked_session_redials_and_recovers_once_its_credential_is_refreshed
     wait_for_relay_ready(&relay_socket).await;
 
     let principal_id = format!("alpha@{bundle_name}");
-    let credential_path = session_identity_psk_path(&state_root, bundle_name, "alpha");
+    let credential_path =
+        session_identity_psk_path(&state_root, bundle_name, "alpha");
 
     // Provision alpha with a real credential, written to the canonical path the
     // session reads at Hello. Without this the session is socket-trust and the
@@ -253,13 +265,15 @@ async fn a_revoked_session_redials_and_recovers_once_its_credential_is_refreshed
     let mut last_error = None;
     loop {
         match session.request(&list_request()) {
-            Ok(response) => assert_list_response(&response, "before the revocation landed"),
+            Ok(response) => {
+                assert_list_response(&response, "before the revocation landed")
+            },
             Err(source) => {
                 if source.to_string().contains("relay hello rejected") {
                     break;
                 }
                 last_error = Some(source);
-            }
+            },
         }
         assert!(
             Instant::now() < deadline,

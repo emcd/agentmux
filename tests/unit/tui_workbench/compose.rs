@@ -12,11 +12,12 @@ fn enter_in_message_triggers_send_path() {
     let mut state = make_state();
     state.set_focus(WorkbenchField::Message);
     state.insert_text("hello");
-    let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
+    let result =
+        state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
     match result {
         Err(RuntimeError::Validation { code, .. }) => {
             assert_eq!(code, "validation_empty_targets")
-        }
+        },
         other => panic!("unexpected result: {other:?}"),
     }
     assert_eq!(state.message_field(), "hello");
@@ -55,8 +56,11 @@ fn modified_enter_in_message_sends_rather_than_inserting_a_newline() {
         state.insert_text("hello");
         match state.dispatch_event(key_event(KeyCode::Enter, modifiers)) {
             Err(RuntimeError::Validation { code, .. }) => {
-                assert_eq!(code, "validation_empty_targets", "modifiers {modifiers:?}")
-            }
+                assert_eq!(
+                    code, "validation_empty_targets",
+                    "modifiers {modifiers:?}"
+                )
+            },
             other => panic!("unexpected result for {modifiers:?}: {other:?}"),
         }
         assert_eq!(state.message_field(), "hello", "modifiers {modifiers:?}");

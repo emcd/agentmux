@@ -47,7 +47,7 @@ impl McpServer {
                     },
                 )?;
                 self.new_peer(args)
-            }
+            },
             other => Err(validation_tool_error(
                 "validation_invalid_params",
                 "new command must be \"peer\"",
@@ -109,15 +109,28 @@ impl McpServer {
                 // `written_path` only when a file was written (per the
                 // mcp-tool-surface success-payload contract).
                 let mut response = Map::new();
-                response.insert("schema_version".to_string(), json!(schema_version));
-                response.insert("principal_id".to_string(), json!(principal_id));
-                response.insert("principal_type".to_string(), json!(principal_type));
-                response.insert("config_snippet".to_string(), json!(config_snippet));
+                response.insert(
+                    "schema_version".to_string(),
+                    json!(schema_version),
+                );
+                response
+                    .insert("principal_id".to_string(), json!(principal_id));
+                response.insert(
+                    "principal_type".to_string(),
+                    json!(principal_type),
+                );
+                response.insert(
+                    "config_snippet".to_string(),
+                    json!(config_snippet),
+                );
                 if let Some(psk) = psk {
                     response.insert("psk".to_string(), json!(psk));
                 }
                 if let Some(written_path) = &written_path {
-                    response.insert("written_path".to_string(), json!(written_path));
+                    response.insert(
+                        "written_path".to_string(),
+                        json!(written_path),
+                    );
                 }
                 // Omitted when empty rather than rendered as `[]`, matching how
                 // every other optional field on this payload behaves.
@@ -146,9 +159,13 @@ impl McpServer {
                 Ok(CallToolResult::success(vec![Content::json(
                     Value::Object(response),
                 )?]))
-            }
-            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.new.peer", other)),
-            Err(source) => Err(self.map_relay_call_error("mcp.tool.new.peer.io_error", source)),
+            },
+            Ok(other) => {
+                Err(self
+                    .map_nonsuccess_relay_response("mcp.tool.new.peer", other))
+            },
+            Err(source) => Err(self
+                .map_relay_call_error("mcp.tool.new.peer.io_error", source)),
         }
     }
 }

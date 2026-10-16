@@ -1,17 +1,21 @@
 use serde_json::{Map, Value, json};
 
 use crate::{
-    configuration::{ConfigurationRoots, load_bundle_configuration, load_bundle_group_memberships},
+    configuration::{
+        ConfigurationRoots, load_bundle_configuration,
+        load_bundle_group_memberships,
+    },
     relay::{RelayRequest, RelayResponse, request_relay},
     runtime::{
         error::RuntimeError, paths::RelayRuntimePaths,
-        starter::ensure_starter_configuration_layout, tui_session::resolve_tui_session_identity,
+        starter::ensure_starter_configuration_layout,
+        tui_session::resolve_tui_session_identity,
     },
 };
 
 use super::{
-    BundleAction, BundleArguments, BundleSelector, BundleTransitionResult, BundleTransitionSummary,
-    RuntimeArguments, shared,
+    BundleAction, BundleArguments, BundleSelector, BundleTransitionResult,
+    BundleTransitionSummary, RuntimeArguments, shared,
 };
 
 pub(super) fn run_bundle_command(
@@ -22,9 +26,13 @@ pub(super) fn run_bundle_command(
     let roots = shared::resolve_roots(&parsed.runtime)?;
     ensure_starter_configuration_layout(&roots)?;
 
-    let selected_bundles = resolve_selected_bundles(&roots.configuration_roots, &parsed.selector)?;
+    let selected_bundles = resolve_selected_bundles(
+        &roots.configuration_roots,
+        &parsed.selector,
+    )?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
-    let mut bundles = Vec::<BundleTransitionResult>::with_capacity(selected_bundles.len());
+    let mut bundles =
+        Vec::<BundleTransitionResult>::with_capacity(selected_bundles.len());
     for bundle_name in selected_bundles {
         let resolved_operator = resolve_tui_session_identity(
             &roots.configuration_roots,
@@ -41,7 +49,12 @@ pub(super) fn run_bundle_command(
             resolved_operator.session_id.as_str(),
             &relay_request,
         )
-        .map_err(|source| shared::map_relay_request_failure(&relay_paths.relay_socket, source))?;
+        .map_err(|source| {
+            shared::map_relay_request_failure(
+                &relay_paths.relay_socket,
+                source,
+            )
+        })?;
         match response {
             RelayResponse::BundleTransition {
                 bundles: relay_bundles,
@@ -61,14 +74,18 @@ pub(super) fn run_bundle_command(
                     reason: entry.reason.clone(),
                     details: entry.details.clone(),
                 });
-            }
-            RelayResponse::Error { error } => return Err(shared::map_relay_error(error)),
+            },
+            RelayResponse::Error { error } => {
+                return Err(shared::map_relay_error(error));
+            },
             other => {
                 return Err(RuntimeError::validation(
                     "internal_unexpected_failure",
-                    format!("relay returned unexpected response variant: {other:?}"),
+                    format!(
+                        "relay returned unexpected response variant: {other:?}"
+                    ),
                 ));
-            }
+            },
         }
     }
 
@@ -126,12 +143,19 @@ fn parse_bundle_arguments(
     let mut group_name = None::<String>;
     let mut index = 0usize;
     while index < arguments.len() {
-        if shared::parse_runtime_flag(arguments, &mut index, &mut parsed.runtime)? {
+        if shared::parse_runtime_flag(
+            arguments,
+            &mut index,
+            &mut parsed.runtime,
+        )? {
             index += 1;
             continue;
         }
         match arguments[index].as_str() {
-            "--group" => group_name = Some(shared::take_value(arguments, &mut index, "--group")?),
+            "--group" => {
+                group_name =
+                    Some(shared::take_value(arguments, &mut index, "--group")?)
+            },
             value if !value.starts_with('-') => {
                 if positional_bundle.is_some() {
                     return Err(RuntimeError::InvalidArgument {
@@ -140,13 +164,13 @@ fn parse_bundle_arguments(
                     });
                 }
                 positional_bundle = Some(value.to_string());
-            }
+            },
             unknown => {
                 return Err(RuntimeError::InvalidArgument {
                     argument: unknown.to_string(),
                     message: "unknown argument".to_string(),
                 });
-            }
+            },
         }
         index += 1;
     }
@@ -156,18 +180,18 @@ fn parse_bundle_arguments(
                 "validation_conflicting_selectors",
                 "provide either positional <bundle-id> or --group <GROUP>, not both".to_string(),
             ));
-        }
+        },
         (None, None) => {
             return Err(RuntimeError::InvalidArgument {
                 argument: "<bundle-id>|--group".to_string(),
                 message: "missing selector".to_string(),
             });
-        }
+        },
         (Some(bundle_name), None) => BundleSelector::Bundle(bundle_name),
         (None, Some(group_name)) => {
             shared::validate_group_selector_name(group_name.as_str())?;
             BundleSelector::Group(group_name)
-        }
+        },
     };
     Ok(parsed)
 }
@@ -178,15 +202,17 @@ fn resolve_selected_bundles(
 ) -> Result<Vec<String>, RuntimeError> {
     match selector {
         BundleSelector::Bundle(bundle_name) => {
-            let _bundle = load_bundle_configuration(configuration_roots, bundle_name)
-                .map_err(shared::map_bundle_load_error)?;
+            let _bundle =
+                load_bundle_configuration(configuration_roots, bundle_name)
+                    .map_err(shared::map_bundle_load_error)?;
             Ok(vec![bundle_name.to_string()])
-        }
+        },
         BundleSelector::Group(group_name) => {
-            let memberships = load_bundle_group_memberships(configuration_roots)
-                .map_err(shared::map_bundle_load_error)?;
+            let memberships =
+                load_bundle_group_memberships(configuration_roots)
+                    .map_err(shared::map_bundle_load_error)?;
             shared::resolve_group_bundles(memberships, group_name)
-        }
+        },
     }
 }
 
@@ -196,7 +222,9 @@ fn build_transition_summary(
 ) -> BundleTransitionSummary {
     let changed_bundle_count = bundles
         .iter()
-        .filter(|bundle| matches!(bundle.outcome.as_str(), "hosted" | "unhosted"))
+        .filter(|bundle| {
+            matches!(bundle.outcome.as_str(), "hosted" | "unhosted")
+        })
         .count();
     let degraded_bundle_count = bundles
         .iter()
@@ -230,7 +258,8 @@ fn build_transition_summary(
 
 fn transition_summary_payload(summary: &BundleTransitionSummary) -> Value {
     let mut payload = Map::<String, Value>::new();
-    payload.insert("schema_version".to_string(), json!(summary.schema_version));
+    payload
+        .insert("schema_version".to_string(), json!(summary.schema_version));
     payload.insert("action".to_string(), json!(summary.action));
     payload.insert(
         "bundles".to_string(),
@@ -278,7 +307,7 @@ fn render_transition_summary(summary: &BundleTransitionSummary) {
                 "agentmux {}: failed to encode summary json: {source}",
                 summary.action
             );
-        }
+        },
     }
     println!(
         "agentmux {} summary changed={} degraded={} skipped={} failed={} changed_any={}",
@@ -296,15 +325,21 @@ fn render_transition_summary(summary: &BundleTransitionSummary) {
                     "bundle={} outcome={} reason_code={} reason={}",
                     bundle.bundle_name, bundle.outcome, reason_code, reason
                 );
-            }
+            },
             (Some(reason_code), None) => {
                 println!(
                     "bundle={} outcome={} reason_code={}",
                     bundle.bundle_name, bundle.outcome, reason_code
                 );
-            }
-            _ => println!("bundle={} outcome={}", bundle.bundle_name, bundle.outcome),
+            },
+            _ => println!(
+                "bundle={} outcome={}",
+                bundle.bundle_name, bundle.outcome
+            ),
         }
-        shared::render_failed_sessions(bundle.bundle_name.as_str(), bundle.details.as_ref());
+        shared::render_failed_sessions(
+            bundle.bundle_name.as_str(),
+            bundle.details.as_ref(),
+        );
     }
 }

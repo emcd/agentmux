@@ -23,8 +23,8 @@ use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{BundleRuntimePaths, RelayRuntimePaths};
 
 use crate::mcp::errors::{
-    UNASSOCIATED_SERVER_REMEDY, internal_tool_error, map_relay_error, map_relay_request_failure,
-    startup_fault_error, unassociated_server_error,
+    UNASSOCIATED_SERVER_REMEDY, internal_tool_error, map_relay_error,
+    map_relay_request_failure, startup_fault_error, unassociated_server_error,
 };
 
 /// A startup failure retained instead of aborting the process.
@@ -99,7 +99,8 @@ pub(super) struct McpState {
 
 impl McpServer {
     pub(crate) fn new(configuration: McpConfiguration) -> Self {
-        let relay_paths = RelayRuntimePaths::resolve(&configuration.state_root);
+        let relay_paths =
+            RelayRuntimePaths::resolve(&configuration.state_root);
         let relay_stream = configuration
             .sender_session
             .as_ref()
@@ -159,19 +160,17 @@ impl McpServer {
         namespace: Option<&str>,
     ) -> Result<RelayResponse, RelayCallError> {
         self.require_ready().map_err(RelayCallError::NotReady)?;
-        let mut guard = self
-            .state
-            .relay_stream
-            .lock()
-            .map_err(|_| std::io::Error::other("failed to lock MCP relay stream session"))?;
+        let mut guard = self.state.relay_stream.lock().map_err(|_| {
+            std::io::Error::other("failed to lock MCP relay stream session")
+        })?;
         let stream_session = guard.as_mut().ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "sender session is not configured for MCP relay stream",
             )
         })?;
-        let (response, events) =
-            stream_session.request_with_namespace_and_events(request, namespace)?;
+        let (response, events) = stream_session
+            .request_with_namespace_and_events(request, namespace)?;
         if !events.is_empty() {
             emit_inscription(
                 "mcp.tool.stream.events_ignored",
@@ -206,7 +205,7 @@ impl McpServer {
                     }),
                 );
                 map_relay_error(error)
-            }
+            },
             other => {
                 emit_inscription(
                     &format!("{event_prefix}.unexpected_response"),
@@ -217,7 +216,7 @@ impl McpServer {
                     "relay returned unexpected response variant",
                     Some(json!({"response": other})),
                 )
-            }
+            },
         }
     }
 
@@ -228,8 +227,13 @@ impl McpServer {
     ) -> rmcp::ErrorData {
         emit_inscription(event, &json!({"error": source.to_string()}));
         if self.is_associated() {
-            let relay_paths = RelayRuntimePaths::resolve(&self.state.configuration.state_root);
-            return map_relay_request_failure(&relay_paths.relay_socket, source);
+            let relay_paths = RelayRuntimePaths::resolve(
+                &self.state.configuration.state_root,
+            );
+            return map_relay_request_failure(
+                &relay_paths.relay_socket,
+                source,
+            );
         }
         // The stream is absent because the server never became operational, not
         // because a present relay failed; report the retained cause, or the
@@ -249,7 +253,9 @@ impl McpServer {
     ) -> rmcp::ErrorData {
         match error {
             RelayCallError::NotReady(fault) => fault,
-            RelayCallError::Io(source) => self.map_relay_stream_failure(event, source),
+            RelayCallError::Io(source) => {
+                self.map_relay_stream_failure(event, source)
+            },
         }
     }
 
@@ -262,7 +268,9 @@ impl McpServer {
     fn require_ready(&self) -> Result<(), rmcp::ErrorData> {
         match &self.state.configuration.readiness {
             McpReadiness::Ready => Ok(()),
-            McpReadiness::Unavailable(fault) => Err(startup_fault_error(fault)),
+            McpReadiness::Unavailable(fault) => {
+                Err(startup_fault_error(fault))
+            },
         }
     }
 
@@ -325,7 +333,9 @@ impl McpServer {
     /// `look`, `raww`, local `list.principals`), rejecting an unassociated server
     /// with the same canonical error. Association requires both the sender session
     /// and a bundle, so a partial configuration is unassociated by definition.
-    pub(super) fn require_associated_sender_session(&self) -> Result<String, rmcp::ErrorData> {
+    pub(super) fn require_associated_sender_session(
+        &self,
+    ) -> Result<String, rmcp::ErrorData> {
         self.require_ready()?;
         match (
             self.state.configuration.sender_session.as_ref(),
@@ -366,7 +376,8 @@ impl McpServer {
 #[tool_handler(router = self.tool_router)]
 impl rmcp::ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
-        const BASE: &str = "agentmux MCP server for tmux-backed multi-agent coordination.";
+        const BASE: &str =
+            "agentmux MCP server for tmux-backed multi-agent coordination.";
         let instructions = if self.is_associated() {
             format!(
                 "{BASE} Associated with session '{session}' in namespace '{namespace}'.",

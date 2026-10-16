@@ -45,7 +45,8 @@ fn operator_message_ignores_unrelated_detail_shapes() {
     // than appending noise.
     let error = RelayError {
         code: "validation_unsupported_operation".to_string(),
-        message: "target transport does not support this operation".to_string(),
+        message: "target transport does not support this operation"
+            .to_string(),
         details: Some(json!({
             "target_session": "alpha@party",
             "session_type": "ui",
@@ -63,7 +64,8 @@ fn operator_message_ignores_unrelated_detail_shapes() {
 fn operator_message_folds_session_and_cause() {
     let error = RelayError {
         code: "internal_unexpected_failure".to_string(),
-        message: "failed to create tmux session during reconciliation".to_string(),
+        message: "failed to create tmux session during reconciliation"
+            .to_string(),
         details: Some(json!({
             "session_name": "a",
             "cause": "permission denied",

@@ -2,9 +2,10 @@ use agentmux::configuration::ConfigurationRoots;
 use agentmux::{
     configuration::BundleConfiguration,
     runtime::association::{
-        AssociationCandidate, AssociationCandidates, AssociationSource, McpAssociationCli,
-        McpAssociationEnvironment, McpAssociationOverrides, load_local_mcp_overrides,
-        resolve_association, resolve_sender_session, validate_sender_session,
+        AssociationCandidate, AssociationCandidates, AssociationSource,
+        McpAssociationCli, McpAssociationEnvironment, McpAssociationOverrides,
+        load_local_mcp_overrides, resolve_association, resolve_sender_session,
+        validate_sender_session,
     },
 };
 use tempfile::TempDir;
@@ -15,7 +16,9 @@ fn named(candidate: Option<&AssociationCandidate>) -> Option<&str> {
 }
 
 /// The tier that supplied a resolved value.
-fn sourced(candidate: Option<&AssociationCandidate>) -> Option<AssociationSource> {
+fn sourced(
+    candidate: Option<&AssociationCandidate>,
+) -> Option<AssociationSource> {
     candidate.map(|candidate| candidate.source)
 }
 
@@ -55,8 +58,8 @@ fn bundle_with_directories(
         groups: Vec::new(),
         members: session_directories
             .iter()
-            .map(
-                |(session_name, directory)| agentmux::configuration::BundleMember {
+            .map(|(session_name, directory)| {
+                agentmux::configuration::BundleMember {
                     id: (*session_name).to_string(),
                     name: None,
                     working_directory: Some((*directory).to_path_buf()),
@@ -69,14 +72,17 @@ fn bundle_with_directories(
                     coder_session_id: None,
                     policy_id: None,
                     environment: Vec::new(),
-                },
-            )
+                }
+            })
             .collect(),
     }
 }
 
 /// Association identities carried by the injected bring-up environment.
-fn injected(bundle: Option<&str>, session: Option<&str>) -> McpAssociationEnvironment {
+fn injected(
+    bundle: Option<&str>,
+    session: Option<&str>,
+) -> McpAssociationEnvironment {
     McpAssociationEnvironment {
         bundle_name: bundle.map(ToString::to_string),
         session_name: session.map(ToString::to_string),
@@ -230,8 +236,10 @@ fn loads_association_file_from_the_configuration_root() {
     )
     .expect("write association file");
 
-    let loaded = load_local_mcp_overrides(&ConfigurationRoots::single(temporary.path()))
-        .expect("load overrides");
+    let loaded = load_local_mcp_overrides(&ConfigurationRoots::single(
+        temporary.path(),
+    ))
+    .expect("load overrides");
     let Some(loaded) = loaded else {
         panic!("expected association file");
     };
@@ -254,7 +262,8 @@ fn an_earlier_association_layer_shadows_a_later_one() {
     )
     .expect("write override association file");
 
-    let roots = ConfigurationRoots::from_elements([override_layer, base]).expect("layer list");
+    let roots = ConfigurationRoots::from_elements([override_layer, base])
+        .expect("layer list");
     let loaded = load_local_mcp_overrides(&roots)
         .expect("load overrides")
         .expect("expected association file");
@@ -271,7 +280,8 @@ fn an_association_file_in_a_later_layer_is_reached() {
     std::fs::write(base.join("mcp.toml"), "bundle_name = 'base-bundle'\n")
         .expect("write base association file");
 
-    let roots = ConfigurationRoots::from_elements([override_layer, base]).expect("layer list");
+    let roots = ConfigurationRoots::from_elements([override_layer, base])
+        .expect("layer list");
     let loaded = load_local_mcp_overrides(&roots)
         .expect("load overrides")
         .expect("expected association file");
@@ -287,8 +297,10 @@ fn rejects_malformed_local_override_file() {
     )
     .expect("write override");
 
-    let err = load_local_mcp_overrides(&ConfigurationRoots::single(temporary.path()))
-        .expect_err("override should fail");
+    let err = load_local_mcp_overrides(&ConfigurationRoots::single(
+        temporary.path(),
+    ))
+    .expect_err("override should fail");
     assert!(err.to_string().contains("validation_invalid_arguments"));
 }
 
@@ -302,7 +314,8 @@ fn validates_sender_membership() {
 #[test]
 fn rejects_unknown_sender_membership() {
     let bundle = bundle_with_sessions(&["relay", "tui"]);
-    let err = validate_sender_session(&bundle, "planner").expect_err("should fail");
+    let err =
+        validate_sender_session(&bundle, "planner").expect_err("should fail");
     assert!(err.to_string().contains("validation_unknown_sender"));
 }
 
@@ -319,7 +332,8 @@ fn resolves_sender_from_working_directory_when_no_candidate_is_supplied() {
     ]);
 
     let resolved =
-        resolve_sender_session(&bundle, None, relay_directory.as_path()).expect("resolve");
+        resolve_sender_session(&bundle, None, relay_directory.as_path())
+            .expect("resolve");
     assert_eq!(resolved.as_deref(), Some("master"));
 }
 
@@ -339,8 +353,12 @@ fn refuses_a_supplied_candidate_which_names_no_member() {
     // mistyped selector authenticate as whichever member owns the directory,
     // reintroducing identity by inference one tier below the Git guessing this
     // ladder replaced.
-    let err = resolve_sender_session(&bundle, Some("relay"), relay_directory.as_path())
-        .expect_err("a supplied candidate naming no member must be refused");
+    let err = resolve_sender_session(
+        &bundle,
+        Some("relay"),
+        relay_directory.as_path(),
+    )
+    .expect_err("a supplied candidate naming no member must be refused");
     assert!(err.to_string().contains("validation_unknown_sender"));
     assert!(
         !err.to_string().contains("master"),
@@ -353,14 +371,17 @@ fn reports_no_sender_when_nothing_supplied_and_no_directory_matches() {
     let temporary = TempDir::new().expect("temporary");
     let relay_directory = temporary.path().join("relay");
     std::fs::create_dir_all(&relay_directory).expect("create relay directory");
-    let bundle = bundle_with_directories(&[("master", relay_directory.as_path())]);
+    let bundle =
+        bundle_with_directories(&[("master", relay_directory.as_path())]);
 
     let unknown_directory = temporary.path().join("unknown");
-    std::fs::create_dir_all(&unknown_directory).expect("create unknown directory");
+    std::fs::create_dir_all(&unknown_directory)
+        .expect("create unknown directory");
     // Nothing was supplied, so nothing was mistaken: an unassociated server is a
     // legitimate outcome rather than a fault.
     let resolved =
-        resolve_sender_session(&bundle, None, unknown_directory.as_path()).expect("resolve");
+        resolve_sender_session(&bundle, None, unknown_directory.as_path())
+            .expect("resolve");
     assert_eq!(resolved, None);
 }
 

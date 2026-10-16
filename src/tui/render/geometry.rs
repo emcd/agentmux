@@ -6,7 +6,11 @@ use ratatui::{
 use super::super::state::AppState;
 use super::frame::{WORKBENCH_MIN_CHAT_HEIGHT, WORKBENCH_MIN_COMPOSE_HEIGHT};
 
-pub(super) fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
+pub(super) fn centered_rect(
+    percent_x: u16,
+    percent_y: u16,
+    area: Rect,
+) -> Rect {
     let vertical = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -60,7 +64,8 @@ pub(super) fn compute_compose_height(
     let desired = message_line_count
         .saturating_add(to_row)
         .saturating_add(borders);
-    let max_compose = available_height.saturating_sub(WORKBENCH_MIN_CHAT_HEIGHT);
+    let max_compose =
+        available_height.saturating_sub(WORKBENCH_MIN_CHAT_HEIGHT);
     let min_compose = WORKBENCH_MIN_COMPOSE_HEIGHT.min(max_compose.max(1));
     desired.clamp(min_compose, max_compose.max(min_compose))
 }

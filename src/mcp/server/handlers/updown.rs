@@ -14,9 +14,13 @@ use crate::relay::{RelayRequest, RelayResponse};
 use crate::runtime::inscriptions::emit_inscription;
 
 use crate::mcp::errors::validation_tool_error;
-use crate::mcp::params::{UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs, UpdownParams};
+use crate::mcp::params::{
+    UPDOWN_COMMAND_DOWN, UPDOWN_COMMAND_UP, UpdownArgs, UpdownParams,
+};
 use crate::mcp::server::McpServer;
-use crate::mcp::validation::{parse_meta_tool_args, validate_updown_args, validate_updown_params};
+use crate::mcp::validation::{
+    parse_meta_tool_args, validate_updown_args, validate_updown_params,
+};
 
 #[tool_router(router = tool_router_updown, vis = "pub(crate)")]
 impl McpServer {
@@ -44,11 +48,11 @@ impl McpServer {
             UPDOWN_COMMAND_UP => {
                 validate_updown_args(&args, UPDOWN_COMMAND_UP)?;
                 self.updown_transition(UPDOWN_COMMAND_UP, RelayRequest::Up)
-            }
+            },
             UPDOWN_COMMAND_DOWN => {
                 validate_updown_args(&args, UPDOWN_COMMAND_DOWN)?;
                 self.updown_transition(UPDOWN_COMMAND_DOWN, RelayRequest::Down)
-            }
+            },
             other => Err(validation_tool_error(
                 "validation_invalid_params",
                 "updown command must be \"up\" or \"down\"",
@@ -106,9 +110,12 @@ impl McpServer {
                     }),
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
-            }
-            Ok(other) => Err(self.map_nonsuccess_relay_response(event_prefix.as_str(), other)),
-            Err(source) => Err(self.map_relay_call_error(io_error_event.as_str(), source)),
+            },
+            Ok(other) => Err(self
+                .map_nonsuccess_relay_response(event_prefix.as_str(), other)),
+            Err(source) => {
+                Err(self.map_relay_call_error(io_error_event.as_str(), source))
+            },
         }
     }
 }

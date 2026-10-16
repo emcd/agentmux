@@ -60,9 +60,14 @@ const WATCHER_SIGNAL_WAIT_BUDGET: Duration = Duration::from_secs(30);
 /// the first server frame (a `hello_ack` on acceptance or an error `response`
 /// on rejection). Used to exercise the relay-wide credential-enforcement flag
 /// end-to-end through the hosted binary.
-fn relay_hello_first_frame(state_root: &Path, principal_id: &str, identity_token: &str) -> Value {
+fn relay_hello_first_frame(
+    state_root: &Path,
+    principal_id: &str,
+    identity_token: &str,
+) -> Value {
     let socket = RelayRuntimePaths::resolve(state_root).relay_socket;
-    let mut stream = UnixStream::connect(&socket).expect("connect relay socket");
+    let mut stream =
+        UnixStream::connect(&socket).expect("connect relay socket");
     let hello = json!({
         "frame": "hello",
         "schema_version": "1",

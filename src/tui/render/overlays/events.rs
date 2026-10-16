@@ -9,7 +9,10 @@ use ratatui::{
 use super::super::super::state::AppState;
 use super::super::geometry::centered_rect;
 
-pub(in crate::tui::render) fn render_events_overlay(frame: &mut Frame, state: &mut AppState) {
+pub(in crate::tui::render) fn render_events_overlay(
+    frame: &mut Frame,
+    state: &mut AppState,
+) {
     let popup = centered_rect(80, 70, frame.area());
     frame.render_widget(Clear, popup);
     let sections = Layout::default()
@@ -41,7 +44,11 @@ pub(in crate::tui::render) fn render_events_overlay(frame: &mut Frame, state: &m
                 .title("Pending Choices"),
         )
         .highlight_style(Style::default().bg(Color::Blue).fg(Color::White));
-    frame.render_stateful_widget(pending_list, sections[0], &mut state.pending_choices_state);
+    frame.render_stateful_widget(
+        pending_list,
+        sections[0],
+        &mut state.pending_choices_state,
+    );
 
     let lines = if state.event_history.is_empty() {
         vec![Line::from("(no delivery events captured yet)")]

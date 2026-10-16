@@ -17,14 +17,17 @@ use std::{
 
 use crate::{
     configuration::{
-        BUNDLE_EXTENSION, BUNDLES_DIRECTORY, ConfigurationError, bundle_directory_layers,
-        effective_bundle_definitions, load_ui_configuration, supplied_root_configuration_sources,
+        BUNDLE_EXTENSION, BUNDLES_DIRECTORY, ConfigurationError,
+        bundle_directory_layers, effective_bundle_definitions,
+        load_ui_configuration, supplied_root_configuration_sources,
     },
     relay::{
-        RelayError, load_relay_runtime_configuration, preflight_bundle_configuration,
-        validate_peer_aliases,
+        RelayError, load_relay_runtime_configuration,
+        preflight_bundle_configuration, validate_peer_aliases,
     },
-    runtime::{error::RuntimeError, starter::validate_supplied_configuration_layers},
+    runtime::{
+        error::RuntimeError, starter::validate_supplied_configuration_layers,
+    },
     tui::unreachable_actions,
 };
 
@@ -42,7 +45,9 @@ use super::{CheckArguments, shared};
 /// captured transcript, which is what an operator pastes into a bug report.
 /// Flushing at the single exit costs nothing, states the ordering contract where
 /// a reader can find it, and covers failure paths added later.
-pub(super) fn run_agentmux_check(arguments: &[String]) -> Result<(), RuntimeError> {
+pub(super) fn run_agentmux_check(
+    arguments: &[String],
+) -> Result<(), RuntimeError> {
     let outcome = check_configuration(arguments);
     if outcome.is_err() {
         let _ = io::stdout().flush();
@@ -60,8 +65,9 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
     }
 
     let parsed = parse_check_arguments(arguments)?;
-    let current_directory = env::current_dir()
-        .map_err(|source| RuntimeError::io("resolve current working directory", source))?;
+    let current_directory = env::current_dir().map_err(|source| {
+        RuntimeError::io("resolve current working directory", source)
+    })?;
     let roots = shared::resolve_roots(&parsed.runtime)?;
 
     // Findings that do not stop the run. This command is what an operator
@@ -74,13 +80,14 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
     // serves the source report and the validation loop from one enumeration. An
     // absent bundles directory yields no entries rather than an error, mirroring
     // the relay's own discovery.
-    let bundle_definitions = match effective_bundle_definitions(&roots.configuration_roots) {
-        Ok(definitions) => definitions,
-        Err(error) => {
-            findings.push(error.to_string());
-            BTreeMap::new()
-        }
-    };
+    let bundle_definitions =
+        match effective_bundle_definitions(&roots.configuration_roots) {
+            Ok(definitions) => definitions,
+            Err(error) => {
+                findings.push(error.to_string());
+                BTreeMap::new()
+            },
+        };
     let bundle_names: Vec<String> = match parsed.bundle_id.as_deref() {
         Some(bundle_id) => vec![bundle_id.to_string()],
         None => bundle_definitions.keys().cloned().collect(),
@@ -96,12 +103,14 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
     // layer is a finding on the same terms in quiet mode. Tying the lookup to
     // the flag would make `--quiet` change which policy the condition gets, not
     // just how much is written.
-    let supplied_sources = match supplied_root_configuration_sources(&roots.configuration_roots) {
+    let supplied_sources = match supplied_root_configuration_sources(
+        &roots.configuration_roots,
+    ) {
         Ok(sources) => sources,
         Err(error) => {
             findings.push(error.to_string());
             Vec::new()
-        }
+        },
     };
     if !parsed.quiet {
         report_configuration_sources(
@@ -137,9 +146,12 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
     // reported even when the config root has no bundles — matching relay startup,
     // which rejects the same artifact up front. The shared loader keeps check and
     // startup in step.
-    let relay_configuration =
-        load_relay_runtime_configuration(&roots.configuration_roots, None, None)
-            .map_err(preflight_error_to_runtime)?;
+    let relay_configuration = load_relay_runtime_configuration(
+        &roots.configuration_roots,
+        None,
+        None,
+    )
+    .map_err(preflight_error_to_runtime)?;
 
     // Peer aliases resolve against the principal store, which lives under the
     // state root rather than the configuration roots, so this is a separate step
@@ -203,8 +215,11 @@ fn check_configuration(arguments: &[String]) -> Result<(), RuntimeError> {
     // Fail-fast: validate bundles in deterministic order and surface the first
     // invalid one with full detail. No partial-load or graceful degradation.
     for bundle_name in &bundle_names {
-        preflight_bundle_configuration(&roots.configuration_roots, bundle_name)
-            .map_err(preflight_error_to_runtime)?;
+        preflight_bundle_configuration(
+            &roots.configuration_roots,
+            bundle_name,
+        )
+        .map_err(preflight_error_to_runtime)?;
         if !parsed.quiet {
             println!("ok: {bundle_name}");
         }
@@ -280,7 +295,9 @@ fn physical_path(current_directory: &Path, path: &Path) -> PathBuf {
     }
 }
 
-fn parse_check_arguments(arguments: &[String]) -> Result<CheckArguments, RuntimeError> {
+fn parse_check_arguments(
+    arguments: &[String],
+) -> Result<CheckArguments, RuntimeError> {
     let Some(subcommand) = arguments.first().map(String::as_str) else {
         return Err(RuntimeError::validation(
             "validation_invalid_params",
@@ -297,29 +314,34 @@ fn parse_check_arguments(arguments: &[String]) -> Result<CheckArguments, Runtime
     let mut parsed = CheckArguments::default();
     let mut index = 1usize;
     while index < arguments.len() {
-        if shared::parse_runtime_flag(arguments, &mut index, &mut parsed.runtime)? {
+        if shared::parse_runtime_flag(
+            arguments,
+            &mut index,
+            &mut parsed.runtime,
+        )? {
             index += 1;
             continue;
         }
         match arguments[index].as_str() {
             "-q" | "--quiet" => {
                 parsed.quiet = true;
-            }
+            },
             value if !value.starts_with('-') => {
                 if parsed.bundle_id.is_some() {
                     return Err(RuntimeError::InvalidArgument {
                         argument: value.to_string(),
-                        message: "unexpected second positional bundle id".to_string(),
+                        message: "unexpected second positional bundle id"
+                            .to_string(),
                     });
                 }
                 parsed.bundle_id = Some(value.to_string());
-            }
+            },
             unknown => {
                 return Err(RuntimeError::InvalidArgument {
                     argument: unknown.to_string(),
                     message: "unknown argument".to_string(),
                 });
-            }
+            },
         }
         index += 1;
     }
@@ -336,10 +358,16 @@ fn parse_check_arguments(arguments: &[String]) -> Result<CheckArguments, Runtime
 /// through the configuration module rather than the relay pre-flight path.
 fn configuration_error_to_runtime(error: ConfigurationError) -> RuntimeError {
     match error {
-        ConfigurationError::InvalidConfiguration { path, message } => RuntimeError::validation(
-            "validation_invalid_arguments",
-            format!("invalid configuration {}: {}", path.display(), message),
-        ),
+        ConfigurationError::InvalidConfiguration { path, message } => {
+            RuntimeError::validation(
+                "validation_invalid_arguments",
+                format!(
+                    "invalid configuration {}: {}",
+                    path.display(),
+                    message
+                ),
+            )
+        },
         // The structured code is the only axis carrying this condition: every
         // failure exits `1`, so folding the layer fault into the generic
         // argument code would make it indistinguishable from a malformed file
@@ -350,8 +378,11 @@ fn configuration_error_to_runtime(error: ConfigurationError) -> RuntimeError {
                 "validation_unreadable_configuration_layer",
                 layer.to_string(),
             )
-        }
-        other => RuntimeError::validation("validation_invalid_arguments", other.to_string()),
+        },
+        other => RuntimeError::validation(
+            "validation_invalid_arguments",
+            other.to_string(),
+        ),
     }
 }
 
@@ -375,5 +406,7 @@ pub(super) fn print_check_help() {
     println!(
         "  Reports the physical file supplying each resolved artifact, so a shadowed copy is distinguishable from the copy in effect."
     );
-    println!("  -q, --quiet  Suppress success output, leaving the exit code and any failure.");
+    println!(
+        "  -q, --quiet  Suppress success output, leaving the exit code and any failure."
+    );
 }

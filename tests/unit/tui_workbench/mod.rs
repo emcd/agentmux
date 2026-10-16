@@ -47,7 +47,10 @@ fn make_state() -> Workbench {
         sender_session: "tui".to_string(),
         relay_socket: PathBuf::from("/tmp/agentmux-test-relay.sock"),
         look_lines: None,
-        available_bundles: vec!["agentmux".to_string(), "secondary".to_string()],
+        available_bundles: vec![
+            "agentmux".to_string(),
+            "secondary".to_string(),
+        ],
         bindings: None,
     })
 }

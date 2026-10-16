@@ -1,6 +1,8 @@
 use tempfile::TempDir;
 
-use agentmux::configuration::{BringUpContext, TargetConfiguration, load_bundle_configuration};
+use agentmux::configuration::{
+    BringUpContext, TargetConfiguration, load_bundle_configuration,
+};
 
 use super::helpers::*;
 
@@ -42,7 +44,8 @@ coder = "acp"
         ),
     );
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(loaded.members.len(), 1);
     let TargetConfiguration::Acp(ref acp) = loaded.members[0].target else {
         panic!("expected ACP target configuration");
@@ -96,7 +99,8 @@ coder = "shell"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string().contains("prompt-regex"),
         "unexpected error: {err}"
@@ -135,7 +139,8 @@ coder = "shell"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string().contains("prompt-inspect-lines"),
         "unexpected error: {err}"
@@ -172,7 +177,8 @@ coder = "missing"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string().contains("unknown coder"),
         "unexpected error: {err}"
@@ -216,7 +222,8 @@ coder = "dup"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string().contains("duplicate coder id"),
         "unexpected error: {err}"
@@ -253,7 +260,8 @@ coder = "shell"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string().contains("unknown placeholder"),
         "unexpected error: {err}"
@@ -286,7 +294,8 @@ coder = "shell"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string().contains("exactly one target table"),
         "unexpected error: {err}"
@@ -327,7 +336,8 @@ coder = "shell"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string().contains("multiple target tables"),
         "unexpected error: {err}"
@@ -363,7 +373,8 @@ coder = "acp"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string()
             .contains("stdio target requires non-empty command"),
@@ -401,7 +412,8 @@ coder = "acp"
         ),
     );
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(loaded.members.len(), 1);
     assert_eq!(loaded.members[0].coder_session_id, None);
     assert!(matches!(
@@ -454,7 +466,8 @@ coder = "acp"
         ),
     );
 
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(loaded.members.len(), 2);
     assert!(matches!(
         loaded.members[0].target,
@@ -509,9 +522,13 @@ coder = "alpha"
 "#
             ),
         );
-        let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
-        let TargetConfiguration::Pty(ref pty) = loaded.members[0].target else {
-            panic!("expected Pty target configuration for term-protocol = {term_str}");
+        let loaded = load_bundle_configuration(&root, "alpha")
+            .expect("load configuration");
+        let TargetConfiguration::Pty(ref pty) = loaded.members[0].target
+        else {
+            panic!(
+                "expected Pty target configuration for term-protocol = {term_str}"
+            );
         };
         assert_eq!(
             pty.term_protocol, *expected,
@@ -551,7 +568,8 @@ coder = "alpha"
 "#
         ),
     );
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     let TargetConfiguration::Pty(ref pty) = loaded.members[0].target else {
         panic!("expected Pty target configuration");
     };

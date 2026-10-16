@@ -93,7 +93,7 @@ pub(in crate::relay) fn enqueue(
             let next = mailbox.next_sequence;
             mailbox.next_sequence = next.next();
             next
-        }
+        },
     };
     if mailbox.slots.contains_key(&sequence) {
         return Err(EnqueueRejection::AlreadyEnqueued);
@@ -134,15 +134,18 @@ pub(in crate::relay) fn enqueue(
     // All three are read from the ledger's own state under the same lock as the
     // insertion, so what is reported is the mailbox's contents rather than a
     // later reading of them or a copy of what the caller passed in.
-    let payload_created_at = mailbox
-        .slots
-        .get(&sequence)
-        .and_then(|slot| match &slot.payload {
-            MailboxPayload::Mail(envelope) => Some(envelope.message.created_at.as_str()),
-            // Raw input is written through verbatim and carries no envelope, so
-            // there is no stamp to report and none to compare against.
-            MailboxPayload::Raw { .. } => None,
-        });
+    let payload_created_at =
+        mailbox
+            .slots
+            .get(&sequence)
+            .and_then(|slot| match &slot.payload {
+                MailboxPayload::Mail(envelope) => {
+                    Some(envelope.message.created_at.as_str())
+                },
+                // Raw input is written through verbatim and carries no envelope, so
+                // there is no stamp to report and none to compare against.
+                MailboxPayload::Raw { .. } => None,
+            });
     emit_inscription(
         INSCRIPTION_MAILBOX_ENQUEUED,
         &json!({
@@ -194,7 +197,8 @@ mod mailbox_retirement_tests {
     use super::*;
 
     #[test]
-    fn a_position_abandoned_or_resolved_outside_an_ack_does_not_park_the_mailbox() {
+    fn a_position_abandoned_or_resolved_outside_an_ack_does_not_park_the_mailbox()
+     {
         // A reservation taken and rolled back before its payload was enqueued.
         // Its position is gone, and the entry behind it must still be reachable:
         // the cursor expects the abandoned position, so leaving it merely absent
@@ -204,7 +208,8 @@ mod mailbox_retirement_tests {
         admit_only(rolled_back, "mbx-retire-rollback-a", 1);
         admit_only(rolled_back, "mbx-retire-rollback-b", 1);
         rollback_admission("mbx-retire-rollback-a");
-        enqueue(&task(rolled_back, "mbx-retire-rollback-b"), mail("body")).expect("enqueue");
+        enqueue(&task(rolled_back, "mbx-retire-rollback-b"), mail("body"))
+            .expect("enqueue");
         assert_eq!(
             peeked(&rollback_bound, 10, 1_000),
             vec![2],
@@ -236,7 +241,8 @@ mod mailbox_retirement_tests {
         let declared = declare(&trigger_bound, range(2, 2)).expect("declare");
         terminalize("mbx-retire-trigger-2");
         assert_eq!(
-            declare(&trigger_bound, range(3, 3)).map(|accepted| accepted.range),
+            declare(&trigger_bound, range(3, 3))
+                .map(|accepted| accepted.range),
             Ok(range(3, 3)),
             "a declaration whose members were all resolved elsewhere stops blocking"
         );

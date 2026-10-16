@@ -31,5 +31,6 @@ mod spawn;
 mod stop;
 
 pub(super) use self::spawn::{
-    AcpWorkerBootstrap, WorkerTransportContext, WorkerTransportSource, spawn_async_delivery_worker,
+    AcpWorkerBootstrap, WorkerTransportContext, WorkerTransportSource,
+    spawn_async_delivery_worker,
 };

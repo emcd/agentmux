@@ -317,7 +317,9 @@ impl TargetGenerations {
     /// advances from the high-water mark rather than from the active generation,
     /// so a release that cleared the latter cannot restart the sequence.
     pub(super) fn issue(&mut self) -> ConsumerGenerationId {
-        let issued = ConsumerGenerationId::new(self.issued.map_or(1, |issued| issued.value() + 1));
+        let issued = ConsumerGenerationId::new(
+            self.issued.map_or(1, |issued| issued.value() + 1),
+        );
         self.issued = Some(issued);
         self.active = Some(issued);
         issued
@@ -343,7 +345,8 @@ pub(super) struct LedgerState {
     /// generations are: it is registered as a generation is built, which can
     /// precede the target's first entry, and holding it on the mailbox would
     /// mean a registration created the mailbox it is waiting for.
-    pub(super) doorbells: HashMap<AdmissionTargetKey, super::mailbox::Doorbell>,
+    pub(super) doorbells:
+        HashMap<AdmissionTargetKey, super::mailbox::Doorbell>,
     pub(super) global: TargetUsage,
     pub(super) per_target: HashMap<AdmissionTargetKey, TargetUsage>,
 }
@@ -359,7 +362,8 @@ fn ledger() -> &'static AdmissionLedger {
     ADMISSION_LEDGER.get_or_init(AdmissionLedger::default)
 }
 
-pub(super) fn lock_ledger() -> Result<std::sync::MutexGuard<'static, LedgerState>, RelayError> {
+pub(super) fn lock_ledger()
+-> Result<std::sync::MutexGuard<'static, LedgerState>, RelayError> {
     // The two reports sit on opposite sides of the acquisition deliberately, and
     // they are the only way an interleaving at this boundary is observable at
     // all: from outside, a caller inside the critical section and a caller that

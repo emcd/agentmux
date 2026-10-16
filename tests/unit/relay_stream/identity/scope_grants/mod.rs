@@ -37,8 +37,12 @@ use super::*;
 
 /// Writes the identity-test operator configuration plus an explicit
 /// `change.scope=all` grant, so scope updates authorize.
-fn write_scope_configuration(temporary: &TempDir, bundle_name: &str) -> ConfigurationRoots {
-    let configuration_roots = write_bundle_configuration(temporary, bundle_name);
+fn write_scope_configuration(
+    temporary: &TempDir,
+    bundle_name: &str,
+) -> ConfigurationRoots {
+    let configuration_roots =
+        write_bundle_configuration(temporary, bundle_name);
     std::fs::write(
         configuration_roots.base_layer().join("policies.toml"),
         r#"
@@ -85,7 +89,8 @@ fn change_scope_request(
     principal_id: &str,
     scope: Option<&str>,
 ) -> Value {
-    let mut request = json!({"operation": "change_scope", "principal_id": principal_id});
+    let mut request =
+        json!({"operation": "change_scope", "principal_id": principal_id});
     if let Some(scope) = scope {
         request["scope"] = Value::String(scope.to_string());
     }
@@ -93,23 +98,32 @@ fn change_scope_request(
 }
 
 /// Reads one principal record from the on-disk store.
-fn store_record(bundle_paths: &BundleRuntimePaths, principal_id: &str) -> Value {
-    let raw =
-        std::fs::read_to_string(principal_store_file(bundle_paths)).expect("read principal store");
-    let store: Value = serde_json::from_str(&raw).expect("parse principal store");
+fn store_record(
+    bundle_paths: &BundleRuntimePaths,
+    principal_id: &str,
+) -> Value {
+    let raw = std::fs::read_to_string(principal_store_file(bundle_paths))
+        .expect("read principal store");
+    let store: Value =
+        serde_json::from_str(&raw).expect("parse principal store");
     store["principals"]
         .as_array()
         .expect("principals array")
         .iter()
         .find(|record| record["principal_id"] == principal_id)
-        .unwrap_or_else(|| panic!("missing record for {principal_id}: {store}"))
+        .unwrap_or_else(|| {
+            panic!("missing record for {principal_id}: {store}")
+        })
         .clone()
 }
 
 /// Writes a users.toml declaring `operators` distinct `@GLOBAL` operators on
 /// the operator policy, so concurrent admin callers on one shared context do
 /// not collide on a single identity claim.
-fn write_multi_operator_users(configuration_roots: &ConfigurationRoots, operators: &[String]) {
+fn write_multi_operator_users(
+    configuration_roots: &ConfigurationRoots,
+    operators: &[String],
+) {
     let sessions = operators
         .iter()
         .map(|operator| {
@@ -132,7 +146,8 @@ fn operator_request_as(
     operator: &str,
     request: Value,
 ) -> Value {
-    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(configuration_roots, bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -175,11 +190,17 @@ fn register_peer_as(
     principal_id: &str,
     scope: Option<&str>,
 ) -> String {
-    let mut request = json!({"operation": "new_peer", "principal_id": principal_id});
+    let mut request =
+        json!({"operation": "new_peer", "principal_id": principal_id});
     if let Some(scope) = scope {
         request["scope"] = Value::String(scope.to_string());
     }
-    let response = operator_request_as(configuration_roots, bundle_paths, operator, request);
+    let response = operator_request_as(
+        configuration_roots,
+        bundle_paths,
+        operator,
+        request,
+    );
     assert_eq!(
         response["response"]["kind"], "new_peer",
         "new peer rejected: {response:?}"
@@ -197,7 +218,8 @@ fn peer_send_response(
     psk: &str,
     target: &str,
 ) -> Value {
-    let (mut client, join) = spawn_relay_connection(configuration_roots, bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(configuration_roots, bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -257,14 +279,17 @@ impl TmuxBlackhole {
             socket_path.display()
         );
         if socket_path.exists() {
-            std::fs::remove_file(&socket_path).expect("clear tmux socket path");
+            std::fs::remove_file(&socket_path)
+                .expect("clear tmux socket path");
         }
-        let listener = UnixListener::bind(&socket_path).expect("bind black-hole socket");
+        let listener =
+            UnixListener::bind(&socket_path).expect("bind black-hole socket");
         listener
             .set_nonblocking(true)
             .expect("nonblocking listener");
         let (dialed_tx, dialed_rx) = mpsc::channel::<()>();
-        let accepted: Arc<Mutex<Vec<UnixStream>>> = Arc::new(Mutex::new(Vec::new()));
+        let accepted: Arc<Mutex<Vec<UnixStream>>> =
+            Arc::new(Mutex::new(Vec::new()));
         let stop = Arc::new(AtomicBool::new(false));
         let thread = {
             let accepted = Arc::clone(&accepted);
@@ -274,15 +299,21 @@ impl TmuxBlackhole {
                 while !stop.load(Ordering::SeqCst) {
                     match listener.accept() {
                         Ok((stream, _)) => {
-                            accepted.lock().expect("lock streams").push(stream);
+                            accepted
+                                .lock()
+                                .expect("lock streams")
+                                .push(stream);
                             if !signaled {
                                 signaled = true;
                                 let _ = dialed_tx.send(());
                             }
-                        }
-                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        },
+                        Err(error)
+                            if error.kind()
+                                == std::io::ErrorKind::WouldBlock =>
+                        {
                             thread::sleep(Duration::from_millis(20));
-                        }
+                        },
                         Err(_) => break,
                     }
                 }

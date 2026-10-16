@@ -29,8 +29,8 @@ use std::thread;
 use std::time::Duration;
 
 use agentmux::relay::{
-    BundleCatalog, ConnectionDrainCoordinator, ConnectionServeContext, PeerConfiguration,
-    PeerConnectionManager, serve_connection,
+    BundleCatalog, ConnectionDrainCoordinator, ConnectionServeContext,
+    PeerConfiguration, PeerConnectionManager, serve_connection,
 };
 use agentmux::runtime::paths::BundleRuntimePaths;
 use serde_json::{Value, json};
@@ -49,7 +49,8 @@ fn spawn_origin_relay(
     catalog_paths: Vec<BundleRuntimePaths>,
     aliases: &[&str],
 ) -> (UnixStream, thread::JoinHandle<()>) {
-    let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
+    let (server_stream, client_stream) =
+        UnixStream::pair().expect("unix stream pair");
     let root = configuration_roots.clone();
     let state = state_root.to_path_buf();
     let catalog = BundleCatalog::from_paths(catalog_paths);
@@ -72,7 +73,9 @@ fn spawn_origin_relay(
         runtime
             .block_on(async move {
                 let stream = tokio::net::UnixStream::from_std(server_stream)?;
-                let manager = Arc::new(PeerConnectionManager::from_configuration(&state, &peers));
+                let manager = Arc::new(
+                    PeerConnectionManager::from_configuration(&state, &peers),
+                );
                 let serve_context = ConnectionServeContext::new(
                     root,
                     state.clone(),
@@ -119,12 +122,15 @@ fn discovery_exchange(
     response
 }
 
-fn origin_fixture() -> (TempDir, String, ConfigurationRoots, BundleRuntimePaths) {
+fn origin_fixture() -> (TempDir, String, ConfigurationRoots, BundleRuntimePaths)
+{
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     (temporary, bundle_name, configuration_roots, bundle_paths)
 }

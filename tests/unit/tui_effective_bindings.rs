@@ -5,14 +5,21 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use agentmux::configuration::{embedded_binding_preset, shipped_binding_presets};
+use agentmux::configuration::{
+    embedded_binding_preset, shipped_binding_presets,
+};
 use agentmux::tui::{
-    Action, BindingConfiguration, BindingContext, CapabilityClass, ConfiguredAction,
-    ConfiguredBinding, EffectiveBindings, PrimaryModifier, default_binding, parse_chord,
+    Action, BindingConfiguration, BindingContext, CapabilityClass,
+    ConfiguredAction, ConfiguredBinding, EffectiveBindings, PrimaryModifier,
+    default_binding, parse_chord,
 };
 
 /// A configured row binding one chord to one action on both capability classes.
-fn row(context: BindingContext, chord: &str, action: Action) -> ConfiguredBinding {
+fn row(
+    context: BindingContext,
+    chord: &str,
+    action: Action,
+) -> ConfiguredBinding {
     let invoke = Some(ConfiguredAction::Invoke(action));
     ConfiguredBinding {
         context,
@@ -68,7 +75,11 @@ fn with_presets(
 }
 
 fn built(configuration: &BindingConfiguration) -> EffectiveBindings {
-    EffectiveBindings::build(Some(configuration), CapabilityClass::Standard, false)
+    EffectiveBindings::build(
+        Some(configuration),
+        CapabilityClass::Standard,
+        false,
+    )
 }
 
 /// Absent configuration must leave every compiled default answering exactly as
@@ -151,7 +162,9 @@ fn deliverable_chords(class: CapabilityClass) -> Vec<(KeyCode, KeyModifiers)> {
     chord_space()
         .into_iter()
         .filter(|(code, modifiers)| {
-            class == CapabilityClass::Enhanced || *code != KeyCode::Enter || modifiers.is_empty()
+            class == CapabilityClass::Enhanced
+                || *code != KeyCode::Enter
+                || modifiers.is_empty()
         })
         .collect()
 }
@@ -198,13 +211,19 @@ fn a_configured_row_wins_over_the_compiled_row_it_shadows() {
 /// and the compiled defaults: it overrides what ships, and yields to what the
 /// operator wrote.
 #[test]
-fn a_preset_row_outranks_the_compiled_default_and_yields_to_a_configured_row() {
+fn a_preset_row_outranks_the_compiled_default_and_yields_to_a_configured_row()
+{
     let context = BindingContext::ComposeMessage;
     let preset = vec![row(context, "ctrl+j", Action::SendMessage)];
 
-    let without_configuration = built(&with_presets(preset.clone(), Vec::new()));
+    let without_configuration =
+        built(&with_presets(preset.clone(), Vec::new()));
     assert_eq!(
-        without_configuration.action_for(context, KeyCode::Char('j'), KeyModifiers::CONTROL),
+        without_configuration.action_for(
+            context,
+            KeyCode::Char('j'),
+            KeyModifiers::CONTROL
+        ),
         Some(Action::SendMessage),
         "a preset row did not outrank the compiled default"
     );
@@ -214,7 +233,11 @@ fn a_preset_row_outranks_the_compiled_default_and_yields_to_a_configured_row() {
         vec![row(context, "ctrl+j", Action::InsertMessageNewline)],
     ));
     assert_eq!(
-        with_configuration.action_for(context, KeyCode::Char('j'), KeyModifiers::CONTROL),
+        with_configuration.action_for(
+            context,
+            KeyCode::Char('j'),
+            KeyModifiers::CONTROL
+        ),
         Some(Action::InsertMessageNewline),
         "a preset row overrode the operator's own row"
     );
@@ -245,7 +268,11 @@ fn a_later_preset_row_supersedes_an_earlier_one_on_the_same_chord() {
         vec![row(context, "ctrl+j", Action::InsertMessageNewline)],
     ));
     assert_eq!(
-        with_configuration.action_for(context, KeyCode::Char('j'), KeyModifiers::CONTROL),
+        with_configuration.action_for(
+            context,
+            KeyCode::Char('j'),
+            KeyModifiers::CONTROL
+        ),
         Some(Action::InsertMessageNewline)
     );
 }
@@ -309,7 +336,11 @@ fn an_explicit_unbinding_leaves_the_chord_inert() {
         "an unbound chord fell through to its compiled default"
     );
     assert!(
-        table.is_configured(context, KeyCode::Char('j'), KeyModifiers::CONTROL),
+        table.is_configured(
+            context,
+            KeyCode::Char('j'),
+            KeyModifiers::CONTROL
+        ),
         "an unbound chord should read as spoken for, not as absent"
     );
 }
@@ -317,11 +348,16 @@ fn an_explicit_unbinding_leaves_the_chord_inert() {
 #[test]
 fn a_single_value_row_applies_on_both_capability_classes() {
     let context = BindingContext::ComposeMessage;
-    let configured = configuration(vec![row(context, "ctrl+w", Action::SendMessage)]);
+    let configured =
+        configuration(vec![row(context, "ctrl+w", Action::SendMessage)]);
     for class in [CapabilityClass::Enhanced, CapabilityClass::Standard] {
         let table = EffectiveBindings::build(Some(&configured), class, false);
         assert_eq!(
-            table.action_for(context, KeyCode::Char('w'), KeyModifiers::CONTROL),
+            table.action_for(
+                context,
+                KeyCode::Char('w'),
+                KeyModifiers::CONTROL
+            ),
             Some(Action::SendMessage),
             "{class:?}"
         );
@@ -338,21 +374,41 @@ fn a_class_qualified_row_applies_only_to_the_class_it_names() {
         ConfiguredAction::Invoke(Action::SendMessage),
     )]);
 
-    let enhanced = EffectiveBindings::build(Some(&configured), CapabilityClass::Enhanced, false);
+    let enhanced = EffectiveBindings::build(
+        Some(&configured),
+        CapabilityClass::Enhanced,
+        false,
+    );
     assert_eq!(
-        enhanced.action_for(context, KeyCode::Char('j'), KeyModifiers::CONTROL),
+        enhanced.action_for(
+            context,
+            KeyCode::Char('j'),
+            KeyModifiers::CONTROL
+        ),
         Some(Action::SendMessage)
     );
 
     // The class the row did not speak for keeps its compiled default.
-    let standard = EffectiveBindings::build(Some(&configured), CapabilityClass::Standard, false);
+    let standard = EffectiveBindings::build(
+        Some(&configured),
+        CapabilityClass::Standard,
+        false,
+    );
     assert_eq!(
-        standard.action_for(context, KeyCode::Char('j'), KeyModifiers::CONTROL),
+        standard.action_for(
+            context,
+            KeyCode::Char('j'),
+            KeyModifiers::CONTROL
+        ),
         Some(Action::InsertMessageNewline),
         "an omitted class did not keep its compiled default"
     );
     assert!(
-        !standard.is_configured(context, KeyCode::Char('j'), KeyModifiers::CONTROL),
+        !standard.is_configured(
+            context,
+            KeyCode::Char('j'),
+            KeyModifiers::CONTROL
+        ),
         "a class the row left alone should not read as spoken for"
     );
 }
@@ -368,7 +424,11 @@ fn the_symbolic_modifier_resolves_as_the_table_is_built() {
         Action::CommitPickerSession,
     )]);
 
-    let elsewhere = EffectiveBindings::build(Some(&configured), CapabilityClass::Standard, false);
+    let elsewhere = EffectiveBindings::build(
+        Some(&configured),
+        CapabilityClass::Standard,
+        false,
+    );
     assert_eq!(
         elsewhere.action_for(context, KeyCode::Enter, KeyModifiers::CONTROL),
         Some(Action::CommitPickerSession),
@@ -376,14 +436,22 @@ fn the_symbolic_modifier_resolves_as_the_table_is_built() {
     );
 
     configured.primary_modifier_on_macos = Some(PrimaryModifier::Command);
-    let on_macos = EffectiveBindings::build(Some(&configured), CapabilityClass::Standard, true);
+    let on_macos = EffectiveBindings::build(
+        Some(&configured),
+        CapabilityClass::Standard,
+        true,
+    );
     assert_eq!(
         on_macos.action_for(context, KeyCode::Enter, KeyModifiers::SUPER),
         Some(Action::CommitPickerSession),
         "the macOS selection did not reach the built table"
     );
     assert!(
-        !on_macos.is_configured(context, KeyCode::Enter, KeyModifiers::CONTROL),
+        !on_macos.is_configured(
+            context,
+            KeyCode::Enter,
+            KeyModifiers::CONTROL
+        ),
         "the chord should no longer sit on Ctrl once it resolved to Cmd"
     );
 }
@@ -403,8 +471,10 @@ fn the_capability_class_follows_the_probe_outcome() {
 /// discriminator.
 #[test]
 fn the_compiled_defaults_are_identical_across_both_capability_classes() {
-    let enhanced = EffectiveBindings::build(None, CapabilityClass::Enhanced, false);
-    let standard = EffectiveBindings::build(None, CapabilityClass::Standard, false);
+    let enhanced =
+        EffectiveBindings::build(None, CapabilityClass::Enhanced, false);
+    let standard =
+        EffectiveBindings::build(None, CapabilityClass::Standard, false);
     for context in BindingContext::ALL {
         for (code, modifiers) in chord_space() {
             assert_eq!(
@@ -464,8 +534,11 @@ fn the_shipped_binding_sets_are_the_two_this_change_promised() {
 fn each_shipped_binding_set_moves_sending_to_the_chord_its_name_promises() {
     let compose = BindingContext::ComposeMessage;
     for (name, sends_with) in SHIPPED {
-        let table =
-            EffectiveBindings::build(Some(&shipped(name)), CapabilityClass::Enhanced, false);
+        let table = EffectiveBindings::build(
+            Some(&shipped(name)),
+            CapabilityClass::Enhanced,
+            false,
+        );
         assert_eq!(
             table.action_for(compose, KeyCode::Enter, KeyModifiers::NONE),
             Some(Action::InsertMessageNewline),
@@ -488,7 +561,11 @@ fn a_shipped_binding_set_honors_the_macos_primary_modifier_selection() {
         primary_modifier_on_macos: Some(PrimaryModifier::Command),
         ..shipped("enter-newline-primary-enter-sends")
     };
-    let table = EffectiveBindings::build(Some(&configuration), CapabilityClass::Enhanced, true);
+    let table = EffectiveBindings::build(
+        Some(&configuration),
+        CapabilityClass::Enhanced,
+        true,
+    );
     assert_eq!(
         table.action_for(compose, KeyCode::Enter, KeyModifiers::SUPER),
         Some(Action::SendMessage),
@@ -503,11 +580,15 @@ fn a_shipped_binding_set_honors_the_macos_primary_modifier_selection() {
 /// names, because a set leaking into the other class could displace a chord it
 /// does not name — through the symbolic modifier, say.
 #[test]
-fn a_shipped_binding_set_contributes_nothing_under_the_other_capability_class() {
+fn a_shipped_binding_set_contributes_nothing_under_the_other_capability_class()
+{
     for (name, _) in SHIPPED {
         let configuration = shipped(name);
-        let standard =
-            EffectiveBindings::build(Some(&configuration), CapabilityClass::Standard, false);
+        let standard = EffectiveBindings::build(
+            Some(&configuration),
+            CapabilityClass::Standard,
+            false,
+        );
         for context in BindingContext::ALL {
             for (code, modifiers) in chord_space() {
                 assert_eq!(
@@ -526,8 +607,11 @@ fn a_shipped_binding_set_contributes_nothing_under_the_other_capability_class() 
 
         // Without this, a set that parsed to no rows at all would satisfy the
         // sweep above by doing nothing anywhere.
-        let enhanced =
-            EffectiveBindings::build(Some(&configuration), CapabilityClass::Enhanced, false);
+        let enhanced = EffectiveBindings::build(
+            Some(&configuration),
+            CapabilityClass::Enhanced,
+            false,
+        );
         assert!(
             BindingContext::ALL.iter().any(|context| {
                 chord_space().iter().any(|(code, modifiers)| {
@@ -548,7 +632,8 @@ fn a_shipped_binding_set_contributes_nothing_under_the_other_capability_class() 
 /// whatever that context's compiled rows bind bare `Enter` to, which is the
 /// commit behavior of every context that has one.
 #[test]
-fn every_shipped_binding_set_leaves_sending_reachable_in_every_context_it_touches() {
+fn every_shipped_binding_set_leaves_sending_reachable_in_every_context_it_touches()
+ {
     for (name, _) in SHIPPED {
         let configuration = shipped(name);
         let mut touched: Vec<BindingContext> = Vec::new();
@@ -560,14 +645,27 @@ fn every_shipped_binding_set_leaves_sending_reachable_in_every_context_it_touche
         assert!(!touched.is_empty(), "{name}: the set touches no context");
 
         for context in touched {
-            let sending = default_binding(context, KeyCode::Enter, KeyModifiers::NONE)
-                .unwrap_or_else(|| panic!("{name}: {context:?} binds bare Enter to nothing"));
-            for class in [CapabilityClass::Enhanced, CapabilityClass::Standard] {
-                let table = EffectiveBindings::build(Some(&configuration), class, false);
+            let sending =
+                default_binding(context, KeyCode::Enter, KeyModifiers::NONE)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "{name}: {context:?} binds bare Enter to nothing"
+                        )
+                    });
+            for class in [CapabilityClass::Enhanced, CapabilityClass::Standard]
+            {
+                let table = EffectiveBindings::build(
+                    Some(&configuration),
+                    class,
+                    false,
+                );
                 assert!(
-                    deliverable_chords(class).iter().any(|(code, modifiers)| {
-                        table.action_for(context, *code, *modifiers) == Some(sending)
-                    }),
+                    deliverable_chords(class).iter().any(
+                        |(code, modifiers)| {
+                            table.action_for(context, *code, *modifiers)
+                                == Some(sending)
+                        }
+                    ),
                     "{name}: nothing reaches {sending:?} in {context:?} under {class:?}"
                 );
             }
@@ -579,12 +677,16 @@ fn every_shipped_binding_set_leaves_sending_reachable_in_every_context_it_touche
 /// sets that ship do. Asserted rather than assumed, because a set that left
 /// sending where it found it would satisfy that check without exercising it.
 #[test]
-fn every_shipped_binding_set_moves_sending_off_the_chord_that_reaches_it_by_default() {
+fn every_shipped_binding_set_moves_sending_off_the_chord_that_reaches_it_by_default()
+ {
     let compose = BindingContext::ComposeMessage;
     let sending = default_binding(compose, KeyCode::Enter, KeyModifiers::NONE);
     for (name, _) in SHIPPED {
-        let table =
-            EffectiveBindings::build(Some(&shipped(name)), CapabilityClass::Enhanced, false);
+        let table = EffectiveBindings::build(
+            Some(&shipped(name)),
+            CapabilityClass::Enhanced,
+            false,
+        );
         assert_ne!(
             table.action_for(compose, KeyCode::Enter, KeyModifiers::NONE),
             sending,
@@ -648,7 +750,11 @@ fn configuring_a_character_claims_both_of_its_forms() {
         rows: vec![row(choice, "c", Action::MoveNextChoiceOption)],
         ..BindingConfiguration::default()
     };
-    let bindings = EffectiveBindings::build(Some(&configuration), CapabilityClass::Standard, false);
+    let bindings = EffectiveBindings::build(
+        Some(&configuration),
+        CapabilityClass::Standard,
+        false,
+    );
 
     for modifiers in [KeyModifiers::NONE, KeyModifiers::SHIFT] {
         assert_eq!(
@@ -679,7 +785,11 @@ fn a_configured_character_carrying_a_modifier_denotes_one_keystroke() {
         rows: vec![row(choice, "ctrl+c", Action::MoveNextChoiceOption)],
         ..BindingConfiguration::default()
     };
-    let bindings = EffectiveBindings::build(Some(&configuration), CapabilityClass::Standard, false);
+    let bindings = EffectiveBindings::build(
+        Some(&configuration),
+        CapabilityClass::Standard,
+        false,
+    );
 
     assert_eq!(
         bindings.action_for(choice, KeyCode::Char('c'), KeyModifiers::CONTROL),

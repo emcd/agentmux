@@ -67,7 +67,9 @@ pub(in crate::relay) struct ResolvedMember {
 pub(super) fn resolve_positions(
     state: &mut LedgerState,
     key: &AdmissionTargetKey,
-    positions: impl IntoIterator<Item = (EntrySequence, Option<SubmissionEvidence>)>,
+    positions: impl IntoIterator<
+        Item = (EntrySequence, Option<SubmissionEvidence>),
+    >,
 ) -> Vec<ResolvedMember> {
     let held: Vec<_> = positions
         .into_iter()
@@ -107,14 +109,16 @@ pub(super) fn resolve_positions(
                             mailbox.retire(sequence);
                         }
                         (
-                            supplied.unwrap_or(SubmissionEvidence::NotSubmitted),
+                            supplied
+                                .unwrap_or(SubmissionEvidence::NotSubmitted),
                             None,
                             false,
                         )
-                    }
-                    TerminalTransition::NoReservation | TerminalTransition::AlreadyTerminal => {
+                    },
+                    TerminalTransition::NoReservation
+                    | TerminalTransition::AlreadyTerminal => {
                         return None;
-                    }
+                    },
                 };
             Some(ResolvedMember {
                 message_id,

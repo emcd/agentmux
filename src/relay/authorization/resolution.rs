@@ -8,13 +8,16 @@ use serde_json::json;
 
 use crate::{
     configuration::{
-        BundleConfiguration, BundleMember, ConfigurationRoots, load_bundle_configuration,
-        load_tui_configuration, policies_configuration_path,
+        BundleConfiguration, BundleMember, ConfigurationRoots,
+        load_bundle_configuration, load_tui_configuration,
+        policies_configuration_path,
     },
     relay::{RelayError, relay_error},
 };
 
-use super::super::identity::{PrincipalType, classify_principal_id, split_principal_id};
+use super::super::identity::{
+    PrincipalType, classify_principal_id, split_principal_id,
+};
 use super::super::map_config;
 use super::context::{AuthorizationContext, PolicyControls, PolicyScope};
 use super::loading::{load_policy_presets, map_tui_configuration_error};
@@ -36,7 +39,9 @@ pub(in crate::relay) fn ui_session_display_name<'a>(
         .and_then(|session| session.display_name.as_deref())
 }
 
-pub(in crate::relay) fn choices_pending_max(authorization: &AuthorizationContext) -> usize {
+pub(in crate::relay) fn choices_pending_max(
+    authorization: &AuthorizationContext,
+) -> usize {
     authorization.choices_pending_max
 }
 
@@ -47,7 +52,9 @@ pub(super) fn resolve_session_policy_controls<'a>(
     conservative_default: &'a PolicyControls,
     policies_path: &Path,
 ) -> Result<&'a PolicyControls, RelayError> {
-    if let Some(policy_id) = member.policy_id.as_deref().and_then(normalize_policy_id) {
+    if let Some(policy_id) =
+        member.policy_id.as_deref().and_then(normalize_policy_id)
+    {
         return presets.get(policy_id).ok_or_else(|| {
             relay_error(
                 "validation_invalid_arguments",
@@ -87,26 +94,32 @@ pub(super) fn resolve_relay_principal_controls(
     configuration_roots: &ConfigurationRoots,
     requester_principal_id: &str,
 ) -> Result<PolicyControls, RelayError> {
-    let (presets, default_policy_id) = load_policy_presets(configuration_roots)?;
+    let (presets, default_policy_id) =
+        load_policy_presets(configuration_roots)?;
     let conservative_default = PolicyControls::conservative_default();
-    let principal_type = classify_principal_id(requester_principal_id).ok_or_else(|| {
-        relay_error(
-            "validation_invalid_principal_id",
-            "requester principal_id is not in <id>@<namespace> form",
-            Some(json!({ "principal_id": requester_principal_id })),
-        )
-    })?;
+    let principal_type = classify_principal_id(requester_principal_id)
+        .ok_or_else(|| {
+            relay_error(
+                "validation_invalid_principal_id",
+                "requester principal_id is not in <id>@<namespace> form",
+                Some(json!({ "principal_id": requester_principal_id })),
+            )
+        })?;
     match principal_type {
         PrincipalType::User => {
             let Some(tui_configuration) =
-                load_tui_configuration(configuration_roots).map_err(map_tui_configuration_error)?
+                load_tui_configuration(configuration_roots)
+                    .map_err(map_tui_configuration_error)?
             else {
                 return Ok(conservative_default);
             };
-            let Some(session) = tui_configuration.session_by_id(requester_principal_id) else {
+            let Some(session) =
+                tui_configuration.session_by_id(requester_principal_id)
+            else {
                 return Ok(conservative_default);
             };
-            let Some(policy_id) = normalize_policy_id(session.policy.as_str()) else {
+            let Some(policy_id) = normalize_policy_id(session.policy.as_str())
+            else {
                 return Ok(conservative_default);
             };
             presets.get(policy_id).cloned().ok_or_else(|| {
@@ -119,18 +132,24 @@ pub(super) fn resolve_relay_principal_controls(
                     })),
                 )
             })
-        }
+        },
         PrincipalType::Session => {
-            let Some((session_id, namespace)) = split_principal_id(requester_principal_id) else {
+            let Some((session_id, namespace)) =
+                split_principal_id(requester_principal_id)
+            else {
                 return Ok(conservative_default);
             };
             let bundle =
-                load_bundle_configuration(configuration_roots, namespace).map_err(map_config)?;
-            let Some(member) = bundle.members.iter().find(|member| member.id == session_id) else {
+                load_bundle_configuration(configuration_roots, namespace)
+                    .map_err(map_config)?;
+            let Some(member) =
+                bundle.members.iter().find(|member| member.id == session_id)
+            else {
                 return Ok(conservative_default);
             };
             let policies_path =
-                policies_configuration_path(configuration_roots).map_err(map_config)?;
+                policies_configuration_path(configuration_roots)
+                    .map_err(map_config)?;
             resolve_session_policy_controls(
                 member,
                 &presets,
@@ -139,8 +158,10 @@ pub(super) fn resolve_relay_principal_controls(
                 policies_path.as_path(),
             )
             .cloned()
-        }
-        PrincipalType::Application | PrincipalType::Relay => Ok(conservative_default),
+        },
+        PrincipalType::Application | PrincipalType::Relay => {
+            Ok(conservative_default)
+        },
     }
 }
 
@@ -155,7 +176,9 @@ pub(in crate::relay) fn choose_authorized_ui_sessions(
             authorization
                 .controls_by_session
                 .get(session_id.as_str())
-                .is_some_and(|controls| controls.choose.allows(PolicyScope::Home))
+                .is_some_and(|controls| {
+                    controls.choose.allows(PolicyScope::Home)
+                })
         })
         .cloned()
         .collect()

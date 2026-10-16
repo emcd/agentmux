@@ -8,11 +8,16 @@ use ratatui::{
 
 use super::super::state::{AppState, ChatHistoryDirection, Recipient};
 use super::geometry::{
-    compose_message_layout, compose_message_visible_start, compose_titled_block,
-    split_workbench_rows, workbench_titled_block, wrap_text,
+    compose_message_layout, compose_message_visible_start,
+    compose_titled_block, split_workbench_rows, workbench_titled_block,
+    wrap_text,
 };
 
-pub(super) fn render_communication_mode(frame: &mut Frame, area: Rect, state: &mut AppState) {
+pub(super) fn render_communication_mode(
+    frame: &mut Frame,
+    area: Rect,
+    state: &mut AppState,
+) {
     let rows = split_workbench_rows(area, state);
     render_chat_history(frame, rows[0], state);
     render_compose(frame, rows[1], state);
@@ -80,7 +85,10 @@ fn render_chat_history(frame: &mut Frame, area: Rect, state: &mut AppState) {
 /// turns are labelled `you -> {peers}` (green); incoming turns `{peer} -> you`
 /// (cyan). The body and any wrapped continuations stay indented so turn
 /// boundaries remain unambiguous even in narrow terminals.
-fn build_chat_history_lines(state: &AppState, content_width: usize) -> Vec<Line<'static>> {
+fn build_chat_history_lines(
+    state: &AppState,
+    content_width: usize,
+) -> Vec<Line<'static>> {
     let label_width = content_width.max(1);
     let body_width = content_width.saturating_sub(2).max(1);
     let mut lines = Vec::<Line<'static>>::new();
@@ -92,14 +100,20 @@ fn build_chat_history_lines(state: &AppState, content_width: usize) -> Vec<Line<
             ChatHistoryDirection::Outgoing => (
                 format!(
                     "you -> {}",
-                    resolve_peer_list(entry.peer_session.as_str(), &state.recipients)
+                    resolve_peer_list(
+                        entry.peer_session.as_str(),
+                        &state.recipients
+                    )
                 ),
                 Color::Green,
             ),
             ChatHistoryDirection::Incoming => (
                 format!(
                     "{} -> you",
-                    resolve_peer(entry.peer_session.as_str(), &state.recipients)
+                    resolve_peer(
+                        entry.peer_session.as_str(),
+                        &state.recipients
+                    )
                 ),
                 Color::Cyan,
             ),
@@ -112,7 +126,10 @@ fn build_chat_history_lines(state: &AppState, content_width: usize) -> Vec<Line<
         }
         for body_line in entry.body.split('\n') {
             for wrapped in wrap_text(body_line, body_width) {
-                lines.push(Line::from(vec![Span::raw("  "), Span::raw(wrapped)]));
+                lines.push(Line::from(vec![
+                    Span::raw("  "),
+                    Span::raw(wrapped),
+                ]));
             }
         }
     }

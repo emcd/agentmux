@@ -18,7 +18,11 @@ pub struct DeliveryDiagnosticContext<'a> {
 
 impl<'a> DeliveryDiagnosticContext<'a> {
     #[must_use]
-    pub fn new<I, S>(namespace: &'a str, target_session: &'a str, message_ids: I) -> Self
+    pub fn new<I, S>(
+        namespace: &'a str,
+        target_session: &'a str,
+        message_ids: I,
+    ) -> Self
     where
         I: IntoIterator<Item = S>,
         S: AsRef<str>,
@@ -40,7 +44,10 @@ impl<'a> DeliveryDiagnosticContext<'a> {
     }
 
     #[must_use]
-    pub fn without_messages(namespace: &'a str, target_session: &'a str) -> Self {
+    pub fn without_messages(
+        namespace: &'a str,
+        target_session: &'a str,
+    ) -> Self {
         Self::new(namespace, target_session, std::iter::empty::<&str>())
     }
 

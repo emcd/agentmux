@@ -54,7 +54,9 @@ use super::*;
 fn a_fenced_acp_generation_leaves_no_surviving_child() {
     let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     // A turn that never comes back, so the member is still in flight when the
     // signal lands. Deliberately not a `sleep`-based stall: that helper process
@@ -64,7 +66,8 @@ fn a_fenced_acp_generation_leaves_no_surviving_child() {
         never_respond_to_prompt: true,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     configure_delivery(DeliveryConfiguration {
@@ -81,8 +84,9 @@ fn a_fenced_acp_generation_leaves_no_surviving_child() {
     // The real signal, not a test-only flag: this is the production trigger.
     // The guard restores the previous handlers and clears the flag on drop, so
     // it has to outlive every assertion below.
-    let _signal_guard = agentmux::runtime::signals::install_shutdown_signal_handlers()
-        .expect("install shutdown signal handlers");
+    let _signal_guard =
+        agentmux::runtime::signals::install_shutdown_signal_handlers()
+            .expect("install shutdown signal handlers");
     let self_pid = i32::try_from(std::process::id()).expect("pid fits i32");
     assert_eq!(
         unsafe { libc::kill(self_pid, libc::SIGTERM) },
@@ -141,14 +145,17 @@ fn a_fenced_acp_generation_leaves_no_surviving_child() {
 fn a_fence_ends_a_respawn_bootstrap() {
     let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let options = AcpStubOptions {
         disconnect_on_prompt: Some("before_activity".to_string()),
         hang_initialize_from_agent: Some(1),
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     configure_delivery(DeliveryConfiguration {
@@ -183,8 +190,9 @@ fn a_fence_ends_a_respawn_bootstrap() {
     // find, and then resolve cooperatively.
     await_hang_fifo(temporary.path());
 
-    let _signal_guard = agentmux::runtime::signals::install_shutdown_signal_handlers()
-        .expect("install shutdown signal handlers");
+    let _signal_guard =
+        agentmux::runtime::signals::install_shutdown_signal_handlers()
+            .expect("install shutdown signal handlers");
     let self_pid = i32::try_from(std::process::id()).expect("pid fits i32");
     assert_eq!(
         unsafe { libc::kill(self_pid, libc::SIGTERM) },
@@ -245,7 +253,9 @@ fn a_fence_ends_a_respawn_bootstrap() {
 fn a_fence_ends_a_hung_initial_bootstrap() {
     let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     // From the very first agent: the target this asserts on has never had a
     // runtime, so the bootstrap in flight is its initial one.
@@ -253,7 +263,8 @@ fn a_fence_ends_a_hung_initial_bootstrap() {
         hang_initialize_from_agent: Some(0),
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     configure_delivery(DeliveryConfiguration {
@@ -278,8 +289,9 @@ fn a_fence_ends_a_hung_initial_bootstrap() {
     let pid_path = acp_child_pid_path(temporary.path());
     await_recorded_child_pids(&pid_path, "alpha");
 
-    let _signal_guard = agentmux::runtime::signals::install_shutdown_signal_handlers()
-        .expect("install shutdown signal handlers");
+    let _signal_guard =
+        agentmux::runtime::signals::install_shutdown_signal_handlers()
+            .expect("install shutdown signal handlers");
     let self_pid = i32::try_from(std::process::id()).expect("pid fits i32");
     assert_eq!(
         unsafe { libc::kill(self_pid, libc::SIGTERM) },
@@ -354,13 +366,16 @@ fn a_fence_ends_a_hung_initial_bootstrap() {
 fn an_executor_blocked_past_the_bound_is_fenced_and_its_member_resolved() {
     let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let options = AcpStubOptions {
         stop_reading_stdin_after_new: true,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     configure_delivery(DeliveryConfiguration {

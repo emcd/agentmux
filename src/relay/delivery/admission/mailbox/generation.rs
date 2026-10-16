@@ -219,22 +219,24 @@ fn resolve_outgoing_declaration(
 mod consumer_generation_tests {
     use crate::protocol::identity::ConsumerBinding;
     use crate::protocol::operations::{
-        AckAccepted, AckRejection, DeclareRejection, MemberAcknowledgment, PeekRejection,
+        AckAccepted, AckRejection, DeclareRejection, MemberAcknowledgment,
+        PeekRejection,
     };
 
     use super::super::super::super::guard::SubmissionEvidence;
     use super::super::super::terminal::terminalize;
     use super::super::declare::declare;
     use super::super::fixtures::{
-        acknowledge, binding, claim, mail, peeked, place, range, request, reserved_envelopes, seq,
-        target,
+        acknowledge, binding, claim, mail, peeked, place, range, request,
+        reserved_envelopes, seq, target,
     };
     use super::super::peek::peek;
     use super::super::reap::reap_target;
     use super::*;
 
     #[test]
-    fn a_target_changes_generations_only_behind_a_fence_and_never_reuses_one() {
+    fn a_target_changes_generations_only_behind_a_fence_and_never_reuses_one()
+    {
         let namespace = "mbx-generation";
         let first = claim(namespace);
 
@@ -315,7 +317,8 @@ mod consumer_generation_tests {
             FenceVerdict::Positive,
         )
         .expect("a fenced incumbent is replaced");
-        let second = ConsumerBinding::new(target(namespace), replacement.generation);
+        let second =
+            ConsumerBinding::new(target(namespace), replacement.generation);
         assert!(
             replacement.generation.value() > first.generation.value(),
             "a replacement generation advances the sequence"
@@ -468,13 +471,15 @@ mod executor_death_tests {
     use super::super::abandonment::resolve_target_entries;
     use super::super::declare::declare;
     use super::super::fixtures::{
-        acknowledge, claim, mail, peeked, place, range, request, reserved_envelopes, target,
+        acknowledge, claim, mail, peeked, place, range, request,
+        reserved_envelopes, target,
     };
     use super::super::peek::peek;
     use super::*;
 
     #[test]
-    fn a_dead_executor_leaves_one_answer_per_declared_member_and_the_rest_peekable() {
+    fn a_dead_executor_leaves_one_answer_per_declared_member_and_the_rest_peekable()
+     {
         let namespace = "mbx-executor-death";
         let bound = claim(namespace);
         for index in 1..=3 {
@@ -490,16 +495,20 @@ mod executor_death_tests {
         let executor = {
             let bound = bound.clone();
             std::thread::spawn(move || {
-                let response =
-                    peek(&request(&bound, 10, 1_000)).expect("the executor's generation");
-                let accepted = declare(&bound, range(1, 2)).expect("a well-formed range binds");
+                let response = peek(&request(&bound, 10, 1_000))
+                    .expect("the executor's generation");
+                let accepted = declare(&bound, range(1, 2))
+                    .expect("a well-formed range binds");
                 report
                     .send((response.entries.len(), accepted.unit))
                     .expect("the relay is still listening");
-                panic!("the delivery-loop executor died between the write and the acknowledgment");
+                panic!(
+                    "the delivery-loop executor died between the write and the acknowledgment"
+                );
             })
         };
-        let (peeked_entries, unit) = reported.recv().expect("the executor reported before dying");
+        let (peeked_entries, unit) =
+            reported.recv().expect("the executor reported before dying");
         assert!(
             executor.join().is_err(),
             "the executor thread ended by panicking, which is the condition under test"
@@ -524,7 +533,8 @@ mod executor_death_tests {
             FenceVerdict::Positive,
         )
         .expect("a fenced generation is replaced");
-        let second = ConsumerBinding::new(target(namespace), replacement.generation);
+        let second =
+            ConsumerBinding::new(target(namespace), replacement.generation);
         assert_eq!(
             replacement
                 .resolved

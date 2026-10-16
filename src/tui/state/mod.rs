@@ -13,15 +13,18 @@ use crate::{
 };
 
 use super::target::{
-    ToCompletionState, append_recipient_token, current_recipient_token_context,
-    matching_recipient_candidates, merge_tui_targets, sender_bound_bundle,
+    ToCompletionState, append_recipient_token,
+    current_recipient_token_context, matching_recipient_candidates,
+    merge_tui_targets, sender_bound_bundle,
 };
 
 mod compose;
 mod history;
 mod relay;
 
-use super::actions::{BindingConfiguration, CapabilityClass, EffectiveBindings};
+use super::actions::{
+    BindingConfiguration, CapabilityClass, EffectiveBindings,
+};
 use super::keyboard::KeyboardEnhancement;
 use super::status::BundleStatusDisplay;
 
@@ -300,7 +303,10 @@ impl AppState {
 
     /// Records the startup probe outcome and rebuilds the effective table for
     /// the capability class it puts this terminal in.
-    pub(crate) fn set_keyboard_enhancement(&mut self, enhancement: KeyboardEnhancement) {
+    pub(crate) fn set_keyboard_enhancement(
+        &mut self,
+        enhancement: KeyboardEnhancement,
+    ) {
         self.keyboard_enhancement = enhancement;
         self.rebuild_bindings();
     }
@@ -320,7 +326,9 @@ impl AppState {
     fn rebuild_bindings(&mut self) {
         self.bindings = EffectiveBindings::build(
             self.binding_configuration.as_ref(),
-            CapabilityClass::of(self.keyboard_enhancement.disambiguates_modified_keys()),
+            CapabilityClass::of(
+                self.keyboard_enhancement.disambiguates_modified_keys(),
+            ),
             cfg!(target_os = "macos"),
         );
     }
@@ -330,7 +338,11 @@ impl AppState {
         self.should_quit = true;
     }
 
-    pub fn push_status(&mut self, code: Option<String>, message: impl Into<String>) {
+    pub fn push_status(
+        &mut self,
+        code: Option<String>,
+        message: impl Into<String>,
+    ) {
         self.status_history.push_front(StatusEntry {
             code,
             message: message.into(),
@@ -344,13 +356,13 @@ impl AppState {
         match error {
             RuntimeError::Validation { code, message } => {
                 self.push_status(Some(code), message);
-            }
+            },
             RuntimeError::InvalidArgument { argument, message } => {
                 self.push_status(
                     Some("validation_invalid_arguments".to_string()),
                     format!("invalid argument {argument}: {message}"),
                 );
-            }
+            },
             other => self.push_status(None, other.to_string()),
         }
     }
@@ -379,7 +391,10 @@ fn map_relay_error(error: RelayError) -> RuntimeError {
     )
 }
 
-fn map_relay_request_failure(socket_path: &std::path::Path, source: io::Error) -> RuntimeError {
+fn map_relay_request_failure(
+    socket_path: &std::path::Path,
+    source: io::Error,
+) -> RuntimeError {
     if is_relay_timeout_error(&source) {
         return RuntimeError::validation(
             "relay_timeout",

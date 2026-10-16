@@ -9,12 +9,14 @@
 use std::{fs, path::Path};
 
 use agentmux::configuration::{
-    ConfigurationRoots, effective_bundle_definitions, effective_configuration_path,
-    supplied_configuration_path,
+    ConfigurationRoots, effective_bundle_definitions,
+    effective_configuration_path, supplied_configuration_path,
 };
 use tempfile::TempDir;
 
-use crate::support::permissions::{deny_directory_access, report_permission_fixture_skip};
+use crate::support::permissions::{
+    deny_directory_access, report_permission_fixture_skip,
+};
 
 const RELAY_BODY: &str = "watch-bundles = true\n";
 
@@ -27,8 +29,11 @@ fn layer(temporary: &TempDir, name: &str) -> std::path::PathBuf {
 
 /// The two-layer list, override first.
 fn layered(override_layer: &Path, base: &Path) -> ConfigurationRoots {
-    ConfigurationRoots::from_elements([override_layer.to_path_buf(), base.to_path_buf()])
-        .expect("layer list")
+    ConfigurationRoots::from_elements([
+        override_layer.to_path_buf(),
+        base.to_path_buf(),
+    ])
+    .expect("layer list")
 }
 
 fn write_bundle_file(layer: &Path, bundle_name: &str) {
@@ -50,8 +55,11 @@ fn an_absent_file_is_absence_rather_than_a_fault() {
     let base = layer(&temporary, "base");
     let override_layer = layer(&temporary, "rnd");
 
-    let supplied = supplied_configuration_path(&layered(&override_layer, &base), "relay.toml")
-        .expect("an absent file is not a fault");
+    let supplied = supplied_configuration_path(
+        &layered(&override_layer, &base),
+        "relay.toml",
+    )
+    .expect("an absent file is not a fault");
     assert_eq!(supplied, None, "no layer supplies the file");
 }
 
@@ -60,12 +68,17 @@ fn a_readable_file_resolves_from_the_earlier_layer() {
     let temporary = TempDir::new().expect("temporary");
     let base = layer(&temporary, "base");
     let override_layer = layer(&temporary, "rnd");
-    fs::write(base.join("relay.toml"), RELAY_BODY).expect("write base relay.toml");
-    fs::write(override_layer.join("relay.toml"), RELAY_BODY).expect("write override relay.toml");
+    fs::write(base.join("relay.toml"), RELAY_BODY)
+        .expect("write base relay.toml");
+    fs::write(override_layer.join("relay.toml"), RELAY_BODY)
+        .expect("write override relay.toml");
 
-    let supplied = supplied_configuration_path(&layered(&override_layer, &base), "relay.toml")
-        .expect("lookup")
-        .expect("a layer supplies the file");
+    let supplied = supplied_configuration_path(
+        &layered(&override_layer, &base),
+        "relay.toml",
+    )
+    .expect("lookup")
+    .expect("a layer supplies the file");
     assert_eq!(supplied, override_layer.join("relay.toml"));
 }
 
@@ -76,8 +89,10 @@ fn an_unreadable_earlier_layer_faults_rather_than_falling_through() {
     let override_layer = layer(&temporary, "rnd");
     // Present in both, so falling through resolves successfully — the failure
     // mode is a clean answer from the wrong layer, not an error.
-    fs::write(base.join("relay.toml"), RELAY_BODY).expect("write base relay.toml");
-    fs::write(override_layer.join("relay.toml"), RELAY_BODY).expect("write override relay.toml");
+    fs::write(base.join("relay.toml"), RELAY_BODY)
+        .expect("write base relay.toml");
+    fs::write(override_layer.join("relay.toml"), RELAY_BODY)
+        .expect("write override relay.toml");
 
     let Some(_restore) = deny_directory_access(&override_layer) else {
         report_permission_fixture_skip(
@@ -86,8 +101,11 @@ fn an_unreadable_earlier_layer_faults_rather_than_falling_through() {
         return;
     };
 
-    let error = supplied_configuration_path(&layered(&override_layer, &base), "relay.toml")
-        .expect_err("an unreadable earlier layer must fault");
+    let error = supplied_configuration_path(
+        &layered(&override_layer, &base),
+        "relay.toml",
+    )
+    .expect_err("an unreadable earlier layer must fault");
     let rendered = error.to_string();
     assert!(
         rendered.contains(&override_layer.display().to_string()),
@@ -133,14 +151,21 @@ fn a_directory_occupying_an_artifact_path_faults() {
     let temporary = TempDir::new().expect("temporary");
     let base = layer(&temporary, "base");
     let override_layer = layer(&temporary, "rnd");
-    fs::write(base.join("relay.toml"), RELAY_BODY).expect("write base relay.toml");
-    fs::create_dir_all(override_layer.join("relay.toml")).expect("occupy the artifact path");
+    fs::write(base.join("relay.toml"), RELAY_BODY)
+        .expect("write base relay.toml");
+    fs::create_dir_all(override_layer.join("relay.toml"))
+        .expect("occupy the artifact path");
 
-    let error = supplied_configuration_path(&layered(&override_layer, &base), "relay.toml")
-        .expect_err("a non-file at the artifact path must fault");
+    let error = supplied_configuration_path(
+        &layered(&override_layer, &base),
+        "relay.toml",
+    )
+    .expect_err("a non-file at the artifact path must fault");
     let rendered = error.to_string();
     assert!(
-        rendered.contains(&override_layer.join("relay.toml").display().to_string()),
+        rendered.contains(
+            &override_layer.join("relay.toml").display().to_string()
+        ),
         "the fault must name the occupied path, got: {rendered}"
     );
 }
@@ -155,10 +180,14 @@ fn a_non_directory_layer_component_faults() {
     let base = layer(&temporary, "base");
     let override_layer = layer(&temporary, "rnd");
     write_bundle_file(&base, "alpha");
-    fs::write(override_layer.join("bundles"), "not a directory\n").expect("occupy bundles");
+    fs::write(override_layer.join("bundles"), "not a directory\n")
+        .expect("occupy bundles");
 
-    effective_configuration_path(&layered(&override_layer, &base), "bundles/alpha.toml")
-        .expect_err("a non-directory path component must fault");
+    effective_configuration_path(
+        &layered(&override_layer, &base),
+        "bundles/alpha.toml",
+    )
+    .expect_err("a non-directory path component must fault");
 }
 
 #[test]
@@ -170,9 +199,11 @@ fn a_layer_without_a_bundles_directory_contributes_nothing() {
     let override_layer = layer(&temporary, "rnd");
     write_bundle_file(&base, "alpha");
 
-    let definitions = effective_bundle_definitions(&layered(&override_layer, &base))
-        .expect("a layer with no bundles directory is not a fault");
-    let identifiers: Vec<&str> = definitions.keys().map(String::as_str).collect();
+    let definitions =
+        effective_bundle_definitions(&layered(&override_layer, &base))
+            .expect("a layer with no bundles directory is not a fault");
+    let identifiers: Vec<&str> =
+        definitions.keys().map(String::as_str).collect();
     assert_eq!(identifiers, ["alpha"]);
 }
 
@@ -226,11 +257,15 @@ fn an_unrelated_entry_under_a_bundles_directory_is_ignored() {
     let override_layer = layer(&temporary, "rnd");
     write_bundle_file(&base, "alpha");
     let bundles = override_layer.join("bundles");
-    fs::create_dir_all(bundles.join("archive")).expect("create an unrelated subdirectory");
-    fs::write(bundles.join("notes.md"), "not a bundle\n").expect("write an unrelated file");
+    fs::create_dir_all(bundles.join("archive"))
+        .expect("create an unrelated subdirectory");
+    fs::write(bundles.join("notes.md"), "not a bundle\n")
+        .expect("write an unrelated file");
 
-    let definitions = effective_bundle_definitions(&layered(&override_layer, &base))
-        .expect("unrelated entries must not fault");
-    let identifiers: Vec<&str> = definitions.keys().map(String::as_str).collect();
+    let definitions =
+        effective_bundle_definitions(&layered(&override_layer, &base))
+            .expect("unrelated entries must not fault");
+    let identifiers: Vec<&str> =
+        definitions.keys().map(String::as_str).collect();
     assert_eq!(identifiers, ["alpha"]);
 }

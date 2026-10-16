@@ -19,10 +19,11 @@ use tokio::{
 use crate::{
     configuration::load_bundle_group_memberships,
     relay::{
-        BundleCatalog, ConnectionDrainCoordinator, ConnectionServeContext, HostingIntent,
-        PeerConnectionManager, configure_delivery, configured_undelivered_reporting,
-        persist_startup_failures, report_undelivered_queue, serve_connection,
-        shutdown_bundle_runtime, spawn_bundle_watcher, startup_bundle,
+        BundleCatalog, ConnectionDrainCoordinator, ConnectionServeContext,
+        HostingIntent, PeerConnectionManager, configure_delivery,
+        configured_undelivered_reporting, persist_startup_failures,
+        report_undelivered_queue, serve_connection, shutdown_bundle_runtime,
+        spawn_bundle_watcher, startup_bundle,
         wait_for_async_delivery_shutdown,
     },
     runtime::{
@@ -31,27 +32,34 @@ use crate::{
             relay_runtime_lock_is_held,
         },
         error::RuntimeError,
-        inscriptions::{configure_process_inscriptions, emit_inscription, relay_inscriptions_path},
+        inscriptions::{
+            configure_process_inscriptions, emit_inscription,
+            relay_inscriptions_path,
+        },
         paths::{
-            BundleRuntimePaths, RelayRuntimePaths, RuntimeRootOverrides, RuntimeRoots,
-            ensure_bundle_runtime_directory, ensure_relay_runtime_directory,
+            BundleRuntimePaths, RelayRuntimePaths, RuntimeRootOverrides,
+            RuntimeRoots, ensure_bundle_runtime_directory,
+            ensure_relay_runtime_directory,
         },
         signals::{
-            arm_shutdown_deadline, budget_within_shutdown, install_shutdown_signal_handlers,
-            register_shutdown_grace, shutdown_requested,
+            arm_shutdown_deadline, budget_within_shutdown,
+            install_shutdown_signal_handlers, register_shutdown_grace,
+            shutdown_requested,
         },
         starter::ensure_starter_configuration_layout,
     },
 };
 
 use crate::commands::{
-    RelayHostArguments, RelayHostStartupBundle, RelayHostStartupSummary, RuntimeArguments, shared,
+    RelayHostArguments, RelayHostStartupBundle, RelayHostStartupSummary,
+    RuntimeArguments, shared,
 };
 
 use super::summary::{
-    build_startup_summary, degraded_startup_bundle, failed_autostart_bundle, failed_startup_bundle,
-    failed_startup_bundle_from_relay_error, hosted_startup_bundle, render_startup_summary,
-    skipped_startup_bundle, startup_summary_payload,
+    build_startup_summary, degraded_startup_bundle, failed_autostart_bundle,
+    failed_startup_bundle, failed_startup_bundle_from_relay_error,
+    hosted_startup_bundle, render_startup_summary, skipped_startup_bundle,
+    startup_summary_payload,
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -138,7 +146,9 @@ const RELAY_SHUTDOWN_WORKER_DRAIN_TIMEOUT_MS: u64 = 1_500;
 // to be cut off by the watchdog.
 const RELAY_SHUTDOWN_TEARDOWN_RESERVE_MS: u64 = 1_000;
 
-pub(super) async fn run_relay_host(arguments: RelayHostArguments) -> Result<(), RuntimeError> {
+pub(super) async fn run_relay_host(
+    arguments: RelayHostArguments,
+) -> Result<(), RuntimeError> {
     // Install SIGINT/SIGTERM handlers before any startup work. The handlers do
     // nothing beyond flipping a process-wide atomic, so they tolerate being
     // installed before the runtime is fully initialized. Installing them here
@@ -198,7 +208,9 @@ fn spawn_shutdown_watchdog() -> Result<(), RuntimeError> {
     // flag a poll interval later, and cleanup can begin inside that window —
     // registering the grace up front is what lets whoever needs a budget first
     // establish the deadline instead of concluding this process has none.
-    register_shutdown_grace(Duration::from_millis(RELAY_SHUTDOWN_WATCHDOG_GRACE_MS));
+    register_shutdown_grace(Duration::from_millis(
+        RELAY_SHUTDOWN_WATCHDOG_GRACE_MS,
+    ));
     thread::Builder::new()
         .name("shutdown-watchdog".to_string())
         .spawn(|| {
@@ -236,7 +248,9 @@ fn spawn_shutdown_watchdog() -> Result<(), RuntimeError> {
     Ok(())
 }
 
-fn resolve_runtime_roots(runtime: RuntimeArguments) -> Result<RuntimeRoots, RuntimeError> {
+fn resolve_runtime_roots(
+    runtime: RuntimeArguments,
+) -> Result<RuntimeRoots, RuntimeError> {
     // The same resolver every other surface uses. A relay that answered this
     // question differently from its clients would bind a socket none of them
     // look for.
@@ -274,16 +288,22 @@ fn prepare_relay_host(
     // peer whose alias names no identity this relay issued would authenticate
     // inbound under a name no route selects, so the reply path is broken before
     // the first delivery — reject at startup rather than at that delivery.
-    crate::relay::validate_peer_aliases(&relay_configuration.peers, &roots.state_root)
-        .map_err(shared::map_relay_error)?;
+    crate::relay::validate_peer_aliases(
+        &relay_configuration.peers,
+        &roots.state_root,
+    )
+    .map_err(shared::map_relay_error)?;
     // Published before anything can be admitted: the listener is not bound yet,
     // so no request boundary has run and no entry can have reserved quota against
     // the defaults.
     configure_delivery(relay_configuration.delivery);
 
-    let memberships = load_bundle_group_memberships(&roots.configuration_roots)
-        .map_err(shared::map_bundle_load_error)?;
-    configure_process_inscriptions(&relay_inscriptions_path(&roots.inscriptions_root))?;
+    let memberships =
+        load_bundle_group_memberships(&roots.configuration_roots)
+            .map_err(shared::map_bundle_load_error)?;
+    configure_process_inscriptions(&relay_inscriptions_path(
+        &roots.inscriptions_root,
+    ))?;
 
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     ensure_relay_runtime_directory(&relay_paths)?;
@@ -312,7 +332,10 @@ fn prepare_relay_host(
             },
             outcomes,
         );
-        emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
+        emit_inscription(
+            "relay.startup.summary",
+            &startup_summary_payload(&summary),
+        );
         render_startup_summary(&summary);
         return Ok(RelayHostPreparation::NoHostedBundles);
     }
@@ -322,7 +345,8 @@ fn prepare_relay_host(
     // fatal here: it would otherwise reject every Hello (which loads the store),
     // so surfacing it at startup fails fast rather than per connection.
     let pruned_principals =
-        crate::relay::prune_principal_store(&roots.state_root).map_err(shared::map_relay_error)?;
+        crate::relay::prune_principal_store(&roots.state_root)
+            .map_err(shared::map_relay_error)?;
     if pruned_principals > 0 {
         emit_inscription(
             "relay.identity.store_pruned",
@@ -331,15 +355,19 @@ fn prepare_relay_host(
     }
 
     let mut outcomes = Vec::with_capacity(memberships.len());
-    let mut hosted_bundles = Vec::<HostedBundle>::with_capacity(memberships.len());
+    let mut hosted_bundles =
+        Vec::<HostedBundle>::with_capacity(memberships.len());
     for membership in memberships {
         let startup_mode = if no_autostart || !membership.autostart {
             RelayHostStartupMode::ProcessOnly
         } else {
             RelayHostStartupMode::Autostart
         };
-        let (mut outcome, hosted_bundle) =
-            host_selected_bundle(roots, membership.bundle_name.as_str(), startup_mode);
+        let (mut outcome, hosted_bundle) = host_selected_bundle(
+            roots,
+            membership.bundle_name.as_str(),
+            startup_mode,
+        );
         if no_autostart {
             outcome = skipped_startup_bundle(
                 membership.bundle_name.as_str(),
@@ -356,8 +384,10 @@ fn prepare_relay_host(
     // Register `users.toml`-declared relay-wide principals as static (offline)
     // registry entries so look/raww resolve their capabilities from the unified
     // registry and a declared-but-disconnected principal is a known target.
-    crate::relay::register_configured_relay_wide_principals(&roots.configuration_roots)
-        .map_err(shared::map_relay_error)?;
+    crate::relay::register_configured_relay_wide_principals(
+        &roots.configuration_roots,
+    )
+    .map_err(shared::map_relay_error)?;
 
     // A restart-first operator diagnoses from the journal and inscriptions, so
     // every failed bundle must leave a per-bundle reason on both before any
@@ -399,12 +429,18 @@ fn prepare_relay_host(
     );
     if hosted_bundles.is_empty() {
         if no_autostart {
-            emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
+            emit_inscription(
+                "relay.startup.summary",
+                &startup_summary_payload(&summary),
+            );
             render_startup_summary(&summary);
             return Ok(RelayHostPreparation::NoHostedBundles);
         }
         if summary.failed_bundle_count > 0 {
-            emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
+            emit_inscription(
+                "relay.startup.summary",
+                &startup_summary_payload(&summary),
+            );
             return Err(RuntimeError::validation(
                 "runtime_startup_failed",
                 format!(
@@ -422,10 +458,11 @@ fn prepare_relay_host(
     // before that field is consumed below. Each peer carries its own presented
     // identity (`connect-as`); the manager is empty (and never dials) on a relay
     // with no configured peers.
-    let peer_connection_manager = Arc::new(PeerConnectionManager::from_configuration(
-        &roots.state_root,
-        &relay_configuration.peers,
-    ));
+    let peer_connection_manager =
+        Arc::new(PeerConnectionManager::from_configuration(
+            &roots.state_root,
+            &relay_configuration.peers,
+        ));
 
     // Build the bundle catalog and pre-build the shared serving context so the
     // serve phase constructs `ConnectionServeContext` exactly once and clones
@@ -468,7 +505,9 @@ fn prepare_relay_host(
 
 /// Drives the single relay accept loop on the async runtime until shutdown,
 /// then performs runtime cleanup.
-async fn serve_relay_host(plan: Box<RelayHostServePlan>) -> Result<(), RuntimeError> {
+async fn serve_relay_host(
+    plan: Box<RelayHostServePlan>,
+) -> Result<(), RuntimeError> {
     let RelayHostServePlan {
         summary,
         relay_paths,
@@ -478,7 +517,10 @@ async fn serve_relay_host(plan: Box<RelayHostServePlan>) -> Result<(), RuntimeEr
         no_autostart,
         serve_context,
     } = *plan;
-    emit_inscription("relay.startup.summary", &startup_summary_payload(&summary));
+    emit_inscription(
+        "relay.startup.summary",
+        &startup_summary_payload(&summary),
+    );
     render_startup_summary(&summary);
 
     let stop_requested = Arc::new(AtomicBool::new(false));
@@ -539,7 +581,7 @@ async fn serve_relay_host(plan: Box<RelayHostServePlan>) -> Result<(), RuntimeEr
                     &json!({ "cause": error.to_string() }),
                 );
                 None
-            }
+            },
         }
     } else {
         None
@@ -552,10 +594,14 @@ async fn serve_relay_host(plan: Box<RelayHostServePlan>) -> Result<(), RuntimeEr
     // relay startup.
     write_relay_ready_sentinel(&relay_paths)?;
 
-    let accept_outcome = supervise_accept_loop(&stop_requested, accept_handle).await;
+    let accept_outcome =
+        supervise_accept_loop(&stop_requested, accept_handle).await;
 
     if shutdown_requested() {
-        emit_inscription("relay.shutdown.signal", &json!({"signal": "termination"}));
+        emit_inscription(
+            "relay.shutdown.signal",
+            &json!({"signal": "termination"}),
+        );
     }
     stop_requested.store(true, Ordering::SeqCst);
 
@@ -643,7 +689,10 @@ fn accept_loop_join_outcome(
 
 /// Builds a runtime error for a blocking supervisor/cleanup task that failed to
 /// join (panic or cancellation).
-fn supervisor_join_error(context: &str, source: tokio::task::JoinError) -> RuntimeError {
+fn supervisor_join_error(
+    context: &str,
+    source: tokio::task::JoinError,
+) -> RuntimeError {
     RuntimeError::validation(
         "internal_unexpected_failure",
         format!("{context} task failed to join: {source}"),
@@ -694,7 +743,9 @@ fn cleanup_relay_host(
 
 /// Writes the relay ready sentinel atomically (write-tmp + rename) so callers
 /// that poll for its existence never see a partially-written file.
-fn write_relay_ready_sentinel(paths: &RelayRuntimePaths) -> Result<(), RuntimeError> {
+fn write_relay_ready_sentinel(
+    paths: &RelayRuntimePaths,
+) -> Result<(), RuntimeError> {
     let sentinel = &paths.relay_ready_sentinel;
     let temporary = sentinel.with_extension("ready.tmp");
     std::fs::write(&temporary, b"").map_err(|source| {
@@ -730,22 +781,24 @@ async fn run_relay_accept_loop(
     max_connections: usize,
     drain_coordinator: Arc<ConnectionDrainCoordinator>,
 ) -> Result<(), RuntimeError> {
-    listener
-        .set_nonblocking(true)
-        .map_err(|source| RuntimeError::io("set relay socket non-blocking".to_string(), source))?;
-    let listener = TokioUnixListener::from_std(listener).map_err(|source| {
-        RuntimeError::io(
-            "register relay socket with async runtime".to_string(),
-            source,
-        )
+    listener.set_nonblocking(true).map_err(|source| {
+        RuntimeError::io("set relay socket non-blocking".to_string(), source)
     })?;
+    let listener =
+        TokioUnixListener::from_std(listener).map_err(|source| {
+            RuntimeError::io(
+                "register relay socket with async runtime".to_string(),
+                source,
+            )
+        })?;
     let metrics = Arc::new(RelayConnectionMetrics::new());
     // The undelivered-queue report rides this loop rather than a task of its own:
     // it is exactly relay-lifetime scoped, needs no shutdown coordination, and
     // does no work worth a thread. The first tick fires immediately, so skip it —
     // a relay that has just started has nothing queued to report.
     let undelivered_reporting = configured_undelivered_reporting();
-    let mut undelivered_report = tokio::time::interval(undelivered_reporting.interval);
+    let mut undelivered_report =
+        tokio::time::interval(undelivered_reporting.interval);
     undelivered_report.tick().await;
 
     loop {
@@ -811,7 +864,8 @@ fn spawn_connection_worker(
     metrics.active_connections.fetch_add(1, Ordering::SeqCst);
     let worker_slot = drain_coordinator.register_worker();
     tokio::spawn(async move {
-        let result = serve_connection(stream, &serve_context, worker_slot).await;
+        let result =
+            serve_connection(stream, &serve_context, worker_slot).await;
         metrics.active_connections.fetch_sub(1, Ordering::SeqCst);
         drop(permit);
         if let Err(source) = result {
@@ -826,13 +880,15 @@ fn spawn_connection_worker(
 }
 
 fn relay_max_connections() -> usize {
-    parse_env_positive_usize("AGENTMUX_RELAY_MAX_CONNECTIONS").unwrap_or(RELAY_MAX_CONNECTIONS)
+    parse_env_positive_usize("AGENTMUX_RELAY_MAX_CONNECTIONS")
+        .unwrap_or(RELAY_MAX_CONNECTIONS)
 }
 
 fn relay_pre_hello_idle_timeout() -> Duration {
-    let timeout_ms = parse_env_positive_usize("AGENTMUX_RELAY_PRE_HELLO_IDLE_TIMEOUT_MS")
-        .and_then(|value| u64::try_from(value).ok())
-        .unwrap_or(RELAY_PRE_HELLO_IDLE_TIMEOUT_MS);
+    let timeout_ms =
+        parse_env_positive_usize("AGENTMUX_RELAY_PRE_HELLO_IDLE_TIMEOUT_MS")
+            .and_then(|value| u64::try_from(value).ok())
+            .unwrap_or(RELAY_PRE_HELLO_IDLE_TIMEOUT_MS);
     Duration::from_millis(timeout_ms)
 }
 
@@ -877,7 +933,10 @@ async fn reject_overloaded_connection(
 // Emits a snapshot of connection occupancy on each accept so saturation is
 // observable: `active_connections` approaching `max_connections` with non-zero
 // `rejected_connections` is the at-capacity signal.
-fn emit_connection_metrics(max_connections: usize, metrics: &RelayConnectionMetrics) {
+fn emit_connection_metrics(
+    max_connections: usize,
+    metrics: &RelayConnectionMetrics,
+) {
     emit_inscription(
         "relay.connection_pool.metrics",
         &json!({
@@ -893,10 +952,13 @@ fn host_selected_bundle(
     bundle_name: &str,
     startup_mode: RelayHostStartupMode,
 ) -> (RelayHostStartupBundle, Option<HostedBundle>) {
-    let paths = match BundleRuntimePaths::resolve(&roots.state_root, bundle_name) {
-        Ok(paths) => paths,
-        Err(source) => return (failed_startup_bundle(bundle_name, source), None),
-    };
+    let paths =
+        match BundleRuntimePaths::resolve(&roots.state_root, bundle_name) {
+            Ok(paths) => paths,
+            Err(source) => {
+                return (failed_startup_bundle(bundle_name, source), None);
+            },
+        };
 
     emit_inscription(
         "relay.startup",
@@ -917,8 +979,10 @@ fn host_selected_bundle(
     // would treat a declared-but-offline member as an unknown target. Autostart
     // performs this registration inside `startup_bundle`.
     if let RelayHostStartupMode::ProcessOnly = startup_mode
-        && let Err(source) =
-            crate::relay::register_configured_bundle(&roots.configuration_roots, &paths.bundle_name)
+        && let Err(source) = crate::relay::register_configured_bundle(
+            &roots.configuration_roots,
+            &paths.bundle_name,
+        )
     {
         return (
             failed_startup_bundle_from_relay_error(bundle_name, source),
@@ -931,10 +995,13 @@ fn host_selected_bundle(
             Ok(report) => report,
             Err(source) => {
                 return (
-                    failed_startup_bundle_from_relay_error(bundle_name, source),
+                    failed_startup_bundle_from_relay_error(
+                        bundle_name,
+                        source,
+                    ),
                     None,
                 );
-            }
+            },
         };
         let mut report = report;
         match persist_startup_failures(
@@ -948,7 +1015,9 @@ fn host_selected_bundle(
                     RelayHostStartupBundle {
                         bundle_name: bundle_name.to_string(),
                         outcome: "failed".to_string(),
-                        reason_code: Some("runtime_startup_failed".to_string()),
+                        reason_code: Some(
+                            "runtime_startup_failed".to_string(),
+                        ),
                         reason: Some(format!(
                             "failed to persist startup failure history: {cause}"
                         )),
@@ -956,22 +1025,29 @@ fn host_selected_bundle(
                     },
                     None,
                 );
-            }
+            },
         }
         startup_report = Some(report);
     }
     let startup_bundle = match startup_mode {
         RelayHostStartupMode::Autostart => {
-            let report = startup_report.expect("autostart report must be present");
+            let report =
+                startup_report.expect("autostart report must be present");
             match (
                 report.ready_session_count > 0,
                 report.failed_startups.is_empty(),
             ) {
                 (true, true) => hosted_startup_bundle(bundle_name),
-                (true, false) => degraded_startup_bundle(bundle_name, &report.failed_startups),
-                (false, _) => failed_autostart_bundle(bundle_name, &report.failed_startups),
+                (true, false) => degraded_startup_bundle(
+                    bundle_name,
+                    &report.failed_startups,
+                ),
+                (false, _) => failed_autostart_bundle(
+                    bundle_name,
+                    &report.failed_startups,
+                ),
             }
-        }
+        },
         RelayHostStartupMode::ProcessOnly => skipped_startup_bundle(
             bundle_name,
             "process_only",

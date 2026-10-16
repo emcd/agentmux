@@ -19,8 +19,11 @@ pub(super) fn relay_hello_keepalive(
     principal_id: &str,
     identity_token: &str,
 ) -> (UnixStream, BufReader<UnixStream>, Value) {
-    let socket = agentmux::runtime::paths::RelayRuntimePaths::resolve(state_root).relay_socket;
-    let mut stream = UnixStream::connect(&socket).expect("connect relay socket");
+    let socket =
+        agentmux::runtime::paths::RelayRuntimePaths::resolve(state_root)
+            .relay_socket;
+    let mut stream =
+        UnixStream::connect(&socket).expect("connect relay socket");
     let reader_stream = stream.try_clone().expect("clone relay stream");
     reader_stream
         .set_read_timeout(Some(WATCHER_SIGNAL_WAIT_BUDGET))
@@ -42,11 +45,15 @@ pub(super) fn relay_hello_keepalive(
 }
 
 /// Reads the next newline-delimited frame, or `None` on EOF or read timeout.
-pub(super) fn read_next_frame(reader: &mut BufReader<UnixStream>) -> Option<Value> {
+pub(super) fn read_next_frame(
+    reader: &mut BufReader<UnixStream>,
+) -> Option<Value> {
     let mut line = String::new();
     match reader.read_line(&mut line) {
         Ok(0) => None,
-        Ok(_) => Some(serde_json::from_str(line.trim_end()).expect("decode relay frame")),
+        Ok(_) => Some(
+            serde_json::from_str(line.trim_end()).expect("decode relay frame"),
+        ),
         Err(_) => None,
     }
 }
@@ -62,7 +69,8 @@ pub(super) fn poll_hello_first_frame(
 ) -> Value {
     let deadline = Instant::now() + WATCHER_SIGNAL_WAIT_BUDGET;
     loop {
-        let frame = relay_hello_first_frame(state_root, principal_id, identity_token);
+        let frame =
+            relay_hello_first_frame(state_root, principal_id, identity_token);
         if accept(&frame) || Instant::now() >= deadline {
             return frame;
         }

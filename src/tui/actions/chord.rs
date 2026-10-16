@@ -52,7 +52,7 @@ impl Chord {
                     rendered_modifiers(modifiers),
                     rendered_key(code, modifiers)
                 )
-            }
+            },
             Self::Char(character) => character_display(character),
             Self::Text => "Type".to_string(),
         }
@@ -70,7 +70,9 @@ impl Chord {
     pub(crate) fn denoted_keystroke(self) -> Option<(KeyCode, KeyModifiers)> {
         match self {
             Self::Key(code, modifiers) => Some((code, modifiers)),
-            Self::Char(character) => Some((KeyCode::Char(character), KeyModifiers::NONE)),
+            Self::Char(character) => {
+                Some((KeyCode::Char(character), KeyModifiers::NONE))
+            },
             Self::Text => None,
         }
     }
@@ -95,11 +97,21 @@ impl Chord {
         }
     }
 
-    pub(super) fn matches(self, code: KeyCode, modifiers: KeyModifiers) -> bool {
+    pub(super) fn matches(
+        self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+    ) -> bool {
         match self {
-            Self::Key(row_code, row_modifiers) => code == row_code && modifiers == row_modifiers,
-            Self::Char(character) => code == KeyCode::Char(character) && is_typed(modifiers),
-            Self::Text => matches!(code, KeyCode::Char(_)) && is_typed(modifiers),
+            Self::Key(row_code, row_modifiers) => {
+                code == row_code && modifiers == row_modifiers
+            },
+            Self::Char(character) => {
+                code == KeyCode::Char(character) && is_typed(modifiers)
+            },
+            Self::Text => {
+                matches!(code, KeyCode::Char(_)) && is_typed(modifiers)
+            },
         }
     }
 }
@@ -175,7 +187,10 @@ impl PrimaryModifier {
 /// The platform arrives as an argument rather than through `cfg!` so both arms
 /// are exercisable wherever the tests run.
 #[must_use]
-pub fn primary_modifier(on_macos: bool, selection: Option<PrimaryModifier>) -> KeyModifiers {
+pub fn primary_modifier(
+    on_macos: bool,
+    selection: Option<PrimaryModifier>,
+) -> KeyModifiers {
     if on_macos {
         selection.unwrap_or_default().modifier()
     } else {
@@ -198,16 +213,21 @@ pub enum ChordError {
 }
 
 impl std::fmt::Display for ChordError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         match self {
             Self::Empty => write!(formatter, "chord names no key"),
             Self::UnknownModifier(segment) => {
                 write!(formatter, "unknown modifier in chord: {segment}")
-            }
-            Self::UnknownKey(segment) => write!(formatter, "unknown key in chord: {segment}"),
+            },
+            Self::UnknownKey(segment) => {
+                write!(formatter, "unknown key in chord: {segment}")
+            },
             Self::RepeatedModifier(segment) => {
                 write!(formatter, "modifier repeated in chord: {segment}")
-            }
+            },
         }
     }
 }
@@ -251,9 +271,11 @@ impl ChordPattern {
             modifiers |= primary;
         }
         let code = match self.code {
-            KeyCode::Char(character) if modifiers.contains(KeyModifiers::CONTROL) => {
+            KeyCode::Char(character)
+                if modifiers.contains(KeyModifiers::CONTROL) =>
+            {
                 KeyCode::Char(character.to_ascii_lowercase())
-            }
+            },
             other => other,
         };
         (code, modifiers)
@@ -277,7 +299,9 @@ impl ChordPattern {
     pub(crate) fn resolve_to_chord(self, primary: KeyModifiers) -> Chord {
         let (code, modifiers) = self.resolve(primary);
         match code {
-            KeyCode::Char(character) if modifiers.is_empty() => Chord::Char(character),
+            KeyCode::Char(character) if modifiers.is_empty() => {
+                Chord::Char(character)
+            },
             _ => Chord::Key(code, modifiers),
         }
     }
@@ -327,17 +351,29 @@ pub fn parse_chord(text: &str) -> Result<ChordPattern, ChordError> {
     let mut primary = false;
     for segment in modifiers {
         match segment.to_ascii_lowercase().as_str() {
-            "ctrl" | "control" => set_once(&mut literal, KeyModifiers::CONTROL, segment)?,
-            "alt" | "option" => set_once(&mut literal, KeyModifiers::ALT, segment)?,
+            "ctrl" | "control" => {
+                set_once(&mut literal, KeyModifiers::CONTROL, segment)?
+            },
+            "alt" | "option" => {
+                set_once(&mut literal, KeyModifiers::ALT, segment)?
+            },
             "shift" => set_once(&mut literal, KeyModifiers::SHIFT, segment)?,
-            "cmd" | "command" | "super" => set_once(&mut literal, KeyModifiers::SUPER, segment)?,
+            "cmd" | "command" | "super" => {
+                set_once(&mut literal, KeyModifiers::SUPER, segment)?
+            },
             "primary" => {
                 if primary {
-                    return Err(ChordError::RepeatedModifier((*segment).to_string()));
+                    return Err(ChordError::RepeatedModifier(
+                        (*segment).to_string(),
+                    ));
                 }
                 primary = true;
-            }
-            _ => return Err(ChordError::UnknownModifier((*segment).to_string())),
+            },
+            _ => {
+                return Err(ChordError::UnknownModifier(
+                    (*segment).to_string(),
+                ));
+            },
         }
     }
     let (code, implied) = parse_key(key)?;
@@ -356,7 +392,10 @@ pub fn parse_chord(text: &str) -> Result<ChordPattern, ChordError> {
 /// so reading the spelling as `Tab` carrying `Shift` would produce a chord no
 /// keystroke ever satisfies. Canonicalizing here rather than at match time
 /// keeps one representation flowing through resolution and dispatch alike.
-fn canonical_key(code: KeyCode, modifiers: KeyModifiers) -> (KeyCode, KeyModifiers) {
+fn canonical_key(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> (KeyCode, KeyModifiers) {
     if code == KeyCode::Tab && modifiers.contains(KeyModifiers::SHIFT) {
         return (KeyCode::BackTab, modifiers.difference(KeyModifiers::SHIFT));
     }
@@ -398,16 +437,22 @@ fn parse_key(segment: &str) -> Result<(KeyCode, KeyModifiers), ChordError> {
         "pgdn" | "pagedown" => KeyCode::PageDown,
         "space" => KeyCode::Char(' '),
         lowered => {
-            if let Some(number) = lowered.strip_prefix('f').and_then(|rest| rest.parse().ok()) {
+            if let Some(number) =
+                lowered.strip_prefix('f').and_then(|rest| rest.parse().ok())
+            {
                 KeyCode::F(number)
             } else {
                 let mut characters = segment.chars();
                 match (characters.next(), characters.next()) {
                     (Some(character), None) => KeyCode::Char(character),
-                    _ => return Err(ChordError::UnknownKey(segment.to_string())),
+                    _ => {
+                        return Err(ChordError::UnknownKey(
+                            segment.to_string(),
+                        ));
+                    },
                 }
             }
-        }
+        },
     };
     Ok((code, KeyModifiers::NONE))
 }
@@ -446,9 +491,11 @@ fn rendered_modifiers(modifiers: KeyModifiers) -> String {
 /// convention so that what is shown and what parses are the same text.
 fn rendered_key(code: KeyCode, modifiers: KeyModifiers) -> String {
     match code {
-        KeyCode::Char(character) if modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::Char(character)
+            if modifiers.contains(KeyModifiers::CONTROL) =>
+        {
             character_display(character.to_ascii_uppercase())
-        }
+        },
         other => key_code_display(other),
     }
 }

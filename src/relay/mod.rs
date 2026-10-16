@@ -3,7 +3,9 @@
 use std::{collections::HashSet, path::Path, time::Duration};
 
 use crate::configuration::{ConfigurationRoots, load_bundle_configuration};
-use crate::runtime::paths::{BundleRuntimePaths, tmux_socket_path_for_runtime_directory};
+use crate::runtime::paths::{
+    BundleRuntimePaths, tmux_socket_path_for_runtime_directory,
+};
 use crate::transports::WorkerReadinessState;
 
 mod authorization;
@@ -33,8 +35,8 @@ mod watcher;
 use self::authorization::load_authorization_context;
 pub use self::configuration::{
     DeliveryConfiguration, PeerConfiguration, RelayRuntimeConfiguration,
-    load_relay_runtime_configuration, parse_relay_bool_env_value, resolve_relay_bool_setting,
-    validate_peer_aliases,
+    load_relay_runtime_configuration, parse_relay_bool_env_value,
+    resolve_relay_bool_setting, validate_peer_aliases,
 };
 
 pub use self::catalog::{BundleCatalog, HostingIntent};
@@ -44,15 +46,20 @@ use self::constants::*;
 use self::context::*;
 pub use self::contract::*;
 pub use self::delivery::admission::{
-    UndeliveredReporting, configure_delivery, configured_undelivered_reporting,
-    report_undelivered_queue,
+    UndeliveredReporting, configure_delivery,
+    configured_undelivered_reporting, report_undelivered_queue,
 };
-pub use self::delivery::fence::{FenceOutcome, FenceResolution, FenceVerdict, acknowledge_fence};
+pub use self::delivery::fence::{
+    FenceOutcome, FenceResolution, FenceVerdict, acknowledge_fence,
+};
 pub use self::delivery::install_pending_choice_request_for_testing;
 pub use self::delivery::observability::{
-    ChoicesQueueEvent, subscribe_choices_queue_events, subscribe_worker_readiness,
+    ChoicesQueueEvent, subscribe_choices_queue_events,
+    subscribe_worker_readiness,
 };
-pub use self::drain::{ConnectionDrainCoordinator, ConnectionDrainReport, ConnectionWorkerSlot};
+pub use self::drain::{
+    ConnectionDrainCoordinator, ConnectionDrainReport, ConnectionWorkerSlot,
+};
 use self::errors::*;
 use self::identity::*;
 pub use self::peer_connection::PeerConnectionManager;
@@ -127,7 +134,7 @@ fn handle_request_with_principal(
                 None,
                 None,
             );
-        }
+        },
         RelayRequest::Look { .. } => {
             return handlers::handle_look_routed(
                 bundle_name,
@@ -136,7 +143,7 @@ fn handle_request_with_principal(
                 bundle_catalog,
                 principal.as_ref(),
             );
-        }
+        },
         RelayRequest::Raww { .. } => {
             // The non-stream single-bundle entry point holds no peer connection
             // manager, so a cross-relay target reports as unavailable here; the
@@ -150,11 +157,13 @@ fn handle_request_with_principal(
                 None,
                 None,
             );
-        }
-        _ => {}
+        },
+        _ => {},
     }
-    let bundle = load_bundle_configuration(configuration_roots, bundle_name).map_err(map_config)?;
-    let authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
+    let bundle = load_bundle_configuration(configuration_roots, bundle_name)
+        .map_err(map_config)?;
+    let authorization =
+        load_authorization_context(configuration_roots, Some(&bundle))?;
     handlers::handle_request(
         request,
         &bundle,
@@ -257,7 +266,11 @@ pub fn shutdown_bundle_runtime(
     runtime_directory: &Path,
     tmux_socket: &Path,
 ) -> Result<ShutdownReport, RelayError> {
-    lifecycle::shutdown_bundle_runtime(bundle_name, runtime_directory, tmux_socket)
+    lifecycle::shutdown_bundle_runtime(
+        bundle_name,
+        runtime_directory,
+        tmux_socket,
+    )
 }
 
 /// Test-only cleanup for `acp::*` integration tests.
@@ -301,7 +314,10 @@ pub fn prune_startup_failures_for_non_members(
     runtime_directory: &Path,
     member_ids: &HashSet<String>,
 ) -> Result<usize, String> {
-    startup_state::prune_startup_failures_for_non_members(runtime_directory, member_ids)
+    startup_state::prune_startup_failures_for_non_members(
+        runtime_directory,
+        member_ids,
+    )
 }
 
 /// Records that a session has been observed serving successfully, clearing any
@@ -319,7 +335,10 @@ pub fn note_session_served_successfully(
     runtime_directory: &Path,
     session_id: &str,
 ) -> Result<(), String> {
-    startup_state::note_session_served_successfully(runtime_directory, session_id)
+    startup_state::note_session_served_successfully(
+        runtime_directory,
+        session_id,
+    )
 }
 
 /// Persists and announces a bring-up pass's per-session startup failures,
@@ -333,7 +352,11 @@ pub fn persist_startup_failures(
     runtime_directory: &Path,
     failures: &[StartupFailureRecord],
 ) -> Result<Vec<StartupFailureRecord>, String> {
-    startup_state::persist_and_announce_startup_failures(bundle_name, runtime_directory, failures)
+    startup_state::persist_and_announce_startup_failures(
+        bundle_name,
+        runtime_directory,
+        failures,
+    )
 }
 
 /// Waits for async delivery workers to stop after shutdown is requested.
@@ -360,14 +383,17 @@ pub fn read_worker_readiness(
     runtime_directory: &Path,
     target_session: &str,
 ) -> Option<&'static str> {
-    delivery::get_worker_readiness(namespace, runtime_directory, target_session).map(|state| {
-        match state {
-            WorkerReadinessState::Initializing => "initializing",
-            WorkerReadinessState::Available => "available",
-            WorkerReadinessState::Busy => "busy",
-            WorkerReadinessState::Recovering => "recovering",
-            WorkerReadinessState::Unavailable => "unavailable",
-        }
+    delivery::get_worker_readiness(
+        namespace,
+        runtime_directory,
+        target_session,
+    )
+    .map(|state| match state {
+        WorkerReadinessState::Initializing => "initializing",
+        WorkerReadinessState::Available => "available",
+        WorkerReadinessState::Busy => "busy",
+        WorkerReadinessState::Recovering => "recovering",
+        WorkerReadinessState::Unavailable => "unavailable",
     })
 }
 
@@ -416,14 +442,20 @@ pub(in crate::relay) fn dispatch_list(
                 None,
             ));
         };
-        let dispatch_bundle =
-            load_bundle_configuration(configuration_roots, &dispatch_paths.bundle_name)
-                .map_err(map_config)?;
-        let dispatch_authorization =
-            load_authorization_context(configuration_roots, Some(&dispatch_bundle))?;
-        let enumerate_bundle =
-            load_bundle_configuration(configuration_roots, &enumerate_paths.bundle_name)
-                .map_err(map_config)?;
+        let dispatch_bundle = load_bundle_configuration(
+            configuration_roots,
+            &dispatch_paths.bundle_name,
+        )
+        .map_err(map_config)?;
+        let dispatch_authorization = load_authorization_context(
+            configuration_roots,
+            Some(&dispatch_bundle),
+        )?;
+        let enumerate_bundle = load_bundle_configuration(
+            configuration_roots,
+            &enumerate_paths.bundle_name,
+        )
+        .map_err(map_config)?;
         handlers::handle_list_routed(
             &dispatch_bundle,
             &dispatch_authorization,
@@ -560,13 +592,17 @@ pub(in crate::relay) fn dispatch_discovery(
         ingress_authority,
     };
     let result = match request {
-        RelayRequest::ListRelays => handlers::handle_list_relays(&context, &principal),
+        RelayRequest::ListRelays => {
+            handlers::handle_list_relays(&context, &principal)
+        },
         RelayRequest::DiscoverNamespaces { relay } => {
             handlers::handle_discover_namespaces(&context, &principal, relay)
-        }
+        },
         RelayRequest::DiscoverPrincipals { relay, namespace } => {
-            handlers::handle_discover_principals(&context, &principal, relay, namespace)
-        }
+            handlers::handle_discover_principals(
+                &context, &principal, relay, namespace,
+            )
+        },
         _ => Err(relay_error(
             "internal_unexpected_request",
             "non-discovery request routed to the discovery dispatcher",
@@ -626,7 +662,11 @@ pub(in crate::relay) fn dispatch_identity_introspect(
             ),
         };
     };
-    match handlers::handle_identity_introspect(state_root, principal, target_session.as_str()) {
+    match handlers::handle_identity_introspect(
+        state_root,
+        principal,
+        target_session.as_str(),
+    ) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },
     }

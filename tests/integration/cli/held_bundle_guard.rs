@@ -20,11 +20,18 @@ fn a_send_to_a_held_tmux_bundle_is_rejected_as_held() {
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("named-state");
     let inscriptions_root = temporary.path().join("inscriptions");
-    fs::create_dir_all(config_root.join("bundles")).expect("create config root");
+    fs::create_dir_all(config_root.join("bundles"))
+        .expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
     // Tmux bundle, autostart = false so it stays held (HostingIntent::Hold).
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
 
     let host_child = process::RelayChildGuard::new(
         Command::new(env!("CARGO_BIN_EXE_agentmux"))
@@ -70,7 +77,8 @@ fn a_send_to_a_held_tmux_bundle_is_rejected_as_held() {
     let stderr = String::from_utf8_lossy(&send.stderr);
     let stdout = String::from_utf8_lossy(&send.stdout);
     assert!(
-        stderr.contains("runtime_bundle_held") || stdout.contains("runtime_bundle_held"),
+        stderr.contains("runtime_bundle_held")
+            || stdout.contains("runtime_bundle_held"),
         "send to a held bundle must resolve as held/unavailable, not queued; stderr: {stderr} stdout: {stdout}"
     );
 
@@ -86,10 +94,17 @@ fn a_raww_to_a_held_tmux_bundle_is_rejected_as_held() {
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("named-state");
     let inscriptions_root = temporary.path().join("inscriptions");
-    fs::create_dir_all(config_root.join("bundles")).expect("create config root");
+    fs::create_dir_all(config_root.join("bundles"))
+        .expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
 
     let host_child = process::RelayChildGuard::new(
         Command::new(env!("CARGO_BIN_EXE_agentmux"))
@@ -133,7 +148,8 @@ fn a_raww_to_a_held_tmux_bundle_is_rejected_as_held() {
     let stderr = String::from_utf8_lossy(&raww.stderr);
     let stdout = String::from_utf8_lossy(&raww.stdout);
     assert!(
-        stderr.contains("runtime_bundle_held") || stdout.contains("runtime_bundle_held"),
+        stderr.contains("runtime_bundle_held")
+            || stdout.contains("runtime_bundle_held"),
         "raww to a held bundle must resolve as held/unavailable; stderr: {stderr} stdout: {stdout}"
     );
 

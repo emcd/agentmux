@@ -1,5 +1,8 @@
 use crate::{
-    relay::{ListedSessionTransport, LookSnapshotPayload, RelayRequest, RelayResponse},
+    relay::{
+        ListedSessionTransport, LookSnapshotPayload, RelayRequest,
+        RelayResponse,
+    },
     runtime::error::RuntimeError,
 };
 
@@ -26,7 +29,9 @@ impl AppState {
         self.mode = ScreenMode::Interaction;
     }
 
-    pub fn enter_interaction_from_picker(&mut self) -> Result<(), RuntimeError> {
+    pub fn enter_interaction_from_picker(
+        &mut self,
+    ) -> Result<(), RuntimeError> {
         let target = self.selected_picker_recipient_id().ok_or_else(|| {
             RuntimeError::validation(
                 "validation_unknown_target",
@@ -53,14 +58,19 @@ impl AppState {
                 self.store_look_snapshot(captured_at, snapshot);
                 self.close_picker();
                 self.enter_interaction_mode();
-                self.push_status(None, format!("look captured target={target_session}"));
+                self.push_status(
+                    None,
+                    format!("look captured target={target_session}"),
+                );
                 self.relay_stream_poll_error_reported = false;
                 Ok(())
-            }
+            },
             RelayResponse::Error { error } => Err(map_relay_error(error)),
             other => Err(RuntimeError::validation(
                 "internal_unexpected_failure",
-                format!("relay returned unexpected response variant: {other:?}"),
+                format!(
+                    "relay returned unexpected response variant: {other:?}"
+                ),
             )),
         }
     }
@@ -90,18 +100,24 @@ impl AppState {
             } => {
                 self.store_look_snapshot(captured_at, snapshot);
                 Ok(())
-            }
+            },
             RelayResponse::Error { error } => Err(map_relay_error(error)),
             other => Err(RuntimeError::validation(
                 "internal_unexpected_failure",
-                format!("relay returned unexpected response variant: {other:?}"),
+                format!(
+                    "relay returned unexpected response variant: {other:?}"
+                ),
             )),
         }
     }
 
     /// Stores a captured look payload into the overlay buffer fields, leaving the
     /// interaction target and overlay scroll position untouched.
-    fn store_look_snapshot(&mut self, captured_at: String, snapshot: LookSnapshotPayload) {
+    fn store_look_snapshot(
+        &mut self,
+        captured_at: String,
+        snapshot: LookSnapshotPayload,
+    ) {
         let (look_snapshot_format, look_snapshot_lines, look_snapshot_entries) =
             overlay_snapshot_from_payload(snapshot);
         self.look_captured_at = Some(captured_at);
@@ -110,7 +126,9 @@ impl AppState {
         self.look_snapshot_entries = look_snapshot_entries;
     }
 
-    pub fn dispatch_raww_from_interaction(&mut self) -> Result<(), RuntimeError> {
+    pub fn dispatch_raww_from_interaction(
+        &mut self,
+    ) -> Result<(), RuntimeError> {
         let Some(target) = self.look_target.clone() else {
             return Err(RuntimeError::validation(
                 "validation_unknown_target",
@@ -170,17 +188,20 @@ impl AppState {
                 self.clear_raww_draft();
                 self.relay_stream_poll_error_reported = false;
                 Ok(())
-            }
+            },
             RelayResponse::Error { error } => Err(map_relay_error(error)),
             other => Err(RuntimeError::validation(
                 "internal_unexpected_failure",
-                format!("relay returned unexpected response variant: {other:?}"),
+                format!(
+                    "relay returned unexpected response variant: {other:?}"
+                ),
             )),
         }
     }
 
     pub fn set_interaction_target(&mut self, target: String) {
-        let target_changed = self.look_target.as_deref() != Some(target.as_str());
+        let target_changed =
+            self.look_target.as_deref() != Some(target.as_str());
         self.look_target = Some(target);
         if target_changed {
             self.look_overlay_scroll = 0;
@@ -228,8 +249,10 @@ impl AppState {
         if self.raww_cursor_index >= self.raww_draft.len() {
             return;
         }
-        self.raww_cursor_index =
-            super::text_util::next_char_boundary(self.raww_draft.as_str(), self.raww_cursor_index);
+        self.raww_cursor_index = super::text_util::next_char_boundary(
+            self.raww_draft.as_str(),
+            self.raww_cursor_index,
+        );
         self.raww_cursor_preferred_column = None;
     }
 
@@ -281,28 +304,33 @@ impl AppState {
     }
 
     fn move_raww_cursor_vertical(&mut self, delta: isize) {
-        let line_ranges = super::text_util::line_ranges(self.raww_draft.as_str());
+        let line_ranges =
+            super::text_util::line_ranges(self.raww_draft.as_str());
         if line_ranges.is_empty() {
             return;
         }
-        let (current_line, current_column) = super::text_util::line_and_column_for_index(
-            self.raww_draft.as_str(),
-            self.raww_cursor_index,
-        );
+        let (current_line, current_column) =
+            super::text_util::line_and_column_for_index(
+                self.raww_draft.as_str(),
+                self.raww_cursor_index,
+            );
         let target_line = if delta.is_negative() {
             current_line.saturating_sub(delta.unsigned_abs())
         } else {
-            (current_line + delta as usize).min(line_ranges.len().saturating_sub(1))
+            (current_line + delta as usize)
+                .min(line_ranges.len().saturating_sub(1))
         };
         if target_line == current_line {
             return;
         }
-        let preferred_column = self.raww_cursor_preferred_column.unwrap_or(current_column);
-        self.raww_cursor_index = super::text_util::cursor_index_for_line_column(
-            self.raww_draft.as_str(),
-            line_ranges[target_line],
-            preferred_column,
-        );
+        let preferred_column =
+            self.raww_cursor_preferred_column.unwrap_or(current_column);
+        self.raww_cursor_index =
+            super::text_util::cursor_index_for_line_column(
+                self.raww_draft.as_str(),
+                line_ranges[target_line],
+                preferred_column,
+            );
         self.raww_cursor_preferred_column = Some(preferred_column);
     }
 
@@ -341,7 +369,7 @@ fn overlay_snapshot_from_payload(
     match snapshot {
         LookSnapshotPayload::Lines { snapshot_lines } => {
             (LookSnapshotFormat::Lines, snapshot_lines, Vec::new())
-        }
+        },
         LookSnapshotPayload::StructuredEntriesV1 {
             snapshot_entries, ..
         } => (

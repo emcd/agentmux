@@ -13,13 +13,15 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::super::{
-    global_user_id, spawn_answering_peer, spawn_relay_stream_with_peer, write_peer_credential,
+    global_user_id, spawn_answering_peer, spawn_relay_stream_with_peer,
+    write_peer_credential,
 };
 use super::{discovery_exchange, origin_fixture, spawn_origin_relay};
 
 #[test]
 fn foreign_discovery_requires_all_scope_before_peer_contact() {
-    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) =
+        origin_fixture();
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
     // No listener bound: if authorization did not fail first, the forward would
     // dial this dead socket. `alpha` holds `list = home`, so the origin denies.
@@ -47,7 +49,8 @@ fn foreign_discovery_requires_all_scope_before_peer_contact() {
 
 #[test]
 fn foreign_namespace_discovery_forwards_without_origin_selectors() {
-    let (temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
+    let (temporary, bundle_name, configuration_roots, bundle_paths) =
+        origin_fixture();
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
     let peer_socket = temporary.path().join("west.sock");
     let observed = spawn_answering_peer(
@@ -87,7 +90,8 @@ fn foreign_namespace_discovery_forwards_without_origin_selectors() {
 
 #[test]
 fn foreign_principal_discovery_propagates_peer_bundles_unchanged() {
-    let (temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
+    let (temporary, bundle_name, configuration_roots, bundle_paths) =
+        origin_fixture();
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
     let peer_socket = temporary.path().join("west.sock");
     // A principal-scoped subset the peer authored, foreign id `myapp`.
@@ -140,7 +144,8 @@ fn foreign_principal_discovery_propagates_peer_bundles_unchanged() {
 
 #[test]
 fn foreign_discovery_propagates_peer_authorization_denial() {
-    let (temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
+    let (temporary, bundle_name, configuration_roots, bundle_paths) =
+        origin_fixture();
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
     let peer_socket = temporary.path().join("west.sock");
     let _observed = spawn_answering_peer(
@@ -177,7 +182,8 @@ fn foreign_discovery_propagates_peer_authorization_denial() {
 
 #[test]
 fn foreign_discovery_reports_unknown_alias_typed_error() {
-    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) =
+        origin_fixture();
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
     let peer_socket = configuration_roots.base_layer().join("west.sock");
     let (client, handle) = spawn_relay_stream_with_peer(
@@ -204,7 +210,8 @@ fn foreign_discovery_reports_unknown_alias_typed_error() {
 
 #[test]
 fn foreign_discovery_reports_unknown_peer_when_none_configured() {
-    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) =
+        origin_fixture();
     let state_root = bundle_paths.state_root.clone();
     // No peers are configured at all. An `all`-scoped requester still gets a typed
     // unknown-peer error, distinct from the unknown-alias case (which has a peer
@@ -231,7 +238,8 @@ fn foreign_discovery_reports_unknown_peer_when_none_configured() {
 
 #[test]
 fn foreign_discovery_reports_unreachable_on_peer_authentication_failure() {
-    let (temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
+    let (temporary, bundle_name, configuration_roots, bundle_paths) =
+        origin_fixture();
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
     let peer_socket = temporary.path().join("west.sock");
     // A peer that answers the Hello with the structured credential-rejection error
@@ -263,7 +271,8 @@ fn foreign_discovery_reports_unreachable_on_peer_authentication_failure() {
 
 #[test]
 fn foreign_discovery_reports_missing_peer_credential_typed_error() {
-    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) =
+        origin_fixture();
     // No peer credential is provisioned, so the forward cannot present an identity.
     let peer_socket = configuration_roots.base_layer().join("west.sock");
     let (client, handle) = spawn_relay_stream_with_peer(
@@ -289,7 +298,8 @@ fn foreign_discovery_reports_missing_peer_credential_typed_error() {
 
 #[test]
 fn foreign_discovery_reports_unreachable_peer_typed_error() {
-    let (_temporary, bundle_name, configuration_roots, bundle_paths) = origin_fixture();
+    let (_temporary, bundle_name, configuration_roots, bundle_paths) =
+        origin_fixture();
     // The credential is present but no listener is bound, so the dial itself fails.
     write_peer_credential(&bundle_paths.state_root, "west", "peer-secret");
     let peer_socket = configuration_roots.base_layer().join("west.sock");
@@ -321,12 +331,15 @@ fn foreign_discovery_reports_unreachable_peer_typed_error() {
 // regression parsing/classifying a real credential denial would be caught. The
 // dialer surfaces the rejected handshake as `runtime_peer_unavailable`.
 fn spawn_rejecting_peer(socket_path: &Path) {
-    let listener = UnixListener::bind(socket_path).expect("bind rejecting peer socket");
+    let listener =
+        UnixListener::bind(socket_path).expect("bind rejecting peer socket");
     thread::spawn(move || {
         let Ok((stream, _)) = listener.accept() else {
             return;
         };
-        let mut reader = BufReader::new(stream.try_clone().expect("clone rejecting stream"));
+        let mut reader = BufReader::new(
+            stream.try_clone().expect("clone rejecting stream"),
+        );
         let mut stream = stream;
         let mut hello_line = String::new();
         if reader.read_line(&mut hello_line).is_err() {

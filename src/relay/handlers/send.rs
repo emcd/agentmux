@@ -10,26 +10,29 @@ use crate::{
 };
 
 use super::super::authorization::{
-    AuthorizationContext, RouteAuthorization, choose_authorized_ui_sessions, has_ui_session,
-    load_authorization_context, reject_cross_relay_ingress,
+    AuthorizationContext, RouteAuthorization, choose_authorized_ui_sessions,
+    has_ui_session, load_authorization_context, reject_cross_relay_ingress,
 };
 use super::super::catalog::BundleCatalog;
 use super::super::delivery::admission::{
-    AdmissionTargetKey, admit, canonical_payload_bytes, resolve_target_session_type,
-    rollback_admission,
+    AdmissionTargetKey, admit, canonical_payload_bytes,
+    resolve_target_session_type, rollback_admission,
 };
 use super::super::delivery::enqueue_async_delivery;
-use super::super::identity::{PrincipalType, classify_principal_id, live_peer_ingress};
+use super::super::identity::{
+    PrincipalType, classify_principal_id, live_peer_ingress,
+};
 use super::super::lifecycle::load_hosted_bundle;
 use super::super::routing::{
-    Addressing, Capability, OperationProfile, ResolvedRoute, ResolvedTarget as RouteTarget,
-    resolve_send_route,
+    Addressing, Capability, OperationProfile, ResolvedRoute,
+    ResolvedTarget as RouteTarget, resolve_send_route,
 };
 use super::super::{
-    AsyncDeliveryTask, DeliveryPayloadMode, GLOBAL_NAMESPACE, PeerConnectionManager,
-    PeerIngressAuthority, RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse,
-    RequestPrincipal, SCHEMA_VERSION, SendOutcome, SendRequestContext, SendResult,
-    SenderReturnRoute, bare_session_id, canonical_session_id, relay_error,
+    AsyncDeliveryTask, DeliveryPayloadMode, GLOBAL_NAMESPACE,
+    PeerConnectionManager, PeerIngressAuthority, RELAY_NAMESPACE, RelayError,
+    RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
+    SendOutcome, SendRequestContext, SendResult, SenderReturnRoute,
+    bare_session_id, canonical_session_id, relay_error,
 };
 use super::routed::{load_home_context, run_target_operation};
 use super::sender::{SenderIdentity, resolve_sender_in_namespace};
@@ -96,7 +99,8 @@ fn handle_send(
     // than a policy tier. Detected from the AUTHENTICATED principal, never the
     // (spoofable) wire `requester_session`.
     let relay_ingress = principal.is_some_and(|principal| {
-        classify_principal_id(principal.session_id.as_str()) == Some(PrincipalType::Relay)
+        classify_principal_id(principal.session_id.as_str())
+            == Some(PrincipalType::Relay)
     });
     let home_namespace = if relay_ingress {
         RELAY_NAMESPACE
@@ -107,7 +111,8 @@ fn handle_send(
     // home bundle; `GLOBAL`/`RELAY` are relay-wide and carry no bundle. The home
     // authorization context (operator policy, or the bundle's policy) is derived
     // from it.
-    let (home_bundle, authorization) = load_home_context(home_namespace, configuration_roots)?;
+    let (home_bundle, authorization) =
+        load_home_context(home_namespace, configuration_roots)?;
     let SendRequestContext {
         request_id,
         requester_session,
@@ -145,11 +150,13 @@ fn handle_send(
     // the authenticated identity); otherwise resolve the requester in its home
     // namespace, stripping any `@<home>` qualifier so internal lookups match.
     let sender = if relay_ingress {
-        let principal =
-            principal.expect("relay ingress is detected from an authenticated principal");
+        let principal = principal.expect(
+            "relay ingress is detected from an authenticated principal",
+        );
         SenderIdentity::relay_principal(principal.session_id.as_str())
     } else {
-        let requester_session = bare_session_id(requester_session.as_str(), home_namespace);
+        let requester_session =
+            bare_session_id(requester_session.as_str(), home_namespace);
         resolve_sender_in_namespace(
             home_bundle.as_ref(),
             &authorization,
@@ -169,8 +176,12 @@ fn handle_send(
     // under an obsolete decision (verified by negative control: an unlocked
     // pre-gate resolution admits, failing gated_update_before_final_admission_denies).
     let live_ingress = if relay_ingress {
-        let peer = principal.expect("relay ingress is detected from an authenticated principal");
-        super::super::test_hooks::test_authority_gate(peer.session_id.as_str());
+        let peer = principal.expect(
+            "relay ingress is detected from an authenticated principal",
+        );
+        super::super::test_hooks::test_authority_gate(
+            peer.session_id.as_str(),
+        );
         Some(live_peer_ingress(
             ingress_authority,
             peer.session_id.as_str(),
@@ -190,14 +201,15 @@ fn handle_send(
     };
     // Verified principal_id of the sender, carried both on the Send response
     // and into each recipient's delivered envelope; `None` for socket-trust.
-    let authenticated_identity =
-        principal.and_then(|principal| principal.authenticated_identity.clone());
+    let authenticated_identity = principal
+        .and_then(|principal| principal.authenticated_identity.clone());
     // The identity this connection was admitted under, credential-backed or not.
     // Cross-relay forwarding attributes the origin from this rather than from
     // the verified identity, so a relay accepting socket-trust still names the
     // sender to a peer. Kept separate from `authenticated_identity` above, which
     // continues to answer whether a credential backed the claim.
-    let admitted_identity = principal.and_then(|principal| principal.admitted_identity.clone());
+    let admitted_identity =
+        principal.and_then(|principal| principal.admitted_identity.clone());
 
     // Return route for a terminal-outcome receipt: the sender's *real* home-bundle
     // member (its true transport) plus the sender bundle's runtime directory. Built
@@ -251,7 +263,8 @@ fn handle_send(
             // manager-availability check, so the rejection is deterministic and a
             // peer can never chain onward through this relay to its own peers.
             if relay_ingress
-                && let Some(target) = route.targets.iter().find(|target| target.is_cross_relay())
+                && let Some(target) =
+                    route.targets.iter().find(|target| target.is_cross_relay())
             {
                 return Err(reject_cross_relay_ingress(target));
             }
@@ -270,7 +283,14 @@ fn handle_send(
             }
             Ok(route)
         },
-        |route| prepare_send(route, &authorization, configuration_roots, bundle_catalog),
+        |route| {
+            prepare_send(
+                route,
+                &authorization,
+                configuration_roots,
+                bundle_catalog,
+            )
+        },
         |route, groups| {
             execute_send(
                 route,
@@ -331,7 +351,11 @@ fn resolve_send_route_or_broadcast(
     targets: &[String],
 ) -> Result<ResolvedRoute, RelayError> {
     if !broadcast {
-        return resolve_send_route(home_namespace, sender.session_id.as_str(), targets);
+        return resolve_send_route(
+            home_namespace,
+            sender.session_id.as_str(),
+            targets,
+        );
     }
     let Some(home_bundle) = home_bundle else {
         return Err(relay_error(
@@ -545,7 +569,10 @@ fn execute_send(
     let response = RelayResponse::Send {
         schema_version: SCHEMA_VERSION.to_string(),
         request_id,
-        requester_session: canonical_session_id(sender.session_id.as_str(), home_namespace),
+        requester_session: canonical_session_id(
+            sender.session_id.as_str(),
+            home_namespace,
+        ),
         sender_display_name: sender.display_name.clone(),
         authenticated_identity: authenticated_identity.clone(),
         on_behalf_of,
@@ -595,19 +622,22 @@ fn admit_request_targets(
     for group in groups {
         for target in &group.targets {
             let message_id = Uuid::new_v4().to_string();
-            let admission = resolve_target_session_type(&group.bundle, target.session_id.as_str())
-                .and_then(|session_type| {
-                    admit(
-                        message_id.as_str(),
-                        AdmissionTargetKey::new(
-                            group.bundle.bundle_name.as_str(),
-                            group.runtime_directory.as_path(),
-                            target.session_id.as_str(),
-                        ),
-                        session_type,
-                        canonical_bytes,
-                    )
-                });
+            let admission = resolve_target_session_type(
+                &group.bundle,
+                target.session_id.as_str(),
+            )
+            .and_then(|session_type| {
+                admit(
+                    message_id.as_str(),
+                    AdmissionTargetKey::new(
+                        group.bundle.bundle_name.as_str(),
+                        group.runtime_directory.as_path(),
+                        target.session_id.as_str(),
+                    ),
+                    session_type,
+                    canonical_bytes,
+                )
+            });
             match admission {
                 Ok(()) => admitted.push(message_id),
                 Err(error) => {
@@ -615,7 +645,7 @@ fn admit_request_targets(
                         rollback_admission(reserved);
                     }
                     return Err(error);
-                }
+                },
             }
         }
     }
@@ -672,7 +702,8 @@ fn forward_send_cross_relay(
             .expect("cross-relay send target carries a session id"),
         target.namespace.as_str(),
     );
-    let Some(requester_session) = manager.presented_principal_id(relay_id) else {
+    let Some(requester_session) = manager.presented_principal_id(relay_id)
+    else {
         return failed_cross_relay_result(
             label,
             "validation_unknown_peer",
@@ -696,7 +727,7 @@ fn forward_send_cross_relay(
                 // local `session@bundle`.
                 result.target_session = label;
                 result
-            }
+            },
             None => failed_cross_relay_result(
                 label,
                 "internal_peer_empty_results",
@@ -704,7 +735,9 @@ fn forward_send_cross_relay(
                 None,
             ),
         },
-        Ok(RelayResponse::Error { error }) => cross_relay_result_from_error(label, error),
+        Ok(RelayResponse::Error { error }) => {
+            cross_relay_result_from_error(label, error)
+        },
         Ok(_) => failed_cross_relay_result(
             label,
             "internal_peer_unexpected_response",
@@ -720,7 +753,10 @@ fn forward_send_cross_relay(
 /// (`runtime_peer_unavailable`) becomes the distinct `peer_unavailable` outcome;
 /// every other error (a peer rejection such as ingress-denied, an unknown peer,
 /// or a missing credential) becomes `failed` carrying the error's reason.
-fn cross_relay_result_from_error(target_label: String, error: RelayError) -> SendResult {
+fn cross_relay_result_from_error(
+    target_label: String,
+    error: RelayError,
+) -> SendResult {
     let outcome = if error.code == "runtime_peer_unavailable" {
         SendOutcome::PeerUnavailable
     } else {
@@ -804,7 +840,10 @@ fn assemble_delivery_groups(
             // Relay-wide `@GLOBAL` target: existence is a registered UI session,
             // resolved from the sender's (operator) authorization context.
             if has_ui_session(home_authorization, session_id) {
-                let group_key = ensure_relay_wide_group(&mut group_order, &mut groups_by_bundle);
+                let group_key = ensure_relay_wide_group(
+                    &mut group_order,
+                    &mut groups_by_bundle,
+                );
                 push_target(
                     &mut groups_by_bundle,
                     group_key.as_str(),
@@ -826,13 +865,14 @@ fn assemble_delivery_groups(
             &mut groups_by_bundle,
         ) {
             Ok(()) => {
-                let is_member = groups_by_bundle.get(namespace).is_some_and(|group| {
-                    group
-                        .bundle
-                        .members
-                        .iter()
-                        .any(|member| member.id == session_id)
-                });
+                let is_member =
+                    groups_by_bundle.get(namespace).is_some_and(|group| {
+                        group
+                            .bundle
+                            .members
+                            .iter()
+                            .any(|member| member.id == session_id)
+                    });
                 if is_member {
                     push_target(
                         &mut groups_by_bundle,
@@ -842,12 +882,14 @@ fn assemble_delivery_groups(
                         },
                     );
                 } else {
-                    unknown_targets.push(canonical_session_id(session_id, namespace));
+                    unknown_targets
+                        .push(canonical_session_id(session_id, namespace));
                 }
-            }
+            },
             Err(BundleGroupError::UnknownBundle) => {
-                unknown_targets.push(canonical_session_id(session_id, namespace));
-            }
+                unknown_targets
+                    .push(canonical_session_id(session_id, namespace));
+            },
             Err(BundleGroupError::Relay(error)) => return Err(error),
         }
     }
@@ -946,11 +988,13 @@ fn ensure_bundle_group(
     // delivery is spawned from exactly these members. Loading through
     // `load_hosted_bundle` is what ties the two together — the catalog's paths
     // are required to get a bundle at all.
-    let bundle =
-        load_hosted_bundle(configuration_roots, &paths).map_err(BundleGroupError::Relay)?;
-    let authorization = load_authorization_context(configuration_roots, Some(&bundle))
+    let bundle = load_hosted_bundle(configuration_roots, &paths)
         .map_err(BundleGroupError::Relay)?;
-    let choice_decider_sessions = choose_authorized_ui_sessions(&authorization, &bundle);
+    let authorization =
+        load_authorization_context(configuration_roots, Some(&bundle))
+            .map_err(BundleGroupError::Relay)?;
+    let choice_decider_sessions =
+        choose_authorized_ui_sessions(&authorization, &bundle);
     group_order.push(namespace.to_string());
     groups_by_bundle.insert(
         namespace.to_string(),

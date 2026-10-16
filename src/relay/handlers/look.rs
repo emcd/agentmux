@@ -9,22 +9,28 @@ use crate::{
     configuration::{BundleConfiguration, ConfigurationRoots},
     relay::{LookFreshness, LookSnapshotPayload, LookSnapshotSource},
     runtime::inscriptions::emit_inscription,
-    transports::{LookMode, LookSnapshotPayload as TransportLookSnapshotPayload, TransportError},
+    transports::{
+        LookMode, LookSnapshotPayload as TransportLookSnapshotPayload,
+        TransportError,
+    },
 };
 
 use super::super::authorization::RouteAuthorization;
 use super::super::catalog::BundleCatalog;
 use super::super::delivery::get_output_view;
 use super::super::routing::{
-    Addressing, Capability, OperationProfile, ResolvedRoute, reject_cross_relay_unsupported,
-    requester_home_namespace, resolve_look_route,
+    Addressing, Capability, OperationProfile, ResolvedRoute,
+    reject_cross_relay_unsupported, requester_home_namespace,
+    resolve_look_route,
 };
 use super::super::stream::lookup_registry_session_type;
 use super::super::{
-    RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION, bare_session_id,
-    canonical_session_id, relay_error, unsupported_operation,
+    RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
+    bare_session_id, canonical_session_id, relay_error, unsupported_operation,
 };
-use super::routed::{load_home_context, resolve_target_bundle, run_target_operation};
+use super::routed::{
+    load_home_context, resolve_target_bundle, run_target_operation,
+};
 use super::sender::resolve_sender_in_namespace;
 
 /// Shared upper bound on the caller-supplied look window, validated before
@@ -84,8 +90,10 @@ pub(in crate::relay) fn handle_look_routed(
 
     // The requester is identified and authorized in its home namespace (operator
     // policy for `GLOBAL`, or the bundle's policy), never a borrowed target bundle.
-    let (home_bundle, authorization) = load_home_context(home_namespace, configuration_roots)?;
-    let requester_session = bare_session_id(requester_session.as_str(), home_namespace);
+    let (home_bundle, authorization) =
+        load_home_context(home_namespace, configuration_roots)?;
+    let requester_session =
+        bare_session_id(requester_session.as_str(), home_namespace);
     let requester = resolve_sender_in_namespace(
         home_bundle.as_ref(),
         &authorization,
@@ -104,7 +112,10 @@ pub(in crate::relay) fn handle_look_routed(
         },
         || {
             let route = resolve_look_route(
-                requester_home_namespace(requester.session_id.as_str(), home_namespace),
+                requester_home_namespace(
+                    requester.session_id.as_str(),
+                    home_namespace,
+                ),
                 requester.session_id.as_str(),
                 target_session.as_str(),
             )?;
@@ -159,7 +170,9 @@ fn prepare_look(
         // startup): a registered principal sorts as `unsupported_operation` (its
         // transport carries `can_be_looked = false`), an unregistered one as
         // `unknown_target`.
-        let Some(session_type) = lookup_registry_session_type(target_session_id) else {
+        let Some(session_type) =
+            lookup_registry_session_type(target_session_id)
+        else {
             return Err(relay_error(
                 "validation_unknown_target",
                 "target_session is not a registered principal",
@@ -195,7 +208,8 @@ fn prepare_look(
     // Capability comes from the target's unified registry entry (a configured
     // session is registered statically at startup); a not-yet-registered member
     // falls back to its configured transport, which derives the same flags.
-    let target_principal = canonical_session_id(target_session_id, target_namespace);
+    let target_principal =
+        canonical_session_id(target_session_id, target_namespace);
     let session_type = lookup_registry_session_type(target_principal.as_str())
         .unwrap_or_else(|| member.target.session_type());
     if !session_type.can_be_looked() {
@@ -214,7 +228,9 @@ fn prepare_look(
 /// Translates the transport-layer look snapshot into the relay's wire payload.
 /// The freshness and source enums are shared types (the relay re-exports the
 /// transport vocabulary), so only the variant discriminator differs.
-fn transport_snapshot_to_wire(snapshot: TransportLookSnapshotPayload) -> LookSnapshotPayload {
+fn transport_snapshot_to_wire(
+    snapshot: TransportLookSnapshotPayload,
+) -> LookSnapshotPayload {
     match snapshot {
         TransportLookSnapshotPayload::StructuredEntries {
             snapshot_entries,
@@ -235,7 +251,7 @@ fn transport_snapshot_to_wire(snapshot: TransportLookSnapshotPayload) -> LookSna
         },
         TransportLookSnapshotPayload::Lines { snapshot_lines } => {
             LookSnapshotPayload::Lines { snapshot_lines }
-        }
+        },
     }
 }
 
@@ -259,7 +275,10 @@ fn unavailable_acp_look_snapshot() -> TransportLookSnapshotPayload {
 /// transport codes (e.g. `validation_offset_unsupported`) become relay
 /// validation errors with their code preserved; anything else is an internal
 /// failure.
-fn map_look_transport_error(target_session: &str, error: TransportError) -> RelayError {
+fn map_look_transport_error(
+    target_session: &str,
+    error: TransportError,
+) -> RelayError {
     // Carry the transport's own `details` through so the underlying cause (e.g.
     // the tmux capture failure reason) is not dropped on the relay boundary.
     let details = Some(json!({
@@ -316,16 +335,22 @@ fn execute_look(
         look_runtime_directory.as_path(),
         target,
     ) {
-        Some(view) => view
-            .look(mode)
-            .map_err(|error| map_look_transport_error(target.id.as_str(), error))?,
+        Some(view) => view.look(mode).map_err(|error| {
+            map_look_transport_error(target.id.as_str(), error)
+        })?,
         None => unavailable_acp_look_snapshot(),
     };
     let snapshot = transport_snapshot_to_wire(snapshot);
     let response = RelayResponse::Look {
         schema_version: SCHEMA_VERSION.to_string(),
-        requester_session: canonical_session_id(requester_session_id, home_namespace),
-        target_session: canonical_session_id(target.id.as_str(), look_bundle.bundle_name.as_str()),
+        requester_session: canonical_session_id(
+            requester_session_id,
+            home_namespace,
+        ),
+        target_session: canonical_session_id(
+            target.id.as_str(),
+            look_bundle.bundle_name.as_str(),
+        ),
         captured_at: time::OffsetDateTime::now_utc()
             .format(&Rfc3339)
             .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string()),
@@ -352,7 +377,7 @@ fn execute_look(
         ) = match snapshot {
             LookSnapshotPayload::Lines { snapshot_lines } => {
                 ("lines", snapshot_lines.len(), None, None, None, None, None)
-            }
+            },
             LookSnapshotPayload::StructuredEntriesV1 {
                 snapshot_entries,
                 entries_total,

@@ -11,8 +11,8 @@
 
 use agentmux::envelope::AddressIdentity;
 use agentmux::protocol::{
-    CursorPosition, DeliveryDoorbell, DeliveryEnvelope, DeliveryMessage, EntryRange, EntrySequence,
-    MailboxEntry, MailboxEntryKind, MailboxPayload,
+    CursorPosition, DeliveryDoorbell, DeliveryEnvelope, DeliveryMessage,
+    EntryRange, EntrySequence, MailboxEntry, MailboxEntryKind, MailboxPayload,
 };
 
 fn sequence(value: u64) -> EntrySequence {
@@ -20,7 +20,8 @@ fn sequence(value: u64) -> EntrySequence {
 }
 
 fn range(from: u64, through: u64) -> EntryRange {
-    EntryRange::new(sequence(from), sequence(through)).expect("an ascending range is valid")
+    EntryRange::new(sequence(from), sequence(through))
+        .expect("an ascending range is valid")
 }
 
 fn identity(name: &str) -> AddressIdentity {
@@ -113,7 +114,8 @@ fn a_range_contains_both_of_its_ends_and_nothing_outside_them() {
 
 #[test]
 fn a_range_enumerates_exactly_the_positions_it_names() {
-    let enumerated: Vec<u64> = range(2, 5).sequences().map(EntrySequence::value).collect();
+    let enumerated: Vec<u64> =
+        range(2, 5).sequences().map(EntrySequence::value).collect();
 
     assert_eq!(enumerated, vec![2, 3, 4, 5]);
 }
@@ -189,8 +191,9 @@ fn a_cloned_handle_observes_the_same_doorbell() {
     let relay_side = DeliveryDoorbell::new();
     let executor_side = relay_side.clone();
 
-    let waiting =
-        std::thread::spawn(move || executor_side.wait_for(std::time::Duration::from_secs(5)));
+    let waiting = std::thread::spawn(move || {
+        executor_side.wait_for(std::time::Duration::from_secs(5))
+    });
     // Retained if the spawned thread has not reached its wait yet, so this does
     // not depend on the two threads interleaving in any particular order.
     relay_side.ring();

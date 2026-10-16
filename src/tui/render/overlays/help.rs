@@ -31,13 +31,17 @@ use ratatui::{
 };
 
 use super::super::super::actions::{
-    Action, BindingContext, EffectiveBindings, HelpSection, binding_for, help_bindings,
+    Action, BindingContext, EffectiveBindings, HelpSection, binding_for,
+    help_bindings,
 };
 use super::super::super::keyboard::format_keyboard_enhancement_lines;
 use super::super::super::state::AppState;
 use super::super::geometry::centered_rect;
 
-pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, state: &mut AppState) {
+pub(in crate::tui::render) fn render_help_overlay(
+    frame: &mut Frame,
+    state: &mut AppState,
+) {
     let popup = centered_rect(96, 92, frame.area());
     frame.render_widget(Clear, popup);
     let block = Block::default().borders(Borders::ALL).title("Help");
@@ -52,7 +56,8 @@ pub(in crate::tui::render) fn render_help_overlay(frame: &mut Frame, state: &mut
     // same content is taller; in two columns it overflowed at terminal sizes
     // the old overlay fitted, and the keyboard-capability report was the part
     // pushed off the bottom.
-    let mut binding_columns: [Vec<Line<'static>>; 2] = [Vec::new(), Vec::new()];
+    let mut binding_columns: [Vec<Line<'static>>; 2] =
+        [Vec::new(), Vec::new()];
     for section in &help_bindings(&state.bindings) {
         let column = match section.heading {
             "Modes" | "Communication Mode" => 0,
@@ -162,7 +167,11 @@ struct Viewport {
 }
 
 impl Viewport {
-    fn measure(bindings: &EffectiveBindings, lines: &[Line<'static>], area: Rect) -> Self {
+    fn measure(
+        bindings: &EffectiveBindings,
+        lines: &[Line<'static>],
+        area: Rect,
+    ) -> Self {
         let available = usize::from(area.height);
         if area.width == 0 || available == 0 {
             return Self {
@@ -215,10 +224,12 @@ impl Viewport {
         // taking the capability report with it -- while a binding column was
         // being scrolled.
         let offset = offset.min(self.extent);
-        let content_rows = self.content_rows.min(usize::from(area.height)) as u16;
+        let content_rows =
+            self.content_rows.min(usize::from(area.height)) as u16;
         if content_rows > 0 {
             frame.render_widget(
-                wrapped(lines).scroll((offset.min(usize::from(u16::MAX)) as u16, 0)),
+                wrapped(lines)
+                    .scroll((offset.min(usize::from(u16::MAX)) as u16, 0)),
                 Rect {
                     height: content_rows,
                     ..area
@@ -249,7 +260,11 @@ impl Viewport {
 /// marker carried before there was a viewport. That is what keeps it a safety
 /// net: rows removed from the table leave a visible consequence rather than a
 /// marker pointing at a chord that does nothing.
-fn overflow_marker(bindings: &EffectiveBindings, above: usize, below: usize) -> Line<'static> {
+fn overflow_marker(
+    bindings: &EffectiveBindings,
+    above: usize,
+    below: usize,
+) -> Line<'static> {
     let text = match scroll_chords(bindings) {
         None => format!("… {} more (resize taller)", above + below),
         Some((up, down)) => match (above, below) {
@@ -439,11 +454,17 @@ mod tests {
     }
 
     impl Overlay {
-        fn new(width: u16, height: u16, enhancement: KeyboardEnhancement) -> Self {
+        fn new(
+            width: u16,
+            height: u16,
+            enhancement: KeyboardEnhancement,
+        ) -> Self {
             let mut state = AppState::new(TuiLaunchOptions {
                 namespace: "agentmux".to_string(),
                 sender_session: "tui".to_string(),
-                relay_socket: std::path::PathBuf::from("/tmp/agentmux-help-render.sock"),
+                relay_socket: std::path::PathBuf::from(
+                    "/tmp/agentmux-help-render.sock",
+                ),
                 look_lines: None,
                 available_bundles: vec!["agentmux".to_string()],
                 bindings: None,
@@ -459,7 +480,8 @@ mod tests {
 
         fn draw(&mut self) -> Vec<String> {
             let mut terminal =
-                Terminal::new(TestBackend::new(self.width, self.height)).expect("terminal");
+                Terminal::new(TestBackend::new(self.width, self.height))
+                    .expect("terminal");
             terminal
                 .draw(|frame| render_help_overlay(frame, &mut self.state))
                 .expect("draw");
@@ -478,8 +500,14 @@ mod tests {
         /// declare there panics here, which is what makes this a test of the
         /// rows rather than of the state methods behind them.
         fn press(&mut self, code: KeyCode) {
-            let action = default_binding(BindingContext::HelpOverlay, code, KeyModifiers::NONE)
-                .unwrap_or_else(|| panic!("the help overlay declares no row for {code:?}"));
+            let action = default_binding(
+                BindingContext::HelpOverlay,
+                code,
+                KeyModifiers::NONE,
+            )
+            .unwrap_or_else(|| {
+                panic!("the help overlay declares no row for {code:?}")
+            });
             action
                 .apply(&mut self.state)
                 .expect("moving the viewport reaches no relay");
@@ -550,7 +578,8 @@ mod tests {
     /// binding.
     fn traverse(width: u16, height: u16) -> Traversal {
         let (_, columns) = columns_of(width, height);
-        let mut overlay = Overlay::new(width, height, KeyboardEnhancement::Unsupported);
+        let mut overlay =
+            Overlay::new(width, height, KeyboardEnhancement::Unsupported);
         // The first frame is what publishes the bounds the offset is clamped
         // against, so it has to happen before anything is pressed.
         let opening = whole_overlay(&overlay.draw(), &columns);
@@ -732,8 +761,12 @@ mod tests {
         // The width is asserted against a literal rather than against `GUTTER`,
         // because deriving the bound from the constant under test makes the
         // check vacuous when the constant goes to zero.
-        let lines = Overlay::new(120, FITS_FROM, KeyboardEnhancement::Unsupported).draw();
-        for (left, right) in [(columns[0], columns[1]), (columns[1], columns[2])] {
+        let lines =
+            Overlay::new(120, FITS_FROM, KeyboardEnhancement::Unsupported)
+                .draw();
+        for (left, right) in
+            [(columns[0], columns[1]), (columns[1], columns[2])]
+        {
             let gap = right.x - (left.x + left.width);
             assert!(gap >= 1, "columns are flush: {left:?} then {right:?}");
             for row in inner.y..inner.y + inner.height {
@@ -742,7 +775,10 @@ mod tests {
                         .chars()
                         .nth(column as usize)
                         .expect("cell within the buffer");
-                    assert_eq!(cell, ' ', "gutter at {column} occupied on row {row}");
+                    assert_eq!(
+                        cell, ' ',
+                        "gutter at {column} occupied on row {row}"
+                    );
                 }
             }
         }

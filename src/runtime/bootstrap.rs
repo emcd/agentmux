@@ -13,7 +13,10 @@ use std::{
 
 use super::{
     error::RuntimeError,
-    paths::{RelayRuntimePaths, ensure_existing_artifact_is_owned, ensure_relay_runtime_directory},
+    paths::{
+        RelayRuntimePaths, ensure_existing_artifact_is_owned,
+        ensure_relay_runtime_directory,
+    },
     sockets::{bind_unix_listener, connect_unix_stream},
 };
 
@@ -87,7 +90,7 @@ impl SpawnedRelay {
                         return;
                     }
                     thread::sleep(POLL_SLEEP_INTERVAL);
-                }
+                },
                 // Nothing more the client can usefully do about a wait error;
                 // the relay's own watchdog still bounds its lifetime.
                 Err(_) => return,
@@ -176,13 +179,13 @@ where
             Ok(BootstrapReport {
                 spawned_relay: true,
             })
-        }
+        },
         None => {
             wait_for_relay_ready(paths, options.startup_timeout)?;
             Ok(BootstrapReport {
                 spawned_relay: false,
             })
-        }
+        },
     }
 }
 
@@ -211,22 +214,28 @@ pub fn acquire_relay_runtime_lock(
 /// # Errors
 ///
 /// Returns an error when socket bind or permission assignment fails.
-pub fn bind_relay_listener(paths: &RelayRuntimePaths) -> Result<UnixListener, RuntimeError> {
+pub fn bind_relay_listener(
+    paths: &RelayRuntimePaths,
+) -> Result<UnixListener, RuntimeError> {
     ensure_existing_artifact_is_owned(&paths.relay_socket)?;
     if paths.relay_socket.exists() {
         fs::remove_file(&paths.relay_socket).map_err(|source| {
             RuntimeError::io(
-                format!("remove stale relay socket {}", paths.relay_socket.display()),
+                format!(
+                    "remove stale relay socket {}",
+                    paths.relay_socket.display()
+                ),
                 source,
             )
         })?;
     }
-    let listener = bind_unix_listener(&paths.relay_socket).map_err(|source| {
-        RuntimeError::io(
-            format!("bind relay socket {}", paths.relay_socket.display()),
-            source,
-        )
-    })?;
+    let listener =
+        bind_unix_listener(&paths.relay_socket).map_err(|source| {
+            RuntimeError::io(
+                format!("bind relay socket {}", paths.relay_socket.display()),
+                source,
+            )
+        })?;
     fs::set_permissions(
         &paths.relay_socket,
         fs::Permissions::from_mode(SOCKET_MODE_OWNER_ONLY),
@@ -257,8 +266,9 @@ pub fn resolve_relay_program() -> Result<PathBuf, RuntimeError> {
             return Ok(PathBuf::from(trimmed));
         }
     }
-    let mut sibling = std::env::current_exe()
-        .map_err(|source| RuntimeError::io("resolve current executable path", source))?;
+    let mut sibling = std::env::current_exe().map_err(|source| {
+        RuntimeError::io("resolve current executable path", source)
+    })?;
     sibling.set_file_name(format!("agentmux{}", std::env::consts::EXE_SUFFIX));
     Ok(sibling)
 }
@@ -281,7 +291,9 @@ fn wait_for_relay_ready(
 ) -> Result<(), RuntimeError> {
     let deadline = Instant::now() + startup_timeout;
     loop {
-        if paths.relay_ready_sentinel.exists() && relay_socket_connectable(paths) {
+        if paths.relay_ready_sentinel.exists()
+            && relay_socket_connectable(paths)
+        {
             return Ok(());
         }
         if Instant::now() >= deadline {
@@ -305,7 +317,9 @@ fn try_acquire_spawn_lock(
     Ok(None)
 }
 
-fn remove_stale_relay_socket(paths: &RelayRuntimePaths) -> Result<bool, RuntimeError> {
+fn remove_stale_relay_socket(
+    paths: &RelayRuntimePaths,
+) -> Result<bool, RuntimeError> {
     if !paths.relay_socket.exists() {
         return Ok(false);
     }
@@ -315,7 +329,10 @@ fn remove_stale_relay_socket(paths: &RelayRuntimePaths) -> Result<bool, RuntimeE
     ensure_existing_artifact_is_owned(&paths.relay_socket)?;
     fs::remove_file(&paths.relay_socket).map_err(|source| {
         RuntimeError::io(
-            format!("remove stale relay socket {}", paths.relay_socket.display()),
+            format!(
+                "remove stale relay socket {}",
+                paths.relay_socket.display()
+            ),
             source,
         )
     })?;
@@ -327,7 +344,9 @@ fn remove_stale_relay_socket(paths: &RelayRuntimePaths) -> Result<bool, RuntimeE
 /// # Errors
 ///
 /// Returns `RuntimeError` when lock-file access fails.
-pub fn relay_runtime_lock_is_held(paths: &RelayRuntimePaths) -> Result<bool, RuntimeError> {
+pub fn relay_runtime_lock_is_held(
+    paths: &RelayRuntimePaths,
+) -> Result<bool, RuntimeError> {
     let lock_file = open_lock_file(&paths.relay_lock_file)?;
     let lock_obtained = try_lock_exclusive_nonblocking(&lock_file)?;
     if lock_obtained {
@@ -353,11 +372,20 @@ fn open_lock_file(path: &Path) -> Result<std::fs::File, RuntimeError> {
         .read(true)
         .write(true)
         .open(path)
-        .map_err(|source| RuntimeError::io(format!("open lock file {}", path.display()), source))
+        .map_err(|source| {
+            RuntimeError::io(
+                format!("open lock file {}", path.display()),
+                source,
+            )
+        })
 }
 
-fn try_lock_exclusive_nonblocking(lock_file: &std::fs::File) -> Result<bool, RuntimeError> {
-    let code = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+fn try_lock_exclusive_nonblocking(
+    lock_file: &std::fs::File,
+) -> Result<bool, RuntimeError> {
+    let code = unsafe {
+        libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB)
+    };
     if code == 0 {
         return Ok(true);
     }
@@ -372,12 +400,14 @@ fn unlock(lock_file: &std::fs::File) {
     let _ = unsafe { libc::flock(lock_file.as_raw_fd(), libc::LOCK_UN) };
 }
 
-fn write_diagnostic_pid(lock_file: &mut std::fs::File) -> Result<(), RuntimeError> {
+fn write_diagnostic_pid(
+    lock_file: &mut std::fs::File,
+) -> Result<(), RuntimeError> {
     use std::io::{Seek, SeekFrom, Write};
 
-    lock_file
-        .set_len(0)
-        .map_err(|source| RuntimeError::io("truncate relay lock file", source))?;
+    lock_file.set_len(0).map_err(|source| {
+        RuntimeError::io("truncate relay lock file", source)
+    })?;
     lock_file
         .seek(SeekFrom::Start(0))
         .map_err(|source| RuntimeError::io("seek relay lock file", source))?;
@@ -402,7 +432,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::{BootstrapOptions, bootstrap_relay};
-    use crate::runtime::paths::{RelayRuntimePaths, ensure_relay_runtime_directory};
+    use crate::runtime::paths::{
+        RelayRuntimePaths, ensure_relay_runtime_directory,
+    };
 
     fn test_paths() -> (TempDir, RelayRuntimePaths) {
         let temporary = TempDir::new().expect("temporary");
@@ -418,10 +450,12 @@ mod tests {
             auto_start_relay: false,
             startup_timeout: Duration::from_millis(100),
         };
-        let err = bootstrap_relay(&paths, options, || Ok(())).expect_err("bootstrap should fail");
+        let err = bootstrap_relay(&paths, options, || Ok(()))
+            .expect_err("bootstrap should fail");
         assert!(
-            err.to_string()
-                .contains("start agentmux host relay with matching --state-directory"),
+            err.to_string().contains(
+                "start agentmux host relay with matching --state-directory"
+            ),
             "unexpected error: {err}"
         );
     }
@@ -429,7 +463,8 @@ mod tests {
     #[test]
     fn bootstrap_uses_existing_relay_without_spawning() {
         let (_temporary, paths) = test_paths();
-        let _listener = UnixListener::bind(&paths.relay_socket).expect("bind listener");
+        let _listener =
+            UnixListener::bind(&paths.relay_socket).expect("bind listener");
         let spawn_called = Arc::new(Mutex::new(false));
         let spawn_called_inner = Arc::clone(&spawn_called);
         let options = BootstrapOptions::default();
@@ -455,8 +490,10 @@ mod tests {
             let relay_socket = paths.relay_socket.clone();
             let ready_sentinel = paths.relay_ready_sentinel.clone();
             let handle = thread::spawn(move || {
-                let listener = UnixListener::bind(&relay_socket).expect("bind");
-                std::fs::write(&ready_sentinel, b"").expect("write ready sentinel");
+                let listener =
+                    UnixListener::bind(&relay_socket).expect("bind");
+                std::fs::write(&ready_sentinel, b"")
+                    .expect("write ready sentinel");
                 thread::sleep(Duration::from_millis(250));
                 drop(listener);
             });
@@ -483,12 +520,17 @@ mod tests {
             startup_timeout: Duration::from_secs(1),
         };
         let report = bootstrap_relay(&paths, options, || {
-            assert!(!paths.relay_socket.exists(), "stale file should be removed");
+            assert!(
+                !paths.relay_socket.exists(),
+                "stale file should be removed"
+            );
             let relay_socket = paths.relay_socket.clone();
             let ready_sentinel = paths.relay_ready_sentinel.clone();
             let handle = thread::spawn(move || {
-                let listener = UnixListener::bind(&relay_socket).expect("bind");
-                std::fs::write(&ready_sentinel, b"").expect("write ready sentinel");
+                let listener =
+                    UnixListener::bind(&relay_socket).expect("bind");
+                std::fs::write(&ready_sentinel, b"")
+                    .expect("write ready sentinel");
                 thread::sleep(Duration::from_millis(250));
                 drop(listener);
             });

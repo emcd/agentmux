@@ -72,7 +72,9 @@ impl CapabilityClass {
     /// key would be declared here.
     #[must_use]
     pub fn delivers(self, code: KeyCode, modifiers: KeyModifiers) -> bool {
-        self == Self::Enhanced || code != KeyCode::Enter || modifiers.is_empty()
+        self == Self::Enhanced
+            || code != KeyCode::Enter
+            || modifiers.is_empty()
     }
 }
 
@@ -116,7 +118,10 @@ pub struct ConfiguredBinding {
 impl ConfiguredBinding {
     /// What this row says for one capability class, if it speaks for it.
     #[must_use]
-    pub const fn for_class(&self, class: CapabilityClass) -> Option<ConfiguredAction> {
+    pub const fn for_class(
+        &self,
+        class: CapabilityClass,
+    ) -> Option<ConfiguredAction> {
         match class {
             CapabilityClass::Enhanced => self.enhanced,
             CapabilityClass::Standard => self.standard,
@@ -154,7 +159,12 @@ pub(crate) struct ResolvedRow {
 }
 
 impl ResolvedRow {
-    fn matches(self, context: BindingContext, code: KeyCode, modifiers: KeyModifiers) -> bool {
+    fn matches(
+        self,
+        context: BindingContext,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+    ) -> bool {
         self.context == context && self.chord.matches(code, modifiers)
     }
 
@@ -170,9 +180,9 @@ impl ResolvedRow {
     fn claims(self, context: BindingContext, chord: Chord) -> bool {
         let denoted = chord.denoted_keystrokes();
         !denoted.is_empty()
-            && denoted
-                .into_iter()
-                .all(|(code, modifiers)| self.matches(context, code, modifiers))
+            && denoted.into_iter().all(|(code, modifiers)| {
+                self.matches(context, code, modifiers)
+            })
     }
 }
 
@@ -208,7 +218,9 @@ impl EffectiveBindings {
     ) -> Self {
         let primary = primary_modifier(
             on_macos,
-            configuration.and_then(|configuration| configuration.primary_modifier_on_macos),
+            configuration.and_then(|configuration| {
+                configuration.primary_modifier_on_macos
+            }),
         );
         let resolve = |rows: &[ConfiguredBinding]| {
             rows.iter()
@@ -226,8 +238,9 @@ impl EffectiveBindings {
                 .collect()
         };
         Self {
-            configured: configuration
-                .map_or_else(Vec::new, |configuration| resolve(&configuration.rows)),
+            configured: configuration.map_or_else(Vec::new, |configuration| {
+                resolve(&configuration.rows)
+            }),
             preset: configuration.map_or_else(Vec::new, |configuration| {
                 resolve(&configuration.preset_rows)
             }),
@@ -249,7 +262,8 @@ impl EffectiveBindings {
         configuration: Option<&BindingConfiguration>,
         on_macos: bool,
     ) -> [(CapabilityClass, Self); 2] {
-        CapabilityClass::ALL.map(|class| (class, Self::build(configuration, class, on_macos)))
+        CapabilityClass::ALL
+            .map(|class| (class, Self::build(configuration, class, on_macos)))
     }
 
     /// The behavior a chord reaches in one context, or `None` where it reaches
@@ -322,7 +336,10 @@ impl EffectiveBindings {
     /// Explicit unbindings are included. What they reach is `None`, and it is
     /// presentation's business rather than this method's that a chord reaching
     /// nothing is shown as nothing.
-    pub(crate) fn rows_for(&self, context: BindingContext) -> Vec<ResolvedRow> {
+    pub(crate) fn rows_for(
+        &self,
+        context: BindingContext,
+    ) -> Vec<ResolvedRow> {
         let mut rows = winning_rows(&self.configured, context, &[]);
         rows.extend(winning_rows(&self.preset, context, &self.configured));
         rows
@@ -339,9 +356,9 @@ impl EffectiveBindings {
         code: KeyCode,
         modifiers: KeyModifiers,
     ) -> bool {
-        [&self.configured, &self.preset]
-            .into_iter()
-            .any(|tier| tier.iter().any(|row| row.matches(context, code, modifiers)))
+        [&self.configured, &self.preset].into_iter().any(|tier| {
+            tier.iter().any(|row| row.matches(context, code, modifiers))
+        })
     }
 }
 
@@ -360,7 +377,8 @@ fn winning_rows(
         .enumerate()
         .filter(|(_, row)| row.context == context)
         .filter(|(index, row)| {
-            let claims = |other: &&ResolvedRow| other.claims(context, row.chord);
+            let claims =
+                |other: &&ResolvedRow| other.claims(context, row.chord);
             !tier[index + 1..].iter().any(|later| claims(&later))
                 && !above.iter().any(|higher| claims(&higher))
         })

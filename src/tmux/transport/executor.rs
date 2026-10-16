@@ -19,8 +19,8 @@ use std::{
 use crate::envelope::{PromptBatchSettings, batch_envelope_groups};
 use crate::protocol::mailbox::{MailboxEntry, MailboxPayload};
 use crate::transports::{
-    DeliveryWriter, PeekDimensions, PlannedWrite, SubmissionEvidence, TransportHealth,
-    UnreachableSince,
+    DeliveryWriter, PeekDimensions, PlannedWrite, SubmissionEvidence,
+    TransportHealth, UnreachableSince,
 };
 
 use super::PaneObservation;
@@ -85,7 +85,11 @@ impl TmuxDeliveryWriter {
     /// non-delivery: nothing has been injected when it fires, so no byte can have
     /// reached the pane.
     fn pane(&self) -> Option<String> {
-        resolve_active_pane_target(self.socket.as_path(), self.target_session.as_str()).ok()
+        resolve_active_pane_target(
+            self.socket.as_path(),
+            self.target_session.as_str(),
+        )
+        .ok()
     }
 }
 
@@ -93,8 +97,10 @@ impl DeliveryWriter for TmuxDeliveryWriter {
     type Plan = TmuxWrite;
 
     fn peek_dimensions(&self) -> PeekDimensions {
-        PeekDimensions::for_session_type(crate::configuration::SessionType::Tmux)
-            .expect("tmux declares peek dimensions")
+        PeekDimensions::for_session_type(
+            crate::configuration::SessionType::Tmux,
+        )
+        .expect("tmux declares peek dimensions")
     }
 
     fn health(&self) -> TransportHealth {
@@ -117,7 +123,10 @@ impl DeliveryWriter for TmuxDeliveryWriter {
         )
     }
 
-    fn plan(&mut self, entries: &[MailboxEntry]) -> Option<PlannedWrite<Self::Plan>> {
+    fn plan(
+        &mut self,
+        entries: &[MailboxEntry],
+    ) -> Option<PlannedWrite<Self::Plan>> {
         let head = entries.first()?;
         if let MailboxPayload::Raw {
             content,
@@ -163,16 +172,20 @@ impl DeliveryWriter for TmuxDeliveryWriter {
         // simplification: the relay accepts one declared-and-unacked unit per
         // target, so a plan covering two groups could not be declared as one and
         // could not be declared as two either.
-        let group = batch_envelope_groups(&rendered[..first_run], self.batch_settings)
-            .into_iter()
-            .next()?;
+        let group =
+            batch_envelope_groups(&rendered[..first_run], self.batch_settings)
+                .into_iter()
+                .next()?;
         Some(PlannedWrite {
             entry_count: group.member_count,
             rendered: TmuxWrite::Prompt(group.combined_prompt),
         })
     }
 
-    fn write(&mut self, planned: PlannedWrite<Self::Plan>) -> Vec<SubmissionEvidence> {
+    fn write(
+        &mut self,
+        planned: PlannedWrite<Self::Plan>,
+    ) -> Vec<SubmissionEvidence> {
         let members = planned.entry_count;
         let outcome = |evidence| vec![evidence; members];
         let Some(pane) = self.pane() else {
@@ -183,9 +196,12 @@ impl DeliveryWriter for TmuxDeliveryWriter {
         let injected = match &planned.rendered {
             // Envelope-mode writes always submit with Enter; the combined prompt
             // is pasted once for the whole unit.
-            TmuxWrite::Prompt(prompt) => {
-                inject_literal_text(self.socket.as_path(), pane.as_str(), prompt.as_str(), true)
-            }
+            TmuxWrite::Prompt(prompt) => inject_literal_text(
+                self.socket.as_path(),
+                pane.as_str(),
+                prompt.as_str(),
+                true,
+            ),
             TmuxWrite::Raw {
                 content,
                 append_enter,
@@ -220,7 +236,9 @@ pub(super) fn tmux_delivery_writer(
     stop: Arc<AtomicBool>,
 ) -> TmuxDeliveryWriter {
     TmuxDeliveryWriter::new(
-        crate::runtime::paths::tmux_socket_path_for_runtime_directory(runtime_directory),
+        crate::runtime::paths::tmux_socket_path_for_runtime_directory(
+            runtime_directory,
+        ),
         target_session,
         batch_settings,
         observation,

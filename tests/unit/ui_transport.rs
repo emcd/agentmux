@@ -14,11 +14,13 @@ use std::time::{Duration, Instant};
 
 use agentmux::envelope::AddressIdentity;
 use agentmux::protocol::DeliveryDoorbell;
-use agentmux::protocol::mailbox::{EntrySequence, MailboxEntry, MailboxPayload};
+use agentmux::protocol::mailbox::{
+    EntrySequence, MailboxEntry, MailboxPayload,
+};
 use agentmux::transports::{
-    DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage, GenerationFence, StartupContext,
-    SubmissionEvidence, Transport, UiBroadcastStatus, UiIncomingMessage, UiTransport,
-    UiTransportServices,
+    DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage,
+    GenerationFence, StartupContext, SubmissionEvidence, Transport,
+    UiBroadcastStatus, UiIncomingMessage, UiTransport, UiTransportServices,
 };
 
 use crate::stub_mailbox::StubMailbox;
@@ -28,7 +30,10 @@ use crate::stub_mailbox::StubMailbox;
 /// `startup` is where the executor is spawned, so every test here goes through
 /// it: a transport that was never started has no executor, and asserting against
 /// one would assert against a mailbox nothing was reading.
-fn started_transport(services: UiTransportServices, mailbox: &Arc<StubMailbox>) -> UiTransport {
+fn started_transport(
+    services: UiTransportServices,
+    mailbox: &Arc<StubMailbox>,
+) -> UiTransport {
     let mut transport = UiTransport::new(
         services,
         DeliveryExecutorContext {
@@ -51,10 +56,12 @@ fn started_transport(services: UiTransportServices, mailbox: &Arc<StubMailbox>) 
                 policy_id: None,
                 environment: Vec::new(),
             },
-            choose: Arc::new(|_| agentmux::transports::ChoiceMade::Cancelled {
-                decided_by: String::new(),
-                reason_code: "not_applicable".to_string(),
-                reason: None,
+            choose: Arc::new(|_| {
+                agentmux::transports::ChoiceMade::Cancelled {
+                    decided_by: String::new(),
+                    reason_code: "not_applicable".to_string(),
+                    reason: None,
+                }
             }),
         })
         .expect("ui transport startup");
@@ -72,7 +79,9 @@ fn mail_entry(envelope: DeliveryEnvelope) -> MailboxEntry {
 }
 
 /// Spins until the mailbox has an acknowledgment to report.
-fn wait_for_ack(mailbox: &StubMailbox) -> agentmux::transports::SubmissionEvidence {
+fn wait_for_ack(
+    mailbox: &StubMailbox,
+) -> agentmux::transports::SubmissionEvidence {
     let started = Instant::now();
     loop {
         if let Some(acked) = mailbox.acked().first() {
@@ -128,7 +137,8 @@ fn wait_for(flag: &AtomicBool, description: &str) {
 
 #[test]
 fn ui_executor_broadcasts_incoming_and_acknowledges_submitted() {
-    let captured: Arc<Mutex<Option<UiIncomingMessage>>> = Arc::new(Mutex::new(None));
+    let captured: Arc<Mutex<Option<UiIncomingMessage>>> =
+        Arc::new(Mutex::new(None));
     let phases: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
     let services = UiTransportServices {
@@ -148,14 +158,16 @@ fn ui_executor_broadcasts_incoming_and_acknowledges_submitted() {
         },
     };
 
-    let mailbox = Arc::new(StubMailbox::with_entries(vec![mail_entry(ui_envelope())]));
+    let mailbox =
+        Arc::new(StubMailbox::with_entries(vec![mail_entry(ui_envelope())]));
     let mut transport = started_transport(services, &mailbox);
 
     assert_eq!(wait_for_ack(&mailbox), SubmissionEvidence::Submitted);
     assert_eq!(mailbox.acked()[0].message_id, "m-1");
     transport.fence_generation();
 
-    let incoming = captured.lock().unwrap().clone().expect("incoming captured");
+    let incoming =
+        captured.lock().unwrap().clone().expect("incoming captured");
     assert_eq!(incoming.message_id, "m-1");
     assert_eq!(incoming.sender_session, "alice@party");
     assert_eq!(incoming.body, "hello ui");
@@ -185,7 +197,9 @@ fn ui_executor_broadcasts_incoming_and_acknowledges_submitted() {
 fn a_broadcast_with_no_endpoint_acknowledges_not_submitted() {
     let phases: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let services = UiTransportServices {
-        broadcast_incoming: Arc::new(|_incoming: &UiIncomingMessage| UiBroadcastStatus::NoUi),
+        broadcast_incoming: Arc::new(|_incoming: &UiIncomingMessage| {
+            UiBroadcastStatus::NoUi
+        }),
         emit_phase: {
             let phases = phases.clone();
             Arc::new(move |phase| {
@@ -195,7 +209,8 @@ fn a_broadcast_with_no_endpoint_acknowledges_not_submitted() {
         },
     };
 
-    let mailbox = Arc::new(StubMailbox::with_entries(vec![mail_entry(ui_envelope())]));
+    let mailbox =
+        Arc::new(StubMailbox::with_entries(vec![mail_entry(ui_envelope())]));
     let mut transport = started_transport(services, &mailbox);
 
     assert_eq!(wait_for_ack(&mailbox), SubmissionEvidence::NotSubmitted);
@@ -279,7 +294,9 @@ fn a_terminated_ui_generation_stops_emitting_without_a_child_to_signal() {
             },
         };
 
-        let mailbox = Arc::new(StubMailbox::with_entries(vec![mail_entry(ui_envelope())]));
+        let mailbox = Arc::new(StubMailbox::with_entries(vec![mail_entry(
+            ui_envelope(),
+        )]));
         let mut transport = started_transport(services, &mailbox);
         wait_for(
             &probe_entered,
@@ -420,7 +437,8 @@ fn ui_transport_is_not_lookable() {
 /// differ from the asserted bare id and fail here.
 #[test]
 fn ui_incoming_message_emits_bare_canonical_identity_never_decorated() {
-    let captured: Arc<Mutex<Option<UiIncomingMessage>>> = Arc::new(Mutex::new(None));
+    let captured: Arc<Mutex<Option<UiIncomingMessage>>> =
+        Arc::new(Mutex::new(None));
 
     let services = UiTransportServices {
         broadcast_incoming: {
@@ -459,12 +477,14 @@ fn ui_incoming_message_emits_bare_canonical_identity_never_decorated() {
         is_receipt: false,
     };
 
-    let mailbox = Arc::new(StubMailbox::with_entries(vec![mail_entry(envelope)]));
+    let mailbox =
+        Arc::new(StubMailbox::with_entries(vec![mail_entry(envelope)]));
     let mut transport = started_transport(services, &mailbox);
     wait_for_ack(&mailbox);
     transport.fence_generation();
 
-    let incoming = captured.lock().unwrap().clone().expect("incoming captured");
+    let incoming =
+        captured.lock().unwrap().clone().expect("incoming captured");
 
     // Sender: bare canonical, never the decorating pane-header form.
     assert_eq!(incoming.sender_session, "alice@bundle");

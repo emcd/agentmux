@@ -4,7 +4,8 @@ use std::fs;
 use agentmux::{
     configuration::TuiConfiguration,
     runtime::tui_session::{
-        load_active_tui_configuration, resolve_tui_launch_identity, resolve_tui_session_identity,
+        load_active_tui_configuration, resolve_tui_launch_identity,
+        resolve_tui_session_identity,
     },
 };
 use tempfile::TempDir;
@@ -20,11 +21,13 @@ fn write_policies(configuration_root: &std::path::Path, policy_ids: &[&str]) {
             .as_str(),
         );
     }
-    fs::write(configuration_root.join("policies.toml"), body).expect("write policies.toml");
+    fs::write(configuration_root.join("policies.toml"), body)
+        .expect("write policies.toml");
 }
 
 fn write_users(configuration_root: &std::path::Path, body: &str) {
-    fs::write(configuration_root.join("users.toml"), body).expect("write users.toml");
+    fs::write(configuration_root.join("users.toml"), body)
+        .expect("write users.toml");
 }
 
 fn write_ui(configuration_root: &std::path::Path, default_bundle: &str) {
@@ -82,9 +85,12 @@ policy = "default"
 "#,
     );
 
-    let resolved =
-        resolve_tui_session_identity(&ConfigurationRoots::single(temporary.path()), None, None)
-            .expect("resolve defaults");
+    let resolved = resolve_tui_session_identity(
+        &ConfigurationRoots::single(temporary.path()),
+        None,
+        None,
+    )
+    .expect("resolve defaults");
     assert_eq!(resolved.namespace, "agentmux");
     assert_eq!(resolved.session_selector, "user@GLOBAL");
 }
@@ -106,9 +112,12 @@ policy = "default"
 "#,
     );
 
-    let error =
-        resolve_tui_session_identity(&ConfigurationRoots::single(temporary.path()), None, None)
-            .expect_err("missing default bundle should fail");
+    let error = resolve_tui_session_identity(
+        &ConfigurationRoots::single(temporary.path()),
+        None,
+        None,
+    )
+    .expect_err("missing default bundle should fail");
     let rendered = error.to_string();
     assert!(rendered.contains("validation_unknown_bundle"));
     assert!(
@@ -269,9 +278,12 @@ policy = "missing"
 "#,
     );
 
-    let error =
-        resolve_tui_session_identity(&ConfigurationRoots::single(temporary.path()), None, None)
-            .expect_err("unknown policy should fail");
+    let error = resolve_tui_session_identity(
+        &ConfigurationRoots::single(temporary.path()),
+        None,
+        None,
+    )
+    .expect_err("unknown policy should fail");
     assert!(error.to_string().contains("validation_unknown_policy"));
 }
 
@@ -306,8 +318,11 @@ policy = "default"
     )
     .expect("write override file");
 
-    let roots = ConfigurationRoots::from_elements([override_layer, temporary.path().to_path_buf()])
-        .expect("layer list");
+    let roots = ConfigurationRoots::from_elements([
+        override_layer,
+        temporary.path().to_path_buf(),
+    ])
+    .expect("layer list");
     let loaded = load_active_tui_configuration(&roots).expect("load config");
     let Some(TuiConfiguration {
         default_session, ..
@@ -357,10 +372,13 @@ policy = "default"
     )
     .expect("write override file");
 
-    let roots = ConfigurationRoots::from_elements([override_layer, temporary.path().to_path_buf()])
-        .expect("layer list");
-    let resolved =
-        resolve_tui_launch_identity(&roots, None, None, None).expect("resolve launch identity");
+    let roots = ConfigurationRoots::from_elements([
+        override_layer,
+        temporary.path().to_path_buf(),
+    ])
+    .expect("layer list");
+    let resolved = resolve_tui_launch_identity(&roots, None, None, None)
+        .expect("resolve launch identity");
     // The earlier layer defines no ui.toml, so the browsing bundle still comes
     // from the base file.
     assert_eq!(resolved.namespace, "root-bundle");

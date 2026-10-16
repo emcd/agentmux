@@ -15,8 +15,8 @@ use crate::relay::RelayResponse;
 use crate::relay::identity::scope_permits;
 
 use super::{
-    OutgoingFrame, RegistrationSource, RegistryEntry, RelayStreamEvent, is_relay_wide,
-    stream_registry, write_stream_frame_to_writer,
+    OutgoingFrame, RegistrationSource, RegistryEntry, RelayStreamEvent,
+    is_relay_wide, stream_registry, write_stream_frame_to_writer,
 };
 
 /// Whether to remove a matched entry entirely during eviction, or only detach
@@ -45,7 +45,11 @@ enum EvictionScope {
 /// client observes the typed error frame ahead of EOF. Writers and teardown
 /// signals are collected under the registry lock and acted on after it is
 /// released. Returns the number of connections torn down.
-fn evict_streams<F>(selector: F, response: &RelayResponse, removal: EvictionScope) -> usize
+fn evict_streams<F>(
+    selector: F,
+    response: &RelayResponse,
+    removal: EvictionScope,
+) -> usize
 where
     F: Fn(&RegistryEntry) -> bool,
 {
@@ -60,13 +64,17 @@ where
             if !selector(entry) {
                 continue;
             }
-            if let (Some(writer), Some(revoke)) = (entry.writer.clone(), entry.revoke.clone()) {
+            if let (Some(writer), Some(revoke)) =
+                (entry.writer.clone(), entry.revoke.clone())
+            {
                 entry.clear_dynamic_state();
                 targets.push((writer, revoke));
             }
             let remove = match removal {
                 EvictionScope::DropEntry => true,
-                EvictionScope::DropStreamSourceOnly => entry.source == RegistrationSource::Stream,
+                EvictionScope::DropStreamSourceOnly => {
+                    entry.source == RegistrationSource::Stream
+                },
             };
             if remove {
                 to_remove.push(key.clone());
@@ -105,7 +113,10 @@ where
 /// that shell: the removed credential fails Hello as unrecognized, and the shell
 /// stays only because the bundle still declares the member. Returns the number
 /// torn down.
-pub(crate) fn revoke_streams_for_identity(principal_id: &str, response: &RelayResponse) -> usize {
+pub(crate) fn revoke_streams_for_identity(
+    principal_id: &str,
+    response: &RelayResponse,
+) -> usize {
     evict_streams(
         |entry| entry.authenticated_identity.as_deref() == Some(principal_id),
         response,
@@ -121,7 +132,10 @@ pub(crate) fn revoke_streams_for_identity(principal_id: &str, response: &RelayRe
 /// recreates them from the current configuration. Relay-wide principals
 /// (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) live in their own reserved namespaces and are
 /// never matched. Returns the number of connections torn down.
-pub(crate) fn evict_streams_for_bundle(namespace: &str, response: &RelayResponse) -> usize {
+pub(crate) fn evict_streams_for_bundle(
+    namespace: &str,
+    response: &RelayResponse,
+) -> usize {
     evict_streams(
         |entry| entry.namespace == namespace,
         response,
@@ -170,7 +184,10 @@ pub(crate) fn notify_trusted_hosts_of_revocation(
     for (writer, host_principal_id) in targets {
         let mut event = template.clone();
         event.target_session = host_principal_id;
-        let _ = write_stream_frame_to_writer(&writer, OutgoingFrame::Event { event: &event });
+        let _ = write_stream_frame_to_writer(
+            &writer,
+            OutgoingFrame::Event { event: &event },
+        );
     }
     count
 }

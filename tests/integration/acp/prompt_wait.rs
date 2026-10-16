@@ -12,12 +12,15 @@ use agentmux::acp::{AcpStdioClient, PromptDispatchOutcome};
 
 use super::helpers::{GuardedTempDir, write_acp_stub};
 
-fn spawn_stub_client(stub_environment: &[(String, String)]) -> (GuardedTempDir, AcpStdioClient) {
+fn spawn_stub_client(
+    stub_environment: &[(String, String)],
+) -> (GuardedTempDir, AcpStdioClient) {
     let temporary = GuardedTempDir::new();
     let stub_path = temporary.path().join("acp_stub.sh");
     write_acp_stub(&stub_path);
     let log_path = temporary.path().join("acp_requests.log");
-    let mut environment = vec![("ACP_LOG_FILE".to_string(), log_path.display().to_string())];
+    let mut environment =
+        vec![("ACP_LOG_FILE".to_string(), log_path.display().to_string())];
     environment.extend(stub_environment.iter().cloned());
     let client = AcpStdioClient::spawn(
         stub_path.display().to_string().as_str(),
@@ -43,11 +46,18 @@ fn wait_times_out_while_pending_then_resolves_on_completion() {
     // The stub holds the prompt response for one second; the bounded wait must
     // report still-pending within that window and resolve once the response
     // (and the dropped completion signal) arrives.
-    let (_temporary, mut client) =
-        spawn_stub_client(&[("PROMPT_DELAY_SEC".to_string(), "1".to_string())]);
+    let (_temporary, mut client) = spawn_stub_client(&[(
+        "PROMPT_DELAY_SEC".to_string(),
+        "1".to_string(),
+    )]);
     client.initialize().expect("initialize stub ACP client");
 
-    let outcome = client.prompt("sess-wait", "status?", None, Box::new(|_completion| {}));
+    let outcome = client.prompt(
+        "sess-wait",
+        "status?",
+        None,
+        Box::new(|_completion| {}),
+    );
     assert!(
         matches!(outcome, PromptDispatchOutcome::Submitted),
         "prompt dispatch should be accepted, got {outcome:?}"

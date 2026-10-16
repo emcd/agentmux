@@ -10,7 +10,9 @@ use std::{
     process::{Command, Stdio},
 };
 
-use agentmux::relay::{ListedSessionTransport, StartupFailureRecord, append_startup_failure};
+use agentmux::relay::{
+    ListedSessionTransport, StartupFailureRecord, append_startup_failure,
+};
 use agentmux::runtime::paths::BundleRuntimePaths;
 use serde_json::Value;
 use tempfile::TempDir;
@@ -31,7 +33,10 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_tmux_and_acp_failure(&config_root, "alpha");
+    write_bundle_configuration_with_tmux_and_acp_failure(
+        &config_root,
+        "alpha",
+    );
     write_tui_configuration(
         &config_root,
         Some("alpha"),
@@ -79,7 +84,8 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
         .output()
         .expect("run list sessions");
     assert!(listed.status.success(), "list sessions should succeed");
-    let listed_json: Value = serde_json::from_slice(&listed.stdout).expect("decode list payload");
+    let listed_json: Value =
+        serde_json::from_slice(&listed.stdout).expect("decode list payload");
     assert_eq!(listed_json["bundle"]["state"], "up");
     assert_eq!(listed_json["bundle"]["startup_health"], "degraded");
     let startup_failure_count = listed_json["bundle"]["startup_failure_count"]
@@ -95,7 +101,11 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
     let bravo_failure = failures
         .iter()
         .find(|entry| entry["session_id"] == "bravo")
-        .unwrap_or_else(|| panic!("expected ACP startup failure for bravo session: {listed_json}"));
+        .unwrap_or_else(|| {
+            panic!(
+                "expected ACP startup failure for bravo session: {listed_json}"
+            )
+        });
     // The record must carry the true bootstrap cause plumbed out of the worker
     // task — here the ACP child binary could not be spawned — rather than the
     // generic "worker unavailable" placeholder the startup poller sees from the
@@ -106,9 +116,9 @@ fn host_relay_records_startup_failures_and_list_reports_degraded_health() {
          generic unavailable placeholder: {listed_json}"
     );
     assert!(
-        bravo_failure["reason"]
-            .as_str()
-            .is_some_and(|reason| reason.contains("spawn ACP stdio command failed")),
+        bravo_failure["reason"].as_str().is_some_and(
+            |reason| reason.contains("spawn ACP stdio command failed")
+        ),
         "bravo startup failure should surface the true spawn cause: {listed_json}"
     );
 
@@ -131,7 +141,10 @@ fn host_relay_records_startup_failure_when_session_dies_before_marking() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_kill_after_create_member(&config_root, "alpha");
+    write_bundle_configuration_with_kill_after_create_member(
+        &config_root,
+        "alpha",
+    );
     write_tui_configuration(
         &config_root,
         Some("alpha"),
@@ -180,7 +193,8 @@ fn host_relay_records_startup_failure_when_session_dies_before_marking() {
         .output()
         .expect("run list sessions");
     assert!(listed.status.success(), "list sessions should succeed");
-    let listed_json: Value = serde_json::from_slice(&listed.stdout).expect("decode list payload");
+    let listed_json: Value =
+        serde_json::from_slice(&listed.stdout).expect("decode list payload");
     let failures = listed_json["bundle"]["recent_startup_failures"]
         .as_array()
         .expect("startup failures array");
@@ -192,7 +206,8 @@ fn host_relay_records_startup_failure_when_session_dies_before_marking() {
         });
     // The captured `$N` mark must fail against the dead session rather than
     // land on a sibling: the record carries the failed mark, not silence.
-    let failure_text = serde_json::to_string(victim_failure).expect("encode failure record");
+    let failure_text =
+        serde_json::to_string(victim_failure).expect("encode failure record");
     assert!(
         failure_text.contains("no such session"),
         "instant-death failure should name the failed mark: {listed_json}"
@@ -218,7 +233,13 @@ fn host_relay_clears_startup_failures_for_sessions_that_start_successfully() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["primary"], Some(true));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["primary"],
+        Some(true),
+    );
     write_tui_configuration(
         &config_root,
         Some("alpha"),
@@ -227,7 +248,8 @@ fn host_relay_clears_startup_failures_for_sessions_that_start_successfully() {
     );
 
     let bundle_runtime = state_root.join("bundles").join("alpha");
-    fs::create_dir_all(&bundle_runtime).expect("create bundle runtime directory");
+    fs::create_dir_all(&bundle_runtime)
+        .expect("create bundle runtime directory");
     fs::write(
         bundle_runtime.join("startup_failures.json"),
         r#"{
@@ -297,7 +319,8 @@ fn host_relay_clears_startup_failures_for_sessions_that_start_successfully() {
         .output()
         .expect("run list sessions");
     assert!(listed.status.success(), "list sessions should succeed");
-    let listed_json: Value = serde_json::from_slice(&listed.stdout).expect("decode list payload");
+    let listed_json: Value =
+        serde_json::from_slice(&listed.stdout).expect("decode list payload");
     let failures = listed_json["bundle"]["recent_startup_failures"]
         .as_array()
         .expect("startup failures array");
@@ -343,7 +366,13 @@ fn host_relay_list_reports_healthy_while_a_startup_failure_record_stands() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_options(&config_root, "alpha", None, &["primary"], Some(true));
+    write_bundle_configuration_with_options(
+        &config_root,
+        "alpha",
+        None,
+        &["primary"],
+        Some(true),
+    );
     write_tui_configuration(
         &config_root,
         Some("alpha"),
@@ -383,7 +412,8 @@ fn host_relay_list_reports_healthy_while_a_startup_failure_record_stands() {
             session_id: "primary".to_string(),
             transport: ListedSessionTransport::Tmux,
             code: "runtime_startup_failed".to_string(),
-            reason: "a failure this session has since recovered from".to_string(),
+            reason: "a failure this session has since recovered from"
+                .to_string(),
             timestamp: "2026-05-01T00:00:00Z".to_string(),
             sequence: 0,
             details: None,
@@ -415,7 +445,8 @@ fn host_relay_list_reports_healthy_while_a_startup_failure_record_stands() {
     assert!(output.status.success(), "command should succeed");
 
     assert!(listed.status.success(), "list principals should succeed");
-    let listed_json: Value = serde_json::from_slice(&listed.stdout).expect("decode list payload");
+    let listed_json: Value =
+        serde_json::from_slice(&listed.stdout).expect("decode list payload");
     // The record has to still be there, or `healthy` proves nothing.
     assert!(
         listed_json["bundle"]["startup_failure_count"]
@@ -440,7 +471,10 @@ fn host_relay_startup_failure_emits_per_bundle_reason_with_details() {
     fs::create_dir_all(&config_root).expect("create config root");
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
-    write_bundle_configuration_with_invalid_policy_scope(&config_root, "alpha");
+    write_bundle_configuration_with_invalid_policy_scope(
+        &config_root,
+        "alpha",
+    );
 
     let fake_tmux = temporary.path().join("fake-tmux.sh");
     write_fake_tmux_script(&fake_tmux);
@@ -466,11 +500,14 @@ fn host_relay_startup_failure_emits_per_bundle_reason_with_details() {
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("bundle 'alpha' failed to start (validation_invalid_policy_scope)"),
+        stderr.contains(
+            "bundle 'alpha' failed to start (validation_invalid_policy_scope)"
+        ),
         "expected per-bundle failure reason on stderr: {stderr}"
     );
     assert!(
-        stderr.contains("\"control\":\"choose\"") && stderr.contains("\"value\":\"everywhere\""),
+        stderr.contains("\"control\":\"choose\"")
+            && stderr.contains("\"value\":\"everywhere\""),
         "expected structured details on stderr: {stderr}"
     );
 
@@ -478,7 +515,10 @@ fn host_relay_startup_failure_emits_per_bundle_reason_with_details() {
         .expect("read relay inscriptions log");
     let startup_failed = inscriptions
         .lines()
-        .map(|line| serde_json::from_str::<Value>(line).expect("decode inscription line"))
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .expect("decode inscription line")
+        })
         .find(|entry| entry["event"] == "relay.bundle.startup_failed")
         .expect("relay.bundle.startup_failed inscription should be emitted");
     assert_eq!(startup_failed["details"]["bundle_name"], "alpha");

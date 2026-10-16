@@ -31,7 +31,9 @@ pub struct AuthorityGate {
 impl AuthorityGate {
     /// Creates an armed gate for `peer_principal_id`, returning the gate
     /// alongside the test-side rendezvous channels.
-    pub fn arm(peer_principal_id: &str) -> (Self, mpsc::Receiver<()>, mpsc::Sender<()>) {
+    pub fn arm(
+        peer_principal_id: &str,
+    ) -> (Self, mpsc::Receiver<()>, mpsc::Sender<()>) {
         let (reached_tx, reached_rx) = mpsc::channel::<()>();
         let (proceed_tx, proceed_rx) = mpsc::channel::<()>();
         (
@@ -105,7 +107,8 @@ impl ConfinedCommitHook {
     }
 }
 
-static CONFINED_COMMIT_HOOK: Mutex<Option<ConfinedCommitHook>> = Mutex::new(None);
+static CONFINED_COMMIT_HOOK: Mutex<Option<ConfinedCommitHook>> =
+    Mutex::new(None);
 
 /// Installs `hook` as the active confined-commit hook, replacing any
 /// previous one. Test-only; call [`disarm_confined_commit_hook`] when done.

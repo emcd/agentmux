@@ -40,7 +40,10 @@ impl McpServer {
         // Fill in the namespace the relay now requires on every target. Done
         // after sender resolution so an unassociated server fails as
         // `validation_unassociated_server` regardless of target shape.
-        let targets = qualify_send_targets(&params.targets, self.associated_namespace())?;
+        let targets = qualify_send_targets(
+            &params.targets,
+            self.associated_namespace(),
+        )?;
 
         let request = RelayRequest::Send {
             request_id: params.request_id.clone(),
@@ -65,9 +68,15 @@ impl McpServer {
                 // sender_display_name follow the relay's skip_serializing_if
                 // semantics, matching the identity fields below.
                 let mut response_map = serde_json::Map::new();
-                response_map.insert("schema_version".to_string(), Value::String(schema_version));
+                response_map.insert(
+                    "schema_version".to_string(),
+                    Value::String(schema_version),
+                );
                 if let Some(request_id) = request_id {
-                    response_map.insert("request_id".to_string(), Value::String(request_id));
+                    response_map.insert(
+                        "request_id".to_string(),
+                        Value::String(request_id),
+                    );
                 }
                 response_map.insert(
                     "requester_session".to_string(),
@@ -86,7 +95,10 @@ impl McpServer {
                     );
                 }
                 if let Some(delegate) = on_behalf_of {
-                    response_map.insert("on_behalf_of".to_string(), Value::String(delegate));
+                    response_map.insert(
+                        "on_behalf_of".to_string(),
+                        Value::String(delegate),
+                    );
                 }
                 response_map.insert("results".to_string(), json!(results));
                 let response = Value::Object(response_map);
@@ -97,9 +109,14 @@ impl McpServer {
                     }),
                 );
                 Ok(CallToolResult::success(vec![Content::json(response)?]))
-            }
-            Ok(other) => Err(self.map_nonsuccess_relay_response("mcp.tool.send", other)),
-            Err(source) => Err(self.map_relay_call_error("mcp.tool.send.io_error", source)),
+            },
+            Ok(other) => {
+                Err(self.map_nonsuccess_relay_response("mcp.tool.send", other))
+            },
+            Err(source) => {
+                Err(self
+                    .map_relay_call_error("mcp.tool.send.io_error", source))
+            },
         }
     }
 }

@@ -7,8 +7,8 @@ use std::{
 };
 
 use crate::configuration::{
-    BUNDLES_DIRECTORY, CODERS_FILE, POLICIES_FILE, RELAY_FILE, UI_FILE, USERS_FILE,
-    effective_bundle_definitions,
+    BUNDLES_DIRECTORY, CODERS_FILE, POLICIES_FILE, RELAY_FILE, UI_FILE,
+    USERS_FILE, effective_bundle_definitions,
 };
 
 use super::error::RuntimeError;
@@ -61,7 +61,9 @@ const RELAY_TEMPLATE: &str = include_str!(concat!(
 /// # Errors
 ///
 /// Returns `RuntimeError` when a supplied layer does not exist.
-pub fn validate_supplied_configuration_layers(roots: &RuntimeRoots) -> Result<(), RuntimeError> {
+pub fn validate_supplied_configuration_layers(
+    roots: &RuntimeRoots,
+) -> Result<(), RuntimeError> {
     if roots.configuration_root_source.permits_hydration() {
         return Ok(());
     }
@@ -69,7 +71,10 @@ pub fn validate_supplied_configuration_layers(roots: &RuntimeRoots) -> Result<()
         if !layer.is_dir() {
             return Err(RuntimeError::validation(
                 "validation_configuration_root_absent",
-                format!("configuration layer does not exist: {}", layer.display()),
+                format!(
+                    "configuration layer does not exist: {}",
+                    layer.display()
+                ),
             ));
         }
     }
@@ -89,7 +94,9 @@ pub fn validate_supplied_configuration_layers(roots: &RuntimeRoots) -> Result<()
 ///
 /// Returns `RuntimeError` when directories or template files cannot be created,
 /// or when a supplied layer does not exist.
-pub fn ensure_starter_configuration_layout(roots: &RuntimeRoots) -> Result<(), RuntimeError> {
+pub fn ensure_starter_configuration_layout(
+    roots: &RuntimeRoots,
+) -> Result<(), RuntimeError> {
     validate_supplied_configuration_layers(roots)?;
     let configuration_roots = &roots.configuration_roots;
     if !roots.configuration_root_source.permits_hydration() {
@@ -122,12 +129,13 @@ pub fn ensure_starter_configuration_layout(roots: &RuntimeRoots) -> Result<(), R
     // deployment with no bundles of its own, and treating it as one would write
     // an example bundle into a live effective set the operator already
     // populated.
-    let definitions = effective_bundle_definitions(configuration_roots).map_err(|source| {
-        RuntimeError::validation(
-            "validation_unreadable_configuration_layer",
-            format!("failed to enumerate bundle definitions: {source}"),
-        )
-    })?;
+    let definitions = effective_bundle_definitions(configuration_roots)
+        .map_err(|source| {
+            RuntimeError::validation(
+                "validation_unreadable_configuration_layer",
+                format!("failed to enumerate bundle definitions: {source}"),
+            )
+        })?;
     if definitions.is_empty() {
         ensure_template_file(
             &bundles_directory.join(EXAMPLE_BUNDLE_FILE),
@@ -138,11 +146,18 @@ pub fn ensure_starter_configuration_layout(roots: &RuntimeRoots) -> Result<(), R
 }
 
 fn ensure_directory(path: &Path) -> Result<(), RuntimeError> {
-    fs::create_dir_all(path)
-        .map_err(|source| RuntimeError::io(format!("create directory {}", path.display()), source))
+    fs::create_dir_all(path).map_err(|source| {
+        RuntimeError::io(
+            format!("create directory {}", path.display()),
+            source,
+        )
+    })
 }
 
-fn ensure_template_file(path: &Path, contents: &str) -> Result<(), RuntimeError> {
+fn ensure_template_file(
+    path: &Path,
+    contents: &str,
+) -> Result<(), RuntimeError> {
     if path.exists() {
         return Ok(());
     }
@@ -152,19 +167,27 @@ fn ensure_template_file(path: &Path, contents: &str) -> Result<(), RuntimeError>
         .open(path)
     {
         Ok(file) => file,
-        Err(source) if source.kind() == ErrorKind::AlreadyExists => return Ok(()),
+        Err(source) if source.kind() == ErrorKind::AlreadyExists => {
+            return Ok(());
+        },
         Err(source) => {
             return Err(RuntimeError::io(
-                format!("create starter configuration file {}", path.display()),
+                format!(
+                    "create starter configuration file {}",
+                    path.display()
+                ),
                 source,
             ));
-        }
+        },
     };
-    file.write_all(contents.as_bytes())
-        .map_err(|source| RuntimeError::io(format!("write {}", path.display()), source))?;
-    file.write_all(b"\n")
-        .map_err(|source| RuntimeError::io(format!("write {}", path.display()), source))?;
-    file.flush()
-        .map_err(|source| RuntimeError::io(format!("flush {}", path.display()), source))?;
+    file.write_all(contents.as_bytes()).map_err(|source| {
+        RuntimeError::io(format!("write {}", path.display()), source)
+    })?;
+    file.write_all(b"\n").map_err(|source| {
+        RuntimeError::io(format!("write {}", path.display()), source)
+    })?;
+    file.flush().map_err(|source| {
+        RuntimeError::io(format!("flush {}", path.display()), source)
+    })?;
     Ok(())
 }

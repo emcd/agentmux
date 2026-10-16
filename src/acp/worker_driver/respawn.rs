@@ -11,15 +11,20 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 
 use crate::acp::AcpTransport;
-use crate::acp::persistent_runtime::{AcpBootstrapError, bootstrap_acp_worker_runtime};
+use crate::acp::persistent_runtime::{
+    AcpBootstrapError, bootstrap_acp_worker_runtime,
+};
 use crate::configuration::BundleMember;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::signals::shutdown_requested;
-use crate::transports::{UnreachableSince, WorkerFailureReason, WorkerReadinessState};
+use crate::transports::{
+    UnreachableSince, WorkerFailureReason, WorkerReadinessState,
+};
 
 use super::services::{AcpDriverServices, MirrorStateFn};
 
-const RESPAWN_BACKOFF_MAX_MS_ENVVAR: &str = "AGENTMUX_RELAY_ACP_RESPAWN_BACKOFF_MAX_MS";
+const RESPAWN_BACKOFF_MAX_MS_ENVVAR: &str =
+    "AGENTMUX_RELAY_ACP_RESPAWN_BACKOFF_MAX_MS";
 const RESPAWN_SLEEP_POLL_MS: u64 = 50;
 const RESPAWN_BACKOFF_INITIAL_MS: u64 = 1_000;
 const RESPAWN_BACKOFF_CAP_DEFAULT_MS: u64 = 30_000;
@@ -73,7 +78,11 @@ async fn run_one_bootstrap(
     let mirror_state = Arc::clone(mirror_state);
     tokio::task::spawn_blocking(move || {
         let publish = |generation| in_flight.publish_generation(generation);
-        match bootstrap_acp_worker_runtime(&runtime_directory, &target_member, &publish) {
+        match bootstrap_acp_worker_runtime(
+            &runtime_directory,
+            &target_member,
+            &publish,
+        ) {
             Ok(runtime) => {
                 // The check and the install happen under one lock: a fence that
                 // began while this bootstrap ran must not find a fresh agent
@@ -92,13 +101,13 @@ async fn run_one_bootstrap(
                         // `list` — that a runtime was still on its way.
                         mirror_state(WorkerReadinessState::Unavailable);
                         BootstrapDisposition::RefusedAfterFence
-                    }
+                    },
                     None => {
                         mirror_state(WorkerReadinessState::Available);
                         BootstrapDisposition::Installed
-                    }
+                    },
                 }
-            }
+            },
             Err(error) => BootstrapDisposition::Failed(error),
         }
     })
@@ -132,7 +141,7 @@ pub(super) async fn initial_acp_bootstrap(
     )
     .await;
     match disposition {
-        BootstrapDisposition::Installed => {}
+        BootstrapDisposition::Installed => {},
         BootstrapDisposition::RefusedAfterFence => {
             emit_inscription(
                 "relay.acp.worker.bootstrap_refused_after_fence",
@@ -141,7 +150,7 @@ pub(super) async fn initial_acp_bootstrap(
                     "target_session": target_session,
                 }),
             );
-        }
+        },
         BootstrapDisposition::Failed(error) => {
             transport
                 .lock()
@@ -199,7 +208,7 @@ pub(super) async fn initial_acp_bootstrap(
                     .expect("acp transport mutex poisoned")
                     .signal_respawn();
             }
-        }
+        },
     }
     settled.store(true, Ordering::Release);
 }
@@ -221,8 +230,14 @@ pub(super) async fn initial_acp_bootstrap(
 /// *combinations* — a signal without an `Unavailable` runtime, an `Unavailable`
 /// runtime without a signal — and staging those against a live monitor means
 /// racing a respawn to observe a state it is about to leave.
-fn respawn_is_owed(signalled: bool, abandoned: bool, readiness: WorkerReadinessState) -> bool {
-    signalled && !abandoned && matches!(readiness, WorkerReadinessState::Unavailable)
+fn respawn_is_owed(
+    signalled: bool,
+    abandoned: bool,
+    readiness: WorkerReadinessState,
+) -> bool {
+    signalled
+        && !abandoned
+        && matches!(readiness, WorkerReadinessState::Unavailable)
 }
 
 /// The health signals a respawn (or a permanent initial-bootstrap failure)
@@ -304,7 +319,8 @@ pub(super) async fn acp_respawn_monitor(
         respawn_needed.borrow_and_update();
         let abandoned = respawn_abandoned.load(Ordering::Acquire);
         let (outstanding, readiness) = {
-            let transport = transport.lock().expect("acp transport mutex poisoned");
+            let transport =
+                transport.lock().expect("acp transport mutex poisoned");
             (
                 transport.respawn_signal_outstanding(),
                 transport.readiness(),
@@ -371,11 +387,13 @@ pub(super) async fn acp_respawn_monitor(
         // can publish a cause of its own; bounding by the classified epoch
         // leaves that one for the next tick instead of consuming it here.
         let answered = {
-            let transport = transport.lock().expect("acp transport mutex poisoned");
+            let transport =
+                transport.lock().expect("acp transport mutex poisoned");
             !matches!(transport.readiness(), WorkerReadinessState::Unavailable)
         } || respawn_abandoned.load(Ordering::Acquire);
         if answered {
-            let epoch = outstanding.expect("an owed respawn has an outstanding cause");
+            let epoch =
+                outstanding.expect("an owed respawn has an outstanding cause");
             transport
                 .lock()
                 .expect("acp transport mutex poisoned")
@@ -444,7 +462,10 @@ async fn run_acp_respawn(
         transport
             .lock()
             .expect("acp transport mutex poisoned")
-            .prepare_for_startup(services.chooser.clone(), target_member.id.clone());
+            .prepare_for_startup(
+                services.chooser.clone(),
+                target_member.id.clone(),
+            );
 
         // Bootstrap the new runtime OFF the lock (blocking child spawn). The
         // install happens inside that same closure, so the published handle
@@ -469,7 +490,7 @@ async fn run_acp_respawn(
                     }),
                 );
                 return;
-            }
+            },
             BootstrapDisposition::Installed => {
                 emit_inscription(
                     "relay.acp.respawn.succeeded",
@@ -488,7 +509,7 @@ async fn run_acp_respawn(
                 );
                 respawn_state.reset_on_success();
                 return;
-            }
+            },
             BootstrapDisposition::Failed(error) => {
                 emit_inscription(
                     "relay.acp.respawn.attempt_failed",
@@ -545,7 +566,7 @@ async fn run_acp_respawn(
                     );
                     return;
                 }
-            }
+            },
         }
     }
 }

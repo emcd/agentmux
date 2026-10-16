@@ -1,7 +1,9 @@
 //! Chat-history scrolling: mouse wheel, viewport-unit paging, and the
 //! snap-to-latest escape.
 
-use crossterm::event::{Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind,
+};
 
 use agentmux::tui::workbench::WorkbenchField;
 

@@ -1,11 +1,14 @@
 use std::collections::{HashSet, VecDeque};
 
-use crate::relay::{RelayRequest, RelayResponse, RelayStreamEvent, SendOutcome, SendResult};
+use crate::relay::{
+    RelayRequest, RelayResponse, RelayStreamEvent, SendOutcome, SendResult,
+};
 use crate::runtime::error::RuntimeError;
 
 use super::{
-    AppState, ChatHistoryDirection, ChatHistoryEntry, PendingChoiceEntry, PendingChoiceOption,
-    SEEN_STREAM_IDS_MAXIMUM, map_relay_error, merge_tui_targets, sender_bound_bundle,
+    AppState, ChatHistoryDirection, ChatHistoryEntry, PendingChoiceEntry,
+    PendingChoiceOption, SEEN_STREAM_IDS_MAXIMUM, map_relay_error,
+    merge_tui_targets, sender_bound_bundle,
 };
 
 impl AppState {
@@ -16,7 +19,8 @@ impl AppState {
                 "message body is required",
             ));
         }
-        let bound_bundle = sender_bound_bundle(&self.sender_session, &self.namespace);
+        let bound_bundle =
+            sender_bound_bundle(&self.sender_session, &self.namespace);
         let targets = merge_tui_targets(&self.to_field, bound_bundle)?;
         let message_body = self.message_field.clone();
         let response = self.request_relay(&RelayRequest::Send {
@@ -34,21 +38,29 @@ impl AppState {
                     .map(|result| result.target_session.clone())
                     .collect::<Vec<_>>();
                 if !history_targets.is_empty() {
-                    self.push_outgoing_chat_history(&history_targets, message_body.as_str());
+                    self.push_outgoing_chat_history(
+                        &history_targets,
+                        message_body.as_str(),
+                    );
                 }
                 self.record_chat_events(&results);
                 self.push_status(
                     None,
-                    format!("send accepted pending={}", self.pending_deliveries_count()),
+                    format!(
+                        "send accepted pending={}",
+                        self.pending_deliveries_count()
+                    ),
                 );
                 self.clear_compose_fields();
                 self.relay_stream_poll_error_reported = false;
                 Ok(())
-            }
+            },
             RelayResponse::Error { error } => Err(map_relay_error(error)),
             other => Err(RuntimeError::validation(
                 "internal_unexpected_failure",
-                format!("relay returned unexpected response variant: {other:?}"),
+                format!(
+                    "relay returned unexpected response variant: {other:?}"
+                ),
             )),
         }
     }
@@ -72,7 +84,8 @@ impl AppState {
     pub fn chat_history_line_window(&self) -> (usize, usize) {
         let viewport = self.chat_history_viewport_height.max(1);
         let total = self.chat_history_total_lines;
-        let scroll = self.chat_history_scroll.min(total.saturating_sub(viewport));
+        let scroll =
+            self.chat_history_scroll.min(total.saturating_sub(viewport));
         let end = total.saturating_sub(scroll);
         let start = end.saturating_sub(viewport);
         (start, end)
@@ -81,17 +94,20 @@ impl AppState {
     pub fn scroll_chat_history_page_up(&mut self) {
         let page = self.chat_history_viewport_height.max(1);
         let max_scroll = self.max_chat_history_scroll();
-        self.chat_history_scroll = (self.chat_history_scroll + page).min(max_scroll);
+        self.chat_history_scroll =
+            (self.chat_history_scroll + page).min(max_scroll);
     }
 
     pub fn scroll_chat_history_page_down(&mut self) {
         let page = self.chat_history_viewport_height.max(1);
-        self.chat_history_scroll = self.chat_history_scroll.saturating_sub(page);
+        self.chat_history_scroll =
+            self.chat_history_scroll.saturating_sub(page);
     }
 
     pub fn scroll_chat_history_up(&mut self) {
         let max_scroll = self.max_chat_history_scroll();
-        self.chat_history_scroll = (self.chat_history_scroll + 1).min(max_scroll);
+        self.chat_history_scroll =
+            (self.chat_history_scroll + 1).min(max_scroll);
     }
 
     pub fn scroll_chat_history_down(&mut self) {
@@ -121,7 +137,11 @@ impl AppState {
         self.chat_history_scroll = 0;
     }
 
-    pub(super) fn push_outgoing_chat_history(&mut self, targets: &[String], body: &str) {
+    pub(super) fn push_outgoing_chat_history(
+        &mut self,
+        targets: &[String],
+        body: &str,
+    ) {
         let peer_session = targets.join(", ");
         self.push_chat_history_entry(ChatHistoryEntry {
             direction: ChatHistoryDirection::Outgoing,
@@ -130,7 +150,11 @@ impl AppState {
         });
     }
 
-    fn push_incoming_chat_history(&mut self, sender_session: &str, body: &str) {
+    fn push_incoming_chat_history(
+        &mut self,
+        sender_session: &str,
+        body: &str,
+    ) {
         self.push_chat_history_entry(ChatHistoryEntry {
             direction: ChatHistoryDirection::Incoming,
             peer_session: sender_session.to_string(),
@@ -167,7 +191,10 @@ impl AppState {
         true
     }
 
-    pub(in crate::tui) fn record_chat_events(&mut self, results: &[SendResult]) {
+    pub(in crate::tui) fn record_chat_events(
+        &mut self,
+        results: &[SendResult],
+    ) {
         let mut accepted_count = 0usize;
         for result in results {
             match result.outcome {
@@ -178,12 +205,13 @@ impl AppState {
                     {
                         continue;
                     }
-                    self.pending_delivery_ids.insert(result.message_id.clone());
+                    self.pending_delivery_ids
+                        .insert(result.message_id.clone());
                     accepted_count += 1;
-                }
+                },
                 _ => {
                     self.pending_delivery_ids.remove(&result.message_id);
-                }
+                },
             }
         }
 
@@ -195,7 +223,8 @@ impl AppState {
         ));
 
         for result in results {
-            let (outcome, reason_code) = map_chat_result_outcome(&result.outcome);
+            let (outcome, reason_code) =
+                map_chat_result_outcome(&result.outcome);
             if let Some(reason) = result.reason.as_deref() {
                 self.push_event(format!(
                     "target={} outcome={} reason_code={} message_id={} reason={}",
@@ -217,7 +246,10 @@ impl AppState {
         }
     }
 
-    pub(in crate::tui) fn record_stream_events(&mut self, events: &[RelayStreamEvent]) {
+    pub(in crate::tui) fn record_stream_events(
+        &mut self,
+        events: &[RelayStreamEvent],
+    ) {
         for event in events {
             match event.event_type.as_str() {
                 "incoming_message" => {
@@ -250,7 +282,7 @@ impl AppState {
                         "incoming target={} sender={} message_id={}",
                         event.target_session, sender_session, message_id
                     ));
-                }
+                },
                 "delivery_outcome" => {
                     let message_id = event
                         .payload
@@ -276,7 +308,12 @@ impl AppState {
                     if let Some(message_id) = message_id
                         && matches!(
                             relay_outcome,
-                            Some("success" | "failed" | "not_submitted" | "submission_unknown")
+                            Some(
+                                "success"
+                                    | "failed"
+                                    | "not_submitted"
+                                    | "submission_unknown"
+                            )
                         )
                     {
                         let _ = Self::remember_seen_id(
@@ -317,7 +354,7 @@ impl AppState {
                         reason_code.unwrap_or("-"),
                         self.pending_deliveries_count()
                     ));
-                }
+                },
                 "choices.snapshot" => {
                     let pending_ids = event
                         .payload
@@ -336,7 +373,7 @@ impl AppState {
                         "choice snapshot pending_count={}",
                         self.pending_choices.len()
                     ));
-                }
+                },
                 "choices.requested" => {
                     let Some(choice_request_id) = event
                         .payload
@@ -345,7 +382,8 @@ impl AppState {
                         .map(ToString::to_string)
                     else {
                         self.push_event(
-                            "choice requested event missing choice_request_id".to_string(),
+                            "choice requested event missing choice_request_id"
+                                .to_string(),
                         );
                         continue;
                     };
@@ -367,7 +405,10 @@ impl AppState {
                             .get("requested_kind")
                             .and_then(serde_json::Value::as_str)
                             .map(ToString::to_string),
-                        requested_details: event.payload.get("requested_details").cloned(),
+                        requested_details: event
+                            .payload
+                            .get("requested_details")
+                            .cloned(),
                         options: parse_choice_options(&event.payload),
                         enqueued_at: event
                             .payload
@@ -394,12 +435,18 @@ impl AppState {
                     if existed {
                         self.push_status(
                             None,
-                            format!("choice request replayed id={} (deduped)", choice_request_id),
+                            format!(
+                                "choice request replayed id={} (deduped)",
+                                choice_request_id
+                            ),
                         );
                     } else {
-                        self.push_status(None, format!("choice requested id={choice_request_id}"));
+                        self.push_status(
+                            None,
+                            format!("choice requested id={choice_request_id}"),
+                        );
                     }
-                }
+                },
                 "choices.resolved" => {
                     let Some(choice_request_id) = event
                         .payload
@@ -407,11 +454,13 @@ impl AppState {
                         .and_then(serde_json::Value::as_str)
                     else {
                         self.push_event(
-                            "choice resolved event missing choice_request_id".to_string(),
+                            "choice resolved event missing choice_request_id"
+                                .to_string(),
                         );
                         continue;
                     };
-                    let removed = self.remove_pending_choice(choice_request_id);
+                    let removed =
+                        self.remove_pending_choice(choice_request_id);
                     let outcome = event
                         .payload
                         .get("outcome")
@@ -438,7 +487,7 @@ impl AppState {
                             ),
                         );
                     }
-                }
+                },
                 _ => self.push_event(format!(
                     "stream event type={} target={}",
                     event.event_type, event.target_session
@@ -475,10 +524,9 @@ impl AppState {
     }
 
     fn upsert_pending_choice(&mut self, entry: PendingChoiceEntry) -> bool {
-        let existing_index = self
-            .pending_choices
-            .iter()
-            .position(|value| value.choice_request_id == entry.choice_request_id);
+        let existing_index = self.pending_choices.iter().position(|value| {
+            value.choice_request_id == entry.choice_request_id
+        });
         let existed = existing_index.is_some();
         if let Some(index) = existing_index {
             self.pending_choices[index] = entry;
@@ -523,11 +571,15 @@ fn compare_pending_choice_order(
     .then(left.choice_request_id.cmp(&right.choice_request_id))
 }
 
-fn map_chat_result_outcome(outcome: &SendOutcome) -> (&'static str, Option<&'static str>) {
+fn map_chat_result_outcome(
+    outcome: &SendOutcome,
+) -> (&'static str, Option<&'static str>) {
     match outcome {
         SendOutcome::Queued => ("accepted", None),
         SendOutcome::Delivered => ("success", None),
-        SendOutcome::DroppedOnShutdown => ("failed", Some("dropped_on_shutdown")),
+        SendOutcome::DroppedOnShutdown => {
+            ("failed", Some("dropped_on_shutdown"))
+        },
         SendOutcome::Failed => ("failed", None),
         SendOutcome::PeerUnavailable => ("failed", Some("peer_unavailable")),
         SendOutcome::NotSubmitted => ("not_submitted", None),
@@ -541,12 +593,16 @@ fn map_stream_outcome<'a>(
 ) -> (&'a str, Option<&'a str>) {
     let outcome = outcome.unwrap_or("<unknown>");
     match outcome {
-        "success" | "failed" | "not_submitted" | "submission_unknown" => (outcome, reason_code),
+        "success" | "failed" | "not_submitted" | "submission_unknown" => {
+            (outcome, reason_code)
+        },
         _ => ("<unknown>", reason_code),
     }
 }
 
-fn parse_choice_options(payload: &serde_json::Value) -> Vec<PendingChoiceOption> {
+fn parse_choice_options(
+    payload: &serde_json::Value,
+) -> Vec<PendingChoiceOption> {
     payload
         .get("requested_details")
         .and_then(|value| value.get("options"))

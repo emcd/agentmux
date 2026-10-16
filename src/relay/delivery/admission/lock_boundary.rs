@@ -158,7 +158,8 @@ pub(super) fn inside() {
     }
     let hold = {
         let mut watch = WATCH.lock().unwrap_or_else(|held| held.into_inner());
-        let Some(reports) = watch.as_mut().filter(|reports| ours(reports)) else {
+        let Some(reports) = watch.as_mut().filter(|reports| ours(reports))
+        else {
             return;
         };
         let _ = reports.inside.send(());

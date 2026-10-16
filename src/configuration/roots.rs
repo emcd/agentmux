@@ -59,7 +59,9 @@ impl ConfigurationRoots {
         }
         for (position, layer) in layers.iter().enumerate() {
             if layer.as_os_str().is_empty() {
-                return Err(ConfigurationRootsError::EmptyElement { position });
+                return Err(ConfigurationRootsError::EmptyElement {
+                    position,
+                });
             }
         }
         Ok(Self { layers })
@@ -76,11 +78,14 @@ impl ConfigurationRoots {
     ///
     /// Returns [`ConfigurationRootsError`] when a leading, trailing, or doubled
     /// separator contributes an empty element.
-    pub fn from_environment_value(value: &str) -> Result<Option<Self>, ConfigurationRootsError> {
+    pub fn from_environment_value(
+        value: &str,
+    ) -> Result<Option<Self>, ConfigurationRootsError> {
         if value.trim().is_empty() {
             return Ok(None);
         }
-        Self::from_elements(value.split(LAYER_SEPARATOR).map(PathBuf::from)).map(Some)
+        Self::from_elements(value.split(LAYER_SEPARATOR).map(PathBuf::from))
+            .map(Some)
     }
 
     /// The layers, highest precedence first.
@@ -117,7 +122,9 @@ pub enum ConfigurationRootsError {
 impl Display for ConfigurationRootsError {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EmptyList => write!(formatter, "configuration layer list is empty"),
+            Self::EmptyList => {
+                write!(formatter, "configuration layer list is empty")
+            },
             // The search-path convention this design otherwise follows reads an
             // empty element as the working directory. Configuration selects
             // policies and identities, so reading a layer from wherever a

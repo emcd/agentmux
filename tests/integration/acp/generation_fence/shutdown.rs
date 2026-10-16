@@ -47,13 +47,16 @@ use super::*;
 fn graceful_shutdown_resolves_a_parked_member_and_a_held_one_exactly_once() {
     let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let options = AcpStubOptions {
         stop_reading_stdin_after_new: true,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     configure_delivery(DeliveryConfiguration {
@@ -83,8 +86,9 @@ fn graceful_shutdown_resolves_a_parked_member_and_a_held_one_exactly_once() {
     );
     assert_eq!(held.outcome, SendOutcome::Queued);
 
-    let _signal_guard = agentmux::runtime::signals::install_shutdown_signal_handlers()
-        .expect("install shutdown signal handlers");
+    let _signal_guard =
+        agentmux::runtime::signals::install_shutdown_signal_handlers()
+            .expect("install shutdown signal handlers");
     let self_pid = i32::try_from(std::process::id()).expect("pid fits i32");
     assert_eq!(
         unsafe { libc::kill(self_pid, libc::SIGTERM) },
@@ -92,7 +96,8 @@ fn graceful_shutdown_resolves_a_parked_member_and_a_held_one_exactly_once() {
         "failed to signal this process"
     );
 
-    let parked_outcome = await_outcome(&inscriptions, parked.message_id.as_str());
+    let parked_outcome =
+        await_outcome(&inscriptions, parked.message_id.as_str());
     let held_outcome = await_outcome(&inscriptions, held.message_id.as_str());
 
     assert_eq!(
@@ -153,16 +158,20 @@ fn graceful_shutdown_resolves_a_parked_member_and_a_held_one_exactly_once() {
 /// member, which no fixture in this arc currently constructs.
 
 #[test]
-fn a_generation_replaced_under_an_in_flight_member_resolves_it_once_and_frees_the_target() {
+fn a_generation_replaced_under_an_in_flight_member_resolves_it_once_and_frees_the_target()
+ {
     let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let options = AcpStubOptions {
         stop_reading_stdin_after_new: true,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     // Far enough out that the quota probe below lands while the member is still
@@ -190,8 +199,9 @@ fn a_generation_replaced_under_an_in_flight_member_resolves_it_once_and_frees_th
     );
 
     // The slot is genuinely held while the member is in flight.
-    let refused = dispatch_send_without_startup_result(&config_root, &tmux_socket)
-        .expect_err("a per-target quota of one must refuse a second send");
+    let refused =
+        dispatch_send_without_startup_result(&config_root, &tmux_socket)
+            .expect_err("a per-target quota of one must refuse a second send");
     assert_eq!(refused.code, "runtime_delivery_queue_full");
 
     await_inscription(
@@ -213,7 +223,8 @@ fn a_generation_replaced_under_an_in_flight_member_resolves_it_once_and_frees_th
     // generation in place and its bootstrap starts a second agent.
     await_recorded_agents(&pid_path, "bravo", first_agents.len() + 1);
 
-    let parked_outcome = await_outcome(&inscriptions, parked.message_id.as_str());
+    let parked_outcome =
+        await_outcome(&inscriptions, parked.message_id.as_str());
     assert_eq!(
         completions_for(&inscriptions, parked.message_id.as_str()),
         1,
@@ -267,16 +278,20 @@ fn a_generation_replaced_under_an_in_flight_member_resolves_it_once_and_frees_th
 /// refusal, which is the opposite fixture.
 
 #[test]
-fn a_pending_member_survives_a_generation_replacement_and_the_new_one_delivers_it() {
+fn a_pending_member_survives_a_generation_replacement_and_the_new_one_delivers_it()
+ {
     let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let options = AcpStubOptions {
         stop_reading_stdin_after_new: true,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     configure_delivery(DeliveryConfiguration {

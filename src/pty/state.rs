@@ -9,7 +9,9 @@ use std::sync::{Arc, atomic::AtomicBool};
 use regex::Regex;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::transports::{LookMode, LookSnapshotPayload, OutputView, TransportError};
+use crate::transports::{
+    LookMode, LookSnapshotPayload, OutputView, TransportError,
+};
 
 /// Default pty look window applied when the caller omits a window size.
 pub const LOOK_LINES_DEFAULT: usize = 120;
@@ -72,7 +74,10 @@ impl PtyOutputView {
     /// `mpsc::Sender::send().await` and the response awaited, so the calling
     /// tokio worker thread is never blocked. This is the off-runtime path the
     /// transport-contracts spec requires.
-    pub async fn look_async(&self, mode: LookMode) -> Result<LookSnapshotPayload, TransportError> {
+    pub async fn look_async(
+        &self,
+        mode: LookMode,
+    ) -> Result<LookSnapshotPayload, TransportError> {
         let (tx, rx) = oneshot::channel();
         self.shared
             .snapshot_tx
@@ -83,12 +88,14 @@ impl PtyOutputView {
             .await
             .map_err(|_request| TransportError {
                 code: "internal_unexpected_failure".to_string(),
-                reason: "pty snapshot channel closed; transport not running".to_string(),
+                reason: "pty snapshot channel closed; transport not running"
+                    .to_string(),
                 details: None,
             })?;
         let response = rx.await.map_err(|_canceled| TransportError {
             code: "internal_unexpected_failure".to_string(),
-            reason: "pty snapshot response canceled before delivery".to_string(),
+            reason: "pty snapshot response canceled before delivery"
+                .to_string(),
             details: None,
         })?;
         let requested_lines = mode
@@ -110,7 +117,10 @@ impl PtyOutputView {
 }
 
 impl OutputView for PtyOutputView {
-    fn look(&self, _mode: LookMode) -> Result<LookSnapshotPayload, TransportError> {
+    fn look(
+        &self,
+        _mode: LookMode,
+    ) -> Result<LookSnapshotPayload, TransportError> {
         // `PtyOutputView::look` is currently unreachable via the relay's look
         // handler — `get_output_view` at `registry.rs:582` returns `None` for
         // `TargetConfiguration::Pty` unconditionally, so `look.rs:320` never
@@ -141,7 +151,10 @@ impl OutputView for PtyOutputView {
 /// the two is what lets the predicate be exercised against a snapshot the test
 /// wrote itself, without a live terminal behind it.
 #[must_use]
-pub fn prompt_satisfied(config: &PtyConfigSnapshot, snapshot: &SnapshotResponse) -> bool {
+pub fn prompt_satisfied(
+    config: &PtyConfigSnapshot,
+    snapshot: &SnapshotResponse,
+) -> bool {
     let regex_matches = config
         .prompt_regex
         .as_ref()

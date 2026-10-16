@@ -1,7 +1,7 @@
 use agentmux::envelope::{
-    AddressIdentity, EnvelopeRenderInput, PromptBatchSettings, TokenizerProfile,
-    batch_envelope_groups, parse_address, parse_envelope, parse_tokenizer_profile, render_address,
-    render_envelope,
+    AddressIdentity, EnvelopeRenderInput, PromptBatchSettings,
+    TokenizerProfile, batch_envelope_groups, parse_address, parse_envelope,
+    parse_tokenizer_profile, render_address, render_envelope,
 };
 
 fn sample_render_input() -> EnvelopeRenderInput {
@@ -114,7 +114,8 @@ Content-Type: text/plain; charset=utf-8
 
 hello
 ";
-    let error = parse_envelope(malformed).expect_err("missing boundary should fail");
+    let error =
+        parse_envelope(malformed).expect_err("missing boundary should fail");
     assert!(error.to_string().contains("boundary marker"));
 }
 
@@ -133,7 +134,8 @@ Content-Type: text/plain; charset=utf-8
 hello
 --agentmux-different--
 ";
-    let error = parse_envelope(malformed).expect_err("boundary mismatch should fail");
+    let error =
+        parse_envelope(malformed).expect_err("boundary mismatch should fail");
     assert!(error.to_string().contains("Message-Id-derived boundary"));
 }
 
@@ -152,12 +154,14 @@ Content-Type: application/json
 {\"hello\":\"world\"}
 --agentmux-msg1--
 ";
-    let error = parse_envelope(malformed).expect_err("missing text/plain should fail");
+    let error =
+        parse_envelope(malformed).expect_err("missing text/plain should fail");
     assert!(error.to_string().contains("text/plain"));
 }
 
 #[test]
-fn parser_accepts_reserved_path_pointer_part_and_ignores_it_for_body_selection() {
+fn parser_accepts_reserved_path_pointer_part_and_ignores_it_for_body_selection()
+ {
     let envelope = "\
 --agentmux-msg1
 Message-Id: msg-1
@@ -176,7 +180,8 @@ Content-Type: text/plain; charset=utf-8
 hello
 --agentmux-msg1--
 ";
-    let parsed = parse_envelope(envelope).expect("reserved part envelope should parse");
+    let parsed =
+        parse_envelope(envelope).expect("reserved part envelope should parse");
     assert_eq!(parsed.text_body, "hello");
     assert_eq!(parsed.reserved_path_pointer_parts.len(), 1);
     assert_eq!(parsed.message_id, "msg-1");
@@ -222,7 +227,8 @@ fn batch_envelope_groups_splits_on_budget_and_reports_member_counts() {
     );
     assert_eq!(split.len(), 3);
     assert!(split.iter().all(|group| group.member_count == 1));
-    let prompts: Vec<&str> = split.iter().map(|g| g.combined_prompt.as_str()).collect();
+    let prompts: Vec<&str> =
+        split.iter().map(|g| g.combined_prompt.as_str()).collect();
     assert_eq!(prompts, ["alpha one", "bravo two", "charlie three"]);
 
     // An intermediate budget that fits exactly two envelopes produces a 2-member

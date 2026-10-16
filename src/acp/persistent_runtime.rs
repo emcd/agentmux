@@ -19,17 +19,23 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use crate::configuration::{AcpChannel, AcpTargetConfiguration, BundleMember, TargetConfiguration};
+use crate::configuration::{
+    AcpChannel, AcpTargetConfiguration, BundleMember, TargetConfiguration,
+};
 
 use super::client::{AcpGenerationHandle, AcpStdioClient};
 
 /// Bootstrap initialize failure; surfaced to the worker's respawn classifier.
-pub const ACP_ERROR_CODE_INITIALIZE_FAILED: &str = "runtime_acp_initialize_failed";
-const ACP_ERROR_CODE_SESSION_LOAD_FAILED: &str = "runtime_acp_session_load_failed";
-const ACP_ERROR_CODE_SESSION_NEW_FAILED: &str = "runtime_acp_session_new_failed";
+pub const ACP_ERROR_CODE_INITIALIZE_FAILED: &str =
+    "runtime_acp_initialize_failed";
+const ACP_ERROR_CODE_SESSION_LOAD_FAILED: &str =
+    "runtime_acp_session_load_failed";
+const ACP_ERROR_CODE_SESSION_NEW_FAILED: &str =
+    "runtime_acp_session_new_failed";
 /// Capability-gap detected at bootstrap; failures with this code are
 /// permanent (respawn cannot resolve a missing capability).
-const ACP_ERROR_CODE_MISSING_CAPABILITY: &str = "validation_missing_acp_capability";
+const ACP_ERROR_CODE_MISSING_CAPABILITY: &str =
+    "validation_missing_acp_capability";
 /// Spawn failure that is a property of the configured command, not of the
 /// moment: the binary does not exist, or exists but exec is denied. Retrying
 /// with the same command reproduces the failure, so respawn cannot resolve it.
@@ -99,10 +105,12 @@ pub fn bootstrap_acp_worker_runtime(
             reason: "ACP worker bootstrap requires ACP target".to_string(),
         });
     };
-    let Some(working_directory) = target_member.working_directory.as_ref() else {
+    let Some(working_directory) = target_member.working_directory.as_ref()
+    else {
         return Err(AcpBootstrapError {
             code: "runtime_startup_failed".to_string(),
-            reason: "ACP worker bootstrap requires target working directory".to_string(),
+            reason: "ACP worker bootstrap requires target working directory"
+                .to_string(),
         });
     };
     initialize_persistent_acp_worker_runtime(
@@ -143,7 +151,7 @@ fn initialize_persistent_acp_worker_runtime(
                 let code = match error.kind() {
                     ErrorKind::NotFound | ErrorKind::PermissionDenied => {
                         ACP_ERROR_CODE_SPAWN_PERMANENT
-                    }
+                    },
                     // Everything else — including ETXTBSY that outlived its
                     // spawn-site retries — is a property of the moment, not of
                     // the command, so the respawn loop may retry it.
@@ -154,13 +162,13 @@ fn initialize_persistent_acp_worker_runtime(
                     reason: format!("spawn ACP stdio command failed: {error}"),
                 }
             })?
-        }
+        },
         AcpChannel::Http => {
             return Err(AcpBootstrapError {
                 code: "runtime_startup_failed".to_string(),
                 reason: "ACP http transport is not implemented".to_string(),
             });
-        }
+        },
     };
 
     // Published before the first request, not after the handshake: `initialize`
@@ -168,10 +176,11 @@ fn initialize_persistent_acp_worker_runtime(
     // one no fence can end.
     publish_generation(client.generation_handle());
 
-    let initialize_result = client.initialize().map_err(|reason| AcpBootstrapError {
-        code: ACP_ERROR_CODE_INITIALIZE_FAILED.to_string(),
-        reason: format!("ACP initialize failed: {reason}"),
-    })?;
+    let initialize_result =
+        client.initialize().map_err(|reason| AcpBootstrapError {
+            code: ACP_ERROR_CODE_INITIALIZE_FAILED.to_string(),
+            reason: format!("ACP initialize failed: {reason}"),
+        })?;
 
     let capabilities = AcpCapabilities {
         load_session: initialize_result
@@ -197,11 +206,16 @@ fn initialize_persistent_acp_worker_runtime(
     let persisted_session_id = if target_member.coder_session_id.is_some() {
         None
     } else {
-        super::state::load_persisted_acp_session_id(runtime_directory, target_member.id.as_str())
-            .map_err(|reason| AcpBootstrapError {
-                code: "runtime_startup_failed".to_string(),
-                reason: format!("failed to load persisted ACP session id: {reason}"),
-            })?
+        super::state::load_persisted_acp_session_id(
+            runtime_directory,
+            target_member.id.as_str(),
+        )
+        .map_err(|reason| AcpBootstrapError {
+            code: "runtime_startup_failed".to_string(),
+            reason: format!(
+                "failed to load persisted ACP session id: {reason}"
+            ),
+        })?
     };
 
     let (lifecycle, lifecycle_session_id) =
@@ -218,7 +232,9 @@ fn initialize_persistent_acp_worker_runtime(
             if !capabilities.load_session {
                 return Err(AcpBootstrapError {
                     code: ACP_ERROR_CODE_MISSING_CAPABILITY.to_string(),
-                    reason: "ACP agent does not advertise required load capability".to_string(),
+                    reason:
+                        "ACP agent does not advertise required load capability"
+                            .to_string(),
                 });
             }
             client
@@ -228,15 +244,13 @@ fn initialize_persistent_acp_worker_runtime(
                     reason: format!("ACP session/load failed: {reason}"),
                 })?;
             lifecycle_session_id
-        }
-        AcpLifecycleSelection::NewSession => {
-            client
-                .new_session(working_directory)
-                .map_err(|reason| AcpBootstrapError {
-                    code: ACP_ERROR_CODE_SESSION_NEW_FAILED.to_string(),
-                    reason: format!("ACP session/new failed: {reason}"),
-                })?
-        }
+        },
+        AcpLifecycleSelection::NewSession => client
+            .new_session(working_directory)
+            .map_err(|reason| AcpBootstrapError {
+                code: ACP_ERROR_CODE_SESSION_NEW_FAILED.to_string(),
+                reason: format!("ACP session/new failed: {reason}"),
+            })?,
     };
 
     super::state::persist_acp_session_id(
@@ -252,7 +266,8 @@ fn initialize_persistent_acp_worker_runtime(
     if !capabilities.prompt_session {
         return Err(AcpBootstrapError {
             code: ACP_ERROR_CODE_MISSING_CAPABILITY.to_string(),
-            reason: "ACP agent does not advertise required prompt capability".to_string(),
+            reason: "ACP agent does not advertise required prompt capability"
+                .to_string(),
         });
     }
 

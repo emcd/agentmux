@@ -7,9 +7,11 @@ fn choice_decision_rejects_submitter_without_choose_capability() {
     // resolves to the default policy, which omits `choose`.
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_non_choose";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let (mut client_stream, join_handle) =
         spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
@@ -64,10 +66,12 @@ fn choice_decision_rejects_submitter_without_choose_capability() {
 fn choice_decision_denial_uses_choose_capability() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_choose_capability";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let (mut client_stream, join_handle) =
         spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
@@ -119,10 +123,12 @@ fn choice_decision_denial_uses_choose_capability() {
 fn choice_decision_rejects_empty_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_empty_option";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let (mut client_stream, join_handle) =
         spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
@@ -175,10 +181,12 @@ fn choice_decision_rejects_empty_option_id() {
 fn choice_decision_rejects_selected_without_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_selected_missing_option";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let (mut client_stream, join_handle) =
         spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
@@ -230,10 +238,12 @@ fn choice_decision_rejects_selected_without_option_id() {
 fn choice_decision_rejects_cancelled_with_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_cancelled_with_option";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let (mut client_stream, join_handle) =
         spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
@@ -286,11 +296,13 @@ fn choice_decision_rejects_cancelled_with_option_id() {
 fn choices_snapshot_then_replay_carries_option_metadata() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_snapshot_options";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     write_policies_with_choose(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     seed_choices_queue_with_options(
         &bundle_paths.runtime_directory,
         &[("perm-aaa", "allow-once"), ("perm-bbb", "allow-once")],
@@ -349,11 +361,13 @@ fn choices_snapshot_then_replay_carries_option_metadata() {
 fn choice_request_persists_across_authorized_ui_reconnect() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_persists";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     write_policies_with_choose(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     seed_choices_queue(
         &bundle_paths.runtime_directory,
         "perm-persistent",
@@ -374,9 +388,11 @@ fn choice_request_persists_across_authorized_ui_reconnect() {
     send_json(&mut first_client, hello_frame.clone());
     let ack = read_json(&mut first_reader);
     assert_eq!(ack["frame"], "hello_ack");
-    let snapshot = read_until_event_type(&mut first_reader, "choices.snapshot");
+    let snapshot =
+        read_until_event_type(&mut first_reader, "choices.snapshot");
     assert_eq!(snapshot["event"]["payload"]["pending_count"], 1);
-    let requested = read_until_event_type(&mut first_reader, "choices.requested");
+    let requested =
+        read_until_event_type(&mut first_reader, "choices.requested");
     assert_eq!(
         requested["event"]["payload"]["choice_request_id"],
         "perm-persistent"
@@ -393,9 +409,11 @@ fn choice_request_persists_across_authorized_ui_reconnect() {
     send_json(&mut second_client, hello_frame);
     let ack = read_json(&mut second_reader);
     assert_eq!(ack["frame"], "hello_ack");
-    let snapshot = read_until_event_type(&mut second_reader, "choices.snapshot");
+    let snapshot =
+        read_until_event_type(&mut second_reader, "choices.snapshot");
     assert_eq!(snapshot["event"]["payload"]["pending_count"], 1);
-    let requested = read_until_event_type(&mut second_reader, "choices.requested");
+    let requested =
+        read_until_event_type(&mut second_reader, "choices.requested");
     assert_eq!(
         requested["event"]["payload"]["choice_request_id"],
         "perm-persistent"
@@ -409,11 +427,13 @@ fn choice_request_persists_across_authorized_ui_reconnect() {
 fn choices_pick_selected_emits_resolved_event_with_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_selected_emit";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     write_policies_with_choose(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     seed_choices_queue(
         &bundle_paths.runtime_directory,
         "perm-selected",
@@ -480,11 +500,13 @@ fn choices_pick_selected_emits_resolved_event_with_option_id() {
 fn choices_pick_cancelled_emits_resolved_event_with_reason_code() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_cancelled_emit";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     write_policies_with_choose(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     seed_choices_queue(
         &bundle_paths.runtime_directory,
         "perm-cancelled",
@@ -548,7 +570,8 @@ fn choices_pick_cancelled_emits_resolved_event_with_reason_code() {
 fn choices_pending_max_out_of_range_is_rejected() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choices_pending_max_invalid";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     write_policies_with_choose(&configuration_roots, "home");
     std::fs::write(
@@ -560,7 +583,8 @@ pending-max = 10000
     )
     .expect("write relay configuration");
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let (mut client_stream, join_handle) =
         spawn_relay_connection(&configuration_roots, &bundle_paths);
@@ -600,11 +624,13 @@ pending-max = 10000
 fn choices_pick_selected_rejects_unknown_option_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_unknown_option";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     write_policies_with_choose(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     seed_choices_queue(
         &bundle_paths.runtime_directory,
         "perm-unknown-option",

@@ -14,7 +14,8 @@ use std::{
 use tempfile::TempDir;
 
 use super::startup_config::{
-    write_all_acp_failure_bundle, write_bundle_configuration_with_tmux_and_acp_failure,
+    write_all_acp_failure_bundle,
+    write_bundle_configuration_with_tmux_and_acp_failure,
 };
 use super::*;
 
@@ -107,7 +108,10 @@ fn host_relay_autostart_summary_reports_a_partial_startup_as_degraded() {
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
     // One tmux member reaches ready state; one ACP member cannot be spawned.
-    write_bundle_configuration_with_tmux_and_acp_failure(&config_root, "alpha");
+    write_bundle_configuration_with_tmux_and_acp_failure(
+        &config_root,
+        "alpha",
+    );
     write_tui_configuration(
         &config_root,
         Some("alpha"),
@@ -169,7 +173,9 @@ fn host_relay_autostart_summary_reports_a_partial_startup_as_degraded() {
     );
     let failed_sessions = alpha["details"]["failed_sessions"]
         .as_array()
-        .unwrap_or_else(|| panic!("expected failed_sessions detail: {summary_json}"));
+        .unwrap_or_else(|| {
+            panic!("expected failed_sessions detail: {summary_json}")
+        });
     assert!(
         failed_sessions
             .iter()
@@ -241,7 +247,8 @@ fn host_relay_autostart_summary_folds_failed_session_reasons() {
     // replaced with the real per-session cause folded from the startup report.
     let reason = alpha["reason"].as_str().expect("failed reason string");
     assert!(
-        reason.contains("bravo") && reason.contains("spawn ACP stdio command failed"),
+        reason.contains("bravo")
+            && reason.contains("spawn ACP stdio command failed"),
         "summary reason should name the failed session and its cause: {summary_json}"
     );
     let failed_sessions = alpha["details"]["failed_sessions"]
@@ -250,9 +257,9 @@ fn host_relay_autostart_summary_folds_failed_session_reasons() {
     assert!(
         failed_sessions.iter().any(|entry| {
             entry["session_id"] == "bravo"
-                && entry["reason"]
-                    .as_str()
-                    .is_some_and(|reason| reason.contains("spawn ACP stdio command failed"))
+                && entry["reason"].as_str().is_some_and(|reason| {
+                    reason.contains("spawn ACP stdio command failed")
+                })
         }),
         "failed_sessions should carry the structured bravo cause: {summary_json}"
     );

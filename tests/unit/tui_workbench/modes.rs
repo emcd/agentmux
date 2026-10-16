@@ -44,7 +44,10 @@ fn f4_preserves_per_mode_drafts_across_switches() {
         .expect("esc should close the auto-opened picker");
     for character in "echo".chars() {
         state
-            .dispatch_event(key_event(KeyCode::Char(character), KeyModifiers::NONE))
+            .dispatch_event(key_event(
+                KeyCode::Char(character),
+                KeyModifiers::NONE,
+            ))
             .expect("raww typing should be handled");
     }
     assert_eq!(state.raww_draft(), "echo");
@@ -76,7 +79,10 @@ fn interaction_mode_typing_updates_raww_draft() {
         .expect("esc should close the auto-opened picker");
     for character in "ls".chars() {
         state
-            .dispatch_event(key_event(KeyCode::Char(character), KeyModifiers::NONE))
+            .dispatch_event(key_event(
+                KeyCode::Char(character),
+                KeyModifiers::NONE,
+            ))
             .expect("raww typing should be handled");
     }
     assert_eq!(state.raww_draft(), "ls");
@@ -93,11 +99,12 @@ fn interaction_mode_enter_without_target_is_validation_error() {
     state
         .dispatch_event(key_event(KeyCode::Esc, KeyModifiers::NONE))
         .expect("esc should close the auto-opened picker");
-    let result = state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
+    let result =
+        state.dispatch_event(key_event(KeyCode::Enter, KeyModifiers::NONE));
     match result {
         Err(RuntimeError::Validation { code, .. }) => {
             assert_eq!(code, "validation_unknown_target")
-        }
+        },
         other => panic!("unexpected result: {other:?}"),
     }
 }
@@ -168,7 +175,10 @@ fn write_draft_cursor_position_survives_a_mode_round_trip() {
         .expect("esc closes the auto-opened picker");
     for character in "echo".chars() {
         state
-            .dispatch_event(key_event(KeyCode::Char(character), KeyModifiers::NONE))
+            .dispatch_event(key_event(
+                KeyCode::Char(character),
+                KeyModifiers::NONE,
+            ))
             .expect("raww typing should be handled");
     }
     // Move the Write cursor into the middle of the draft: "ec|ho".
@@ -206,18 +216,22 @@ fn reentering_interaction_with_a_target_refreshes_the_look_snapshot() {
     // With no relay reachable in tests the refresh surfaces the relay-unavailable
     // outcome, proving entry attempts a look instead of showing a buffer frozen
     // from a prior visit.
-    let result = state.dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE));
+    let result =
+        state.dispatch_event(key_event(KeyCode::F(4), KeyModifiers::NONE));
     match result {
-        Err(RuntimeError::Validation { code, .. }) => assert_eq!(code, "relay_unavailable"),
+        Err(RuntimeError::Validation { code, .. }) => {
+            assert_eq!(code, "relay_unavailable")
+        },
         Err(RuntimeError::Io { source, .. }) => {
             assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied)
-        }
+        },
         other => panic!("unexpected result: {other:?}"),
     }
 }
 
 #[test]
-fn entering_interaction_without_a_target_opens_picker_without_a_look_attempt() {
+fn entering_interaction_without_a_target_opens_picker_without_a_look_attempt()
+{
     let mut state = make_state();
     // With no target yet, F4 opens the picker to choose one and must not attempt
     // a look (no relay round trip, hence no error).

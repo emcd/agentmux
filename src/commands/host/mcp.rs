@@ -8,12 +8,13 @@ use crate::{
     runtime::{
         association::{
             AssociationSource, McpAssociationCli, McpAssociationEnvironment,
-            load_local_mcp_overrides, resolve_association, resolve_sender_session,
+            load_local_mcp_overrides, resolve_association,
+            resolve_sender_session,
         },
         error::RuntimeError,
         inscriptions::{
-            configure_process_inscriptions, emit_inscription, mcp_inscriptions_path,
-            mcp_unassociated_inscriptions_path,
+            configure_process_inscriptions, emit_inscription,
+            mcp_inscriptions_path, mcp_unassociated_inscriptions_path,
         },
         paths::{BundleRuntimePaths, RuntimeRoots},
         starter::ensure_starter_configuration_layout,
@@ -70,12 +71,16 @@ pub(super) async fn run_mcp_host(
                 prepared.associated_bundle_paths.as_ref(),
                 prepared.sender_session.as_deref(),
             ) {
-                (Some(bundle_paths), Some(session_name)) => mcp_inscriptions_path(
+                (Some(bundle_paths), Some(session_name)) => {
+                    mcp_inscriptions_path(
+                        &prepared.roots.inscriptions_root,
+                        bundle_paths.bundle_name.as_str(),
+                        session_name,
+                    )
+                },
+                _ => mcp_unassociated_inscriptions_path(
                     &prepared.roots.inscriptions_root,
-                    bundle_paths.bundle_name.as_str(),
-                    session_name,
                 ),
-                _ => mcp_unassociated_inscriptions_path(&prepared.roots.inscriptions_root),
             };
             // Inscriptions are diagnostics, not the protocol, so failing to open
             // them must not terminate the process. It is still a startup fault
@@ -85,7 +90,9 @@ pub(super) async fn run_mcp_host(
             // must not pass quietly. Stderr as well, never stdout, which carries
             // the protocol -- the sink that would otherwise record this is the
             // thing that just failed.
-            if let Err(source) = configure_process_inscriptions(&inscriptions_path) {
+            if let Err(source) =
+                configure_process_inscriptions(&inscriptions_path)
+            {
                 eprintln!("failed to configure MCP inscriptions: {source}");
                 // An earlier fault keeps precedence: it names the condition that
                 // came first, and this one would not have been reached without it.
@@ -107,7 +114,7 @@ pub(super) async fn run_mcp_host(
             };
             emit_startup_inscription(&configuration, &prepared.diagnostics);
             configuration
-        }
+        },
         Err(fault) => {
             // Faulted before any root resolved, so there is nowhere to inscribe.
             // A fault found *after* roots resolve takes the branch above, which
@@ -129,24 +136,33 @@ pub(super) async fn run_mcp_host(
                 },
             );
             configuration
-        }
+        },
     };
 
-    crate::mcp::run(configuration)
-        .await
-        .map_err(|source| RuntimeError::io("run MCP stdio service", std::io::Error::other(source)))
+    crate::mcp::run(configuration).await.map_err(|source| {
+        RuntimeError::io(
+            "run MCP stdio service",
+            std::io::Error::other(source),
+        )
+    })
 }
 
 /// Builds the operational context, or reports the fault which prevented one.
-fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpStartupFault> {
-    let current_directory = env::current_dir().map_err(|source| McpStartupFault {
-        code: "runtime_startup_failed".to_string(),
-        message: format!("cannot resolve current working directory: {source}"),
-    })?;
-    let roots = shared::resolve_roots(&arguments.runtime).map_err(to_startup_fault)?;
+fn prepare_runtime(
+    arguments: &McpHostArguments,
+) -> Result<PreparedRuntime, McpStartupFault> {
+    let current_directory =
+        env::current_dir().map_err(|source| McpStartupFault {
+            code: "runtime_startup_failed".to_string(),
+            message: format!(
+                "cannot resolve current working directory: {source}"
+            ),
+        })?;
+    let roots =
+        shared::resolve_roots(&arguments.runtime).map_err(to_startup_fault)?;
     ensure_starter_configuration_layout(&roots).map_err(to_startup_fault)?;
-    let local_overrides =
-        load_local_mcp_overrides(&roots.configuration_roots).map_err(to_startup_fault)?;
+    let local_overrides = load_local_mcp_overrides(&roots.configuration_roots)
+        .map_err(to_startup_fault)?;
 
     let candidates = resolve_association(
         &McpAssociationCli {
@@ -158,7 +174,8 @@ fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpS
         arguments.default_bundle.as_deref(),
     );
 
-    let bundle_source = candidates.bundle.as_ref().map(|candidate| candidate.source);
+    let bundle_source =
+        candidates.bundle.as_ref().map(|candidate| candidate.source);
     let unassociated = |roots, reason: String| PreparedRuntime {
         roots,
         associated_bundle_paths: None,
@@ -191,13 +208,15 @@ fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpS
 
     // The bundle was named by some tier, so failing to load it is a mistake to
     // repair rather than a configuration to accept.
-    let bundle =
-        match load_bundle_configuration(&roots.configuration_roots, &bundle_candidate.value)
-            .map_err(shared::map_bundle_load_error)
-        {
-            Ok(bundle) => bundle,
-            Err(source) => return Ok(retained(roots, source)),
-        };
+    let bundle = match load_bundle_configuration(
+        &roots.configuration_roots,
+        &bundle_candidate.value,
+    )
+    .map_err(shared::map_bundle_load_error)
+    {
+        Ok(bundle) => bundle,
+        Err(source) => return Ok(retained(roots, source)),
+    };
 
     // With no candidate, the session falls to matching the working directory
     // against the member directories the bundle file already declares. A
@@ -223,7 +242,7 @@ fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpS
                     bundle_candidate.value
                 ),
             ));
-        }
+        },
         Err(source) => return Ok(retained(roots, source)),
     };
     let session_source = session_candidate
@@ -231,11 +250,13 @@ fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpS
             candidate.source
         });
 
-    let associated_bundle_paths =
-        match BundleRuntimePaths::resolve(&roots.state_root, &bundle_candidate.value) {
-            Ok(paths) => paths,
-            Err(source) => return Ok(retained(roots, source)),
-        };
+    let associated_bundle_paths = match BundleRuntimePaths::resolve(
+        &roots.state_root,
+        &bundle_candidate.value,
+    ) {
+        Ok(paths) => paths,
+        Err(source) => return Ok(retained(roots, source)),
+    };
 
     Ok(PreparedRuntime {
         roots,
@@ -255,8 +276,12 @@ fn prepare_runtime(arguments: &McpHostArguments) -> Result<PreparedRuntime, McpS
 fn to_startup_fault(source: RuntimeError) -> McpStartupFault {
     let code = match &source {
         RuntimeError::Validation { code, .. } => code.clone(),
-        RuntimeError::InvalidArgument { .. } => "validation_invalid_arguments".to_string(),
-        RuntimeError::SecurityForeignOwned { .. } => "runtime_security_foreign_owned".to_string(),
+        RuntimeError::InvalidArgument { .. } => {
+            "validation_invalid_arguments".to_string()
+        },
+        RuntimeError::SecurityForeignOwned { .. } => {
+            "runtime_security_foreign_owned".to_string()
+        },
         _ => "runtime_startup_failed".to_string(),
     };
     McpStartupFault {
@@ -265,7 +290,10 @@ fn to_startup_fault(source: RuntimeError) -> McpStartupFault {
     }
 }
 
-fn emit_startup_inscription(configuration: &McpConfiguration, diagnostics: &StartupDiagnostics) {
+fn emit_startup_inscription(
+    configuration: &McpConfiguration,
+    diagnostics: &StartupDiagnostics,
+) {
     let startup_fault = diagnostics.startup_fault.as_ref();
     emit_inscription(
         "mcp.startup",

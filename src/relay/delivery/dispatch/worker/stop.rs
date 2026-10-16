@@ -8,20 +8,26 @@ use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::protocol::identity::{ConsumerBinding, DeliveryTargetId};
-use crate::relay::delivery::admission::{ResolvedMember, reap_target, resolve_target_entries};
+use crate::relay::delivery::admission::{
+    ResolvedMember, reap_target, resolve_target_entries,
+};
 use crate::relay::{AsyncDeliveryTask, RelayError, SendOutcome, SendResult};
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::signals::budget_within_shutdown;
 use crate::transports::TransportImpl;
 
 use super::super::super::async_worker::{
-    AsyncWorkerKey, WorkerOwner, report_resolved_member, report_resolved_outcome,
+    AsyncWorkerKey, WorkerOwner, report_resolved_member,
+    report_resolved_outcome,
 };
-use super::super::super::fence::{FenceInProgress, FenceOutcome, FenceResolution, FenceVerdict};
+use super::super::super::fence::{
+    FenceInProgress, FenceOutcome, FenceResolution, FenceVerdict,
+};
 use super::super::super::guard::GuardTrigger;
 use super::spawn::{ASYNC_WORKER_POLL_INTERVAL_MS, SHUTDOWN_FENCE_RESERVE_MS};
 
-const DROPPED_ON_SHUTDOWN_REASON: &str = "relay shutdown requested before delivery";
+const DROPPED_ON_SHUTDOWN_REASON: &str =
+    "relay shutdown requested before delivery";
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 
 /// Reports an undeclared entry the relay shut down before anything wrote it.
@@ -99,7 +105,10 @@ pub(super) fn resolve_queued_tasks_and_reclaim(
     error: &RelayError,
 ) {
     while let Ok(task) = receiver.try_recv() {
-        super::super::super::async_worker::complete_task_outcome(&task, Err(error.clone()));
+        super::super::super::async_worker::complete_task_outcome(
+            &task,
+            Err(error.clone()),
+        );
         super::super::super::async_worker::release_pending_slot(pending);
     }
     reap_target(
@@ -118,7 +127,11 @@ pub(super) fn resolve_queued_tasks_and_reclaim(
 /// Shared by graceful shutdown and the execution watchdog because the fence is
 /// one protocol with one vocabulary: an operator reading these should be able to
 /// compare a shutdown verdict against a watchdog verdict without translating.
-pub(super) fn emit_fence_verdict(key: &AsyncWorkerKey, trigger: &str, outcome: FenceOutcome) {
+pub(super) fn emit_fence_verdict(
+    key: &AsyncWorkerKey,
+    trigger: &str,
+    outcome: FenceOutcome,
+) {
     emit_inscription(
         "relay.delivery.fence.verdict",
         &json!({
@@ -149,7 +162,10 @@ pub(super) fn emit_fence_verdict(key: &AsyncWorkerKey, trigger: &str, outcome: F
 ///
 /// Members already resolved are not reported twice: the terminal transition is
 /// contested, and only what this call wins comes back.
-pub(super) fn abandon_target(binding: &ConsumerBinding, trigger: GuardTrigger) {
+pub(super) fn abandon_target(
+    binding: &ConsumerBinding,
+    trigger: GuardTrigger,
+) {
     for member in &resolve_target_entries(binding) {
         report_resolved_member(member, None, Some(trigger.reason()));
     }
@@ -168,7 +184,11 @@ pub(super) fn abandon_target(binding: &ConsumerBinding, trigger: GuardTrigger) {
 fn resolve_mailbox_at_stop(binding: &ConsumerBinding, cause: StopCause) {
     for member in &resolve_target_entries(binding) {
         if member.declared || cause != StopCause::Shutdown {
-            report_resolved_member(member, None, Some(cause.guard_trigger().reason()));
+            report_resolved_member(
+                member,
+                None,
+                Some(cause.guard_trigger().reason()),
+            );
         } else {
             complete_resolved_on_shutdown(member);
         }
@@ -329,10 +349,13 @@ mod reclaim_after_drain_tests {
     use std::sync::Arc;
 
     use crate::configuration::{
-        BUNDLE_SCHEMA_VERSION, BundleConfiguration, BundleMember, SessionType, TargetConfiguration,
+        BUNDLE_SCHEMA_VERSION, BundleConfiguration, BundleMember, SessionType,
+        TargetConfiguration,
     };
     use crate::protocol::mailbox::MailboxPayload;
-    use crate::relay::delivery::admission::{AdmissionTargetKey, TargetReap, admit, enqueue};
+    use crate::relay::delivery::admission::{
+        AdmissionTargetKey, TargetReap, admit, enqueue,
+    };
     use crate::transports::DeliveryPayloadMode;
 
     use super::*;
@@ -343,8 +366,16 @@ mod reclaim_after_drain_tests {
     #[test]
     fn draining_a_queue_the_reap_had_to_keep_lets_the_retry_reclaim_it() {
         let runtime_directory = PathBuf::from("/nonexistent").join(NAMESPACE);
-        let admission = AdmissionTargetKey::new(NAMESPACE, runtime_directory.as_path(), TARGET);
-        let target = DeliveryTargetId::new(NAMESPACE, runtime_directory.as_path(), TARGET);
+        let admission = AdmissionTargetKey::new(
+            NAMESPACE,
+            runtime_directory.as_path(),
+            TARGET,
+        );
+        let target = DeliveryTargetId::new(
+            NAMESPACE,
+            runtime_directory.as_path(),
+            TARGET,
+        );
         let raw = || MailboxPayload::Raw {
             content: "body".to_string(),
             append_enter: true,
@@ -384,7 +415,11 @@ mod reclaim_after_drain_tests {
             .expect("the receiver is live");
         drop(sender);
         let pending = std::sync::atomic::AtomicUsize::new(1);
-        let error = crate::relay::relay_error("transport_unavailable", "no transport", None);
+        let error = crate::relay::relay_error(
+            "transport_unavailable",
+            "no transport",
+            None,
+        );
         resolve_queued_tasks_and_reclaim(
             &AsyncWorkerKey {
                 runtime_directory: runtime_directory.clone(),
@@ -399,7 +434,8 @@ mod reclaim_after_drain_tests {
         // The numbering is the discriminating observation, not emptiness. Had the
         // mailbox survived the retry, this entry would be position two in a
         // mailbox belonging to a target that no longer has a worker.
-        admit("reclaim-after-drain-2", admission, SessionType::Tmux, 1).expect("admit");
+        admit("reclaim-after-drain-2", admission, SessionType::Tmux, 1)
+            .expect("admit");
         assert_eq!(
             enqueue(
                 &Arc::new(queued_task(
@@ -415,7 +451,10 @@ mod reclaim_after_drain_tests {
         );
     }
 
-    fn queued_task(runtime_directory: &Path, message_id: &str) -> AsyncDeliveryTask {
+    fn queued_task(
+        runtime_directory: &Path,
+        message_id: &str,
+    ) -> AsyncDeliveryTask {
         AsyncDeliveryTask {
             admitted: true,
             bundle: BundleConfiguration {

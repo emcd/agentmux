@@ -9,22 +9,26 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agentmux::configuration::{BundleMember, TargetConfiguration, TmuxTargetConfiguration};
+use agentmux::configuration::{
+    BundleMember, TargetConfiguration, TmuxTargetConfiguration,
+};
 use agentmux::envelope::{AddressIdentity, PromptBatchSettings};
 use agentmux::protocol::DeliveryDoorbell;
-use agentmux::protocol::mailbox::{EntrySequence, MailboxEntry, MailboxPayload};
+use agentmux::protocol::mailbox::{
+    EntrySequence, MailboxEntry, MailboxPayload,
+};
 use agentmux::runtime::paths::tmux_socket_path_for_runtime_directory;
 use agentmux::tmux::TmuxTransport;
 use agentmux::transports::{
-    ChoiceMade, DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage, GenerationFence,
-    StartupContext, Transport,
+    ChoiceMade, DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage,
+    GenerationFence, StartupContext, Transport,
 };
 use tempfile::TempDir;
 
 use crate::support::mailbox::StubMailbox;
 use crate::support::relay_delivery::{
-    TmuxServerGuard, capture_pane, spawn_session, tmux_available, tmux_command,
-    wait_for_pane_contains,
+    TmuxServerGuard, capture_pane, spawn_session, tmux_available,
+    tmux_command, wait_for_pane_contains,
 };
 
 fn tmux_member(session: &str) -> BundleMember {
@@ -106,7 +110,9 @@ fn mailbox_entry(body: &str) -> MailboxEntry {
 #[test]
 fn terminating_a_tmux_generation_leaves_the_server_and_its_sessions_running() {
     if !tmux_available() {
-        eprintln!("skipping tmux generation-fence test because tmux is unavailable");
+        eprintln!(
+            "skipping tmux generation-fence test because tmux is unavailable"
+        );
         return;
     }
 
@@ -178,7 +184,8 @@ fn terminating_a_tmux_generation_leaves_the_server_and_its_sessions_running() {
     GenerationFence::fence_generation(&mut transport);
     GenerationFence::terminate_generation(&mut transport);
 
-    let sessions = tmux_command(&socket, &["list-sessions", "-F", "#{session_name}"]);
+    let sessions =
+        tmux_command(&socket, &["list-sessions", "-F", "#{session_name}"]);
     assert!(
         sessions.status.success(),
         "the tmux server must survive the fence: {}",

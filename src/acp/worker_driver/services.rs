@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::transports::{Chooser, OutputView, WorkerFailureReason, WorkerReadinessState};
+use crate::transports::{
+    Chooser, OutputView, WorkerFailureReason, WorkerReadinessState,
+};
 
 /// Mirrors the worker readiness state into the relay's global registry.
 pub type MirrorStateFn = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
@@ -11,7 +13,8 @@ pub type MirrorStateFn = Arc<dyn Fn(WorkerReadinessState) + Send + Sync>;
 /// `Unavailable` readiness state.
 pub type RecordFailureFn = Arc<dyn Fn(WorkerFailureReason) + Send + Sync>;
 /// Publishes the transport's `look` [`OutputView`] handle into the relay registry.
-pub type PublishOutputFn = Arc<dyn Fn(Option<Arc<dyn OutputView>>) + Send + Sync>;
+pub type PublishOutputFn =
+    Arc<dyn Fn(Option<Arc<dyn OutputView>>) + Send + Sync>;
 /// Broadcasts an ACP respawn stream event (`event_type`, `payload`) to the bundle UI.
 pub type BroadcastUiFn = Arc<dyn Fn(&str, Value) + Send + Sync>;
 /// Invalidates the target's pending operator choices before a respawn attempt.

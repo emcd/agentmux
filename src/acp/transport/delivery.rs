@@ -23,8 +23,8 @@ use crate::acp::client::AcpStdioClient;
 use crate::envelope::{PromptBatchSettings, batch_envelope_groups};
 use crate::protocol::mailbox::{MailboxEntry, MailboxPayload};
 use crate::transports::{
-    DeliveryWriter, PeekDimensions, PlannedWrite, SubmissionEvidence, TransportHealth,
-    UnreachableSince, WorkerReadinessState, receipt_runs,
+    DeliveryWriter, PeekDimensions, PlannedWrite, SubmissionEvidence,
+    TransportHealth, UnreachableSince, WorkerReadinessState, receipt_runs,
 };
 
 use super::state::AcpSharedState;
@@ -71,7 +71,10 @@ impl AcpReachability {
     /// latch first recorded. A second latch here would restart that instant on
     /// every poll, and a dwell measured from a moving `since` never elapses.
     #[must_use]
-    pub fn new(abandoned: Arc<AtomicBool>, unreachable_since: Arc<UnreachableSince>) -> Self {
+    pub fn new(
+        abandoned: Arc<AtomicBool>,
+        unreachable_since: Arc<UnreachableSince>,
+    ) -> Self {
         Self {
             abandoned,
             unreachable_since,
@@ -180,12 +183,14 @@ impl AcpDeliveryWriter {
                     // to another.
                     self.outstanding_turn = None;
                     self.runtime = Some(*slot);
-                }
+                },
                 Ok(RuntimeInstall::Clear) => {
                     self.outstanding_turn = None;
                     self.runtime = None;
-                }
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => return,
+                },
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => {
+                    return;
+                },
             }
         }
     }
@@ -202,8 +207,10 @@ impl DeliveryWriter for AcpDeliveryWriter {
     type Plan = AcpTurn;
 
     fn peek_dimensions(&self) -> PeekDimensions {
-        PeekDimensions::for_session_type(crate::configuration::SessionType::Acp)
-            .expect("acp declares peek dimensions")
+        PeekDimensions::for_session_type(
+            crate::configuration::SessionType::Acp,
+        )
+        .expect("acp declares peek dimensions")
     }
 
     fn health(&self) -> TransportHealth {
@@ -242,7 +249,11 @@ impl DeliveryWriter for AcpDeliveryWriter {
                 chooser: &self.chooser,
                 target_session: self.target_session.as_str(),
             };
-            observation.observe(&mut runtime.client, &context, &self.respawn_needed_tx);
+            observation.observe(
+                &mut runtime.client,
+                &context,
+                &self.respawn_needed_tx,
+            );
         }
         // No runtime, no write — and no claim about the target either. This is
         // the respawn gap and the pre-bootstrap window, both of which leave
@@ -256,7 +267,10 @@ impl DeliveryWriter for AcpDeliveryWriter {
         self.is_available()
     }
 
-    fn plan(&mut self, entries: &[MailboxEntry]) -> Option<PlannedWrite<Self::Plan>> {
+    fn plan(
+        &mut self,
+        entries: &[MailboxEntry],
+    ) -> Option<PlannedWrite<Self::Plan>> {
         let head = entries.first()?;
         if let MailboxPayload::Raw { content, .. } = &head.payload {
             // Raw is submitted through the same `session/prompt` path as mail —
@@ -283,7 +297,9 @@ impl DeliveryWriter for AcpDeliveryWriter {
         let head_envelope = envelopes.first()?;
         let rendered: Vec<String> = envelopes
             .iter()
-            .map(|envelope| envelope.message.render_pane_envelope(&envelope.message_id))
+            .map(|envelope| {
+                envelope.message.render_pane_envelope(&envelope.message_id)
+            })
             .collect();
         // A receipt never rides with peer traffic; see `receipt_runs`.
         let first_run = *receipt_runs(
@@ -296,9 +312,10 @@ impl DeliveryWriter for AcpDeliveryWriter {
         // The first budget group of the first run. One unit at a time, because
         // the relay accepts one declared-and-unacked unit per target: a plan
         // spanning two groups could be declared neither as one nor as two.
-        let group = batch_envelope_groups(&rendered[..first_run], self.batch_settings)
-            .into_iter()
-            .next()?;
+        let group =
+            batch_envelope_groups(&rendered[..first_run], self.batch_settings)
+                .into_iter()
+                .next()?;
         Some(PlannedWrite {
             entry_count: group.member_count,
             rendered: AcpTurn {
@@ -306,19 +323,27 @@ impl DeliveryWriter for AcpDeliveryWriter {
                 // Taken from the head, as the correlation always was: a
                 // permission request belongs to the turn, and the turn is named
                 // by the member that opened it.
-                decider_sessions: head_envelope.choice_decider_sessions.clone(),
+                decider_sessions: head_envelope
+                    .choice_decider_sessions
+                    .clone(),
                 head_message_id: head_envelope.message_id.clone(),
             },
         })
     }
 
-    fn write(&mut self, planned: PlannedWrite<Self::Plan>) -> Vec<SubmissionEvidence> {
+    fn write(
+        &mut self,
+        planned: PlannedWrite<Self::Plan>,
+    ) -> Vec<SubmissionEvidence> {
         let Some(runtime) = self.runtime.as_mut() else {
             // Unreachable on the loop's own path — `is_ready` refuses without a
             // runtime — but a declared unit must be acknowledged whatever
             // happens, and `NotSubmitted` is provable here: there is no
             // connection to have written through.
-            return vec![SubmissionEvidence::NotSubmitted; planned.entry_count];
+            return vec![
+                SubmissionEvidence::NotSubmitted;
+                planned.entry_count
+            ];
         };
         let (evidence, observation) = {
             let context = TurnContext {
@@ -353,7 +378,11 @@ impl DeliveryWriter for AcpDeliveryWriter {
         self.stop.load(Ordering::Acquire)
     }
 
-    fn wait_for_work(&mut self, doorbell: &crate::protocol::DeliveryDoorbell, timeout: Duration) {
+    fn wait_for_work(
+        &mut self,
+        doorbell: &crate::protocol::DeliveryDoorbell,
+        timeout: Duration,
+    ) {
         // A runtime installed while this executor was idle is picked up before
         // the wait rather than after it, so a bootstrap completing does not have
         // to wait out a poll interval before its first write.

@@ -95,7 +95,8 @@ fn host_relay_watcher_preserves_down_intent_across_file_edit() {
     assert!(
         suppressed,
         "expected relay.bundle.reload_suppressed_held for the downed bundle; relay inscriptions: {}",
-        fs::read_to_string(inscriptions_root.join("relay.log")).unwrap_or_default()
+        fs::read_to_string(inscriptions_root.join("relay.log"))
+            .unwrap_or_default()
     );
     // The suppressed edit must not have reloaded (and thereby restarted) the
     // bundle the operator deliberately took down.
@@ -105,7 +106,8 @@ fn host_relay_watcher_preserves_down_intent_across_file_edit() {
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .any(|entry| {
-            entry["event"] == "relay.bundle.reloaded" && entry["details"]["bundle_name"] == "alpha"
+            entry["event"] == "relay.bundle.reloaded"
+                && entry["details"]["bundle_name"] == "alpha"
         });
     assert!(
         !reloaded,
@@ -182,7 +184,8 @@ fn host_relay_watcher_holds_non_autostart_bundle_on_file_edit() {
     assert!(
         suppressed,
         "expected relay.bundle.reload_suppressed_held for the non-autostart bundle; relay inscriptions: {}",
-        fs::read_to_string(inscriptions_root.join("relay.log")).unwrap_or_default()
+        fs::read_to_string(inscriptions_root.join("relay.log"))
+            .unwrap_or_default()
     );
     let inscriptions = fs::read_to_string(inscriptions_root.join("relay.log"))
         .expect("read relay inscriptions log");
@@ -190,7 +193,8 @@ fn host_relay_watcher_holds_non_autostart_bundle_on_file_edit() {
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .any(|entry| {
-            entry["event"] == "relay.bundle.reloaded" && entry["details"]["bundle_name"] == "alpha"
+            entry["event"] == "relay.bundle.reloaded"
+                && entry["details"]["bundle_name"] == "alpha"
         });
     assert!(
         !reloaded,

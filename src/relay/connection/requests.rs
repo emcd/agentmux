@@ -12,15 +12,22 @@ use std::{io, sync::Arc};
 
 use serde_json::json;
 
-use super::super::stream::{OutgoingFrame, registration_is_current, write_stream_frame_to_writer};
+use super::super::stream::{
+    OutgoingFrame, registration_is_current, write_stream_frame_to_writer,
+};
 use super::super::{
-    PeerIngressAuthority, RelayRequest, RelayResponse, RequestPrincipal, dispatch_discovery,
-    dispatch_identity_admin, dispatch_identity_introspect, dispatch_list, dispatch_look,
-    dispatch_raww, dispatch_request, dispatch_send, handlers, relay_error,
+    PeerIngressAuthority, RelayRequest, RelayResponse, RequestPrincipal,
+    dispatch_discovery, dispatch_identity_admin, dispatch_identity_introspect,
+    dispatch_list, dispatch_look, dispatch_raww, dispatch_request,
+    dispatch_send, handlers, relay_error,
 };
 use super::framing::dispatch_on_blocking_pool;
-use super::helpers::{full_requester_principal_id, resolve_namespace_routing_bundle};
-use super::serve::{ConnectionBinding, FrameContext, FrameOutcome, RegistrationGuard};
+use super::helpers::{
+    full_requester_principal_id, resolve_namespace_routing_bundle,
+};
+use super::serve::{
+    ConnectionBinding, FrameContext, FrameOutcome, RegistrationGuard,
+};
 
 /// Routes one request frame and writes its response.
 pub(super) async fn handle_request(
@@ -78,11 +85,13 @@ pub(super) async fn handle_request(
             | RelayRequest::DropPeer { .. }
             | RelayRequest::InstallPeerCredential { .. }
     ) {
-        let requester_principal_id = full_requester_principal_id(active_registration);
+        let requester_principal_id =
+            full_requester_principal_id(active_registration);
         let response = {
             let configuration_roots = Arc::clone(frame.configuration_roots);
             let state_root = Arc::clone(frame.state_root);
-            let identity_admin_lock = Arc::clone(&frame.context.identity_admin_lock);
+            let identity_admin_lock =
+                Arc::clone(&frame.context.identity_admin_lock);
             dispatch_on_blocking_pool(move || {
                 dispatch_identity_admin(
                     request,
@@ -136,7 +145,8 @@ pub(super) async fn handle_request(
     // per-bundle dispatch path and reads the stream registry
     // directly. Other per-target operations infer their routing
     // bundle from target suffixes inside `resolve_effective_bundle`.
-    if matches!(request, RelayRequest::List { .. }) && target_namespace.as_deref() == Some("GLOBAL")
+    if matches!(request, RelayRequest::List { .. })
+        && target_namespace.as_deref() == Some("GLOBAL")
     {
         let response = handlers::handle_global_list();
         write_stream_frame_to_writer(
@@ -172,7 +182,7 @@ pub(super) async fn handle_request(
                     },
                 )?;
                 return Ok(FrameOutcome::Next);
-            }
+            },
         };
         let dispatch_paths = binding
             .bound_bundle
@@ -218,7 +228,8 @@ pub(super) async fn handle_request(
             let bundle_catalog = bundle_catalog.clone();
             let peer_connection_manager = Arc::clone(peer_connection_manager);
             let state_root = Arc::clone(frame.state_root);
-            let identity_admin_lock = Arc::clone(&frame.context.identity_admin_lock);
+            let identity_admin_lock =
+                Arc::clone(&frame.context.identity_admin_lock);
             dispatch_on_blocking_pool(move || {
                 let ingress_authority = PeerIngressAuthority {
                     state_root: state_root.as_ref(),
@@ -291,7 +302,8 @@ pub(super) async fn handle_request(
             let bundle_catalog = bundle_catalog.clone();
             let peer_connection_manager = Arc::clone(peer_connection_manager);
             let state_root = Arc::clone(frame.state_root);
-            let identity_admin_lock = Arc::clone(&frame.context.identity_admin_lock);
+            let identity_admin_lock =
+                Arc::clone(&frame.context.identity_admin_lock);
             dispatch_on_blocking_pool(move || {
                 let ingress_authority = PeerIngressAuthority {
                     state_root: state_root.as_ref(),
@@ -346,7 +358,8 @@ pub(super) async fn handle_request(
             let peer_connection_manager = Arc::clone(peer_connection_manager);
             let relay_aliases = Arc::clone(&frame.context.relay_aliases);
             let state_root = Arc::clone(frame.state_root);
-            let identity_admin_lock = Arc::clone(&frame.context.identity_admin_lock);
+            let identity_admin_lock =
+                Arc::clone(&frame.context.identity_admin_lock);
             dispatch_on_blocking_pool(move || {
                 let ingress_authority = PeerIngressAuthority {
                     state_root: state_root.as_ref(),
@@ -392,7 +405,7 @@ pub(super) async fn handle_request(
                 },
             )?;
             return Ok(FrameOutcome::Next);
-        }
+        },
     };
     let principal = RequestPrincipal {
         session_id: active_registration.requester_session_id().to_string(),

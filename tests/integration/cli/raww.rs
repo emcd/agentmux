@@ -49,8 +49,10 @@ fn raww_forwards_no_enter_and_preserves_json_contract() {
         &[("user", "default", Some("Operator"))],
     );
 
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
-    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux")
+        .expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths)
+        .expect("ensure bundle runtime directory");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
@@ -85,7 +87,8 @@ fn raww_forwards_no_enter_and_preserves_json_contract() {
     relay_thread.join().expect("join fake relay thread");
 
     assert!(output.status.success(), "command should succeed");
-    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode raww json payload");
+    let payload: Value = serde_json::from_slice(&output.stdout)
+        .expect("decode raww json payload");
     assert_eq!(payload["status"], "queued");
     assert_eq!(payload["target_session"], "bravo");
     assert_eq!(payload["transport"], "acp");
@@ -128,8 +131,10 @@ fn raww_surfaces_unknown_target_from_relay() {
     let workspace_root = temporary.path().join("workspace");
     fs::create_dir_all(&workspace_root).expect("create workspace");
 
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
-    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux")
+        .expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths)
+        .expect("ensure bundle runtime directory");
     let relay_thread = spawn_fake_relay_once(
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
         RelayResponse::Error {
@@ -194,8 +199,10 @@ fn raww_retains_relay_code_for_internal_error() {
     let workspace_root = temporary.path().join("workspace");
     fs::create_dir_all(&workspace_root).expect("create workspace");
 
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
-    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux")
+        .expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths)
+        .expect("ensure bundle runtime directory");
     // A non-canonical (internal) relay code stays an IO status, but the surfaced
     // diagnostic must still name the real code rather than collapsing every
     // internal failure into one opaque "internal error" string.

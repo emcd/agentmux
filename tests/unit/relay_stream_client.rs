@@ -28,7 +28,8 @@ fn temporary_socket_path(prefix: &str) -> (SocketPathGuard, PathBuf) {
     let counter = SOCKET_COUNTER.fetch_add(1, Ordering::Relaxed);
     let pid = std::process::id();
     let short_prefix = &prefix[..prefix.len().min(12)];
-    let socket_path = std::env::temp_dir().join(format!("amx-{short_prefix}-{pid}-{counter}.sock"));
+    let socket_path = std::env::temp_dir()
+        .join(format!("amx-{short_prefix}-{pid}-{counter}.sock"));
     let _ = std::fs::remove_file(&socket_path);
     (
         SocketPathGuard {
@@ -47,13 +48,15 @@ const FRAME_WAIT_BUDGET: Duration = Duration::from_secs(5);
 /// already guaranteed when it does.
 fn arm_frame_wait(stream: &UnixStream) {
     match stream.set_read_timeout(Some(FRAME_WAIT_BUDGET)) {
-        Ok(()) => {}
-        Err(source) if source.kind() == ErrorKind::InvalidInput => {}
+        Ok(()) => {},
+        Err(source) if source.kind() == ErrorKind::InvalidInput => {},
         Err(source) => panic!("set frame read timeout: {source}"),
     }
 }
 
-fn read_json_line(reader: &mut BufReader<std::os::unix::net::UnixStream>) -> Value {
+fn read_json_line(
+    reader: &mut BufReader<std::os::unix::net::UnixStream>,
+) -> Value {
     arm_frame_wait(reader.get_ref());
     let mut line = String::new();
     reader.read_line(&mut line).unwrap_or_else(|source| {
@@ -62,7 +65,10 @@ fn read_json_line(reader: &mut BufReader<std::os::unix::net::UnixStream>) -> Val
     serde_json::from_str(line.trim_end()).expect("decode json line")
 }
 
-fn write_json_line(stream: &mut std::os::unix::net::UnixStream, value: &Value) {
+fn write_json_line(
+    stream: &mut std::os::unix::net::UnixStream,
+    value: &Value,
+) {
     let text = serde_json::to_string(value).expect("encode json line");
     stream
         .write_all(format!("{text}\n").as_bytes())
@@ -72,8 +78,8 @@ fn write_json_line(stream: &mut std::os::unix::net::UnixStream, value: &Value) {
 
 fn shutdown_stream(stream: &std::os::unix::net::UnixStream, context: &str) {
     match stream.shutdown(std::net::Shutdown::Both) {
-        Ok(()) => {}
-        Err(source) if source.kind() == std::io::ErrorKind::NotConnected => {}
+        Ok(()) => {},
+        Err(source) if source.kind() == std::io::ErrorKind::NotConnected => {},
         Err(source) => panic!("{context}: {source:?}"),
     }
 }
@@ -161,11 +167,14 @@ fn assert_and_ack_hello(
 
 #[test]
 fn stream_client_poll_events_returns_pending_event_frames() {
-    let (_temporary, socket_path) = temporary_socket_path("relay-stream-client-events");
-    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let (_temporary, socket_path) =
+        temporary_socket_path("relay-stream-client-events");
+    let listener =
+        UnixListener::bind(&socket_path).expect("bind unix listener");
     let server = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept client");
-        let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+        let mut reader =
+            BufReader::new(stream.try_clone().expect("clone stream"));
         assert_and_ack_hello(&mut reader, &mut stream, "party", "alpha");
 
         thread::sleep(Duration::from_millis(80));
@@ -190,8 +199,11 @@ fn stream_client_poll_events_returns_pending_event_frames() {
         thread::sleep(Duration::from_millis(200));
     });
 
-    let mut session =
-        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
+    let mut session = RelayStreamSession::new(
+        socket_path,
+        "party".to_string(),
+        "alpha".to_string(),
+    );
 
     let deadline = Instant::now() + Duration::from_millis(750);
     let received = loop {
@@ -215,22 +227,38 @@ fn stream_client_poll_events_returns_pending_event_frames() {
 
 #[test]
 fn stream_client_does_not_auto_retry_request_after_disconnect() {
-    let (_temporary, socket_path) = temporary_socket_path("relay-stream-client-no-auto-retry");
-    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let (_temporary, socket_path) =
+        temporary_socket_path("relay-stream-client-no-auto-retry");
+    let listener =
+        UnixListener::bind(&socket_path).expect("bind unix listener");
     let server = thread::spawn(move || {
         // First stream: accept hello + request, then close before response.
-        let (mut first_stream, _) = listener.accept().expect("accept first client");
-        let mut first_reader = BufReader::new(first_stream.try_clone().expect("clone first"));
-        assert_and_ack_hello(&mut first_reader, &mut first_stream, "party", "alpha");
+        let (mut first_stream, _) =
+            listener.accept().expect("accept first client");
+        let mut first_reader =
+            BufReader::new(first_stream.try_clone().expect("clone first"));
+        assert_and_ack_hello(
+            &mut first_reader,
+            &mut first_stream,
+            "party",
+            "alpha",
+        );
         let first_request = read_json_line(&mut first_reader);
         assert_eq!(first_request["frame"], "request");
         assert_eq!(first_request["request"]["operation"], "list");
         shutdown_stream(&first_stream, "shutdown first stream");
 
         // Second stream: fresh hello + request, then normal response.
-        let (mut second_stream, _) = listener.accept().expect("accept second client");
-        let mut second_reader = BufReader::new(second_stream.try_clone().expect("clone second"));
-        assert_and_ack_hello(&mut second_reader, &mut second_stream, "party", "alpha");
+        let (mut second_stream, _) =
+            listener.accept().expect("accept second client");
+        let mut second_reader =
+            BufReader::new(second_stream.try_clone().expect("clone second"));
+        assert_and_ack_hello(
+            &mut second_reader,
+            &mut second_stream,
+            "party",
+            "alpha",
+        );
         let second_request = read_json_line(&mut second_reader);
         assert_eq!(second_request["frame"], "request");
         assert_eq!(second_request["request"]["operation"], "list");
@@ -261,8 +289,11 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
         );
     });
 
-    let mut session =
-        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
+    let mut session = RelayStreamSession::new(
+        socket_path,
+        "party".to_string(),
+        "alpha".to_string(),
+    );
     let first_error = session
         .request_with_events(&agentmux::relay::RelayRequest::List {
             requester_session: Some("alpha".to_string()),
@@ -280,7 +311,7 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
         agentmux::relay::RelayResponse::List { bundle, .. } => {
             assert_eq!(bundle.id, "party");
             assert!(bundle.principals.is_empty());
-        }
+        },
         other => panic!("unexpected response: {other:?}"),
     }
     server.join().expect("join server");
@@ -290,10 +321,13 @@ fn stream_client_does_not_auto_retry_request_after_disconnect() {
 fn stream_client_retries_hello_after_identity_claim_conflict() {
     let (_temporary, socket_path) =
         temporary_socket_path("relay-stream-client-hello-conflict-retry");
-    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let listener =
+        UnixListener::bind(&socket_path).expect("bind unix listener");
     let server = thread::spawn(move || {
-        let (mut conflict_stream, _) = listener.accept().expect("accept conflict client");
-        let mut conflict_reader = BufReader::new(conflict_stream.try_clone().expect("clone"));
+        let (mut conflict_stream, _) =
+            listener.accept().expect("accept conflict client");
+        let mut conflict_reader =
+            BufReader::new(conflict_stream.try_clone().expect("clone"));
         let hello_payload = read_json_line(&mut conflict_reader);
         assert_eq!(hello_payload["frame"], "hello");
         write_json_line(
@@ -312,7 +346,8 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
         shutdown_stream(&conflict_stream, "shutdown conflict stream");
 
         let (mut stream, _) = listener.accept().expect("accept retry client");
-        let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+        let mut reader =
+            BufReader::new(stream.try_clone().expect("clone stream"));
         assert_and_ack_hello(&mut reader, &mut stream, "party", "alpha");
 
         let request = read_json_line(&mut reader);
@@ -344,8 +379,11 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
         );
     });
 
-    let mut session =
-        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
+    let mut session = RelayStreamSession::new(
+        socket_path,
+        "party".to_string(),
+        "alpha".to_string(),
+    );
     let (response, events) = session
         .request_with_events(&agentmux::relay::RelayRequest::List {
             requester_session: Some("alpha".to_string()),
@@ -356,7 +394,7 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
         agentmux::relay::RelayResponse::List { bundle, .. } => {
             assert_eq!(bundle.id, "party");
             assert!(bundle.principals.is_empty());
-        }
+        },
         other => panic!("unexpected response: {other:?}"),
     }
     server.join().expect("join server");
@@ -369,12 +407,16 @@ fn stream_client_retries_hello_after_identity_claim_conflict() {
 /// mid-handshake all present this way.
 #[test]
 fn stream_client_retries_hello_after_the_relay_closes_without_answering() {
-    let (_temporary, socket_path) = temporary_socket_path("relay-stream-client-hello-closed-retry");
-    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let (_temporary, socket_path) =
+        temporary_socket_path("relay-stream-client-hello-closed-retry");
+    let listener =
+        UnixListener::bind(&socket_path).expect("bind unix listener");
     let server = thread::spawn(move || {
         // First attempt: consume the hello, then close with nothing written.
-        let (closed_stream, _) = listener.accept().expect("accept closed client");
-        let mut closed_reader = BufReader::new(closed_stream.try_clone().expect("clone"));
+        let (closed_stream, _) =
+            listener.accept().expect("accept closed client");
+        let mut closed_reader =
+            BufReader::new(closed_stream.try_clone().expect("clone"));
         let hello_payload = read_json_line(&mut closed_reader);
         assert_eq!(hello_payload["frame"], "hello");
         shutdown_stream(&closed_stream, "shutdown unanswered stream");
@@ -382,7 +424,8 @@ fn stream_client_retries_hello_after_the_relay_closes_without_answering() {
 
         // Second attempt: behave normally, proving the client came back.
         let (mut stream, _) = listener.accept().expect("accept retry client");
-        let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+        let mut reader =
+            BufReader::new(stream.try_clone().expect("clone stream"));
         assert_and_ack_hello(&mut reader, &mut stream, "party", "alpha");
 
         let request = read_json_line(&mut reader);
@@ -413,15 +456,22 @@ fn stream_client_retries_hello_after_the_relay_closes_without_answering() {
         );
     });
 
-    let mut session =
-        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
+    let mut session = RelayStreamSession::new(
+        socket_path,
+        "party".to_string(),
+        "alpha".to_string(),
+    );
     let (response, _events) = session
         .request_with_events(&agentmux::relay::RelayRequest::List {
             requester_session: Some("alpha".to_string()),
         })
-        .expect("a relay that closed before acknowledging hello should be retried");
+        .expect(
+            "a relay that closed before acknowledging hello should be retried",
+        );
     match response {
-        agentmux::relay::RelayResponse::List { bundle, .. } => assert_eq!(bundle.id, "party"),
+        agentmux::relay::RelayResponse::List { bundle, .. } => {
+            assert_eq!(bundle.id, "party")
+        },
         other => panic!("unexpected response: {other:?}"),
     }
     server.join().expect("join server");
@@ -431,7 +481,8 @@ fn stream_client_retries_hello_after_the_relay_closes_without_answering() {
 fn stream_client_reports_exhausted_hello_conflict_as_timeout() {
     let (_temporary, socket_path) =
         temporary_socket_path("relay-stream-client-hello-conflict-exhausted");
-    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let listener =
+        UnixListener::bind(&socket_path).expect("bind unix listener");
     let done = Arc::new(AtomicBool::new(false));
     let server_done = Arc::clone(&done);
 
@@ -443,7 +494,8 @@ fn stream_client_reports_exhausted_hello_conflict_as_timeout() {
             if server_done.load(Ordering::Relaxed) {
                 break;
             }
-            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut reader =
+                BufReader::new(stream.try_clone().expect("clone stream"));
             let hello_payload = read_json_line(&mut reader);
             assert_eq!(hello_payload["frame"], "hello");
             write_json_line(
@@ -501,7 +553,8 @@ fn hello_conflict_retries_back_off_to_a_bounded_attempt_count() {
     // proving the client retried at all.
     let (_temporary, socket_path) =
         temporary_socket_path("relay-stream-client-hello-conflict-backoff");
-    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let listener =
+        UnixListener::bind(&socket_path).expect("bind unix listener");
     let done = Arc::new(AtomicBool::new(false));
     let server_done = Arc::clone(&done);
     let hello_count = Arc::new(AtomicU64::new(0));
@@ -512,7 +565,8 @@ fn hello_conflict_retries_back_off_to_a_bounded_attempt_count() {
             if server_done.load(Ordering::Relaxed) {
                 break;
             }
-            let mut reader = BufReader::new(stream.try_clone().expect("clone stream"));
+            let mut reader =
+                BufReader::new(stream.try_clone().expect("clone stream"));
             let hello_payload = read_json_line(&mut reader);
             assert_eq!(hello_payload["frame"], "hello");
             server_hello_count.fetch_add(1, Ordering::Relaxed);
@@ -572,13 +626,22 @@ fn stream_client_detects_idle_disconnect_and_reconnects_on_next_request() {
     // the dead socket via the non-blocking peek and reconnect transparently
     // in the SAME call, rather than writing into a half-closed socket and
     // blocking on the 5-second response timeout.
-    let (_temporary, socket_path) = temporary_socket_path("relay-stream-client-idle-drop");
-    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let (_temporary, socket_path) =
+        temporary_socket_path("relay-stream-client-idle-drop");
+    let listener =
+        UnixListener::bind(&socket_path).expect("bind unix listener");
     let server = thread::spawn(move || {
         // First stream: hello, one list request, full response, then shutdown.
-        let (mut first_stream, _) = listener.accept().expect("accept first client");
-        let mut first_reader = BufReader::new(first_stream.try_clone().expect("clone first"));
-        assert_and_ack_hello(&mut first_reader, &mut first_stream, "party", "alpha");
+        let (mut first_stream, _) =
+            listener.accept().expect("accept first client");
+        let mut first_reader =
+            BufReader::new(first_stream.try_clone().expect("clone first"));
+        assert_and_ack_hello(
+            &mut first_reader,
+            &mut first_stream,
+            "party",
+            "alpha",
+        );
         let first_request = read_json_line(&mut first_reader);
         let first_request_id = first_request["request_id"]
             .as_str()
@@ -607,9 +670,16 @@ fn stream_client_detects_idle_disconnect_and_reconnects_on_next_request() {
         shutdown_stream(&first_stream, "shutdown first stream after response");
 
         // Second stream: a fresh hello + request must arrive on the next call.
-        let (mut second_stream, _) = listener.accept().expect("accept second client");
-        let mut second_reader = BufReader::new(second_stream.try_clone().expect("clone second"));
-        assert_and_ack_hello(&mut second_reader, &mut second_stream, "party", "alpha");
+        let (mut second_stream, _) =
+            listener.accept().expect("accept second client");
+        let mut second_reader =
+            BufReader::new(second_stream.try_clone().expect("clone second"));
+        assert_and_ack_hello(
+            &mut second_reader,
+            &mut second_stream,
+            "party",
+            "alpha",
+        );
         let second_request = read_json_line(&mut second_reader);
         let second_request_id = second_request["request_id"]
             .as_str()
@@ -637,15 +707,20 @@ fn stream_client_detects_idle_disconnect_and_reconnects_on_next_request() {
         );
     });
 
-    let mut session =
-        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
+    let mut session = RelayStreamSession::new(
+        socket_path,
+        "party".to_string(),
+        "alpha".to_string(),
+    );
     let (first_response, _) = session
         .request_with_events(&agentmux::relay::RelayRequest::List {
             requester_session: Some("alpha".to_string()),
         })
         .expect("first request should succeed");
     match first_response {
-        agentmux::relay::RelayResponse::List { bundle, .. } => assert_eq!(bundle.id, "party"),
+        agentmux::relay::RelayResponse::List { bundle, .. } => {
+            assert_eq!(bundle.id, "party")
+        },
         other => panic!("unexpected first response: {other:?}"),
     }
 
@@ -661,14 +736,18 @@ fn stream_client_detects_idle_disconnect_and_reconnects_on_next_request() {
         .request_with_events(&agentmux::relay::RelayRequest::List {
             requester_session: Some("alpha".to_string()),
         })
-        .expect("second request should reconnect transparently on the SAME call");
+        .expect(
+            "second request should reconnect transparently on the SAME call",
+        );
     let elapsed = started_at.elapsed();
     assert!(
         elapsed < Duration::from_secs(2),
         "liveness check must trigger reconnect well before the response timeout; took {elapsed:?}",
     );
     match second_response {
-        agentmux::relay::RelayResponse::List { bundle, .. } => assert_eq!(bundle.id, "party"),
+        agentmux::relay::RelayResponse::List { bundle, .. } => {
+            assert_eq!(bundle.id, "party")
+        },
         other => panic!("unexpected second response: {other:?}"),
     }
     server.join().expect("join server");
@@ -685,15 +764,25 @@ fn stream_client_detects_idle_disconnect_and_reconnects_on_next_request() {
 /// replaced — every later call repeats the same failure against the same dead
 /// socket without ever dialling.
 #[test]
-fn stream_client_reconnects_on_the_same_call_after_a_revocation_frame_and_close() {
-    let (_temporary, socket_path) = temporary_socket_path("relay-stream-client-revoked");
-    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+fn stream_client_reconnects_on_the_same_call_after_a_revocation_frame_and_close()
+ {
+    let (_temporary, socket_path) =
+        temporary_socket_path("relay-stream-client-revoked");
+    let listener =
+        UnixListener::bind(&socket_path).expect("bind unix listener");
     let closed = Arc::new(AtomicBool::new(false));
     let server_closed = Arc::clone(&closed);
     let server = thread::spawn(move || {
-        let (mut first_stream, _) = listener.accept().expect("accept first client");
-        let mut first_reader = BufReader::new(first_stream.try_clone().expect("clone first"));
-        assert_and_ack_hello(&mut first_reader, &mut first_stream, "party", "alpha");
+        let (mut first_stream, _) =
+            listener.accept().expect("accept first client");
+        let mut first_reader =
+            BufReader::new(first_stream.try_clone().expect("clone first"));
+        assert_and_ack_hello(
+            &mut first_reader,
+            &mut first_stream,
+            "party",
+            "alpha",
+        );
         serve_one_list_request(&mut first_reader, &mut first_stream);
 
         // The teardown order that produces the defect: speak, then hang up.
@@ -717,14 +806,24 @@ fn stream_client_reconnects_on_the_same_call_after_a_revocation_frame_and_close(
         drop(first_stream);
         server_closed.store(true, Ordering::Release);
 
-        let (mut second_stream, _) = listener.accept().expect("accept second client");
-        let mut second_reader = BufReader::new(second_stream.try_clone().expect("clone second"));
-        assert_and_ack_hello(&mut second_reader, &mut second_stream, "party", "alpha");
+        let (mut second_stream, _) =
+            listener.accept().expect("accept second client");
+        let mut second_reader =
+            BufReader::new(second_stream.try_clone().expect("clone second"));
+        assert_and_ack_hello(
+            &mut second_reader,
+            &mut second_stream,
+            "party",
+            "alpha",
+        );
         serve_one_list_request(&mut second_reader, &mut second_stream);
     });
 
-    let mut session =
-        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
+    let mut session = RelayStreamSession::new(
+        socket_path,
+        "party".to_string(),
+        "alpha".to_string(),
+    );
     session
         .request_with_events(&list_request())
         .expect("first request should succeed");
@@ -738,7 +837,9 @@ fn stream_client_reconnects_on_the_same_call_after_a_revocation_frame_and_close(
         .request_with_events(&list_request())
         .expect("a revoked-then-closed socket must be replaced on the SAME call, not reported");
     match second_response {
-        agentmux::relay::RelayResponse::List { bundle, .. } => assert_eq!(bundle.id, "party"),
+        agentmux::relay::RelayResponse::List { bundle, .. } => {
+            assert_eq!(bundle.id, "party")
+        },
         other => panic!("unexpected second response: {other:?}"),
     }
     server.join().expect("join server");
@@ -754,14 +855,23 @@ fn stream_client_reconnects_on_the_same_call_after_a_revocation_frame_and_close(
 /// potentially side-effecting request against a fresh connection.
 #[test]
 fn stream_client_reconnects_after_the_request_write_is_rejected() {
-    let (_temporary, socket_path) = temporary_socket_path("relay-stream-client-wr-shut");
-    let listener = UnixListener::bind(&socket_path).expect("bind unix listener");
+    let (_temporary, socket_path) =
+        temporary_socket_path("relay-stream-client-wr-shut");
+    let listener =
+        UnixListener::bind(&socket_path).expect("bind unix listener");
     let refusing = Arc::new(AtomicBool::new(false));
     let server_refusing = Arc::clone(&refusing);
     let server = thread::spawn(move || {
-        let (mut first_stream, _) = listener.accept().expect("accept first client");
-        let mut first_reader = BufReader::new(first_stream.try_clone().expect("clone first"));
-        assert_and_ack_hello(&mut first_reader, &mut first_stream, "party", "alpha");
+        let (mut first_stream, _) =
+            listener.accept().expect("accept first client");
+        let mut first_reader =
+            BufReader::new(first_stream.try_clone().expect("clone first"));
+        assert_and_ack_hello(
+            &mut first_reader,
+            &mut first_stream,
+            "party",
+            "alpha",
+        );
         serve_one_list_request(&mut first_reader, &mut first_stream);
 
         first_stream
@@ -772,14 +882,24 @@ fn stream_client_reconnects_after_the_request_write_is_rejected() {
         // `first_stream` and its clone stay in scope for the rest of this
         // closure: closing either would hang the socket up and let the liveness
         // probe classify it, which is the path this test exists to exclude.
-        let (mut second_stream, _) = listener.accept().expect("accept second client");
-        let mut second_reader = BufReader::new(second_stream.try_clone().expect("clone second"));
-        assert_and_ack_hello(&mut second_reader, &mut second_stream, "party", "alpha");
+        let (mut second_stream, _) =
+            listener.accept().expect("accept second client");
+        let mut second_reader =
+            BufReader::new(second_stream.try_clone().expect("clone second"));
+        assert_and_ack_hello(
+            &mut second_reader,
+            &mut second_stream,
+            "party",
+            "alpha",
+        );
         serve_one_list_request(&mut second_reader, &mut second_stream);
     });
 
-    let mut session =
-        RelayStreamSession::new(socket_path, "party".to_string(), "alpha".to_string());
+    let mut session = RelayStreamSession::new(
+        socket_path,
+        "party".to_string(),
+        "alpha".to_string(),
+    );
     session
         .request_with_events(&list_request())
         .expect("first request should succeed");
@@ -792,11 +912,13 @@ fn stream_client_reconnects_after_the_request_write_is_rejected() {
         "a request whose write the peer refuses must report the failure, not a response",
     );
 
-    let (recovered, _) = session
-        .request_with_events(&list_request())
-        .expect("a refused write must evict the connection so the next call dials");
+    let (recovered, _) = session.request_with_events(&list_request()).expect(
+        "a refused write must evict the connection so the next call dials",
+    );
     match recovered {
-        agentmux::relay::RelayResponse::List { bundle, .. } => assert_eq!(bundle.id, "party"),
+        agentmux::relay::RelayResponse::List { bundle, .. } => {
+            assert_eq!(bundle.id, "party")
+        },
         other => panic!("unexpected recovered response: {other:?}"),
     }
     server.join().expect("join server");

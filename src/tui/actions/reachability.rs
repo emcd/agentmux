@@ -16,7 +16,9 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use super::action::Action;
 use super::bindings::default_rows;
 use super::context::{BindingContext, lookup_order};
-use super::effective::{BindingConfiguration, CapabilityClass, EffectiveBindings};
+use super::effective::{
+    BindingConfiguration, CapabilityClass, EffectiveBindings,
+};
 use super::help::context_actions;
 
 /// Which capability classes a finding holds under.
@@ -36,7 +38,9 @@ impl AffectedClasses {
     pub fn describe(self) -> String {
         match self {
             Self::Both => "both terminal classes".to_owned(),
-            Self::Only(class) => format!("the {} terminal class", class.name()),
+            Self::Only(class) => {
+                format!("the {} terminal class", class.name())
+            },
         }
     }
 }
@@ -91,7 +95,9 @@ pub fn unreachable_actions(
     for context in BindingContext::ALL {
         let reachable: Vec<(CapabilityClass, Vec<Action>)> = tables
             .iter()
-            .map(|(class, bindings)| (*class, reachable_actions(bindings, *class, context)))
+            .map(|(class, bindings)| {
+                (*class, reachable_actions(bindings, *class, context))
+            })
             .collect();
         for action in context_actions(context) {
             let lost: Vec<CapabilityClass> = reachable
@@ -154,7 +160,8 @@ fn reachable_actions(
 ) -> Vec<Action> {
     let mut reached = Vec::new();
     for (code, modifiers) in candidate_keystrokes(bindings, class, context) {
-        if let Some(action) = resolved_action(bindings, context, code, modifiers)
+        if let Some(action) =
+            resolved_action(bindings, context, code, modifiers)
             && !reached.contains(&action)
         {
             reached.push(action);
@@ -213,7 +220,9 @@ fn candidate_keystrokes(
 ) -> Vec<(KeyCode, KeyModifiers)> {
     let mut keystrokes: Vec<(KeyCode, KeyModifiers)> = Vec::new();
     let mut push = |code, modifiers| {
-        if class.delivers(code, modifiers) && !keystrokes.contains(&(code, modifiers)) {
+        if class.delivers(code, modifiers)
+            && !keystrokes.contains(&(code, modifiers))
+        {
             keystrokes.push((code, modifiers));
         }
     };

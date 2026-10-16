@@ -17,7 +17,11 @@ pub struct DeliveryTargetId {
 
 impl DeliveryTargetId {
     #[must_use]
-    pub fn new(namespace: &str, runtime_directory: &Path, target_session: &str) -> Self {
+    pub fn new(
+        namespace: &str,
+        runtime_directory: &Path,
+        target_session: &str,
+    ) -> Self {
         Self {
             namespace: namespace.to_string(),
             runtime_directory: runtime_directory.to_path_buf(),
@@ -67,7 +71,10 @@ pub struct ConsumerBinding {
 
 impl ConsumerBinding {
     #[must_use]
-    pub fn new(target: DeliveryTargetId, generation: ConsumerGenerationId) -> Self {
+    pub fn new(
+        target: DeliveryTargetId,
+        generation: ConsumerGenerationId,
+    ) -> Self {
         Self { target, generation }
     }
 }

@@ -19,7 +19,10 @@
 use std::io;
 
 use crossterm::{
-    event::{KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags},
+    event::{
+        KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+        PushKeyboardEnhancementFlags,
+    },
     execute, terminal,
 };
 
@@ -58,7 +61,9 @@ impl KeyboardEnhancement {
 /// The `ProbeFailed` wording claims nothing about the terminal. A failed probe
 /// establishes only that the TUI could not determine or enable disambiguation;
 /// the terminal may well support the protocol.
-pub fn format_keyboard_enhancement_lines(enhancement: KeyboardEnhancement) -> Vec<String> {
+pub fn format_keyboard_enhancement_lines(
+    enhancement: KeyboardEnhancement,
+) -> Vec<String> {
     let outcome = match enhancement {
         KeyboardEnhancement::Active => [
             "Kitty keyboard protocol: active",
@@ -105,7 +110,7 @@ impl KeyboardEnhancementSession {
                     Ok(()) => KeyboardEnhancement::Active,
                     Err(_) => KeyboardEnhancement::ProbeFailed,
                 }
-            }
+            },
             Ok(false) => KeyboardEnhancement::Unsupported,
             Err(_) => KeyboardEnhancement::ProbeFailed,
         };

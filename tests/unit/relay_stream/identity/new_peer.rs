@@ -5,7 +5,9 @@
 use agentmux::configuration::ConfigurationRoots;
 use std::path::Path;
 
-use agentmux::runtime::paths::{BundleRuntimePaths, session_identity_psk_path};
+use agentmux::runtime::paths::{
+    BundleRuntimePaths, session_identity_psk_path,
+};
 use serde_json::Value;
 use tempfile::TempDir;
 
@@ -69,9 +71,11 @@ fn assert_invalid_output_path(response: &Value) {
 fn new_peer_output_rejects_relative_path() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_output_relative";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let response = new_peer_with_output(
         &configuration_roots,
@@ -89,9 +93,11 @@ fn new_peer_output_rejects_relative_path() {
 fn new_peer_output_rejects_missing_parent_directory() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_output_missing_parent";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let output_path = temporary.path().join("absent").join("credential.psk");
 
     let response = new_peer_with_output(
@@ -114,14 +120,20 @@ fn new_peer_output_rejects_missing_parent_directory() {
 fn new_peer_output_rejects_symlinked_target() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_output_symlink";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let output_directory = temporary.path().join("out");
-    std::fs::create_dir_all(&output_directory).expect("create output directory");
+    std::fs::create_dir_all(&output_directory)
+        .expect("create output directory");
     let link_path = output_directory.join("credential.psk");
-    std::os::unix::fs::symlink(temporary.path().join("elsewhere.psk"), &link_path)
-        .expect("create output symlink");
+    std::os::unix::fs::symlink(
+        temporary.path().join("elsewhere.psk"),
+        &link_path,
+    )
+    .expect("create output symlink");
 
     let response = new_peer_with_output(
         &configuration_roots,
@@ -141,9 +153,11 @@ fn new_peer_output_writes_credential_with_mode_0600() {
 
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_output_success";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
     let output_path = temporary.path().join("credential.psk");
 
@@ -175,7 +189,8 @@ fn new_peer_output_writes_credential_with_mode_0600() {
         & 0o777;
     assert_eq!(mode, 0o600, "credential file must be owner-only (0600)");
 
-    let psk = std::fs::read_to_string(&output_path).expect("read credential file");
+    let psk =
+        std::fs::read_to_string(&output_path).expect("read credential file");
     assert!(!psk.is_empty(), "written credential must be non-empty");
     let frame = hello_first_frame(
         &configuration_roots,
@@ -200,9 +215,11 @@ fn new_peer_config_writes_session_identity_and_authenticates() {
 
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_config_success";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let response = new_peer_with_config(
@@ -216,7 +233,8 @@ fn new_peer_config_writes_session_identity_and_authenticates() {
         "new peer config rejected: {response:?}"
     );
 
-    let canonical = session_identity_psk_path(&state_root, bundle_name, "alpha");
+    let canonical =
+        session_identity_psk_path(&state_root, bundle_name, "alpha");
     assert_eq!(
         response["response"]["written_path"],
         canonical.to_string_lossy().as_ref(),
@@ -233,7 +251,8 @@ fn new_peer_config_writes_session_identity_and_authenticates() {
         .mode()
         & 0o777;
     assert_eq!(mode, 0o600, "config credential must be owner-only (0600)");
-    let psk = std::fs::read_to_string(&canonical).expect("read config credential");
+    let psk =
+        std::fs::read_to_string(&canonical).expect("read config credential");
     assert!(!psk.is_empty(), "written credential must be non-empty");
     let frame = hello_first_frame(
         &configuration_roots,
@@ -256,9 +275,11 @@ fn new_peer_config_writes_session_identity_and_authenticates() {
 fn new_peer_config_rejected_for_relay_principal_leaves_store_unchanged() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_config_relay";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = "peer1@RELAY";
 
     let rejected = new_peer_with_config(
@@ -295,9 +316,11 @@ fn new_peer_config_rejected_for_relay_principal_leaves_store_unchanged() {
 fn new_peer_config_rejected_for_non_grammar_session_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_config_grammar";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     for session_id in ["1worker", "worker.name"] {
         let response = new_peer_with_config(
@@ -311,7 +334,8 @@ fn new_peer_config_rejected_for_non_grammar_session_id() {
             "path-safe but non-grammar id '{session_id}' must reject: {response:?}"
         );
         assert_eq!(
-            response["response"]["error"]["code"], "validation_invalid_principal_id",
+            response["response"]["error"]["code"],
+            "validation_invalid_principal_id",
             "id '{session_id}' must fail the session-id grammar"
         );
     }
@@ -325,15 +349,18 @@ fn new_peer_config_rejected_for_non_grammar_session_id() {
 fn new_peer_output_finalization_failure_leaves_store_unchanged() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_output_finalization";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
     // A directory at the output path passes validation (absolute, parent exists,
     // not a symlink) but makes the final publishing rename fail after the store
     // has already been persisted, exercising the post-commit rollback.
     let output_path = temporary.path().join("occupied.psk");
-    std::fs::create_dir_all(&output_path).expect("create directory at output path");
+    std::fs::create_dir_all(&output_path)
+        .expect("create directory at output path");
 
     let response = new_peer_with_output(
         &configuration_roots,
@@ -366,9 +393,11 @@ fn new_peer_output_finalization_failure_leaves_store_unchanged() {
 fn new_peer_config_accepts_dotted_bundle_name() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_config_dotted";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let dotted_namespace = "team.one";
     let principal_id = format!("alpha@{dotted_namespace}");
 
@@ -382,7 +411,8 @@ fn new_peer_config_accepts_dotted_bundle_name() {
         response["response"]["kind"], "new_peer",
         "a dotted bundle name must be accepted for config: {response:?}"
     );
-    let canonical = session_identity_psk_path(&state_root, dotted_namespace, "alpha");
+    let canonical =
+        session_identity_psk_path(&state_root, dotted_namespace, "alpha");
     assert_eq!(
         response["response"]["written_path"],
         canonical.to_string_lossy().as_ref(),
@@ -401,9 +431,11 @@ fn new_peer_config_accepts_dotted_bundle_name() {
 fn new_peer_config_rejected_for_traversal_principal_id() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_config_traversal";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let response = new_peer_with_config(
         &configuration_roots,
@@ -430,11 +462,15 @@ fn new_peer_config_rejected_for_traversal_principal_id() {
 fn new_peer_advises_on_a_scope_spelled_as_a_policy_tier() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_tier_advice";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
-    for (index, tier) in ["none", "self", "home", "all"].into_iter().enumerate() {
+    for (index, tier) in
+        ["none", "self", "home", "all"].into_iter().enumerate()
+    {
         let principal_id = format!("tier{index}@RELAY");
         let response = operator_request(
             &configuration_roots,
@@ -451,7 +487,8 @@ fn new_peer_advises_on_a_scope_spelled_as_a_policy_tier() {
             "a tier-spelled scope must still register: {response:?}"
         );
         assert_eq!(
-            response["response"]["diagnostics"][0]["code"], "advisory_scope_resembles_policy_tier",
+            response["response"]["diagnostics"][0]["code"],
+            "advisory_scope_resembles_policy_tier",
             "scope '{tier}' must raise the vocabulary advisory: {response:?}"
         );
         assert!(
@@ -471,9 +508,11 @@ fn new_peer_advises_on_a_scope_spelled_as_a_policy_tier() {
 fn new_peer_stays_silent_for_a_scope_that_merely_resolves_to_nothing() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_silent";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let response = operator_request(
         &configuration_roots,
@@ -505,9 +544,11 @@ fn new_peer_stays_silent_for_a_scope_that_merely_resolves_to_nothing() {
 fn new_peer_relay_snippet_names_no_local_state_root_path() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_snippet_relay";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let response = operator_request(
         &configuration_roots,
@@ -541,9 +582,11 @@ fn new_peer_relay_snippet_names_no_local_state_root_path() {
 fn new_peer_without_a_scope_raises_no_diagnostics() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_absent";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let response = operator_request(
         &configuration_roots,

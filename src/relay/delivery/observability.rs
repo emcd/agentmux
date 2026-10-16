@@ -49,15 +49,18 @@ pub enum ChoicesQueueEvent {
 }
 
 static WORKER_READINESS_PUBLISHERS: OnceLock<
-    Mutex<HashMap<AsyncWorkerKey, watch::Sender<Option<WorkerReadinessState>>>>,
+    Mutex<
+        HashMap<AsyncWorkerKey, watch::Sender<Option<WorkerReadinessState>>>,
+    >,
 > = OnceLock::new();
 
 static CHOICES_QUEUE_PUBLISHERS: OnceLock<
     Mutex<HashMap<PathBuf, broadcast::Sender<ChoicesQueueEvent>>>,
 > = OnceLock::new();
 
-fn worker_state_publishers()
--> &'static Mutex<HashMap<AsyncWorkerKey, watch::Sender<Option<WorkerReadinessState>>>> {
+fn worker_state_publishers() -> &'static Mutex<
+    HashMap<AsyncWorkerKey, watch::Sender<Option<WorkerReadinessState>>>,
+> {
     WORKER_READINESS_PUBLISHERS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
@@ -103,11 +106,16 @@ pub fn subscribe_choices_queue_events(
         .expect("choices queue publishers mutex poisoned");
     publishers
         .entry(runtime_directory.to_path_buf())
-        .or_insert_with(|| broadcast::channel(CHOICES_QUEUE_BROADCAST_CAPACITY).0)
+        .or_insert_with(|| {
+            broadcast::channel(CHOICES_QUEUE_BROADCAST_CAPACITY).0
+        })
         .subscribe()
 }
 
-pub(super) fn publish_worker_readiness(key: &AsyncWorkerKey, state: WorkerReadinessState) {
+pub(super) fn publish_worker_readiness(
+    key: &AsyncWorkerKey,
+    state: WorkerReadinessState,
+) {
     let mut publishers = worker_state_publishers()
         .lock()
         .expect("worker state publishers mutex poisoned");
@@ -118,13 +126,18 @@ pub(super) fn publish_worker_readiness(key: &AsyncWorkerKey, state: WorkerReadin
     let _ = sender.send(Some(state));
 }
 
-pub(super) fn publish_choices_queue_event(runtime_directory: &Path, event: ChoicesQueueEvent) {
+pub(super) fn publish_choices_queue_event(
+    runtime_directory: &Path,
+    event: ChoicesQueueEvent,
+) {
     let mut publishers = choices_queue_publishers()
         .lock()
         .expect("choices queue publishers mutex poisoned");
     let sender = publishers
         .entry(runtime_directory.to_path_buf())
-        .or_insert_with(|| broadcast::channel(CHOICES_QUEUE_BROADCAST_CAPACITY).0);
+        .or_insert_with(|| {
+            broadcast::channel(CHOICES_QUEUE_BROADCAST_CAPACITY).0
+        });
     // send returns Err only when there are no live receivers, which is fine.
     let _ = sender.send(event);
 }
@@ -146,16 +159,24 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn publishers_deliver_state_and_queue_events_to_subscribers() {
-        let runtime_directory = PathBuf::from("/tmp/agentmux-observability-test-fake-runtime");
+        let runtime_directory =
+            PathBuf::from("/tmp/agentmux-observability-test-fake-runtime");
         let namespace = "obstest_bundle";
         let target_session = "obstest_target";
 
         // Worker-state watch: subscribe first, then publish, then await the
         // change notification and read the borrowed value.
-        let mut state_receiver =
-            subscribe_worker_readiness(namespace, runtime_directory.as_path(), target_session);
+        let mut state_receiver = subscribe_worker_readiness(
+            namespace,
+            runtime_directory.as_path(),
+            target_session,
+        );
         assert_eq!(*state_receiver.borrow_and_update(), None);
-        let key = build_worker_key(namespace, runtime_directory.as_path(), target_session);
+        let key = build_worker_key(
+            namespace,
+            runtime_directory.as_path(),
+            target_session,
+        );
         publish_worker_readiness(&key, WorkerReadinessState::Unavailable);
         state_receiver
             .changed()
@@ -168,7 +189,8 @@ mod tests {
 
         // Choices-queue broadcast: subscribe first, publish two events,
         // then assert both arrive in order with their payload preserved.
-        let mut queue_receiver = subscribe_choices_queue_events(runtime_directory.as_path());
+        let mut queue_receiver =
+            subscribe_choices_queue_events(runtime_directory.as_path());
         publish_choices_queue_event(
             runtime_directory.as_path(),
             ChoicesQueueEvent::Enqueued {
@@ -182,7 +204,8 @@ mod tests {
             ChoicesQueueEvent::Invalidated {
                 choice_request_id: "perm-1".to_string(),
                 target_session: target_session.to_string(),
-                reason_code: "runtime_choices_request_invalidated_by_respawn".to_string(),
+                reason_code: "runtime_choices_request_invalidated_by_respawn"
+                    .to_string(),
             },
         );
         match queue_receiver.recv().await.expect("first event") {
@@ -194,7 +217,7 @@ mod tests {
                 assert_eq!(choice_request_id, "perm-1");
                 assert_eq!(message_id, "msg-1");
                 assert_eq!(actual_target, target_session);
-            }
+            },
             other => panic!("expected Enqueued, got {other:?}"),
         }
         match queue_receiver.recv().await.expect("second event") {
@@ -209,7 +232,7 @@ mod tests {
                     reason_code,
                     "runtime_choices_request_invalidated_by_respawn"
                 );
-            }
+            },
             other => panic!("expected Invalidated, got {other:?}"),
         }
     }

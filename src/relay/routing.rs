@@ -19,7 +19,9 @@
 
 use serde_json::json;
 
-use super::identity::{PrincipalType, classify_principal_id, split_principal_id};
+use super::identity::{
+    PrincipalType, classify_principal_id, split_principal_id,
+};
 use super::{RelayError, relay_error};
 
 /// Which `policies.toml` control an operation's authorization reads.
@@ -135,7 +137,9 @@ impl ResolvedTarget {
             .is_some_and(|class| {
                 matches!(
                     class,
-                    PrincipalType::User | PrincipalType::Application | PrincipalType::Relay
+                    PrincipalType::User
+                        | PrincipalType::Application
+                        | PrincipalType::Relay
                 )
             })
     }
@@ -173,16 +177,23 @@ impl ResolvedTarget {
 
     /// Classifies this target's relationship to the requester within the
     /// dispatch namespace into a uniform scope tier.
-    fn tier(&self, dispatch_namespace: &str, requester_session: &str) -> ScopeTier {
+    fn tier(
+        &self,
+        dispatch_namespace: &str,
+        requester_session: &str,
+    ) -> ScopeTier {
         if !self.reachable_at_home_tier(dispatch_namespace) {
             return ScopeTier::All;
         }
         // A relay-wide target is never `Own`: self-action via the relay-wide
         // registry path is not modeled, so it floors at `Home`.
         match self.session_id.as_deref() {
-            Some(session_id) if session_id == requester_session && !self.is_relay_wide() => {
+            Some(session_id)
+                if session_id == requester_session
+                    && !self.is_relay_wide() =>
+            {
                 ScopeTier::Own
-            }
+            },
             _ => ScopeTier::Home,
         }
     }
@@ -217,7 +228,9 @@ pub(super) fn required_tier(route: &ResolvedRoute) -> ScopeTier {
     route
         .targets
         .iter()
-        .map(|target| target.tier(&route.dispatch_namespace, &route.requester_session))
+        .map(|target| {
+            target.tier(&route.dispatch_namespace, &route.requester_session)
+        })
         .max_by_key(|tier| tier.rank())
         .unwrap_or(ScopeTier::Own)
 }
@@ -230,7 +243,10 @@ pub(super) fn required_tier(route: &ResolvedRoute) -> ScopeTier {
 /// `validation_unsupported_namespace`; a bare (unqualified) target is rejected
 /// with `validation_unqualified_target`. Target *existence* is not checked here
 /// — that is the handler body's delivery concern, validated after this stage.
-fn resolve_target(dispatch_namespace: &str, target: &str) -> Result<ResolvedTarget, RelayError> {
+fn resolve_target(
+    dispatch_namespace: &str,
+    target: &str,
+) -> Result<ResolvedTarget, RelayError> {
     let requested = target.trim();
     // The cross-relay `!<relay_id>` suffix is parsed before the `@<namespace>`
     // split so a bang-path target is classified as cross-relay rather than as a
@@ -252,7 +268,7 @@ fn resolve_target(dispatch_namespace: &str, target: &str) -> Result<ResolvedTarg
                 session_id: Some(session_id.to_string()),
                 relay_id: None,
             })
-        }
+        },
         Some(PrincipalType::Application | PrincipalType::Relay) => {
             let namespace = split_principal_id(requested)
                 .map(|(_, namespace)| namespace)
@@ -262,7 +278,7 @@ fn resolve_target(dispatch_namespace: &str, target: &str) -> Result<ResolvedTarg
                 "target namespace names no routable recipient for this operation",
                 Some(json!({ "target": requested, "namespace": namespace })),
             ))
-        }
+        },
         None => Err(relay_error(
             "validation_unqualified_target",
             "target must be a fully-qualified principal id (id@namespace)",
@@ -305,19 +321,20 @@ fn resolve_cross_relay_target(
             Some(json!({ "target": requested })),
         )
     };
-    if relay_id.is_empty() || relay_id.contains('!') || relay_id.contains('@') {
+    if relay_id.is_empty() || relay_id.contains('!') || relay_id.contains('@')
+    {
         return Err(malformed());
     }
     match classify_principal_id(principal) {
         Some(PrincipalType::Session | PrincipalType::User) => {
-            let (session_id, namespace) =
-                split_principal_id(principal).expect("classification implies a parseable suffix");
+            let (session_id, namespace) = split_principal_id(principal)
+                .expect("classification implies a parseable suffix");
             Ok(ResolvedTarget {
                 namespace: namespace.to_string(),
                 session_id: Some(session_id.to_string()),
                 relay_id: Some(relay_id.to_string()),
             })
-        }
+        },
         Some(PrincipalType::Application | PrincipalType::Relay) => {
             let namespace = split_principal_id(principal)
                 .map(|(_, namespace)| namespace)
@@ -327,7 +344,7 @@ fn resolve_cross_relay_target(
                 "target namespace names no routable recipient for this operation",
                 Some(json!({ "target": requested, "namespace": namespace })),
             ))
-        }
+        },
         None => Err(malformed()),
     }
 }
@@ -342,7 +359,9 @@ fn resolve_cross_relay_target(
 /// Until then a well-formed cross-relay target on these inspection operations is
 /// a permanent, honest rejection rather than a misleading `validation_unknown_bundle`
 /// from the local catalog.
-pub(super) fn reject_cross_relay_unsupported(route: &ResolvedRoute) -> Result<(), RelayError> {
+pub(super) fn reject_cross_relay_unsupported(
+    route: &ResolvedRoute,
+) -> Result<(), RelayError> {
     if route.targets.iter().any(ResolvedTarget::is_cross_relay) {
         return Err(relay_error(
             "runtime_cross_relay_unsupported",
@@ -408,7 +427,11 @@ pub(super) fn resolve_look_route(
     requester_session: &str,
     target_session: &str,
 ) -> Result<ResolvedRoute, RelayError> {
-    resolve_single_target_route(dispatch_namespace, requester_session, target_session)
+    resolve_single_target_route(
+        dispatch_namespace,
+        requester_session,
+        target_session,
+    )
 }
 
 /// Resolves a Raww's fully-qualified target into a config-free [`ResolvedRoute`];
@@ -418,7 +441,11 @@ pub(super) fn resolve_raww_route(
     requester_session: &str,
     target_session: &str,
 ) -> Result<ResolvedRoute, RelayError> {
-    resolve_single_target_route(dispatch_namespace, requester_session, target_session)
+    resolve_single_target_route(
+        dispatch_namespace,
+        requester_session,
+        target_session,
+    )
 }
 
 /// Builds the config-free [`ResolvedRoute`] for a List (the `BundleEnumerate`

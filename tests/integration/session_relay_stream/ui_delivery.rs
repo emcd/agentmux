@@ -21,11 +21,14 @@ use super::*;
 fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
-    let (mut ui_client, ui_handle) = spawn_relay_stream(&configuration_roots, &bundle_paths);
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
+    let (mut ui_client, ui_handle) =
+        spawn_relay_stream(&configuration_roots, &bundle_paths);
     let read_stream = ui_client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -117,20 +120,25 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
     // which no test window outlasts; the relay runs in-process here, so the
     // process-global the real host would install at startup has to be set
     // directly. Shortens the policy, not the sustained-observation behaviour.
-    agentmux::relay::configure_delivery(agentmux::relay::DeliveryConfiguration {
-        unreachable_dwell_ms: 500,
-        ..Default::default()
-    });
+    agentmux::relay::configure_delivery(
+        agentmux::relay::DeliveryConfiguration {
+            unreachable_dwell_ms: 500,
+            ..Default::default()
+        },
+    );
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
 
     let (mut sender_client, sender_handle) =
         spawn_relay_stream(&configuration_roots, &bundle_paths);
-    let sender_read_stream = sender_client.try_clone().expect("clone sender stream");
+    let sender_read_stream =
+        sender_client.try_clone().expect("clone sender stream");
     sender_read_stream
         .set_read_timeout(Some(Duration::from_millis(100)))
         .expect("set sender read timeout");
@@ -210,10 +218,12 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
 fn relay_configured_ui_target_recovers_after_late_stream_registration() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     let display_target = format!("display@{bundle_name}");
 
     // Send #1 to the configured UI target BEFORE any UI stream registers. The
@@ -245,7 +255,8 @@ fn relay_configured_ui_target_recovers_after_late_stream_registration() {
     thread::sleep(UI_DELIVERY_WORKER_BUDGET);
 
     // The UI client now connects and registers a Ui stream for `display`.
-    let (mut ui_client, ui_handle) = spawn_relay_stream(&configuration_roots, &bundle_paths);
+    let (mut ui_client, ui_handle) =
+        spawn_relay_stream(&configuration_roots, &bundle_paths);
     let read_stream = ui_client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -305,7 +316,8 @@ fn relay_configured_ui_target_recovers_after_late_stream_registration() {
         .find(|value| {
             value["event"]["event_type"] == "delivery_outcome"
                 && value["event"]["payload"]["phase"] == "delivered"
-                && value["event"]["payload"]["message_id"] == second_results[0].message_id.as_str()
+                && value["event"]["payload"]["message_id"]
+                    == second_results[0].message_id.as_str()
         })
         .expect("delivered outcome for second send after late registration");
     assert_eq!(delivered["event"]["payload"]["outcome"], "success");

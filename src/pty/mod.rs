@@ -25,7 +25,7 @@ pub mod transport;
 
 pub use command::{CommandParseError, program_and_args, tokenize_command};
 pub use state::{
-    LOOK_LINES_DEFAULT, PtyConfigSnapshot, PtyOutputView, PtyShared, PtyState, SnapshotRequest,
-    SnapshotResponse, prompt_satisfied,
+    LOOK_LINES_DEFAULT, PtyConfigSnapshot, PtyOutputView, PtyShared, PtyState,
+    SnapshotRequest, SnapshotResponse, prompt_satisfied,
 };
 pub use transport::{PtyMirrorStateFn, PtyTargetConfiguration, PtyTransport};

@@ -147,7 +147,9 @@ pub(crate) fn binding_lookup_order(state: &AppState) -> [BindingContext; 2] {
 /// exactly as consulting it once does. Left to fall out rather than special
 /// cased: the global rows are consulted first whatever the surface, and that is
 /// as true when they are the surface.
-pub(crate) const fn lookup_order(context: BindingContext) -> [BindingContext; 2] {
+pub(crate) const fn lookup_order(
+    context: BindingContext,
+) -> [BindingContext; 2] {
     [BindingContext::Global, context]
 }
 
@@ -178,6 +180,6 @@ pub(crate) fn binding_context(state: &AppState) -> BindingContext {
             } else {
                 BindingContext::InteractionWrite
             }
-        }
+        },
     }
 }

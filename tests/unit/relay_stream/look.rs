@@ -19,7 +19,10 @@ use agentmux::configuration::ConfigurationRoots;
 
 /// Overwrites the policy artifact so the `default` preset's `look` control uses
 /// the given scope, leaving the other controls at workable defaults.
-fn write_policies_with_look(configuration_roots: &ConfigurationRoots, look: &str) {
+fn write_policies_with_look(
+    configuration_roots: &ConfigurationRoots,
+    look: &str,
+) {
     std::fs::write(
         configuration_roots.base_layer().join("policies.toml"),
         format!(
@@ -49,8 +52,11 @@ fn cross_bundle_look(
     bundle_name: &str,
     target_session: &str,
 ) -> Value {
-    let (mut client, join) =
-        spawn_relay_connection_with_catalog(configuration_roots, state_root, catalog);
+    let (mut client, join) = spawn_relay_connection_with_catalog(
+        configuration_roots,
+        state_root,
+        catalog,
+    );
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -97,8 +103,10 @@ fn cross_bundle_look_permitted_under_all_scope_resolves_peer() {
     write_ui_bundle(&configuration_roots, bundle_b);
     write_policies_with_look(&configuration_roots, "all");
     let state_root = temporary.path().join("state");
-    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
-    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
+    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a)
+        .expect("bundle-a paths");
+    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b)
+        .expect("bundle-b paths");
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_look(
@@ -111,7 +119,8 @@ fn cross_bundle_look_permitted_under_all_scope_resolves_peer() {
 
     assert_eq!(response["response"]["kind"], "error");
     assert_eq!(
-        response["response"]["error"]["code"], "validation_unsupported_operation",
+        response["response"]["error"]["code"],
+        "validation_unsupported_operation",
         "cross-bundle look resolves the peer member and reaches the capability gate"
     );
     assert_eq!(
@@ -132,8 +141,10 @@ fn cross_bundle_look_denied_under_home_scope() {
     write_tmux_bundle(&configuration_roots, bundle_b);
     write_policies_with_look(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
-    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
-    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
+    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a)
+        .expect("bundle-a paths");
+    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b)
+        .expect("bundle-b paths");
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_look(
@@ -163,7 +174,8 @@ fn cross_bundle_look_rejects_unknown_peer_bundle() {
     let configuration_roots = write_bundle_configuration(&temporary, bundle_a);
     write_policies_with_look(&configuration_roots, "all");
     let state_root = temporary.path().join("state");
-    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
+    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a)
+        .expect("bundle-a paths");
     let catalog = multi_bundle_catalog(&[paths_a]);
 
     let response = cross_bundle_look(
@@ -192,8 +204,10 @@ fn cross_bundle_look_rejects_unknown_target_in_peer_bundle() {
     write_ui_bundle(&configuration_roots, bundle_b);
     write_policies_with_look(&configuration_roots, "all");
     let state_root = temporary.path().join("state");
-    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
-    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
+    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a)
+        .expect("bundle-a paths");
+    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b)
+        .expect("bundle-b paths");
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_look(

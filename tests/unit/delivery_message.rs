@@ -45,7 +45,8 @@ fn sample_message() -> DeliveryMessage {
 // `incoming_message` event and the envelope metadata record, which take the same
 // field, still naming the forwarding relay.
 #[test]
-fn a_composed_cross_relay_sender_reaches_both_the_pane_header_and_the_bare_field() {
+fn a_composed_cross_relay_sender_reaches_both_the_pane_header_and_the_bare_field()
+ {
     let composed = "coordinator@agentmux!bravo";
     let message = DeliveryMessage {
         sender: AddressIdentity {

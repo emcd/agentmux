@@ -6,9 +6,13 @@ use std::{fs, path::Path, process::Command};
 use tempfile::TempDir;
 
 use super::helpers::*;
-use crate::support::permissions::{deny_directory_access, report_permission_fixture_skip};
+use crate::support::permissions::{
+    deny_directory_access, report_permission_fixture_skip,
+};
 
-fn config_and_state(temporary: &TempDir) -> (std::path::PathBuf, std::path::PathBuf) {
+fn config_and_state(
+    temporary: &TempDir,
+) -> (std::path::PathBuf, std::path::PathBuf) {
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("state");
     fs::create_dir_all(&config_root).expect("create config root");
@@ -22,7 +26,8 @@ fn config_and_state(temporary: &TempDir) -> (std::path::PathBuf, std::path::Path
 /// the unreadable-layer tests need an override that supplies the bundle while
 /// `coders.toml` still resolves from the layer beneath.
 fn write_shadowing_bundle(layer: &Path, bundle_name: &str) {
-    fs::create_dir_all(layer.join("bundles")).expect("create override bundles directory");
+    fs::create_dir_all(layer.join("bundles"))
+        .expect("create override bundles directory");
     fs::write(
         layer.join("bundles").join(format!("{bundle_name}.toml")),
         "format-version = 1\n\n[[sessions]]\nid = \"shadowing\"\nname = \"shadowing\"\ndirectory = \"/tmp\"\ncoder = \"default\"\n",
@@ -322,7 +327,8 @@ fn check_configuration_reports_invalid_relay_toml_without_bundles() {
 fn check_configuration_reports_invalid_ui_toml_without_bundles() {
     let temporary = TempDir::new().expect("temporary");
     let (config_root, state_root) = config_and_state(&temporary);
-    fs::write(config_root.join("ui.toml"), "unknown-key = \"oops\"\n").expect("write ui.toml");
+    fs::write(config_root.join("ui.toml"), "unknown-key = \"oops\"\n")
+        .expect("write ui.toml");
 
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
@@ -353,7 +359,8 @@ fn check_configuration_accepts_valid_ui_toml() {
     let temporary = TempDir::new().expect("temporary");
     let (config_root, state_root) = config_and_state(&temporary);
     write_bundle_configuration(&config_root, "alpha", None, &["a"]);
-    fs::write(config_root.join("ui.toml"), "default-bundle = \"alpha\"\n").expect("write ui.toml");
+    fs::write(config_root.join("ui.toml"), "default-bundle = \"alpha\"\n")
+        .expect("write ui.toml");
 
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
@@ -387,7 +394,8 @@ fn check_configuration_reports_the_layer_that_supplied_each_artifact() {
     let (config_root, state_root) = config_and_state(&temporary);
     write_bundle_configuration(&config_root, "alpha", None, &["a"]);
     let override_layer = temporary.path().join("override");
-    fs::create_dir_all(override_layer.join("bundles")).expect("create override bundles directory");
+    fs::create_dir_all(override_layer.join("bundles"))
+        .expect("create override bundles directory");
     fs::write(
         override_layer.join("bundles").join("alpha.toml"),
         "format-version = 1\n\n[[sessions]]\nid = \"shadowing\"\nname = \"shadowing\"\ndirectory = \"/tmp\"\ncoder = \"default\"\n",
@@ -567,9 +575,9 @@ fn check_configuration_reports_sources_ahead_of_a_validation_failure() {
 
     assert!(!output.status.success(), "command should fail");
     let merged = String::from_utf8_lossy(&output.stdout);
-    let report = merged
-        .find("source coders.toml")
-        .unwrap_or_else(|| panic!("sources must be reported on a failing run: {merged}"));
+    let report = merged.find("source coders.toml").unwrap_or_else(|| {
+        panic!("sources must be reported on a failing run: {merged}")
+    });
     let failure = merged
         .find("codex-session-id")
         .unwrap_or_else(|| panic!("the failure must be reported: {merged}"));
@@ -659,7 +667,8 @@ fn check_configuration_quiet_still_reports_a_failure() {
 // where a finding can be the only surviving record of the layer fault.
 
 #[test]
-fn check_configuration_renders_an_unreadable_layer_as_a_finding_and_still_fails() {
+fn check_configuration_renders_an_unreadable_layer_as_a_finding_and_still_fails()
+ {
     // The override supplies the bundle and the *base* bundles directory is the
     // unreadable one, so per-bundle lookup answers from the override without
     // reaching it while enumeration, which reads every layer, faults. That is
@@ -696,7 +705,8 @@ fn check_configuration_renders_an_unreadable_layer_as_a_finding_and_still_fails(
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stdout.contains("finding:") && stdout.contains(&base_bundles.display().to_string()),
+        stdout.contains("finding:")
+            && stdout.contains(&base_bundles.display().to_string()),
         "the finding must be rendered and must name the layer at fault: {stdout}"
     );
     assert!(
@@ -714,7 +724,8 @@ fn check_configuration_renders_an_unreadable_layer_as_a_finding_and_still_fails(
 }
 
 #[test]
-fn check_configuration_suppresses_the_no_bundles_error_when_a_layer_is_unreadable() {
+fn check_configuration_suppresses_the_no_bundles_error_when_a_layer_is_unreadable()
+ {
     // Enumeration returned nothing because it could not look, not because there
     // is nothing there. Reporting "no bundle configurations found" would name the
     // wrong problem and abort ahead of the finding that explains it.
@@ -758,14 +769,16 @@ fn check_configuration_suppresses_the_no_bundles_error_when_a_layer_is_unreadabl
 }
 
 #[test]
-fn check_configuration_reports_a_later_failure_found_after_an_unreadable_layer() {
+fn check_configuration_reports_a_later_failure_found_after_an_unreadable_layer()
+ {
     // The finding must not hijack the exit: a genuine validation failure found
     // afterwards keeps its own code and its own field-level diagnosis, which is
     // the output an operator acts on.
     let temporary = TempDir::new().expect("temporary");
     let (config_root, state_root) = config_and_state(&temporary);
     write_bundle_configuration(&config_root, "alpha", None, &["a"]);
-    fs::write(config_root.join("ui.toml"), "unknown-key = \"oops\"\n").expect("write ui.toml");
+    fs::write(config_root.join("ui.toml"), "unknown-key = \"oops\"\n")
+        .expect("write ui.toml");
     let override_layer = temporary.path().join("override");
     write_shadowing_bundle(&override_layer, "alpha");
 
@@ -814,7 +827,8 @@ fn check_configuration_quiet_still_renders_an_unreadable_layer_finding() {
     let temporary = TempDir::new().expect("temporary");
     let (config_root, state_root) = config_and_state(&temporary);
     write_bundle_configuration(&config_root, "alpha", None, &["a"]);
-    fs::write(config_root.join("ui.toml"), "unknown-key = \"oops\"\n").expect("write ui.toml");
+    fs::write(config_root.join("ui.toml"), "unknown-key = \"oops\"\n")
+        .expect("write ui.toml");
     let override_layer = temporary.path().join("override");
     write_shadowing_bundle(&override_layer, "alpha");
 
@@ -845,7 +859,8 @@ fn check_configuration_quiet_still_renders_an_unreadable_layer_finding() {
     assert!(!output.status.success(), "the run must fail");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("finding:") && stdout.contains(&base_bundles.display().to_string()),
+        stdout.contains("finding:")
+            && stdout.contains(&base_bundles.display().to_string()),
         "quiet must not suppress the layer finding: {stdout}"
     );
     assert!(
@@ -855,7 +870,8 @@ fn check_configuration_quiet_still_renders_an_unreadable_layer_finding() {
 }
 
 #[test]
-fn check_configuration_keeps_the_layer_code_when_the_fault_arrives_through_a_root_artifact() {
+fn check_configuration_keeps_the_layer_code_when_the_fault_arrives_through_a_root_artifact()
+ {
     // `ui.toml` is loaded through the configuration module rather than the relay
     // pre-flight, so it crosses a different error mapper on its way out. Every
     // failure exits `1`, which leaves the structured code as the only thing
@@ -871,7 +887,8 @@ fn check_configuration_keeps_the_layer_code_when_the_fault_arrives_through_a_roo
     let (config_root, state_root) = config_and_state(&temporary);
     write_bundle_configuration(&config_root, "alpha", None, &["a"]);
     let override_layer = temporary.path().join("override");
-    fs::create_dir_all(override_layer.join("ui.toml")).expect("occupy the ui.toml path");
+    fs::create_dir_all(override_layer.join("ui.toml"))
+        .expect("occupy the ui.toml path");
 
     let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([

@@ -3,16 +3,17 @@ use std::time::Duration;
 use agentmux::{
     configuration::ConfigurationRoots,
     relay::{
-        ListedSessionTransport, RelayRequest, RelayResponse, SendOutcome, StartupFailureRecord,
-        append_startup_failure, handle_request, load_startup_failures,
+        ListedSessionTransport, RelayRequest, RelayResponse, SendOutcome,
+        StartupFailureRecord, append_startup_failure, handle_request,
+        load_startup_failures,
     },
     runtime::paths::{BundleRuntimePaths, ensure_bundle_runtime_directory},
 };
 use tempfile::TempDir;
 
 use crate::support::relay_delivery::{
-    TmuxServerGuard, capture_pane, spawn_session, tmux_available, tmux_command,
-    wait_for_pane_contains, write_bundle_configuration,
+    TmuxServerGuard, capture_pane, spawn_session, tmux_available,
+    tmux_command, wait_for_pane_contains, write_bundle_configuration,
 };
 
 fn dispatch_request(
@@ -21,7 +22,12 @@ fn dispatch_request(
     bundle_name: &str,
     runtime_directory: &std::path::Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    handle_request(request, configuration_roots, bundle_name, runtime_directory)
+    handle_request(
+        request,
+        configuration_roots,
+        bundle_name,
+        runtime_directory,
+    )
 }
 
 /// A *delivered* terminal outcome produces NO receipt. Only non-delivered
@@ -35,15 +41,21 @@ fn dispatch_request(
 #[test]
 fn relay_send_async_emits_no_receipt_for_a_delivered_outcome() {
     if !tmux_available() {
-        eprintln!("skipping delivered-no-receipt test because tmux is unavailable");
+        eprintln!(
+            "skipping delivered-no-receipt test because tmux is unavailable"
+        );
         return;
     }
 
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root =
-        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "charlie"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        bundle_name,
+        &["alpha", "charlie"],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -153,15 +165,21 @@ fn relay_send_async_emits_no_receipt_for_a_delivered_outcome() {
 #[test]
 fn relay_send_async_clears_the_targets_startup_failure_records_on_delivery() {
     if !tmux_available() {
-        eprintln!("skipping delivery-clears-startup-failures test because tmux is unavailable");
+        eprintln!(
+            "skipping delivery-clears-startup-failures test because tmux is unavailable"
+        );
         return;
     }
 
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root =
-        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "charlie"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        bundle_name,
+        &["alpha", "charlie"],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -218,7 +236,8 @@ fn relay_send_async_clears_the_targets_startup_failure_records_on_delivery() {
     // behaviour and testing the scheduler.
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let remaining = loop {
-        let records = load_startup_failures(&paths.runtime_directory).expect("load history");
+        let records = load_startup_failures(&paths.runtime_directory)
+            .expect("load history");
         let remaining: Vec<String> = records
             .iter()
             .filter(|record| record.session_id == "charlie")
@@ -262,9 +281,13 @@ fn relay_send_async_processes_repeated_target_messages_in_fifo_order() {
 
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root =
-        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        bundle_name,
+        &["alpha", "bravo"],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -361,9 +384,13 @@ fn relay_send_async_writes_while_target_is_active() {
 
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root =
-        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        bundle_name,
+        &["alpha", "bravo"],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -425,14 +452,18 @@ fn relay_send_async_writes_while_target_is_active() {
 #[test]
 fn relay_raww_submits_through_copy_mode_pane() {
     if !tmux_available() {
-        eprintln!("skipping copy-mode delivery test because tmux is unavailable");
+        eprintln!(
+            "skipping copy-mode delivery test because tmux is unavailable"
+        );
         return;
     }
 
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root = write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let config_root =
+        write_bundle_configuration(temporary.path(), bundle_name, &["alpha"]);
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -445,7 +476,8 @@ fn relay_raww_submits_through_copy_mode_pane() {
     );
 
     // Put the pane into copy-mode, as a scroll-back would.
-    let enter = tmux_command(&paths.tmux_socket, &["copy-mode", "-t", "alpha"]);
+    let enter =
+        tmux_command(&paths.tmux_socket, &["copy-mode", "-t", "alpha"]);
     assert!(
         enter.status.success(),
         "failed to enter copy-mode: {}",
@@ -529,9 +561,13 @@ fn relay_interleaves_mail_and_raw_in_one_per_target_order() {
 
     let temporary = TempDir::new().expect("temporary");
     let bundle_name = "party";
-    let config_root =
-        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        bundle_name,
+        &["alpha", "bravo"],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -602,9 +638,9 @@ fn relay_interleaves_mail_and_raw_in_one_per_target_order() {
     let positions: Vec<usize> = markers
         .iter()
         .map(|marker| {
-            snapshot
-                .find(marker)
-                .unwrap_or_else(|| panic!("marker {marker} should exist in pane"))
+            snapshot.find(marker).unwrap_or_else(|| {
+                panic!("marker {marker} should exist in pane")
+            })
         })
         .collect();
     assert!(
@@ -634,24 +670,34 @@ fn relay_interleaves_mail_and_raw_in_one_per_target_order() {
 #[test]
 fn relay_send_async_delivers_a_receipt_for_a_non_delivered_outcome() {
     if !tmux_available() {
-        eprintln!("skipping receipt-delivery test because tmux is unavailable");
+        eprintln!(
+            "skipping receipt-delivery test because tmux is unavailable"
+        );
         return;
     }
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
     let bundle_name = "party";
-    let config_root =
-        write_bundle_configuration(temporary.path(), bundle_name, &["alpha", "bravo"]);
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let config_root = write_bundle_configuration(
+        temporary.path(),
+        bundle_name,
+        &["alpha", "bravo"],
+    );
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
-    agentmux::relay::configure_delivery(agentmux::relay::DeliveryConfiguration {
-        unreachable_dwell_ms: 400,
-        ..agentmux::relay::DeliveryConfiguration::default()
-    });
+    agentmux::relay::configure_delivery(
+        agentmux::relay::DeliveryConfiguration {
+            unreachable_dwell_ms: 400,
+            ..agentmux::relay::DeliveryConfiguration::default()
+        },
+    );
 
     // Only alpha gets a session. bravo is configured but has no pane, so it is
     // unreachable from the first observation.
@@ -718,7 +764,8 @@ fn relay_send_async_delivers_a_receipt_for_a_non_delivered_outcome() {
     // The receipt must reach alpha's pane.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     loop {
-        let snapshot = capture_pane(&paths.tmux_socket, "alpha", "-200").replace('\n', "");
+        let snapshot = capture_pane(&paths.tmux_socket, "alpha", "-200")
+            .replace('\n', "");
         if snapshot.contains("was not delivered") {
             break;
         }

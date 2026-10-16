@@ -27,7 +27,8 @@ use tempfile::TempDir;
 /// It reports its own start by touching a marker, so a test can wait for a build
 /// to have actually happened rather than sleeping, and then holds the pty open
 /// without reading it.
-const AGENT_SCRIPT: &str = "#!/bin/sh\nprintf 1 > \"$AGENT_MARKER\"\nexec sleep 45\n";
+const AGENT_SCRIPT: &str =
+    "#!/bin/sh\nprintf 1 > \"$AGENT_MARKER\"\nexec sleep 45\n";
 
 /// The same child, but it leaves its terminal unread for a moment before
 /// draining it.
@@ -159,7 +160,8 @@ fn await_completion_after(
 ) -> serde_json::Value {
     let deadline = Instant::now() + within;
     loop {
-        let completions = read_inscriptions(inscriptions, "relay.send.async.completed");
+        let completions =
+            read_inscriptions(inscriptions, "relay.send.async.completed");
         if completions.len() > settled_before {
             return serde_json::from_str(completions[settled_before].as_str())
                 .expect("completion is json");
@@ -186,7 +188,9 @@ fn await_completion_after(
 fn a_target_whose_transport_failed_to_build_can_still_be_served() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let agent = temporary.path().join("agent.sh");
     let marker = temporary.path().join("agent-started");
@@ -214,7 +218,8 @@ fn a_target_whose_transport_failed_to_build_can_still_be_served() {
     };
 
     send("first");
-    let first = await_completion_after(&inscriptions, 0, Duration::from_secs(15));
+    let first =
+        await_completion_after(&inscriptions, 0, Duration::from_secs(15));
 
     // The fixture's premise: the first send failed because the transport could
     // not be built, which is the only failure that leaves a generation issued
@@ -237,7 +242,8 @@ fn a_target_whose_transport_failed_to_build_can_still_be_served() {
     write_agent_script(&agent);
 
     send("second");
-    let second = await_completion_after(&inscriptions, 1, Duration::from_secs(15));
+    let second =
+        await_completion_after(&inscriptions, 1, Duration::from_secs(15));
     assert_eq!(
         second["details"]["outcome"], "delivered",
         "a failed construction must give the target back, so the next send can \
@@ -266,7 +272,9 @@ fn a_replacement_whose_transport_failed_to_build_gives_the_target_back() {
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let agent = temporary.path().join("agent.sh");
     let marker = temporary.path().join("agent-started");
@@ -324,7 +332,8 @@ fn a_replacement_whose_transport_failed_to_build_gives_the_target_back() {
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let verdict = loop {
-        let verdicts = read_inscriptions(&inscriptions, "relay.delivery.fence.verdict");
+        let verdicts =
+            read_inscriptions(&inscriptions, "relay.delivery.fence.verdict");
         if let Some(first) = verdicts.first() {
             break serde_json::from_str::<serde_json::Value>(first.as_str())
                 .expect("verdict is json");
@@ -365,12 +374,14 @@ fn a_replacement_whose_transport_failed_to_build_gives_the_target_back() {
     // completion and report it as the second's. The recovery would then be
     // asserted by a delivery that happened before the failure it is supposed to
     // have recovered from.
-    let first = await_completion_after(&inscriptions, 0, Duration::from_secs(15));
+    let first =
+        await_completion_after(&inscriptions, 0, Duration::from_secs(15));
     assert_eq!(
         first["details"]["outcome"], "delivered",
         "the outgoing generation delivered its member before the fence stopped it: {first}"
     );
-    let settled_before = read_inscriptions(&inscriptions, "relay.send.async.completed").len();
+    let settled_before =
+        read_inscriptions(&inscriptions, "relay.send.async.completed").len();
     assert_eq!(
         settled_before, 1,
         "exactly one send has resolved so far, so the next completion can only be \
@@ -381,7 +392,11 @@ fn a_replacement_whose_transport_failed_to_build_gives_the_target_back() {
     // the recovery the unregister-rather-than-fail-stop spelling promises.
     write_agent_script(&agent);
     send("second".to_string());
-    let second = await_completion_after(&inscriptions, settled_before, Duration::from_secs(15));
+    let second = await_completion_after(
+        &inscriptions,
+        settled_before,
+        Duration::from_secs(15),
+    );
     assert_eq!(
         second["details"]["outcome"], "delivered",
         "a replacement that could not be built must still give the target back, or \

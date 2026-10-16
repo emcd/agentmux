@@ -19,12 +19,14 @@ fn spawn_relay_connection_capturing(
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
 ) -> (UnixStream, thread::JoinHandle<Result<(), std::io::Error>>) {
-    let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
+    let (server_stream, client_stream) =
+        UnixStream::pair().expect("unix stream pair");
     let root = configuration_roots.clone();
     let state_root = bundle_paths.state_root.clone();
     let catalog = super::single_bundle_catalog(bundle_paths);
-    let join_handle =
-        thread::spawn(move || run_serve_connection(server_stream, root, state_root, catalog));
+    let join_handle = thread::spawn(move || {
+        run_serve_connection(server_stream, root, state_root, catalog)
+    });
     (client_stream, join_handle)
 }
 
@@ -76,7 +78,9 @@ fn join_within(
         }
         thread::sleep(Duration::from_millis(20));
     }
-    panic!("serve_connection did not return; connection-pool worker is still pinned");
+    panic!(
+        "serve_connection did not return; connection-pool worker is still pinned"
+    );
 }
 
 fn agent_hello_frame(bundle_name: &str) -> Value {
@@ -96,7 +100,10 @@ fn hello_frame_for(session_id: &str, bundle_name: &str) -> Value {
 // member `panel`. Delivery to a UI member is pushed over its registered stream
 // (no live tmux pane needed), which lets a sender flood events at an idle UI
 // connection to drive the relay-to-client write timeout.
-fn write_sender_and_ui_bundle(configuration_roots: &ConfigurationRoots, bundle_name: &str) {
+fn write_sender_and_ui_bundle(
+    configuration_roots: &ConfigurationRoots,
+    bundle_name: &str,
+) {
     let bundles_directory = configuration_roots.base_layer().join("bundles");
     std::fs::write(
         bundles_directory.join(format!("{bundle_name}.toml")),
@@ -125,9 +132,11 @@ fn stalled_client_write_timeout_releases_connection_worker() {
     ensure_fast_write_timeout_for_tests();
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_write_timeout";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let (mut client_stream, join_handle) =
         spawn_relay_connection_capturing(&configuration_roots, &bundle_paths);
@@ -159,8 +168,9 @@ fn stalled_client_write_timeout_releases_connection_worker() {
     // unusually small. See issues/relay/19.
     const ASSUMED_MIN_RESPONSE_BYTES: usize = 32;
     const FLOOD_SAFETY_MULTIPLIER: usize = 4;
-    let flood_count =
-        (rcvbuf_bytes / ASSUMED_MIN_RESPONSE_BYTES * FLOOD_SAFETY_MULTIPLIER).max(512);
+    let flood_count = (rcvbuf_bytes / ASSUMED_MIN_RESPONSE_BYTES
+        * FLOOD_SAFETY_MULTIPLIER)
+        .max(512);
     drop(reader);
     let flood = thread::spawn(move || {
         for _ in 0..flood_count {
@@ -220,10 +230,12 @@ fn idle_ui_stream_write_timeout_tears_down_connection() {
     ensure_fast_write_timeout_for_tests();
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_idle_ui_timeout";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_sender_and_ui_bundle(&configuration_roots, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     // UI client: register, read the ack, shrink its receive buffer, then go
     // idle -- it never sends another frame and never reads again. This is the
@@ -319,12 +331,14 @@ fn idle_global_operator_stream_write_timeout_tears_down_connection() {
     ensure_fast_write_timeout_for_tests();
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_idle_global_ui_timeout";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     // Declare the relay-wide operator (`@GLOBAL`) whose idle UI stream the relay
     // keeps pushing events to: the TUI connection shape from the regression.
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let operator_id = global_user_id(bundle_name);
 
     // Operator UI client: register as a relay-wide stream, read the ack, shrink
@@ -333,7 +347,8 @@ fn idle_global_operator_stream_write_timeout_tears_down_connection() {
     // pinning on a parked read loop behind a dead writer.
     let (mut operator_client, operator_handle) =
         spawn_relay_connection_capturing(&configuration_roots, &bundle_paths);
-    let operator_read = operator_client.try_clone().expect("clone operator stream");
+    let operator_read =
+        operator_client.try_clone().expect("clone operator stream");
     let mut operator_reader = BufReader::new(operator_read);
     send_json(
         &mut operator_client,
@@ -438,20 +453,30 @@ fn block_on_drain(
 fn shutdown_signal_drains_parked_connection_worker() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_drain_parked";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     // The slot is registered with a coordinator the test keeps, so the test
     // plays the relay host's shutdown role against a real connection worker.
     let coordinator = ConnectionDrainCoordinator::new();
     let worker_slot = coordinator.register_worker();
-    let (server_stream, client_stream) = UnixStream::pair().expect("unix stream pair");
+    let (server_stream, client_stream) =
+        UnixStream::pair().expect("unix stream pair");
     let root = configuration_roots.clone();
     let state = bundle_paths.state_root.clone();
     let catalog = super::single_bundle_catalog(&bundle_paths);
     let join_handle = thread::spawn(move || {
-        run_serve_connection_with_slot(server_stream, root, state, catalog, false, worker_slot)
+        run_serve_connection_with_slot(
+            server_stream,
+            root,
+            state,
+            catalog,
+            false,
+            worker_slot,
+        )
     });
 
     let mut client_stream = client_stream;
@@ -514,9 +539,11 @@ fn drain_wait_reports_timeout_for_undrained_workers() {
 fn connection_loop_error_releases_hello_claim() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_error_release";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let (mut client_stream, join_handle) =
         spawn_relay_connection_capturing(&configuration_roots, &bundle_paths);

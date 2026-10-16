@@ -27,8 +27,14 @@ fn link_peer_retries_install_once_on_transport_failure() {
         3,
         {
             let installs = Arc::clone(&installs);
-            move |request| match request.get("operation").and_then(Value::as_str) {
-                Some("new_peer") => Some(new_peer_response("bravo@RELAY", Some(DISCARDED_MINT))),
+            move |request| match request
+                .get("operation")
+                .and_then(Value::as_str)
+            {
+                Some("new_peer") => Some(new_peer_response(
+                    "bravo@RELAY",
+                    Some(DISCARDED_MINT),
+                )),
                 Some("install_peer_credential") => {
                     assert_eq!(
                         request.get("psk").and_then(Value::as_str),
@@ -43,14 +49,15 @@ fn link_peer_retries_install_once_on_transport_failure() {
                             "/fake/dest/state/peers/bravo.psk",
                         ))
                     }
-                }
+                },
                 other => panic!("unexpected destination operation: {other:?}"),
             }
         },
         Arc::clone(&destination_log),
     );
 
-    let output = run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
+    let output =
+        run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
     assert!(
         output.status.success(),
         "install retry link failed: {}",
@@ -76,7 +83,11 @@ fn link_peer_aborts_before_issuance_on_registration_transport_failure() {
     let issuer = spawn_operation_fake(
         &issuer_socket(&sides),
         0,
-        |_| panic!("issuer must not be contacted after a registration transport failure"),
+        |_| {
+            panic!(
+                "issuer must not be contacted after a registration transport failure"
+            )
+        },
         Arc::clone(&issuer_log),
     );
     let destination = spawn_operation_fake(
@@ -86,7 +97,8 @@ fn link_peer_aborts_before_issuance_on_registration_transport_failure() {
         Arc::new(Mutex::new(Vec::new())),
     );
 
-    let output = run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
+    let output =
+        run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
     assert!(
         !output.status.success(),
         "registration transport failure link must fail"
@@ -115,14 +127,20 @@ fn link_peer_retries_registration_once_on_transport_failure() {
         3,
         {
             let registrations = Arc::clone(&registrations);
-            move |request| match request.get("operation").and_then(Value::as_str) {
+            move |request| match request
+                .get("operation")
+                .and_then(Value::as_str)
+            {
                 Some("new_peer") => {
                     if registrations.fetch_add(1, Ordering::SeqCst) == 0 {
                         None
                     } else {
-                        Some(new_peer_response("bravo@RELAY", Some(DISCARDED_MINT)))
+                        Some(new_peer_response(
+                            "bravo@RELAY",
+                            Some(DISCARDED_MINT),
+                        ))
                     }
-                }
+                },
                 Some("install_peer_credential") => Some(install_response(
                     "bravo",
                     "/fake/dest/state/peers/bravo.psk",
@@ -133,7 +151,8 @@ fn link_peer_retries_registration_once_on_transport_failure() {
         Arc::new(Mutex::new(Vec::new())),
     );
 
-    let output = run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
+    let output =
+        run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
     assert!(
         output.status.success(),
         "registration retry link failed: {}",
@@ -165,13 +184,18 @@ fn link_peer_reports_unknown_on_issuance_transport_failure() {
         &destination_socket(&sides),
         1,
         |request| match request.get("operation").and_then(Value::as_str) {
-            Some("new_peer") => Some(new_peer_response("bravo@RELAY", Some(DISCARDED_MINT))),
-            other => panic!("install must not follow unknown issuance: {other:?}"),
+            Some("new_peer") => {
+                Some(new_peer_response("bravo@RELAY", Some(DISCARDED_MINT)))
+            },
+            other => {
+                panic!("install must not follow unknown issuance: {other:?}")
+            },
         },
         Arc::new(Mutex::new(Vec::new())),
     );
 
-    let output = run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
+    let output =
+        run_link(&sides, &["--alias", "bravo", "--connect-as", "bravo-link"]);
     assert!(!output.status.success(), "unknown issuance link must fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -198,7 +222,10 @@ fn link_peer_paired_reports_unknown_without_rotating() {
         2,
         {
             let registrations = Arc::clone(&registrations);
-            move |request| match request.get("operation").and_then(Value::as_str) {
+            move |request| match request
+                .get("operation")
+                .and_then(Value::as_str)
+            {
                 Some("new_peer") => {
                     if registrations.fetch_add(1, Ordering::SeqCst) == 0 {
                         None
@@ -208,8 +235,10 @@ fn link_peer_paired_reports_unknown_without_rotating() {
                             "principal_id is already registered",
                         ))
                     }
-                }
-                other => panic!("no change_psk may follow ambiguous registration: {other:?}"),
+                },
+                other => panic!(
+                    "no change_psk may follow ambiguous registration: {other:?}"
+                ),
             }
         },
         Arc::clone(&issuer_log),
@@ -217,7 +246,11 @@ fn link_peer_paired_reports_unknown_without_rotating() {
     let destination = spawn_operation_fake(
         &destination_socket(&sides),
         0,
-        |_| panic!("destination must not be contacted after unknown registration"),
+        |_| {
+            panic!(
+                "destination must not be contacted after unknown registration"
+            )
+        },
         Arc::new(Mutex::new(Vec::new())),
     );
 

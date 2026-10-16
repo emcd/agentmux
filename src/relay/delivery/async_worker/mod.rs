@@ -24,15 +24,17 @@ pub(in crate::relay::delivery) use self::reap::{
     bind_worker_consumer_generation, unregister_worker,
 };
 pub(in crate::relay::delivery) use self::registry::{
-    AsyncWorkerKey, WorkerDispatch, WorkerOwner, build_worker_key, close_worker,
-    drop_pending_async_tasks_on_stop, mark_worker_fail_stopped, register_worker_if_absent,
-    release_pending_slot, task_uses_acp_transport, try_existing_worker,
-    wait_for_async_delivery_shutdown, worker_exists, worker_stop_requested,
+    AsyncWorkerKey, WorkerDispatch, WorkerOwner, build_worker_key,
+    close_worker, drop_pending_async_tasks_on_stop, mark_worker_fail_stopped,
+    register_worker_if_absent, release_pending_slot, task_uses_acp_transport,
+    try_existing_worker, wait_for_async_delivery_shutdown, worker_exists,
+    worker_stop_requested,
 };
 pub(in crate::relay) use self::registry::{
-    acp_readiness_is_ready, acp_session_is_ready, get_output_view, get_worker_failure,
-    get_worker_readiness, install_acp_worker_output_view, set_worker_failure, set_worker_readiness,
-    stop_workers_for_bundle, wait_for_bundle_workers_stopped,
+    acp_readiness_is_ready, acp_session_is_ready, get_output_view,
+    get_worker_failure, get_worker_readiness, install_acp_worker_output_view,
+    set_worker_failure, set_worker_readiness, stop_workers_for_bundle,
+    wait_for_bundle_workers_stopped,
 };
 
 /// Test-only registry seam: installs an entry directly, so a test can make a
@@ -42,6 +44,7 @@ pub(in crate::relay) use self::registry::{
 pub(in crate::relay::delivery) use self::registry::register_worker;
 
 pub(in crate::relay::delivery) use self::terminal::{
-    complete_task_on_shutdown, complete_task_outcome, complete_task_outcome_from_trigger,
-    complete_task_refusal, report_resolved_member, report_resolved_outcome,
+    complete_task_on_shutdown, complete_task_outcome,
+    complete_task_outcome_from_trigger, complete_task_refusal,
+    report_resolved_member, report_resolved_outcome,
 };

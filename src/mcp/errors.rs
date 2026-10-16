@@ -10,8 +10,14 @@ use crate::runtime::error::RuntimeError;
 use super::validation::{is_relay_timeout_error, is_relay_unavailable_error};
 
 pub(super) fn map_relay_error(error: RelayError) -> McpError {
-    if error.code.starts_with("validation_") || error.code == "authorization_forbidden" {
-        return validation_tool_error(&error.code, &error.message, error.details);
+    if error.code.starts_with("validation_")
+        || error.code == "authorization_forbidden"
+    {
+        return validation_tool_error(
+            &error.code,
+            &error.message,
+            error.details,
+        );
     }
     internal_tool_error(&error.code, &error.message, error.details)
 }
@@ -32,31 +38,37 @@ pub(super) fn map_configuration_error(source: ConfigurationError) -> McpError {
                     "path": path.display().to_string(),
                 })),
             )
-        }
-        ConfigurationError::InvalidConfiguration { path, message } => validation_tool_error(
-            "validation_invalid_arguments",
-            "bundle configuration is invalid",
-            Some(json!({
-                "path": path.display().to_string(),
-                "cause": message,
-            })),
-        ),
-        ConfigurationError::InvalidGroupName { path, group_name } => validation_tool_error(
-            "validation_invalid_group_name",
-            "bundle configuration has invalid group name",
-            Some(json!({
-                "path": path.display().to_string(),
-                "group_name": group_name,
-            })),
-        ),
-        ConfigurationError::ReservedGroupName { path, group_name } => validation_tool_error(
-            "validation_reserved_group_name",
-            "bundle configuration uses reserved group name",
-            Some(json!({
-                "path": path.display().to_string(),
-                "group_name": group_name,
-            })),
-        ),
+        },
+        ConfigurationError::InvalidConfiguration { path, message } => {
+            validation_tool_error(
+                "validation_invalid_arguments",
+                "bundle configuration is invalid",
+                Some(json!({
+                    "path": path.display().to_string(),
+                    "cause": message,
+                })),
+            )
+        },
+        ConfigurationError::InvalidGroupName { path, group_name } => {
+            validation_tool_error(
+                "validation_invalid_group_name",
+                "bundle configuration has invalid group name",
+                Some(json!({
+                    "path": path.display().to_string(),
+                    "group_name": group_name,
+                })),
+            )
+        },
+        ConfigurationError::ReservedGroupName { path, group_name } => {
+            validation_tool_error(
+                "validation_reserved_group_name",
+                "bundle configuration uses reserved group name",
+                Some(json!({
+                    "path": path.display().to_string(),
+                    "group_name": group_name,
+                })),
+            )
+        },
         ConfigurationError::AmbiguousSender {
             working_directory,
             matches,
@@ -68,14 +80,16 @@ pub(super) fn map_configuration_error(source: ConfigurationError) -> McpError {
                 "matches": matches,
             })),
         ),
-        ConfigurationError::UnreadableConfigurationLayer { path, source } => validation_tool_error(
-            "validation_unreadable_configuration_layer",
-            "configuration layer could not be read",
-            Some(json!({
-                "path": path.display().to_string(),
-                "cause": source.to_string(),
-            })),
-        ),
+        ConfigurationError::UnreadableConfigurationLayer { path, source } => {
+            validation_tool_error(
+                "validation_unreadable_configuration_layer",
+                "configuration layer could not be read",
+                Some(json!({
+                    "path": path.display().to_string(),
+                    "cause": source.to_string(),
+                })),
+            )
+        },
         ConfigurationError::Io { context, source } => internal_tool_error(
             "internal_unexpected_failure",
             "failed to load bundle configuration",
@@ -87,7 +101,10 @@ pub(super) fn map_configuration_error(source: ConfigurationError) -> McpError {
         // Not a validation fault: the malformed text ships with this binary, so
         // nothing the caller supplied is at issue and nothing they can edit
         // will change the outcome.
-        ConfigurationError::MalformedEmbeddedArtifact { artifact, message } => internal_tool_error(
+        ConfigurationError::MalformedEmbeddedArtifact {
+            artifact,
+            message,
+        } => internal_tool_error(
             "internal_unexpected_failure",
             "an artifact built into this binary is malformed",
             Some(json!({
@@ -100,11 +117,13 @@ pub(super) fn map_configuration_error(source: ConfigurationError) -> McpError {
 
 pub(super) fn map_runtime_error(source: RuntimeError) -> McpError {
     match source {
-        RuntimeError::InvalidBundleName { bundle_name } => validation_tool_error(
-            "validation_invalid_params",
-            "bundle_name contains unsupported characters",
-            Some(json!({"bundle_name": bundle_name})),
-        ),
+        RuntimeError::InvalidBundleName { bundle_name } => {
+            validation_tool_error(
+                "validation_invalid_params",
+                "bundle_name contains unsupported characters",
+                Some(json!({"bundle_name": bundle_name})),
+            )
+        },
         other => internal_tool_error(
             "internal_unexpected_failure",
             "failed to resolve bundle runtime paths",
@@ -113,7 +132,10 @@ pub(super) fn map_runtime_error(source: RuntimeError) -> McpError {
     }
 }
 
-pub(super) fn map_relay_request_failure(socket_path: &Path, source: std::io::Error) -> McpError {
+pub(super) fn map_relay_request_failure(
+    socket_path: &Path,
+    source: std::io::Error,
+) -> McpError {
     if is_relay_timeout_error(&source) {
         return internal_tool_error(
             "relay_timeout",
@@ -175,7 +197,9 @@ pub(super) fn unassociated_server_error() -> McpError {
 /// Carries the original code so a caller can distinguish an absent configuration
 /// layer from a malformed file from an unknown bundle, rather than seeing one
 /// undifferentiated "not ready".
-pub(super) fn startup_fault_error(fault: &crate::mcp::McpStartupFault) -> McpError {
+pub(super) fn startup_fault_error(
+    fault: &crate::mcp::McpStartupFault,
+) -> McpError {
     validation_tool_error(
         fault.code.as_str(),
         format!(

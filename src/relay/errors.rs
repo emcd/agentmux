@@ -6,39 +6,51 @@ use super::RelayError;
 
 pub(super) fn map_config(error: ConfigurationError) -> RelayError {
     match error {
-        ConfigurationError::UnknownBundle { bundle_name, path } => relay_error(
-            "validation_unknown_bundle",
-            "bundle is not configured",
-            Some(json!({"bundle_name": bundle_name, "path": path})),
-        ),
-        ConfigurationError::InvalidConfiguration { path, message } => relay_error(
-            "internal_unexpected_failure",
-            "bundle configuration is invalid",
-            Some(json!({"path": path, "cause": message})),
-        ),
-        ConfigurationError::InvalidGroupName { path, group_name } => relay_error(
-            "validation_invalid_group_name",
-            "bundle configuration uses invalid group name",
-            Some(json!({"path": path, "group_name": group_name})),
-        ),
-        ConfigurationError::ReservedGroupName { path, group_name } => relay_error(
-            "validation_reserved_group_name",
-            "bundle configuration uses reserved group name",
-            Some(json!({"path": path, "group_name": group_name})),
-        ),
+        ConfigurationError::UnknownBundle { bundle_name, path } => {
+            relay_error(
+                "validation_unknown_bundle",
+                "bundle is not configured",
+                Some(json!({"bundle_name": bundle_name, "path": path})),
+            )
+        },
+        ConfigurationError::InvalidConfiguration { path, message } => {
+            relay_error(
+                "internal_unexpected_failure",
+                "bundle configuration is invalid",
+                Some(json!({"path": path, "cause": message})),
+            )
+        },
+        ConfigurationError::InvalidGroupName { path, group_name } => {
+            relay_error(
+                "validation_invalid_group_name",
+                "bundle configuration uses invalid group name",
+                Some(json!({"path": path, "group_name": group_name})),
+            )
+        },
+        ConfigurationError::ReservedGroupName { path, group_name } => {
+            relay_error(
+                "validation_reserved_group_name",
+                "bundle configuration uses reserved group name",
+                Some(json!({"path": path, "group_name": group_name})),
+            )
+        },
         ConfigurationError::AmbiguousSender {
             working_directory,
             matches,
         } => relay_error(
             "validation_unknown_sender",
             "sender association is ambiguous",
-            Some(json!({"working_directory": working_directory, "matches": matches})),
+            Some(
+                json!({"working_directory": working_directory, "matches": matches}),
+            ),
         ),
-        ConfigurationError::UnreadableConfigurationLayer { path, source } => relay_error(
-            UNREADABLE_LAYER_CODE,
-            "configuration layer could not be read",
-            Some(json!({"path": path, "cause": source.to_string()})),
-        ),
+        ConfigurationError::UnreadableConfigurationLayer { path, source } => {
+            relay_error(
+                UNREADABLE_LAYER_CODE,
+                "configuration layer could not be read",
+                Some(json!({"path": path, "cause": source.to_string()})),
+            )
+        },
         ConfigurationError::Io { context, source } => relay_error(
             "internal_unexpected_failure",
             "bundle configuration could not be loaded",
@@ -47,7 +59,10 @@ pub(super) fn map_config(error: ConfigurationError) -> RelayError {
         // Not a validation fault: the malformed text ships with this binary, so
         // nothing the caller supplied is at issue and nothing they can edit
         // will change the outcome.
-        ConfigurationError::MalformedEmbeddedArtifact { artifact, message } => relay_error(
+        ConfigurationError::MalformedEmbeddedArtifact {
+            artifact,
+            message,
+        } => relay_error(
             "internal_unexpected_failure",
             "an artifact built into this binary is malformed",
             Some(json!({"artifact": artifact, "cause": message})),
@@ -61,9 +76,14 @@ pub(super) fn map_config(error: ConfigurationError) -> RelayError {
 /// been mapped, so the code is what carries the distinction the whole change
 /// exists to preserve. Folding it into a general validation code would restore
 /// the ambiguity one layer up from where it was removed.
-pub(super) const UNREADABLE_LAYER_CODE: &str = "validation_unreadable_configuration_layer";
+pub(super) const UNREADABLE_LAYER_CODE: &str =
+    "validation_unreadable_configuration_layer";
 
-pub(super) fn relay_error(code: &str, message: &str, details: Option<Value>) -> RelayError {
+pub(super) fn relay_error(
+    code: &str,
+    message: &str,
+    details: Option<Value>,
+) -> RelayError {
     RelayError {
         code: code.to_string(),
         message: message.to_string(),
@@ -76,7 +96,8 @@ pub(super) fn relay_error(code: &str, message: &str, details: Option<Value>) -> 
 /// `validation_unsupported_namespace` (reserved namespace names no session at
 /// all) and `validation_unknown_target` (target not configured): the target
 /// exists and is routable, but its transport cannot perform this operation.
-pub(super) const VALIDATION_UNSUPPORTED_OPERATION: &str = "validation_unsupported_operation";
+pub(super) const VALIDATION_UNSUPPORTED_OPERATION: &str =
+    "validation_unsupported_operation";
 
 /// Builds the capability-gate rejection for a look/raww target whose transport
 /// lacks the operation's capability. `capability_flag` names the failed flag
@@ -119,21 +140,25 @@ pub(super) fn session_type_not_implemented(
 
 pub(super) fn map_tui_config(error: ConfigurationError) -> RelayError {
     match error {
-        ConfigurationError::InvalidConfiguration { path, message } => relay_error(
-            "validation_invalid_arguments",
-            "tui configuration is invalid",
-            Some(json!({"path": path, "cause": message})),
-        ),
+        ConfigurationError::InvalidConfiguration { path, message } => {
+            relay_error(
+                "validation_invalid_arguments",
+                "tui configuration is invalid",
+                Some(json!({"path": path, "cause": message})),
+            )
+        },
         ConfigurationError::Io { context, source } => relay_error(
             "validation_invalid_arguments",
             "failed to load tui configuration",
             Some(json!({"context": context, "cause": source.to_string()})),
         ),
-        ConfigurationError::UnreadableConfigurationLayer { path, source } => relay_error(
-            UNREADABLE_LAYER_CODE,
-            "configuration layer could not be read",
-            Some(json!({"path": path, "cause": source.to_string()})),
-        ),
+        ConfigurationError::UnreadableConfigurationLayer { path, source } => {
+            relay_error(
+                UNREADABLE_LAYER_CODE,
+                "configuration layer could not be read",
+                Some(json!({"path": path, "cause": source.to_string()})),
+            )
+        },
         other => relay_error(
             "validation_invalid_arguments",
             "failed to load tui configuration",

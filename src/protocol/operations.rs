@@ -12,7 +12,9 @@
 
 use super::delivery::{PackingUnitId, SubmissionEvidence};
 use super::identity::ConsumerBinding;
-use super::mailbox::{CursorPosition, EntryRange, EntrySequence, MailboxEntry};
+use super::mailbox::{
+    CursorPosition, EntryRange, EntrySequence, MailboxEntry,
+};
 
 /// Reads the head of a target's mailbox without advancing anything.
 ///

@@ -19,13 +19,15 @@
 //! configuration could trip. Both facts are now gone.
 
 use agentmux::tui::{
-    Action, AffectedClasses, BindingConfiguration, BindingContext, CapabilityClass,
-    ConfiguredAction, ConfiguredBinding, PrimaryModifier, UnreachableAction, default_binding,
-    parse_chord, quit_unreachable, unreachable_actions,
+    Action, AffectedClasses, BindingConfiguration, BindingContext,
+    CapabilityClass, ConfiguredAction, ConfiguredBinding, PrimaryModifier,
+    UnreachableAction, default_binding, parse_chord, quit_unreachable,
+    unreachable_actions,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 
-const BOTH: &[CapabilityClass] = &[CapabilityClass::Enhanced, CapabilityClass::Standard];
+const BOTH: &[CapabilityClass] =
+    &[CapabilityClass::Enhanced, CapabilityClass::Standard];
 
 /// One configured row, speaking for the classes given.
 fn row(
@@ -61,11 +63,16 @@ fn configuration(rows: Vec<ConfiguredBinding>) -> BindingConfiguration {
 const SENDING_CHORDS: [&str; 3] = ["enter", "shift+enter", "ctrl+enter"];
 
 /// Rows claiming all three of those for one behavior.
-fn claim_sending(action: ConfiguredAction, classes: &[CapabilityClass]) -> BindingConfiguration {
+fn claim_sending(
+    action: ConfiguredAction,
+    classes: &[CapabilityClass],
+) -> BindingConfiguration {
     configuration(
         SENDING_CHORDS
             .iter()
-            .map(|chord| row(BindingContext::ComposeMessage, chord, action, classes))
+            .map(|chord| {
+                row(BindingContext::ComposeMessage, chord, action, classes)
+            })
             .collect(),
     )
 }
@@ -116,7 +123,10 @@ fn displacing_every_chord_of_a_behavior_is_reported_under_both_classes() {
         );
     }
 
-    let configuration = claim_sending(ConfiguredAction::Invoke(Action::InsertMessageNewline), BOTH);
+    let configuration = claim_sending(
+        ConfiguredAction::Invoke(Action::InsertMessageNewline),
+        BOTH,
+    );
     assert_eq!(
         finding_for(&configuration, compose, Action::SendMessage),
         Some(AffectedClasses::Both)
@@ -129,7 +139,10 @@ fn displacing_every_chord_of_a_behavior_is_reported_under_both_classes() {
 #[test]
 fn an_explicit_unbinding_is_reported_exactly_as_a_displacement_is() {
     let compose = BindingContext::ComposeMessage;
-    let displaced = claim_sending(ConfiguredAction::Invoke(Action::InsertMessageNewline), BOTH);
+    let displaced = claim_sending(
+        ConfiguredAction::Invoke(Action::InsertMessageNewline),
+        BOTH,
+    );
     let emptied = claim_sending(ConfiguredAction::Unbound, BOTH);
 
     assert_eq!(
@@ -399,7 +412,10 @@ fn which_chord_the_symbolic_modifier_claims_follows_the_platform() {
     let sending_lost = |on_macos| {
         unreachable_actions(Some(&configuration), on_macos)
             .into_iter()
-            .find(|finding| finding.context == compose && finding.action == Action::SendMessage)
+            .find(|finding| {
+                finding.context == compose
+                    && finding.action == Action::SendMessage
+            })
             .map(|finding| finding.classes)
     };
     assert_eq!(
@@ -431,7 +447,11 @@ fn which_chord_the_symbolic_modifier_claims_follows_the_platform() {
 fn a_global_row_shadowing_a_contextual_chord_is_reported() {
     let compose = BindingContext::ComposeMessage;
     assert_eq!(
-        default_binding(BindingContext::Global, KeyCode::Enter, KeyModifiers::NONE),
+        default_binding(
+            BindingContext::Global,
+            KeyCode::Enter,
+            KeyModifiers::NONE
+        ),
         None,
         "the global context already binds Enter, so this fixture displaces \
          something other than what it means to"

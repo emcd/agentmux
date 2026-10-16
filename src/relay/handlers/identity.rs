@@ -17,14 +17,17 @@ use crate::relay::authorization::{RelayActionFamily, authorize_relay_action};
 use crate::relay::context::RequestPrincipal;
 use crate::relay::identity::{
     IdentityIntrospectRights, PrincipalRecord, PrincipalStore, PrincipalType,
-    classify_principal_id, generate_psk, hash_token_sha256, parse_peer_scope, scope_permits,
-    split_principal_id, stage_credential_sink, write_pending_credential,
+    classify_principal_id, generate_psk, hash_token_sha256, parse_peer_scope,
+    scope_permits, split_principal_id, stage_credential_sink,
+    write_pending_credential,
 };
 use crate::relay::stream::{
-    RelayStreamEvent, notify_trusted_hosts_of_revocation, revoke_streams_for_identity,
+    RelayStreamEvent, notify_trusted_hosts_of_revocation,
+    revoke_streams_for_identity,
 };
 use crate::relay::{
-    CredentialDestination, RelayDiagnostic, RelayError, RelayResponse, SCHEMA_VERSION, relay_error,
+    CredentialDestination, RelayDiagnostic, RelayError, RelayResponse,
+    SCHEMA_VERSION, relay_error,
 };
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::session_identity_psk_path;
@@ -56,7 +59,8 @@ pub(in crate::relay) fn handle_new_peer(
         RelayActionFamily::New,
         "peer",
     )?;
-    let principal_type = classify_target_principal(context.principal_id.as_str())?;
+    let principal_type =
+        classify_target_principal(context.principal_id.as_str())?;
     let canonical_scope = if principal_type == PrincipalType::Relay {
         parse_peer_scope(context.scope.as_deref())?
     } else {
@@ -109,7 +113,7 @@ pub(in crate::relay) fn handle_new_peer(
                     pending.abort();
                 }
                 return Err(error);
-            }
+            },
             Err(rollback) if is_durability_uncertain(&rollback) => {
                 // Compensation rename succeeded: the prior absence is
                 // effective now and only crash durability is uncertain.
@@ -119,7 +123,7 @@ pub(in crate::relay) fn handle_new_peer(
                     pending.abort();
                 }
                 return Err(error);
-            }
+            },
             Err(rollback) => {
                 // Compensation failed before its rename: the original
                 // publication stands and the new record is effective. Publish
@@ -133,12 +137,15 @@ pub(in crate::relay) fn handle_new_peer(
                     let _ = pending.commit();
                 }
                 return Err(credential_rollback_failed(error, rollback));
-            }
+            },
         }
     }
 
-    let config_snippet =
-        build_config_snippet(principal_type, context.principal_id.as_str(), state_root);
+    let config_snippet = build_config_snippet(
+        principal_type,
+        context.principal_id.as_str(),
+        state_root,
+    );
     let (returned_psk, written_path) = match pending {
         None => (Some(psk), None),
         Some(pending) => match pending.commit() {
@@ -149,7 +156,7 @@ pub(in crate::relay) fn handle_new_peer(
                 // record back would orphan a published credential file with
                 // no record; report the typed uncertainty instead.
                 return Err(error);
-            }
+            },
             Err(error) => {
                 // The rename failed after the store commit: remove the record we
                 // just inserted so no principal lingers without a credential
@@ -162,7 +169,7 @@ pub(in crate::relay) fn handle_new_peer(
                     return Err(credential_rollback_failed(error, rollback));
                 }
                 return Err(error);
-            }
+            },
         },
     };
     Ok(RelayResponse::NewPeer {
@@ -233,7 +240,9 @@ pub(in crate::relay) fn handle_change_psk(
     )?;
     let mut store = PrincipalStore::load(state_root)?;
     store.prune_expired(OffsetDateTime::now_utc());
-    let Some(existing) = store.find_by_principal_id(principal_id.as_str()).cloned() else {
+    let Some(existing) =
+        store.find_by_principal_id(principal_id.as_str()).cloned()
+    else {
         return Err(relay_error(
             "validation_unknown_principal",
             "principal_id is not registered; create it with new peer first",
@@ -282,7 +291,7 @@ pub(in crate::relay) fn handle_change_psk(
                     pending.abort();
                 }
                 return Err(error);
-            }
+            },
             Err(rollback) if is_durability_uncertain(&rollback) => {
                 // Compensation rename succeeded: the prior record is
                 // effective now and only crash durability is uncertain.
@@ -293,7 +302,7 @@ pub(in crate::relay) fn handle_change_psk(
                     pending.abort();
                 }
                 return Err(error);
-            }
+            },
             Err(rollback) => {
                 // Compensation failed: the rotated hash may still be
                 // effective. Fail closed — publish staged material
@@ -304,13 +313,16 @@ pub(in crate::relay) fn handle_change_psk(
                 // reconciles by rotating again, which always applies cleanly
                 // to the existing record.
                 match pending {
-                    None => {}
+                    None => {},
                     Some(pending) => {
                         let _ = pending.commit();
-                    }
+                    },
                 }
                 let (revoked_connections, notified_hosts) =
-                    revoke_superseded_credential(principal_id.as_str(), requester_principal_id);
+                    revoke_superseded_credential(
+                        principal_id.as_str(),
+                        requester_principal_id,
+                    );
                 emit_inscription(
                     "relay.identity.psk_rotate_failed",
                     &serde_json::json!({
@@ -320,7 +332,7 @@ pub(in crate::relay) fn handle_change_psk(
                     }),
                 );
                 return Err(credential_rollback_failed(error, rollback));
-            }
+            },
         }
     }
     let written_path = match pending {
@@ -335,7 +347,10 @@ pub(in crate::relay) fn handle_change_psk(
                 // down sessions holding the superseded credential exactly as
                 // the success path does, then report the typed uncertainty.
                 let (revoked_connections, notified_hosts) =
-                    revoke_superseded_credential(principal_id.as_str(), requester_principal_id);
+                    revoke_superseded_credential(
+                        principal_id.as_str(),
+                        requester_principal_id,
+                    );
                 emit_inscription(
                     "relay.identity.psk_rotated",
                     &serde_json::json!({
@@ -345,7 +360,7 @@ pub(in crate::relay) fn handle_change_psk(
                     }),
                 );
                 return Err(error);
-            }
+            },
             Err(error) => {
                 // The rename failed after the store commit: restore the prior
                 // record so the unchanged config file still authenticates, and
@@ -358,7 +373,7 @@ pub(in crate::relay) fn handle_change_psk(
                     return Err(credential_rollback_failed(error, rollback));
                 }
                 return Err(error);
-            }
+            },
         },
     };
 
@@ -373,8 +388,10 @@ pub(in crate::relay) fn handle_change_psk(
     // destination is Response. Excluding it cannot leave some other session
     // alive on the prior credential: the stream registry keys one entry per
     // `principal_id`, so a self-rotation's only possible match is the requester.
-    let (revoked_connections, notified_hosts) =
-        revoke_superseded_credential(principal_id.as_str(), requester_principal_id);
+    let (revoked_connections, notified_hosts) = revoke_superseded_credential(
+        principal_id.as_str(),
+        requester_principal_id,
+    );
     emit_inscription(
         "relay.identity.psk_rotated",
         &serde_json::json!({
@@ -429,7 +446,9 @@ pub(in crate::relay) fn handle_change_scope(
         RelayActionFamily::Change,
         "scope",
     )?;
-    if classify_principal_id(principal_id.as_str()) != Some(PrincipalType::Relay) {
+    if classify_principal_id(principal_id.as_str())
+        != Some(PrincipalType::Relay)
+    {
         return Err(relay_error(
             "validation_invalid_principal_id",
             "change scope applies only to peer relay principals (<id>@RELAY)",
@@ -443,7 +462,9 @@ pub(in crate::relay) fn handle_change_scope(
     // No expiry pruning here: this operation must not alter unrelated records
     // as a side effect.
     let mut store = PrincipalStore::load(state_root)?;
-    let Some(existing) = store.find_by_principal_id(principal_id.as_str()).cloned() else {
+    let Some(existing) =
+        store.find_by_principal_id(principal_id.as_str()).cloned()
+    else {
         return Err(relay_error(
             "validation_unknown_principal",
             "principal_id is not registered; create it with new peer first",
@@ -551,7 +572,9 @@ pub(in crate::relay) fn handle_drop_peer(
     store.prune_expired(OffsetDateTime::now_utc());
     // Behind the gate: answering this for an unauthorized caller would disclose
     // whether an arbitrary principal exists.
-    let Some(existing) = store.find_by_principal_id(principal_id.as_str()).cloned() else {
+    let Some(existing) =
+        store.find_by_principal_id(principal_id.as_str()).cloned()
+    else {
         return Err(relay_error(
             "validation_unknown_principal",
             "principal_id is not registered",
@@ -577,7 +600,8 @@ pub(in crate::relay) fn handle_drop_peer(
             Some(serde_json::json!({ "principal_id": principal_id })),
         ),
     };
-    let revoked_connections = revoke_streams_for_identity(principal_id.as_str(), &revoked_frame);
+    let revoked_connections =
+        revoke_streams_for_identity(principal_id.as_str(), &revoked_frame);
     let revoked_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_default();
@@ -590,7 +614,10 @@ pub(in crate::relay) fn handle_drop_peer(
             "revoked_at": revoked_at,
         }),
     };
-    let notified_hosts = notify_trusted_hosts_of_revocation(principal_id.as_str(), &revoked_event);
+    let notified_hosts = notify_trusted_hosts_of_revocation(
+        principal_id.as_str(),
+        &revoked_event,
+    );
     emit_inscription(
         "relay.identity.principal_dropped",
         &serde_json::json!({
@@ -601,8 +628,11 @@ pub(in crate::relay) fn handle_drop_peer(
         }),
     );
 
-    let credential_path =
-        relay_owned_credential_path(existing.principal_type, principal_id.as_str(), state_root);
+    let credential_path = relay_owned_credential_path(
+        existing.principal_type,
+        principal_id.as_str(),
+        state_root,
+    );
     let principal_type = existing.principal_type.as_str().to_string();
     match durability_uncertain {
         None => Ok(RelayResponse::DropPeer {
@@ -723,7 +753,12 @@ pub(in crate::relay) fn build_identity_snapshot_event(
     let principals: Vec<Value> = store
         .records()
         .filter(|record| !record.is_expired(now))
-        .filter(|record| scope_permits(rights.scope.as_deref(), record.principal_id.as_str()))
+        .filter(|record| {
+            scope_permits(
+                rights.scope.as_deref(),
+                record.principal_id.as_str(),
+            )
+        })
         .map(snapshot_principal_entry)
         .collect();
     Ok(RelayStreamEvent {
@@ -746,14 +781,19 @@ fn snapshot_principal_entry(record: &PrincipalRecord) -> Value {
         Value::String(record.principal_id.clone()),
     );
     if let Some(expires_at) = record.expires_at.as_ref() {
-        entry.insert("expires_at".to_string(), Value::String(expires_at.clone()));
+        entry.insert(
+            "expires_at".to_string(),
+            Value::String(expires_at.clone()),
+        );
     }
     entry.insert("verified".to_string(), Value::Bool(true));
     Value::Object(entry)
 }
 
 /// Validates and classifies the target `principal_id` for registration.
-fn classify_target_principal(principal_id: &str) -> Result<PrincipalType, RelayError> {
+fn classify_target_principal(
+    principal_id: &str,
+) -> Result<PrincipalType, RelayError> {
     classify_principal_id(principal_id).ok_or_else(|| {
         relay_error(
             "validation_invalid_principal_id",
@@ -822,7 +862,8 @@ fn revoke_superseded_credential(
             "revoked_at": revoked_at,
         }),
     };
-    let notified_hosts = notify_trusted_hosts_of_revocation(principal_id, &revoked_event);
+    let notified_hosts =
+        notify_trusted_hosts_of_revocation(principal_id, &revoked_event);
     (revoked_connections, notified_hosts)
 }
 
@@ -836,7 +877,10 @@ fn revoke_superseded_credential(
 /// The operator reconciles by inspecting and re-rotating or recreating; staged
 /// Response-destination secrets that could not be delivered are lost, but
 /// nothing referenced them yet.
-fn credential_rollback_failed(write_error: RelayError, rollback_error: RelayError) -> RelayError {
+fn credential_rollback_failed(
+    write_error: RelayError,
+    rollback_error: RelayError,
+) -> RelayError {
     relay_error(
         "internal_credential_rollback_failed",
         "credential publish failed and the principal-store rollback also failed; the store may be inconsistent",

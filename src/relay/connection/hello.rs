@@ -11,14 +11,19 @@ use std::io;
 use crate::configuration::SessionType;
 
 use super::super::stream::{
-    HelloFrame, OutgoingFrame, RegisterStreamOutcome, StreamRevokeSignal, register_stream,
-    write_stream_frame_to_writer,
+    HelloFrame, OutgoingFrame, RegisterStreamOutcome, StreamRevokeSignal,
+    register_stream, write_stream_frame_to_writer,
 };
-use super::super::{IdentityIntrospectRights, RelayResponse, SCHEMA_VERSION, handlers};
+use super::super::{
+    IdentityIntrospectRights, RelayResponse, SCHEMA_VERSION, handlers,
+};
 use super::helpers::{
-    emit_registration_choices_snapshots, identity_claim_conflict_error, resolve_hello_binding,
+    emit_registration_choices_snapshots, identity_claim_conflict_error,
+    resolve_hello_binding,
 };
-use super::serve::{ConnectionBinding, FrameContext, FrameOutcome, RegistrationGuard};
+use super::serve::{
+    ConnectionBinding, FrameContext, FrameOutcome, RegistrationGuard,
+};
 use crate::runtime::paths::BundleRuntimePaths;
 
 /// Connection-level binding established from a verified Hello identity.
@@ -71,12 +76,13 @@ pub(super) async fn handle_hello(
                 },
             )?;
             return Ok(FrameOutcome::Stop);
-        }
+        },
     };
     // Verified `principal_id` of a store-backed connection; `None`
     // for socket-trust. Recorded on the registry entry so a
     // `change psk` rotation can find and revoke this connection.
-    let connection_identity = binding.store_backed.then(|| hello.principal_id.clone());
+    let connection_identity =
+        binding.store_backed.then(|| hello.principal_id.clone());
     // Introspection scope of an application principal, recorded on
     // the registry entry so revocation fan-out can filter watching
     // hosts by scope; `None` for every other principal type.
@@ -94,11 +100,12 @@ pub(super) async fn handle_hello(
     )? {
         RegisterStreamOutcome::Registered(value) => {
             guard.set(value);
-        }
+        },
         RegisterStreamOutcome::IdentityClaimConflict {
             existing_connection_id,
         } => {
-            let error = identity_claim_conflict_error(&hello, existing_connection_id);
+            let error =
+                identity_claim_conflict_error(&hello, existing_connection_id);
             write_stream_frame_to_writer(
                 writer,
                 OutgoingFrame::Response {
@@ -107,7 +114,7 @@ pub(super) async fn handle_hello(
                 },
             )?;
             return Ok(FrameOutcome::Stop);
-        }
+        },
     }
     write_stream_frame_to_writer(
         writer,
@@ -117,8 +124,11 @@ pub(super) async fn handle_hello(
         },
     )?;
     if binding.session_type == SessionType::Ui
-        && let Err(error) =
-            emit_registration_choices_snapshots(frame.configuration_roots, bundle_catalog, &binding)
+        && let Err(error) = emit_registration_choices_snapshots(
+            frame.configuration_roots,
+            bundle_catalog,
+            &binding,
+        )
     {
         write_stream_frame_to_writer(
             writer,
@@ -148,9 +158,10 @@ pub(super) async fn handle_hello(
             hello.principal_id.as_str(),
             rights,
         ) {
-            Ok(event) => {
-                write_stream_frame_to_writer(writer, OutgoingFrame::Event { event: &event })?
-            }
+            Ok(event) => write_stream_frame_to_writer(
+                writer,
+                OutgoingFrame::Event { event: &event },
+            )?,
             Err(error) => {
                 write_stream_frame_to_writer(
                     writer,
@@ -160,7 +171,7 @@ pub(super) async fn handle_hello(
                     },
                 )?;
                 return Ok(FrameOutcome::Stop);
-            }
+            },
         }
     }
     Ok(FrameOutcome::Next)

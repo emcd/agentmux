@@ -14,7 +14,10 @@ const GLOBAL_SESSION_SUFFIX: &str = "@GLOBAL";
 /// and so rejects bare targets — it must name each target's `@namespace`
 /// explicitly, since the relay derives `Send` routing solely from those
 /// suffixes.
-pub fn sender_bound_bundle<'a>(sender_session: &str, active_bundle: &'a str) -> Option<&'a str> {
+pub fn sender_bound_bundle<'a>(
+    sender_session: &str,
+    active_bundle: &'a str,
+) -> Option<&'a str> {
     if sender_session.ends_with(GLOBAL_SESSION_SUFFIX) {
         None
     } else {
@@ -73,7 +76,9 @@ pub fn parse_tui_target_identifier(
     if after_prefix.contains('/') {
         return Err(RuntimeError::validation(
             "validation_unknown_target",
-            format!("target identifier '{after_prefix}' is invalid; '/' is not allowed"),
+            format!(
+                "target identifier '{after_prefix}' is invalid; '/' is not allowed"
+            ),
         ));
     }
     let mut parts = after_prefix.splitn(2, '@');
@@ -104,10 +109,14 @@ pub fn parse_tui_target_identifier(
                 "bundle qualifier must be non-empty in 'session@bundle' (got '{after_prefix}')"
             ),
         )),
-        Some(namespace) if namespace.contains('@') => Err(RuntimeError::validation(
-            "validation_unknown_target",
-            format!("target identifier '{after_prefix}' may contain at most one '@' separator"),
-        )),
+        Some(namespace) if namespace.contains('@') => {
+            Err(RuntimeError::validation(
+                "validation_unknown_target",
+                format!(
+                    "target identifier '{after_prefix}' may contain at most one '@' separator"
+                ),
+            ))
+        },
         Some(namespace) => Ok(format!("{session}@{namespace}")),
     }
 }
@@ -146,7 +155,10 @@ pub fn merge_tui_targets(
 }
 
 /// Completes the current recipient token from a list of candidate identities.
-pub fn autocomplete_recipient_input(field_value: &str, candidates: &[String]) -> Option<String> {
+pub fn autocomplete_recipient_input(
+    field_value: &str,
+    candidates: &[String],
+) -> Option<String> {
     let context = current_recipient_token_context(field_value)?;
     let selected = matching_recipient_candidates(&context.query, candidates)
         .first()
@@ -159,7 +171,10 @@ pub fn autocomplete_recipient_input(field_value: &str, candidates: &[String]) ->
     Some(next)
 }
 
-pub(super) fn matching_recipient_candidates(query: &str, candidates: &[String]) -> Vec<String> {
+pub(super) fn matching_recipient_candidates(
+    query: &str,
+    candidates: &[String],
+) -> Vec<String> {
     let mut matched = candidates
         .iter()
         .filter(|candidate| query.is_empty() || candidate.starts_with(query))
@@ -169,8 +184,11 @@ pub(super) fn matching_recipient_candidates(query: &str, candidates: &[String]) 
     matched
 }
 
-pub(super) fn current_recipient_token_context(field_value: &str) -> Option<RecipientTokenContext> {
-    let token_start = field_value.rfind(',').map(|index| index + 1).unwrap_or(0);
+pub(super) fn current_recipient_token_context(
+    field_value: &str,
+) -> Option<RecipientTokenContext> {
+    let token_start =
+        field_value.rfind(',').map(|index| index + 1).unwrap_or(0);
     let token_slice = &field_value[token_start..];
     let leading_ws = token_slice
         .char_indices()
@@ -187,7 +205,8 @@ pub(super) fn current_recipient_token_context(field_value: &str) -> Option<Recip
         return None;
     }
 
-    let (at_prefixed, query) = if let Some(rest) = token_text.strip_prefix('@') {
+    let (at_prefixed, query) = if let Some(rest) = token_text.strip_prefix('@')
+    {
         (true, rest.to_string())
     } else {
         (false, token_text.clone())
@@ -201,7 +220,10 @@ pub(super) fn current_recipient_token_context(field_value: &str) -> Option<Recip
     })
 }
 
-pub(crate) fn append_recipient_token(field_value: &str, recipient: &str) -> String {
+pub(crate) fn append_recipient_token(
+    field_value: &str,
+    recipient: &str,
+) -> String {
     let mut tokens = field_value
         .split(',')
         .map(str::trim)

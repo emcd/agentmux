@@ -28,7 +28,10 @@ pub(crate) struct RestoredMode {
 
 impl Drop for RestoredMode {
     fn drop(&mut self) {
-        let _ = fs::set_permissions(&self.directory, fs::Permissions::from_mode(self.original));
+        let _ = fs::set_permissions(
+            &self.directory,
+            fs::Permissions::from_mode(self.original),
+        );
     }
 }
 

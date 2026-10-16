@@ -149,9 +149,13 @@ pub fn enforce_replay_buffer_cap_and_maintain_positions(
 /// should NOT push a new entry). Returns `false` if the caller should push
 /// `new_entry` as-is. Pass-by-reference with internal clone of merge-target
 /// fields; the merge cost is `O(new_entry's lines)` per mergeable pair.
-fn try_merge_adjacent(tail: &mut ReplayEntry, new_entry: &ReplayEntry) -> bool {
+fn try_merge_adjacent(
+    tail: &mut ReplayEntry,
+    new_entry: &ReplayEntry,
+) -> bool {
     use ReplayEntry::{
-        Agent as AgentEntry, Cognition as CognitionEntry, Update as UpdateEntry, User as UserEntry,
+        Agent as AgentEntry, Cognition as CognitionEntry,
+        Update as UpdateEntry, User as UserEntry,
     };
     match (tail, new_entry) {
         (
@@ -166,15 +170,21 @@ fn try_merge_adjacent(tail: &mut ReplayEntry, new_entry: &ReplayEntry) -> bool {
         ) if tail_source == new_source => {
             tail_lines.extend(new_lines.iter().cloned());
             true
-        }
-        (AgentEntry { lines: tail_lines }, AgentEntry { lines: new_lines }) => {
+        },
+        (
+            AgentEntry { lines: tail_lines },
+            AgentEntry { lines: new_lines },
+        ) => {
             tail_lines.extend(new_lines.iter().cloned());
             true
-        }
-        (CognitionEntry { lines: tail_lines }, CognitionEntry { lines: new_lines }) => {
+        },
+        (
+            CognitionEntry { lines: tail_lines },
+            CognitionEntry { lines: new_lines },
+        ) => {
             tail_lines.extend(new_lines.iter().cloned());
             true
-        }
+        },
         (
             UpdateEntry {
                 update_kind: tail_kind,
@@ -187,7 +197,7 @@ fn try_merge_adjacent(tail: &mut ReplayEntry, new_entry: &ReplayEntry) -> bool {
         ) if tail_kind == new_kind => {
             tail_lines.extend(new_lines.iter().cloned());
             true
-        }
+        },
         // Invocation never merges with adjacent entries, regardless of
         // identity (the per-call boundary must be preserved). Different-kind
         // pairs never merge. Update entries with different `update_kind`
@@ -258,13 +268,16 @@ pub fn parse_replay_entries_from_params(
                         }],
                     );
                 }
-            }
+            },
             "agent_message_chunk" => {
                 let lines = collect_text_lines_from_value(update);
                 if !lines.is_empty() {
-                    coalesce_replay_entries_on_append(buffer, vec![ReplayEntry::Agent { lines }]);
+                    coalesce_replay_entries_on_append(
+                        buffer,
+                        vec![ReplayEntry::Agent { lines }],
+                    );
                 }
-            }
+            },
             "agent_thought_chunk" => {
                 let lines = collect_text_lines_from_value(update);
                 if !lines.is_empty() {
@@ -273,7 +286,7 @@ pub fn parse_replay_entries_from_params(
                         vec![ReplayEntry::Cognition { lines }],
                     );
                 }
-            }
+            },
             "tool_call" => {
                 let Some(call_id) = update
                     .get("toolCallId")
@@ -293,7 +306,10 @@ pub fn parse_replay_entries_from_params(
                     invocation,
                     result: None,
                 };
-                coalesce_replay_entries_on_append(buffer, vec![pending_entry.clone()]);
+                coalesce_replay_entries_on_append(
+                    buffer,
+                    vec![pending_entry.clone()],
+                );
                 let buffer_position = buffer.len() - 1;
                 pending_calls.insert(
                     call_id,
@@ -302,7 +318,7 @@ pub fn parse_replay_entries_from_params(
                         buffer_position,
                     },
                 );
-            }
+            },
             "tool_call_update" => {
                 let Some(call_id) = update
                     .get("toolCallId")
@@ -317,19 +333,21 @@ pub fn parse_replay_entries_from_params(
                 };
                 let result = update.clone();
                 match pending_calls.remove(&call_id) {
-                    Some(pending) => match &mut buffer[pending.buffer_position] {
-                        ReplayEntry::Invocation {
-                            status,
-                            result: existing_result,
-                            ..
-                        } => {
-                            *status = ToolCallStatus::Completed;
-                            *existing_result = Some(result);
+                    Some(pending) => {
+                        match &mut buffer[pending.buffer_position] {
+                            ReplayEntry::Invocation {
+                                status,
+                                result: existing_result,
+                                ..
+                            } => {
+                                *status = ToolCallStatus::Completed;
+                                *existing_result = Some(result);
+                            },
+                            _ => panic!(
+                                "tool_call_lifecycle invariant violated: pending call_id={} recorded at buffer position {} but entry is not Invocation",
+                                call_id, pending.buffer_position
+                            ),
                         }
-                        _ => panic!(
-                            "tool_call_lifecycle invariant violated: pending call_id={} recorded at buffer position {} but entry is not Invocation",
-                            call_id, pending.buffer_position
-                        ),
                     },
                     None => {
                         let orphan_entry = ReplayEntry::Invocation {
@@ -338,17 +356,20 @@ pub fn parse_replay_entries_from_params(
                             invocation: serde_json::json!({}),
                             result: Some(result),
                         };
-                        coalesce_replay_entries_on_append(buffer, vec![orphan_entry]);
-                    }
+                        coalesce_replay_entries_on_append(
+                            buffer,
+                            vec![orphan_entry],
+                        );
+                    },
                 }
-            }
+            },
             _ => {
                 let entry = ReplayEntry::Update {
                     update_kind,
                     lines: collect_text_lines_from_value(update),
                 };
                 coalesce_replay_entries_on_append(buffer, vec![entry]);
-            }
+            },
         }
     }
     enforce_replay_buffer_cap_and_maintain_positions(buffer, pending_calls);
@@ -366,7 +387,7 @@ fn collect_text_lines_recursive(value: &Value, output: &mut Vec<String>) {
             for value in values {
                 collect_text_lines_recursive(value, output);
             }
-        }
+        },
         Value::Object(values) => {
             if let Some(text) = values.get("text").and_then(Value::as_str) {
                 super::text::append_text_lines(text, output);
@@ -374,7 +395,7 @@ fn collect_text_lines_recursive(value: &Value, output: &mut Vec<String>) {
             for value in values.values() {
                 collect_text_lines_recursive(value, output);
             }
-        }
-        _ => {}
+        },
+        _ => {},
     }
 }

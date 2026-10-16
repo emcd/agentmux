@@ -23,10 +23,12 @@ use super::*;
 fn cross_relay_send_propagates_peer_delivery_outcome() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots =
+        write_cross_relay_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
 
     let peer_socket = temporary.path().join("peer.sock");
@@ -79,10 +81,12 @@ fn cross_relay_send_propagates_peer_delivery_outcome() {
 fn cross_relay_send_reports_ingress_denied_as_failed() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots =
+        write_cross_relay_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
 
     let peer_socket = temporary.path().join("peer.sock");
@@ -115,10 +119,12 @@ fn cross_relay_send_reports_ingress_denied_as_failed() {
 fn cross_relay_send_reports_peer_unavailable_when_unreachable() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots =
+        write_cross_relay_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
 
     // No listener is bound at this path: the peer is unreachable. The origin still
@@ -172,10 +178,12 @@ fn cross_relay_send_requires_all_tier() {
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     // The default policy grants alpha `send = home`, so a cross-relay (always
     // all-tier) target is denied at authorization before any peer is dialed.
-    let configuration_roots = write_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
 
     // A peer is configured, so the request is not reported as unavailable; the
@@ -223,10 +231,12 @@ fn cross_relay_send_requires_all_tier() {
 fn cross_relay_ingress_accepts_in_scope_target() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     let relay_principal_id = unique_relay_principal_id();
     // A bundle-wide scope covers every session in the target bundle.
     write_ingress_peer_store(
@@ -257,10 +267,12 @@ fn cross_relay_ingress_accepts_in_scope_target() {
 fn cross_relay_ingress_denies_out_of_scope_target() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     let relay_principal_id = unique_relay_principal_id();
     // The scope names a different bundle, so the target is out of scope.
     write_ingress_peer_store(
@@ -290,13 +302,19 @@ fn cross_relay_ingress_denies_out_of_scope_target() {
 fn cross_relay_ingress_denies_absent_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     let relay_principal_id = unique_relay_principal_id();
     // A peer registered without a scope covers nothing (deny-by-default).
-    write_ingress_peer_store(&bundle_paths.state_root, relay_principal_id.as_str(), None);
+    write_ingress_peer_store(
+        &bundle_paths.state_root,
+        relay_principal_id.as_str(),
+        None,
+    );
 
     let response = ingress_send_response(
         &configuration_roots,
@@ -315,10 +333,12 @@ fn cross_relay_ingress_denies_absent_scope() {
 fn cross_relay_ingress_unknown_target_sorts_before_authorization() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     let relay_principal_id = unique_relay_principal_id();
     // Out-of-scope peer targeting a non-member: existence is validated by the
     // spine's prepare stage before the ingress gate, so an unknown target sorts
@@ -346,10 +366,12 @@ fn cross_relay_ingress_unknown_target_sorts_before_authorization() {
 fn cross_relay_ingress_rejects_bang_path_send_before_forwarding() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     let relay_principal_id = unique_relay_principal_id();
     // In-scope for the local bundle, but the target carries a bang-path onward
     // relay id. A peer must not chain through this relay to a third relay, so the
@@ -388,10 +410,12 @@ fn cross_relay_ingress_rejects_bang_path_send_before_forwarding() {
 fn cross_relay_ingress_rejects_bang_path_raww_before_forwarding() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
+    let configuration_roots =
+        write_bundle_configuration_with_ui_member(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     let relay_principal_id = unique_relay_principal_id();
     write_ingress_peer_store(
         &bundle_paths.state_root,
@@ -439,10 +463,12 @@ fn cross_relay_send_redials_a_peer_that_revoked_the_outbound_connection() {
     // fresh manager and could not observe a stale cache at all.
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
-    let configuration_roots = write_cross_relay_bundle_configuration(&temporary, &bundle_name);
+    let configuration_roots =
+        write_cross_relay_bundle_configuration(&temporary, &bundle_name);
     let state_root = temporary.path().join("state");
     let bundle_paths =
-        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str()).expect("bundle paths");
+        BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
+            .expect("bundle paths");
     write_peer_credential(&bundle_paths.state_root, "peer", "peer-secret");
 
     let peer_socket = temporary.path().join("peer.sock");
@@ -456,7 +482,8 @@ fn cross_relay_send_redials_a_peer_that_revoked_the_outbound_connection() {
             "outcome": "queued",
         }],
     });
-    let (peer_closed, observed_after_redial) = spawn_revoking_peer(&peer_socket, peer_response);
+    let (peer_closed, observed_after_redial) =
+        spawn_revoking_peer(&peer_socket, peer_response);
 
     let (mut client, handle) = spawn_relay_stream_with_peer(
         &configuration_roots,

@@ -21,7 +21,10 @@ use tokio::sync::mpsc;
 use crate::pty::command::program_and_args;
 use crate::transports::{TransportError, TransportReadiness, TransportStatus};
 
-use super::{PtyChildHandle, PtyTransport, STARTUP_CLEANUP_JOIN_BOUND, STARTUP_CLEANUP_POLL};
+use super::{
+    PtyChildHandle, PtyTransport, STARTUP_CLEANUP_JOIN_BOUND,
+    STARTUP_CLEANUP_POLL,
+};
 
 impl PtyTransport {
     /// Performs the bootstrap work behind [`crate::transports::Transport::startup`].
@@ -55,11 +58,16 @@ impl PtyTransport {
                 details: None,
             })?;
 
-        let (program, args) = program_and_args(&initial_command).map_err(|e| TransportError {
-            code: "pty_command_parse_failed".to_string(),
-            reason: format!("tokenize initial_command {initial_command:?}: {e}"),
-            details: None,
-        })?;
+        let (program, args) =
+            program_and_args(&initial_command).map_err(|e| {
+                TransportError {
+                    code: "pty_command_parse_failed".to_string(),
+                    reason: format!(
+                        "tokenize initial_command {initial_command:?}: {e}"
+                    ),
+                    details: None,
+                }
+            })?;
         let mut cmd = CommandBuilder::new(&program);
         for arg in &args {
             cmd.arg(arg);
@@ -76,31 +84,35 @@ impl PtyTransport {
         if let Some(cwd) = cwd.and_then(|p| p.to_str()) {
             cmd.cwd(cwd);
         }
-        let child = pair.slave.spawn_command(cmd).map_err(|e| TransportError {
-            code: "pty_spawn_failed".to_string(),
-            reason: format!("spawn_command: {e}"),
-            details: None,
-        })?;
+        let child =
+            pair.slave.spawn_command(cmd).map_err(|e| TransportError {
+                code: "pty_spawn_failed".to_string(),
+                reason: format!("spawn_command: {e}"),
+                details: None,
+            })?;
         drop(pair.slave);
 
         let child_arc: PtyChildHandle = Arc::new(std::sync::Mutex::new(child));
         guard.note_child(child_arc.clone());
 
-        let reader = pair.master.try_clone_reader().map_err(|e| TransportError {
-            code: "pty_reader_clone_failed".to_string(),
-            reason: format!("try_clone_reader: {e}"),
-            details: None,
-        })?;
-        let writer = pair.master.take_writer().map_err(|e| TransportError {
-            code: "pty_writer_take_failed".to_string(),
-            reason: format!("take_writer: {e}"),
-            details: None,
-        })?;
+        let reader =
+            pair.master.try_clone_reader().map_err(|e| TransportError {
+                code: "pty_reader_clone_failed".to_string(),
+                reason: format!("try_clone_reader: {e}"),
+                details: None,
+            })?;
+        let writer =
+            pair.master.take_writer().map_err(|e| TransportError {
+                code: "pty_writer_take_failed".to_string(),
+                reason: format!("take_writer: {e}"),
+                details: None,
+            })?;
         let writer_arc: Arc<std::sync::Mutex<Box<dyn std::io::Write + Send>>> =
             Arc::new(std::sync::Mutex::new(writer));
 
         let (bytes_tx, bytes_rx) = mpsc::channel::<Vec<u8>>(256);
-        let (snapshot_tx, snapshot_rx) = mpsc::channel::<crate::pty::state::SnapshotRequest>(64);
+        let (snapshot_tx, snapshot_rx) =
+            mpsc::channel::<crate::pty::state::SnapshotRequest>(64);
 
         self.shared.snapshot_tx = snapshot_tx.clone();
         let shared_for_worker = crate::pty::state::PtyShared {
@@ -225,14 +237,12 @@ impl StartupGuard {
             .child
             .take()
             .expect("StartupGuard invariant: child is set before finish");
-        let worker = self
-            .worker_handle
-            .take()
-            .expect("StartupGuard invariant: worker_handle is set before finish");
-        let reader = self
-            .reader_handle
-            .take()
-            .expect("StartupGuard invariant: reader_handle is set before finish");
+        let worker = self.worker_handle.take().expect(
+            "StartupGuard invariant: worker_handle is set before finish",
+        );
+        let reader = self.reader_handle.take().expect(
+            "StartupGuard invariant: reader_handle is set before finish",
+        );
         (child, worker, reader)
     }
 }
@@ -275,7 +285,10 @@ impl Drop for StartupGuard {
 }
 
 /// Boundedly observes a thread's completion instead of blocking on it.
-fn observe_thread_finished(handle: thread::JoinHandle<()>, bound: Duration) -> bool {
+fn observe_thread_finished(
+    handle: thread::JoinHandle<()>,
+    bound: Duration,
+) -> bool {
     let deadline = std::time::Instant::now() + bound;
     while !handle.is_finished() && std::time::Instant::now() < deadline {
         thread::sleep(STARTUP_CLEANUP_POLL);

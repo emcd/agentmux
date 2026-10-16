@@ -7,8 +7,8 @@ async fn updown_up_returns_bundle_transition_from_relay() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("up") => json!({
                     "kind": "bundle_transition",
                     "schema_version": "1",
@@ -34,8 +34,8 @@ async fn updown_up_returns_bundle_transition_from_relay() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -65,8 +65,8 @@ async fn updown_down_returns_bundle_transition_from_relay() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("down") => json!({
                     "kind": "bundle_transition",
                     "schema_version": "1",
@@ -92,8 +92,8 @@ async fn updown_down_returns_bundle_transition_from_relay() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -116,8 +116,8 @@ async fn updown_up_forwards_skipped_outcome_unchanged() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("up") => json!({
                     "kind": "bundle_transition",
                     "schema_version": "1",
@@ -143,8 +143,8 @@ async fn updown_up_forwards_skipped_outcome_unchanged() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -165,8 +165,8 @@ async fn updown_preserves_authorization_forbidden_updown_capability() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("up") | Some("down") => json!({
                     "kind": "error",
                     "error": {
@@ -187,8 +187,8 @@ async fn updown_preserves_authorization_forbidden_updown_capability() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -205,13 +205,16 @@ async fn updown_rejects_unknown_top_level_fields() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive a request for invalid parameters")),
+        Arc::new(|_| {
+            panic!("relay should not receive a request for invalid parameters")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
     arguments.insert("command".to_string(), Value::String("up".to_string()));
-    arguments.insert("stowaway".to_string(), Value::String("value".to_string()));
+    arguments
+        .insert("stowaway".to_string(), Value::String("value".to_string()));
     let response = harness.call_tool(2, "updown", arguments).await;
 
     assert_unknown_field_error(&response, &["stowaway"]);
@@ -224,7 +227,9 @@ async fn updown_rejects_unknown_arg_fields() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive updown for invalid args")),
+        Arc::new(|_| {
+            panic!("relay should not receive updown for invalid args")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -247,12 +252,15 @@ async fn updown_rejects_unknown_command_selector() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive a request for invalid command")),
+        Arc::new(|_| {
+            panic!("relay should not receive a request for invalid command")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("garbage".to_string()));
+    arguments
+        .insert("command".to_string(), Value::String("garbage".to_string()));
     let response = harness.call_tool(2, "updown", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_invalid_params"));
@@ -265,7 +273,9 @@ async fn updown_rejects_missing_command_selector() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive a request without command")),
+        Arc::new(|_| {
+            panic!("relay should not receive a request without command")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 

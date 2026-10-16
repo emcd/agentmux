@@ -2,20 +2,24 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::configuration::{BundleConfiguration, ConfigurationRoots, load_bundle_configuration};
+use crate::configuration::{
+    BundleConfiguration, ConfigurationRoots, load_bundle_configuration,
+};
 
 use super::super::authorization::{
     AuthorizationContext, authorize_choose, authorize_choose_for_list,
     choose_authorized_ui_sessions, load_authorization_context,
 };
 use super::super::delivery::{
-    ChoiceDecisionKind, ChoiceDecisionRequest, ChoiceEventContext, ChoiceResolutionOutcome,
-    PendingChoiceRequest, emit_choices_snapshot_then_replay, list_pending_choice_requests,
+    ChoiceDecisionKind, ChoiceDecisionRequest, ChoiceEventContext,
+    ChoiceResolutionOutcome, PendingChoiceRequest,
+    emit_choices_snapshot_then_replay, list_pending_choice_requests,
     resolve_choice_request,
 };
 use super::super::{
-    ChoiceDecisionRequestContext, PendingChoiceEntry, RelayError, RelayResponse, RequestPrincipal,
-    SCHEMA_VERSION, canonical_session_id, map_config, relay_error,
+    ChoiceDecisionRequestContext, PendingChoiceEntry, RelayError,
+    RelayResponse, RequestPrincipal, SCHEMA_VERSION, canonical_session_id,
+    map_config, relay_error,
 };
 
 pub(super) fn emit_choices_snapshot_for_ui_registration(
@@ -24,9 +28,12 @@ pub(super) fn emit_choices_snapshot_for_ui_registration(
     runtime_directory: &Path,
     ui_session_id: &str,
 ) -> Result<(), RelayError> {
-    let bundle = load_bundle_configuration(configuration_roots, namespace).map_err(map_config)?;
-    let authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
-    let authorized_sessions = choose_authorized_ui_sessions(&authorization, &bundle);
+    let bundle = load_bundle_configuration(configuration_roots, namespace)
+        .map_err(map_config)?;
+    let authorization =
+        load_authorization_context(configuration_roots, Some(&bundle))?;
+    let authorized_sessions =
+        choose_authorized_ui_sessions(&authorization, &bundle);
     if !authorized_sessions
         .iter()
         .any(|value| value == ui_session_id)
@@ -38,17 +45,19 @@ pub(super) fn emit_choices_snapshot_for_ui_registration(
         namespace: bundle.bundle_name.clone(),
         authorized_ui_sessions: authorized_sessions,
     };
-    emit_choices_snapshot_then_replay(&context, ui_session_id).map_err(|cause| {
-        relay_error(
-            "internal_unexpected_failure",
-            "failed to replay choices snapshot for ui session",
-            Some(json!({
-                "namespace": bundle.bundle_name,
-                "session_id": ui_session_id,
-                "cause": cause,
-            })),
-        )
-    })
+    emit_choices_snapshot_then_replay(&context, ui_session_id).map_err(
+        |cause| {
+            relay_error(
+                "internal_unexpected_failure",
+                "failed to replay choices snapshot for ui session",
+                Some(json!({
+                    "namespace": bundle.bundle_name,
+                    "session_id": ui_session_id,
+                    "cause": cause,
+                })),
+            )
+        },
+    )
 }
 
 pub(super) fn handle_choices_pick(
@@ -63,7 +72,10 @@ pub(super) fn handle_choices_pick(
         outcome,
         option_id,
     } = request;
-    validate_choice_decision_request(choice_request_id.as_str(), option_id.as_deref())?;
+    validate_choice_decision_request(
+        choice_request_id.as_str(),
+        option_id.as_deref(),
+    )?;
     let decision = choice_decision_kind(outcome.as_str(), option_id.as_ref())?;
     let principal = principal.ok_or_else(|| {
         relay_error(
@@ -81,7 +93,10 @@ pub(super) fn handle_choices_pick(
     let context = ChoiceEventContext {
         runtime_directory: runtime_directory.to_path_buf(),
         namespace: bundle.bundle_name.clone(),
-        authorized_ui_sessions: choose_authorized_ui_sessions(authorization, bundle),
+        authorized_ui_sessions: choose_authorized_ui_sessions(
+            authorization,
+            bundle,
+        ),
     };
     let outcome = resolve_choice_request(
         &context,
@@ -95,22 +110,25 @@ pub(super) fn handle_choices_pick(
             ),
         },
     )
-    .map_err(|cause| map_choice_resolution_error(cause, &choice_request_id, option_id))?;
-    let (outcome_label, reason_code, reason_message, decided_by) = match outcome {
-        ChoiceResolutionOutcome::Selected { decided_by, .. } => {
-            ("selected".to_string(), None, None, decided_by)
-        }
-        ChoiceResolutionOutcome::Cancelled {
-            decided_by,
-            reason_code,
-            reason,
-        } => (
-            "cancelled".to_string(),
-            Some(reason_code),
-            reason,
-            decided_by,
-        ),
-    };
+    .map_err(|cause| {
+        map_choice_resolution_error(cause, &choice_request_id, option_id)
+    })?;
+    let (outcome_label, reason_code, reason_message, decided_by) =
+        match outcome {
+            ChoiceResolutionOutcome::Selected { decided_by, .. } => {
+                ("selected".to_string(), None, None, decided_by)
+            },
+            ChoiceResolutionOutcome::Cancelled {
+                decided_by,
+                reason_code,
+                reason,
+            } => (
+                "cancelled".to_string(),
+                Some(reason_code),
+                reason,
+                decided_by,
+            ),
+        };
     Ok(RelayResponse::ChoicesPick {
         schema_version: SCHEMA_VERSION.to_string(),
         status: "resolved".to_string(),
@@ -135,20 +153,27 @@ pub(super) fn handle_choices_list(
             None,
         )
     })?;
-    authorize_choose_for_list(bundle, authorization, principal.session_id.as_str())?;
-    let pending = list_pending_choice_requests(runtime_directory).map_err(|cause| {
-        relay_error(
-            "internal_unexpected_failure",
-            "failed to list pending choice requests",
-            Some(json!({ "cause": cause })),
-        )
-    })?;
+    authorize_choose_for_list(
+        bundle,
+        authorization,
+        principal.session_id.as_str(),
+    )?;
+    let pending =
+        list_pending_choice_requests(runtime_directory).map_err(|cause| {
+            relay_error(
+                "internal_unexpected_failure",
+                "failed to list pending choice requests",
+                Some(json!({ "cause": cause })),
+            )
+        })?;
     let pending_requests = pending
         .into_iter()
         .map(|record| {
             let mut entry = pending_choice_entry_from_record(record);
-            entry.target_session =
-                canonical_session_id(entry.target_session.as_str(), bundle.bundle_name.as_str());
+            entry.target_session = canonical_session_id(
+                entry.target_session.as_str(),
+                bundle.bundle_name.as_str(),
+            );
             entry
         })
         .collect();
@@ -195,17 +220,19 @@ fn choice_decision_kind(
                 ));
             }
             Ok(ChoiceDecisionKind::Selected)
-        }
+        },
         "cancelled" => {
             if option_id.is_some() {
                 return Err(relay_error(
                     "validation_invalid_params",
                     "cancelled outcome must omit option_id",
-                    Some(json!({"field": "option_id", "outcome": "cancelled"})),
+                    Some(
+                        json!({"field": "option_id", "outcome": "cancelled"}),
+                    ),
                 ));
             }
             Ok(ChoiceDecisionKind::Cancelled)
-        }
+        },
         _ => Err(relay_error(
             "validation_invalid_params",
             "choice decision outcome must be selected or cancelled",
@@ -229,7 +256,9 @@ fn map_choice_resolution_error(
         let validation_message = cause
             .split_once(':')
             .map(|(_, message)| message.trim().to_string())
-            .unwrap_or_else(|| "invalid choice decision parameters".to_string());
+            .unwrap_or_else(|| {
+                "invalid choice decision parameters".to_string()
+            });
         relay_error(
             "validation_invalid_params",
             validation_message.as_str(),
@@ -247,7 +276,9 @@ fn map_choice_resolution_error(
     }
 }
 
-fn pending_choice_entry_from_record(record: PendingChoiceRequest) -> PendingChoiceEntry {
+fn pending_choice_entry_from_record(
+    record: PendingChoiceRequest,
+) -> PendingChoiceEntry {
     let PendingChoiceRequest {
         message_id,
         choice_request_id,

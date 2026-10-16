@@ -39,7 +39,9 @@ pub fn mcp_inscriptions_path(
 
 /// Resolves MCP inscription file path for an unassociated MCP process.
 #[must_use]
-pub fn mcp_unassociated_inscriptions_path(inscriptions_root: &Path) -> PathBuf {
+pub fn mcp_unassociated_inscriptions_path(
+    inscriptions_root: &Path,
+) -> PathBuf {
     inscriptions_root.join("mcp").join("unassociated.log")
 }
 
@@ -49,10 +51,13 @@ pub fn mcp_unassociated_inscriptions_path(inscriptions_root: &Path) -> PathBuf {
 ///
 /// Returns `RuntimeError` when parent directory cannot be created or when a
 /// conflicting path is already configured.
-pub fn configure_process_inscriptions(path: &Path) -> Result<(), RuntimeError> {
+pub fn configure_process_inscriptions(
+    path: &Path,
+) -> Result<(), RuntimeError> {
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|source| RuntimeError::io(format!("create {}", parent.display()), source))?;
+        fs::create_dir_all(parent).map_err(|source| {
+            RuntimeError::io(format!("create {}", parent.display()), source)
+        })?;
     }
     if let Some(existing) = PROCESS_INSCRIPTIONS_PATH.get() {
         if existing == path {
@@ -121,7 +126,9 @@ pub fn append_inscription_record(path: &Path, event: &str, details: &Value) {
     })
     .to_string();
     record.push('\n');
-    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+    if let Ok(mut file) =
+        OpenOptions::new().create(true).append(true).open(path)
+    {
         let _ = file.write_all(record.as_bytes());
     }
 }
@@ -129,7 +136,9 @@ pub fn append_inscription_record(path: &Path, event: &str, details: &Value) {
 fn safe_segment(value: &str) -> String {
     let mut normalized = String::new();
     for character in value.chars() {
-        if character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.') {
+        if character.is_ascii_alphanumeric()
+            || matches!(character, '-' | '_' | '.')
+        {
             normalized.push(character);
         } else {
             normalized.push('_');
@@ -149,7 +158,8 @@ fn safe_segment(value: &str) -> String {
 /// name is the same string whether the caller sets it from a tmux-driven
 /// or ACP-driven test (no `*_acp_*` / `*_tmux_*` split — the env var is
 /// transport-neutral).
-pub const DELIVERY_DIAGNOSTICS_ENVVAR: &str = "AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS";
+pub const DELIVERY_DIAGNOSTICS_ENVVAR: &str =
+    "AGENTMUX_RELAY_DELIVERY_DIAGNOSTICS";
 
 /// Emits one transport-side delivery diagnostic inscription line under the
 /// `relay.<event>` namespace. Gated by [`DELIVERY_DIAGNOSTICS_ENVVAR`]; when

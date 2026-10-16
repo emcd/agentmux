@@ -4,10 +4,12 @@ use std::fs;
 use tempfile::TempDir;
 
 use agentmux::configuration::{
-    ConfigurationError, UiConfiguration, embedded_binding_preset, load_ui_configuration,
-    shipped_binding_presets,
+    ConfigurationError, UiConfiguration, embedded_binding_preset,
+    load_ui_configuration, shipped_binding_presets,
 };
-use agentmux::tui::{Action, BindingContext, ConfiguredAction, PrimaryModifier, parse_chord};
+use agentmux::tui::{
+    Action, BindingContext, ConfiguredAction, PrimaryModifier, parse_chord,
+};
 
 #[test]
 fn loads_default_bundle_from_ui_configuration() {
@@ -34,7 +36,8 @@ fn ignores_missing_ui_configuration() {
     let root = temporary.path().join("config");
     fs::create_dir_all(&root).expect("create config root");
 
-    let loaded = load_ui_configuration(&ConfigurationRoots::single(&root)).expect("load ui config");
+    let loaded = load_ui_configuration(&ConfigurationRoots::single(&root))
+        .expect("load ui config");
     assert!(loaded.is_none(), "missing file should be ignored");
 }
 
@@ -56,7 +59,8 @@ fn rejects_malformed_ui_configuration() {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path().join("config");
     fs::create_dir_all(&root).expect("create config root");
-    fs::write(root.join("ui.toml"), "default-bundle = ").expect("write ui.toml");
+    fs::write(root.join("ui.toml"), "default-bundle = ")
+        .expect("write ui.toml");
 
     let error = load_ui_configuration(&ConfigurationRoots::single(&root))
         .expect_err("malformed ui.toml should fail");
@@ -67,7 +71,9 @@ fn rejects_malformed_ui_configuration() {
 }
 
 /// Writes a `ui.toml` holding `body` and loads it.
-fn load_bindings(body: &str) -> Result<Option<UiConfiguration>, ConfigurationError> {
+fn load_bindings(
+    body: &str,
+) -> Result<Option<UiConfiguration>, ConfigurationError> {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path().join("config");
     fs::create_dir_all(&root).expect("create config root");
@@ -124,7 +130,10 @@ fn the_documented_configuration_shape_loads_as_written() {
         bindings
             .rows
             .iter()
-            .find(|row| row.context == context && row.chord == parse_chord(chord).expect("chord"))
+            .find(|row| {
+                row.context == context
+                    && row.chord == parse_chord(chord).expect("chord")
+            })
             .unwrap_or_else(|| panic!("no row for {chord} in {context:?}"))
     };
 
@@ -221,7 +230,8 @@ fn an_invalid_binding_group_is_refused_with_its_reason() {
             "not an action name or a table of them",
         ),
     ] {
-        let error = load_bindings(body).expect_err(&format!("expected refusal for {body:?}"));
+        let error = load_bindings(body)
+            .expect_err(&format!("expected refusal for {body:?}"));
         let rendered = error.to_string();
         assert!(
             rendered.contains(expected),
@@ -274,7 +284,8 @@ fn two_spellings_of_one_chord_in_a_context_are_refused() {
             "denote the same chord",
         ),
     ] {
-        let error = load_bindings(body).expect_err(&format!("expected refusal for {body:?}"));
+        let error = load_bindings(body)
+            .expect_err(&format!("expected refusal for {body:?}"));
         let rendered = error.to_string();
         assert!(
             rendered.contains(expected),
@@ -321,8 +332,10 @@ fn an_invalid_group_applies_no_binding_from_that_configuration() {
 /// `To` field and does nothing in the message field.
 #[test]
 fn a_behavior_the_context_does_not_declare_is_refused() {
-    let error = load_bindings("[bindings.compose-message]\n\"ctrl+g\" = \"clear-to-field\"\n")
-        .expect_err("an inert binding is refused");
+    let error = load_bindings(
+        "[bindings.compose-message]\n\"ctrl+g\" = \"clear-to-field\"\n",
+    )
+    .expect_err("an inert binding is refused");
     let rendered = error.to_string();
     assert!(
         rendered.contains("clear-to-field") && rendered.contains("no effect"),
@@ -346,8 +359,10 @@ fn taking_the_quit_chord_is_refused_however_it_is_taken() {
         "\"toggle-help-overlay\"",
         "{ standard = \"none\" }",
     ] {
-        let error = load_bindings(&format!("[bindings.global]\n\"ctrl+c\" = {value}\n"))
-            .expect_err("taking the only chord that quits must be refused");
+        let error = load_bindings(&format!(
+            "[bindings.global]\n\"ctrl+c\" = {value}\n"
+        ))
+        .expect_err("taking the only chord that quits must be refused");
         assert!(
             error.to_string().contains("no chord quits the TUI"),
             "{value} was refused for the wrong reason: {error}"
@@ -363,9 +378,11 @@ fn taking_the_quit_chord_is_refused_however_it_is_taken() {
 /// would refuse this too.
 #[test]
 fn claiming_a_modified_variant_of_the_quit_chord_still_loads() {
-    let loaded = load_bindings("[bindings.global]\n\"ctrl+shift+c\" = \"toggle-help-overlay\"\n")
-        .expect("Ctrl+Shift+C is not the quit chord and taking it loses nothing")
-        .expect("existing config");
+    let loaded = load_bindings(
+        "[bindings.global]\n\"ctrl+shift+c\" = \"toggle-help-overlay\"\n",
+    )
+    .expect("Ctrl+Shift+C is not the quit chord and taking it loses nothing")
+    .expect("existing config");
     assert_eq!(loaded.bindings.expect("a binding group").rows.len(), 1);
 }
 
@@ -400,9 +417,11 @@ fn displacing_a_behavior_other_than_quit_still_loads() {
 /// for.
 #[test]
 fn a_new_chord_for_a_declared_behavior_is_accepted() {
-    let loaded = load_bindings("[bindings.compose-to]\n\"ctrl+g\" = \"clear-to-field\"\n")
-        .expect("the binding is accepted")
-        .expect("existing config");
+    let loaded = load_bindings(
+        "[bindings.compose-to]\n\"ctrl+g\" = \"clear-to-field\"\n",
+    )
+    .expect("the binding is accepted")
+    .expect("existing config");
     let rows = loaded.bindings.expect("a binding group").rows;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].context, BindingContext::ComposeTo);
@@ -421,7 +440,9 @@ fn every_shipped_binding_set_parses() {
     assert!(!shipped.is_empty(), "this build ships no binding set");
     for preset in shipped {
         let rows = embedded_binding_preset(preset.name, preset.text)
-            .unwrap_or_else(|error| panic!("{} does not parse: {error}", preset.name));
+            .unwrap_or_else(|error| {
+                panic!("{} does not parse: {error}", preset.name)
+            });
         assert!(
             !rows.is_empty(),
             "{} parses but declares no binding",
@@ -459,7 +480,10 @@ fn a_malformed_binding_set_is_not_reported_against_the_operators_file() {
         let error = embedded_binding_preset("binding set under test", text)
             .expect_err(&format!("{description} should be refused"));
         assert!(
-            matches!(error, ConfigurationError::MalformedEmbeddedArtifact { .. }),
+            matches!(
+                error,
+                ConfigurationError::MalformedEmbeddedArtifact { .. }
+            ),
             "{description}: classified as {error:?} rather than as a defect in our artifact"
         );
         let rendered = error.to_string();

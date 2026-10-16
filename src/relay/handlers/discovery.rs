@@ -23,16 +23,20 @@ use crate::configuration::load_bundle_configuration;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 
-use super::super::authorization::{authorize_discovery_origin, requester_list_reaches_all};
+use super::super::authorization::{
+    authorize_discovery_origin, requester_list_reaches_all,
+};
 use super::super::identity::{
-    PrincipalType, classify_principal_id, is_wildcard_scope, live_peer_ingress,
-    peer_scope_covers_namespace, peer_scope_covers_target, split_principal_id,
+    PrincipalType, classify_principal_id, is_wildcard_scope,
+    live_peer_ingress, peer_scope_covers_namespace, peer_scope_covers_target,
+    split_principal_id,
 };
 use super::super::stream::list_namespace_sessions;
 use super::super::{
-    BundleCatalog, GLOBAL_NAMESPACE, ListedBundle, ListedBundleState, ListedRelay, ListedSession,
-    PeerConnectionManager, PeerIngressAuthority, RelayError, RelayRequest, RelayResponse,
-    RequestPrincipal, SCHEMA_VERSION, map_config, relay_error,
+    BundleCatalog, GLOBAL_NAMESPACE, ListedBundle, ListedBundleState,
+    ListedRelay, ListedSession, PeerConnectionManager, PeerIngressAuthority,
+    RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
+    map_config, relay_error,
 };
 use super::listing::build_listed_bundle;
 
@@ -67,7 +71,10 @@ pub(in crate::relay) fn handle_list_relays(
         "relay.discovery.relays.request",
         &json!({ "requester_session": principal.session_id }),
     );
-    authorize_discovery_origin(context.configuration_roots, principal.session_id.as_str())?;
+    authorize_discovery_origin(
+        context.configuration_roots,
+        principal.session_id.as_str(),
+    )?;
     let mut aliases: Vec<String> = context.configured_relay_aliases.to_vec();
     aliases.sort();
     aliases.dedup();
@@ -95,13 +102,16 @@ pub(in crate::relay) fn handle_discover_namespaces(
     match relay {
         Some(alias) => {
             reject_peer_reforward(ingress)?;
-            authorize_discovery_origin(context.configuration_roots, principal.session_id.as_str())?;
+            authorize_discovery_origin(
+                context.configuration_roots,
+                principal.session_id.as_str(),
+            )?;
             forward_discovery(
                 context,
                 alias.as_str(),
                 &RelayRequest::DiscoverNamespaces { relay: None },
             )
-        }
+        },
         None if ingress => {
             // Two phases around the shared identity-admin serialization. Phase
             // 1 collects the full candidate snapshot with no lock held, so a
@@ -114,7 +124,9 @@ pub(in crate::relay) fn handle_discover_namespaces(
             let snapshot = collect_namespace_snapshot(context);
             // ORDERING: gate before final resolution, as in the send path —
             // the collected snapshot carries no authority.
-            super::super::test_hooks::test_authority_gate(principal.session_id.as_str());
+            super::super::test_hooks::test_authority_gate(
+                principal.session_id.as_str(),
+            );
             let live = live_peer_ingress(
                 context.ingress_authority,
                 principal.session_id.as_str(),
@@ -125,7 +137,7 @@ pub(in crate::relay) fn handle_discover_namespaces(
                 live.scope.as_deref(),
                 principal.session_id.as_str(),
             )?)
-        }
+        },
         None => local_namespace_discovery(context, principal),
     }
 }
@@ -142,7 +154,10 @@ pub(in crate::relay) fn handle_discover_principals(
     match relay {
         Some(alias) => {
             reject_peer_reforward(ingress)?;
-            authorize_discovery_origin(context.configuration_roots, principal.session_id.as_str())?;
+            authorize_discovery_origin(
+                context.configuration_roots,
+                principal.session_id.as_str(),
+            )?;
             forward_discovery(
                 context,
                 alias.as_str(),
@@ -151,16 +166,19 @@ pub(in crate::relay) fn handle_discover_principals(
                     namespace,
                 },
             )
-        }
+        },
         None if ingress => {
             // Two phases, as in `handle_discover_namespaces`: the bundle
             // listing (including tmux readiness probes) is collected with no
             // lock held and its Result retained; the grant is resolved and the
             // filtered result fixed under the shared serialization, so
             // collection diagnostics never reach an unauthorized caller.
-            let snapshot = collect_principal_snapshot(context, namespace.as_str());
+            let snapshot =
+                collect_principal_snapshot(context, namespace.as_str());
             // ORDERING: gate before final resolution, as in the send path.
-            super::super::test_hooks::test_authority_gate(principal.session_id.as_str());
+            super::super::test_hooks::test_authority_gate(
+                principal.session_id.as_str(),
+            );
             let live = live_peer_ingress(
                 context.ingress_authority,
                 principal.session_id.as_str(),
@@ -171,7 +189,7 @@ pub(in crate::relay) fn handle_discover_principals(
                 live.scope.as_deref(),
                 namespace.as_str(),
             ))
-        }
+        },
         None => Err(relay_error(
             "internal_unexpected_request",
             "local principal discovery is served by List, not DiscoverPrincipals",
@@ -209,8 +227,11 @@ fn collect_namespace_snapshot(
 ) -> Result<BTreeSet<String>, RelayError> {
     let mut namespaces = BTreeSet::new();
     for paths in context.bundle_catalog.snapshot() {
-        let bundle = load_bundle_configuration(context.configuration_roots, &paths.bundle_name)
-            .map_err(map_config)?;
+        let bundle = load_bundle_configuration(
+            context.configuration_roots,
+            &paths.bundle_name,
+        )
+        .map_err(map_config)?;
         if !bundle.members.is_empty() {
             namespaces.insert(paths.bundle_name);
         }
@@ -244,7 +265,9 @@ fn filter_namespace_snapshot(
     let snapshot = snapshot.map_err(|_| ingress_forbidden())?;
     let namespaces = snapshot
         .into_iter()
-        .filter(|namespace| peer_scope_covers_namespace(Some(scope), namespace))
+        .filter(|namespace| {
+            peer_scope_covers_namespace(Some(scope), namespace)
+        })
         .collect::<BTreeSet<_>>();
     if namespaces.is_empty() {
         emit_scope_unmatched(requester, scope);
@@ -296,8 +319,10 @@ fn collect_principal_snapshot(
         return Ok(None);
     };
     let bundle_config =
-        load_bundle_configuration(context.configuration_roots, namespace).map_err(map_config)?;
-    let tmux_socket = tmux_socket_path_for_runtime_directory(&paths.runtime_directory);
+        load_bundle_configuration(context.configuration_roots, namespace)
+            .map_err(map_config)?;
+    let tmux_socket =
+        tmux_socket_path_for_runtime_directory(&paths.runtime_directory);
     let bundle = build_listed_bundle(
         &bundle_config,
         &paths.runtime_directory,
@@ -337,14 +362,17 @@ fn decide_principal_snapshot(
         Ok(snapshot) => snapshot,
         Err(error) => {
             return RelayResponse::Error { error };
-        }
+        },
     };
     let bundle = snapshot.unwrap_or_else(|| empty_namespace_bundle(namespace));
     debug_assert!(
         bundle
             .principals
             .iter()
-            .all(|principal| peer_scope_covers_target(Some(scope), principal.id.as_str())),
+            .all(|principal| peer_scope_covers_target(
+                Some(scope),
+                principal.id.as_str()
+            )),
         "a covered namespace must expose only scope-covered principals"
     );
     emit_inscription(
@@ -375,7 +403,9 @@ fn build_scoped_global_bundle(scope: &str) -> ListedBundle {
     let sessions = list_namespace_sessions(GLOBAL_NAMESPACE);
     let mut principals = sessions
         .into_iter()
-        .filter(|(principal_id, _, _)| peer_scope_covers_target(Some(scope), principal_id.as_str()))
+        .filter(|(principal_id, _, _)| {
+            peer_scope_covers_target(Some(scope), principal_id.as_str())
+        })
         .map(|(principal_id, session_type, ready)| ListedSession {
             id: principal_id,
             name: None,
@@ -419,15 +449,18 @@ fn forward_discovery(
         .peer_connection_manager
         .forward(alias, forwarded)
         .inspect_err(|error| {
-            emit_inscription(
-                "relay.discovery.relay_error",
-                &json!({ "relay": alias, "code": error.code }),
-            );
-        })?;
+        emit_inscription(
+            "relay.discovery.relay_error",
+            &json!({ "relay": alias, "code": error.code }),
+        );
+    })?;
     Ok(response)
 }
 
-fn namespaces_response(namespaces: BTreeSet<String>, source: &str) -> RelayResponse {
+fn namespaces_response(
+    namespaces: BTreeSet<String>,
+    source: &str,
+) -> RelayResponse {
     let namespaces = namespaces.into_iter().collect::<Vec<_>>();
     emit_inscription(
         "relay.discovery.namespaces.success",
@@ -455,7 +488,8 @@ fn empty_namespace_bundle(namespace: &str) -> ListedBundle {
 }
 
 fn is_relay_principal(principal: &RequestPrincipal) -> bool {
-    classify_principal_id(principal.session_id.as_str()) == Some(PrincipalType::Relay)
+    classify_principal_id(principal.session_id.as_str())
+        == Some(PrincipalType::Relay)
 }
 
 /// Whether an ingress `scope` covers `namespace` for principal discovery: `*`

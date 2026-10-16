@@ -25,7 +25,8 @@ use time::format_description::well_known::Rfc3339;
 
 use super::SharedWaiterState;
 
-static CHOICE_WAITERS: OnceLock<Mutex<HashMap<String, SharedWaiterState>>> = OnceLock::new();
+static CHOICE_WAITERS: OnceLock<Mutex<HashMap<String, SharedWaiterState>>> =
+    OnceLock::new();
 
 fn choice_waiters() -> &'static Mutex<HashMap<String, SharedWaiterState>> {
     CHOICE_WAITERS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -42,14 +43,18 @@ pub(super) fn register_waiter(choice_request_id: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn get_waiter(choice_request_id: &str) -> Result<Option<SharedWaiterState>, String> {
+pub(super) fn get_waiter(
+    choice_request_id: &str,
+) -> Result<Option<SharedWaiterState>, String> {
     let waiters = choice_waiters()
         .lock()
         .map_err(|_| "failed to lock choice waiters".to_string())?;
     Ok(waiters.get(choice_request_id).cloned())
 }
 
-pub(super) fn take_waiter(choice_request_id: &str) -> Result<Option<SharedWaiterState>, String> {
+pub(super) fn take_waiter(
+    choice_request_id: &str,
+) -> Result<Option<SharedWaiterState>, String> {
     let mut waiters = choice_waiters()
         .lock()
         .map_err(|_| "failed to lock choice waiters".to_string())?;

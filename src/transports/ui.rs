@@ -45,10 +45,11 @@ use std::thread;
 use crate::protocol::mailbox::{MailboxEntry, MailboxPayload};
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::{
-    DeliveryEnvelope, DeliveryExecutorContext, DeliveryWriter, GenerationFence, OutputView,
-    PeekDimensions, PlannedWrite, SendOutcome, SingleDeliveryOutcome, StartupContext,
-    SubmissionEvidence, Transport, TransportError, TransportHealth, TransportReadiness,
-    TransportStatus, run_delivery_executor, stopped_before_submission_outcome,
+    DeliveryEnvelope, DeliveryExecutorContext, DeliveryWriter,
+    GenerationFence, OutputView, PeekDimensions, PlannedWrite, SendOutcome,
+    SingleDeliveryOutcome, StartupContext, SubmissionEvidence, Transport,
+    TransportError, TransportHealth, TransportReadiness, TransportStatus,
+    run_delivery_executor, stopped_before_submission_outcome,
 };
 
 const UI_GENERATION_FENCED_CODE: &str = "ui_generation_fenced";
@@ -95,10 +96,12 @@ pub struct UiOutcomePhase {
 
 /// Emits the `incoming_message` stream event for a delivery; returns whether it
 /// reached a connected UI.
-pub type UiBroadcastFn = Arc<dyn Fn(&UiIncomingMessage) -> UiBroadcastStatus + Send + Sync>;
+pub type UiBroadcastFn =
+    Arc<dyn Fn(&UiIncomingMessage) -> UiBroadcastStatus + Send + Sync>;
 /// Emits a `delivery_outcome` phase event; returns whether it reached a
 /// connected UI.
-pub type UiPhaseFn = Arc<dyn Fn(UiOutcomePhase) -> UiBroadcastStatus + Send + Sync>;
+pub type UiPhaseFn =
+    Arc<dyn Fn(UiOutcomePhase) -> UiBroadcastStatus + Send + Sync>;
 
 /// Relay-provided UI broadcast touchpoints, injected once when the transport is
 /// built. Each closure closes over the target's `(namespace, target_session)`
@@ -190,7 +193,10 @@ impl UiGeneration {
 
 impl UiTransport {
     #[must_use]
-    pub fn new(services: UiTransportServices, delivery: DeliveryExecutorContext) -> Self {
+    pub fn new(
+        services: UiTransportServices,
+        delivery: DeliveryExecutorContext,
+    ) -> Self {
         Self {
             services,
             generation: Arc::new(UiGeneration::default()),
@@ -221,7 +227,10 @@ impl GenerationFence for UiTransport {
 }
 
 impl Transport for UiTransport {
-    fn startup(&mut self, _context: StartupContext) -> Result<TransportStatus, TransportError> {
+    fn startup(
+        &mut self,
+        _context: StartupContext,
+    ) -> Result<TransportStatus, TransportError> {
         // The UI transport has no runtime to establish; it is always ready and
         // resolves connectivity per-delivery, from the broadcast itself. What
         // `startup` does own is the executor, which is why this is no longer a
@@ -310,7 +319,10 @@ impl DeliveryWriter for UiDeliveryWriter {
         true
     }
 
-    fn plan(&mut self, entries: &[MailboxEntry]) -> Option<PlannedWrite<Self::Plan>> {
+    fn plan(
+        &mut self,
+        entries: &[MailboxEntry],
+    ) -> Option<PlannedWrite<Self::Plan>> {
         // One entry per iteration. UI emits one stream event per envelope and
         // coalesces nothing, which its declared peek dimensions already say; this
         // is the same fact stated where the decision is made.
@@ -318,7 +330,7 @@ impl DeliveryWriter for UiDeliveryWriter {
         let rendered = match &head.payload {
             MailboxPayload::Mail(envelope) => {
                 UiWrite::Message(Box::new(incoming_message(envelope)))
-            }
+            },
             MailboxPayload::Raw { .. } => UiWrite::UnsupportedRaw,
         };
         Some(PlannedWrite {
@@ -327,14 +339,19 @@ impl DeliveryWriter for UiDeliveryWriter {
         })
     }
 
-    fn write(&mut self, planned: PlannedWrite<Self::Plan>) -> Vec<SubmissionEvidence> {
+    fn write(
+        &mut self,
+        planned: PlannedWrite<Self::Plan>,
+    ) -> Vec<SubmissionEvidence> {
         let incoming = match planned.rendered {
             UiWrite::Message(incoming) => incoming,
             // A raw entry is declared like any other and then acknowledged as
             // written by nothing, which is what keeps it from parking the mailbox
             // behind it forever. `NotSubmitted` is provable: this arm emits no
             // frame at all.
-            UiWrite::UnsupportedRaw => return vec![SubmissionEvidence::NotSubmitted],
+            UiWrite::UnsupportedRaw => {
+                return vec![SubmissionEvidence::NotSubmitted];
+            },
         };
         let outcome = run_ui_delivery(
             &self.services,
@@ -356,7 +373,9 @@ impl DeliveryWriter for UiDeliveryWriter {
     }
 
     fn stop_requested(&mut self) -> bool {
-        self.generation.is_fenced() || self.generation.is_revoked() || self.generation.is_stopped()
+        self.generation.is_fenced()
+            || self.generation.is_revoked()
+            || self.generation.is_stopped()
     }
 }
 
@@ -400,7 +419,10 @@ fn run_ui_delivery(
             message_id,
             SendOutcome::NotSubmitted,
             Some(UI_GENERATION_FENCED_CODE.to_string()),
-            Some("UI generation was fenced before this delivery emitted".to_string()),
+            Some(
+                "UI generation was fenced before this delivery emitted"
+                    .to_string(),
+            ),
         );
     }
     if shutdown_requested() {
@@ -410,7 +432,10 @@ fn run_ui_delivery(
         // a trigger, and the evidence order chooses the outcome. The cause
         // survives in the reason code, which is the same split the coder
         // transports use.
-        let stopped = stopped_before_submission_outcome(String::new(), message_id.clone());
+        let stopped = stopped_before_submission_outcome(
+            String::new(),
+            message_id.clone(),
+        );
         let _ = (services.emit_phase)(UiOutcomePhase {
             message_id,
             phase: "failed",
@@ -442,7 +467,10 @@ fn run_ui_delivery(
             message_id,
             SendOutcome::NotSubmitted,
             Some(UI_GENERATION_FENCED_CODE.to_string()),
-            Some("UI generation was terminated before this delivery emitted".to_string()),
+            Some(
+                "UI generation was terminated before this delivery emitted"
+                    .to_string(),
+            ),
         );
     }
     match (services.broadcast_incoming)(incoming) {
@@ -455,7 +483,7 @@ fn run_ui_delivery(
                 reason: None,
             });
             terminal(message_id, SendOutcome::Delivered, None, None)
-        }
+        },
         // The broadcast found no endpoint, which may equally be because none was
         // ever registered — nothing upstream anticipates this, since UI reports
         // healthy unconditionally. Nothing was emitted to any subscriber, and
@@ -469,7 +497,7 @@ fn run_ui_delivery(
         ),
         UiBroadcastStatus::Failed(reason) => {
             terminal(message_id, SendOutcome::Failed, None, Some(reason))
-        }
+        },
     }
 }
 

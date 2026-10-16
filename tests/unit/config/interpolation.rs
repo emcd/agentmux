@@ -2,7 +2,9 @@ use std::fs;
 
 use tempfile::TempDir;
 
-use agentmux::configuration::{TargetConfiguration, load_bundle_configuration};
+use agentmux::configuration::{
+    TargetConfiguration, load_bundle_configuration,
+};
 
 #[cfg(feature = "pty")]
 use agentmux::pty::tokenize_command;
@@ -49,7 +51,11 @@ coder = "conduct"
     )
 }
 
-fn start_command_for(coders_toml: &str, directory: &str, coder_session_id: Option<&str>) -> String {
+fn start_command_for(
+    coders_toml: &str,
+    directory: &str,
+    coder_session_id: Option<&str>,
+) -> String {
     let temporary = TempDir::new().expect("temporary");
     let root = write_config(
         &temporary,
@@ -57,7 +63,8 @@ fn start_command_for(coders_toml: &str, directory: &str, coder_session_id: Optio
         coders_toml,
         &session_toml(directory, coder_session_id),
     );
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     assert_eq!(loaded.members.len(), 1);
     match &loaded.members[0].target {
         TargetConfiguration::Tmux(target) => target.start_command.clone(),
@@ -140,7 +147,12 @@ fn command_for_initial(
     directory: &str,
     coder_session_id: Option<&str>,
 ) -> String {
-    command_for_commands(initial_command, "\"conduct\"", directory, coder_session_id)
+    command_for_commands(
+        initial_command,
+        "\"conduct\"",
+        directory,
+        coder_session_id,
+    )
 }
 
 fn command_for_commands(
@@ -168,7 +180,8 @@ resume-command = {resume_command}
         &coders,
         &session_toml(directory, coder_session_id),
     );
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     let TargetConfiguration::Tmux(target) = &loaded.members[0].target else {
         panic!("expected tmux target");
     };
@@ -189,7 +202,12 @@ initial-command = {initial_command}
 resume-command = "conduct"
 "#
     );
-    let root = write_config(&temporary, "alpha", &coders, &session_toml(directory, None));
+    let root = write_config(
+        &temporary,
+        "alpha",
+        &coders,
+        &session_toml(directory, None),
+    );
     load_bundle_configuration(&root, "alpha")
         .expect_err("misplaced placeholder loads")
         .to_string()
@@ -210,7 +228,10 @@ fn rejects_escaped_unknown_placeholder() {
 fn rejects_escaped_directory_placeholder() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_initial("\"cmd \\\\{{session-directory}}\"", &directory);
+    let error = load_error_for_initial(
+        "\"cmd \\\\{{session-directory}}\"",
+        &directory,
+    );
     assert!(
         error.contains("must not escape {{session-directory}}"),
         "unexpected error: {error}"
@@ -221,7 +242,11 @@ fn rejects_escaped_directory_placeholder() {
 fn escaped_id_token_still_substitutes_raw() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let command = command_for_initial("\"conduct \\\\{{bundle-session-id}}\"", &directory, None);
+    let command = command_for_initial(
+        "\"conduct \\\\{{bundle-session-id}}\"",
+        &directory,
+        None,
+    );
     assert!(
         command.contains("\\session-a"),
         "escaped id token must still substitute, got: {command}"
@@ -232,7 +257,8 @@ fn escaped_id_token_still_substitutes_raw() {
 fn rejects_directory_inside_single_quotes() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_initial("\"cmd '{{session-directory}}'\"", &directory);
+    let error =
+        load_error_for_initial("\"cmd '{{session-directory}}'\"", &directory);
     assert!(
         error.contains("in an unquoted word"),
         "unexpected error: {error}"
@@ -243,7 +269,10 @@ fn rejects_directory_inside_single_quotes() {
 fn rejects_directory_inside_double_quotes() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_initial("\"cmd \\\"{{session-directory}}\\\"\"", &directory);
+    let error = load_error_for_initial(
+        "\"cmd \\\"{{session-directory}}\\\"\"",
+        &directory,
+    );
     assert!(
         error.contains("in an unquoted word"),
         "unexpected error: {error}"
@@ -254,7 +283,11 @@ fn rejects_directory_inside_double_quotes() {
 fn accepts_directory_with_safe_literal_prefix() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let command = command_for_initial("'cmd prefix{{session-directory}}'", &directory, None);
+    let command = command_for_initial(
+        "'cmd prefix{{session-directory}}'",
+        &directory,
+        None,
+    );
     assert!(
         command.contains(&format!("prefix'{directory}'")),
         "expected composed directory word, got: {command}"
@@ -265,7 +298,11 @@ fn accepts_directory_with_safe_literal_prefix() {
 fn accepts_directory_with_safe_literal_suffix() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let command = command_for_initial("'cmd {{session-directory}}suffix'", &directory, None);
+    let command = command_for_initial(
+        "'cmd {{session-directory}}suffix'",
+        &directory,
+        None,
+    );
     assert!(
         command.contains(&format!("'{directory}'suffix")),
         "expected composed directory word, got: {command}"
@@ -276,7 +313,8 @@ fn accepts_directory_with_safe_literal_suffix() {
 fn rejects_directory_after_escape_continuing_word() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let error = load_error_for_initial("'cmd \\\"{{session-directory}}'", &directory);
+    let error =
+        load_error_for_initial("'cmd \\\"{{session-directory}}'", &directory);
     assert!(
         error.contains("not shell-literal-safe"),
         "unexpected error: {error}"
@@ -287,7 +325,11 @@ fn rejects_directory_after_escape_continuing_word() {
 fn accepts_directory_after_escape_then_whitespace() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let command = command_for_initial("'cmd \\\" {{session-directory}}'", &directory, None);
+    let command = command_for_initial(
+        "'cmd \\\" {{session-directory}}'",
+        &directory,
+        None,
+    );
     assert!(
         command.contains(&format!("'{directory}'")),
         "expected quoted directory, got: {command}"
@@ -329,7 +371,8 @@ resume-command = "conduct"
 "#,
         &session_toml(&directory, None),
     );
-    let error = load_bundle_configuration(&root, "alpha").expect_err("single-brace loads");
+    let error = load_bundle_configuration(&root, "alpha")
+        .expect_err("single-brace loads");
     assert!(
         error
             .to_string()
@@ -348,7 +391,8 @@ fn pty_tokenizer_returns_special_directory_as_single_argument() {
     fs::create_dir(&special).expect("create special directory");
     let directory = special.display().to_string();
     let command = start_command_for(CODERS_TMUX, &directory, None);
-    let tokens = tokenize_command(&command).expect("tokenize rendered command");
+    let tokens =
+        tokenize_command(&command).expect("tokenize rendered command");
     let flag = tokens
         .iter()
         .position(|token| token == "--session-directory")
@@ -365,7 +409,11 @@ fn shell_receives_special_directory_as_single_argument() {
     let special = temporary.path().join(SPECIAL_DIRECTORY_NAME);
     fs::create_dir(&special).expect("create special directory");
     let directory = special.display().to_string();
-    let command = command_for_initial("\"printf '<%s>' {{session-directory}}\"", &directory, None);
+    let command = command_for_initial(
+        "\"printf '<%s>' {{session-directory}}\"",
+        &directory,
+        None,
+    );
     let output = Command::new("sh")
         .arg("-c")
         .arg(&command)
@@ -411,7 +459,8 @@ resume-command = "conduct"
 "#,
         &session_toml(&directory, None),
     );
-    let error = load_bundle_configuration(&root, "alpha").expect_err("unknown placeholder loads");
+    let error = load_bundle_configuration(&root, "alpha")
+        .expect_err("unknown placeholder loads");
     assert!(
         error
             .to_string()
@@ -441,7 +490,8 @@ resume-command = "conduct"
 "#,
         &session_toml(&directory, None),
     );
-    let error = load_bundle_configuration(&root, "alpha").expect_err("unknown placeholder loads");
+    let error = load_bundle_configuration(&root, "alpha")
+        .expect_err("unknown placeholder loads");
     assert!(
         error
             .to_string()
@@ -454,8 +504,7 @@ resume-command = "conduct"
 fn acp_stdio_command_with_braces_passes_through_verbatim() {
     let temporary = TempDir::new().expect("temporary");
     let directory = temporary.path().display().to_string();
-    let command_text =
-        "cistella conduct --label agentmux.session={{bundle-session-id}} -- {harness}";
+    let command_text = "cistella conduct --label agentmux.session={{bundle-session-id}} -- {harness}";
     let root = write_config(
         &temporary,
         "alpha",
@@ -473,7 +522,8 @@ command = "{command_text}"
         ),
         &session_toml(&directory, None),
     );
-    let loaded = load_bundle_configuration(&root, "alpha").expect("load configuration");
+    let loaded =
+        load_bundle_configuration(&root, "alpha").expect("load configuration");
     let TargetConfiguration::Acp(target) = &loaded.members[0].target else {
         panic!("expected acp target");
     };

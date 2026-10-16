@@ -270,11 +270,11 @@ pub async fn run_agentmux(arguments: Vec<String>) -> Result<(), RuntimeError> {
         "--help" | "-h" => {
             print_agentmux_help();
             Ok(())
-        }
+        },
         "--version" | "-V" => {
             print_agentmux_version();
             Ok(())
-        }
+        },
         "host" => host::run_agentmux_host(&arguments[1..]).await,
         "up" => up::run_agentmux_up(&arguments[1..]),
         "down" => down::run_agentmux_down(&arguments[1..]),

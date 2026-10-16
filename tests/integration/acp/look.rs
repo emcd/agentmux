@@ -1,7 +1,8 @@
 use agentmux::acp::snapshot_entries_to_plain_lines;
 use agentmux::configuration::ConfigurationRoots;
 use agentmux::relay::{
-    LookFreshness, LookSnapshotPayload, LookSnapshotSource, RelayResponse, SendOutcome,
+    LookFreshness, LookSnapshotPayload, LookSnapshotSource, RelayResponse,
+    SendOutcome,
 };
 use std::{
     thread,
@@ -17,11 +18,13 @@ fn acp_send_without_startup_fails_when_worker_is_unavailable() {
         update_count: 1,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let error = dispatch_send_without_startup_result(&config_root, &tmux_socket)
-        .expect_err("ACP send should fail without startup worker");
+    let error =
+        dispatch_send_without_startup_result(&config_root, &tmux_socket)
+            .expect_err("ACP send should fail without startup worker");
     assert_eq!(error.code, "runtime_acp_worker_unavailable");
 }
 
@@ -29,10 +32,17 @@ fn acp_send_without_startup_fails_when_worker_is_unavailable() {
 fn acp_look_without_startup_returns_unavailable_stale_metadata() {
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let look = dispatch_look_without_startup(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
+    let look = dispatch_look_without_startup(
+        &config_root,
+        &tmux_socket,
+        "bravo",
+        "bravo",
+        Some(5),
+    );
     let snapshot = expect_acp_snapshot(look);
     assert!(snapshot.lines.is_empty());
     assert_eq!(snapshot.freshness, LookFreshness::Stale);
@@ -50,7 +60,8 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
         update_count: 3,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
@@ -64,7 +75,10 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
         "bravo",
         "bravo",
         Some(10),
-        |lines| lines.len() >= 3 && lines.last().map(String::as_str) == Some("ACP-LINE-3"),
+        |lines| {
+            lines.len() >= 3
+                && lines.last().map(String::as_str) == Some("ACP-LINE-3")
+        },
     );
     let snapshot = expect_acp_snapshot(look);
     // The reader-thread same-kind adjacency coalescence rule collapses the 3
@@ -91,7 +105,7 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
                 ],
                 "the 3 streaming chunks coalesce into one Agent entry's lines"
             );
-        }
+        },
         other => panic!("expected Agent entry at index 1, got {other:?}"),
     }
     assert_eq!(snapshot.freshness, LookFreshness::Fresh);
@@ -112,7 +126,8 @@ fn acp_look_coalesces_long_streaming_response_into_single_entry() {
         update_count: 1_105,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
@@ -141,7 +156,9 @@ fn acp_look_coalesces_long_streaming_response_into_single_entry() {
         agentmux::transports::StructuredEntry::User { .. }
     ));
     let agent_lines = match &snapshot.entries[1] {
-        agentmux::transports::StructuredEntry::Agent { lines } => lines.clone(),
+        agentmux::transports::StructuredEntry::Agent { lines } => {
+            lines.clone()
+        },
         other => panic!("expected Agent entry at index 1, got {other:?}"),
     };
     assert_eq!(
@@ -170,7 +187,8 @@ fn acp_look_emits_one_coalesced_invocation_entry_for_tool_call_lifecycle() {
         tool_call_id: "tc-look-1".to_string(),
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
@@ -217,9 +235,9 @@ fn acp_look_emits_one_coalesced_invocation_entry_for_tool_call_lifecycle() {
         agentmux::transports::ToolCallStatus::Completed,
         "the in-place mutation sets status=Completed"
     );
-    let result = invocation
-        .2
-        .expect("tool_call_update result payload is set on the completed Invocation");
+    let result = invocation.2.expect(
+        "tool_call_update result payload is set on the completed Invocation",
+    );
     assert_eq!(
         result["status"], "completed",
         "the stored payload is the tool_call_update notification"
@@ -242,7 +260,8 @@ fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
         update_count: 10,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
@@ -309,10 +328,12 @@ fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
 fn acp_look_returns_empty_snapshot_when_no_updates_exist() {
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
+    let look =
+        dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
     let snapshot = expect_acp_snapshot(look);
     assert!(snapshot.lines.is_empty());
     assert_eq!(snapshot.freshness, LookFreshness::Stale);
@@ -332,7 +353,8 @@ fn acp_look_reflects_outgoing_user_prompt_before_session_updates_arrive() {
         update_count: 0,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
@@ -372,7 +394,8 @@ fn acp_look_captures_updates_emitted_after_prompt_response() {
         update_delay_ms: 20,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
@@ -396,7 +419,9 @@ fn acp_look_captures_updates_emitted_after_prompt_response() {
         "User prompt + 1 coalesced Agent entry across pre- and post-response chunks"
     );
     let agent_lines = match &snapshot.entries[1] {
-        agentmux::transports::StructuredEntry::Agent { lines } => lines.clone(),
+        agentmux::transports::StructuredEntry::Agent { lines } => {
+            lines.clone()
+        },
         other => panic!("expected Agent entry at index 1, got {other:?}"),
     };
     assert_eq!(
@@ -421,13 +446,15 @@ fn acp_look_reuses_persistent_worker_without_one_shot_replay_refresh() {
         configured_session_id: Some("sess-generated".to_string()),
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
     let response = dispatch_send(&config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
-    let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(10));
+    let look =
+        dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(10));
     let snapshot = expect_acp_snapshot(look);
     let snapshot_lines = snapshot.lines;
     assert!(snapshot_lines.iter().any(|line| line == "LIVE-LINE-1"));
@@ -451,7 +478,8 @@ fn acp_look_across_respawn_window_returns_clean_snapshots() {
         disconnect_on_prompt: Some("before_activity".to_string()),
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let response = dispatch_send(&config_root, &tmux_socket);
@@ -461,7 +489,13 @@ fn acp_look_across_respawn_window_returns_clean_snapshots() {
     while Instant::now() < deadline {
         // `expect_acp_snapshot` panics if the payload is not a well-formed
         // `StructuredEntriesV1`, so a malformed or wrong-typed response fails the test.
-        let look = dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
+        let look = dispatch_look(
+            &config_root,
+            &tmux_socket,
+            "bravo",
+            "bravo",
+            Some(5),
+        );
         let snapshot = expect_acp_snapshot(look);
         assert!(
             snapshot.returned_entries_count <= 5,
@@ -549,7 +583,9 @@ fn snapshot_lines_from_look(look: &RelayResponse) -> Vec<String> {
         panic!("expected look response");
     };
     match snapshot {
-        LookSnapshotPayload::Lines { snapshot_lines } => snapshot_lines.clone(),
+        LookSnapshotPayload::Lines { snapshot_lines } => {
+            snapshot_lines.clone()
+        },
         LookSnapshotPayload::StructuredEntriesV1 {
             snapshot_entries, ..
         } => snapshot_entries_to_plain_lines(snapshot_entries.as_slice()),

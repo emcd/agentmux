@@ -58,7 +58,10 @@ pub(in crate::relay::delivery) fn bind_worker_consumer_generation(
 /// naming exists for: a consumer that claims this target between the removal and
 /// the reap holds a generation this entry never named, so the reap refuses
 /// rather than reclaiming a mailbox somebody is already serving.
-pub(in crate::relay::delivery) fn unregister_worker(key: &AsyncWorkerKey, owner: WorkerOwner) {
+pub(in crate::relay::delivery) fn unregister_worker(
+    key: &AsyncWorkerKey,
+    owner: WorkerOwner,
+) {
     let Some(held) = remove_owned_entry(key, owner) else {
         return;
     };
@@ -121,8 +124,8 @@ mod worker_reap_tests {
     use crate::configuration::SessionType;
     use crate::protocol::mailbox::MailboxPayload;
     use crate::relay::delivery::admission::{
-        AdmissionTargetKey, GenerationRejection, TargetReap, admit, claim_consumer_generation,
-        enqueue, reap_target, terminalize,
+        AdmissionTargetKey, GenerationRejection, TargetReap, admit,
+        claim_consumer_generation, enqueue, reap_target, terminalize,
     };
 
     use super::super::registry::{build_worker_key, register_worker};
@@ -132,14 +135,22 @@ mod worker_reap_tests {
     const TARGET: &str = "target";
 
     #[test]
-    fn unregistering_an_owned_entry_reaps_its_target_and_a_foreign_one_reaps_nothing() {
-        let key = build_worker_key(NAMESPACE, runtime_directory().as_path(), TARGET);
+    fn unregistering_an_owned_entry_reaps_its_target_and_a_foreign_one_reaps_nothing()
+     {
+        let key =
+            build_worker_key(NAMESPACE, runtime_directory().as_path(), TARGET);
         let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
-        let owner = register_worker(key.clone(), sender, Arc::new(AtomicUsize::new(0)), false);
-        let generation =
-            claim_consumer_generation(&target()).expect("the test target is unclaimed");
+        let owner = register_worker(
+            key.clone(),
+            sender,
+            Arc::new(AtomicUsize::new(0)),
+            false,
+        );
+        let generation = claim_consumer_generation(&target())
+            .expect("the test target is unclaimed");
         bind_worker_consumer_generation(&key, owner, generation);
-        admit("worker-reap-1", admission_key(), SessionType::Tmux, 1).expect("admit");
+        admit("worker-reap-1", admission_key(), SessionType::Tmux, 1)
+            .expect("admit");
         enqueue(
             &Arc::new(queued_task("worker-reap-1")),
             MailboxPayload::Raw {
@@ -154,9 +165,14 @@ mod worker_reap_tests {
         // under it must leave both the registration and the target alone —
         // otherwise a worker that lost a registration race would reclaim the
         // mailbox its successor is serving.
-        let (other_sender, _other_receiver) = tokio::sync::mpsc::unbounded_channel();
+        let (other_sender, _other_receiver) =
+            tokio::sync::mpsc::unbounded_channel();
         let stranger = register_worker(
-            build_worker_key(NAMESPACE, runtime_directory().as_path(), "other-target"),
+            build_worker_key(
+                NAMESPACE,
+                runtime_directory().as_path(),
+                "other-target",
+            ),
             other_sender,
             Arc::new(AtomicUsize::new(0)),
             false,
@@ -171,8 +187,8 @@ mod worker_reap_tests {
         // The owner's unregister is the reap: the generation is given up and the
         // mailbox goes with the registration.
         unregister_worker(&key, owner);
-        let next =
-            claim_consumer_generation(&target()).expect("the reaped target is free to claim again");
+        let next = claim_consumer_generation(&target())
+            .expect("the reaped target is free to claim again");
         assert!(
             next.value() > generation.value(),
             "the reap left the sequence behind rather than restarting it"
@@ -197,7 +213,11 @@ mod worker_reap_tests {
     }
 
     fn admission_key() -> AdmissionTargetKey {
-        AdmissionTargetKey::new(NAMESPACE, runtime_directory().as_path(), TARGET)
+        AdmissionTargetKey::new(
+            NAMESPACE,
+            runtime_directory().as_path(),
+            TARGET,
+        )
     }
 
     /// The send this test's entry answers for.
@@ -208,7 +228,8 @@ mod worker_reap_tests {
         crate::relay::AsyncDeliveryTask {
             admitted: true,
             bundle: crate::configuration::BundleConfiguration {
-                schema_version: crate::configuration::BUNDLE_SCHEMA_VERSION.to_string(),
+                schema_version: crate::configuration::BUNDLE_SCHEMA_VERSION
+                    .to_string(),
                 bundle_name: NAMESPACE.to_string(),
                 autostart: false,
                 groups: Vec::new(),

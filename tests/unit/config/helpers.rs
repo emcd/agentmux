@@ -18,6 +18,7 @@ pub(super) fn write_config(
     let bundles = root.join("bundles");
     fs::create_dir_all(&bundles).expect("create directories");
     fs::write(root.join("coders.toml"), coders_toml).expect("write coders");
-    fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml).expect("write bundle");
+    fs::write(bundles.join(format!("{bundle_name}.toml")), bundle_toml)
+        .expect("write bundle");
     ConfigurationRoots::single(root)
 }

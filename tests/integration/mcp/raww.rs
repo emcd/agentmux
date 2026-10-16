@@ -7,7 +7,11 @@ async fn raww_rejects_sender_like_fields_before_relay_request() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay should not receive raww request for invalid parameters")),
+        Arc::new(|_| {
+            panic!(
+                "relay should not receive raww request for invalid parameters"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -32,8 +36,8 @@ async fn raww_returns_queued_payload_and_forwards_request_shape() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("raww") => json!({
                     "kind": "raww",
                     "schema_version": "1",
@@ -50,8 +54,8 @@ async fn raww_returns_queued_payload_and_forwards_request_shape() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -98,8 +102,8 @@ async fn raww_returns_queued_payload_for_acp_target() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("raww") => json!({
                     "kind": "raww",
                     "schema_version": "1",
@@ -115,8 +119,8 @@ async fn raww_returns_queued_payload_for_acp_target() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -125,7 +129,8 @@ async fn raww_returns_queued_payload_for_acp_target() {
         "target_session".to_string(),
         Value::String("charlie".to_string()),
     );
-    arguments.insert("text".to_string(), Value::String("hello acp".to_string()));
+    arguments
+        .insert("text".to_string(), Value::String("hello acp".to_string()));
     let response = harness.call_tool(2, "raww", arguments).await;
     let payload = decode_tool_payload(&response);
 
@@ -148,8 +153,8 @@ async fn raww_maps_unknown_target_validation_error_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("raww") => json!({
                     "kind": "error",
                     "error": {
@@ -165,8 +170,8 @@ async fn raww_maps_unknown_target_validation_error_from_relay() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -186,8 +191,8 @@ async fn raww_maps_authorization_forbidden_and_preserves_capability_label() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("raww") => json!({
                     "kind": "error",
                     "error": {
@@ -209,8 +214,8 @@ async fn raww_maps_authorization_forbidden_and_preserves_capability_label() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -234,8 +239,8 @@ async fn raww_omits_wire_envelope_namespace_for_suffix_routing() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("raww") => json!({
                     "kind": "raww",
                     "schema_version": "1",
@@ -250,8 +255,8 @@ async fn raww_omits_wire_envelope_namespace_for_suffix_routing() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 

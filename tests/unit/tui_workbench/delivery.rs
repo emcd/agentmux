@@ -102,7 +102,8 @@ fn queued_result_does_not_readd_pending_after_not_submitted_arrives_first() {
 }
 
 #[test]
-fn queued_result_does_not_readd_pending_after_submission_unknown_arrives_first() {
+fn queued_result_does_not_readd_pending_after_submission_unknown_arrives_first()
+ {
     let mut state = make_state();
     state.record_stream_events(&[stream_event(
         "delivery_outcome",

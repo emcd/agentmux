@@ -66,7 +66,8 @@ async fn a_malformed_namespace_outranks_a_retained_startup_fault() {
     let mut harness = McpHarness::spawn_with_retained_fault(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("namespace".to_string(), Value::String("bad/name".into()));
+    arguments
+        .insert("namespace".to_string(), Value::String("bad/name".into()));
     let response = harness
         .call_tool(2, "list", list_principals_call(arguments))
         .await;
@@ -104,8 +105,8 @@ async fn tool_catalog_matches_exact_advertised_tool_set() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("list") => json!({
                     "kind": "list",
                     "schema_version": "1",
@@ -142,8 +143,8 @@ async fn tool_catalog_matches_exact_advertised_tool_set() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
     let response = harness.list_tools(2).await;
@@ -178,8 +179,8 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("list") => json!({
                     "kind": "list",
                     "schema_version": "1",
@@ -205,8 +206,8 @@ async fn list_sessions_returns_canonical_bundle_payload_from_relay() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
     let response = harness
@@ -309,7 +310,10 @@ async fn list_rejects_malformed_foreign_relay_selectors() {
                 "list",
                 list_principals_call(Map::from_iter([
                     ("relay".to_string(), Value::String((*relay).to_string())),
-                    ("namespace".to_string(), Value::String("myapp".to_string())),
+                    (
+                        "namespace".to_string(),
+                        Value::String("myapp".to_string()),
+                    ),
                 ])),
             )
             .await;
@@ -358,7 +362,10 @@ async fn list_rejects_missing_or_invalid_command() {
         .call_tool(
             2,
             "list",
-            Map::from_iter([("command".to_string(), Value::String("bundles".to_string()))]),
+            Map::from_iter([(
+                "command".to_string(),
+                Value::String("bundles".to_string()),
+            )]),
         )
         .await;
     assert_eq!(
@@ -463,7 +470,8 @@ async fn list_sessions_synthesizes_down_bundle_for_unreachable_home_bundle() {
             .as_array()
             .is_some_and(|values| values.is_empty())
     );
-    let sessions = configured["principals"].as_array().expect("sessions array");
+    let sessions =
+        configured["principals"].as_array().expect("sessions array");
     assert_eq!(sessions.len(), 3);
     for session in sessions {
         assert_eq!(session["ready"], false);
@@ -480,7 +488,8 @@ async fn list_sessions_synthesizes_down_bundle_for_unreachable_home_bundle() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn list_sessions_rejects_unreachable_non_home_bundle_with_relay_unavailable() {
+async fn list_sessions_rejects_unreachable_non_home_bundle_with_relay_unavailable()
+ {
     let runtime = TestRuntime::create();
     write_bundle_configuration(&runtime.config_root, "zeta", &["zeta"]);
     let mut harness = McpHarness::spawn(&runtime).await;
@@ -563,8 +572,8 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
     );
     routes.insert(
         "party".to_string(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("list") => json!({
                     "kind": "list",
                     "schema_version": "1",
@@ -587,11 +596,12 @@ async fn list_sessions_all_mode_aggregates_in_lexicographic_bundle_order() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     routes.insert("GLOBAL".to_string(), default_empty_global_responder());
-    let relay = FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
+    let relay =
+        FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
     let mut harness = McpHarness::spawn(&runtime).await;
     let arguments = list_principals_call(Map::from_iter([(
         "namespace".to_string(),
@@ -632,8 +642,8 @@ async fn list_sessions_appends_global_bundle_with_relay_wide_principals() {
     let mut routes: HashMap<String, RelayResponder> = HashMap::new();
     routes.insert(
         BUNDLE_NAME.to_string(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("list") => json!({
                     "kind": "list",
                     "schema_version": "1",
@@ -656,8 +666,8 @@ async fn list_sessions_appends_global_bundle_with_relay_wide_principals() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     routes.insert(
         "GLOBAL".to_string(),
@@ -691,7 +701,8 @@ async fn list_sessions_appends_global_bundle_with_relay_wide_principals() {
             },
         ),
     );
-    let relay = FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
+    let relay =
+        FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
     let mut harness = McpHarness::spawn(&runtime).await;
     let response = harness
         .call_tool(2, "list", list_principals_call(Map::new()))
@@ -756,7 +767,8 @@ async fn list_global_namespace_returns_only_relay_wide_principals() {
             },
         ),
     );
-    let relay = FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
+    let relay =
+        FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
     let mut harness = McpHarness::spawn(&runtime).await;
     let arguments = list_principals_call(Map::from_iter([(
         "namespace".to_string(),
@@ -775,7 +787,9 @@ async fn list_global_namespace_returns_only_relay_wide_principals() {
     let namespaces = relay
         .envelopes_for_operation("list")
         .iter()
-        .filter_map(|envelope| envelope["namespace"].as_str().map(str::to_string))
+        .filter_map(|envelope| {
+            envelope["namespace"].as_str().map(str::to_string)
+        })
         .collect::<Vec<_>>();
     assert_eq!(namespaces, vec!["GLOBAL".to_string()]);
 }
@@ -788,8 +802,8 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
     let mut routes: HashMap<String, RelayResponder> = HashMap::new();
     routes.insert(
         "alpha".to_string(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("list") => json!({
                     "kind": "error",
                     "error": {
@@ -810,8 +824,8 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
                         "message": "unexpected operation",
                     },
                 }),
-            },
-        ),
+            }
+        }),
     );
     routes.insert(
         BUNDLE_NAME.to_string(),
@@ -871,7 +885,8 @@ async fn list_sessions_all_mode_fails_fast_on_first_authorization_denial() {
             },
         ),
     );
-    let relay = FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
+    let relay =
+        FakeRelay::start_for_bundles(runtime.relay_socket.clone(), routes);
     let mut harness = McpHarness::spawn(&runtime).await;
     let arguments = list_principals_call(Map::from_iter([(
         "namespace".to_string(),

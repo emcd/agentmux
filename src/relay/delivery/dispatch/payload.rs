@@ -2,14 +2,17 @@ use serde_json::json;
 
 use crate::{
     configuration::BundleMember,
-    envelope::{AddressIdentity, ManifestPreamble, PromptBatchSettings, parse_tokenizer_profile},
+    envelope::{
+        AddressIdentity, ManifestPreamble, PromptBatchSettings,
+        parse_tokenizer_profile,
+    },
     runtime::inscriptions::emit_inscription,
     transports::DeliveryMessage,
 };
 
 use super::super::super::{
-    AsyncDeliveryTask, RELAY_NAMESPACE, RelayError, SCHEMA_VERSION, bare_session_id,
-    canonical_session_id,
+    AsyncDeliveryTask, RELAY_NAMESPACE, RelayError, SCHEMA_VERSION,
+    bare_session_id, canonical_session_id,
 };
 
 const PROMPT_TOKENS_MAX_ENVVAR: &str = "AGENTMUX_PROMPT_TOKENS_MAX";
@@ -42,10 +45,14 @@ const TOKENIZER_PROFILE_ENVVAR: &str = "AGENTMUX_TOKENIZER_PROFILE";
 fn sender_session_name(task: &AsyncDeliveryTask) -> String {
     match task.on_behalf_of.as_deref() {
         Some(origin) => {
-            let peer = bare_session_id(task.sender.id.as_str(), RELAY_NAMESPACE);
+            let peer =
+                bare_session_id(task.sender.id.as_str(), RELAY_NAMESPACE);
             format!("{origin}!{peer}")
-        }
-        None => canonical_session_id(task.sender.id.as_str(), task.sender_namespace.as_str()),
+        },
+        None => canonical_session_id(
+            task.sender.id.as_str(),
+            task.sender_namespace.as_str(),
+        ),
     }
 }
 
@@ -115,7 +122,10 @@ pub(super) fn build_delivery_message(
 /// envelope is independently traceable. The canonical routing/audit metadata is
 /// preserved out-of-band from the same structured [`DeliveryMessage`] the
 /// transport renders — never injected into pane text.
-pub(super) fn emit_envelope_metadata_inscription(message: &DeliveryMessage, message_id: &str) {
+pub(super) fn emit_envelope_metadata_inscription(
+    message: &DeliveryMessage,
+    message_id: &str,
+) {
     let cc_sessions: Vec<String> = message
         .cc
         .iter()
@@ -175,7 +185,10 @@ fn co_recipient_parties(task: &AsyncDeliveryTask) -> Vec<AddressIdentity> {
     co_recipient_sessions(task)
         .into_iter()
         .map(|session| {
-            let local_id = bare_session_id(session.as_str(), task.bundle.bundle_name.as_str());
+            let local_id = bare_session_id(
+                session.as_str(),
+                task.bundle.bundle_name.as_str(),
+            );
             let display_name = task
                 .bundle
                 .members

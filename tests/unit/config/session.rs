@@ -41,7 +41,8 @@ coder = "shell"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string().contains("duplicate session name"),
         "unexpected error: {err}"
@@ -77,7 +78,8 @@ coder = "shell"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string()
             .contains("must start with an ASCII alphabetic character"),
@@ -114,7 +116,8 @@ coder = "shell"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string()
             .contains("may only contain ASCII alphanumeric"),
@@ -151,7 +154,8 @@ coder = "shell"
         ),
     );
 
-    let err = load_bundle_configuration(&root, "alpha").expect_err("load should fail");
+    let err = load_bundle_configuration(&root, "alpha")
+        .expect_err("load should fail");
     assert!(
         err.to_string().contains("exceeds max length 31"),
         "unexpected error: {err}"

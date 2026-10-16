@@ -57,7 +57,10 @@ pub struct BundleCatalog {
 }
 
 impl std::fmt::Debug for BundleCatalog {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
         // RwLock contents are never observable without acquiring the lock, and
         // Debug-formatting while the lock is held could deadlock any thread
         // already partway through an inspect/print. Surface the structural
@@ -72,8 +75,12 @@ impl BundleCatalog {
     /// Builds a catalog from hosted bundle paths, defaulting every entry to
     /// `HostingIntent::Run`. Used where the entries are known to be running (the
     /// per-request ephemeral catalog) or where the intent is irrelevant (tests).
-    pub fn from_paths(paths: impl IntoIterator<Item = BundleRuntimePaths>) -> Self {
-        Self::from_entries(paths.into_iter().map(|paths| (paths, HostingIntent::Run)))
+    pub fn from_paths(
+        paths: impl IntoIterator<Item = BundleRuntimePaths>,
+    ) -> Self {
+        Self::from_entries(
+            paths.into_iter().map(|paths| (paths, HostingIntent::Run)),
+        )
     }
 
     /// Builds a catalog from hosted bundle paths each paired with its initial
@@ -101,7 +108,10 @@ impl BundleCatalog {
 
     /// Returns the runtime paths for `bundle_name`, or `None` when no such
     /// bundle is currently loaded.
-    pub(super) fn lookup(&self, bundle_name: &str) -> Option<BundleRuntimePaths> {
+    pub(super) fn lookup(
+        &self,
+        bundle_name: &str,
+    ) -> Option<BundleRuntimePaths> {
         self.read()
             .get(bundle_name)
             .map(|entry| entry.paths.clone())
@@ -129,7 +139,11 @@ impl BundleCatalog {
     /// derived from the bundle's effective autostart) or a modified bundle is
     /// reloaded (always `Run` — a held bundle's reload is suppressed before it
     /// reaches here).
-    pub(super) fn insert(&self, paths: BundleRuntimePaths, hosting_intent: HostingIntent) {
+    pub(super) fn insert(
+        &self,
+        paths: BundleRuntimePaths,
+        hosting_intent: HostingIntent,
+    ) {
         let bundle_name = paths.bundle_name.clone();
         self.write().insert(
             bundle_name,
@@ -143,7 +157,10 @@ impl BundleCatalog {
     /// Removes a loaded bundle, returning its paths when present. Held by the
     /// watcher's write side when a bundle file disappears. Dropping the entry
     /// also drops any operator down intent recorded for it.
-    pub(super) fn remove(&self, bundle_name: &str) -> Option<BundleRuntimePaths> {
+    pub(super) fn remove(
+        &self,
+        bundle_name: &str,
+    ) -> Option<BundleRuntimePaths> {
         self.write().remove(bundle_name).map(|entry| entry.paths)
     }
 
@@ -151,7 +168,11 @@ impl BundleCatalog {
     /// to `Hold` by the `down` handler and `Run` by the `up` handler. A no-op
     /// when the bundle is not loaded — intent is meaningful only for a bundle
     /// that exists, and a missing entry carries no state to leak.
-    pub(super) fn set_intent(&self, bundle_name: &str, hosting_intent: HostingIntent) {
+    pub(super) fn set_intent(
+        &self,
+        bundle_name: &str,
+        hosting_intent: HostingIntent,
+    ) {
         if let Some(entry) = self.write().get_mut(bundle_name) {
             entry.hosting_intent = hosting_intent;
         }

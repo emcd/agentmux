@@ -9,8 +9,8 @@ use std::{
 use crate::configuration::BundleMember;
 use crate::envelope::PromptBatchSettings;
 use crate::transports::{
-    GenerationFence, OutputView, StartupContext, Transport, TransportError, TransportHealth,
-    TransportStatus, UnreachableSince, WorkerReadinessState,
+    GenerationFence, OutputView, StartupContext, Transport, TransportError,
+    TransportHealth, TransportStatus, UnreachableSince, WorkerReadinessState,
 };
 
 use crate::acp::AcpTransport;
@@ -135,8 +135,10 @@ impl AcpWorkerDriver {
 
         // Set chooser/target identity ahead of the establish; the freshly-built
         // transport already reads Initializing from construction.
-        self.lock_transport()
-            .prepare_for_startup(self.services.chooser.clone(), self.target_member.id.clone());
+        self.lock_transport().prepare_for_startup(
+            self.services.chooser.clone(),
+            self.target_member.id.clone(),
+        );
 
         // Spawned before the bootstrap it supervises, rather than after it
         // returns: the monitor is idle until the transport signals
@@ -218,12 +220,17 @@ impl GenerationFence for AcpWorkerDriver {
             .bootstrap_task
             .as_ref()
             .is_none_or(tokio::task::JoinHandle::is_finished);
-        monitor_ceased && bootstrap_ceased && self.lock_transport().generation_ceased()
+        monitor_ceased
+            && bootstrap_ceased
+            && self.lock_transport().generation_ceased()
     }
 }
 
 impl Transport for AcpWorkerDriver {
-    fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
+    fn startup(
+        &mut self,
+        context: StartupContext,
+    ) -> Result<TransportStatus, TransportError> {
         self.lock_transport().startup(context)
     }
 

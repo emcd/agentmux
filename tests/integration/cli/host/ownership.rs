@@ -20,7 +20,13 @@ use tempfile::TempDir;
 use super::*;
 
 fn write_cistella_bundle(config_root: &Path) {
-    write_bundle_configuration_with_options(config_root, "alpha", None, &["cistella"], Some(true));
+    write_bundle_configuration_with_options(
+        config_root,
+        "alpha",
+        None,
+        &["cistella"],
+        Some(true),
+    );
 }
 
 /// Every malformed creation-id shape refuses inscription through the CLI:
@@ -57,12 +63,22 @@ fn malformed_session_id_shapes_all_fail_closed_through_cli() {
     fail_fake_tmux_session_id_report_raw(&fake_tmux, "shape_dollar", "$");
     fail_fake_tmux_session_id_report_raw(&fake_tmux, "shape_dollarx", "$x");
     fail_fake_tmux_session_id_report_raw(&fake_tmux, "shape_multi", "$7\\n$8");
-    fail_fake_tmux_session_id_report_raw(&fake_tmux, "shape_trailing", "$7 extra");
+    fail_fake_tmux_session_id_report_raw(
+        &fake_tmux,
+        "shape_trailing",
+        "$7 extra",
+    );
 
-    let child = spawn_host_relay(&config_root, &state_root, &inscriptions_root, &fake_tmux);
+    let child = spawn_host_relay(
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux,
+    );
     wait_for_relay_ready(&state_root, "alpha");
 
-    let listed_json = list_bundle(&state_root, &inscriptions_root, &config_root);
+    let listed_json =
+        list_bundle(&state_root, &inscriptions_root, &config_root);
     let failures = listed_json["bundle"]["recent_startup_failures"]
         .as_array()
         .expect("startup failures array");
@@ -76,8 +92,11 @@ fn malformed_session_id_shapes_all_fail_closed_through_cli() {
         let failure = failures
             .iter()
             .find(|entry| entry["session_id"] == member)
-            .unwrap_or_else(|| panic!("expected startup failure for {member}: {listed_json}"));
-        let failure_text = serde_json::to_string(failure).expect("encode failure record");
+            .unwrap_or_else(|| {
+                panic!("expected startup failure for {member}: {listed_json}")
+            });
+        let failure_text =
+            serde_json::to_string(failure).expect("encode failure record");
         assert!(
             failure_text.contains("did not report a session id"),
             "{member} failure should name the unparseable id: {listed_json}"
@@ -126,7 +145,11 @@ fn spawn_host_relay(
     )
 }
 
-fn list_bundle(state_root: &Path, inscriptions_root: &Path, config_root: &Path) -> Value {
+fn list_bundle(
+    state_root: &Path,
+    inscriptions_root: &Path,
+    config_root: &Path,
+) -> Value {
     let listed = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
             "list",
@@ -148,7 +171,8 @@ fn list_bundle(state_root: &Path, inscriptions_root: &Path, config_root: &Path) 
 }
 
 fn tmux_log(fake_tmux: &Path) -> String {
-    fs::read_to_string(fake_tmux_log_path(fake_tmux)).expect("read fake tmux log")
+    fs::read_to_string(fake_tmux_log_path(fake_tmux))
+        .expect("read fake tmux log")
 }
 
 fn set_option_targets(log: &str) -> Vec<String> {
@@ -185,10 +209,16 @@ fn ownership_inscription_does_not_bleed_to_prefixed_sibling() {
     // calls — the prefix-match trap the captured id must not fall into.
     kill_fake_tmux_session_after_create(&fake_tmux, "cistella");
 
-    let child = spawn_host_relay(&config_root, &state_root, &inscriptions_root, &fake_tmux);
+    let child = spawn_host_relay(
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux,
+    );
     wait_for_relay_ready(&state_root, "alpha");
 
-    let listed_json = list_bundle(&state_root, &inscriptions_root, &config_root);
+    let listed_json =
+        list_bundle(&state_root, &inscriptions_root, &config_root);
     assert!(
         listed_json["bundle"]["startup_failure_count"]
             .as_u64()
@@ -201,9 +231,9 @@ fn ownership_inscription_does_not_bleed_to_prefixed_sibling() {
     // would record `cistella-o` here; the id path must record nothing.
     let owned = read_fake_tmux_owned_sessions(&fake_tmux);
     assert!(
-        !owned
-            .iter()
-            .any(|name| name == "cistella-o" || name == "foreign" || name == "cistella"),
+        !owned.iter().any(|name| name == "cistella-o"
+            || name == "foreign"
+            || name == "cistella"),
         "no sibling may be inscribed when the created session is gone: {owned:?}"
     );
 
@@ -239,10 +269,16 @@ fn failed_creation_issues_no_set_option() {
     write_fake_tmux_script(&fake_tmux);
     fail_fake_tmux_session_creation(&fake_tmux, "cistella");
 
-    let child = spawn_host_relay(&config_root, &state_root, &inscriptions_root, &fake_tmux);
+    let child = spawn_host_relay(
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux,
+    );
     wait_for_relay_ready(&state_root, "alpha");
 
-    let listed_json = list_bundle(&state_root, &inscriptions_root, &config_root);
+    let listed_json =
+        list_bundle(&state_root, &inscriptions_root, &config_root);
     assert!(
         listed_json["bundle"]["startup_failure_count"]
             .as_u64()
@@ -281,10 +317,16 @@ fn malformed_session_id_report_issues_no_set_option() {
     write_fake_tmux_script(&fake_tmux);
     fail_fake_tmux_session_id_report(&fake_tmux, "cistella");
 
-    let child = spawn_host_relay(&config_root, &state_root, &inscriptions_root, &fake_tmux);
+    let child = spawn_host_relay(
+        &config_root,
+        &state_root,
+        &inscriptions_root,
+        &fake_tmux,
+    );
     wait_for_relay_ready(&state_root, "alpha");
 
-    let listed_json = list_bundle(&state_root, &inscriptions_root, &config_root);
+    let listed_json =
+        list_bundle(&state_root, &inscriptions_root, &config_root);
     assert!(
         listed_json["bundle"]["startup_failure_count"]
             .as_u64()

@@ -11,12 +11,18 @@ use crate::{
         BundleConfiguration, ConfigurationRoots, load_tui_configuration,
         policies_configuration_path,
     },
-    relay::{POLICIES_FORMAT_VERSION, RelayError, errors::map_config, relay_error},
+    relay::{
+        POLICIES_FORMAT_VERSION, RelayError, errors::map_config, relay_error,
+    },
 };
 
 use super::super::configuration::load_relay_file_configuration;
-use super::context::{AuthorizationContext, PolicyControls, PolicyScope, UiSessionAuthorization};
-use super::resolution::{normalize_policy_id, resolve_session_policy_controls};
+use super::context::{
+    AuthorizationContext, PolicyControls, PolicyScope, UiSessionAuthorization,
+};
+use super::resolution::{
+    normalize_policy_id, resolve_session_policy_controls,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
@@ -78,27 +84,30 @@ fn default_updown_policy_scope() -> String {
 pub(super) fn load_policy_presets(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<(HashMap<String, PolicyControls>, Option<String>), RelayError> {
-    let policies_path = policies_configuration_path(configuration_roots).map_err(map_config)?;
-    let policies_raw = fs::read_to_string(&policies_path).map_err(|source| {
-        relay_error(
-            "validation_invalid_arguments",
-            "failed to load authorization policy artifact",
-            Some(json!({
-                "path": policies_path.display().to_string(),
-                "cause": source.to_string(),
-            })),
-        )
-    })?;
-    let policies_file = toml::from_str::<RawPoliciesFile>(&policies_raw).map_err(|source| {
-        relay_error(
-            "validation_invalid_arguments",
-            "failed to parse authorization policy artifact",
-            Some(json!({
-                "path": policies_path.display().to_string(),
-                "cause": source.to_string(),
-            })),
-        )
-    })?;
+    let policies_path = policies_configuration_path(configuration_roots)
+        .map_err(map_config)?;
+    let policies_raw =
+        fs::read_to_string(&policies_path).map_err(|source| {
+            relay_error(
+                "validation_invalid_arguments",
+                "failed to load authorization policy artifact",
+                Some(json!({
+                    "path": policies_path.display().to_string(),
+                    "cause": source.to_string(),
+                })),
+            )
+        })?;
+    let policies_file = toml::from_str::<RawPoliciesFile>(&policies_raw)
+        .map_err(|source| {
+            relay_error(
+                "validation_invalid_arguments",
+                "failed to parse authorization policy artifact",
+                Some(json!({
+                    "path": policies_path.display().to_string(),
+                    "cause": source.to_string(),
+                })),
+            )
+        })?;
     if policies_file.format_version != POLICIES_FORMAT_VERSION {
         return Err(relay_error(
             "validation_invalid_arguments",
@@ -112,15 +121,16 @@ pub(super) fn load_policy_presets(
 
     let mut presets = HashMap::<String, PolicyControls>::new();
     for policy in policies_file.policies {
-        let policy_id = normalize_policy_id(policy.id.as_str()).ok_or_else(|| {
-            relay_error(
-                "validation_invalid_arguments",
-                "policy id must be non-empty",
-                Some(json!({
-                    "path": policies_path.display().to_string(),
-                })),
-            )
-        })?;
+        let policy_id =
+            normalize_policy_id(policy.id.as_str()).ok_or_else(|| {
+                relay_error(
+                    "validation_invalid_arguments",
+                    "policy id must be non-empty",
+                    Some(json!({
+                        "path": policies_path.display().to_string(),
+                    })),
+                )
+            })?;
         if presets.contains_key(policy_id) {
             return Err(relay_error(
                 "validation_invalid_arguments",
@@ -131,7 +141,11 @@ pub(super) fn load_policy_presets(
                 })),
             ));
         }
-        let controls = parse_policy_controls(policy.controls, policies_path.as_path(), policy_id)?;
+        let controls = parse_policy_controls(
+            policy.controls,
+            policies_path.as_path(),
+            policy_id,
+        )?;
         presets.insert(policy_id.to_string(), controls);
     }
 
@@ -159,18 +173,22 @@ pub(in crate::relay) fn load_authorization_context(
     configuration_roots: &ConfigurationRoots,
     bundle: Option<&BundleConfiguration>,
 ) -> Result<AuthorizationContext, RelayError> {
-    let policies_path = policies_configuration_path(configuration_roots).map_err(map_config)?;
-    let (presets, default_policy_id) = load_policy_presets(configuration_roots)?;
+    let policies_path = policies_configuration_path(configuration_roots)
+        .map_err(map_config)?;
+    let (presets, default_policy_id) =
+        load_policy_presets(configuration_roots)?;
 
     let choices_pending_max =
-        load_relay_file_configuration(configuration_roots)?.choices_pending_max;
+        load_relay_file_configuration(configuration_roots)?
+            .choices_pending_max;
 
     // A relay-wide (`GLOBAL`) home namespace has no bundle members; its
     // requester controls come entirely from the operator policy loaded below
     // (the TUI session presets), independent of any bundle.
     let conservative_default = PolicyControls::conservative_default();
-    let mut controls_by_session =
-        HashMap::with_capacity(bundle.map_or(0, |bundle| bundle.members.len()));
+    let mut controls_by_session = HashMap::with_capacity(
+        bundle.map_or(0, |bundle| bundle.members.len()),
+    );
     if let Some(bundle) = bundle {
         for member in &bundle.members {
             let controls = resolve_session_policy_controls(
@@ -185,20 +203,22 @@ pub(in crate::relay) fn load_authorization_context(
     }
     let mut ui_sessions = HashMap::<String, UiSessionAuthorization>::new();
     if let Some(tui_configuration) =
-        load_tui_configuration(configuration_roots).map_err(map_tui_configuration_error)?
+        load_tui_configuration(configuration_roots)
+            .map_err(map_tui_configuration_error)?
     {
         for session in tui_configuration.sessions {
             let session_id = session.id.clone();
-            let policy_id = normalize_policy_id(session.policy.as_str()).ok_or_else(|| {
-                relay_error(
-                    "validation_unknown_policy",
-                    "ui session policy reference is empty",
-                    Some(json!({
-                        "session_selector": session_id.as_str(),
-                        "session_id": session_id.as_str(),
-                    })),
-                )
-            })?;
+            let policy_id = normalize_policy_id(session.policy.as_str())
+                .ok_or_else(|| {
+                    relay_error(
+                        "validation_unknown_policy",
+                        "ui session policy reference is empty",
+                        Some(json!({
+                            "session_selector": session_id.as_str(),
+                            "session_id": session_id.as_str(),
+                        })),
+                    )
+                })?;
             let controls = presets.get(policy_id).ok_or_else(|| {
                 relay_error(
                     "validation_unknown_policy",
@@ -210,7 +230,8 @@ pub(in crate::relay) fn load_authorization_context(
                     })),
                 )
             })?;
-            if let Some(existing_controls) = controls_by_session.get(session_id.as_str())
+            if let Some(existing_controls) =
+                controls_by_session.get(session_id.as_str())
                 && existing_controls != controls
             {
                 return Err(relay_error(
@@ -294,12 +315,24 @@ fn parse_policy_controls(
         "validation_invalid_policy_scope",
         "authorization policy updown control uses unknown scope value",
     )?;
-    let new_controls =
-        parse_action_scope_map(controls.new_controls, "new", policies_path, policy_id)?;
-    let change_controls =
-        parse_action_scope_map(controls.change_controls, "change", policies_path, policy_id)?;
-    let drop_controls =
-        parse_action_scope_map(controls.drop_controls, "drop", policies_path, policy_id)?;
+    let new_controls = parse_action_scope_map(
+        controls.new_controls,
+        "new",
+        policies_path,
+        policy_id,
+    )?;
+    let change_controls = parse_action_scope_map(
+        controls.change_controls,
+        "change",
+        policies_path,
+        policy_id,
+    )?;
+    let drop_controls = parse_action_scope_map(
+        controls.drop_controls,
+        "drop",
+        policies_path,
+        policy_id,
+    )?;
     Ok(PolicyControls {
         list,
         look,
@@ -382,24 +415,27 @@ pub(super) fn map_tui_configuration_error(
     source: crate::configuration::ConfigurationError,
 ) -> RelayError {
     match source {
-        crate::configuration::ConfigurationError::InvalidConfiguration { path, message } => {
-            relay_error(
-                "validation_invalid_arguments",
-                "tui configuration is invalid",
-                Some(json!({
-                    "path": path.display().to_string(),
-                    "cause": message,
-                })),
-            )
-        }
-        crate::configuration::ConfigurationError::Io { context, source } => relay_error(
+        crate::configuration::ConfigurationError::InvalidConfiguration {
+            path,
+            message,
+        } => relay_error(
             "validation_invalid_arguments",
-            "failed to load tui configuration",
+            "tui configuration is invalid",
             Some(json!({
-                "context": context,
-                "cause": source.to_string(),
+                "path": path.display().to_string(),
+                "cause": message,
             })),
         ),
+        crate::configuration::ConfigurationError::Io { context, source } => {
+            relay_error(
+                "validation_invalid_arguments",
+                "failed to load tui configuration",
+                Some(json!({
+                    "context": context,
+                    "cause": source.to_string(),
+                })),
+            )
+        },
         other => relay_error(
             "validation_invalid_arguments",
             "failed to load tui configuration",

@@ -151,19 +151,26 @@ fn read_opencode_prompt_regex_from_config() -> String {
         .join("data")
         .join("configuration")
         .join("coders.toml");
-    let raw = fs::read_to_string(&config_path)
-        .unwrap_or_else(|error| panic!("read {}: {error}", config_path.display()));
-    let value = raw
-        .parse::<Value>()
-        .unwrap_or_else(|error| panic!("parse {}: {error}", config_path.display()));
+    let raw = fs::read_to_string(&config_path).unwrap_or_else(|error| {
+        panic!("read {}: {error}", config_path.display())
+    });
+    let value = raw.parse::<Value>().unwrap_or_else(|error| {
+        panic!("parse {}: {error}", config_path.display())
+    });
     let coders = value
         .get("coders")
         .and_then(Value::as_array)
-        .unwrap_or_else(|| panic!("{} has no `[[coders]]` table", config_path.display()));
+        .unwrap_or_else(|| {
+            panic!("{} has no `[[coders]]` table", config_path.display())
+        });
     let opencode = coders
         .iter()
-        .find(|coder| coder.get("id").and_then(Value::as_str) == Some("opencode"))
-        .unwrap_or_else(|| panic!("opencode coder entry missing in {}", config_path.display()));
+        .find(|coder| {
+            coder.get("id").and_then(Value::as_str) == Some("opencode")
+        })
+        .unwrap_or_else(|| {
+            panic!("opencode coder entry missing in {}", config_path.display())
+        });
     opencode
         .get("tmux")
         .and_then(|tmux| tmux.get("prompt-regex"))

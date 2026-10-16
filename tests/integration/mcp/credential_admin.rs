@@ -11,8 +11,8 @@ use std::sync::Arc;
 /// adapter completes; the assertions inspect the recorded relay request, not the
 /// response.
 fn credential_admin_responder() -> RelayResponder {
-    Arc::new(
-        |request| match request.get("operation").and_then(Value::as_str) {
+    Arc::new(|request| {
+        match request.get("operation").and_then(Value::as_str) {
             Some("new_peer") => json!({
                 "kind": "new_peer",
                 "schema_version": "1",
@@ -36,15 +36,17 @@ fn credential_admin_responder() -> RelayResponder {
                     "message": "unexpected operation",
                 },
             }),
-        },
-    )
+        }
+    })
 }
 
 fn peer_args(extra: Value) -> Map<String, Value> {
     let mut arguments = Map::new();
     arguments.insert("command".to_string(), Value::String("peer".to_string()));
     let mut args = json!({"principal_id": "worker@party"});
-    if let (Value::Object(args_map), Value::Object(extra_map)) = (&mut args, extra) {
+    if let (Value::Object(args_map), Value::Object(extra_map)) =
+        (&mut args, extra)
+    {
         args_map.extend(extra_map);
     }
     arguments.insert("args".to_string(), args);
@@ -55,7 +57,9 @@ fn psk_args(extra: Value) -> Map<String, Value> {
     let mut arguments = Map::new();
     arguments.insert("command".to_string(), Value::String("psk".to_string()));
     let mut args = json!({"principal_id": "worker@party"});
-    if let (Value::Object(args_map), Value::Object(extra_map)) = (&mut args, extra) {
+    if let (Value::Object(args_map), Value::Object(extra_map)) =
+        (&mut args, extra)
+    {
         args_map.extend(extra_map);
     }
     arguments.insert("args".to_string(), args);
@@ -65,7 +69,10 @@ fn psk_args(extra: Value) -> Map<String, Value> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_peer_output_path_translates_to_path_destination() {
     let runtime = TestRuntime::create();
-    let relay = FakeRelay::start(runtime.relay_socket.clone(), credential_admin_responder());
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        credential_admin_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let arguments = peer_args(json!({"output_path": "/tmp/cred.psk"}));
@@ -82,7 +89,10 @@ async fn new_peer_output_path_translates_to_path_destination() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_peer_write_to_config_translates_to_config_destination() {
     let runtime = TestRuntime::create();
-    let relay = FakeRelay::start(runtime.relay_socket.clone(), credential_admin_responder());
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        credential_admin_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let arguments = peer_args(json!({"write_to_config": true}));
@@ -96,7 +106,10 @@ async fn new_peer_write_to_config_translates_to_config_destination() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_peer_default_destination_is_response() {
     let runtime = TestRuntime::create();
-    let relay = FakeRelay::start(runtime.relay_socket.clone(), credential_admin_responder());
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        credential_admin_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let arguments = peer_args(json!({}));
@@ -112,11 +125,17 @@ async fn new_peer_rejects_output_path_and_write_to_config_together() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay must not receive new_peer for a mutually-exclusive request")),
+        Arc::new(|_| {
+            panic!(
+                "relay must not receive new_peer for a mutually-exclusive request"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let arguments = peer_args(json!({"output_path": "/tmp/cred.psk", "write_to_config": true}));
+    let arguments = peer_args(
+        json!({"output_path": "/tmp/cred.psk", "write_to_config": true}),
+    );
     let response = harness.call_tool(2, "new", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_invalid_params"));
@@ -126,7 +145,10 @@ async fn new_peer_rejects_output_path_and_write_to_config_together() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn change_psk_output_path_translates_to_path_destination() {
     let runtime = TestRuntime::create();
-    let relay = FakeRelay::start(runtime.relay_socket.clone(), credential_admin_responder());
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        credential_admin_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let arguments = psk_args(json!({"output_path": "/tmp/cred.psk"}));
@@ -143,7 +165,10 @@ async fn change_psk_output_path_translates_to_path_destination() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn change_psk_write_to_config_translates_to_config_destination() {
     let runtime = TestRuntime::create();
-    let relay = FakeRelay::start(runtime.relay_socket.clone(), credential_admin_responder());
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        credential_admin_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let arguments = psk_args(json!({"write_to_config": true}));
@@ -159,11 +184,17 @@ async fn change_psk_rejects_output_path_and_write_to_config_together() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay must not receive change_psk for a mutually-exclusive request")),
+        Arc::new(|_| {
+            panic!(
+                "relay must not receive change_psk for a mutually-exclusive request"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
-    let arguments = psk_args(json!({"output_path": "/tmp/cred.psk", "write_to_config": true}));
+    let arguments = psk_args(
+        json!({"output_path": "/tmp/cred.psk", "write_to_config": true}),
+    );
     let response = harness.call_tool(2, "change", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_invalid_params"));
@@ -172,9 +203,12 @@ async fn change_psk_rejects_output_path_and_write_to_config_together() {
 
 fn scope_args(extra: Value) -> Map<String, Value> {
     let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("scope".to_string()));
+    arguments
+        .insert("command".to_string(), Value::String("scope".to_string()));
     let mut args = json!({"principal_id": "west@RELAY"});
-    if let (Value::Object(args_map), Value::Object(extra_map)) = (&mut args, extra) {
+    if let (Value::Object(args_map), Value::Object(extra_map)) =
+        (&mut args, extra)
+    {
         args_map.extend(extra_map);
     }
     arguments.insert("args".to_string(), args);
@@ -185,8 +219,8 @@ fn scope_args(extra: Value) -> Map<String, Value> {
 /// adapter completes; the assertions inspect the recorded relay request and
 /// the surfaced payload.
 fn change_scope_responder() -> RelayResponder {
-    Arc::new(
-        |request| match request.get("operation").and_then(Value::as_str) {
+    Arc::new(|request| {
+        match request.get("operation").and_then(Value::as_str) {
             Some("change_scope") => json!({
                 "kind": "change_scope",
                 "schema_version": "1",
@@ -197,14 +231,17 @@ fn change_scope_responder() -> RelayResponder {
                 "kind": "error",
                 "error": {"code": "internal_unexpected_failure", "message": "unexpected operation"},
             }),
-        },
-    )
+        }
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn change_scope_forwards_principal_id_and_scope_to_the_relay() {
     let runtime = TestRuntime::create();
-    let relay = FakeRelay::start(runtime.relay_socket.clone(), change_scope_responder());
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        change_scope_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let arguments = scope_args(json!({"scope": "beta,alpha"}));
@@ -224,7 +261,9 @@ async fn change_scope_rejects_omitted_scope_before_relay_contact() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay must not receive change_scope for an omitted scope")),
+        Arc::new(|_| {
+            panic!("relay must not receive change_scope for an omitted scope")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -236,12 +275,13 @@ async fn change_scope_rejects_omitted_scope_before_relay_contact() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn change_scope_surfaces_relay_persistence_failure_without_success_payload() {
+async fn change_scope_surfaces_relay_persistence_failure_without_success_payload()
+ {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(
-            |request| match request.get("operation").and_then(Value::as_str) {
+        Arc::new(|request| {
+            match request.get("operation").and_then(Value::as_str) {
                 Some("change_scope") => json!({
                     "kind": "error",
                     "error": {
@@ -253,8 +293,8 @@ async fn change_scope_surfaces_relay_persistence_failure_without_success_payload
                     "kind": "error",
                     "error": {"code": "internal_unexpected_failure", "message": "unexpected operation"},
                 }),
-            },
-        ),
+            }
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -272,7 +312,9 @@ async fn change_scope_rejects_malformed_scope_before_relay_contact() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay must not receive change_scope for a malformed scope")),
+        Arc::new(|_| {
+            panic!("relay must not receive change_scope for a malformed scope")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -288,7 +330,11 @@ async fn change_scope_rejects_non_relay_principal_before_relay_contact() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay must not receive change_scope for a non-relay principal")),
+        Arc::new(|_| {
+            panic!(
+                "relay must not receive change_scope for a non-relay principal"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -311,7 +357,9 @@ async fn new_peer_rejects_malformed_relay_scope_before_relay_contact() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay must not receive new_peer for a malformed scope")),
+        Arc::new(|_| {
+            panic!("relay must not receive new_peer for a malformed scope")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -328,11 +376,16 @@ async fn new_peer_rejects_malformed_relay_scope_before_relay_contact() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn change_scope_validates_the_normalized_identity_before_relay_contact() {
+async fn change_scope_validates_the_normalized_identity_before_relay_contact()
+{
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay must not receive change_scope for a malformed identity")),
+        Arc::new(|_| {
+            panic!(
+                "relay must not receive change_scope for a malformed identity"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
@@ -357,12 +410,15 @@ async fn change_rejects_an_unknown_command() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay must not receive an unknown change command")),
+        Arc::new(|_| {
+            panic!("relay must not receive an unknown change command")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
-    arguments.insert("command".to_string(), Value::String("bogus".to_string()));
+    arguments
+        .insert("command".to_string(), Value::String("bogus".to_string()));
     arguments.insert("args".to_string(), json!({}));
     let response = harness.call_tool(2, "change", arguments).await;
 
@@ -372,15 +428,16 @@ async fn change_rejects_an_unknown_command() {
 fn drop_peer_arguments(principal_id: &str) -> Map<String, Value> {
     let mut arguments = Map::new();
     arguments.insert("command".to_string(), Value::String("peer".to_string()));
-    arguments.insert("args".to_string(), json!({"principal_id": principal_id}));
+    arguments
+        .insert("args".to_string(), json!({"principal_id": principal_id}));
     arguments
 }
 
 /// Responder answering `drop_peer` for a session principal, which is the one
 /// principal type the relay owns a canonical credential location for.
 fn drop_session_responder() -> RelayResponder {
-    Arc::new(
-        |request| match request.get("operation").and_then(Value::as_str) {
+    Arc::new(|request| {
+        match request.get("operation").and_then(Value::as_str) {
             Some("drop_peer") => json!({
                 "kind": "drop_peer",
                 "schema_version": "1",
@@ -392,15 +449,15 @@ fn drop_session_responder() -> RelayResponder {
                 "kind": "error",
                 "error": {"code": "internal_unexpected_failure", "message": "unexpected operation"},
             }),
-        },
-    )
+        }
+    })
 }
 
 /// Responder answering `drop_peer` for a peer relay, whose credential lives
 /// under the connecting relay's state root and so carries no path.
 fn drop_relay_responder() -> RelayResponder {
-    Arc::new(
-        |request| match request.get("operation").and_then(Value::as_str) {
+    Arc::new(|request| {
+        match request.get("operation").and_then(Value::as_str) {
             Some("drop_peer") => json!({
                 "kind": "drop_peer",
                 "schema_version": "1",
@@ -412,14 +469,17 @@ fn drop_relay_responder() -> RelayResponder {
                 "kind": "error",
                 "error": {"code": "internal_unexpected_failure", "message": "unexpected operation"},
             }),
-        },
-    )
+        }
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn drop_peer_forwards_the_principal_id_to_the_relay() {
     let runtime = TestRuntime::create();
-    let relay = FakeRelay::start(runtime.relay_socket.clone(), drop_session_responder());
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        drop_session_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     harness
@@ -434,7 +494,10 @@ async fn drop_peer_forwards_the_principal_id_to_the_relay() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn drop_peer_reports_the_credential_path_for_a_session_principal() {
     let runtime = TestRuntime::create();
-    let _relay = FakeRelay::start(runtime.relay_socket.clone(), drop_session_responder());
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        drop_session_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let response = harness
@@ -453,7 +516,8 @@ async fn drop_peer_reports_the_credential_path_for_a_session_principal() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn drop_peer_omits_the_credential_path_for_a_peer_relay() {
     let runtime = TestRuntime::create();
-    let _relay = FakeRelay::start(runtime.relay_socket.clone(), drop_relay_responder());
+    let _relay =
+        FakeRelay::start(runtime.relay_socket.clone(), drop_relay_responder());
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let response = harness
@@ -474,13 +538,16 @@ async fn drop_rejects_a_command_other_than_peer() {
     let runtime = TestRuntime::create();
     let _relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay must not receive a drop with an unknown command")),
+        Arc::new(|_| {
+            panic!("relay must not receive a drop with an unknown command")
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let mut arguments = Map::new();
     arguments.insert("command".to_string(), Value::String("psk".to_string()));
-    arguments.insert("args".to_string(), json!({"principal_id": "worker@party"}));
+    arguments
+        .insert("args".to_string(), json!({"principal_id": "worker@party"}));
     let response = harness.call_tool(2, "drop", arguments).await;
 
     assert_eq!(
@@ -492,8 +559,8 @@ async fn drop_rejects_a_command_other_than_peer() {
 /// Responder answering `new_peer` with the policy-tier scope advisory attached,
 /// matching how the relay serializes a diagnostic-bearing success.
 fn scope_advisory_responder() -> RelayResponder {
-    Arc::new(
-        |request| match request.get("operation").and_then(Value::as_str) {
+    Arc::new(|request| {
+        match request.get("operation").and_then(Value::as_str) {
             Some("new_peer") => json!({
                 "kind": "new_peer",
                 "schema_version": "1",
@@ -511,14 +578,17 @@ fn scope_advisory_responder() -> RelayResponder {
                 "kind": "error",
                 "error": {"code": "internal_unexpected_failure", "message": "unexpected operation"},
             }),
-        },
-    )
+        }
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_peer_preserves_a_scope_diagnostic_in_the_structured_result() {
     let runtime = TestRuntime::create();
-    let _relay = FakeRelay::start(runtime.relay_socket.clone(), scope_advisory_responder());
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        scope_advisory_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let response = harness
@@ -529,7 +599,8 @@ async fn new_peer_preserves_a_scope_diagnostic_in_the_structured_result() {
     // The advisory has to reach an MCP caller through the payload: relay stderr
     // is a different process's stream, and MCP has no stderr channel at all.
     assert_eq!(
-        payload["diagnostics"][0]["code"], "advisory_scope_resembles_policy_tier",
+        payload["diagnostics"][0]["code"],
+        "advisory_scope_resembles_policy_tier",
         "the scope advisory must survive into the structured result: {payload}"
     );
     assert!(
@@ -545,7 +616,10 @@ async fn new_peer_preserves_a_scope_diagnostic_in_the_structured_result() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_peer_omits_diagnostics_when_none_were_raised() {
     let runtime = TestRuntime::create();
-    let _relay = FakeRelay::start(runtime.relay_socket.clone(), response_mode_responder());
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        response_mode_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let response = harness
@@ -562,8 +636,8 @@ async fn new_peer_omits_diagnostics_when_none_were_raised() {
 /// Responder answering `new_peer` in Response mode (psk present, no written
 /// path), matching how the relay serializes a Response-destination result.
 fn response_mode_responder() -> RelayResponder {
-    Arc::new(
-        |request| match request.get("operation").and_then(Value::as_str) {
+    Arc::new(|request| {
+        match request.get("operation").and_then(Value::as_str) {
             Some("new_peer") => json!({
                 "kind": "new_peer",
                 "schema_version": "1",
@@ -584,14 +658,17 @@ fn response_mode_responder() -> RelayResponder {
                 "kind": "error",
                 "error": {"code": "internal_unexpected_failure", "message": "unexpected operation"},
             }),
-        },
-    )
+        }
+    })
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_peer_response_mode_payload_omits_written_path() {
     let runtime = TestRuntime::create();
-    let _relay = FakeRelay::start(runtime.relay_socket.clone(), response_mode_responder());
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        response_mode_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let response = harness.call_tool(2, "new", peer_args(json!({}))).await;
@@ -607,7 +684,10 @@ async fn new_peer_response_mode_payload_omits_written_path() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_peer_written_payload_omits_psk() {
     let runtime = TestRuntime::create();
-    let _relay = FakeRelay::start(runtime.relay_socket.clone(), credential_admin_responder());
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        credential_admin_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let response = harness
@@ -625,7 +705,10 @@ async fn new_peer_written_payload_omits_psk() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn change_psk_written_payload_omits_psk() {
     let runtime = TestRuntime::create();
-    let _relay = FakeRelay::start(runtime.relay_socket.clone(), credential_admin_responder());
+    let _relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        credential_admin_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     let response = harness
@@ -645,13 +728,18 @@ async fn new_peer_empty_output_path_with_config_is_mutually_exclusive() {
     let runtime = TestRuntime::create();
     let relay = FakeRelay::start(
         runtime.relay_socket.clone(),
-        Arc::new(|_| panic!("relay must not receive new_peer for a mutually-exclusive request")),
+        Arc::new(|_| {
+            panic!(
+                "relay must not receive new_peer for a mutually-exclusive request"
+            )
+        }),
     );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     // An explicitly-supplied (even empty) output_path conflicts with
     // write_to_config: presence, not emptiness, drives mutual exclusion.
-    let arguments = peer_args(json!({"output_path": "", "write_to_config": true}));
+    let arguments =
+        peer_args(json!({"output_path": "", "write_to_config": true}));
     let response = harness.call_tool(2, "new", arguments).await;
 
     assert_eq!(error_code(&response), Some("validation_invalid_params"));
@@ -661,7 +749,10 @@ async fn new_peer_empty_output_path_with_config_is_mutually_exclusive() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_peer_empty_output_path_forwards_as_path_for_relay_rejection() {
     let runtime = TestRuntime::create();
-    let relay = FakeRelay::start(runtime.relay_socket.clone(), credential_admin_responder());
+    let relay = FakeRelay::start(
+        runtime.relay_socket.clone(),
+        credential_admin_responder(),
+    );
     let mut harness = McpHarness::spawn(&runtime).await;
 
     // An empty output_path must forward as a Path destination (for the relay to

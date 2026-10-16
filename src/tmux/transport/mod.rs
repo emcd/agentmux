@@ -34,12 +34,16 @@ use crate::configuration::TargetConfiguration;
 use crate::envelope::PromptBatchSettings;
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 use crate::transports::{
-    DeliveryEnvelope, DeliveryExecutorContext, GenerationFence, OutputView, StartupContext,
-    Transport, TransportError, TransportHealth, TransportReadiness, TransportStatus,
-    UnreachableSince, run_delivery_executor,
+    DeliveryEnvelope, DeliveryExecutorContext, GenerationFence, OutputView,
+    StartupContext, Transport, TransportError, TransportHealth,
+    TransportReadiness, TransportStatus, UnreachableSince,
+    run_delivery_executor,
 };
 
-use super::pane::{TmuxInvocationSlot, publish_tmux_invocations, terminate_published_invocation};
+use super::pane::{
+    TmuxInvocationSlot, publish_tmux_invocations,
+    terminate_published_invocation,
+};
 
 mod delivery;
 mod executor;
@@ -261,10 +265,14 @@ impl TmuxTransport {
         let Some(context) = self.task_context.clone() else {
             return;
         };
-        let TargetConfiguration::Tmux(target) = context.target_member.target.clone() else {
+        let TargetConfiguration::Tmux(target) =
+            context.target_member.target.clone()
+        else {
             return;
         };
-        let socket = tmux_socket_path_for_runtime_directory(context.runtime_directory.as_path());
+        let socket = tmux_socket_path_for_runtime_directory(
+            context.runtime_directory.as_path(),
+        );
         let observation = Arc::clone(&self.observation);
         let slot = Arc::clone(&self.observer_invocation);
         let shutdown_flag = Arc::clone(&self.shutdown_flag);
@@ -281,14 +289,17 @@ impl TmuxTransport {
                     target.prompt_readiness.as_ref(),
                 );
                 let next = match observed {
-                    Some((ready, activity)) => PaneObservation::Observed { ready, activity },
+                    Some((ready, activity)) => {
+                        PaneObservation::Observed { ready, activity }
+                    },
                     None => PaneObservation::Unreachable,
                 };
                 // Notify on the edge only. A wakeup per tick would make the
                 // closure a second poll rather than a substitute for one, and the
                 // relay re-reads the level itself on waking.
                 let changed = {
-                    let mut current = observation.lock().expect("tmux observation mutex");
+                    let mut current =
+                        observation.lock().expect("tmux observation mutex");
                     let changed = current.differs_from(next);
                     *current = next;
                     changed
@@ -391,7 +402,10 @@ impl GenerationFence for TmuxTransport {
 }
 
 impl Transport for TmuxTransport {
-    fn startup(&mut self, context: StartupContext) -> Result<TransportStatus, TransportError> {
+    fn startup(
+        &mut self,
+        context: StartupContext,
+    ) -> Result<TransportStatus, TransportError> {
         let task_context = DeliveryTaskContext {
             target_session: context.target_member.id.clone(),
             runtime_directory: context.runtime_directory,
@@ -421,7 +435,8 @@ impl Transport for TmuxTransport {
         // evidence, and starting a dwell against a target nobody has examined
         // would resolve members on the strength of not knowing. Such a target
         // reports unready through the other axis, so its entries are held.
-        let reachable = !matches!(self.observed(), PaneObservation::Unreachable);
+        let reachable =
+            !matches!(self.observed(), PaneObservation::Unreachable);
         self.unreachable_since.fold(reachable)
     }
 

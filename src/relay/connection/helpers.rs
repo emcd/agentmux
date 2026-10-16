@@ -14,7 +14,8 @@ use time::OffsetDateTime;
 use super::super::catalog::BundleCatalog;
 use super::super::handlers::emit_choices_snapshot_for_ui_registration;
 use super::super::identity::{
-    PrincipalStore, PrincipalType, VerifiedIdentity, split_principal_id, verify_hello_credential,
+    PrincipalStore, PrincipalType, VerifiedIdentity, split_principal_id,
+    verify_hello_credential,
 };
 use super::super::stream::HelloFrame;
 use super::super::stream::StreamRegistration;
@@ -24,8 +25,8 @@ use crate::relay::errors::{map_config, map_tui_config};
 use crate::runtime::paths::BundleRuntimePaths;
 use crate::{
     configuration::{
-        ConfigurationRoots, SessionType, load_bundle_configuration, load_policy_ids,
-        load_tui_configuration,
+        ConfigurationRoots, SessionType, load_bundle_configuration,
+        load_policy_ids, load_tui_configuration,
     },
     relay::{errors::relay_error, identity::canonical_session_id},
 };
@@ -34,9 +35,14 @@ use crate::{
 /// its stream registration. Session principals are stored bundle-local, so the
 /// bound bundle is re-applied; relay-wide principals already carry their full
 /// `principal_id`.
-pub(super) fn full_requester_principal_id(registration: &StreamRegistration) -> String {
+pub(super) fn full_requester_principal_id(
+    registration: &StreamRegistration,
+) -> String {
     match registration.namespace() {
-        Some(namespace) => canonical_session_id(registration.requester_session_id(), namespace),
+        Some(namespace) => canonical_session_id(
+            registration.requester_session_id(),
+            namespace,
+        ),
         None => registration.requester_session_id().to_string(),
     }
 }
@@ -103,7 +109,10 @@ pub(super) fn identity_claim_conflict_error(
         Value::String("existing identity owner is still live".to_string()),
     );
     if let Some(value) = existing_connection_id {
-        details.insert("existing_connection_id".to_string(), Value::String(value));
+        details.insert(
+            "existing_connection_id".to_string(),
+            Value::String(value),
+        );
     }
     relay_error(
         "runtime_identity_claim_conflict",
@@ -126,7 +135,8 @@ pub(super) fn emit_registration_choices_snapshots(
     match binding.bound_bundle.as_ref() {
         // Session principal: emit the snapshot for its bound bundle.
         Some(bundle_paths) => {
-            if let Some((session_id, namespace)) = split_principal_id(binding.principal_id.as_str())
+            if let Some((session_id, namespace)) =
+                split_principal_id(binding.principal_id.as_str())
             {
                 emit_choices_snapshot_for_ui_registration(
                     configuration_roots,
@@ -135,7 +145,7 @@ pub(super) fn emit_registration_choices_snapshots(
                     session_id,
                 )?;
             }
-        }
+        },
         // Relay-wide principal: not bundle-bound, so replay every configured
         // bundle's snapshot — a global operator sees pending requests across the
         // whole relay on (re)connect.
@@ -148,7 +158,7 @@ pub(super) fn emit_registration_choices_snapshots(
                     binding.principal_id.as_str(),
                 )?;
             }
-        }
+        },
     }
     Ok(())
 }
@@ -198,19 +208,24 @@ pub(super) fn resolve_hello_binding(
     } = verified;
     match principal_type {
         PrincipalType::Session => {
-            let (session_id, namespace) = split_principal_id(hello.principal_id.as_str())
-                .ok_or_else(|| {
-                    relay_error(
-                        "validation_invalid_principal_id",
-                        "session principal_id is not in <session>@<bundle> form",
-                        Some(json!({ "principal_id": hello.principal_id })),
-                    )
-                })?;
+            let (session_id, namespace) = split_principal_id(
+                hello.principal_id.as_str(),
+            )
+            .ok_or_else(|| {
+                relay_error(
+                    "validation_invalid_principal_id",
+                    "session principal_id is not in <session>@<bundle> form",
+                    Some(json!({ "principal_id": hello.principal_id })),
+                )
+            })?;
             let bundle_paths = bundle_catalog
                 .lookup(namespace)
                 .ok_or_else(|| unknown_bundle_error(namespace))?;
-            let session_type =
-                resolve_bundle_member_session_type(configuration_roots, namespace, session_id)?;
+            let session_type = resolve_bundle_member_session_type(
+                configuration_roots,
+                namespace,
+                session_id,
+            )?;
             Ok(HelloBinding {
                 session_type,
                 principal_id: hello.principal_id.clone(),
@@ -219,10 +234,12 @@ pub(super) fn resolve_hello_binding(
                 credential_hash: credential_hash.clone(),
                 introspect_rights,
             })
-        }
+        },
         PrincipalType::User => {
-            let session_type =
-                resolve_global_user_session_type(configuration_roots, hello.principal_id.as_str())?;
+            let session_type = resolve_global_user_session_type(
+                configuration_roots,
+                hello.principal_id.as_str(),
+            )?;
             Ok(HelloBinding {
                 session_type,
                 principal_id: hello.principal_id.clone(),
@@ -231,15 +248,17 @@ pub(super) fn resolve_hello_binding(
                 credential_hash: credential_hash.clone(),
                 introspect_rights,
             })
-        }
-        PrincipalType::Application | PrincipalType::Relay => Ok(HelloBinding {
-            session_type: SessionType::Pubsub,
-            principal_id: hello.principal_id.clone(),
-            bound_bundle: None,
-            store_backed,
-            credential_hash,
-            introspect_rights,
-        }),
+        },
+        PrincipalType::Application | PrincipalType::Relay => {
+            Ok(HelloBinding {
+                session_type: SessionType::Pubsub,
+                principal_id: hello.principal_id.clone(),
+                bound_bundle: None,
+                store_backed,
+                credential_hash,
+                introspect_rights,
+            })
+        },
     }
 }
 
@@ -249,8 +268,11 @@ pub(super) fn resolve_bundle_member_session_type(
     bundle_name: &str,
     session_id: &str,
 ) -> Result<SessionType, RelayError> {
-    let bundle = load_bundle_configuration(configuration_roots, bundle_name).map_err(map_config)?;
-    let Some(member) = bundle.members.iter().find(|member| member.id == session_id) else {
+    let bundle = load_bundle_configuration(configuration_roots, bundle_name)
+        .map_err(map_config)?;
+    let Some(member) =
+        bundle.members.iter().find(|member| member.id == session_id)
+    else {
         return Err(relay_error(
             "validation_unknown_sender",
             "hello session_id is not configured in associated bundle",
@@ -274,10 +296,12 @@ pub(super) fn resolve_global_user_session_type(
     else {
         return Err(global_user_missing_error(principal_id));
     };
-    let Some(user_session) = users_configuration.session_by_id(principal_id) else {
+    let Some(user_session) = users_configuration.session_by_id(principal_id)
+    else {
         return Err(global_user_missing_error(principal_id));
     };
-    let policy_ids = load_policy_ids(configuration_roots).map_err(map_tui_config)?;
+    let policy_ids =
+        load_policy_ids(configuration_roots).map_err(map_tui_config)?;
     if !policy_ids.contains(user_session.policy.as_str()) {
         return Err(relay_error(
             "validation_unknown_policy",

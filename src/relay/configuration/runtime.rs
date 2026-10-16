@@ -18,8 +18,9 @@ use super::super::relay_error;
 
 use super::delivery::DeliveryConfiguration;
 use super::environment::{
-    DEFAULT_REQUIRE_SESSION_CREDENTIALS, DEFAULT_WATCH_BUNDLES, ENV_REQUIRE_SESSION_CREDENTIALS,
-    ENV_WATCH_BUNDLES, relay_bool_env_override, resolve_relay_bool_setting,
+    DEFAULT_REQUIRE_SESSION_CREDENTIALS, DEFAULT_WATCH_BUNDLES,
+    ENV_REQUIRE_SESSION_CREDENTIALS, ENV_WATCH_BUNDLES,
+    relay_bool_env_override, resolve_relay_bool_setting,
 };
 use super::relay_file::{PeerConfiguration, load_relay_file_configuration};
 
@@ -50,7 +51,8 @@ pub fn load_relay_runtime_configuration(
     cli_require_session_credentials: Option<bool>,
 ) -> Result<RelayRuntimeConfiguration, RelayError> {
     let file = load_relay_file_configuration(configuration_roots)?;
-    let environment_watch_bundles = relay_bool_env_override(ENV_WATCH_BUNDLES)?;
+    let environment_watch_bundles =
+        relay_bool_env_override(ENV_WATCH_BUNDLES)?;
     let environment_require_session_credentials =
         relay_bool_env_override(ENV_REQUIRE_SESSION_CREDENTIALS)?;
     Ok(RelayRuntimeConfiguration {
@@ -111,7 +113,8 @@ pub fn validate_peer_aliases(
     let store = PrincipalStore::load(state_root)?;
     for peer in peers {
         let principal_id = format!("{}@{RELAY_NAMESPACE}", peer.alias);
-        let Some(record) = store.find_by_principal_id(principal_id.as_str()) else {
+        let Some(record) = store.find_by_principal_id(principal_id.as_str())
+        else {
             return Err(relay_error(
                 "validation_peer_alias_unregistered",
                 "relay peer alias names no identity this relay issued; register the peer with \

@@ -46,8 +46,11 @@ fn send_rejects_conflicting_flag_and_piped_message_sources() {
             .write_all(b"hello from stdin")
             .expect("write piped input");
     }
-    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
-        .expect("wait for child");
+    let output = process::wait_with_output_bounded(
+        child,
+        process::HARNESS_CHILD_WAIT_DEFAULT,
+    )
+    .expect("wait for child");
     assert!(!output.status.success(), "command should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
@@ -78,8 +81,10 @@ fn send_accepts_message_flag_when_piped_stdin_is_empty() {
         &[("user", "default", Some("Operator"))],
     );
 
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
-    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux")
+        .expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths)
+        .expect("ensure bundle runtime directory");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
@@ -123,8 +128,11 @@ fn send_accepts_message_flag_when_piped_stdin_is_empty() {
         .spawn()
         .expect("spawn agentmux send");
     drop(child.stdin.take());
-    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
-        .expect("wait for child");
+    let output = process::wait_with_output_bounded(
+        child,
+        process::HARNESS_CHILD_WAIT_DEFAULT,
+    )
+    .expect("wait for child");
     relay_thread.join().expect("join fake relay thread");
 
     assert!(output.status.success(), "command should succeed");
@@ -155,8 +163,10 @@ fn send_preserves_valid_explicit_session_in_relay_request() {
         &[("user", "default", Some("Operator"))],
     );
 
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
-    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux")
+        .expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths)
+        .expect("ensure bundle runtime directory");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
@@ -205,12 +215,16 @@ fn send_preserves_valid_explicit_session_in_relay_request() {
         let stdin = child.stdin.as_mut().expect("open child stdin");
         stdin.write_all(b"hello").expect("write piped input");
     }
-    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
-        .expect("wait for child");
+    let output = process::wait_with_output_bounded(
+        child,
+        process::HARNESS_CHILD_WAIT_DEFAULT,
+    )
+    .expect("wait for child");
     relay_thread.join().expect("join fake relay thread");
 
     assert!(output.status.success(), "command should succeed");
-    let payload: Value = serde_json::from_slice(&output.stdout).expect("decode send json payload");
+    let payload: Value = serde_json::from_slice(&output.stdout)
+        .expect("decode send json payload");
     assert_eq!(payload["requester_session"], "user");
 
     let requests = request_log.lock().expect("request log lock");
@@ -272,8 +286,11 @@ fn send_rejects_unknown_explicit_session_without_fallback() {
         let stdin = child.stdin.as_mut().expect("open child stdin");
         stdin.write_all(b"hello").expect("write piped input");
     }
-    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
-        .expect("wait for child");
+    let output = process::wait_with_output_bounded(
+        child,
+        process::HARNESS_CHILD_WAIT_DEFAULT,
+    )
+    .expect("wait for child");
 
     assert!(!output.status.success(), "command should fail");
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -309,8 +326,10 @@ fn send_uses_tui_defaults_for_bundle_and_session() {
         &[("user", "default", Some("Operator"))],
     );
 
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux").expect("bundle paths");
-    ensure_bundle_runtime_directory(&bundle_paths).expect("ensure bundle runtime directory");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, "agentmux")
+        .expect("bundle paths");
+    ensure_bundle_runtime_directory(&bundle_paths)
+        .expect("ensure bundle runtime directory");
     let request_log = Arc::new(Mutex::new(Vec::<Value>::new()));
     let relay_thread = spawn_fake_relay_once(
         &RelayRuntimePaths::resolve(&state_root).relay_socket,
@@ -355,8 +374,11 @@ fn send_uses_tui_defaults_for_bundle_and_session() {
         let stdin = child.stdin.as_mut().expect("open child stdin");
         stdin.write_all(b"hello").expect("write piped input");
     }
-    let output = process::wait_with_output_bounded(child, process::HARNESS_CHILD_WAIT_DEFAULT)
-        .expect("wait for child");
+    let output = process::wait_with_output_bounded(
+        child,
+        process::HARNESS_CHILD_WAIT_DEFAULT,
+    )
+    .expect("wait for child");
     relay_thread.join().expect("join fake relay thread");
     assert!(output.status.success(), "command should succeed");
 

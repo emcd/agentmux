@@ -37,11 +37,15 @@ impl TmuxOutputView {
 }
 
 impl crate::transports::OutputView for TmuxOutputView {
-    fn look(&self, mode: LookMode) -> Result<LookSnapshotPayload, TransportError> {
+    fn look(
+        &self,
+        mode: LookMode,
+    ) -> Result<LookSnapshotPayload, TransportError> {
         if mode.offset.unwrap_or(0) > 0 {
             return Err(TransportError {
                 code: "validation_offset_unsupported".to_string(),
-                reason: "offset is only supported for ACP look targets".to_string(),
+                reason: "offset is only supported for ACP look targets"
+                    .to_string(),
                 details: Some(json!({ "offset": mode.offset })),
             });
         }
@@ -49,13 +53,16 @@ impl crate::transports::OutputView for TmuxOutputView {
             .lines
             .map(|lines| lines as usize)
             .unwrap_or(LOOK_LINES_DEFAULT);
-        let pane_target =
-            resolve_active_pane_target(self.socket_path.as_path(), self.session_id.as_str())
-                .map_err(|reason| TransportError {
-                    code: "internal_unexpected_failure".to_string(),
-                    reason: "failed to resolve active pane for look target".to_string(),
-                    details: Some(json!({ "cause": reason })),
-                })?;
+        let pane_target = resolve_active_pane_target(
+            self.socket_path.as_path(),
+            self.session_id.as_str(),
+        )
+        .map_err(|reason| TransportError {
+            code: "internal_unexpected_failure".to_string(),
+            reason: "failed to resolve active pane for look target"
+                .to_string(),
+            details: Some(json!({ "cause": reason })),
+        })?;
         let snapshot_lines = capture_pane_tail_lines(
             self.socket_path.as_path(),
             pane_target.as_str(),
@@ -84,7 +91,9 @@ pub(super) fn observe_pane_once(
     target_session: &str,
     prompt_readiness: Option<&crate::configuration::PromptReadinessTemplate>,
 ) -> Option<(bool, u64)> {
-    let mut probe = RealPanePromptProbe::new(socket, target_session, prompt_readiness).ok()?;
+    let mut probe =
+        RealPanePromptProbe::new(socket, target_session, prompt_readiness)
+            .ok()?;
     probe
         .next_evaluation()
         .ok()

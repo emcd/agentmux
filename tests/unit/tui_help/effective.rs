@@ -8,19 +8,21 @@
 //! surface missing from the catalogue.
 
 use agentmux::tui::{
-    Action, BindingConfiguration, BindingContext, CapabilityClass, ConfiguredBinding,
-    EffectiveBindings, HelpSection, default_binding, default_help_bindings, help_bindings,
-    interaction_choice_hint, interaction_write_hint, picker_hint,
+    Action, BindingConfiguration, BindingContext, CapabilityClass,
+    ConfiguredBinding, EffectiveBindings, HelpSection, default_binding,
+    default_help_bindings, help_bindings, interaction_choice_hint,
+    interaction_write_hint, picker_hint,
 };
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::{
-    chord_space, entries, help_workbench, one_row, presented_lines, presented_under, row,
-    workbench_with,
+    chord_space, entries, help_workbench, one_row, presented_lines,
+    presented_under, row, workbench_with,
 };
 
 #[test]
-fn an_unconfigured_run_presents_the_same_bindings_under_either_capability_class() {
+fn an_unconfigured_run_presents_the_same_bindings_under_either_capability_class()
+ {
     // This property used to be structural: the presentation functions took no
     // state, so no probe outcome could reach them. They now take the effective
     // table, which is built from the probe outcome, and that is deliberate --
@@ -59,7 +61,8 @@ fn an_unconfigured_run_presents_the_same_bindings_under_either_capability_class(
     // capability-conditioned, this is the shape it would take.
     for entry in entries(&catalogue) {
         assert!(
-            !entry.chords.contains("Shift+Enter") && !entry.chords.contains("Ctrl+Enter"),
+            !entry.chords.contains("Shift+Enter")
+                && !entry.chords.contains("Ctrl+Enter"),
             "presentation names a modified Enter in {:?}",
             entry.chords
         );
@@ -67,7 +70,8 @@ fn an_unconfigured_run_presents_the_same_bindings_under_either_capability_class(
 }
 
 #[test]
-fn a_configured_rebinding_reaches_the_help_overlay_and_the_strip_that_advertises_it() {
+fn a_configured_rebinding_reaches_the_help_overlay_and_the_strip_that_advertises_it()
+ {
     // Closing the picker is the case that exercises both surfaces at once: the
     // picker's hint strip advertises it and the help overlay catalogues it, so
     // one configured row is visible in both places or in neither.
@@ -102,10 +106,11 @@ fn a_configured_rebinding_reaches_the_help_overlay_and_the_strip_that_advertises
 
     // And the strip that advertises this behavior presents it too. A one-line
     // strip has room for one chord, so leading the line is what decides which.
-    let strip = picker_hint(workbench.bindings(), BindingContext::PickerBundles)
-        .into_iter()
-        .find(|entry| entry.description == "Close picker")
-        .expect("the picker strip advertises closing the picker");
+    let strip =
+        picker_hint(workbench.bindings(), BindingContext::PickerBundles)
+            .into_iter()
+            .find(|entry| entry.description == "Close picker")
+            .expect("the picker strip advertises closing the picker");
     assert_eq!(strip.primary_chord(), "Ctrl+W");
 
     // Neither surface moved for a run that configured nothing, so the two
@@ -151,9 +156,8 @@ fn a_configured_chord_displaces_the_compiled_row_it_takes_over() {
     // And the behavior that took the chord is presented under it, so the row
     // was moved rather than merely dropped.
     assert!(
-        lines
-            .iter()
-            .any(|line| line.starts_with("Esc") && line.ends_with(": Message: insert newline")),
+        lines.iter().any(|line| line.starts_with("Esc")
+            && line.ends_with(": Message: insert newline")),
         "no line presents Esc as the chord that took it: {lines:#?}"
     );
 
@@ -179,7 +183,9 @@ const LOSER: Action = Action::MoveRawwCursorLeft;
 const WINNER: Action = Action::MoveRawwCursorRight;
 
 /// What the catalogue and a lookup each say about the contended chord.
-fn tier_outcome(bindings: &EffectiveBindings) -> (Vec<&'static str>, Option<Action>) {
+fn tier_outcome(
+    bindings: &EffectiveBindings,
+) -> (Vec<&'static str>, Option<Action>) {
     (
         presented_under(&help_bindings(bindings), TIER_CHORD),
         bindings.action_for(
@@ -205,7 +211,8 @@ fn the_catalogue_presents_a_contended_chord_only_under_the_row_that_wins_it() {
     // the precedence rule is a property of the table rather than something the
     // shipped sets stand in for.
     let write = BindingContext::InteractionWrite;
-    let build = |preset_rows: Vec<ConfiguredBinding>, rows: Vec<ConfiguredBinding>| {
+    let build = |preset_rows: Vec<ConfiguredBinding>,
+                 rows: Vec<ConfiguredBinding>| {
         EffectiveBindings::build(
             Some(&BindingConfiguration {
                 presets: Vec::new(),
@@ -222,7 +229,10 @@ fn the_catalogue_presents_a_contended_chord_only_under_the_row_that_wins_it() {
         (
             "a later binding-set row supersedes an earlier one",
             build(
-                vec![row(write, "ctrl+g", LOSER), row(write, "ctrl+g", WINNER)],
+                vec![
+                    row(write, "ctrl+g", LOSER),
+                    row(write, "ctrl+g", WINNER),
+                ],
                 Vec::new(),
             ),
         ),
@@ -269,7 +279,8 @@ fn a_chord_no_tier_contends_is_presented_once_under_the_row_that_binds_it() {
 }
 
 #[test]
-fn a_compiled_row_a_configuration_took_over_is_not_advertised_under_its_old_behavior() {
+fn a_compiled_row_a_configuration_took_over_is_not_advertised_under_its_old_behavior()
+ {
     // Configuring the bare key takes the keystroke the compiled row is written
     // as, which is now the whole of what that row matched. Nothing outlasts it:
     // `Shift+Up` reached the compiled behavior before this change and reaches
@@ -345,7 +356,8 @@ fn the_picker_strip_advertises_only_chords_that_work_on_the_focused_column() {
     // either answered for both and the difference could not show. A
     // configuration can bind one column alone, and then the column a strip
     // reads from is the whole of whether it tells the truth.
-    let bundles_only = one_row(BindingContext::PickerBundles, "ctrl+w", Action::ClosePicker);
+    let bundles_only =
+        one_row(BindingContext::PickerBundles, "ctrl+w", Action::ClosePicker);
     let workbench = workbench_with(Some(bundles_only));
     let bindings = workbench.bindings();
 
@@ -392,7 +404,8 @@ fn the_picker_strip_advertises_only_chords_that_work_on_the_focused_column() {
             // behavior the focused column does not reach, by design.
             if matches!(
                 entry.description,
-                "Bundle col: switch bundle" | "Session col: insert or open look"
+                "Bundle col: switch bundle"
+                    | "Session col: insert or open look"
             ) {
                 continue;
             }
@@ -465,7 +478,8 @@ fn where_presentation_drops_a_rebound_row_dispatch_reaches_it_nowhere() {
         assert!(
             (0..=KeyModifiers::all().bits())
                 .filter_map(KeyModifiers::from_bits)
-                .any(|modifiers| default_binding(context, code, modifiers) == Some(displaced)),
+                .any(|modifiers| default_binding(context, code, modifiers)
+                    == Some(displaced)),
             "the premise fails -- {chords:?} reaches no compiled row to displace"
         );
 
@@ -473,12 +487,21 @@ fn where_presentation_drops_a_rebound_row_dispatch_reaches_it_nowhere() {
         let configuration = BindingConfiguration {
             rows: chords
                 .iter()
-                .map(|chord| row(context, chord, Action::ScrollInteractionSnapshotPageUp))
+                .map(|chord| {
+                    row(
+                        context,
+                        chord,
+                        Action::ScrollInteractionSnapshotPageUp,
+                    )
+                })
                 .collect(),
             ..BindingConfiguration::default()
         };
-        let bindings =
-            EffectiveBindings::build(Some(&configuration), CapabilityClass::Standard, false);
+        let bindings = EffectiveBindings::build(
+            Some(&configuration),
+            CapabilityClass::Standard,
+            false,
+        );
         let chord = chords.join(", ");
 
         // Presentation drops the displaced behavior from this context.
@@ -487,7 +510,8 @@ fn where_presentation_drops_a_rebound_row_dispatch_reaches_it_nowhere() {
             !help_bindings(&bindings)
                 .iter()
                 .flat_map(|section| section.entries.iter())
-                .any(|entry| entry.description == described && entry.covers(context)),
+                .any(|entry| entry.description == described
+                    && entry.covers(context)),
             "{chord}: the overlay still advertises a chord for {described:?}"
         );
 
@@ -527,7 +551,11 @@ fn a_partly_claimed_row_is_still_presented_because_it_still_answers() {
         rows: vec![row(choice, "shift+c", Action::MovePreviousChoiceOption)],
         ..BindingConfiguration::default()
     };
-    let bindings = EffectiveBindings::build(Some(&configuration), CapabilityClass::Standard, false);
+    let bindings = EffectiveBindings::build(
+        Some(&configuration),
+        CapabilityClass::Standard,
+        false,
+    );
 
     // Dispatch: the operator's row takes the shifted form, the preset row keeps
     // the bare one.

@@ -13,15 +13,18 @@ fn acp_next_send_recovers_after_connection_closed_failure() {
         disconnect_on_prompt: Some("before_activity".to_string()),
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &failing);
-    let first = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &failing);
+    let first =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let first_result = send_result(first);
     assert_eq!(first_result.outcome, SendOutcome::Queued);
 
     // Swap in a healthy stub before the respawn loop picks up its next
     // backoff slot so the rebuilt ACP child sees the recovered behavior.
     let recovered = AcpStubOptions::default();
-    let (config_root, _log_path) = write_configuration(temporary.path(), &recovered);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &recovered);
     assert!(
         wait_for_worker_state(
             temporary.path(),
@@ -31,7 +34,8 @@ fn acp_next_send_recovers_after_connection_closed_failure() {
         ),
         "worker did not auto-respawn back to available after disconnect"
     );
-    let second = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let second =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let second_result = send_result(second);
     assert_eq!(second_result.outcome, SendOutcome::Queued);
 }
@@ -44,13 +48,16 @@ fn acp_next_send_recovers_after_post_accept_disconnect() {
         update_count: 1,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &failing);
-    let first = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &failing);
+    let first =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let first_result = send_result(first);
     assert_eq!(first_result.outcome, SendOutcome::Queued);
 
     let recovered = AcpStubOptions::default();
-    let (config_root, _log_path) = write_configuration(temporary.path(), &recovered);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &recovered);
     assert!(
         wait_for_worker_state(
             temporary.path(),
@@ -60,7 +67,8 @@ fn acp_next_send_recovers_after_post_accept_disconnect() {
         ),
         "worker did not auto-respawn back to available after disconnect"
     );
-    let second = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let second =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let second_result = send_result(second);
     assert_eq!(second_result.outcome, SendOutcome::Queued);
 }
@@ -73,7 +81,8 @@ fn wait_for_worker_state(
 ) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if read_worker_state(root, target_session).as_deref() == Some(expected) {
+        if read_worker_state(root, target_session).as_deref() == Some(expected)
+        {
             return true;
         }
         thread::sleep(Duration::from_millis(20));
@@ -102,13 +111,17 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
         disconnect_on_prompt: Some("after_activity".to_string()),
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &exiting);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &exiting);
 
     // Subscribe BEFORE dispatch so no transitions can fire and be missed.
-    let mut worker_state_receiver = subscribe_bravo_worker_state(temporary.path());
-    let mut queue_receiver = subscribe_bravo_permission_queue(temporary.path());
+    let mut worker_state_receiver =
+        subscribe_bravo_worker_state(temporary.path());
+    let mut queue_receiver =
+        subscribe_bravo_permission_queue(temporary.path());
 
-    let first = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let first =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let first_result = send_result(first);
     assert_eq!(first_result.outcome, SendOutcome::Queued);
 
@@ -173,8 +186,10 @@ fn acp_respawn_with_missing_load_capability_is_permanent_failure() {
         update_count: 1,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
-    let first = dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
+    let first =
+        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
     let first_result = send_result(first);
     assert_eq!(first_result.outcome, SendOutcome::Queued);
 
@@ -188,5 +203,8 @@ fn acp_respawn_with_missing_load_capability_is_permanent_failure() {
         "respawn did not surface permanent failure when session/load is unsupported"
     );
 
-    assert_acp_delivery_unavailable(&config_root, &temporary.path().join("tmux.sock"));
+    assert_acp_delivery_unavailable(
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
 }

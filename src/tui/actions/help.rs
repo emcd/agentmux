@@ -24,7 +24,9 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::action::Action;
-use super::bindings::{BoundAction, ContextRow, DisplaySection, default_rows, default_section};
+use super::bindings::{
+    BoundAction, ContextRow, DisplaySection, default_rows, default_section,
+};
 use super::chord::Chord;
 use super::context::BindingContext;
 use super::effective::EffectiveBindings;
@@ -188,7 +190,10 @@ pub fn default_help_bindings() -> Vec<HelpSection> {
 /// single context. That asymmetry is deliberate and is the difference between
 /// the help overlay and a pane hint strip: help is a catalogue of everything,
 /// a strip annotates the one surface it sits on.
-pub fn context_bindings(bindings: &EffectiveBindings, context: BindingContext) -> Vec<HelpEntry> {
+pub fn context_bindings(
+    bindings: &EffectiveBindings,
+    context: BindingContext,
+) -> Vec<HelpEntry> {
     finish(fold_rows(
         rows_of(bindings, context)
             .into_iter()
@@ -241,7 +246,10 @@ pub(crate) fn context_actions(context: BindingContext) -> Vec<Action> {
 
 /// The presented binding for typing an ordinary character into this context's
 /// draft, or `None` where the context takes no typed text.
-pub fn typing_binding(bindings: &EffectiveBindings, context: BindingContext) -> Option<HelpEntry> {
+pub fn typing_binding(
+    bindings: &EffectiveBindings,
+    context: BindingContext,
+) -> Option<HelpEntry> {
     fold_rows(
         rows_of(bindings, context)
             .into_iter()
@@ -276,7 +284,10 @@ pub fn typing_binding(bindings: &EffectiveBindings, context: BindingContext) -> 
 /// `focused` is expected to be a picker column. Anything else has no picker
 /// rows to answer with, so the strip comes back empty rather than borrowing
 /// another surface's chords.
-pub fn picker_hint(bindings: &EffectiveBindings, focused: BindingContext) -> Vec<HelpEntry> {
+pub fn picker_hint(
+    bindings: &EffectiveBindings,
+    focused: BindingContext,
+) -> Vec<HelpEntry> {
     [
         binding_for(bindings, focused, Action::TogglePickerFocus),
         binding_for(
@@ -303,7 +314,9 @@ pub fn picker_hint(bindings: &EffectiveBindings, focused: BindingContext) -> Vec
 /// navigation rows would take it past the width of an ordinary terminal --
 /// where a title does not wrap, it is cut. Navigation stays discoverable in the
 /// help overlay, which has room to present a surface in full.
-pub fn interaction_choice_hint(bindings: &EffectiveBindings) -> Vec<HelpEntry> {
+pub fn interaction_choice_hint(
+    bindings: &EffectiveBindings,
+) -> Vec<HelpEntry> {
     [
         binding_for(
             bindings,
@@ -379,7 +392,10 @@ struct PresentedRow {
 ///
 /// The bare character is the one shape denoting two keystrokes, and both sides
 /// denote the same two, so claiming it claims all of what the row answered.
-fn rows_of(bindings: &EffectiveBindings, context: BindingContext) -> Vec<PresentedRow> {
+fn rows_of(
+    bindings: &EffectiveBindings,
+    context: BindingContext,
+) -> Vec<PresentedRow> {
     let mut rows: Vec<PresentedRow> = bindings
         .rows_for(context)
         .into_iter()
@@ -408,10 +424,16 @@ fn rows_of(bindings: &EffectiveBindings, context: BindingContext) -> Vec<Present
 }
 
 /// Whether a higher tier has taken the keystroke a compiled row is written as.
-fn superseded(bindings: &EffectiveBindings, context: BindingContext, row: &ContextRow) -> bool {
+fn superseded(
+    bindings: &EffectiveBindings,
+    context: BindingContext,
+    row: &ContextRow,
+) -> bool {
     row.chord
         .denoted_keystroke()
-        .is_some_and(|(code, modifiers)| bindings.is_configured(context, code, modifiers))
+        .is_some_and(|(code, modifiers)| {
+            bindings.is_configured(context, code, modifiers)
+        })
 }
 
 fn one(
@@ -429,7 +451,10 @@ fn one(
     .map(entry_of)
 }
 
-fn entries_for(bindings: &EffectiveBindings, section: DisplaySection) -> Vec<HelpEntry> {
+fn entries_for(
+    bindings: &EffectiveBindings,
+    section: DisplaySection,
+) -> Vec<HelpEntry> {
     finish(fold_rows(help_contexts().into_iter().flat_map(
         move |context| {
             rows_of(bindings, context)
@@ -468,7 +493,7 @@ fn fold_rows(
                     shown,
                     pattern: row.chord,
                 });
-            }
+            },
             None => entries.push((
                 row.action,
                 vec![HelpSource {
@@ -528,5 +553,6 @@ fn already_shown(chord: &str, sources: &[HelpSource]) -> bool {
 /// resolve through the effective table, and the folded row is still recorded in
 /// [`HelpEntry::sources`] with `shown` false.
 fn is_redundant_modified_enter(chord: &str, sources: &[HelpSource]) -> bool {
-    matches!(chord, "Shift+Enter" | "Ctrl+Enter") && already_shown("Enter", sources)
+    matches!(chord, "Shift+Enter" | "Ctrl+Enter")
+        && already_shown("Enter", sources)
 }

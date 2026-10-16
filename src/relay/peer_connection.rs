@@ -29,7 +29,9 @@ use crate::runtime::paths::peer_relay_psk_path;
 
 use super::client::RelayStreamSession;
 use super::configuration::PeerConfiguration;
-use super::{RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse, relay_error};
+use super::{
+    RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse, relay_error,
+};
 
 /// One configured outbound peer endpoint.
 #[derive(Clone, Debug)]
@@ -61,7 +63,10 @@ impl PeerConnectionManager {
     /// entries are keyed by their local `alias`; the address is validated as an
     /// absolute Unix socket path at configuration load, so it is trusted here.
     #[must_use]
-    pub fn from_configuration(state_root: &Path, peers: &[PeerConfiguration]) -> Self {
+    pub fn from_configuration(
+        state_root: &Path,
+        peers: &[PeerConfiguration],
+    ) -> Self {
         let mut endpoints = HashMap::with_capacity(peers.len());
         let mut sessions = HashMap::with_capacity(peers.len());
         for peer in peers {
@@ -97,9 +102,9 @@ impl PeerConnectionManager {
     /// `on_behalf_of` field). `None` when `alias` names no configured peer.
     #[must_use]
     pub fn presented_principal_id(&self, alias: &str) -> Option<String> {
-        self.endpoints
-            .get(alias)
-            .map(|endpoint| format!("{}@{RELAY_NAMESPACE}", endpoint.connect_as))
+        self.endpoints.get(alias).map(|endpoint| {
+            format!("{}@{RELAY_NAMESPACE}", endpoint.connect_as)
+        })
     }
 
     /// Forwards a fully-formed request to the peer named by the local `alias`
@@ -226,7 +231,7 @@ impl PeerConnectionManager {
                 } else {
                     Ok(trimmed.to_string())
                 }
-            }
+            },
             Err(source) => Err(credential_error(source.to_string().as_str())),
         }
     }

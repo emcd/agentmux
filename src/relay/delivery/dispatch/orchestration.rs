@@ -12,14 +12,19 @@ use crate::configuration::{BundleMember, TargetConfiguration};
 use super::super::super::{AsyncDeliveryTask, RelayError};
 use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
-use super::super::async_worker::{WorkerDispatch, get_worker_failure, get_worker_readiness};
+use super::super::async_worker::{
+    WorkerDispatch, get_worker_failure, get_worker_readiness,
+};
 use super::worker::{
-    AcpWorkerBootstrap, WorkerTransportContext, WorkerTransportSource, spawn_async_delivery_worker,
+    AcpWorkerBootstrap, WorkerTransportContext, WorkerTransportSource,
+    spawn_async_delivery_worker,
 };
 use crate::runtime::signals::shutdown_requested;
 use crate::transports::{WorkerFailureReason, WorkerReadinessState};
 
-pub(in crate::relay) fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
+pub(in crate::relay) fn wait_for_async_delivery_shutdown(
+    timeout: Duration,
+) -> usize {
     super::super::async_worker::wait_for_async_delivery_shutdown(timeout)
 }
 
@@ -67,7 +72,8 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
     if super::super::async_worker::worker_stop_requested(&key) {
         return Err((
             "runtime_startup_failed".to_string(),
-            "ACP worker from the previous definition is still stopping".to_string(),
+            "ACP worker from the previous definition is still stopping"
+                .to_string(),
             Some(json!({
                 "target_session": target_member.id,
             })),
@@ -83,29 +89,33 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
             })),
         )
     })? {
-        let (sender, receiver) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        let pending = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (sender, receiver) =
+            tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
+        let pending =
+            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let bootstrap = AcpWorkerBootstrap {
             target_member: target_member.clone(),
             runtime_directory: runtime_directory.to_path_buf(),
             choices_pending_max,
         };
-        if let Some(owner) = super::super::async_worker::register_worker_if_absent(
-            key.clone(),
-            sender,
-            pending.clone(),
-            true,
-        )
-        .map_err(|error| {
-            (
-                "internal_unexpected_failure".to_string(),
-                "failed to register ACP worker".to_string(),
-                Some(json!({
-                    "target_session": target_member.id,
-                    "cause": error.message,
-                })),
+        if let Some(owner) =
+            super::super::async_worker::register_worker_if_absent(
+                key.clone(),
+                sender,
+                pending.clone(),
+                true,
             )
-        })? {
+            .map_err(|error| {
+                (
+                    "internal_unexpected_failure".to_string(),
+                    "failed to register ACP worker".to_string(),
+                    Some(json!({
+                        "target_session": target_member.id,
+                        "cause": error.message,
+                    })),
+                )
+            })?
+        {
             spawn_async_delivery_worker(
                 key,
                 owner,
@@ -115,7 +125,8 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
             );
         }
     }
-    let deadline = Instant::now() + Duration::from_millis(ACP_STARTUP_PRIME_TIMEOUT_MS);
+    let deadline =
+        Instant::now() + Duration::from_millis(ACP_STARTUP_PRIME_TIMEOUT_MS);
     loop {
         // A worker told to stop will not become ready, and it deregisters as it
         // drains — taking the readiness this poll reads with it, so the wait
@@ -125,8 +136,11 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
         if shutdown_requested() {
             return Err(startup_interrupted_error(target_member.id.as_str()));
         }
-        let readiness =
-            get_worker_readiness(namespace, runtime_directory, target_member.id.as_str());
+        let readiness = get_worker_readiness(
+            namespace,
+            runtime_directory,
+            target_member.id.as_str(),
+        );
         // The same acceptance set `list` reports, so a session this poll counts
         // ready is one `list` also calls ready.
         if super::super::async_worker::acp_readiness_is_ready(readiness) {
@@ -134,8 +148,11 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
         }
         match readiness {
             Some(WorkerReadinessState::Unavailable) => {
-                let recorded =
-                    get_worker_failure(namespace, runtime_directory, target_member.id.as_str());
+                let recorded = get_worker_failure(
+                    namespace,
+                    runtime_directory,
+                    target_member.id.as_str(),
+                );
                 return Err(startup_failure_error(
                     recorded,
                     "runtime_acp_worker_unavailable",
@@ -144,14 +161,17 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
                         "target_session": target_member.id,
                     }),
                 ));
-            }
+            },
             // Still settling. `Available`/`Busy` returned above, so this arm is
             // reached only for `Initializing`, `Recovering`, and an unregistered
             // worker.
             _ => {
                 if Instant::now() >= deadline {
-                    let recorded =
-                        get_worker_failure(namespace, runtime_directory, target_member.id.as_str());
+                    let recorded = get_worker_failure(
+                        namespace,
+                        runtime_directory,
+                        target_member.id.as_str(),
+                    );
                     return Err(startup_failure_error(
                         recorded,
                         "runtime_startup_failed",
@@ -163,13 +183,15 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
                     ));
                 }
                 thread::sleep(Duration::from_millis(25));
-            }
+            },
         }
     }
 }
 
 /// Reports a startup abandoned because the relay is shutting down.
-fn startup_interrupted_error(target_session: &str) -> (String, String, Option<serde_json::Value>) {
+fn startup_interrupted_error(
+    target_session: &str,
+) -> (String, String, Option<serde_json::Value>) {
     (
         "runtime_startup_interrupted".to_string(),
         "relay shutdown requested during ACP worker startup".to_string(),
@@ -202,12 +224,15 @@ fn startup_failure_error(
     }
 }
 
-pub(in crate::relay) fn enqueue_async_delivery(task: AsyncDeliveryTask) -> Result<(), RelayError> {
+pub(in crate::relay) fn enqueue_async_delivery(
+    task: AsyncDeliveryTask,
+) -> Result<(), RelayError> {
     enqueue_delivery_task(task)
 }
 
 fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
-    let bounded_acp_queue = super::super::async_worker::task_uses_acp_transport(&task);
+    let bounded_acp_queue =
+        super::super::async_worker::task_uses_acp_transport(&task);
     let key = super::super::async_worker::build_worker_key(
         task.bundle.bundle_name.as_str(),
         task.runtime_directory.as_path(),
@@ -231,7 +256,7 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
             // shutdown barrier still counts (an accept-after-drain regression).
             super::super::async_worker::complete_task_on_shutdown(&task);
             Ok(())
-        }
+        },
         // Reported as an error rather than resolved as a delivery outcome: nothing
         // was admitted for this task yet, and the condition is about the target
         // rather than about this message. The sender is told the target is
@@ -265,8 +290,10 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
             // handed to a worker that would discover it later. Registering first
             // would leave an entry with a live sender and no worker behind it.
             let transport_context = WorkerTransportContext::resolve(&task)?;
-            let (sender, receiver) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
-            let pending = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+            let (sender, receiver) =
+                tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
+            let pending =
+                std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
             // The registry insert is the election, and it happens before anything
             // is spawned. Two concurrent first sends both reach this arm; only the
             // one that installs an entry owns the target, and only it starts a
@@ -295,13 +322,13 @@ fn enqueue_delivery_task(task: AsyncDeliveryTask) -> Result<(), RelayError> {
                         WorkerTransportSource::Direct(transport_context),
                     );
                     Ok(())
-                }
+                },
                 // Lost the election: someone installed between the lookup above and
                 // this claim. Hand the task to the owner they installed rather than
                 // to the channel nothing will ever read.
                 None => dispatch_to_installed_owner(&key, task),
             }
-        }
+        },
     }
 }
 
@@ -320,7 +347,7 @@ fn dispatch_to_installed_owner(
         WorkerDispatch::Closing(task) => {
             super::super::async_worker::complete_task_on_shutdown(&task);
             Ok(())
-        }
+        },
         WorkerDispatch::FailStopped(task) => Err(fail_stopped_error(&task)),
         WorkerDispatch::Missing(task) | WorkerDispatch::Dropped(task) => {
             Err(super::super::super::relay_error(
@@ -328,7 +355,7 @@ fn dispatch_to_installed_owner(
                 "target worker was replaced while the delivery was being enqueued",
                 Some(json!({"target_session": task.target_session})),
             ))
-        }
+        },
     }
 }
 
@@ -355,11 +382,16 @@ mod tests {
     // sender's worker while the closing entry is retained and fed nothing — no
     // replacement worker is spawned over it. One `#[test]`, no widened visibility.
     use super::super::super::async_worker::{
-        build_worker_key, close_worker, register_worker, unregister_worker, worker_exists,
+        build_worker_key, close_worker, register_worker, unregister_worker,
+        worker_exists,
     };
     use super::*;
-    use crate::configuration::{BundleConfiguration, BundleMember, TargetConfiguration};
-    use crate::relay::{DeliveryPayloadMode, SCHEMA_VERSION, SenderReturnRoute};
+    use crate::configuration::{
+        BundleConfiguration, BundleMember, TargetConfiguration,
+    };
+    use crate::relay::{
+        DeliveryPayloadMode, SCHEMA_VERSION, SenderReturnRoute,
+    };
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
@@ -369,10 +401,12 @@ mod tests {
             id: id.to_string(),
             name: Some(id.to_string()),
             working_directory: None,
-            target: TargetConfiguration::Tmux(crate::configuration::TmuxTargetConfiguration {
-                start_command: format!("run-{id}"),
-                prompt_readiness: None,
-            }),
+            target: TargetConfiguration::Tmux(
+                crate::configuration::TmuxTargetConfiguration {
+                    start_command: format!("run-{id}"),
+                    prompt_readiness: None,
+                },
+            ),
             coder_session_id: None,
             policy_id: None,
             environment: Vec::new(),
@@ -394,9 +428,13 @@ mod tests {
         let sender_member_id = "enqueue-sender-mem";
 
         // A registered, closing target worker; enqueue must not feed it.
-        let target_key =
-            build_worker_key(target_namespace, Path::new(target_runtime), target_session);
-        let (target_tx, mut target_rx) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
+        let target_key = build_worker_key(
+            target_namespace,
+            Path::new(target_runtime),
+            target_session,
+        );
+        let (target_tx, mut target_rx) =
+            tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
         let target_owner = register_worker(
             target_key.clone(),
             target_tx,
@@ -411,7 +449,8 @@ mod tests {
             Path::new(sender_runtime),
             sender_member_id,
         );
-        let (sender_tx, mut sender_rx) = tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
+        let (sender_tx, mut sender_rx) =
+            tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
         let owner = register_worker(
             sender_key.clone(),
             sender_tx,
@@ -448,7 +487,8 @@ mod tests {
             }),
         };
 
-        enqueue_delivery_task(task).expect("enqueue returns Ok when the target worker is closing");
+        enqueue_delivery_task(task)
+            .expect("enqueue returns Ok when the target worker is closing");
 
         // The closing worker is retained and was fed nothing: no replacement worker
         // spawned or registered over the closing entry.

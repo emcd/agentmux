@@ -150,17 +150,24 @@ esac
 fn write_slow_paste_fake_tmux(script_path: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
 
-    std::fs::write(script_path, SLOW_PASTE_FAKE_TMUX).expect("write slow-paste fake tmux");
-    std::fs::set_permissions(script_path, std::fs::Permissions::from_mode(0o755))
-        .expect("set slow-paste fake tmux executable");
+    std::fs::write(script_path, SLOW_PASTE_FAKE_TMUX)
+        .expect("write slow-paste fake tmux");
+    std::fs::set_permissions(
+        script_path,
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .expect("set slow-paste fake tmux executable");
 }
 
 fn write_idle_fake_tmux(script_path: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
 
     std::fs::write(script_path, IDLE_FAKE_TMUX).expect("write idle fake tmux");
-    std::fs::set_permissions(script_path, std::fs::Permissions::from_mode(0o755))
-        .expect("set idle fake tmux executable");
+    std::fs::set_permissions(
+        script_path,
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .expect("set idle fake tmux executable");
 }
 
 fn read_inscriptions(path: &std::path::Path, event: &str) -> Vec<String> {
@@ -199,7 +206,9 @@ fn await_inscription(path: &std::path::Path, event: &str, within: Duration) {
 fn tearing_a_bundle_down_stops_the_workers_it_owns() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let fake_tmux = temporary.path().join("fake-tmux");
     write_idle_fake_tmux(&fake_tmux);
@@ -239,16 +248,23 @@ fn tearing_a_bundle_down_stops_the_workers_it_owns() {
     // process-wide and one relay hosts many bundles, so a stop that matched too
     // loosely would take another bundle's workers down with it — a far worse
     // failure than the leak this change fixes.
-    let other =
-        agentmux::relay::shutdown_bundle_runtime("elsewhere", runtime_directory, &tmux_socket)
-            .expect("unrelated bundle teardown");
+    let other = agentmux::relay::shutdown_bundle_runtime(
+        "elsewhere",
+        runtime_directory,
+        &tmux_socket,
+    )
+    .expect("unrelated bundle teardown");
     assert_eq!(
         other.signalled_worker_count, 0,
         "tearing down another bundle must not stop this bundle's workers"
     );
 
-    let report = agentmux::relay::shutdown_bundle_runtime("party", runtime_directory, &tmux_socket)
-        .expect("bundle teardown");
+    let report = agentmux::relay::shutdown_bundle_runtime(
+        "party",
+        runtime_directory,
+        &tmux_socket,
+    )
+    .expect("bundle teardown");
 
     assert_eq!(
         report.signalled_worker_count, 1,
@@ -262,7 +278,8 @@ fn tearing_a_bundle_down_stops_the_workers_it_owns() {
     // The ending is named for what actually happened. A bundle stop reported as a
     // relay shutdown would tell an operator the relay was exiting while it is
     // still serving every other bundle.
-    let verdicts = read_inscriptions(&inscriptions, "relay.delivery.fence.verdict");
+    let verdicts =
+        read_inscriptions(&inscriptions, "relay.delivery.fence.verdict");
     assert_eq!(
         verdicts.len(),
         1,
@@ -287,7 +304,9 @@ fn tearing_a_bundle_down_stops_the_workers_it_owns() {
 fn a_teardown_with_no_tmux_effects_still_reports_the_bundle_hosted() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let fake_tmux = temporary.path().join("fake-tmux");
     write_idle_fake_tmux(&fake_tmux);
@@ -319,8 +338,12 @@ fn a_teardown_with_no_tmux_effects_still_reports_the_bundle_hosted() {
         Duration::from_secs(10),
     );
 
-    let report = agentmux::relay::shutdown_bundle_runtime("party", runtime_directory, &tmux_socket)
-        .expect("bundle teardown");
+    let report = agentmux::relay::shutdown_bundle_runtime(
+        "party",
+        runtime_directory,
+        &tmux_socket,
+    )
+    .expect("bundle teardown");
 
     // The fixture's own premise: this teardown had no tmux work to do, so the
     // reporting below rests on the worker half alone.
@@ -369,7 +392,9 @@ fn a_teardown_with_no_tmux_effects_still_reports_the_bundle_hosted() {
 fn a_torn_down_target_can_be_served_again() {
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let fake_tmux = temporary.path().join("fake-tmux");
     write_idle_fake_tmux(&fake_tmux);
@@ -405,8 +430,12 @@ fn a_torn_down_target_can_be_served_again() {
         Duration::from_secs(10),
     );
 
-    let report = agentmux::relay::shutdown_bundle_runtime("party", runtime_directory, &tmux_socket)
-        .expect("bundle teardown");
+    let report = agentmux::relay::shutdown_bundle_runtime(
+        "party",
+        runtime_directory,
+        &tmux_socket,
+    )
+    .expect("bundle teardown");
     // The premise: a worker really was stopped, so the second send below is
     // electing a fresh one rather than reusing a survivor. Without this the test
     // would still pass against a teardown that stopped nothing at all.
@@ -417,7 +446,9 @@ fn a_torn_down_target_can_be_served_again() {
 
     send("second");
     let deadline = Instant::now() + Duration::from_secs(10);
-    while read_inscriptions(&inscriptions, "relay.send.async.completed").len() < 2 {
+    while read_inscriptions(&inscriptions, "relay.send.async.completed").len()
+        < 2
+    {
         assert!(
             Instant::now() < deadline,
             "the second send never resolved, so the torn-down target was never re-elected: {:?}",
@@ -426,9 +457,11 @@ fn a_torn_down_target_can_be_served_again() {
         std::thread::sleep(Duration::from_millis(25));
     }
 
-    let completions = read_inscriptions(&inscriptions, "relay.send.async.completed");
+    let completions =
+        read_inscriptions(&inscriptions, "relay.send.async.completed");
     let second: serde_json::Value =
-        serde_json::from_str(completions[1].as_str()).expect("completion is json");
+        serde_json::from_str(completions[1].as_str())
+            .expect("completion is json");
     assert_eq!(
         second["details"]["outcome"], "delivered",
         "the second send must be delivered by a freshly elected worker, not refused \
@@ -458,7 +491,9 @@ fn a_target_that_replaced_its_generation_can_still_be_served_again() {
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let fake_tmux = temporary.path().join("fake-tmux");
     write_slow_paste_fake_tmux(&fake_tmux);
@@ -515,7 +550,8 @@ fn a_target_that_replaced_its_generation_can_still_be_served_again() {
     // fenced this generation, and the verdict was positive, so a replacement was
     // built. A negative verdict would fail-stop the target instead, which is a
     // different path and would make the re-election below meaningless.
-    let verdicts = read_inscriptions(&inscriptions, "relay.delivery.fence.verdict");
+    let verdicts =
+        read_inscriptions(&inscriptions, "relay.delivery.fence.verdict");
     let verdict: serde_json::Value =
         serde_json::from_str(verdicts[0].as_str()).expect("verdict is json");
     assert_eq!(
@@ -527,8 +563,12 @@ fn a_target_that_replaced_its_generation_can_still_be_served_again() {
         "a replacement is built only behind a positive verdict: {verdict}"
     );
 
-    let report = agentmux::relay::shutdown_bundle_runtime("party", runtime_directory, &tmux_socket)
-        .expect("bundle teardown");
+    let report = agentmux::relay::shutdown_bundle_runtime(
+        "party",
+        runtime_directory,
+        &tmux_socket,
+    )
+    .expect("bundle teardown");
     assert_eq!(
         report.signalled_worker_count, 1,
         "the replacement's worker must have been stopped for this to test re-election"
@@ -549,7 +589,8 @@ fn a_target_that_replaced_its_generation_can_still_be_served_again() {
     // the one this test claims to exercise.
     let first_deadline = Instant::now() + Duration::from_secs(20);
     let first = loop {
-        let completions = read_inscriptions(&inscriptions, "relay.send.async.completed");
+        let completions =
+            read_inscriptions(&inscriptions, "relay.send.async.completed");
         if let Some(only) = completions.first() {
             break serde_json::from_str::<serde_json::Value>(only.as_str())
                 .expect("completion is json");
@@ -565,7 +606,8 @@ fn a_target_that_replaced_its_generation_can_still_be_served_again() {
         "the outgoing generation must have completed its write before the fence \
          stopped it: {first}"
     );
-    let settled_before = read_inscriptions(&inscriptions, "relay.send.async.completed").len();
+    let settled_before =
+        read_inscriptions(&inscriptions, "relay.send.async.completed").len();
     assert_eq!(
         settled_before, 1,
         "exactly one send has resolved so far, so the next completion can only be \
@@ -575,10 +617,13 @@ fn a_target_that_replaced_its_generation_can_still_be_served_again() {
     send("second");
     let deadline = Instant::now() + Duration::from_secs(20);
     let second = loop {
-        let completions = read_inscriptions(&inscriptions, "relay.send.async.completed");
+        let completions =
+            read_inscriptions(&inscriptions, "relay.send.async.completed");
         if completions.len() > settled_before {
-            break serde_json::from_str::<serde_json::Value>(completions[settled_before].as_str())
-                .expect("completion is json");
+            break serde_json::from_str::<serde_json::Value>(
+                completions[settled_before].as_str(),
+            )
+            .expect("completion is json");
         }
         assert!(
             Instant::now() < deadline,

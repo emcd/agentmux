@@ -117,7 +117,9 @@ fn bare_agentmux_without_tty_prints_help_and_fails() {
         "unexpected stdout: {stdout}"
     );
     assert!(
-        stdout.contains("list principals [--namespace NAME|GLOBAL|*] [--as-session NAME]"),
+        stdout.contains(
+            "list principals [--namespace NAME|GLOBAL|*] [--as-session NAME]"
+        ),
         "top-level help should advertise relocked list principals surface: {stdout}"
     );
     assert!(
@@ -164,8 +166,8 @@ fn drop_appears_in_the_top_level_command_topology() {
 /// the roster is updated, which is the point — the update is where a developer
 /// notices the surface grew.
 const DISPATCHED_SUBCOMMANDS: [&str; 13] = [
-    "host", "up", "down", "list", "look", "raww", "new", "change", "drop", "link", "check", "tui",
-    "send",
+    "host", "up", "down", "list", "look", "raww", "new", "change", "drop",
+    "link", "check", "tui", "send",
 ];
 
 /// Extracts the leading token of each entry under the help output's `Commands:`

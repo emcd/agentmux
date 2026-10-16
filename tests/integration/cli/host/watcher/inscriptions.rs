@@ -16,7 +16,8 @@ use super::super::*;
 /// without reconciliation — every watcher signal the test waits on afterwards
 /// would starve for the full budget with no explanation.
 pub(super) fn assert_bundle_watch_started(inscriptions_root: &Path) {
-    let log = fs::read_to_string(inscriptions_root.join("relay.log")).unwrap_or_default();
+    let log = fs::read_to_string(inscriptions_root.join("relay.log"))
+        .unwrap_or_default();
     let started = log
         .lines()
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
@@ -77,7 +78,8 @@ pub(super) fn poll_inscription_event(
     bundle_name: &str,
 ) -> bool {
     poll_inscriptions(inscriptions_root, |entry| {
-        entry["event"] == event && entry["details"]["bundle_name"] == bundle_name
+        entry["event"] == event
+            && entry["details"]["bundle_name"] == bundle_name
     })
 }
 
@@ -86,6 +88,9 @@ pub(super) fn poll_inscription_event(
 /// The bundle-scoped variant cannot serve a reconciliation suppressed by an
 /// unreadable layer: enumeration never got far enough to know which bundles were
 /// involved, so the inscription names the layer rather than a bundle.
-pub(super) fn poll_inscription_event_kind(inscriptions_root: &Path, event: &str) -> bool {
+pub(super) fn poll_inscription_event_kind(
+    inscriptions_root: &Path,
+    event: &str,
+) -> bool {
     poll_inscriptions(inscriptions_root, |entry| entry["event"] == event)
 }

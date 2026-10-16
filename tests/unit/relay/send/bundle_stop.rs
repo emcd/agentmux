@@ -28,7 +28,9 @@ fn a_bundle_stop_is_never_reported_to_a_sender_as_a_relay_shutdown() {
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let fake_tmux = temporary.path().join("fake-tmux");
     let busy_file = temporary.path().join("target-busy");
@@ -95,14 +97,20 @@ fn a_bundle_stop_is_never_reported_to_a_sender_as_a_relay_shutdown() {
     // The fixture's own premise: nothing has resolved yet, so every outcome read
     // below is one the teardown produced.
     assert!(
-        read_inscriptions(&inscriptions, "relay.send.async.completed").is_empty(),
+        read_inscriptions(&inscriptions, "relay.send.async.completed")
+            .is_empty(),
         "no member may resolve before the teardown runs"
     );
 
-    agentmux::relay::shutdown_bundle_runtime("party", temporary.path(), &tmux_socket)
-        .expect("bundle teardown");
+    agentmux::relay::shutdown_bundle_runtime(
+        "party",
+        temporary.path(),
+        &tmux_socket,
+    )
+    .expect("bundle teardown");
 
-    let completions = read_inscriptions(&inscriptions, "relay.send.async.completed");
+    let completions =
+        read_inscriptions(&inscriptions, "relay.send.async.completed");
     assert_eq!(
         completions.len(),
         3,

@@ -8,8 +8,9 @@ use agentmux::{
 use tempfile::TempDir;
 
 use crate::support::relay_delivery::{
-    CoderSpec, SessionSpec, TmuxServerGuard, capture_pane, spawn_session, tmux_available,
-    tmux_command, wait_for_pane_contains, write_bundle_configuration_members,
+    CoderSpec, SessionSpec, TmuxServerGuard, capture_pane, spawn_session,
+    tmux_available, tmux_command, wait_for_pane_contains,
+    write_bundle_configuration_members,
 };
 
 /// Negative-assertion budget: how long to wait after `SendOutcome::Queued`
@@ -28,7 +29,12 @@ fn dispatch_request(
     bundle_name: &str,
     runtime_directory: &std::path::Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    handle_request(request, configuration_roots, bundle_name, runtime_directory)
+    handle_request(
+        request,
+        configuration_roots,
+        bundle_name,
+        runtime_directory,
+    )
 }
 
 #[test]
@@ -78,7 +84,8 @@ fn relay_send_delivers_when_prompt_readiness_template_matches() {
             },
         ],
     );
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -177,7 +184,8 @@ fn relay_send_times_out_when_prompt_readiness_never_matches() {
             },
         ],
     );
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -268,7 +276,8 @@ fn relay_send_delivers_when_prompt_idle_column_matches() {
             },
         ],
     );
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -342,7 +351,9 @@ fn relay_send_delivers_when_prompt_regex_requires_blank_separator_line() {
                 id: "prompt".to_string(),
                 initial_command: "sh -lc 'exec sleep 45'".to_string(),
                 resume_command: "sh -lc 'exec sleep 45'".to_string(),
-                prompt_regex: Some("(?ms)^READY>.*\\n\\nstatus.*$".to_string()),
+                prompt_regex: Some(
+                    "(?ms)^READY>.*\\n\\nstatus.*$".to_string(),
+                ),
                 prompt_inspect_lines: Some(3),
                 prompt_idle_column: None,
             },
@@ -364,7 +375,8 @@ fn relay_send_delivers_when_prompt_regex_requires_blank_separator_line() {
             },
         ],
     );
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -464,7 +476,8 @@ fn relay_send_times_out_when_prompt_idle_column_does_not_match() {
             },
         ],
     );
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -537,12 +550,18 @@ fn count_inscriptions(path: &std::path::Path, event: &str) -> usize {
 }
 
 /// Waits for one inscription of `event`, returning its line.
-fn await_inscription(path: &std::path::Path, event: &str, budget: Duration) -> String {
+fn await_inscription(
+    path: &std::path::Path,
+    event: &str,
+    budget: Duration,
+) -> String {
     let needle = format!("\"event\":\"{event}\"");
     let started = std::time::Instant::now();
     loop {
         let log = std::fs::read_to_string(path).unwrap_or_default();
-        if let Some(line) = log.lines().find(|line| line.contains(needle.as_str())) {
+        if let Some(line) =
+            log.lines().find(|line| line.contains(needle.as_str()))
+        {
             return line.to_string();
         }
         assert!(
@@ -575,7 +594,8 @@ fn await_inscription(path: &std::path::Path, event: &str, budget: Duration) -> S
 /// member still holds its slot; if elapsed time released the slot behind the
 /// sender's back, the second send would be accepted instead.
 #[test]
-fn a_member_held_on_readiness_keeps_its_quota_and_delivers_when_the_prompt_arrives() {
+fn a_member_held_on_readiness_keeps_its_quota_and_delivers_when_the_prompt_arrives()
+ {
     use agentmux::relay::{DeliveryConfiguration, configure_delivery};
 
     if !tmux_available() {
@@ -585,7 +605,9 @@ fn a_member_held_on_readiness_keeps_its_quota_and_delivers_when_the_prompt_arriv
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     configure_delivery(DeliveryConfiguration {
         // One slot per target, so the second send can ask whether the first
@@ -638,7 +660,8 @@ fn a_member_held_on_readiness_keeps_its_quota_and_delivers_when_the_prompt_arriv
             },
         ],
     );
-    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name).expect("resolve paths");
+    let paths = BundleRuntimePaths::resolve(temporary.path(), bundle_name)
+        .expect("resolve paths");
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
@@ -698,7 +721,8 @@ fn a_member_held_on_readiness_keeps_its_quota_and_delivers_when_the_prompt_arriv
     );
 
     // The quota probe. Refusal here means the held member still owns its slot.
-    let refusal = send("req-second").expect_err("the held member still holds the only slot");
+    let refusal = send("req-second")
+        .expect_err("the held member still holds the only slot");
     assert_eq!(refusal.code, "runtime_delivery_queue_full");
 
     // Open the gate. Everything above was the wait; this is the delivery it was
@@ -717,8 +741,8 @@ fn a_member_held_on_readiness_keeps_its_quota_and_delivers_when_the_prompt_arriv
         "relay.send.async.completed",
         Duration::from_millis(10_000),
     );
-    let record: serde_json::Value =
-        serde_json::from_str(completed.as_str()).expect("completed inscription is json");
+    let record: serde_json::Value = serde_json::from_str(completed.as_str())
+        .expect("completed inscription is json");
     assert_eq!(
         record["details"]["outcome"].as_str(),
         Some("delivered"),

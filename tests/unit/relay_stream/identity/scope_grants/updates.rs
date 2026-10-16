@@ -4,9 +4,11 @@ use super::*;
 fn change_scope_updates_grant_and_returns_canonical() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_update";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "update@RELAY";
 
     register_peer(
@@ -16,7 +18,8 @@ fn change_scope_updates_grant_and_returns_canonical() {
         peer_id,
         Some(bundle_name),
     );
-    let hash_before = store_record(&bundle_paths, peer_id)["credential_hash"].clone();
+    let hash_before =
+        store_record(&bundle_paths, peer_id)["credential_hash"].clone();
 
     let updated = change_scope_request(
         &configuration_roots,
@@ -43,9 +46,11 @@ fn change_scope_updates_grant_and_returns_canonical() {
 fn change_scope_empty_clears_grant_and_repeats_safely() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_clear";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "clear@RELAY";
 
     let psk = register_peer(
@@ -95,9 +100,11 @@ fn change_scope_requires_dedicated_authority() {
     let bundle_name = "ident_scope_auth";
     // The shared identity configuration grants change.psk but not
     // change.scope: rotation rights must not confer scope administration.
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "auth@RELAY";
 
     register_peer(
@@ -135,9 +142,11 @@ fn change_scope_requires_dedicated_authority() {
 fn change_scope_unknown_peer_reports_behind_authorization() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_unknown";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let unknown = change_scope_request(
         &configuration_roots,
@@ -161,7 +170,8 @@ fn change_scope_unknown_peer_reports_behind_authorization() {
     );
     assert_eq!(non_relay["response"]["kind"], "error");
     assert_eq!(
-        non_relay["response"]["error"]["code"], "validation_invalid_principal_id",
+        non_relay["response"]["error"]["code"],
+        "validation_invalid_principal_id",
         "non-relay target is rejected: {non_relay:?}"
     );
 }
@@ -170,9 +180,11 @@ fn change_scope_unknown_peer_reports_behind_authorization() {
 fn change_scope_omitted_scope_is_invalid_not_a_clear() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_omitted";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "omitted@RELAY";
 
     register_peer(
@@ -206,9 +218,11 @@ fn change_scope_omitted_scope_is_invalid_not_a_clear() {
 fn live_narrowing_applies_on_the_same_connection_without_reconnect() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_live";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "live@RELAY";
     let target = format!("alpha@{bundle_name}");
 
@@ -220,7 +234,8 @@ fn live_narrowing_applies_on_the_same_connection_without_reconnect() {
         Some("*"),
     );
 
-    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -234,23 +249,25 @@ fn live_narrowing_applies_on_the_same_connection_without_reconnect() {
     );
     assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
     let mut request_id = 0;
-    let mut peer_request =
-        |client: &mut UnixStream, reader: &mut BufReader<UnixStream>, request: Value| -> Value {
-            request_id += 1;
-            send_json(
-                client,
-                json!({
-                    "frame": "request",
-                    "request_id": format!("live-{request_id}"),
-                    "request": request,
-                }),
-            );
-            let mut response = read_json(reader);
-            while response["frame"] != "response" {
-                response = read_json(reader);
-            }
-            response
-        };
+    let mut peer_request = |client: &mut UnixStream,
+                            reader: &mut BufReader<UnixStream>,
+                            request: Value|
+     -> Value {
+        request_id += 1;
+        send_json(
+            client,
+            json!({
+                "frame": "request",
+                "request_id": format!("live-{request_id}"),
+                "request": request,
+            }),
+        );
+        let mut response = read_json(reader);
+        while response["frame"] != "response" {
+            response = read_json(reader);
+        }
+        response
+    };
 
     let first = peer_request(
         &mut client,
@@ -333,7 +350,8 @@ fn live_narrowing_applies_on_the_same_connection_without_reconnect() {
     );
     assert_eq!(principal_lookup["response"]["kind"], "error");
     assert_eq!(
-        principal_lookup["response"]["error"]["code"], "authorization_forbidden",
+        principal_lookup["response"]["error"]["code"],
+        "authorization_forbidden",
         "narrowed grant must deny principal discovery: {principal_lookup:?}"
     );
 
@@ -387,9 +405,11 @@ fn live_narrowing_applies_on_the_same_connection_without_reconnect() {
 fn rotation_preserves_the_latest_narrowed_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_rotation";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "rotated@RELAY";
 
     register_peer(
@@ -453,9 +473,11 @@ fn rotation_preserves_the_latest_narrowed_scope() {
 fn wildcard_peer_reaches_bundle_targets_and_namespace_discovery() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_wildcard";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "wild@RELAY";
 
     let psk = register_peer(
@@ -475,7 +497,8 @@ fn wildcard_peer_reaches_bundle_targets_and_namespace_discovery() {
     );
     assert_eq!(sent["response"]["kind"], "send", "wildcard send: {sent:?}");
 
-    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -519,7 +542,8 @@ fn wildcard_peer_reaches_bundle_targets_and_namespace_discovery() {
 fn admitted_delivery_executes_after_narrowing_without_cancellation() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_uiexec";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let receiver_id = global_user_id(bundle_name);
     let admin_id = format!("admin-{receiver_id}");
     write_multi_operator_users(
@@ -527,10 +551,12 @@ fn admitted_delivery_executes_after_narrowing_without_cancellation() {
         &[receiver_id.clone(), admin_id.clone()],
     );
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "uiexec@RELAY";
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context =
+        shared_serve_context(&configuration_roots, &state_root, catalog);
 
     // Arrival-level evidence that narrowing neither tears down admitted work
     // nor the connection carrying it: a delivery admitted under the wildcard
@@ -541,7 +567,8 @@ fn admitted_delivery_executes_after_narrowing_without_cancellation() {
     // express cancellation through them.
     let (mut operator_client, operator_join) =
         spawn_relay_connection_on_context(Arc::clone(&context));
-    let operator_read = operator_client.try_clone().expect("clone operator stream");
+    let operator_read =
+        operator_client.try_clone().expect("clone operator stream");
     let mut operator_reader = BufReader::new(operator_read);
     send_json(
         &mut operator_client,
@@ -564,7 +591,8 @@ fn admitted_delivery_executes_after_narrowing_without_cancellation() {
 
     // Admit a peer delivery to the operator under the wildcard grant: the
     // queued response proves admission completed.
-    let (mut peer_client, peer_join) = spawn_relay_connection_on_context(Arc::clone(&context));
+    let (mut peer_client, peer_join) =
+        spawn_relay_connection_on_context(Arc::clone(&context));
     let peer_read = peer_client.try_clone().expect("clone peer stream");
     let mut peer_reader = BufReader::new(peer_read);
     send_json(
@@ -606,7 +634,8 @@ fn admitted_delivery_executes_after_narrowing_without_cancellation() {
     );
     assert_eq!(narrowed["response"]["kind"], "change_scope", "{narrowed:?}");
 
-    let event = read_until_event_type(&mut operator_reader, "incoming_message");
+    let event =
+        read_until_event_type(&mut operator_reader, "incoming_message");
     assert_eq!(
         event["event"]["event_type"], "incoming_message",
         "admitted delivery must execute after narrowing: {event:?}"
@@ -621,9 +650,11 @@ fn admitted_delivery_executes_after_narrowing_without_cancellation() {
 fn scope_retry_without_grant_is_denied_not_applied() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_reauth";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "reauth@RELAY";
 
     register_peer(
@@ -702,9 +733,11 @@ peer = "all"
 fn committed_update_survives_response_transport_loss() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_resploss";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "resploss@RELAY";
 
     let peer_psk = register_peer(
@@ -717,7 +750,8 @@ fn committed_update_survives_response_transport_loss() {
 
     // Submit the widening update, then drop the transport without reading the
     // response: the commit does not depend on the caller observing it.
-    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     let operator_id = global_user_id(bundle_name);
@@ -843,12 +877,16 @@ impl HeldTmuxServer {
     }
 
     fn stop(&self) {
-        let result = unsafe { libc::kill(self.server_pid as libc::pid_t, libc::SIGSTOP) };
+        let result = unsafe {
+            libc::kill(self.server_pid as libc::pid_t, libc::SIGSTOP)
+        };
         assert_eq!(result, 0, "SIGSTOP tmux server failed");
     }
 
     fn cont(&self) {
-        let result = unsafe { libc::kill(self.server_pid as libc::pid_t, libc::SIGCONT) };
+        let result = unsafe {
+            libc::kill(self.server_pid as libc::pid_t, libc::SIGCONT)
+        };
         assert_eq!(result, 0, "SIGCONT tmux server failed");
     }
 
@@ -891,15 +929,21 @@ fn held_tmux_delivery_runs_after_narrowing_with_original_text() {
     // "file name too long" for reasons unrelated to the behavior under test.
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_tmuxhold";
-    let configuration_roots = write_scope_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_scope_configuration(&temporary, bundle_name);
     let operator_id = global_user_id(bundle_name);
-    write_multi_operator_users(&configuration_roots, std::slice::from_ref(&operator_id));
+    write_multi_operator_users(
+        &configuration_roots,
+        std::slice::from_ref(&operator_id),
+    );
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let peer_id = "tmuxhold@RELAY";
     let target = format!("alpha@{bundle_name}");
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context = shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context =
+        shared_serve_context(&configuration_roots, &state_root, catalog);
 
     let seed = operator_request_on_context(
         &context,
@@ -912,12 +956,14 @@ fn held_tmux_delivery_runs_after_narrowing_with_original_text() {
         .expect("seed psk")
         .to_string();
 
-    std::fs::create_dir_all(&bundle_paths.runtime_directory).expect("runtime dir");
+    std::fs::create_dir_all(&bundle_paths.runtime_directory)
+        .expect("runtime dir");
     let socket_path = bundle_paths.runtime_directory.join("tmux.sock");
     let server = HeldTmuxServer::start(&socket_path, "alpha");
     server.stop();
 
-    let (mut client, join) = spawn_relay_connection_on_context(Arc::clone(&context));
+    let (mut client, join) =
+        spawn_relay_connection_on_context(Arc::clone(&context));
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(

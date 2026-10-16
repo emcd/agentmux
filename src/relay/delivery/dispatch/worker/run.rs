@@ -22,12 +22,12 @@ use super::super::super::fence::{FenceInProgress, FenceVerdict};
 use super::super::super::guard::GuardTrigger;
 use super::intake::take_into_mailbox;
 use super::spawn::{
-    ASYNC_WORKER_POLL_INTERVAL_MS, BuiltGeneration, ConsumerGenerationStep, WorkerTransportSource,
-    build_generation,
+    ASYNC_WORKER_POLL_INTERVAL_MS, BuiltGeneration, ConsumerGenerationStep,
+    WorkerTransportSource, build_generation,
 };
 use super::stop::{
-    StopCause, abandon_target, emit_fence_verdict, resolve_queued_tasks_and_reclaim,
-    shutdown_before_generation, stop_drain,
+    StopCause, abandon_target, emit_fence_verdict,
+    resolve_queued_tasks_and_reclaim, shutdown_before_generation, stop_drain,
 };
 
 pub(super) async fn run_async_delivery_worker(
@@ -68,7 +68,12 @@ pub(super) async fn run_async_delivery_worker(
     // shutdown before creating a worker at all rather than only while waiting on
     // one.
     if shutdown_requested() {
-        shutdown_before_generation(&key, owner, &mut receiver, pending.as_ref());
+        shutdown_before_generation(
+            &key,
+            owner,
+            &mut receiver,
+            pending.as_ref(),
+        );
         return;
     }
     // The first generation. An ACP worker starts its bootstrap here but does not
@@ -109,17 +114,24 @@ pub(super) async fn run_async_delivery_worker(
             // is the accept-after-drain race `close_worker` exists to prevent on
             // the shutdown path, and this path has to close the same way.
             super::super::super::async_worker::unregister_worker(&key, owner);
-            resolve_queued_tasks_and_reclaim(&key, &mut receiver, pending.as_ref(), &error);
+            resolve_queued_tasks_and_reclaim(
+                &key,
+                &mut receiver,
+                pending.as_ref(),
+                &error,
+            );
             return;
-        }
+        },
     };
     let poll_interval = Duration::from_millis(ASYNC_WORKER_POLL_INTERVAL_MS);
     let mut senders_dropped = false;
     // Graceful shutdown and the execution watchdog are what fence a generation.
     // Both bounds are the relay's own `[delivery]` settings, read once per worker.
     let delivery = super::super::super::admission::delivery_configuration();
-    let fence_observation = Duration::from_millis(delivery.fence_observation_timeout_ms);
-    let submission_timeout = Duration::from_millis(delivery.submission_timeout_ms);
+    let fence_observation =
+        Duration::from_millis(delivery.fence_observation_timeout_ms);
+    let submission_timeout =
+        Duration::from_millis(delivery.submission_timeout_ms);
     // The execution watchdog's fence, present only while one is in progress.
     let mut watchdog: Option<FenceInProgress> = None;
     // Set by a negative verdict and never cleared. From then on this worker keeps
@@ -133,7 +145,9 @@ pub(super) async fn run_async_delivery_worker(
         // shutdown spelling is the one its members' senders are owed.
         let stop_cause = if shutdown_requested() {
             Some(StopCause::Shutdown)
-        } else if super::super::super::async_worker::worker_stop_requested(&key) {
+        } else if super::super::super::async_worker::worker_stop_requested(
+            &key,
+        ) {
             Some(StopCause::BundleStop)
         } else {
             None
@@ -183,7 +197,10 @@ pub(super) async fn run_async_delivery_worker(
                     "submission_timeout_ms": submission_timeout.as_millis() as u64,
                 }),
             );
-            watchdog = Some(FenceInProgress::begin(&mut transport, fence_observation));
+            watchdog = Some(FenceInProgress::begin(
+                &mut transport,
+                fence_observation,
+            ));
         }
         // Advanced before the wait rather than inside it, so an acknowledgment
         // keeps landing through both observation windows: the fence's whole point
@@ -223,7 +240,7 @@ pub(super) async fn run_async_delivery_worker(
                         Ok(built) => {
                             transport = built.transport;
                             binding = built.binding;
-                        }
+                        },
                         Err(error) => {
                             // No replacement could be built. The old generation
                             // did cease, so nothing can race a later worker —
@@ -236,7 +253,10 @@ pub(super) async fn run_async_delivery_worker(
                             // between the drain observing empty and the entry
                             // going, and it would be lost with the receiver.
                             super::super::super::async_worker::unregister_worker(&key, owner);
-                            abandon_target(&binding, GuardTrigger::ExecutionBound);
+                            abandon_target(
+                                &binding,
+                                GuardTrigger::ExecutionBound,
+                            );
                             resolve_queued_tasks_and_reclaim(
                                 &key,
                                 &mut receiver,
@@ -244,9 +264,9 @@ pub(super) async fn run_async_delivery_worker(
                                 &error,
                             );
                             return;
-                        }
+                        },
                     }
-                }
+                },
                 FenceVerdict::Negative => {
                     // Cessation was not observed, so an old executor may still
                     // reach the target. Refusing every further send is what holds
@@ -266,7 +286,7 @@ pub(super) async fn run_async_delivery_worker(
                     // no consumer can be elected for this target, and a member
                     // held behind that can never be delivered by anything.
                     abandon_target(&binding, GuardTrigger::ExecutionBound);
-                }
+                },
             }
         }
 

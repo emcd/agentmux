@@ -3,30 +3,37 @@ use std::path::PathBuf;
 use serde_json::json;
 use uuid::Uuid;
 
-use crate::configuration::{BundleConfiguration, ConfigurationRoots, TargetConfiguration};
+use crate::configuration::{
+    BundleConfiguration, ConfigurationRoots, TargetConfiguration,
+};
 
 use super::super::authorization::{
-    AuthorizationContext, RouteAuthorization, authorize_route, choose_authorized_ui_sessions,
-    load_authorization_context, reject_cross_relay_ingress,
+    AuthorizationContext, RouteAuthorization, authorize_route,
+    choose_authorized_ui_sessions, load_authorization_context,
+    reject_cross_relay_ingress,
 };
 use super::super::catalog::BundleCatalog;
 use super::super::delivery::admission::{
     AdmissionTargetKey, admit, canonical_payload_bytes, rollback_admission,
 };
 use super::super::delivery::enqueue_async_delivery;
-use super::super::identity::{PrincipalType, classify_principal_id, live_peer_ingress};
+use super::super::identity::{
+    PrincipalType, classify_principal_id, live_peer_ingress,
+};
 use super::super::routing::{
-    Addressing, Capability, OperationProfile, ResolvedRoute, requester_home_namespace,
-    resolve_raww_route,
+    Addressing, Capability, OperationProfile, ResolvedRoute,
+    requester_home_namespace, resolve_raww_route,
 };
 use super::super::stream::lookup_registry_session_type;
 use super::super::{
-    AsyncDeliveryTask, DeliveryPayloadMode, ListedSessionTransport, PeerConnectionManager,
-    PeerIngressAuthority, RELAY_NAMESPACE, RelayError, RelayRequest, RelayResponse,
-    RequestPrincipal, SCHEMA_VERSION, bare_session_id, canonical_session_id, relay_error,
-    unsupported_operation,
+    AsyncDeliveryTask, DeliveryPayloadMode, ListedSessionTransport,
+    PeerConnectionManager, PeerIngressAuthority, RELAY_NAMESPACE, RelayError,
+    RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
+    bare_session_id, canonical_session_id, relay_error, unsupported_operation,
 };
-use super::routed::{load_home_context, resolve_target_bundle, run_target_operation};
+use super::routed::{
+    load_home_context, resolve_target_bundle, run_target_operation,
+};
 use super::sender::{SenderIdentity, resolve_sender_in_namespace};
 
 /// The raww target's bundle, runtime, and the target bundle's authorization
@@ -95,7 +102,8 @@ pub(in crate::relay) fn handle_raww_routed(
     // than a policy tier. Detected from the AUTHENTICATED principal, never the
     // (spoofable) wire `requester_session`.
     let relay_ingress = principal.is_some_and(|principal| {
-        classify_principal_id(principal.session_id.as_str()) == Some(PrincipalType::Relay)
+        classify_principal_id(principal.session_id.as_str())
+            == Some(PrincipalType::Relay)
     });
     let home_namespace = if relay_ingress {
         RELAY_NAMESPACE
@@ -105,16 +113,19 @@ pub(in crate::relay) fn handle_raww_routed(
     // The requester is identified in its home namespace (operator policy for
     // `GLOBAL`, the bundle's policy, or — for a peer relay — no bundle), never a
     // borrowed target bundle.
-    let (home_bundle, authorization) = load_home_context(home_namespace, configuration_roots)?;
+    let (home_bundle, authorization) =
+        load_home_context(home_namespace, configuration_roots)?;
     // A peer relay's own principal is the sender for an ingress request (keyed on
     // the authenticated identity); otherwise resolve the requester in its home
     // namespace.
     let sender = if relay_ingress {
-        let principal =
-            principal.expect("relay ingress is detected from an authenticated principal");
+        let principal = principal.expect(
+            "relay ingress is detected from an authenticated principal",
+        );
         SenderIdentity::relay_principal(principal.session_id.as_str())
     } else {
-        let requester_session = bare_session_id(requester_session.as_str(), home_namespace);
+        let requester_session =
+            bare_session_id(requester_session.as_str(), home_namespace);
         resolve_sender_in_namespace(
             home_bundle.as_ref(),
             &authorization,
@@ -134,7 +145,9 @@ pub(in crate::relay) fn handle_raww_routed(
     // targets. A peer relay ingress requester may address only plain local
     // targets, so its bang-path target is rejected before any forwarding — a peer
     // must not chain onward through this relay to its own peers.
-    if let Some(target) = route.targets.iter().find(|target| target.is_cross_relay()) {
+    if let Some(target) =
+        route.targets.iter().find(|target| target.is_cross_relay())
+    {
         if relay_ingress {
             return Err(reject_cross_relay_ingress(target));
         }
@@ -148,7 +161,8 @@ pub(in crate::relay) fn handle_raww_routed(
                 request_id,
                 // The identity the origin was admitted under, stamped as
                 // on_behalf_of so the peer knows who this relay forwards for.
-                on_behalf_of: principal.and_then(|principal| principal.admitted_identity.clone()),
+                on_behalf_of: principal
+                    .and_then(|principal| principal.admitted_identity.clone()),
             },
             peer_connection_manager,
         );
@@ -160,10 +174,14 @@ pub(in crate::relay) fn handle_raww_routed(
     // authorization and admission below; every other requester by its policy
     // tier resolved in the home bundle.
     let live_ingress = if relay_ingress {
-        let peer = principal.expect("relay ingress is detected from an authenticated principal");
+        let peer = principal.expect(
+            "relay ingress is detected from an authenticated principal",
+        );
         // ORDERING: same gate-before-resolution contract as the send path —
         // see handle_send.
-        super::super::test_hooks::test_authority_gate(peer.session_id.as_str());
+        super::super::test_hooks::test_authority_gate(
+            peer.session_id.as_str(),
+        );
         Some(live_peer_ingress(
             ingress_authority,
             peer.session_id.as_str(),
@@ -282,13 +300,14 @@ fn forward_raww_cross_relay(
             .expect("cross-relay raww target carries a session id"),
         target.namespace.as_str(),
     );
-    let requester_session = manager.presented_principal_id(relay_id).ok_or_else(|| {
-        relay_error(
-            "validation_unknown_peer",
-            "no configured peer relay matches the target alias",
-            None,
-        )
-    })?;
+    let requester_session =
+        manager.presented_principal_id(relay_id).ok_or_else(|| {
+            relay_error(
+                "validation_unknown_peer",
+                "no configured peer relay matches the target alias",
+                None,
+            )
+        })?;
     let forwarded = RelayRequest::Raww {
         request_id,
         requester_session,
@@ -325,7 +344,9 @@ fn prepare_raww(
         // startup): a registered principal sorts as `unsupported_operation` (its
         // transport carries `can_be_written = false`), an unregistered one as
         // `unknown_target`.
-        let Some(session_type) = lookup_registry_session_type(target_session_id) else {
+        let Some(session_type) =
+            lookup_registry_session_type(target_session_id)
+        else {
             return Err(relay_error(
                 "validation_unknown_target",
                 "target_session is not a registered principal",
@@ -371,7 +392,8 @@ fn prepare_raww(
     // Capability comes from the target's unified registry entry (a configured
     // session is registered statically at startup); a not-yet-registered member
     // falls back to its configured transport, which derives the same flags.
-    let target_principal = canonical_session_id(target_session_id, target_namespace);
+    let target_principal =
+        canonical_session_id(target_session_id, target_namespace);
     let session_type = lookup_registry_session_type(target_principal.as_str())
         .unwrap_or_else(|| member.target.session_type());
     if !session_type.can_be_written() {
@@ -381,7 +403,8 @@ fn prepare_raww(
             "can_be_written",
         ));
     }
-    let target_authorization = load_authorization_context(configuration_roots, Some(&bundle))?;
+    let target_authorization =
+        load_authorization_context(configuration_roots, Some(&bundle))?;
     Ok(RawwPrepared {
         bundle,
         runtime_directory,
@@ -426,8 +449,10 @@ fn execute_raww(
         TargetConfiguration::Acp(_) => ListedSessionTransport::Acp,
         TargetConfiguration::Pty(_) => ListedSessionTransport::Pty,
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
-            unreachable!("capability gate in prepare_raww rejects can_be_written = false targets")
-        }
+            unreachable!(
+                "capability gate in prepare_raww rejects can_be_written = false targets"
+            )
+        },
     };
     let message_id = Uuid::new_v4().to_string();
     // Mail and raw are variants of one per-target FIFO, so raw input is admitted
@@ -488,10 +513,12 @@ fn execute_raww(
                 rollback_admission(message_id.as_str());
                 return Err(error);
             }
-        }
+        },
         TargetConfiguration::Ui | TargetConfiguration::Pubsub => {
-            unreachable!("capability gate in prepare_raww rejects can_be_written = false targets")
-        }
+            unreachable!(
+                "capability gate in prepare_raww rejects can_be_written = false targets"
+            )
+        },
     }
 
     Ok(RelayResponse::Raww {

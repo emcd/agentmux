@@ -5,7 +5,8 @@ use std::{
 
 use crate::{
     configuration::{
-        BundleGroupMembership, ConfigurationError, ConfigurationRootsError, RESERVED_GROUP_ALL,
+        BundleGroupMembership, ConfigurationError, ConfigurationRootsError,
+        RESERVED_GROUP_ALL,
     },
     relay::{CredentialDestination, RelayError},
     runtime::{
@@ -25,7 +26,10 @@ use super::{LOOK_LINES_MAXIMUM, LOOK_LINES_MINIMUM, RuntimeArguments};
 /// of them and another way on the other is the problem this exists to close.
 /// `details` is the entry's structured detail; anything without a
 /// `failed_sessions` array renders nothing.
-pub(super) fn render_failed_sessions(bundle_name: &str, details: Option<&serde_json::Value>) {
+pub(super) fn render_failed_sessions(
+    bundle_name: &str,
+    details: Option<&serde_json::Value>,
+) {
     let Some(failed_sessions) = details
         .and_then(|details| details.get("failed_sessions"))
         .and_then(serde_json::Value::as_array)
@@ -50,8 +54,10 @@ pub(super) fn render_failed_sessions(bundle_name: &str, details: Option<&serde_j
                 println!(
                     "  session={session_id} bundle={bundle_name} reason={reason} cause={cause}"
                 )
-            }
-            None => println!("  session={session_id} bundle={bundle_name} reason={reason}"),
+            },
+            None => println!(
+                "  session={session_id} bundle={bundle_name} reason={reason}"
+            ),
         }
     }
 }
@@ -66,7 +72,8 @@ pub(super) fn parse_runtime_flag(
             // Repeatable: each occurrence appends one layer, and the layers are
             // searched in the order given, so the first occurrence is the
             // highest-precedence one.
-            let value = take_value(arguments, index, "--configuration-directory")?;
+            let value =
+                take_value(arguments, index, "--configuration-directory")?;
             if value.is_empty() {
                 return Err(RuntimeError::validation(
                     "validation_invalid_configuration_layers",
@@ -78,7 +85,7 @@ pub(super) fn parse_runtime_flag(
             }
             runtime.configuration_layers.push(PathBuf::from(value));
             Ok(true)
-        }
+        },
         "--state-directory" => {
             runtime.state_root = Some(PathBuf::from(take_value(
                 arguments,
@@ -86,7 +93,7 @@ pub(super) fn parse_runtime_flag(
                 "--state-directory",
             )?));
             Ok(true)
-        }
+        },
         "--inscriptions-directory" | "--logs-directory" => {
             runtime.inscriptions_root = Some(PathBuf::from(take_value(
                 arguments,
@@ -94,7 +101,7 @@ pub(super) fn parse_runtime_flag(
                 "--inscriptions-directory",
             )?));
             Ok(true)
-        }
+        },
         _ => Ok(false),
     }
 }
@@ -104,7 +111,9 @@ pub(super) fn parse_runtime_flag(
 /// The association override file no longer participates: it lives *under* the
 /// configuration root, so letting it select that root made the lookup circular.
 /// Roots resolve first, and the association file is read from the resolved root.
-pub(super) fn resolve_roots(runtime: &RuntimeArguments) -> Result<RuntimeRoots, RuntimeError> {
+pub(super) fn resolve_roots(
+    runtime: &RuntimeArguments,
+) -> Result<RuntimeRoots, RuntimeError> {
     RuntimeRoots::resolve(&RuntimeRootOverrides {
         configuration_layers: runtime.configuration_layers.clone(),
         state_root: runtime.state_root.clone(),
@@ -175,40 +184,52 @@ pub(super) fn map_reconcile_error(source: RelayError) -> RuntimeError {
     RuntimeError::io(message, std::io::Error::other(format!("{source:?}")))
 }
 
-pub(super) fn map_bundle_load_error(source: ConfigurationError) -> RuntimeError {
+pub(super) fn map_bundle_load_error(
+    source: ConfigurationError,
+) -> RuntimeError {
     match source {
-        ConfigurationError::UnknownBundle { bundle_name, .. } => RuntimeError::validation(
-            "validation_unknown_bundle",
-            format!("bundle '{}' is not configured", bundle_name),
-        ),
-        ConfigurationError::AmbiguousSender { .. } => RuntimeError::validation(
-            "validation_unknown_sender",
-            "sender association is ambiguous".to_string(),
-        ),
-        ConfigurationError::InvalidConfiguration { path, message } => RuntimeError::validation(
-            "validation_invalid_arguments",
-            format!(
-                "invalid bundle configuration {}: {}",
-                path.display(),
-                message
-            ),
-        ),
-        ConfigurationError::InvalidGroupName { path, group_name } => RuntimeError::validation(
-            "validation_invalid_group_name",
-            format!(
-                "invalid group '{}' in bundle configuration {}",
-                group_name,
-                path.display()
-            ),
-        ),
-        ConfigurationError::ReservedGroupName { path, group_name } => RuntimeError::validation(
-            "validation_reserved_group_name",
-            format!(
-                "group '{}' is reserved in bundle configuration {}",
-                group_name,
-                path.display()
-            ),
-        ),
+        ConfigurationError::UnknownBundle { bundle_name, .. } => {
+            RuntimeError::validation(
+                "validation_unknown_bundle",
+                format!("bundle '{}' is not configured", bundle_name),
+            )
+        },
+        ConfigurationError::AmbiguousSender { .. } => {
+            RuntimeError::validation(
+                "validation_unknown_sender",
+                "sender association is ambiguous".to_string(),
+            )
+        },
+        ConfigurationError::InvalidConfiguration { path, message } => {
+            RuntimeError::validation(
+                "validation_invalid_arguments",
+                format!(
+                    "invalid bundle configuration {}: {}",
+                    path.display(),
+                    message
+                ),
+            )
+        },
+        ConfigurationError::InvalidGroupName { path, group_name } => {
+            RuntimeError::validation(
+                "validation_invalid_group_name",
+                format!(
+                    "invalid group '{}' in bundle configuration {}",
+                    group_name,
+                    path.display()
+                ),
+            )
+        },
+        ConfigurationError::ReservedGroupName { path, group_name } => {
+            RuntimeError::validation(
+                "validation_reserved_group_name",
+                format!(
+                    "group '{}' is reserved in bundle configuration {}",
+                    group_name,
+                    path.display()
+                ),
+            )
+        },
         ConfigurationError::UnreadableConfigurationLayer {
             ref path,
             source: ref cause,
@@ -219,16 +240,19 @@ pub(super) fn map_bundle_load_error(source: ConfigurationError) -> RuntimeError 
                 path.display()
             ),
         ),
-        ConfigurationError::Io { context, source } => RuntimeError::io(context, source),
+        ConfigurationError::Io { context, source } => {
+            RuntimeError::io(context, source)
+        },
         // Not a validation fault: the malformed text ships with this binary, so
         // nothing the operator supplied is at issue and no edit to their
         // configuration will change the outcome.
-        ref malformed @ ConfigurationError::MalformedEmbeddedArtifact { ref artifact, .. } => {
-            RuntimeError::io(
-                format!("read the {artifact} built into this binary"),
-                std::io::Error::other(malformed.to_string()),
-            )
-        }
+        ref malformed @ ConfigurationError::MalformedEmbeddedArtifact {
+            ref artifact,
+            ..
+        } => RuntimeError::io(
+            format!("read the {artifact} built into this binary"),
+            std::io::Error::other(malformed.to_string()),
+        ),
     }
 }
 
@@ -238,7 +262,9 @@ pub(super) fn map_relay_error(error: RelayError) -> RuntimeError {
     // failure reaching `agentmux up` names the file and field, not just a bare
     // summary. Other errors keep their plain message.
     let message = error.operator_message();
-    if error.code.starts_with("validation_") || error.code == "authorization_forbidden" {
+    if error.code.starts_with("validation_")
+        || error.code == "authorization_forbidden"
+    {
         return RuntimeError::validation(error.code, message);
     }
     // An internal relay code stays an IO status (not an actionable validation
@@ -278,7 +304,9 @@ pub(super) fn map_relay_request_failure(
     )
 }
 
-pub(super) fn remove_relay_socket_file(socket_path: &Path) -> Result<(), RuntimeError> {
+pub(super) fn remove_relay_socket_file(
+    socket_path: &Path,
+) -> Result<(), RuntimeError> {
     match fs::remove_file(socket_path) {
         Ok(()) => Ok(()),
         Err(source) if source.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -291,10 +319,12 @@ pub(super) fn remove_relay_socket_file(socket_path: &Path) -> Result<(), Runtime
 
 pub(super) fn runtime_error_reason(source: &RuntimeError) -> (String, String) {
     match source {
-        RuntimeError::Validation { code, message } => (code.clone(), message.clone()),
+        RuntimeError::Validation { code, message } => {
+            (code.clone(), message.clone())
+        },
         RuntimeError::InvalidArgument { message, .. } => {
             ("validation_invalid_arguments".to_string(), message.clone())
-        }
+        },
         _ => ("runtime_startup_failed".to_string(), source.to_string()),
     }
 }
@@ -314,7 +344,9 @@ fn is_relay_unavailable_error(source: &std::io::Error) -> bool {
     )
 }
 
-pub(super) fn validate_group_selector_name(group_name: &str) -> Result<(), RuntimeError> {
+pub(super) fn validate_group_selector_name(
+    group_name: &str,
+) -> Result<(), RuntimeError> {
     if group_name == RESERVED_GROUP_ALL {
         return Ok(());
     }
@@ -351,7 +383,9 @@ pub(super) fn resolve_group_bundles(
     }
     let selected = memberships
         .into_iter()
-        .filter(|membership| membership.groups.iter().any(|group| group == group_name))
+        .filter(|membership| {
+            membership.groups.iter().any(|group| group == group_name)
+        })
         .map(|membership| membership.bundle_name)
         .collect::<Vec<_>>();
     if selected.is_empty() {
@@ -365,7 +399,9 @@ pub(super) fn resolve_group_bundles(
 
 fn is_reserved_group_name(group_name: &str) -> bool {
     group_name.chars().all(|character| {
-        character.is_ascii_uppercase() || character.is_ascii_digit() || character == '_'
+        character.is_ascii_uppercase()
+            || character.is_ascii_digit()
+            || character == '_'
     })
 }
 

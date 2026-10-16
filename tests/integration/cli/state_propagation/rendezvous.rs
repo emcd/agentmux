@@ -21,7 +21,13 @@ pub(super) fn write_rendezvous_bundle(
     member_directory: &Path,
     declared: &str,
 ) {
-    write_bundle_configuration_with_options(config_root, "alpha", None, &["a"], Some(false));
+    write_bundle_configuration_with_options(
+        config_root,
+        "alpha",
+        None,
+        &["a"],
+        Some(false),
+    );
     // The descendant is a real `agentmux host mcp`, driven over stdio the way a
     // coder drives it, rather than a CLI client standing in for one. That is the
     // process the propagation contract names, and it resolves association as
@@ -69,12 +75,13 @@ resume-command = "sh -lc 'exec sleep 45'"
     // The member runs from a directory that is not the relay's, so a relative or
     // unnormalized state root would resolve somewhere else and fail rather than
     // pass by coincidence.
-    let bundle = fs::read_to_string(config_root.join("bundles").join("alpha.toml"))
-        .expect("read bundle configuration")
-        .replace(
-            "directory = \"/tmp\"",
-            &format!("directory = \"{}\"", member_directory.display()),
-        );
+    let bundle =
+        fs::read_to_string(config_root.join("bundles").join("alpha.toml"))
+            .expect("read bundle configuration")
+            .replace(
+                "directory = \"/tmp\"",
+                &format!("directory = \"{}\"", member_directory.display()),
+            );
     fs::write(config_root.join("bundles").join("alpha.toml"), bundle)
         .expect("write rendezvous bundle config");
     // The member declares its own state root, which the relay must overwrite. The
@@ -99,7 +106,9 @@ resume-command = "sh -lc 'exec sleep 45'"
 /// yet. That answer arrives either way — an unreachable relay yields a successful
 /// call reporting the bundle down — so this waits for the exchange to finish
 /// rather than for it to succeed.
-pub(super) fn await_rendezvous_report(report: &Path) -> (HashMap<u64, Value>, String) {
+pub(super) fn await_rendezvous_report(
+    report: &Path,
+) -> (HashMap<u64, Value>, String) {
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut last_seen = String::new();
     while Instant::now() < deadline {
@@ -143,8 +152,10 @@ fn a_partially_written_response_line_is_not_counted_as_complete() {
     // finished contributes no id, however much of it is present. Waiting on the
     // text `"id":2` instead would return on the partial line below.
     let complete = r#"{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05"}}"#;
-    let partial = r#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","tex"#;
-    let responses = decode_complete_responses(&format!("{complete}\n{partial}"));
+    let partial =
+        r#"{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","tex"#;
+    let responses =
+        decode_complete_responses(&format!("{complete}\n{partial}"));
 
     assert!(
         responses.contains_key(&1),
@@ -168,16 +179,24 @@ fn listed_bundle(response: &Value, bundle_name: &str) -> Value {
     let text = response
         .pointer("/result/content/0/text")
         .and_then(Value::as_str)
-        .unwrap_or_else(|| panic!("tool response carries no content text: {response}"));
+        .unwrap_or_else(|| {
+            panic!("tool response carries no content text: {response}")
+        });
     let payload = serde_json::from_str::<Value>(text)
         .unwrap_or_else(|error| panic!("decode tool payload {text}: {error}"));
     payload
         .get("bundles")
         .and_then(Value::as_array)
-        .unwrap_or_else(|| panic!("tool payload carries no bundles array: {payload}"))
+        .unwrap_or_else(|| {
+            panic!("tool payload carries no bundles array: {payload}")
+        })
         .iter()
-        .find(|bundle| bundle.get("id").and_then(Value::as_str) == Some(bundle_name))
-        .unwrap_or_else(|| panic!("tool payload lists no bundle {bundle_name}: {payload}"))
+        .find(|bundle| {
+            bundle.get("id").and_then(Value::as_str) == Some(bundle_name)
+        })
+        .unwrap_or_else(|| {
+            panic!("tool payload lists no bundle {bundle_name}: {payload}")
+        })
         .clone()
 }
 
@@ -208,8 +227,14 @@ fn assert_rendezvous_survives_declaration(declared: &str) {
     fs::create_dir_all(&state_root).expect("create state root");
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
     fs::create_dir_all(&member_directory).expect("create member directory");
-    fs::create_dir_all(&isolated_fallback).expect("create fallback state root");
-    write_rendezvous_bundle(&config_root, &report, &member_directory, declared);
+    fs::create_dir_all(&isolated_fallback)
+        .expect("create fallback state root");
+    write_rendezvous_bundle(
+        &config_root,
+        &report,
+        &member_directory,
+        declared,
+    );
 
     // Real tmux, not the fake: the stamp has to reach a live child, and the fake
     // records invocations without executing the member's command.
@@ -274,9 +299,9 @@ fn assert_rendezvous_survives_declaration(declared: &str) {
         .wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT)
         .ok();
 
-    let initialized = responses
-        .get(&1)
-        .unwrap_or_else(|| panic!("no initialize response; it reported:\n{reported}"));
+    let initialized = responses.get(&1).unwrap_or_else(|| {
+        panic!("no initialize response; it reported:\n{reported}")
+    });
     assert!(
         initialized
             .pointer("/result/protocolVersion")

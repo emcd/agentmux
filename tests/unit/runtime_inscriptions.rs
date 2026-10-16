@@ -5,7 +5,8 @@ use serde_json::{Value, json};
 
 #[test]
 fn resolves_relay_inscriptions_path_at_relay_level() {
-    let resolved = relay_inscriptions_path(std::path::Path::new("/inscriptions"));
+    let resolved =
+        relay_inscriptions_path(std::path::Path::new("/inscriptions"));
     assert_eq!(resolved, std::path::Path::new("/inscriptions/relay.log"));
 }
 
@@ -18,7 +19,9 @@ fn resolves_mcp_inscriptions_path_per_bundle_and_session() {
     );
     assert_eq!(
         resolved,
-        std::path::Path::new("/inscriptions/bundles/party-alpha/sessions/session-1/mcp.log")
+        std::path::Path::new(
+            "/inscriptions/bundles/party-alpha/sessions/session-1/mcp.log"
+        )
     );
 }
 
@@ -55,7 +58,8 @@ fn concurrent_appends_keep_every_record_a_valid_json_line() {
         handle.join().expect("emitter thread joins");
     }
 
-    let contents = std::fs::read_to_string(&path).expect("read inscription log");
+    let contents =
+        std::fs::read_to_string(&path).expect("read inscription log");
     let lines: Vec<&str> = contents.lines().collect();
     assert_eq!(
         lines.len(),
@@ -63,8 +67,8 @@ fn concurrent_appends_keep_every_record_a_valid_json_line() {
         "every record must occupy its own intact line"
     );
     for line in &lines {
-        let parsed: Value =
-            serde_json::from_str(line).unwrap_or_else(|_| panic!("line is not valid JSON: {line}"));
+        let parsed: Value = serde_json::from_str(line)
+            .unwrap_or_else(|_| panic!("line is not valid JSON: {line}"));
         assert_eq!(
             parsed.get("event").and_then(Value::as_str),
             Some("relay.test.concurrent"),
@@ -82,6 +86,8 @@ fn inscriptions_paths_sanitize_unsafe_path_segments() {
     );
     assert_eq!(
         mcp,
-        std::path::Path::new("/inscriptions/bundles/party/sessions/session_with_slashes/mcp.log")
+        std::path::Path::new(
+            "/inscriptions/bundles/party/sessions/session_with_slashes/mcp.log"
+        )
     );
 }

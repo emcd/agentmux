@@ -3,7 +3,9 @@
 
 use std::io::BufReader;
 
-use agentmux::runtime::paths::{BundleRuntimePaths, session_identity_psk_path};
+use agentmux::runtime::paths::{
+    BundleRuntimePaths, session_identity_psk_path,
+};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -15,9 +17,11 @@ use super::*;
 fn change_psk_rotates_credential() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_change_psk";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let original_psk = register_peer(
@@ -89,7 +93,8 @@ fn change_psk_config_writes_under_the_state_root_not_a_configuration_layer() {
     ])
     .expect("two-layer configuration list");
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let original_psk = register_peer(
@@ -121,13 +126,15 @@ fn change_psk_config_writes_under_the_state_root_not_a_configuration_layer() {
     // landed under the state root. An implementation that resolved the
     // destination through a configuration layer would fail here, not merely on
     // the inventory comparison below.
-    let canonical = session_identity_psk_path(&state_root, bundle_name, "alpha");
+    let canonical =
+        session_identity_psk_path(&state_root, bundle_name, "alpha");
     assert_eq!(
         rotation["response"]["written_path"],
         canonical.to_string_lossy().as_ref(),
         "a layered configuration list must not move the credential destination"
     );
-    let rotated_psk = std::fs::read_to_string(&canonical).expect("read rotated credential");
+    let rotated_psk =
+        std::fs::read_to_string(&canonical).expect("read rotated credential");
     assert_ne!(rotated_psk, original_psk, "rotation must mint a new psk");
 
     assert_eq!(
@@ -176,9 +183,11 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
 
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_change_config";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let original_psk = register_peer(
@@ -204,7 +213,8 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
         "change psk config rejected: {rotation:?}"
     );
 
-    let canonical = session_identity_psk_path(&state_root, bundle_name, "alpha");
+    let canonical =
+        session_identity_psk_path(&state_root, bundle_name, "alpha");
     assert_eq!(
         rotation["response"]["written_path"],
         canonical.to_string_lossy().as_ref(),
@@ -221,7 +231,8 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
         .mode()
         & 0o777;
     assert_eq!(mode, 0o600, "config credential must be owner-only (0600)");
-    let rotated_psk = std::fs::read_to_string(&canonical).expect("read rotated config credential");
+    let rotated_psk = std::fs::read_to_string(&canonical)
+        .expect("read rotated config credential");
     assert!(
         !rotated_psk.is_empty(),
         "rotated credential must be non-empty"
@@ -248,7 +259,8 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
         false,
     );
     assert_eq!(
-        rejected["response"]["error"]["code"], "validation_unrecognized_credential",
+        rejected["response"]["error"]["code"],
+        "validation_unrecognized_credential",
         "old credential must be rejected after rotation: {rejected:?}"
     );
 }
@@ -258,12 +270,15 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
 // attempt neither rotates the stored hash nor revokes: the original credential
 // still authenticates afterward.
 #[test]
-fn change_psk_config_rejected_for_relay_principal_leaves_credential_unrotated() {
+fn change_psk_config_rejected_for_relay_principal_leaves_credential_unrotated()
+{
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_change_config_relay";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = "peer1@RELAY";
 
     let original_psk = register_peer(
@@ -317,9 +332,11 @@ fn change_psk_config_rejected_for_relay_principal_leaves_credential_unrotated() 
 fn change_psk_output_finalization_failure_leaves_credential_unrotated() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_change_finalization";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let original_psk = register_peer(
@@ -331,7 +348,8 @@ fn change_psk_output_finalization_failure_leaves_credential_unrotated() {
     );
 
     let output_path = temporary.path().join("occupied.psk");
-    std::fs::create_dir_all(&output_path).expect("create directory at output path");
+    std::fs::create_dir_all(&output_path)
+        .expect("create directory at output path");
     let response = operator_request(
         &configuration_roots,
         &bundle_paths,
@@ -370,9 +388,11 @@ fn change_psk_output_finalization_failure_leaves_credential_unrotated() {
 fn change_psk_revokes_live_session_holding_old_credential() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_revoke_live";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
@@ -386,7 +406,8 @@ fn change_psk_revokes_live_session_holding_old_credential() {
     // Bring up a live, store-backed session and keep its connection open.
     let (mut alpha_client, alpha_join) =
         spawn_relay_connection(&configuration_roots, &bundle_paths);
-    let mut alpha_reader = BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
+    let mut alpha_reader =
+        BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
     send_json(
         &mut alpha_client,
         json!({
@@ -458,9 +479,11 @@ fn change_psk_revokes_live_session_holding_old_credential() {
 fn change_psk_on_the_requesters_own_identity_returns_the_rotated_credential() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_self_rotate";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let operator = global_user_id(bundle_name);
 
     let operator_psk = register_peer(
@@ -471,7 +494,8 @@ fn change_psk_on_the_requesters_own_identity_returns_the_rotated_credential() {
         None,
     );
 
-    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -525,9 +549,11 @@ fn change_psk_on_the_requesters_own_identity_returns_the_rotated_credential() {
 fn self_rotation_still_fans_out_identity_revoked_to_trusted_hosts() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_self_rotate_fanout";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let operator = global_user_id(bundle_name);
     let app_principal_id = format!("engine_{bundle_name}@EXTERNAL");
 
@@ -548,8 +574,10 @@ fn self_rotation_still_fans_out_identity_revoked_to_trusted_hosts() {
         Some("GLOBAL"),
     );
 
-    let (mut app_client, app_join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
-    let mut app_reader = BufReader::new(app_client.try_clone().expect("clone app stream"));
+    let (mut app_client, app_join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let mut app_reader =
+        BufReader::new(app_client.try_clone().expect("clone app stream"));
     send_json(
         &mut app_client,
         json!({
@@ -565,7 +593,8 @@ fn self_rotation_still_fans_out_identity_revoked_to_trusted_hosts() {
         "app hello not acked"
     );
 
-    let (mut client, join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let (mut client, join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -617,9 +646,11 @@ fn self_rotation_still_fans_out_identity_revoked_to_trusted_hosts() {
 fn change_psk_fans_out_identity_revoked_to_trusted_hosts() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_revoked_fanout";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let target_principal_id = format!("alpha@{bundle_name}");
     let app_principal_id = format!("engine_{bundle_name}@EXTERNAL");
 
@@ -642,8 +673,10 @@ fn change_psk_fans_out_identity_revoked_to_trusted_hosts() {
 
     // Connect the trusted host and keep its connection open; it receives the
     // connect-time identity.snapshot first, which the revoked-event read skips.
-    let (mut app_client, app_join) = spawn_relay_connection(&configuration_roots, &bundle_paths);
-    let mut app_reader = BufReader::new(app_client.try_clone().expect("clone app stream"));
+    let (mut app_client, app_join) =
+        spawn_relay_connection(&configuration_roots, &bundle_paths);
+    let mut app_reader =
+        BufReader::new(app_client.try_clone().expect("clone app stream"));
     send_json(
         &mut app_client,
         json!({

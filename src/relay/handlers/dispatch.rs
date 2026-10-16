@@ -11,9 +11,10 @@ use super::super::authorization::{AuthorizationContext, authorize_updown};
 use super::super::identity::IdentityIntrospectRights;
 use super::super::stream::{RelayStreamEvent, list_namespace_sessions};
 use super::super::{
-    BundleCatalog, ChoiceDecisionRequestContext, GLOBAL_NAMESPACE, ListedBundle, ListedBundleState,
-    ListedSession, RelayError, RelayRequest, RelayResponse, RequestPrincipal, SCHEMA_VERSION,
-    bare_session_id, relay_error,
+    BundleCatalog, ChoiceDecisionRequestContext, GLOBAL_NAMESPACE,
+    ListedBundle, ListedBundleState, ListedSession, RelayError, RelayRequest,
+    RelayResponse, RequestPrincipal, SCHEMA_VERSION, bare_session_id,
+    relay_error,
 };
 use super::{choices, identity, install, listing};
 
@@ -29,34 +30,49 @@ pub(in crate::relay) fn handle_request(
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
 ) -> Result<RelayResponse, RelayError> {
-    let request = normalize_request_identities(request, bundle.bundle_name.as_str());
+    let request =
+        normalize_request_identities(request, bundle.bundle_name.as_str());
     match request {
         RelayRequest::Up => {
-            authorize_bundle_principal(bundle, authorization, principal.as_ref())?;
+            authorize_bundle_principal(
+                bundle,
+                authorization,
+                principal.as_ref(),
+            )?;
             listing::handle_bundle_up(bundle, authorization, bundle_catalog)
-        }
+        },
         RelayRequest::Down => {
-            authorize_bundle_principal(bundle, authorization, principal.as_ref())?;
-            listing::handle_bundle_down(bundle, runtime_directory, bundle_catalog)
-        }
-        RelayRequest::List { requester_session } => listing::handle_list_routed(
-            bundle,
-            authorization,
-            bundle,
-            runtime_directory,
-            requester_session,
-        ),
+            authorize_bundle_principal(
+                bundle,
+                authorization,
+                principal.as_ref(),
+            )?;
+            listing::handle_bundle_down(
+                bundle,
+                runtime_directory,
+                bundle_catalog,
+            )
+        },
+        RelayRequest::List { requester_session } => {
+            listing::handle_list_routed(
+                bundle,
+                authorization,
+                bundle,
+                runtime_directory,
+                requester_session,
+            )
+        },
         // Send, Look, and Raww are dispatched through the namespace-centric paths
         // (`handle_send_routed` / `handle_look_routed` / `handle_raww_routed`),
         // which resolve the requester in its home namespace rather than a borrowed
         // dispatch bundle. They never reach the per-bundle dispatcher.
-        RelayRequest::Send { .. } | RelayRequest::Look { .. } | RelayRequest::Raww { .. } => {
-            Err(relay_error(
-                "internal_unexpected_request",
-                "target operation reached the per-bundle dispatcher instead of its namespace-centric path",
-                None,
-            ))
-        }
+        RelayRequest::Send { .. }
+        | RelayRequest::Look { .. }
+        | RelayRequest::Raww { .. } => Err(relay_error(
+            "internal_unexpected_request",
+            "target operation reached the per-bundle dispatcher instead of its namespace-centric path",
+            None,
+        )),
         RelayRequest::ChoicesPick {
             choice_request_id,
             outcome,
@@ -72,9 +88,12 @@ pub(in crate::relay) fn handle_request(
             runtime_directory,
             principal,
         ),
-        RelayRequest::ChoicesList => {
-            choices::handle_choices_list(bundle, authorization, runtime_directory, principal)
-        }
+        RelayRequest::ChoicesList => choices::handle_choices_list(
+            bundle,
+            authorization,
+            runtime_directory,
+            principal,
+        ),
         RelayRequest::NewPeer { .. }
         | RelayRequest::ChangePsk { .. }
         | RelayRequest::ChangeScope { .. }
@@ -197,7 +216,7 @@ pub(in crate::relay) fn handle_identity_admin_request(
                 alias,
                 psk,
             )
-        }
+        },
         _ => Err(relay_error(
             "internal_unexpected_request",
             "non-admin request routed to identity admin dispatcher",
@@ -227,7 +246,11 @@ pub(in crate::relay) fn build_identity_snapshot_event(
     host_principal_id: &str,
     rights: &IdentityIntrospectRights,
 ) -> Result<RelayStreamEvent, RelayError> {
-    identity::build_identity_snapshot_event(state_root, host_principal_id, rights)
+    identity::build_identity_snapshot_event(
+        state_root,
+        host_principal_id,
+        rights,
+    )
 }
 
 pub(in crate::relay) fn emit_choices_snapshot_for_ui_registration(
@@ -246,7 +269,10 @@ pub(in crate::relay) fn emit_choices_snapshot_for_ui_registration(
 
 /// Rewrites canonical `session@bundle` identities in an incoming request to
 /// their bundle-local form so internal lookups match configured member ids.
-fn normalize_request_identities(request: RelayRequest, namespace: &str) -> RelayRequest {
+fn normalize_request_identities(
+    request: RelayRequest,
+    namespace: &str,
+) -> RelayRequest {
     let bare = |id: String| bare_session_id(id.as_str(), namespace);
     match request {
         RelayRequest::List { requester_session } => RelayRequest::List {

@@ -46,7 +46,8 @@ use super::async_worker::report_resolved_member;
 /// which layer observed it, and a sender correlating receipts across the cutover
 /// should see no difference.
 const UNREACHABLE_REASON_CODE: &str = "delivery_target_unreachable";
-const UNREACHABLE_REASON: &str = "target could not be reached for longer than the configured dwell";
+const UNREACHABLE_REASON: &str =
+    "target could not be reached for longer than the configured dwell";
 
 /// One target's mailbox, bound to the generation entitled to consume it.
 pub(in crate::relay) struct LedgerMailboxConsumer {
@@ -62,7 +63,9 @@ impl LedgerMailboxConsumer {
     /// held it. Named for what it does rather than spelled `new`, since what
     /// comes back is the trait object the transport side holds and never this
     /// type.
-    pub(in crate::relay) fn bind(binding: ConsumerBinding) -> Arc<dyn MailboxConsumer> {
+    pub(in crate::relay) fn bind(
+        binding: ConsumerBinding,
+    ) -> Arc<dyn MailboxConsumer> {
         Arc::new(Self { binding })
     }
 
@@ -72,7 +75,11 @@ impl LedgerMailboxConsumer {
     /// won its terminal transition inside that lock, so this is the one report
     /// it will ever get — a caller that skipped it would leave a sender waiting
     /// on a receipt for a message that had already resolved.
-    fn report(resolved: &[ResolvedMember], reason_code: Option<&str>, reason: Option<&str>) {
+    fn report(
+        resolved: &[ResolvedMember],
+        reason_code: Option<&str>,
+        reason: Option<&str>,
+    ) {
         for member in resolved {
             report_resolved_member(member, reason_code, reason);
         }
@@ -92,7 +99,11 @@ impl MailboxConsumer for LedgerMailboxConsumer {
         super::admission::declare(&self.binding, range)
     }
 
-    fn ack(&self, unit: PackingUnitId, members: &[MemberAcknowledgment]) -> AckResult {
+    fn ack(
+        &self,
+        unit: PackingUnitId,
+        members: &[MemberAcknowledgment],
+    ) -> AckResult {
         let Acknowledgment { result, resolved } =
             super::admission::ack(&self.binding, unit, members);
         // No cause: the executor reported what its write observed for each

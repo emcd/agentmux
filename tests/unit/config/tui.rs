@@ -95,8 +95,8 @@ fn ignores_missing_tui_configuration() {
     let temporary = TempDir::new().expect("temporary");
     let root = temporary.path().join("config");
     fs::create_dir_all(&root).expect("create config root");
-    let loaded =
-        load_tui_configuration(&ConfigurationRoots::single(&root)).expect("load tui config");
+    let loaded = load_tui_configuration(&ConfigurationRoots::single(&root))
+        .expect("load tui config");
     assert!(loaded.is_none(), "missing file should be ignored");
 }
 
@@ -157,7 +157,8 @@ send = "none"
     )
     .expect("write policies.toml");
 
-    let loaded = load_policy_ids(&ConfigurationRoots::single(&root)).expect("load policy ids");
+    let loaded = load_policy_ids(&ConfigurationRoots::single(&root))
+        .expect("load policy ids");
     assert!(loaded.contains("default"));
     assert!(loaded.contains("restricted"));
 }

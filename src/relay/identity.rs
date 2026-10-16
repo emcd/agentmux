@@ -20,13 +20,16 @@ use crate::runtime::paths::{
 
 use super::{
     CredentialDestination, GLOBAL_SESSION_SUFFIX, RelayError,
-    confined::{CONFINED_FILE_MODE, ConfineError, ConfinedWrite, confined_read, confined_stage},
+    confined::{
+        CONFINED_FILE_MODE, ConfineError, ConfinedWrite, confined_read,
+        confined_stage,
+    },
     relay_error,
 };
 
 pub(crate) use super::peer_scope::{
-    is_wildcard_scope, live_peer_ingress, parse_peer_scope, peer_scope_covers_namespace,
-    peer_scope_covers_target,
+    is_wildcard_scope, live_peer_ingress, parse_peer_scope,
+    peer_scope_covers_namespace, peer_scope_covers_target,
 };
 
 const PSK_BYTE_LENGTH: usize = 32;
@@ -44,7 +47,10 @@ const CONFIG_SESSION_ID_LENGTH_MAX: usize = 31;
 /// principal arrives at ingress already suffixed `@RELAY` and is then qualified
 /// against the relay namespace, which without this yields `<id>@RELAY@RELAY`.
 /// Bundle-local identities carry no suffix and are qualified.
-pub(super) fn canonical_session_id(session_id: &str, namespace: &str) -> String {
+pub(super) fn canonical_session_id(
+    session_id: &str,
+    namespace: &str,
+) -> String {
     let already_qualified = session_id.ends_with(GLOBAL_SESSION_SUFFIX)
         || session_id
             .strip_suffix(namespace)
@@ -170,17 +176,17 @@ impl PrincipalStore {
                     state_root: state_root.to_path_buf(),
                     records_by_hash: HashMap::new(),
                 });
-            }
+            },
             Err(ConfineError::Symlink { component }) => {
                 return Err(invalid_credential_path(
                     component.as_str(),
                     "principal store ancestor is a symlink",
                 ));
-            }
+            },
             Err(other) => {
-                let source = other
-                    .io_source()
-                    .unwrap_or_else(|| io::Error::other("confined store read failed"));
+                let source = other.io_source().unwrap_or_else(|| {
+                    io::Error::other("confined store read failed")
+                });
                 return Err(relay_error(
                     "internal_principal_store",
                     "failed to read principal store",
@@ -189,18 +195,19 @@ impl PrincipalStore {
                         "cause": source.to_string(),
                     })),
                 ));
-            }
+            },
         };
-        let envelope: StoreEnvelope = serde_json::from_str(&raw).map_err(|source| {
-            relay_error(
-                "internal_principal_store",
-                "failed to parse principal store",
-                Some(json!({
-                    "path": path.display().to_string(),
-                    "cause": source.to_string(),
-                })),
-            )
-        })?;
+        let envelope: StoreEnvelope =
+            serde_json::from_str(&raw).map_err(|source| {
+                relay_error(
+                    "internal_principal_store",
+                    "failed to parse principal store",
+                    Some(json!({
+                        "path": path.display().to_string(),
+                        "cause": source.to_string(),
+                    })),
+                )
+            })?;
         if envelope.format_version != PRINCIPAL_STORE_FORMAT_VERSION {
             return Err(relay_error(
                 "internal_principal_store",
@@ -212,7 +219,8 @@ impl PrincipalStore {
                 })),
             ));
         }
-        let mut records_by_hash = HashMap::with_capacity(envelope.principals.len());
+        let mut records_by_hash =
+            HashMap::with_capacity(envelope.principals.len());
         for record in envelope.principals {
             if record.principal_type == PrincipalType::Relay
                 && parse_peer_scope(record.scope.as_deref()).is_err()
@@ -237,10 +245,15 @@ impl PrincipalStore {
 
     /// Looks up a principal by SHA-256 hex `credential_hash` using a
     /// constant-time per-key comparison to avoid token-equality timing leaks.
-    pub(crate) fn find_by_credential_hash(&self, hash_hex: &str) -> Option<&PrincipalRecord> {
+    pub(crate) fn find_by_credential_hash(
+        &self,
+        hash_hex: &str,
+    ) -> Option<&PrincipalRecord> {
         let probe = hash_hex.as_bytes();
         for (stored_hash, record) in &self.records_by_hash {
-            if stored_hash.len() == probe.len() && bool::from(stored_hash.as_bytes().ct_eq(probe)) {
+            if stored_hash.len() == probe.len()
+                && bool::from(stored_hash.as_bytes().ct_eq(probe))
+            {
                 return Some(record);
             }
         }
@@ -255,7 +268,10 @@ impl PrincipalStore {
     }
 
     /// Looks up a principal by its registered `principal_id`.
-    pub(crate) fn find_by_principal_id(&self, principal_id: &str) -> Option<&PrincipalRecord> {
+    pub(crate) fn find_by_principal_id(
+        &self,
+        principal_id: &str,
+    ) -> Option<&PrincipalRecord> {
         self.records_by_hash
             .values()
             .find(|record| record.principal_id == principal_id)
@@ -265,7 +281,10 @@ impl PrincipalStore {
     ///
     /// Returns any prior record displaced by the insert; rotation uses this
     /// to surface the old hash for revocation dispatch (Slice 2).
-    pub(crate) fn insert(&mut self, record: PrincipalRecord) -> Option<PrincipalRecord> {
+    pub(crate) fn insert(
+        &mut self,
+        record: PrincipalRecord,
+    ) -> Option<PrincipalRecord> {
         self.records_by_hash
             .insert(record.credential_hash.clone(), record)
     }
@@ -281,7 +300,10 @@ impl PrincipalStore {
     }
 
     /// Removes a principal by `principal_id` regardless of credential hash.
-    pub(crate) fn remove_by_principal_id(&mut self, principal_id: &str) -> Option<PrincipalRecord> {
+    pub(crate) fn remove_by_principal_id(
+        &mut self,
+        principal_id: &str,
+    ) -> Option<PrincipalRecord> {
         let key = self
             .records_by_hash
             .iter()
@@ -305,35 +327,43 @@ impl PrincipalStore {
             format_version: PRINCIPAL_STORE_FORMAT_VERSION,
             principals: self.records_by_hash.values().cloned().collect(),
         };
-        let serialized = serde_json::to_vec_pretty(&envelope).map_err(|source| {
-            relay_error(
-                "internal_principal_store",
-                "failed to serialize principal store",
-                Some(json!({
-                    "path": self.path.display().to_string(),
-                    "cause": source.to_string(),
-                })),
-            )
-        })?;
+        let serialized =
+            serde_json::to_vec_pretty(&envelope).map_err(|source| {
+                relay_error(
+                    "internal_principal_store",
+                    "failed to serialize principal store",
+                    Some(json!({
+                        "path": self.path.display().to_string(),
+                        "cause": source.to_string(),
+                    })),
+                )
+            })?;
         // Stage into a per-attempt-unique sibling and enforce mode BEFORE the
         // rename. A failure before publication leaves the old store intact.
         let relative = state_relative_path(&self.state_root, &self.path);
-        let staged = confined_stage(&self.state_root, relative, serialized.as_slice(), "store")
-            .map_err(|error| match error {
-                ConfineError::Symlink { component } => invalid_credential_path(
-                    component.as_str(),
-                    "principal store ancestor is a symlink",
-                ),
-                ConfineError::Exchanged { component } => invalid_credential_path(
-                    component.as_str(),
-                    "principal store ancestor changed during commit",
-                ),
-                ConfineError::DirSync { .. } => self.io_error(
-                    "stage store",
-                    io::Error::other("unexpected directory sync during staging"),
-                ),
-                ConfineError::Io { source } => self.io_error("stage store", source),
-            })?;
+        let staged = confined_stage(
+            &self.state_root,
+            relative,
+            serialized.as_slice(),
+            "store",
+        )
+        .map_err(|error| match error {
+            ConfineError::Symlink { component } => invalid_credential_path(
+                component.as_str(),
+                "principal store ancestor is a symlink",
+            ),
+            ConfineError::Exchanged { component } => invalid_credential_path(
+                component.as_str(),
+                "principal store ancestor changed during commit",
+            ),
+            ConfineError::DirSync { .. } => self.io_error(
+                "stage store",
+                io::Error::other("unexpected directory sync during staging"),
+            ),
+            ConfineError::Io { source } => {
+                self.io_error("stage store", source)
+            },
+        })?;
         // Commit point: the rename publishes the replacement.
         staged.commit().map(|_| ()).map_err(|error| match error {
             ConfineError::Symlink { component } => invalid_credential_path(
@@ -434,7 +464,7 @@ impl PendingCredentialWrite {
                     )
                 })?;
                 Ok(final_path.display().to_string())
-            }
+            },
             Self::Confined(staged) => {
                 let display = staged.display_path().to_string();
                 staged.commit().map_err(|error| match error {
@@ -463,7 +493,7 @@ impl PendingCredentialWrite {
                         })),
                     ),
                 })
-            }
+            },
         }
     }
 
@@ -472,7 +502,7 @@ impl PendingCredentialWrite {
         match self {
             Self::Direct { tmp_path, .. } => {
                 let _ = fs::remove_file(&tmp_path);
-            }
+            },
             Self::Confined(staged) => staged.abort(),
         }
     }
@@ -495,14 +525,18 @@ pub(crate) fn stage_credential_sink(
                 path,
                 create_parents: false,
             })
-        }
+        },
         CredentialDestination::Config => {
-            let path = resolve_config_credential_path(principal_type, principal_id, state_root)?;
+            let path = resolve_config_credential_path(
+                principal_type,
+                principal_id,
+                state_root,
+            )?;
             Ok(StagedCredentialSink::File {
                 path,
                 create_parents: true,
             })
-        }
+        },
     }
 }
 
@@ -526,16 +560,20 @@ pub(crate) fn write_pending_credential(
     if *create_parents {
         let relative = state_relative_path(state_root, path);
         let staged =
-            confined_stage(state_root, relative, psk.as_bytes(), "cred").map_err(|error| {
-                match error {
-                    ConfineError::Symlink { component } => invalid_credential_path(
-                        component.as_str(),
-                        "credential ancestor is a symlink",
-                    ),
-                    ConfineError::Exchanged { component } => invalid_credential_path(
-                        component.as_str(),
-                        "credential ancestor changed during commit",
-                    ),
+            confined_stage(state_root, relative, psk.as_bytes(), "cred")
+                .map_err(|error| match error {
+                    ConfineError::Symlink { component } => {
+                        invalid_credential_path(
+                            component.as_str(),
+                            "credential ancestor is a symlink",
+                        )
+                    },
+                    ConfineError::Exchanged { component } => {
+                        invalid_credential_path(
+                            component.as_str(),
+                            "credential ancestor changed during commit",
+                        )
+                    },
                     ConfineError::DirSync { .. } => relay_error(
                         "internal_credential_write",
                         "unexpected directory sync during staging",
@@ -551,8 +589,7 @@ pub(crate) fn write_pending_credential(
                             "cause": source.to_string(),
                         })),
                     ),
-                }
-            })?;
+                })?;
         return Ok(Some(PendingCredentialWrite::Confined(staged)));
     }
     // `create_new` (O_EXCL) guarantees we materialize a fresh 0600 file rather
@@ -577,9 +614,10 @@ pub(crate) fn write_pending_credential(
     })?;
     // Enforce exactly 0600 before the secret is written, then publish via the
     // rename commit point, so no fallible permission step follows publication.
-    if let Err(source) =
-        fs::set_permissions(&tmp_path, fs::Permissions::from_mode(CONFINED_FILE_MODE))
-    {
+    if let Err(source) = fs::set_permissions(
+        &tmp_path,
+        fs::Permissions::from_mode(CONFINED_FILE_MODE),
+    ) {
         let _ = fs::remove_file(&tmp_path);
         return Err(relay_error(
             "internal_credential_write",
@@ -591,8 +629,8 @@ pub(crate) fn write_pending_credential(
         ));
     }
     let mut file = file;
-    let write_result =
-        io::Write::write_all(&mut file, psk.as_bytes()).and_then(|()| file.sync_all());
+    let write_result = io::Write::write_all(&mut file, psk.as_bytes())
+        .and_then(|()| file.sync_all());
     if let Err(source) = write_result {
         let _ = fs::remove_file(&tmp_path);
         return Err(relay_error(
@@ -674,7 +712,8 @@ fn resolve_config_credential_path(
             })),
         ));
     }
-    let Some((session_id, bundle_name)) = split_principal_id(principal_id) else {
+    let Some((session_id, bundle_name)) = split_principal_id(principal_id)
+    else {
         return Err(relay_error(
             "validation_invalid_principal_id",
             "principal_id is not in <id>@<namespace> form",
@@ -686,7 +725,9 @@ fn resolve_config_credential_path(
     // The session-id grammar (leading ASCII alpha, then alphanumeric/`-`/`_`)
     // and the namespace grammar both exclude `/`, `.`, and `..`, so this also
     // subsumes traversal rejection.
-    if !is_valid_session_component(session_id) || !is_valid_namespace_component(bundle_name) {
+    if !is_valid_session_component(session_id)
+        || !is_valid_namespace_component(bundle_name)
+    {
         return Err(relay_error(
             "validation_invalid_principal_id",
             "principal id components are not a valid session identity for a config destination",
@@ -711,8 +752,9 @@ fn is_valid_session_component(session_id: &str) -> bool {
         return false;
     };
     first.is_ascii_alphabetic()
-        && characters
-            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+        && characters.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+        })
         && session_id.len() <= CONFIG_SESSION_ID_LENGTH_MAX
 }
 
@@ -735,7 +777,10 @@ fn invalid_output_path(path: &Path, message: &str) -> RelayError {
 
 /// Builds a `validation_invalid_credential_path` rejection naming the
 /// symlinked ancestor component that aborted a state-root-owned write.
-pub(crate) fn invalid_credential_path(component: &str, message: &str) -> RelayError {
+pub(crate) fn invalid_credential_path(
+    component: &str,
+    message: &str,
+) -> RelayError {
     relay_error(
         "validation_invalid_credential_path",
         message,
@@ -746,7 +791,10 @@ pub(crate) fn invalid_credential_path(component: &str, message: &str) -> RelayEr
 /// Returns the state-root-relative form of a relay-owned path. Relay-owned
 /// paths are constructed below the state root, so stripping always succeeds;
 /// the panic documents that invariant rather than failing open.
-pub(crate) fn state_relative_path<'a>(state_root: &Path, path: &'a Path) -> &'a Path {
+pub(crate) fn state_relative_path<'a>(
+    state_root: &Path,
+    path: &'a Path,
+) -> &'a Path {
     path.strip_prefix(state_root)
         .expect("relay-owned store path below the state root")
 }
@@ -796,7 +844,10 @@ pub(crate) fn split_principal_id(principal_id: &str) -> Option<(&str, &str)> {
 /// `session_id@bundle_name` identity (exact match) or a bare `bundle_name`
 /// (matches every session in that bundle namespace). A `None` scope is
 /// fail-closed: no target is in scope.
-pub(crate) fn scope_permits(scope: Option<&str>, target_principal_id: &str) -> bool {
+pub(crate) fn scope_permits(
+    scope: Option<&str>,
+    target_principal_id: &str,
+) -> bool {
     let Some(scope) = scope else {
         return false;
     };
@@ -813,7 +864,9 @@ pub(crate) fn scope_permits(scope: Option<&str>, target_principal_id: &str) -> b
 ///
 /// `@GLOBAL` → user, `@EXTERNAL` → application, `@RELAY` → peer relay; any
 /// other non-empty namespace is treated as a bundle-scoped session principal.
-pub(crate) fn classify_principal_id(principal_id: &str) -> Option<PrincipalType> {
+pub(crate) fn classify_principal_id(
+    principal_id: &str,
+) -> Option<PrincipalType> {
     let (_, namespace) = split_principal_id(principal_id)?;
     Some(match namespace {
         "GLOBAL" => PrincipalType::User,
@@ -893,7 +946,11 @@ pub(crate) fn verify_hello_credential(
         ));
     };
     if identity_token == SOCKET_TRUST_TOKEN {
-        return verify_socket_trust(principal_id, claimed_type, require_session_credentials);
+        return verify_socket_trust(
+            principal_id,
+            claimed_type,
+            require_session_credentials,
+        );
     }
     let hash = hash_token_sha256(identity_token);
     let Some(record) = store.find_by_credential_hash(&hash) else {
@@ -923,8 +980,9 @@ pub(crate) fn verify_hello_credential(
             })),
         ));
     }
-    let introspect_rights =
-        (record.principal_type == PrincipalType::Application).then(|| IdentityIntrospectRights {
+    let introspect_rights = (record.principal_type
+        == PrincipalType::Application)
+        .then(|| IdentityIntrospectRights {
             scope: record.scope.clone(),
         });
     Ok(VerifiedIdentity {
@@ -963,6 +1021,6 @@ fn verify_socket_trust(
                 credential_hash: None,
                 introspect_rights: None,
             })
-        }
+        },
     }
 }

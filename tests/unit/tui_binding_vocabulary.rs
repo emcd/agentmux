@@ -9,8 +9,8 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use agentmux::tui::{
-    Action, BindingContext, ChordError, PrimaryModifier, default_binding, default_help_bindings,
-    parse_chord, primary_modifier,
+    Action, BindingContext, ChordError, PrimaryModifier, default_binding,
+    default_help_bindings, parse_chord, primary_modifier,
 };
 
 /// What a typing row renders as. It denotes typing rather than a keystroke, and
@@ -21,9 +21,9 @@ const TYPING_PLACEHOLDER: &str = "Type";
 /// trailing, or doubled separator.
 fn is_kebab_case(name: &str) -> bool {
     !name.is_empty()
-        && name
-            .split('-')
-            .all(|word| !word.is_empty() && word.chars().all(|c| c.is_ascii_lowercase()))
+        && name.split('-').all(|word| {
+            !word.is_empty() && word.chars().all(|c| c.is_ascii_lowercase())
+        })
 }
 
 #[test]
@@ -116,7 +116,9 @@ fn every_chord_help_presents_parses_back_to_itself() {
     for section in &sections {
         for entry in &section.entries {
             chords.extend(entry.chords.split(" / ").map(str::to_string));
-            chords.extend(entry.sources.iter().map(|source| source.chord.clone()));
+            chords.extend(
+                entry.sources.iter().map(|source| source.chord.clone()),
+            );
         }
     }
     chords.retain(|chord| chord != TYPING_PLACEHOLDER);
@@ -162,7 +164,8 @@ fn the_grammar_reads_modifiers_and_keys_an_operator_writes() {
         ("Space", KeyCode::Char(' '), KeyModifiers::NONE),
         ("Ctrl+C", KeyCode::Char('c'), KeyModifiers::CONTROL),
     ] {
-        let parsed = parse_chord(text).unwrap_or_else(|error| panic!("{text:?}: {error}"));
+        let parsed = parse_chord(text)
+            .unwrap_or_else(|error| panic!("{text:?}: {error}"));
         assert!(!parsed.uses_primary_modifier(), "{text:?} is not symbolic");
         assert_eq!(parsed.resolve(literal), (code, modifiers), "{text:?}");
     }
@@ -233,7 +236,8 @@ fn the_grammar_refuses_what_it_does_not_express() {
 #[test]
 fn the_back_tab_spelling_reads_as_the_key_a_terminal_reports() {
     for spelling in ["Shift+Tab", "shift+tab"] {
-        let parsed = parse_chord(spelling).expect("the back-tab spelling parses");
+        let parsed =
+            parse_chord(spelling).expect("the back-tab spelling parses");
         assert_eq!(
             parsed.resolve(KeyModifiers::NONE),
             (KeyCode::BackTab, KeyModifiers::NONE),
@@ -362,8 +366,13 @@ fn every_accepted_modifier_survives_a_round_trip() {
         "Ctrl+Alt+Shift+Enter",
         "primary+Cmd+Enter",
     ] {
-        let parsed = parse_chord(text).unwrap_or_else(|error| panic!("{text:?}: {error}"));
-        assert_eq!(parsed.render(), text, "{text:?} did not survive rendering");
+        let parsed = parse_chord(text)
+            .unwrap_or_else(|error| panic!("{text:?}: {error}"));
+        assert_eq!(
+            parsed.render(),
+            text,
+            "{text:?} did not survive rendering"
+        );
     }
 }
 

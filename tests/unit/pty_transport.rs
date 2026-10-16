@@ -8,17 +8,22 @@ use std::{
     time::{Duration, Instant},
 };
 
-use agentmux::configuration::{BundleMember, TargetConfiguration, TermProtocol};
+use agentmux::configuration::{
+    BundleMember, TargetConfiguration, TermProtocol,
+};
 use agentmux::envelope::AddressIdentity;
 use agentmux::protocol::DeliveryDoorbell;
-use agentmux::protocol::mailbox::{EntrySequence, MailboxEntry, MailboxPayload};
+use agentmux::protocol::mailbox::{
+    EntrySequence, MailboxEntry, MailboxPayload,
+};
 use agentmux::pty::{
-    PtyConfigSnapshot, PtyOutputView, PtyShared, PtyTargetConfiguration, PtyTransport,
-    SnapshotResponse, prompt_satisfied,
+    PtyConfigSnapshot, PtyOutputView, PtyShared, PtyTargetConfiguration,
+    PtyTransport, SnapshotResponse, prompt_satisfied,
 };
 use agentmux::transports::{
-    ChoiceMade, DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage, LookMode,
-    LookSnapshotPayload, StartupContext, SubmissionEvidence, Transport, TransportHealth,
+    ChoiceMade, DeliveryEnvelope, DeliveryExecutorContext, DeliveryMessage,
+    LookMode, LookSnapshotPayload, StartupContext, SubmissionEvidence,
+    Transport, TransportHealth,
 };
 use regex::Regex;
 use tokio::sync::mpsc;
@@ -83,7 +88,9 @@ fn prompt_readiness_requires_every_configured_half() {
     assert!(prompt_satisfied(&unconstrained, &snapshot("anything", 47)));
 }
 
-fn shared_with(script: Vec<SnapshotResponse>) -> (PtyShared, thread::JoinHandle<()>) {
+fn shared_with(
+    script: Vec<SnapshotResponse>,
+) -> (PtyShared, thread::JoinHandle<()>) {
     let (tx, mut rx) = mpsc::channel::<agentmux::pty::SnapshotRequest>(8);
     let script = Arc::new(Mutex::new(VecDeque::from(script)));
     let worker_script = Arc::clone(&script);
@@ -132,7 +139,11 @@ async fn pty_look_returns_requested_tail() {
     handle.join().expect("snapshot worker");
 }
 
-fn envelope(message_id: &str, body: &str, is_receipt: bool) -> DeliveryEnvelope {
+fn envelope(
+    message_id: &str,
+    body: &str,
+    is_receipt: bool,
+) -> DeliveryEnvelope {
     DeliveryEnvelope {
         message_id: message_id.to_string(),
         message: DeliveryMessage {
@@ -157,12 +168,20 @@ fn envelope(message_id: &str, body: &str, is_receipt: bool) -> DeliveryEnvelope 
     }
 }
 
-fn entry(sequence: u64, message_id: &str, body: &str, is_receipt: bool) -> MailboxEntry {
+fn entry(
+    sequence: u64,
+    message_id: &str,
+    body: &str,
+    is_receipt: bool,
+) -> MailboxEntry {
     MailboxEntry {
-        sequence: EntrySequence::new(sequence).expect("a position is never zero"),
+        sequence: EntrySequence::new(sequence)
+            .expect("a position is never zero"),
         message_id: message_id.to_string(),
         canonical_bytes: body.len() as u64,
-        payload: MailboxPayload::Mail(Arc::new(envelope(message_id, body, is_receipt))),
+        payload: MailboxPayload::Mail(Arc::new(envelope(
+            message_id, body, is_receipt,
+        ))),
     }
 }
 

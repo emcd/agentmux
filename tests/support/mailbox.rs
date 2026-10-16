@@ -21,12 +21,16 @@
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-use agentmux::protocol::mailbox::{CursorPosition, EntryRange, EntrySequence, MailboxEntry};
-use agentmux::protocol::operations::{
-    AckAccepted, AckRejection, AckResult, DeclareAccepted, DeclareRejection, DeclareResult,
-    MemberAcknowledgment, PeekResponse, PeekResult,
+use agentmux::protocol::mailbox::{
+    CursorPosition, EntryRange, EntrySequence, MailboxEntry,
 };
-use agentmux::transports::{MailboxConsumer, PackingUnitId, SubmissionEvidence};
+use agentmux::protocol::operations::{
+    AckAccepted, AckRejection, AckResult, DeclareAccepted, DeclareRejection,
+    DeclareResult, MemberAcknowledgment, PeekResponse, PeekResult,
+};
+use agentmux::transports::{
+    MailboxConsumer, PackingUnitId, SubmissionEvidence,
+};
 
 /// What one acknowledged member reported, in the order the executor reported it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -173,7 +177,9 @@ impl MailboxConsumer for StubMailbox {
             // The head entry is returned whatever it costs. A mailbox that
             // withheld an oversized head would park every entry behind it
             // forever.
-            if !entries.is_empty() && bytes + entry.canonical_bytes > canonical_bytes_max {
+            if !entries.is_empty()
+                && bytes + entry.canonical_bytes > canonical_bytes_max
+            {
                 break;
             }
             bytes += entry.canonical_bytes;
@@ -189,7 +195,9 @@ impl MailboxConsumer for StubMailbox {
     fn declare(&self, range: EntryRange) -> DeclareResult {
         let mut state = self.state.lock().expect("stub mailbox");
         if let Some((outstanding, _)) = state.outstanding {
-            return Err(DeclareRejection::UnitAlreadyOutstanding { outstanding });
+            return Err(DeclareRejection::UnitAlreadyOutstanding {
+                outstanding,
+            });
         }
         let expected = state.cursor.next_sequence();
         if range.from() != expected {
@@ -203,7 +211,11 @@ impl MailboxConsumer for StubMailbox {
         Ok(DeclareAccepted { unit, range })
     }
 
-    fn ack(&self, unit: PackingUnitId, members: &[MemberAcknowledgment]) -> AckResult {
+    fn ack(
+        &self,
+        unit: PackingUnitId,
+        members: &[MemberAcknowledgment],
+    ) -> AckResult {
         let mut state = self.state.lock().expect("stub mailbox");
         let Some((outstanding, range)) = state.outstanding else {
             return Err(AckRejection::UnitNotDeclared);
@@ -213,11 +225,13 @@ impl MailboxConsumer for StubMailbox {
         }
         let covered: Vec<EntrySequence> = range.sequences().collect();
         if members.len() != covered.len()
-            || !covered
-                .iter()
-                .all(|sequence| members.iter().any(|member| member.sequence == *sequence))
+            || !covered.iter().all(|sequence| {
+                members.iter().any(|member| member.sequence == *sequence)
+            })
         {
-            return Err(AckRejection::EvidenceDoesNotCoverUnit { expected: range });
+            return Err(AckRejection::EvidenceDoesNotCoverUnit {
+                expected: range,
+            });
         }
         for member in members {
             let message_id = state

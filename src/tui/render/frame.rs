@@ -11,7 +11,8 @@ use super::super::sender_bound_bundle;
 use super::super::state::AppState;
 use super::cursor::render_active_cursor;
 use super::overlays::{
-    events::render_events_overlay, help::render_help_overlay, picker::render_picker_overlay,
+    events::render_events_overlay, help::render_help_overlay,
+    picker::render_picker_overlay,
 };
 
 pub(super) const WORKBENCH_MIN_CHAT_HEIGHT: u16 = 1;
@@ -70,19 +71,23 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
         state.sender_session,
         state.pending_deliveries_count()
     )));
-    let paragraph =
-        Paragraph::new(vec![Line::from(spans)]).style(Style::default().bg(Color::DarkGray));
+    let paragraph = Paragraph::new(vec![Line::from(spans)])
+        .style(Style::default().bg(Color::DarkGray));
     frame.render_widget(paragraph, area);
 }
 
-pub(super) fn render_main(frame: &mut Frame, area: Rect, state: &mut AppState) {
+pub(super) fn render_main(
+    frame: &mut Frame,
+    area: Rect,
+    state: &mut AppState,
+) {
     match state.mode {
         super::super::state::ScreenMode::Communication => {
             super::communication::render_communication_mode(frame, area, state)
-        }
+        },
         super::super::state::ScreenMode::Interaction => {
             super::interaction::render_interaction_mode(frame, area, state)
-        }
+        },
     }
 }
 
@@ -118,7 +123,9 @@ fn startup_status(state: &AppState) -> String {
         BindingContext::Global,
         Action::ToggleHelpOverlay,
     ) {
-        Some(entry) => format!("Ready. Press {} for help.", entry.primary_chord()),
+        Some(entry) => {
+            format!("Ready. Press {} for help.", entry.primary_chord())
+        },
         None => "Ready. The help overlay lists every binding.".to_string(),
     }
 }
@@ -127,10 +134,10 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     let (mode_label, toggle_hint) = match state.mode {
         super::super::state::ScreenMode::Communication => {
             ("[Communication]", mode_switch_hint(state, "Interaction"))
-        }
+        },
         super::super::state::ScreenMode::Interaction => {
             ("[Interaction]", mode_switch_hint(state, "Communication"))
-        }
+        },
     };
     let status_line = state
         .status_history
@@ -155,7 +162,9 @@ fn render_footer(frame: &mut Frame, area: Rect, state: &AppState) {
     frame.render_widget(footer, area);
 }
 
-fn render_status_line(entry: &super::super::state::StatusEntry) -> Line<'static> {
+fn render_status_line(
+    entry: &super::super::state::StatusEntry,
+) -> Line<'static> {
     match entry.code.as_ref() {
         Some(code) => Line::from(vec![
             Span::styled(
@@ -179,7 +188,9 @@ mod tests {
         AppState::new(TuiLaunchOptions {
             namespace: "agentmux".to_string(),
             sender_session: "tui".to_string(),
-            relay_socket: std::path::PathBuf::from("/tmp/agentmux-frame-render.sock"),
+            relay_socket: std::path::PathBuf::from(
+                "/tmp/agentmux-frame-render.sock",
+            ),
             look_lines: None,
             available_bundles: vec!["agentmux".to_string()],
             bindings: None,
@@ -187,7 +198,8 @@ mod tests {
     }
 
     fn rendered(state: &mut AppState) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(110, 30)).expect("terminal");
+        let mut terminal =
+            Terminal::new(TestBackend::new(110, 30)).expect("terminal");
         terminal.draw(|frame| render(frame, state)).expect("draw");
         let buffer = terminal.backend().buffer().clone();
         (0..buffer.area.height)
@@ -220,7 +232,10 @@ mod tests {
         // reach the catalogue at all.
         let text = rendered(&mut state);
         assert!(
-            text.contains(&format!("Press {} for help.", help.primary_chord())),
+            text.contains(&format!(
+                "Press {} for help.",
+                help.primary_chord()
+            )),
             "the startup status does not name {:?}:\n{text}",
             help.primary_chord()
         );
@@ -239,7 +254,10 @@ mod tests {
             .expect("every surface binds switching modes");
             let text = rendered(&mut state);
             assert!(
-                text.contains(&format!("{} → {destination}", switch.primary_chord())),
+                text.contains(&format!(
+                    "{} → {destination}",
+                    switch.primary_chord()
+                )),
                 "the footer does not offer {:?} → {destination}:\n{text}",
                 switch.primary_chord()
             );

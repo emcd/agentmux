@@ -14,8 +14,14 @@ fn dispatch_request(
     bundle_name: &str,
     tmux_socket: &Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
-    let runtime_directory = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
-    handle_request(request, configuration_roots, bundle_name, runtime_directory)
+    let runtime_directory =
+        tmux_socket.parent().unwrap_or_else(|| Path::new("."));
+    handle_request(
+        request,
+        configuration_roots,
+        bundle_name,
+        runtime_directory,
+    )
 }
 
 fn acp_send_request() -> RelayRequest {
@@ -40,12 +46,13 @@ pub(in crate::acp) fn dispatch_send(
     let root = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
     let log_path = root.join("acp_requests.log");
     let baseline_prompts = count_logged_method(&log_path, "session/prompt");
-    let response =
-        dispatch_send_result(config_root, tmux_socket).expect("relay request should parse");
+    let response = dispatch_send_result(config_root, tmux_socket)
+        .expect("relay request should parse");
     let deadline = Instant::now() + Duration::from_secs(3);
     while Instant::now() < deadline {
         if count_logged_method(&log_path, "session/prompt") > baseline_prompts
-            || read_worker_state(root, "bravo").as_deref() == Some("unavailable")
+            || read_worker_state(root, "bravo").as_deref()
+                == Some("unavailable")
         {
             break;
         }
@@ -77,7 +84,11 @@ pub(in crate::acp) fn dispatch_sized_send_result(
     body_bytes: usize,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     startup_bundle(config_root, tmux_socket)?;
-    dispatch_sized_send_without_startup_result(config_root, tmux_socket, body_bytes)
+    dispatch_sized_send_without_startup_result(
+        config_root,
+        tmux_socket,
+        body_bytes,
+    )
 }
 
 /// Dispatches a sized send against an already-started bundle.
@@ -133,7 +144,8 @@ pub(in crate::acp) fn dispatch_look_with_offset(
     lines: Option<usize>,
     offset: Option<usize>,
 ) -> RelayResponse {
-    startup_bundle(config_root, tmux_socket).expect("relay startup should parse");
+    startup_bundle(config_root, tmux_socket)
+        .expect("relay startup should parse");
     dispatch_request(
         RelayRequest::Look {
             requester_session: requester_session.to_string(),
@@ -177,7 +189,8 @@ pub(in crate::acp) fn dispatch_raww(
     text: &str,
     no_enter: bool,
 ) -> RelayResponse {
-    startup_bundle(config_root, tmux_socket).expect("relay startup should parse");
+    startup_bundle(config_root, tmux_socket)
+        .expect("relay startup should parse");
     dispatch_request(
         RelayRequest::Raww {
             request_id: Some("req-acp-raww".to_string()),

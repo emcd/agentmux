@@ -13,26 +13,32 @@ use crate::runtime::error::RuntimeError;
 use super::actions::{Action, binding_lookup_order};
 use super::state::{AppState, ScreenMode};
 
-pub(crate) fn handle_event(state: &mut AppState, event: Event) -> Result<(), RuntimeError> {
+pub(crate) fn handle_event(
+    state: &mut AppState,
+    event: Event,
+) -> Result<(), RuntimeError> {
     match event {
         Event::Key(key) => handle_key(state, key),
         Event::Mouse(mouse) => {
             match mouse.kind {
                 MouseEventKind::ScrollUp => state.scroll_chat_history_up(),
                 MouseEventKind::ScrollDown => state.scroll_chat_history_down(),
-                _ => {}
+                _ => {},
             }
             Ok(())
-        }
+        },
         Event::Paste(text) => {
             insert_text_for_active_mode(state, text.as_str());
             Ok(())
-        }
+        },
         _ => Ok(()),
     }
 }
 
-fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
+fn handle_key(
+    state: &mut AppState,
+    key: KeyEvent,
+) -> Result<(), RuntimeError> {
     if key.kind != KeyEventKind::Press {
         return Ok(());
     }
@@ -57,9 +63,9 @@ fn handle_key(state: &mut AppState, key: KeyEvent) -> Result<(), RuntimeError> {
 /// to one context -- so unbinding a global chord uncovers a surface row that
 /// the global row was shadowing, rather than silencing the key everywhere.
 fn resolve_key(state: &AppState, key: KeyEvent) -> Option<Action> {
-    binding_lookup_order(state)
-        .into_iter()
-        .find_map(|context| state.bindings.action_for(context, key.code, key.modifiers))
+    binding_lookup_order(state).into_iter().find_map(|context| {
+        state.bindings.action_for(context, key.code, key.modifiers)
+    })
 }
 
 fn insert_text_for_active_mode(state: &mut AppState, text: &str) {
@@ -69,6 +75,6 @@ fn insert_text_for_active_mode(state: &mut AppState, text: &str) {
             for character in text.chars() {
                 state.insert_character_in_raww(character);
             }
-        }
+        },
     }
 }

@@ -84,7 +84,9 @@ impl DeliveryDoorbell {
             if remaining.is_zero() {
                 return false;
             }
-            let Ok((guard, _)) = self.inner.changed.wait_timeout(rung, remaining) else {
+            let Ok((guard, _)) =
+                self.inner.changed.wait_timeout(rung, remaining)
+            else {
                 return false;
             };
             rung = guard;

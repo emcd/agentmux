@@ -4,7 +4,9 @@
 
 use std::io::BufReader;
 
-use agentmux::runtime::paths::{BundleRuntimePaths, session_identity_psk_path};
+use agentmux::runtime::paths::{
+    BundleRuntimePaths, session_identity_psk_path,
+};
 use serde_json::json;
 use tempfile::TempDir;
 
@@ -17,7 +19,8 @@ fn write_configuration_without_drop_grant(
     temporary: &TempDir,
     bundle_name: &str,
 ) -> ConfigurationRoots {
-    let configuration_roots = write_bundle_configuration(temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(temporary, bundle_name);
     std::fs::write(
         configuration_roots.base_layer().join("policies.toml"),
         r#"
@@ -58,9 +61,11 @@ psk = "all"
 fn drop_peer_deletes_the_record_and_its_credential_stops_authenticating() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_deletes";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
@@ -103,7 +108,8 @@ fn drop_peer_deletes_the_record_and_its_credential_stops_authenticating() {
         true,
     );
     assert_eq!(
-        rejected["response"]["error"]["code"], "validation_unrecognized_credential",
+        rejected["response"]["error"]["code"],
+        "validation_unrecognized_credential",
         "the dropped credential must stop authenticating: {rejected:?}"
     );
 }
@@ -115,9 +121,11 @@ fn drop_peer_deletes_the_record_and_its_credential_stops_authenticating() {
 fn drop_peer_revokes_the_live_session_it_deletes() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_revokes";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
@@ -130,7 +138,8 @@ fn drop_peer_revokes_the_live_session_it_deletes() {
 
     let (mut alpha_client, alpha_join) =
         spawn_relay_connection(&configuration_roots, &bundle_paths);
-    let mut alpha_reader = BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
+    let mut alpha_reader =
+        BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
     send_json(
         &mut alpha_client,
         json!({
@@ -188,9 +197,11 @@ fn drop_peer_revokes_the_live_session_it_deletes() {
 fn drop_peer_refuses_to_drop_the_requester_itself() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_self";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let operator_id = global_user_id(bundle_name);
 
     let refused = operator_request(
@@ -216,9 +227,11 @@ fn drop_peer_refuses_to_drop_the_requester_itself() {
 fn self_drop_is_refused_ahead_of_an_authorization_denial() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_self_ungranted";
-    let configuration_roots = write_configuration_without_drop_grant(&temporary, bundle_name);
+    let configuration_roots =
+        write_configuration_without_drop_grant(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let operator_id = global_user_id(bundle_name);
 
     let refused = operator_request(
@@ -240,9 +253,11 @@ fn self_drop_is_refused_ahead_of_an_authorization_denial() {
 fn an_ungranted_caller_is_denied_rather_than_told_the_principal_is_absent() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_nondisclosure";
-    let configuration_roots = write_configuration_without_drop_grant(&temporary, bundle_name);
+    let configuration_roots =
+        write_configuration_without_drop_grant(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let denied = operator_request(
         &configuration_roots,
@@ -262,9 +277,11 @@ fn an_ungranted_caller_is_denied_rather_than_told_the_principal_is_absent() {
 fn new_and_change_grants_do_not_confer_drop() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_distinct_grant";
-    let configuration_roots = write_configuration_without_drop_grant(&temporary, bundle_name);
+    let configuration_roots =
+        write_configuration_without_drop_grant(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     // The same operator can mint, which pins that only the drop control is
@@ -307,9 +324,11 @@ fn new_and_change_grants_do_not_confer_drop() {
 fn drop_peer_rejects_an_unregistered_principal() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_unknown";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
 
     let rejected = operator_request(
         &configuration_roots,
@@ -329,9 +348,11 @@ fn drop_peer_rejects_an_unregistered_principal() {
 fn drop_peer_reports_no_credential_path_for_a_peer_relay() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_relay_path";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = "rnd-main@RELAY";
 
     register_peer(
@@ -365,9 +386,11 @@ fn drop_peer_reports_no_credential_path_for_a_peer_relay() {
 fn drop_peer_reports_the_relay_owned_credential_path_for_a_session() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_session_path";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
 
     register_peer(
@@ -386,8 +409,11 @@ fn drop_peer_reports_the_relay_owned_credential_path_for_a_session() {
     );
     let reported = dropped["response"]["credential_path"]
         .as_str()
-        .unwrap_or_else(|| panic!("credential_path for a session principal: {dropped:?}"));
-    let expected = session_identity_psk_path(&state_root, bundle_name, "alpha");
+        .unwrap_or_else(|| {
+            panic!("credential_path for a session principal: {dropped:?}")
+        });
+    let expected =
+        session_identity_psk_path(&state_root, bundle_name, "alpha");
     assert_eq!(
         reported,
         expected.display().to_string(),
@@ -402,12 +428,15 @@ fn drop_peer_reports_the_relay_owned_credential_path_for_a_session() {
 fn drop_peer_leaves_the_credential_file_on_disk() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_keeps_file";
-    let configuration_roots = write_identity_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_identity_configuration(&temporary, bundle_name);
     let state_root = temporary.path().join("state");
-    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
     let credential_path = state_root.join("dropped-alpha.psk");
-    std::fs::create_dir_all(&state_root).expect("create state root for the credential destination");
+    std::fs::create_dir_all(&state_root)
+        .expect("create state root for the credential destination");
 
     let registration = operator_request(
         &configuration_roots,

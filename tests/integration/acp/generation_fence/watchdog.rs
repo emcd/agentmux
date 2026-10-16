@@ -4,13 +4,16 @@ use super::*;
 fn a_long_agent_turn_never_arms_the_execution_watchdog() {
     let temporary = GuardedTempDir::new();
     let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(&inscriptions);
+    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+        &inscriptions,
+    );
 
     let options = AcpStubOptions {
         never_respond_to_prompt: true,
         ..AcpStubOptions::default()
     };
-    let (config_root, _log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, _log_path) =
+        write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
     configure_delivery(DeliveryConfiguration {

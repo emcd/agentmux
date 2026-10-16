@@ -33,8 +33,9 @@ pub struct ResolvedTuiSession {
 pub fn load_active_tui_configuration(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<Option<TuiConfiguration>, RuntimeError> {
-    load_tui_configuration(configuration_roots)
-        .map_err(|source| map_configuration_error(source, "load TUI configuration"))
+    load_tui_configuration(configuration_roots).map_err(|source| {
+        map_configuration_error(source, "load TUI configuration")
+    })
 }
 
 /// Resolves TUI bundle/session identity with deterministic precedence.
@@ -56,7 +57,8 @@ pub fn resolve_tui_session_identity(
 ) -> Result<ResolvedTuiSession, RuntimeError> {
     let configuration = load_active_tui_configuration(configuration_roots)?;
     let ui_default_bundle = load_ui_default_bundle(configuration_roots)?;
-    let bundle_name = resolve_bundle_name(ui_default_bundle.as_deref(), explicit_bundle)?;
+    let bundle_name =
+        resolve_bundle_name(ui_default_bundle.as_deref(), explicit_bundle)?;
     finish_tui_session(
         configuration_roots,
         configuration.as_ref(),
@@ -135,7 +137,9 @@ fn load_ui_default_bundle(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<Option<String>, RuntimeError> {
     Ok(load_ui_configuration(configuration_roots)
-        .map_err(|source| map_configuration_error(source, "load UI configuration"))?
+        .map_err(|source| {
+            map_configuration_error(source, "load UI configuration")
+        })?
         .and_then(|configuration| configuration.default_bundle))
 }
 
@@ -155,7 +159,9 @@ pub fn load_ui_binding_configuration(
     configuration_roots: &ConfigurationRoots,
 ) -> Result<Option<BindingConfiguration>, RuntimeError> {
     Ok(load_ui_configuration(configuration_roots)
-        .map_err(|source| map_configuration_error(source, "load UI configuration"))?
+        .map_err(|source| {
+            map_configuration_error(source, "load UI configuration")
+        })?
         .and_then(|configuration| configuration.bindings))
 }
 
@@ -171,7 +177,8 @@ fn resolve_bundle_name(
     }
     Err(RuntimeError::validation(
         "validation_unknown_bundle",
-        "bundle is required via --bundle or ui.toml default-bundle".to_string(),
+        "bundle is required via --bundle or ui.toml default-bundle"
+            .to_string(),
     ))
 }
 
@@ -209,7 +216,8 @@ fn resolve_session_selector(
     }
     Err(RuntimeError::validation(
         "validation_unknown_session",
-        "session is required via --as-session or users.toml default-session".to_string(),
+        "session is required via --as-session or users.toml default-session"
+            .to_string(),
     ))
 }
 
@@ -235,8 +243,10 @@ fn validate_selected_policy(
     configuration_roots: &ConfigurationRoots,
     policy_id: &str,
 ) -> Result<(), RuntimeError> {
-    let policy_ids = load_policy_ids(configuration_roots)
-        .map_err(|source| map_configuration_error(source, "load policy presets"))?;
+    let policy_ids =
+        load_policy_ids(configuration_roots).map_err(|source| {
+            map_configuration_error(source, "load policy presets")
+        })?;
     if policy_ids.contains(policy_id) {
         return Ok(());
     }
@@ -264,13 +274,14 @@ fn validate_sender_shape(session_id: &str) -> Result<(), RuntimeError> {
     if !first.is_ascii_alphabetic() {
         return Err(RuntimeError::validation(
             "validation_unknown_sender",
-            format!("session id '{session_id}' must start with an ASCII alphabetic character"),
+            format!(
+                "session id '{session_id}' must start with an ASCII alphabetic character"
+            ),
         ));
     }
-    if !local
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
-    {
+    if !local.chars().all(|character| {
+        character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+    }) {
         return Err(RuntimeError::validation(
             "validation_unknown_sender",
             format!(
@@ -281,27 +292,36 @@ fn validate_sender_shape(session_id: &str) -> Result<(), RuntimeError> {
     Ok(())
 }
 
-fn map_configuration_error(source: ConfigurationError, context: &str) -> RuntimeError {
+fn map_configuration_error(
+    source: ConfigurationError,
+    context: &str,
+) -> RuntimeError {
     match source {
-        ConfigurationError::InvalidConfiguration { path, message } => RuntimeError::validation(
-            "validation_invalid_arguments",
-            format!("{context} {}: {}", path.display(), message),
-        ),
-        ConfigurationError::Io { context, source } => RuntimeError::io(context, source),
+        ConfigurationError::InvalidConfiguration { path, message } => {
+            RuntimeError::validation(
+                "validation_invalid_arguments",
+                format!("{context} {}: {}", path.display(), message),
+            )
+        },
+        ConfigurationError::Io { context, source } => {
+            RuntimeError::io(context, source)
+        },
         // Named ahead of the catch-all below, which would classify this as a
         // fault in what the operator supplied. It is not one: the malformed
         // text ships with this binary, their file is uninvolved, and no edit to
         // it will change the outcome.
-        malformed @ ConfigurationError::MalformedEmbeddedArtifact { .. } => RuntimeError::io(
+        malformed @ ConfigurationError::MalformedEmbeddedArtifact {
+            ..
+        } => RuntimeError::io(
             context.to_string(),
             std::io::Error::other(malformed.to_string()),
         ),
-        unreadable @ ConfigurationError::UnreadableConfigurationLayer { .. } => {
-            RuntimeError::validation(
-                "validation_unreadable_configuration_layer",
-                format!("{context}: {unreadable}"),
-            )
-        }
+        unreadable @ ConfigurationError::UnreadableConfigurationLayer {
+            ..
+        } => RuntimeError::validation(
+            "validation_unreadable_configuration_layer",
+            format!("{context}: {unreadable}"),
+        ),
         other => RuntimeError::validation(
             "validation_invalid_arguments",
             format!("{context}: {other}"),

@@ -22,7 +22,8 @@ fn send_response(request_id: Option<String>) -> RelayResponse {
 /// `message_id`. See issues/relay/50.
 #[test]
 fn send_response_omits_absent_request_id() {
-    let value = serde_json::to_value(send_response(None)).expect("serialize send response");
+    let value = serde_json::to_value(send_response(None))
+        .expect("serialize send response");
     let object = value
         .as_object()
         .expect("send response serializes to an object");

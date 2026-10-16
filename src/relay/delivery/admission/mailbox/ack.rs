@@ -3,7 +3,9 @@
 
 use crate::protocol::identity::ConsumerBinding;
 use crate::protocol::mailbox::EntrySequence;
-use crate::protocol::operations::{AckAccepted, AckRejection, AckResult, MemberAcknowledgment};
+use crate::protocol::operations::{
+    AckAccepted, AckRejection, AckResult, MemberAcknowledgment,
+};
 
 use super::super::super::guard::PackingUnitId;
 use super::super::ledger::lock_ledger;
@@ -71,10 +73,12 @@ fn apply(
         // names one that never existed for this caller to resolve.
         _ => {
             return match mailbox.acknowledged.get(&unit) {
-                Some(range) => Ok(AckAccepted::AlreadyTerminalized { range: *range }),
+                Some(range) => {
+                    Ok(AckAccepted::AlreadyTerminalized { range: *range })
+                },
                 None => Err(AckRejection::UnitNotDeclared),
             };
-        }
+        },
     };
     // A declaration made under an earlier generation is not this caller's to
     // resolve, even though the identifier is real: the consumer that bound it no
@@ -93,13 +97,16 @@ fn apply(
     // would be to invent one or to borrow a sibling's, both of which state an
     // outcome nothing observed for that member. A repeated or out-of-range member
     // means the caller is describing a unit other than the one it declared.
-    let covered: Vec<EntrySequence> = members.iter().map(|member| member.sequence).collect();
+    let covered: Vec<EntrySequence> =
+        members.iter().map(|member| member.sequence).collect();
     let evidence_matches_unit = covered.len() as u64 == range.entries_count()
-        && range
-            .sequences()
-            .all(|sequence| covered.iter().filter(|held| **held == sequence).count() == 1);
+        && range.sequences().all(|sequence| {
+            covered.iter().filter(|held| **held == sequence).count() == 1
+        });
     if !evidence_matches_unit {
-        return Err(AckRejection::EvidenceDoesNotCoverUnit { expected: range });
+        return Err(AckRejection::EvidenceDoesNotCoverUnit {
+            expected: range,
+        });
     }
 
     // Each member resolves from its own report, and every member of the unit is
@@ -144,7 +151,9 @@ fn apply(
 mod mailbox_evidence_tests {
     use super::super::super::super::guard::SubmissionEvidence;
     use super::super::declare::declare;
-    use super::super::fixtures::{acknowledge, claim, mail, peeked, place, range, seq};
+    use super::super::fixtures::{
+        acknowledge, claim, mail, peeked, place, range, seq,
+    };
     use super::*;
 
     #[test]
@@ -156,9 +165,11 @@ mod mailbox_evidence_tests {
         }
         let accepted = declare(&bound, range(1, 3)).expect("declare");
 
-        let report = |sequence: u64, evidence: SubmissionEvidence| MemberAcknowledgment {
-            sequence: seq(sequence),
-            evidence,
+        let report = |sequence: u64, evidence: SubmissionEvidence| {
+            MemberAcknowledgment {
+                sequence: seq(sequence),
+                evidence,
+            }
         };
         let rejected = Err(AckRejection::EvidenceDoesNotCoverUnit {
             expected: range(1, 3),
@@ -268,7 +279,9 @@ mod mailbox_acknowledgment_tests {
 
     use super::super::super::terminal::{TerminalTransition, terminalize};
     use super::super::declare::declare;
-    use super::super::fixtures::{acknowledge, claim, mail, peeked, place, range, seq};
+    use super::super::fixtures::{
+        acknowledge, claim, mail, peeked, place, range, seq,
+    };
     use super::*;
 
     #[test]
@@ -287,7 +300,8 @@ mod mailbox_acknowledgment_tests {
             vec![1, 2, 3, 4, 5],
             "the executor peeks the whole run before deciding how much of it to declare"
         );
-        let accepted = declare(&bound, range(1, 3)).expect("a well-formed range binds");
+        let accepted =
+            declare(&bound, range(1, 3)).expect("a well-formed range binds");
         let members: Vec<MemberAcknowledgment> = range(1, 3)
             .sequences()
             .map(|sequence| MemberAcknowledgment {
@@ -366,7 +380,8 @@ mod mailbox_acknowledgment_tests {
         // executor its own completed work never happened. Remembering only the
         // most recent unit is what produces that answer, so this is the assertion
         // that rules it out.
-        let later = declare(&bound, range(5, 5)).expect("declare the remaining entry");
+        let later =
+            declare(&bound, range(5, 5)).expect("declare the remaining entry");
         acknowledge(
             &bound,
             later.unit,
@@ -426,7 +441,9 @@ mod cross_generation_contention_tests {
     use super::super::super::super::guard::SubmissionEvidence;
     use super::super::super::lock_boundary;
     use super::super::declare::declare;
-    use super::super::fixtures::{claim, mail, place, range, reserved_envelopes, seq, target};
+    use super::super::fixtures::{
+        claim, mail, place, range, reserved_envelopes, seq, target,
+    };
     use super::super::generation::replace_consumer_generation;
     use super::*;
 
@@ -439,7 +456,8 @@ mod cross_generation_contention_tests {
         for index in 1..=3 {
             place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
         }
-        let declared = declare(&outgoing, range(1, 3)).expect("a well-formed range binds");
+        let declared = declare(&outgoing, range(1, 3))
+            .expect("a well-formed range binds");
         let members = range(1, 3)
             .sequences()
             .map(|sequence| MemberAcknowledgment {
@@ -451,7 +469,8 @@ mod cross_generation_contention_tests {
     }
 
     #[test]
-    fn two_acknowledgments_under_different_generations_answer_each_entry_once() {
+    fn two_acknowledgments_under_different_generations_answer_each_entry_once()
+    {
         let namespace = "mbx-ack-inflight";
         let (outgoing, unit, members) = three_declared(namespace);
 
@@ -471,10 +490,14 @@ mod cross_generation_contention_tests {
             let generation = outgoing.generation;
             let members = members.clone();
             boundary.spawn(move || {
-                let replacement =
-                    replace_consumer_generation(&target, generation, FenceVerdict::Positive)
-                        .expect("a fenced incumbent is replaced");
-                let binding = ConsumerBinding::new(target, replacement.generation);
+                let replacement = replace_consumer_generation(
+                    &target,
+                    generation,
+                    FenceVerdict::Positive,
+                )
+                .expect("a fenced incumbent is replaced");
+                let binding =
+                    ConsumerBinding::new(target, replacement.generation);
                 let inherited = ack(&binding, unit, &members).result;
                 (replacement, inherited)
             })
@@ -486,8 +509,10 @@ mod cross_generation_contention_tests {
         boundary.assert_none_entered();
 
         boundary.release();
-        let incumbent = incumbent.join().expect("the incumbent's acknowledgment");
-        let (replacement, inherited) = successor.join().expect("the successor's replacement");
+        let incumbent =
+            incumbent.join().expect("the incumbent's acknowledgment");
+        let (replacement, inherited) =
+            successor.join().expect("the successor's replacement");
 
         assert_eq!(
             incumbent.result,
@@ -557,10 +582,8 @@ mod cross_generation_contention_tests {
             "and terminalizes nothing on its way out"
         );
         assert!(
-            replacement
-                .resolved
-                .iter()
-                .all(|member| member.evidence == SubmissionEvidence::SubmissionUnknown),
+            replacement.resolved.iter().all(|member| member.evidence
+                == SubmissionEvidence::SubmissionUnknown),
             "the replacement resolved the declaration it superseded through the guard, which \
              cannot exclude a write that half-happened"
         );
@@ -585,7 +608,10 @@ mod cross_generation_contention_tests {
     /// Counted across both because they are the only resolvers in play: an id
     /// appearing twice is one send told its fate twice, and one appearing in
     /// neither is a send owed an answer that never came.
-    fn answered(one: &[ResolvedMember], other: &[ResolvedMember]) -> Vec<String> {
+    fn answered(
+        one: &[ResolvedMember],
+        other: &[ResolvedMember],
+    ) -> Vec<String> {
         let mut answered: Vec<String> = one
             .iter()
             .chain(other.iter())

@@ -5,7 +5,10 @@ use crate::{
     runtime::error::RuntimeError,
 };
 
-use super::{AppState, BundleStatusDisplay, Recipient, map_relay_error, map_relay_request_failure};
+use super::{
+    AppState, BundleStatusDisplay, Recipient, map_relay_error,
+    map_relay_request_failure,
+};
 
 impl AppState {
     pub fn refresh_recipients(&mut self) -> Result<(), RuntimeError> {
@@ -14,7 +17,8 @@ impl AppState {
         })?;
         match response {
             RelayResponse::List { bundle, .. } => {
-                self.bundle_status = Some(BundleStatusDisplay::from_listed_bundle(&bundle));
+                self.bundle_status =
+                    Some(BundleStatusDisplay::from_listed_bundle(&bundle));
                 let recipients = bundle
                     .principals
                     .into_iter()
@@ -37,11 +41,13 @@ impl AppState {
                 self.refresh_cross_bundle_candidates();
                 self.relay_stream_poll_error_reported = false;
                 Ok(())
-            }
+            },
             RelayResponse::Error { error } => Err(map_relay_error(error)),
             other => Err(RuntimeError::validation(
                 "internal_unexpected_failure",
-                format!("relay returned unexpected response variant: {other:?}"),
+                format!(
+                    "relay returned unexpected response variant: {other:?}"
+                ),
             )),
         }
     }
@@ -57,15 +63,18 @@ impl AppState {
                 let had_events = !events.is_empty();
                 self.record_stream_events(&events);
                 reconnected || had_events
-            }
+            },
             Err(source) => {
                 if self.relay_stream_poll_error_reported {
                     return false;
                 }
                 self.relay_stream_poll_error_reported = true;
-                self.push_runtime_error(map_relay_request_failure(&self.relay_socket, source));
+                self.push_runtime_error(map_relay_request_failure(
+                    &self.relay_socket,
+                    source,
+                ));
                 true
-            }
+            },
         }
     }
 
@@ -74,7 +83,9 @@ impl AppState {
     /// selecting a different bundle switches the active context, re-enumerates
     /// its sessions, and keeps the picker open focused on those sessions so the
     /// operator can pick one in the same window.
-    pub fn commit_selected_picker_bundle(&mut self) -> Result<(), RuntimeError> {
+    pub fn commit_selected_picker_bundle(
+        &mut self,
+    ) -> Result<(), RuntimeError> {
         let Some(target_namespace) = self.selected_picker_bundle() else {
             return Err(RuntimeError::validation(
                 "validation_unknown_target",
@@ -93,7 +104,10 @@ impl AppState {
         );
         self.reset_bundle_scoped_state();
         self.focus_picker_session_column();
-        self.push_status(None, format!("Switched to bundle {target_namespace}."));
+        self.push_status(
+            None,
+            format!("Switched to bundle {target_namespace}."),
+        );
         self.refresh_recipients()
     }
 
@@ -148,13 +162,14 @@ impl AppState {
             let request = RelayRequest::List {
                 requester_session: Some(self.sender_session.clone()),
             };
-            let (response, events) = match self
-                .relay_stream
-                .request_with_namespace_and_events(&request, Some(bundle.as_str()))
-            {
-                Ok(pair) => pair,
-                Err(_) => continue,
-            };
+            let (response, events) =
+                match self.relay_stream.request_with_namespace_and_events(
+                    &request,
+                    Some(bundle.as_str()),
+                ) {
+                    Ok(pair) => pair,
+                    Err(_) => continue,
+                };
             self.record_stream_events(&events);
             if let RelayResponse::List { bundle: listed, .. } = response {
                 for principal in listed.principals {
@@ -176,8 +191,10 @@ impl AppState {
             Ok((response, events)) => {
                 self.record_stream_events(&events);
                 Ok(response)
-            }
-            Err(source) => Err(map_relay_request_failure(&self.relay_socket, source)),
+            },
+            Err(source) => {
+                Err(map_relay_request_failure(&self.relay_socket, source))
+            },
         }
     }
 }

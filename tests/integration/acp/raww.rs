@@ -11,7 +11,8 @@ use super::helpers::*;
 fn acp_raww_returns_queued_and_dispatches_prompt() {
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
-    let (config_root, log_path) = write_configuration(temporary.path(), &options);
+    let (config_root, log_path) =
+        write_configuration(temporary.path(), &options);
 
     let response = dispatch_raww(
         &config_root,
@@ -42,7 +43,8 @@ fn acp_raww_returns_queued_and_dispatches_prompt() {
     let deadline = Instant::now() + Duration::from_secs(2);
     loop {
         let requests = read_request_log(log_path.as_path());
-        if request_count_by_method(requests.as_slice(), "session/prompt") >= 1 {
+        if request_count_by_method(requests.as_slice(), "session/prompt") >= 1
+        {
             break;
         }
         assert!(

@@ -5,8 +5,9 @@ use std::{
 };
 
 use super::{
-    ASSOCIATION_FILE, BUNDLE_EXTENSION, BUNDLES_DIRECTORY, CODERS_FILE, ConfigurationError,
-    ConfigurationRoots, POLICIES_FILE, RELAY_FILE, UI_FILE, USERS_FILE,
+    ASSOCIATION_FILE, BUNDLE_EXTENSION, BUNDLES_DIRECTORY, CODERS_FILE,
+    ConfigurationError, ConfigurationRoots, POLICIES_FILE, RELAY_FILE,
+    UI_FILE, USERS_FILE,
 };
 
 /// What one layer answers for one candidate path.
@@ -26,14 +27,20 @@ enum LayerAnswer {
 /// the fault side deliberately: layer-list validation proves each supplied layer
 /// *root* is a directory and says nothing about intermediate components of a
 /// relative path beneath it.
-fn classify_candidate(candidate: &Path) -> Result<LayerAnswer, ConfigurationError> {
+fn classify_candidate(
+    candidate: &Path,
+) -> Result<LayerAnswer, ConfigurationError> {
     match std::fs::metadata(candidate) {
         Ok(metadata) if metadata.is_file() => Ok(LayerAnswer::Supplies),
         Ok(_) => Err(ConfigurationError::layer_path_not_a_file(candidate)),
         // Also a dangling symlink, since `metadata` follows links exactly as the
         // `is_file` probe this replaced did.
-        Err(source) if source.kind() == ErrorKind::NotFound => Ok(LayerAnswer::DoesNotSupply),
-        Err(source) => Err(ConfigurationError::unreadable_layer(candidate, source)),
+        Err(source) if source.kind() == ErrorKind::NotFound => {
+            Ok(LayerAnswer::DoesNotSupply)
+        },
+        Err(source) => {
+            Err(ConfigurationError::unreadable_layer(candidate, source))
+        },
     }
 }
 
@@ -58,7 +65,7 @@ pub fn supplied_configuration_path(
         let candidate = layer.join(relative);
         match classify_candidate(&candidate)? {
             LayerAnswer::Supplies => return Ok(Some(candidate)),
-            LayerAnswer::DoesNotSupply => {}
+            LayerAnswer::DoesNotSupply => {},
         }
     }
     Ok(None)
@@ -124,7 +131,8 @@ pub fn bundle_configuration_path(
 ) -> Result<PathBuf, ConfigurationError> {
     effective_configuration_path(
         roots,
-        Path::new(BUNDLES_DIRECTORY).join(format!("{bundle_name}.{BUNDLE_EXTENSION}")),
+        Path::new(BUNDLES_DIRECTORY)
+            .join(format!("{bundle_name}.{BUNDLE_EXTENSION}")),
     )
 }
 
@@ -150,31 +158,50 @@ pub fn effective_bundle_definitions(
         let entries = match std::fs::read_dir(&directory) {
             Ok(entries) => entries,
             Err(source) if source.kind() == ErrorKind::NotFound => continue,
-            Err(source) => return Err(ConfigurationError::unreadable_layer(directory, source)),
+            Err(source) => {
+                return Err(ConfigurationError::unreadable_layer(
+                    directory, source,
+                ));
+            },
         };
         for entry in entries {
             // Not `flatten`: an item error truncates this layer's contribution
             // while enumeration still reports success, which is the same
             // substitution as an unreadable layer with less to show for it.
-            let entry =
-                entry.map_err(|source| ConfigurationError::unreadable_layer(&directory, source))?;
+            let entry = entry.map_err(|source| {
+                ConfigurationError::unreadable_layer(&directory, source)
+            })?;
             let path = entry.path();
             // Extension first, so an ordinary subdirectory or stray file under
             // `bundles/` stays ignorable whatever its type, and only
             // bundle-shaped names are held to being regular files.
-            if path.extension().and_then(|value| value.to_str()) != Some(BUNDLE_EXTENSION) {
+            if path.extension().and_then(|value| value.to_str())
+                != Some(BUNDLE_EXTENSION)
+            {
                 continue;
             }
             match std::fs::metadata(&path) {
-                Ok(metadata) if metadata.is_file() => {}
-                Ok(_) => return Err(ConfigurationError::layer_path_not_a_file(path)),
+                Ok(metadata) if metadata.is_file() => {},
+                Ok(_) => {
+                    return Err(ConfigurationError::layer_path_not_a_file(
+                        path,
+                    ));
+                },
                 // The entry was removed between enumeration and this probe. The
                 // removal raises its own filesystem event, so the watcher
                 // reconciles from that rather than from a fault here.
-                Err(source) if source.kind() == ErrorKind::NotFound => continue,
-                Err(source) => return Err(ConfigurationError::unreadable_layer(path, source)),
+                Err(source) if source.kind() == ErrorKind::NotFound => {
+                    continue;
+                },
+                Err(source) => {
+                    return Err(ConfigurationError::unreadable_layer(
+                        path, source,
+                    ));
+                },
             }
-            let Some(identifier) = path.file_stem().and_then(|value| value.to_str()) else {
+            let Some(identifier) =
+                path.file_stem().and_then(|value| value.to_str())
+            else {
                 continue;
             };
             definitions.insert(identifier.to_string(), path);
@@ -184,12 +211,16 @@ pub fn effective_bundle_definitions(
 }
 
 /// Resolves path to global user configuration file (`users.toml`).
-pub fn tui_configuration_path(roots: &ConfigurationRoots) -> Result<PathBuf, ConfigurationError> {
+pub fn tui_configuration_path(
+    roots: &ConfigurationRoots,
+) -> Result<PathBuf, ConfigurationError> {
     effective_configuration_path(roots, USERS_FILE)
 }
 
 /// Resolves path to UI-surface configuration file (`ui.toml`).
-pub fn ui_configuration_path(roots: &ConfigurationRoots) -> Result<PathBuf, ConfigurationError> {
+pub fn ui_configuration_path(
+    roots: &ConfigurationRoots,
+) -> Result<PathBuf, ConfigurationError> {
     effective_configuration_path(roots, UI_FILE)
 }
 
@@ -201,7 +232,9 @@ pub fn policies_configuration_path(
 }
 
 /// Resolves path to relay settings file (`relay.toml`).
-pub fn relay_configuration_path(roots: &ConfigurationRoots) -> Result<PathBuf, ConfigurationError> {
+pub fn relay_configuration_path(
+    roots: &ConfigurationRoots,
+) -> Result<PathBuf, ConfigurationError> {
     effective_configuration_path(roots, RELAY_FILE)
 }
 

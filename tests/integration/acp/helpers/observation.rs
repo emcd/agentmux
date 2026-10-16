@@ -1,6 +1,7 @@
 use agentmux::configuration::ConfigurationRoots;
 use agentmux::relay::{
-    ChoicesQueueEvent, subscribe_choices_queue_events, subscribe_worker_readiness,
+    ChoicesQueueEvent, subscribe_choices_queue_events,
+    subscribe_worker_readiness,
 };
 use agentmux::transports::WorkerReadinessState;
 use serde_json::Value;
@@ -124,13 +125,13 @@ where
                 if matcher(&event) {
                     return true;
                 }
-            }
+            },
             Err(broadcast::error::TryRecvError::Empty) => {
                 if Instant::now() >= deadline {
                     return false;
                 }
                 thread::sleep(Duration::from_millis(5));
-            }
+            },
             Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
             Err(broadcast::error::TryRecvError::Closed) => return false,
         }
@@ -149,7 +150,8 @@ where
 /// readiness-poll state so a future release-mode nextest flake can be
 /// triaged from the panic alone rather than re-deriving context from
 /// relay inscriptions.
-pub(super) const ACP_FAIL_LOAD_SETTLE_BUDGET: Duration = Duration::from_secs(30);
+pub(super) const ACP_FAIL_LOAD_SETTLE_BUDGET: Duration =
+    Duration::from_secs(30);
 
 /// Asserts that an ACP send to `bravo` does not succeed: either the relay
 /// rejects the enqueue outright with `runtime_acp_worker_unavailable`, or it
@@ -189,7 +191,8 @@ pub(in crate::acp) fn assert_acp_delivery_unavailable(
             //
             // The watch is still needed for the other ordering, where the worker
             // is mid-respawn at this point and settles shortly after.
-            let settled = read_worker_state(root, "bravo").as_deref() == Some("unavailable")
+            let settled = read_worker_state(root, "bravo").as_deref()
+                == Some("unavailable")
                 || await_acp_worker_state(
                     &mut receiver,
                     WorkerReadinessState::Unavailable,
@@ -199,16 +202,20 @@ pub(in crate::acp) fn assert_acp_delivery_unavailable(
                 let elapsed = started.elapsed();
                 let last_state_label = (*receiver.borrow())
                     .map(|s| format!("{s:?}"))
-                    .unwrap_or_else(|| "None (no transitions published)".to_string());
+                    .unwrap_or_else(|| {
+                        "None (no transitions published)".to_string()
+                    });
                 let poll_state = read_worker_state(root, "bravo")
-                    .unwrap_or_else(|| "None (worker not registered)".to_string());
+                    .unwrap_or_else(|| {
+                        "None (worker not registered)".to_string()
+                    });
                 panic!(
                     "ACP worker did not settle unavailable within {ACP_FAIL_LOAD_SETTLE_BUDGET:?} \
                      after a failed startup stage; observed wall time {elapsed:?}, last watch \
                      state = {last_state_label}, readiness poll state = {poll_state}"
                 );
             }
-        }
+        },
     }
 }
 
@@ -220,20 +227,33 @@ pub(in crate::acp) fn read_request_log(path: &Path) -> Vec<Value> {
         .expect("read ACP request log")
         .lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str::<Value>(line).expect("parse ACP request JSON line"))
+        .map(|line| {
+            serde_json::from_str::<Value>(line)
+                .expect("parse ACP request JSON line")
+        })
         .collect()
 }
 
-pub(in crate::acp) fn request_by_method<'a>(requests: &'a [Value], method: &str) -> &'a Value {
+pub(in crate::acp) fn request_by_method<'a>(
+    requests: &'a [Value],
+    method: &str,
+) -> &'a Value {
     requests
         .iter()
-        .find(|request| request.get("method").and_then(Value::as_str) == Some(method))
+        .find(|request| {
+            request.get("method").and_then(Value::as_str) == Some(method)
+        })
         .unwrap_or_else(|| panic!("missing ACP request for method '{method}'"))
 }
 
-pub(in crate::acp) fn request_count_by_method(requests: &[Value], method: &str) -> usize {
+pub(in crate::acp) fn request_count_by_method(
+    requests: &[Value],
+    method: &str,
+) -> usize {
     requests
         .iter()
-        .filter(|request| request.get("method").and_then(Value::as_str) == Some(method))
+        .filter(|request| {
+            request.get("method").and_then(Value::as_str) == Some(method)
+        })
         .count()
 }

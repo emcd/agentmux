@@ -21,8 +21,11 @@ fn cross_bundle_list(
     bundle_name: &str,
     namespace: &str,
 ) -> Value {
-    let (mut client, join) =
-        spawn_relay_connection_with_catalog(configuration_roots, state_root, catalog);
+    let (mut client, join) = spawn_relay_connection_with_catalog(
+        configuration_roots,
+        state_root,
+        catalog,
+    );
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -63,8 +66,10 @@ fn cross_bundle_list_permitted_under_all_scope_enumerates_peer() {
     write_ui_bundle(&configuration_roots, bundle_b);
     write_policies_with_list(&configuration_roots, "all");
     let state_root = temporary.path().join("state");
-    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
-    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
+    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a)
+        .expect("bundle-a paths");
+    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b)
+        .expect("bundle-b paths");
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_list(
@@ -99,8 +104,10 @@ fn cross_bundle_list_denied_under_home_scope() {
     write_ui_bundle(&configuration_roots, bundle_b);
     write_policies_with_list(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
-    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
-    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b).expect("bundle-b paths");
+    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a)
+        .expect("bundle-a paths");
+    let paths_b = BundleRuntimePaths::resolve(&state_root, bundle_b)
+        .expect("bundle-b paths");
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_list(
@@ -128,10 +135,12 @@ fn cross_bundle_list_denied_under_home_scope() {
 fn same_bundle_list_permitted_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "list_same_home";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_policies_with_list(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
-    let paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let catalog = multi_bundle_catalog(&[paths]);
 
     let response = cross_bundle_list(
@@ -154,8 +163,11 @@ fn relay_wide_list(
     operator_id: &str,
     namespace: &str,
 ) -> Value {
-    let (mut client, join) =
-        spawn_relay_connection_with_catalog(configuration_roots, state_root, catalog);
+    let (mut client, join) = spawn_relay_connection_with_catalog(
+        configuration_roots,
+        state_root,
+        catalog,
+    );
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -191,11 +203,13 @@ fn relay_wide_list(
 fn relay_wide_list_of_bundle_permitted_under_all_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "list_relay_wide_all";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     write_policies_with_list(&configuration_roots, "all");
     let state_root = temporary.path().join("state");
-    let paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let catalog = multi_bundle_catalog(&[paths]);
     let operator_id = global_user_id(bundle_name);
 
@@ -217,11 +231,13 @@ fn relay_wide_list_of_bundle_permitted_under_all_scope() {
 fn relay_wide_list_of_bundle_denied_under_home_scope() {
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "list_relay_wide_home";
-    let configuration_roots = write_bundle_configuration(&temporary, bundle_name);
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
     write_tui_configuration(&configuration_roots, "default", bundle_name);
     write_policies_with_list(&configuration_roots, "home");
     let state_root = temporary.path().join("state");
-    let paths = BundleRuntimePaths::resolve(&state_root, bundle_name).expect("bundle paths");
+    let paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
     let catalog = multi_bundle_catalog(&[paths]);
     let operator_id = global_user_id(bundle_name);
 
@@ -252,7 +268,8 @@ fn cross_bundle_list_rejects_unknown_namespace() {
     let configuration_roots = write_bundle_configuration(&temporary, bundle_a);
     write_policies_with_list(&configuration_roots, "all");
     let state_root = temporary.path().join("state");
-    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a).expect("bundle-a paths");
+    let paths_a = BundleRuntimePaths::resolve(&state_root, bundle_a)
+        .expect("bundle-a paths");
     let catalog = multi_bundle_catalog(&[paths_a]);
 
     let response = cross_bundle_list(
