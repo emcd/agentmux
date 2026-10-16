@@ -8,7 +8,7 @@ Structured tracking stays in `nb`.
 Agentmux is a multi-agent coordination runtime for coder sessions. It
 provides relay-hosted inter-agent messaging, MCP tool surfaces, and a unified
 CLI so operators and agents can list peers, send messages, inspect pane state,
-and coordinate work across multiple worktrees with clear contracts.
+and coordinate work across multiple clones with clear contracts.
 
 ## Tech Stack
 
