@@ -1,7 +1,7 @@
 # Changes here will be overwritten by Copier
 _commit: 0d06cd4
 _src_path: /home/me/src/rust-project-common
-authors: []
+authors: ''
 cpu_architectures:
 - x86_64
 - arm64
