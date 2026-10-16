@@ -18,17 +18,8 @@ guardian_approval = false
 ## MCP Servers
 
 [mcp_servers.agentmux]
-command = "reloaderoo"
-args = [
-  "--",
-  "cargo",
-  "run",
-  "--bin",
-  "agentmux",
-  "--",
-  "host",
-  "mcp",
-]
+command = "cargo"
+args = ["run", "--bin", "agentmux", "--", "host", "mcp"]
 startup_timeout_sec = 60
 tool_timeout_sec = 900
 
