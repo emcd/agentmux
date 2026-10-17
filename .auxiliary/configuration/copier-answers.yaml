@@ -1,5 +1,5 @@
-# Changes here will be overwritten by Copier
-_commit: 0d06cd4
+# Changes here will be overwritten by Copier; NEVER EDIT MANUALLY
+_commit: 0.3.0
 _src_path: /home/me/src/rust-project-common
 authors: ''
 cpu_architectures:
@@ -9,7 +9,8 @@ crate_name: agentmux
 crate_shape:
 - library
 - executable
-description: Provides relays for inter-agent communication and a single pane of glass for the management of multiple agent harness sessions.
+description: Provides relays for inter-agent communication and a single pane of glass
+    for the management of multiple agent harness sessions.
 enable_benchmarking: false
 enable_fuzzing: false
 enable_property_tests: false
