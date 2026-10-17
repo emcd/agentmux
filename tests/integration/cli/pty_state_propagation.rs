@@ -1,11 +1,11 @@
-//! The lazy Pty spawn path, which reaches its member through delivery rather
-//! than through bring-up.
+//! The eager Pty bring-up path, which elects its member's worker at `up`
+//! rather than at first delivery.
 //!
-//! A Pty member that was not started at bring-up is spawned when a delivery
-//! first targets it, from a bundle the delivery layer loads itself. That made
-//! it a third injection path, distinct from first startup and `up`/reconcile,
-//! and the one where an authoritative stamp applied only at bring-up would go
-//! missing.
+//! A Pty member is started when its bundle is brought up, from the same
+//! registry election a first delivery would run — which is what keeps one
+//! worker (and therefore one child) per target. An authoritative stamp
+//! applied at bring-up is therefore present for the delivery that follows,
+//! closing the third-injection-path gap the lazy spawn used to be.
 //!
 //! The child reports its own environment into a file, so what is asserted is
 //! what the spawned process actually received rather than what configuration
@@ -102,22 +102,14 @@ fn await_report(report: &std::path::Path) -> String {
     );
 }
 
-/// Ignored because the path it exercises cannot complete yet, not because the
-/// expectation is wrong. `PtyTransport::startup` spawns the child, then blocks on
-/// the worker's init handshake — and that block is a tokio `blocking_recv` on a
-/// runtime worker thread, which panics with "Cannot block the current thread from
-/// within a runtime". So the child *is* spawned, and is then killed by the
-/// startup guard as the panic unwinds.
+/// The eagerly started Pty child carries the relay's state root.
 ///
-/// That ordering is why this cannot be made to pass by observing the child: the
-/// window between spawn and kill is not synchronized with anything the test can
-/// wait on, so a test that reads the child's report would pass or fail on
-/// timing. It stays ignored rather than becoming flaky.
-///
-/// Tracked separately as `agentmux:issues/runtime/8` — the defect is independent
-/// of state-root propagation and predates it. Remove the ignore once the spawn
-/// completes; the assertion needs no change.
-fn assert_lazy_pty_spawn_carries_the_relays_state_root(declared: &str) {
+/// Bring-up (`up`) elects the member's worker and spawns its child; the
+/// subsequent delivery is adopted by that same worker rather than spawning
+/// a second child. Both the spawn-time environment and the delivery path
+/// are exercised: the report proves what the child was spawned with, and
+/// the accepted send proves the adopted worker serves.
+fn assert_eager_pty_spawn_carries_the_relays_state_root(declared: &str) {
     let temporary = TempDir::new().expect("temporary");
     let config_root = temporary.path().join("config");
     let state_root = temporary.path().join("named-state");
@@ -129,9 +121,9 @@ fn assert_lazy_pty_spawn_carries_the_relays_state_root(declared: &str) {
     fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
     write_pty_bundle(&config_root, &report, declared);
 
-    // `--no-autostart` plus `autostart = false` keeps bring-up from starting the
-    // member, so the spawn can only come from the delivery below. That is the
-    // path under test; starting it at bring-up would prove the wrong thing.
+    // Bring-up starts the member: the worker is elected at `up` and the
+    // child spawned in its first generation build. That is the path under
+    // test; the spawn happening anywhere else would prove the wrong thing.
     let host_child = process::RelayChildGuard::new(
         Command::new(env!("CARGO_BIN_EXE_agentmux"))
             .args([
@@ -152,9 +144,6 @@ fn assert_lazy_pty_spawn_carries_the_relays_state_root(declared: &str) {
     );
     wait_for_relay_ready(&state_root, "alpha");
 
-    // Hosts the bundle so delivery can route to it. Reconcile creates only Tmux
-    // members, so the Pty member is still unstarted afterwards — which is what
-    // makes the spawn below come from delivery rather than from bring-up.
     let up = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
             "up",
@@ -173,11 +162,19 @@ fn assert_lazy_pty_spawn_carries_the_relays_state_root(declared: &str) {
         "up should host the bundle; stderr:\n{}",
         String::from_utf8_lossy(&up.stderr)
     );
-    assert!(
-        !report.exists(),
-        "bring-up must not have spawned the Pty member; the lazy path is under test"
+    // Eager bring-up spawns the child: the report appears at `up`, not at
+    // first delivery. Waiting here (rather than after the send) is what
+    // pins the spawn to bring-up.
+    let reported = await_report(&report);
+    assert_eq!(
+        reported,
+        state_root.display().to_string(),
+        "the eagerly spawned Pty child must carry the spawning relay's state root, \
+         not its own declaration"
     );
 
+    // Delivery through the adopted worker: accepted and served by the same
+    // worker bring-up elected, not a second spawn.
     let send = Command::new(env!("CARGO_BIN_EXE_agentmux"))
         .args([
             "send",
@@ -204,24 +201,15 @@ fn assert_lazy_pty_spawn_carries_the_relays_state_root(declared: &str) {
         String::from_utf8_lossy(&send.stderr)
     );
 
-    let reported = await_report(&report);
-
     shutdown_relay_if_present(&state_root, "alpha");
     host_child
         .wait_with_output(process::HARNESS_CHILD_WAIT_DEFAULT)
         .ok();
-
-    assert_eq!(
-        reported,
-        state_root.display().to_string(),
-        "the lazily spawned Pty child must carry the spawning relay's state root, \
-         not its own declaration"
-    );
 }
 
 #[test]
-fn a_lazily_spawned_pty_member_receives_the_relays_state_root() {
-    assert_lazy_pty_spawn_carries_the_relays_state_root(
+fn an_eagerly_started_pty_member_receives_the_relays_state_root() {
+    assert_eager_pty_spawn_carries_the_relays_state_root(
         MEMBER_DECLARED_STATE_ROOT,
     );
 }
@@ -229,8 +217,8 @@ fn a_lazily_spawned_pty_member_receives_the_relays_state_root() {
 // The blank declaration, which reads as absent everywhere else and so is the case
 // an upsert-if-absent implementation would leave to the child.
 #[test]
-fn a_lazily_spawned_pty_member_survives_a_blank_declaration() {
-    assert_lazy_pty_spawn_carries_the_relays_state_root(
+fn an_eagerly_started_pty_member_survives_a_blank_declaration() {
+    assert_eager_pty_spawn_carries_the_relays_state_root(
         MEMBER_BLANK_STATE_ROOT,
     );
 }

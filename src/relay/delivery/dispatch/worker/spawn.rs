@@ -25,9 +25,13 @@ use crate::relay::{AsyncDeliveryTask, RelayError, relay_error};
 use crate::transports::{DeliveryExecutorContext, TransportImpl};
 use crate::{configuration::BundleMember, envelope::PromptBatchSettings};
 
+#[cfg(feature = "pty")]
+use super::super::super::async_worker::clear_construction_error;
 use super::super::super::async_worker::{
     AsyncWorkerKey, WorkerOwner, bind_worker_consumer_generation,
 };
+#[cfg(feature = "pty")]
+use super::super::envelope::build_pty_transport;
 use super::super::envelope::{
     build_acp_driver_services, build_worker_transport,
 };
@@ -53,6 +57,12 @@ pub(super) const SHUTDOWN_FENCE_RESERVE_MS: u64 = 300;
 pub(in crate::relay::delivery::dispatch) enum WorkerTransportSource {
     /// ACP targets, whose runtime comes from a driver-owned supervised bootstrap.
     Acp(AcpWorkerBootstrap),
+    /// Pty targets elected at bring-up, carrying the member the startup pass
+    /// resolved. Builds through the same factored Pty construction as the
+    /// `Direct` session-type dispatch below — the variant names the
+    /// provenance (bring-up election), not a second build path.
+    #[cfg(feature = "pty")]
+    Pty(PtyWorkerBootstrap),
     /// Every other target, from inputs the spawn site resolved.
     Direct(WorkerTransportContext),
 }
@@ -100,6 +110,26 @@ pub(in crate::relay::delivery::dispatch) struct AcpWorkerBootstrap {
     /// Per-bundle choice-queue bound, captured into the chooser closure at worker
     /// construction so it no longer rides every delivery task and choice.
     pub(in crate::relay::delivery::dispatch) choices_pending_max: usize,
+}
+
+/// The construction inputs for a Pty target elected at bring-up, resolved
+/// from the configured member rather than from whichever delivery task
+/// happens to arrive first.
+///
+/// The fields are the same ones [`WorkerTransportContext`] carries for the
+/// lazy path on purpose: bring-up election and first-delivery election must
+/// construct from the same inputs, or the "one worker per target" guarantee
+/// would rest on two resolutions agreeing. The build itself is shared too —
+/// the `Pty` arm of [`build_transport`] routes through the factored Pty
+/// construction the `Direct` session-type dispatch uses — so the variant
+/// records provenance without introducing a second construction path.
+#[cfg(feature = "pty")]
+#[derive(Clone)]
+pub(in crate::relay::delivery::dispatch) struct PtyWorkerBootstrap {
+    pub(in crate::relay::delivery::dispatch) namespace: String,
+    pub(in crate::relay::delivery::dispatch) runtime_directory:
+        std::path::PathBuf,
+    pub(in crate::relay::delivery::dispatch) target_member: BundleMember,
 }
 
 /// Spawns the per-target async delivery worker as a tokio task.
@@ -235,6 +265,11 @@ pub(super) async fn build_generation(
         delivery,
     )
     .await?;
+    // A build that succeeded supersedes whatever failed before: a cause
+    // recorded by an earlier generation must not describe this one if a
+    // later bring-up prime wait ever asks.
+    #[cfg(feature = "pty")]
+    clear_construction_error(key);
     Ok(BuiltGeneration { transport, binding })
 }
 
@@ -399,6 +434,26 @@ async fn build_transport(
                 driver.start_bootstrap();
             }
             Ok(transport)
+        },
+        // Bring-up-elected Pty construction. Builds through the same factored
+        // `build_pty_transport` the `Direct` session-type dispatch uses, so
+        // the variant records provenance without introducing a second build.
+        //
+        // ASYMMETRY, READ BEFORE ADDING A REFUSE-TO-RECREATE GUARD: the
+        // delivery-time `Missing`-arm rebuild produces a `Direct`-sourced
+        // worker for a Pty target while eager startup builds `Pty`-sourced.
+        // Both converge at `build_pty_transport`, so behavior is identical
+        // today — but a future ACP-style refuse-to-recreate guard keyed on
+        // the variant would misread a lazily rebuilt Pty worker as foreign.
+        #[cfg(feature = "pty")]
+        WorkerTransportSource::Pty(bootstrap) => {
+            build_pty_transport(
+                &bootstrap.target_member,
+                bootstrap.namespace.as_str(),
+                bootstrap.runtime_directory.as_path(),
+                delivery,
+            )
+            .await
         },
         WorkerTransportSource::Direct(context) => {
             let notify = std::sync::Arc::clone(readiness_changed);

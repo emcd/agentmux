@@ -12,9 +12,13 @@ use crate::configuration::{BundleMember, TargetConfiguration};
 use super::super::super::{AsyncDeliveryTask, RelayError};
 use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
+#[cfg(feature = "pty")]
+use super::super::async_worker::take_construction_error;
 use super::super::async_worker::{
     WorkerDispatch, get_worker_failure, get_worker_readiness,
 };
+#[cfg(feature = "pty")]
+use super::worker::PtyWorkerBootstrap;
 use super::worker::{
     AcpWorkerBootstrap, WorkerTransportContext, WorkerTransportSource,
     spawn_async_delivery_worker,
@@ -179,6 +183,187 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
                         json!({
                             "target_session": target_member.id,
                             "timeout_ms": ACP_STARTUP_PRIME_TIMEOUT_MS,
+                        }),
+                    ));
+                }
+                thread::sleep(Duration::from_millis(25));
+            },
+        }
+    }
+}
+
+/// Bound on a Pty worker reaching a ready state during bring-up.
+///
+/// Child spawn is local and fast unlike the ACP agent handshake, so the
+/// bound is tighter than `ACP_STARTUP_PRIME_TIMEOUT_MS`. It binds only
+/// pathological slowness: construction failure surfaces through the
+/// vanished-worker arm below without waiting out the bound.
+#[cfg(feature = "pty")]
+const PTY_STARTUP_PRIME_TIMEOUT_MS: u64 = 5_000;
+
+/// Eagerly elects a Pty target's delivery worker at bundle bring-up.
+///
+/// Mirrors `initialize_acp_target_for_startup`: the registry election is
+/// the handoff, so whichever site wins — bring-up here or a first delivery
+/// racing it — owns the target's only worker, and the child is spawned
+/// inside that worker's first generation build (post-registration), which
+/// is what makes a second child unrepresentable. A repeated pass over an
+/// already-registered worker changes nothing, so startup and reconcile
+/// agree about what starting a Pty member means.
+#[cfg(feature = "pty")]
+pub(in crate::relay) fn initialize_pty_target_for_startup(
+    namespace: &str,
+    runtime_directory: &std::path::Path,
+    target_member: &BundleMember,
+) -> Result<(), (String, String, Option<serde_json::Value>)> {
+    if !matches!(target_member.target, TargetConfiguration::Pty(_)) {
+        return Ok(());
+    }
+    // Checked before the worker is created, not only while waiting on it:
+    // starting a target means spawning a child process, and a relay on its
+    // way out has no use for one.
+    if shutdown_requested() {
+        return Err(startup_interrupted_error(target_member.id.as_str()));
+    }
+    let key = super::super::async_worker::build_worker_key(
+        namespace,
+        runtime_directory,
+        target_member.id.as_str(),
+    );
+    // Same draining-entry guard as the ACP path: a worker on its way out
+    // must never be adopted as this target's live one.
+    if super::super::async_worker::worker_stop_requested(&key) {
+        return Err((
+            "runtime_startup_failed".to_string(),
+            "Pty worker from the previous definition is still stopping"
+                .to_string(),
+            Some(json!({
+                "target_session": target_member.id,
+            })),
+        ));
+    }
+    if !super::super::async_worker::worker_exists(&key).map_err(|error| {
+        (
+            "internal_unexpected_failure".to_string(),
+            "failed to query Pty worker registry".to_string(),
+            Some(json!({
+                "target_session": target_member.id,
+                "cause": error.message,
+            })),
+        )
+    })? {
+        let (sender, receiver) =
+            tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
+        let pending =
+            std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let bootstrap = PtyWorkerBootstrap {
+            namespace: namespace.to_string(),
+            runtime_directory: runtime_directory.to_path_buf(),
+            target_member: target_member.clone(),
+        };
+        if let Some(owner) =
+            super::super::async_worker::register_worker_if_absent(
+                key.clone(),
+                sender,
+                pending.clone(),
+                true,
+            )
+            .map_err(|error| {
+                (
+                    "internal_unexpected_failure".to_string(),
+                    "failed to register Pty worker".to_string(),
+                    Some(json!({
+                        "target_session": target_member.id,
+                        "cause": error.message,
+                    })),
+                )
+            })?
+        {
+            spawn_async_delivery_worker(
+                key.clone(),
+                owner,
+                receiver,
+                pending,
+                WorkerTransportSource::Pty(bootstrap),
+            );
+        }
+    }
+    // The worker unregisters on construction failure, taking its entry
+    // with it — so the recorded cause lives in the construction-error
+    // table, not the entry. Consuming (not peeking) is what keeps a stale
+    // cause from a previous generation from describing this one; a
+    // successful build clears the table, and each arm below returns, so
+    // the take runs at most once per bring-up.
+    //
+    // Prime wait: registration alone must not report ready. The transport
+    // publishes `Available` once its child is spawned and its terminal
+    // established — the same acceptance set `list` reports, so a session
+    // this poll counts ready is one `list` also calls ready.
+    // (`acp_readiness_is_ready` is reused for the predicate; the name is
+    // ACP-specific, the `Available | Busy` acceptance is
+    // transport-neutral.)
+    let deadline =
+        Instant::now() + Duration::from_millis(PTY_STARTUP_PRIME_TIMEOUT_MS);
+    loop {
+        if shutdown_requested() {
+            return Err(startup_interrupted_error(target_member.id.as_str()));
+        }
+        // Vanished after this pass registered (or found) it: the worker's
+        // first generation build failed and it unregistered. That is the
+        // prompt signal, not the deadline — a failed construction must not
+        // wait out the bound.
+        if !super::super::async_worker::worker_exists(&key).map_err(
+            |error| {
+                (
+                    "internal_unexpected_failure".to_string(),
+                    "failed to query Pty worker registry".to_string(),
+                    Some(json!({
+                        "target_session": target_member.id,
+                        "cause": error.message,
+                    })),
+                )
+            },
+        )? {
+            return Err(startup_failure_error(
+                take_construction_error(&key),
+                "runtime_pty_startup_failed",
+                "Pty worker unregistered during startup",
+                json!({
+                    "target_session": target_member.id,
+                }),
+            ));
+        }
+        let readiness = get_worker_readiness(
+            namespace,
+            runtime_directory,
+            target_member.id.as_str(),
+        );
+        if super::super::async_worker::acp_readiness_is_ready(readiness) {
+            return Ok(());
+        }
+        match readiness {
+            Some(WorkerReadinessState::Unavailable) => {
+                return Err(startup_failure_error(
+                    take_construction_error(&key),
+                    "runtime_pty_worker_unavailable",
+                    "Pty worker is unavailable after startup",
+                    json!({
+                        "target_session": target_member.id,
+                    }),
+                ));
+            },
+            // Still settling. `Available`/`Busy` returned above, so this arm
+            // is reached only for `Initializing`, `Recovering`, and — already
+            // excluded by the vanished check — an unregistered worker.
+            _ => {
+                if Instant::now() >= deadline {
+                    return Err(startup_failure_error(
+                        take_construction_error(&key),
+                        "runtime_startup_failed",
+                        "Pty worker did not become ready during startup",
+                        json!({
+                            "target_session": target_member.id,
+                            "timeout_ms": PTY_STARTUP_PRIME_TIMEOUT_MS,
                         }),
                     ));
                 }
@@ -413,6 +598,32 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "pty")]
+    fn pty_member_with_unparseable_command(id: &str) -> BundleMember {
+        BundleMember {
+            id: id.to_string(),
+            name: Some(id.to_string()),
+            working_directory: None,
+            target: TargetConfiguration::Pty(
+                crate::configuration::PtyTargetConfiguration {
+                    // Unterminated quote: tokenization fails before any
+                    // spawn, so construction failure is deterministic with
+                    // no child process and no timing dependence.
+                    initial_command: "sh -c \"echo hi".to_string(),
+                    resume_command: String::new(),
+                    prompt_readiness: None,
+                    cols: 120,
+                    rows: 40,
+                    term_protocol: crate::configuration::TermProtocol::default(
+                    ),
+                },
+            ),
+            coder_session_id: None,
+            policy_id: None,
+            environment: Vec::new(),
+        }
+    }
+
     /// A Send racing relay shutdown whose target worker is already draining
     /// (`closing`) is dropped as `DroppedOnShutdown`, not spawned into a replacement
     /// worker that would clobber the closing registry entry the shutdown barrier
@@ -515,5 +726,131 @@ mod tests {
 
         unregister_worker(&target_key, target_owner);
         unregister_worker(&sender_key, owner);
+    }
+
+    /// A Pty member whose child cannot be constructed records a startup
+    /// failure instead of ready.
+    ///
+    /// The load-bearing verification for eager construction: registration
+    /// alone must not report ready. The unparseable command fails
+    /// deterministically before any spawn, so the worker's first generation
+    /// build fails, the worker unregisters, and the prime wait must observe
+    /// the vanished worker (or its `Unavailable` transition) and report —
+    /// promptly, not at the prime-timeout bound.
+    #[cfg(feature = "pty")]
+    #[test]
+    fn pty_bring_up_with_unconstructible_child_records_startup_failure() {
+        let namespace = "pty-startup-failure-ns";
+        let runtime = tempfile::TempDir::new().expect("temporary directory");
+        let member = pty_member_with_unparseable_command("pty-bad-child");
+        let before = std::time::Instant::now();
+        let result = initialize_pty_target_for_startup(
+            namespace,
+            runtime.path(),
+            &member,
+        );
+        let elapsed = before.elapsed();
+        let (code, reason, _) = result.expect_err(
+            "an unconstructible Pty child must fail bring-up, not record ready",
+        );
+        assert!(
+            elapsed < std::time::Duration::from_millis(2_000),
+            "the failure must surface from the vanished worker, not the prime-timeout bound: {elapsed:?}",
+        );
+        assert_eq!(
+            code, "pty_command_parse_failed",
+            "the recorded transport cause survives the worker's unregister: {reason}",
+        );
+        assert!(
+            !worker_exists(&build_worker_key(
+                namespace,
+                runtime.path(),
+                "pty-bad-child",
+            ))
+            .expect("registry lock"),
+            "a failed construction leaves no worker registered",
+        );
+    }
+
+    #[cfg(feature = "pty")]
+    fn pty_member_with_live_command(id: &str) -> BundleMember {
+        BundleMember {
+            id: id.to_string(),
+            name: Some(id.to_string()),
+            working_directory: None,
+            target: TargetConfiguration::Pty(
+                crate::configuration::PtyTargetConfiguration {
+                    // A child that outlives the test: prime-wait
+                    // termination is about the worker's `Available`
+                    // publish, and an instantly-exiting child would
+                    // race the departure publish against it.
+                    initial_command: "sleep 30".to_string(),
+                    resume_command: String::new(),
+                    prompt_readiness: None,
+                    cols: 120,
+                    rows: 40,
+                    term_protocol: crate::configuration::TermProtocol::default(
+                    ),
+                },
+            ),
+            coder_session_id: None,
+            policy_id: None,
+            environment: Vec::new(),
+        }
+    }
+
+    /// Bring-up elects the Pty worker eagerly, and a repeated pass adopts
+    /// rather than replaces it.
+    ///
+    /// The first call registers the worker and the prime wait observes its
+    /// `Available` transition; the second call — what reconcile/`up` runs —
+    /// finds the entry and leaves it alone. Either call racing a first
+    /// delivery resolves through the same registry election, which is what
+    /// keeps one worker (and therefore one child) per target.
+    #[cfg(feature = "pty")]
+    #[test]
+    fn pty_bring_up_elects_worker_and_repeat_pass_adopts_it() {
+        use super::super::super::async_worker::{
+            stop_workers_for_bundle, wait_for_bundle_workers_stopped,
+        };
+
+        let namespace = "pty-startup-ok-ns";
+        let runtime = tempfile::TempDir::new().expect("temporary directory");
+        let member = pty_member_with_live_command("pty-live-child");
+        initialize_pty_target_for_startup(namespace, runtime.path(), &member)
+            .expect("a constructible Pty child records ready at bring-up");
+        let key =
+            build_worker_key(namespace, runtime.path(), "pty-live-child");
+        assert!(
+            worker_exists(&key).expect("registry lock"),
+            "bring-up leaves the worker registered for first delivery to adopt",
+        );
+        assert!(
+            super::super::super::async_worker::acp_readiness_is_ready(
+                super::super::super::async_worker::get_worker_readiness(
+                    namespace,
+                    runtime.path(),
+                    "pty-live-child",
+                ),
+            ),
+            "the primed worker is serving, not still initializing",
+        );
+        // The repeat pass is reconcile/`up`: same answer, no replacement.
+        initialize_pty_target_for_startup(namespace, runtime.path(), &member)
+            .expect("a repeat pass over a live worker stays ready");
+        assert!(
+            worker_exists(&key).expect("registry lock"),
+            "the repeat pass adopts the worker rather than replacing it",
+        );
+        stop_workers_for_bundle(namespace, runtime.path());
+        wait_for_bundle_workers_stopped(
+            namespace,
+            runtime.path(),
+            std::time::Duration::from_secs(10),
+        );
+        assert!(
+            !worker_exists(&key).expect("registry lock"),
+            "the test's worker stops cleanly with its child",
+        );
     }
 }

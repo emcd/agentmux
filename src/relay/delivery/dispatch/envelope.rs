@@ -27,6 +27,10 @@ use crate::relay::delivery::async_worker::{
     AsyncWorkerKey, install_acp_worker_output_view, set_worker_failure,
     set_worker_readiness,
 };
+#[cfg(feature = "pty")]
+use crate::relay::delivery::async_worker::{
+    build_worker_key, record_construction_error,
+};
 use crate::relay::delivery::choice_state::{
     ChoiceEventContext, build_acp_chooser, invalidate_pending_for_respawn,
 };
@@ -46,7 +50,7 @@ use crate::transports::{
     AcpDriverServices, ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope,
     DeliveryExecutorContext, DeliveryMessage, StartupContext, TransportError,
     TransportImpl, UiBroadcastStatus, UiIncomingMessage, UiOutcomePhase,
-    UiTransportServices,
+    UiTransportServices, WorkerFailureReason,
 };
 
 /// Builds the [`TransportImpl`] for a non-bootstrap worker delivery, dispatching
@@ -116,10 +120,25 @@ async fn start_transport_off_runtime(
     mut transport: TransportImpl,
     context: StartupContext,
     target_session: String,
+    record_failure: Option<Arc<dyn Fn(WorkerFailureReason) + Send + Sync>>,
 ) -> Result<TransportImpl, RelayError> {
     tokio::task::spawn_blocking(move || match transport.startup(context) {
         Ok(_) => Ok(transport),
-        Err(error) => Err(startup_failure(target_session.as_str(), error)),
+        Err(error) => {
+            // Recorded before wrapping: the worker unregisters on
+            // construction failure, so a cause recorded any later would
+            // have nowhere to land, and the bring-up prime wait would
+            // report a generic timeout instead of the transport's own
+            // code (e.g. `pty_spawn_failed`). Mirrors the ACP driver's
+            // `record_failure` service; tmux passes `None`.
+            if let Some(record) = record_failure.as_ref() {
+                record(WorkerFailureReason {
+                    code: error.code.clone(),
+                    reason: error.reason.clone(),
+                });
+            }
+            Err(startup_failure(target_session.as_str(), error))
+        },
     })
     .await
     .map_err(|join_error| {
@@ -129,6 +148,113 @@ async fn start_transport_off_runtime(
             Some(json!({ "details": join_error.to_string() })),
         )
     })?
+}
+
+/// Builds a Pty worker's transport from the configured member, shared by
+/// the bring-up-elected (`WorkerTransportSource::Pty`) and first-delivery
+/// (`Direct` session-type dispatch) construction paths.
+///
+/// One build path is the point: the two election sites must construct the
+/// same transport, or "one worker per target" would rest on two builds
+/// agreeing. The structured failure is recorded (not just wrapped) so the
+/// bring-up prime wait can report the transport's own code — the worker
+/// unregisters on construction failure, so a cause recorded any later
+/// would have nowhere to land.
+#[cfg(feature = "pty")]
+pub(super) async fn build_pty_transport(
+    target_member: &BundleMember,
+    namespace: &str,
+    runtime_directory: &std::path::Path,
+    delivery: DeliveryExecutorContext,
+) -> Result<TransportImpl, RelayError> {
+    // Pty target reached worker construction. The per-coder configuration is
+    // read from the resolved target; the fallback covers a member whose
+    // target is not a Pty configuration, which the session-type dispatch
+    // should already have excluded.
+    let pty_config = match &target_member.target {
+        crate::configuration::TargetConfiguration::Pty(pty_cfg) => {
+            crate::pty::PtyTargetConfiguration {
+                initial_command: pty_cfg.initial_command.clone(),
+                resume_command: pty_cfg.resume_command.clone(),
+                prompt_readiness: pty_cfg.prompt_readiness.clone(),
+                cols: pty_cfg.cols,
+                rows: pty_cfg.rows,
+                working_directory: target_member.working_directory.clone(),
+                term_protocol: pty_cfg.term_protocol,
+            }
+        },
+        _ => crate::pty::PtyTargetConfiguration {
+            initial_command: String::new(),
+            resume_command: String::new(),
+            prompt_readiness: None,
+            cols: 120,
+            rows: 40,
+            working_directory: target_member.working_directory.clone(),
+            term_protocol: crate::configuration::TermProtocol::default(),
+        },
+    };
+    // Mirror ACP's `MirrorStateFn` pattern (see `build_acp_driver_services`
+    // above): the relay constructs the closure closing over
+    // `set_worker_readiness(namespace, runtime_directory, target_session,
+    // state)`. The transport holds an opaque `Arc<dyn Fn>` so `src/pty`
+    // does not import `crate::relay`. The transport uses the closure to
+    // publish `Initializing` / `Available` / `Busy` / `Unavailable`
+    // transitions into the relay's global worker-state registry at its
+    // lifecycle points.
+    let pty_mirror_state: crate::pty::PtyMirrorStateFn = {
+        let namespace = namespace.to_string();
+        let runtime_directory = runtime_directory.to_path_buf();
+        let target_session = target_member.id.clone();
+        Arc::new(move |state| {
+            set_worker_readiness(
+                namespace.as_str(),
+                runtime_directory.as_path(),
+                target_session.as_str(),
+                state,
+            );
+        })
+    };
+    let record_failure = {
+        let key = build_worker_key(
+            namespace,
+            runtime_directory,
+            target_member.id.as_str(),
+        );
+        Arc::new(move |failure: WorkerFailureReason| {
+            // Side table, not the entry: the worker unregisters on
+            // construction failure, taking its entry with it. An
+            // entry-scoped record would be observable only in the race
+            // between the record and the unregister; the table holds the
+            // cause for the bring-up prime wait to consume
+            // deterministically.
+            record_construction_error(&key, failure);
+        })
+    };
+    let transport = TransportImpl::pty(
+        target_member.clone(),
+        pty_config,
+        Some(pty_mirror_state),
+        delivery,
+    );
+    // Propagated rather than discarded. A dropped startup error installed
+    // an already-dead transport whose executor would peek a mailbox it
+    // could not write, so the entries waited out the whole dwell before
+    // anything reported a generic unreachable -- turning a spawn failure
+    // the relay already knew about into a delayed guess.
+    start_transport_off_runtime(
+        transport,
+        StartupContext {
+            namespace: namespace.to_string(),
+            runtime_directory: runtime_directory.to_path_buf(),
+            target_member: target_member.clone(),
+            // Pty raises no operator choices, so a cancelling no-op
+            // satisfies the contract's required resolver field.
+            choose: noop_tmux_chooser(),
+        },
+        target_member.id.clone(),
+        Some(record_failure),
+    )
+    .await
 }
 
 /// Builds a non-ACP worker's transport from inputs resolved before the worker
@@ -191,6 +317,9 @@ pub(super) async fn build_worker_transport(
                 transport,
                 startup(target_member),
                 context.target_session.clone(),
+                // Tmux construction has no structured cause to preserve
+                // beyond the wrapped error; only the Pty path records.
+                None,
             )
             .await
         },
@@ -207,69 +336,11 @@ pub(super) async fn build_worker_transport(
             // fallback arm below covers a member whose target is not a Pty
             // configuration, which the session-type dispatch above should already
             // have excluded.
-            let pty_config = match &target_member.target {
-                crate::configuration::TargetConfiguration::Pty(pty_cfg) => {
-                    crate::pty::PtyTargetConfiguration {
-                        initial_command: pty_cfg.initial_command.clone(),
-                        resume_command: pty_cfg.resume_command.clone(),
-                        prompt_readiness: pty_cfg.prompt_readiness.clone(),
-                        cols: pty_cfg.cols,
-                        rows: pty_cfg.rows,
-                        working_directory: target_member
-                            .working_directory
-                            .clone(),
-                        term_protocol: pty_cfg.term_protocol,
-                    }
-                },
-                _ => crate::pty::PtyTargetConfiguration {
-                    initial_command: String::new(),
-                    resume_command: String::new(),
-                    prompt_readiness: None,
-                    cols: 120,
-                    rows: 40,
-                    working_directory: target_member.working_directory.clone(),
-                    term_protocol: crate::configuration::TermProtocol::default(
-                    ),
-                },
-            };
-            // Mirror ACP's `MirrorStateFn` pattern (see
-            // `build_acp_driver_services` above): the relay constructs
-            // the closure closing over
-            // `set_worker_readiness(namespace, runtime_directory,
-            // target_session, state)`. The transport holds an opaque
-            // `Arc<dyn Fn>` so `src/pty` does not import `crate::relay`.
-            // The transport uses the closure to publish
-            // `Initializing` / `Available` / `Busy` / `Unavailable`
-            // transitions into the relay's global worker-state
-            // registry at its lifecycle points.
-            let pty_mirror_state: crate::pty::PtyMirrorStateFn = {
-                let namespace = context.namespace.clone();
-                let runtime_directory = context.runtime_directory.clone();
-                let target_session = target_member.id.clone();
-                Arc::new(move |state| {
-                    set_worker_readiness(
-                        namespace.as_str(),
-                        runtime_directory.as_path(),
-                        target_session.as_str(),
-                        state,
-                    );
-                })
-            };
-            let transport = TransportImpl::pty(
-                target_member.clone(),
-                pty_config,
-                Some(pty_mirror_state),
+            build_pty_transport(
+                target_member,
+                context.namespace.as_str(),
+                context.runtime_directory.as_path(),
                 delivery,
-            );
-            // Propagated rather than discarded. A dropped startup error installed
-            // an already-dead transport whose executor would peek a mailbox it
-            // could not write, so the entries waited out the whole dwell before
-            // anything reported a generic unreachable -- turning a spawn failure
-            // the relay already knew about into a delayed guess.
-            start_transport_off_runtime(
-                transport,
-                startup(target_member),
-                context.target_session.clone(),
             )
             .await
         },

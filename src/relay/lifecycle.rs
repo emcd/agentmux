@@ -24,6 +24,8 @@ use super::{
 use crate::relay::authorization::{
     choices_pending_max, load_authorization_context,
 };
+#[cfg(feature = "pty")]
+use crate::relay::delivery::initialize_pty_target_for_startup;
 use crate::relay::delivery::{
     initialize_acp_target_for_startup, stop_workers_for_bundle,
     wait_for_bundle_workers_stopped,
@@ -523,14 +525,19 @@ fn startup_member(
             member,
             choices_pending_max,
         ),
-        // Pty startup is recorded as ready when the per-coder config
-        // resolves cleanly. The transport is constructed lazily when the
-        // dispatcher first references it; for the v1 startup-count
-        // accounting, Pty members are recorded as ready alongside Tmux /
-        // ACP. Eager construction without a handoff would double-spawn
-        // (one child from bring-up, a second from the first delivery) so
-        // the persistent lifecycle is deferred until a handoff exists that
-        // lets the delivery worker adopt the eagerly built handle.
+        // Pty members elect their delivery worker at bring-up through the
+        // registry, the same election a first delivery would run: whichever
+        // site wins owns the target's only worker, and the child is spawned
+        // inside that worker's first generation build. Without the `pty`
+        // feature there is no Pty transport to construct, so the member
+        // still records ready on clean config resolution.
+        #[cfg(feature = "pty")]
+        TargetConfiguration::Pty(_) => initialize_pty_target_for_startup(
+            bundle_name,
+            runtime_directory,
+            member,
+        ),
+        #[cfg(not(feature = "pty"))]
         TargetConfiguration::Pty(_) => Ok(()),
         // `ui`/`pubsub` members have no implemented startup path; record a
         // structured startup failure and exclude them from active routing.

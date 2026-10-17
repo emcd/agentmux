@@ -36,6 +36,15 @@ pub(in crate::relay) use self::registry::{
     set_worker_failure, set_worker_readiness, stop_workers_for_bundle,
     wait_for_bundle_workers_stopped,
 };
+/// Construction-error table for the bring-up prime wait: only Pty records
+/// into it today (the one transport whose worker unregisters on
+/// construction failure), so the table and its touchpoints are gated with
+/// it rather than compiled dead into every build.
+#[cfg(feature = "pty")]
+pub(in crate::relay::delivery) use self::registry::{
+    clear_construction_error, record_construction_error,
+    take_construction_error,
+};
 
 /// Test-only registry seam: installs an entry directly, so a test can make a
 /// worker key routable without spawning a real worker. Re-exported under the same

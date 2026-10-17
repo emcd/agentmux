@@ -30,6 +30,8 @@ mod run;
 mod spawn;
 mod stop;
 
+#[cfg(feature = "pty")]
+pub(super) use self::spawn::PtyWorkerBootstrap;
 pub(super) use self::spawn::{
     AcpWorkerBootstrap, WorkerTransportContext, WorkerTransportSource,
     spawn_async_delivery_worker,

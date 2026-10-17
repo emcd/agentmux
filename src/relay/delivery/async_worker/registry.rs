@@ -566,6 +566,69 @@ pub(in crate::relay) fn get_worker_failure(
         .and_then(|entry| entry.last_failure.clone())
 }
 
+/// Construction causes that outlive the worker entry.
+///
+/// A worker unregisters on first-generation construction failure, taking its
+/// entry — and any `last_failure` recorded in it — with it. A bring-up prime
+/// wait polling after the unregister would find nothing and report a generic
+/// timeout instead of the transport's own code. This table holds the most
+/// recent construction cause per target independently of registration, so the
+/// prime wait consumes it deterministically: the record happens-before the
+/// unregister in the failing worker, and the take happens-after the prime
+/// wait observes the vanished entry.
+///
+/// Bounded: one entry per failing target, overwritten on each failure,
+/// consumed by `take_construction_error` or cleared by the next successful
+/// build.
+///
+/// Gated with the Pty feature: Pty is the only transport that records here
+/// today (the one whose worker unregisters on construction failure), and an
+/// unpopulated table in every other build would be dead code.
+#[cfg(feature = "pty")]
+static CONSTRUCTION_ERRORS: OnceLock<
+    Mutex<HashMap<AsyncWorkerKey, WorkerFailureReason>>,
+> = OnceLock::new();
+
+#[cfg(feature = "pty")]
+fn construction_errors_lock()
+-> &'static Mutex<HashMap<AsyncWorkerKey, WorkerFailureReason>> {
+    CONSTRUCTION_ERRORS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Records a transport construction failure against the target, surviving
+/// the entry removal the failing worker performs on its way out.
+#[cfg(feature = "pty")]
+pub(in crate::relay::delivery) fn record_construction_error(
+    key: &AsyncWorkerKey,
+    failure: WorkerFailureReason,
+) {
+    if let Ok(mut errors) = construction_errors_lock().lock() {
+        errors.insert(key.clone(), failure);
+    }
+}
+
+/// Takes a recorded construction failure, if any. Consuming (not peeking)
+/// is what keeps a stale cause from a previous generation from describing
+/// a later one.
+#[cfg(feature = "pty")]
+pub(in crate::relay::delivery) fn take_construction_error(
+    key: &AsyncWorkerKey,
+) -> Option<WorkerFailureReason> {
+    construction_errors_lock().lock().ok()?.remove(key)
+}
+
+/// Drops a recorded construction failure without reporting it. Called when
+/// a generation builds successfully: whatever failed before is no longer
+/// what this target is.
+#[cfg(feature = "pty")]
+pub(in crate::relay::delivery) fn clear_construction_error(
+    key: &AsyncWorkerKey,
+) {
+    if let Ok(mut errors) = construction_errors_lock().lock() {
+        errors.remove(key);
+    }
+}
+
 pub(in crate::relay) fn install_acp_worker_output_view(
     namespace: &str,
     runtime_directory: &Path,
