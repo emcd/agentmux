@@ -37,6 +37,12 @@ principal context and SHALL return typed results or typed relay errors.
 Public dispatch handlers SHALL NOT require callers to construct private socket
 Hello, request, or response frames.
 
+Operation inputs SHALL carry an explicit operation-bundle (default-namespace)
+parameter alongside target lists. Bare targets that carry no namespace suffix
+are qualified against that parameter; an explicit target suffix always wins
+over the parameter. Broadcast, which carries no per-target suffixes by
+definition, resolves its scope solely from the parameter.
+
 #### Scenario: Embedded host dispatches without socket frames
 
 - **GIVEN** an embedded host has obtained relay-verified principal context
@@ -50,6 +56,32 @@ Hello, request, or response frames.
 - **THEN** the handler requires relay-verified principal context
 - **AND** sender or requester fields in the operation payload are not accepted as
   proof of authority
+
+#### Scenario: Bare targets default through the operation-bundle parameter
+
+- **GIVEN** a dispatch operation carries targets without namespace suffixes
+- **AND** an explicit operation-bundle parameter is present
+- **WHEN** the handler resolves routing
+- **THEN** bare targets are qualified against the parameter
+- **AND** targets carrying explicit suffixes keep their own namespaces
+
+#### Scenario: Relay-wide principals are rejected, not defaulted
+
+- **GIVEN** a relay-wide principal invokes dispatch with bare targets
+- **AND** neither an explicit target suffix nor the operation-bundle parameter
+  resolves them
+- **WHEN** the handler resolves routing
+- **THEN** the operation is rejected rather than defaulted, including defaulting
+  to any principal-home (relay-wide homes are never bundle scopes)
+
+#### Scenario: Bundle-scoped home is the last default, not the first
+
+- **GIVEN** a bundle-scoped principal invokes dispatch with bare targets
+- **AND** neither an explicit target suffix nor the operation-bundle parameter
+  resolves them
+- **WHEN** the handler resolves routing
+- **THEN** bare targets are qualified against the principal-home bundle
+- **AND** this fallback never precedes an explicit suffix or parameter
 
 
 ### Requirement: Identity Descriptor and Verified Context Separation
@@ -71,7 +103,20 @@ without forcing those agents through Agentmux-managed credential files or
 
 Relay-verified principal context SHALL be produced by Agentmux verification or
 introspection logic and SHALL be the identity authority passed to public
-dispatch handlers.
+dispatch handlers. It SHALL carry the principal home as an explicit field
+(e.g. `home_namespace`), set once at verification time from the principal
+record — never re-derived by re-splitting principal-id strings at dispatch or
+routing call sites.
+
+Principal-home (initiator authority, from verified principal identity) and
+operation-bundle (target/routing context, from operation inputs) are
+independent axes. The single fusion point is bare-target defaulting, with
+explicit precedence: explicit target suffix first, then the explicit
+operation-bundle parameter, then principal-home when and only when it is
+bundle-scoped. Relay-wide principals are rejected, not defaulted, when
+neither a suffix nor a parameter resolves a bare target. The proposal spec's
+routing-default allowance on descriptors defines operation-bundle defaults
+only, never identity.
 
 #### Scenario: Descriptor cannot authorize dispatch
 
@@ -215,32 +260,32 @@ transport adapter whose purpose is to mimic the socket protocol.
 
 ### Requirement: Controlled Delivery Runtime Integration
 
-The embeddable runtime SHALL provide a transport-neutral delivery execution and
-observation boundary. An embedder SHALL be able to supply a delivery executor
-that receives resolved public delivery input and returns typed delivery outcomes.
-An embedder SHALL be able to observe typed delivery lifecycle outcomes without
-parsing relay logs or private transport frames.
+The embeddable runtime SHALL provide a transport-neutral delivery observation
+boundary. An embedder SHALL be able to observe typed delivery lifecycle
+outcomes without parsing relay logs or private transport frames.
 
-Agentmux SHALL retain ownership of delivery task construction, worker
-registration, receipt generation, outcome correlation, and shutdown gating. The
-public runtime contract SHALL NOT expose internal delivery-task fields, worker
-registry entries, individual worker-close functions, or terminal-outcome
-completion functions for callers to invoke or mutate directly.
+Agentmux SHALL retain ownership of delivery task construction, delivery
+execution, worker registration, receipt generation, outcome correlation, and
+shutdown gating. The public runtime contract SHALL NOT accept a host-supplied
+in-process delivery implementation: no public executor, transport, or worker
+injection point. External delivery extension belongs at the versioned
+executable agent-adapter wire boundary defined by the follow-up adapter
+contract, not inside the runtime API. The public runtime contract SHALL NOT
+expose internal delivery-task fields, worker registry entries, individual
+worker-close functions, or terminal-outcome completion functions for callers
+to invoke or mutate directly.
 
 The public runtime handle SHALL support controlled shutdown. Once shutdown has
 begun, dispatch through public handlers SHALL NOT create or resurrect delivery
 workers outside the runtime's shutdown gate, and relay-authored terminal
 dispositions SHALL remain observable through the public lifecycle boundary.
 
-#### Scenario: Embedded executor drives a deterministic outcome
+#### Scenario: Public integration does not accept a delivery implementation
 
-- **GIVEN** an embedded host supplies a transport-neutral delivery executor
-- **WHEN** a public dispatch handler resolves and submits a delivery
-- **THEN** the executor receives resolved public delivery input rather than an
-  internal worker task
-- **AND** returns a typed delivery outcome through the runtime-owned completion
-  path
-- **AND** the host can observe the relay-authored lifecycle outcome
+- **GIVEN** an embedded host holds a custom in-process delivery implementation
+- **WHEN** it initializes the public relay runtime
+- **THEN** the runtime contract offers no executor or transport injection point
+- **AND** delivery executes under runtime-owned semantics in every topology
 
 #### Scenario: Controlled shutdown preserves runtime invariants
 
@@ -253,7 +298,7 @@ dispositions SHALL remain observable through the public lifecycle boundary.
 
 #### Scenario: Public integration does not expose worker internals
 
-- **WHEN** an embedder integrates a delivery executor or lifecycle observer
+- **WHEN** an embedder integrates a lifecycle observer
 - **THEN** it does not receive mutable worker registry access
 - **AND** it does not construct internal delivery tasks
 - **AND** it does not directly close workers or complete task outcomes
