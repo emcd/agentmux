@@ -261,6 +261,57 @@ policy = "default"
 }
 
 #[test]
+fn resolves_bare_explicit_selector_to_canonical_global_user() {
+    let temporary = TempDir::new().expect("temporary");
+    write_policies(temporary.path(), &["default"]);
+    write_users(
+        temporary.path(),
+        r#"
+[[sessions]]
+id = "user@GLOBAL"
+policy = "default"
+
+[sessions.ui]
+"#,
+    );
+
+    let resolved = resolve_tui_session_identity(
+        &ConfigurationRoots::single(temporary.path()),
+        Some("agentmux"),
+        Some("user"),
+    )
+    .expect("bare selector for a configured global user should resolve");
+    assert_eq!(resolved.namespace, "agentmux");
+    assert_eq!(resolved.session_selector, "user@GLOBAL");
+    assert_eq!(resolved.session_id, "user@GLOBAL");
+    assert_eq!(resolved.policy, "default");
+}
+
+#[test]
+fn rejects_unknown_bare_selector() {
+    let temporary = TempDir::new().expect("temporary");
+    write_policies(temporary.path(), &["default"]);
+    write_users(
+        temporary.path(),
+        r#"
+[[sessions]]
+id = "user@GLOBAL"
+policy = "default"
+
+[sessions.ui]
+"#,
+    );
+
+    let error = resolve_tui_session_identity(
+        &ConfigurationRoots::single(temporary.path()),
+        Some("agentmux"),
+        Some("nobody"),
+    )
+    .expect_err("unknown bare session should fail");
+    assert!(error.to_string().contains("validation_unknown_session"));
+}
+
+#[test]
 fn rejects_session_with_unknown_policy_reference() {
     let temporary = TempDir::new().expect("temporary");
     write_policies(temporary.path(), &["default"]);

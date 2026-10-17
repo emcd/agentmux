@@ -206,7 +206,7 @@ fn resolve_session_selector(
     explicit_session: Option<&str>,
 ) -> Result<String, RuntimeError> {
     if let Some(session) = explicit_session.and_then(normalize) {
-        return Ok(session.to_string());
+        return Ok(normalize_explicit_session_selector(session));
     }
     if let Some(session) = configuration
         .and_then(|configuration| configuration.default_session.as_deref())
@@ -219,6 +219,20 @@ fn resolve_session_selector(
         "session is required via --as-session or users.toml default-session"
             .to_string(),
     ))
+}
+
+/// Normalizes a bare explicit `--as-session` selector to canonical
+/// `session@GLOBAL` form, matching the loader's own normalization of stored
+/// global user ids. Selectors that already carry a namespace pass through
+/// unchanged. The exact-match lookup in [`resolve_selected_session`] still
+/// rejects unconfigured names, so the unknown-session gate is preserved —
+/// only the spelling of the lookup key changes, never the bundle context.
+fn normalize_explicit_session_selector(selector: &str) -> String {
+    if selector.contains('@') {
+        selector.to_string()
+    } else {
+        format!("{selector}{GLOBAL_SESSION_SUFFIX}")
+    }
 }
 
 fn resolve_selected_session<'a>(
