@@ -12,10 +12,12 @@ use crate::configuration::{BundleMember, TargetConfiguration};
 use super::super::super::{AsyncDeliveryTask, RelayError};
 use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
-#[cfg(feature = "pty")]
-use super::super::async_worker::take_construction_error;
 use super::super::async_worker::{
     WorkerDispatch, get_worker_failure, get_worker_readiness,
+};
+#[cfg(feature = "pty")]
+use super::super::async_worker::{
+    clear_construction_error, take_construction_error,
 };
 #[cfg(feature = "pty")]
 use super::worker::PtyWorkerBootstrap;
@@ -339,6 +341,11 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
             target_member.id.as_str(),
         );
         if super::super::async_worker::acp_readiness_is_ready(readiness) {
+            // A serving worker is definitionally not described by a stale
+            // entry: clear so a later vanished arm cannot misattribute an
+            // old generation's cause (Backend side-table review). With
+            // every terminal arm taking, this closes the window completely.
+            clear_construction_error(&key);
             return Ok(());
         }
         match readiness {
