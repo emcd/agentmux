@@ -33,6 +33,12 @@ bundles and their sessions. Collect every session whose bundle `state` is
 Do not hardcode the bundle list — iterate what the relay reports. Also skip
 yourself (the coordinator) — you manage your own checkout.
 
+**Also check cross-relay peers.** Call `mcp__agentmux__list` with
+`command="relays"` to discover configured outbound peers (e.g., `rnd-qa`).
+For each peer relay, list its principals and include non-self sessions with
+`"tmux"` or `"pty"` transport. QA Partner (`qa-partner@agentmux!rnd-qa`) is
+on the `rnd-qa` relay and must not be forgotten.
+
 ### 3. Look at every session in parallel
 
 Call `mcp__agentmux__look` with `lines=5` for every non-self session across all
@@ -67,8 +73,9 @@ session directory, then `agentsmgr populate project
 Report "synced" when done.
 ```
 
-Send these in parallel (single `send` call with multiple targets). The
-message should be terse — lanes know their own clone paths.
+Send these in parallel (single `send` call with multiple targets). Use
+relay-qualified ids for cross-relay peers (e.g., `qa-partner@agentmux!rnd-qa`).
+The message should be terse — lanes know their own clone paths.
 
 ### 6. Wait for confirmations
 
