@@ -581,6 +581,11 @@ pub(in crate::relay) fn get_worker_failure(
 /// consumed by `take_construction_error` or cleared by the next successful
 /// build.
 ///
+/// Sequencing: this map is a process-global in the `todos/backend/2`
+/// census class. Keys are instance-partitioned (`runtime_directory` is in
+/// the key), but the map itself must move into the per-instance context
+/// when `/2` lands — named here so the rebase cannot miss it.
+///
 /// Gated with the Pty feature: Pty is the only transport that records here
 /// today (the one whose worker unregisters on construction failure), and an
 /// unpopulated table in every other build would be dead code.
