@@ -36,12 +36,11 @@ jobs:
           toolchain: 1.98.0
           components: rustfmt, clippy
 
-      # TEMPORARILY DISABLED: linecheck pending module splits (todos/general/56)
-      # - name: Install linecheck
-      #   run: cargo install linecheck --locked --version 1.2.1
-      #
-      # - name: Check Line Counts
-      #   run: linecheck --config .auxiliary/configuration/linecheck.yaml src tests
+      - name: Install linecheck
+        run: cargo install linecheck --locked --version 1.2.1
+
+      - name: Check Line Counts
+        run: linecheck --config .auxiliary/configuration/linecheck.yaml src tests
 
       - name: Check Formatting
         run: cargo fmt --all -- --check

@@ -158,16 +158,15 @@ repos:
       stages: [ 'pre-commit' ]
       fail_fast: true
 
-    # TEMPORARILY DISABLED: linecheck pending module splits (todos/general/56)
-    # - id: linecheck
-    #   name: 'Check: Line Counts'
-    #   language: system
-    #   entry: 'linecheck --config .auxiliary/configuration/linecheck.yaml src tests'
-    #   pass_filenames: false
-    #   always_run: true
-    #   require_serial: true
-    #   stages: [ 'pre-commit' ]
-    #   fail_fast: true
+    - id: linecheck
+      name: 'Check: Line Counts'
+      language: system
+      entry: 'linecheck --config .auxiliary/configuration/linecheck.yaml src tests'
+      pass_filenames: false
+      always_run: true
+      require_serial: true
+      stages: [ 'pre-commit' ]
+      fail_fast: true
 
     - id: cargo-fmt
       name: 'Check Style (Rust)'
