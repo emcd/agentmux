@@ -788,6 +788,53 @@ has not observed, and a bound that cannot be made true is worse than none.
   reader thread or the worker thread
 - **AND** joins the reader thread handle and the delivery-loop executor handle
 
+### Requirement: Pty Persistent Worker Lifecycle
+
+Bundle bring-up SHALL elect a Pty member's delivery worker through the
+worker registry (`register_worker_if_absent`), passing a
+`WorkerTransportSource::Pty` construction input resolved from the
+configured member — the same election a first delivery runs, so bring-up
+and first delivery cannot produce two workers (and therefore two children)
+for one target. The child SHALL be spawned inside the elected worker's
+first generation build, after the registration win, never at bring-up
+directly.
+
+Bring-up SHALL prime-wait the worker's readiness: `Available`/`Busy`
+records ready; `Unavailable`, unregistration during startup, or the prime
+bound elapsing records a structured startup failure carrying the
+transport's own recorded cause. Registration alone SHALL NOT record ready.
+
+A repeated bring-up pass over a registered worker SHALL adopt it
+unchanged. A Pty target with no worker SHALL still be constructed on
+demand at first delivery (recreation, not refusal): Pty workers are
+ephemeral, not supervised-persistent.
+
+#### Scenario: Bring-up elects the worker first delivery adopts
+
+- **GIVEN** a bundle with a Pty member and no worker registered
+- **WHEN** the startup pass brings the member up
+- **THEN** exactly one worker is registered for the target
+- **AND** a subsequent delivery is accepted by that worker — no second
+  worker, no second child
+
+#### Scenario: Unconstructible child fails bring-up with its own cause
+
+- **GIVEN** a Pty member whose child cannot be constructed
+- **WHEN** the startup pass brings the member up
+- **THEN** the member records a startup failure, not ready
+- **AND** the failure carries the transport's construction code
+- **AND** no worker remains registered
+- **AND** the failure surfaces from the unregistration promptly, without
+  waiting out the prime bound
+
+#### Scenario: Repeat bring-up adopts the live worker
+
+- **GIVEN** a Pty member whose worker is registered and serving
+- **WHEN** the startup pass runs again (reconcile/`up`)
+- **THEN** the member records ready
+- **AND** the registered worker is unchanged — no replacement, no second
+  child
+
 ### Requirement: Packing Units and Typed Submission Evidence
 
 A packing unit SHALL be established by **declaration** before any target-side

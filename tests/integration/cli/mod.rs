@@ -14,6 +14,8 @@ mod list;
 mod look;
 mod new;
 #[cfg(feature = "pty")]
+mod pty_bring_up;
+#[cfg(feature = "pty")]
 mod pty_state_propagation;
 mod raww;
 mod send;
