@@ -83,6 +83,32 @@ the same public runtime boundary in-process.
   controlled shutdown lifecycle. Dispatch and observation remain at the runtime
   contract level; callers do not directly enqueue internal tasks, mutate the
   worker registry, close individual workers, or complete outcomes.
+- Decision: verified principal context is opaque and runtime-issued,
+  constructible only on Agentmux verification or authorized provisioning
+  paths. Authority is frozen to the credential/principal binding epoch and
+  bound to the issuing runtime/identity-store instance: cross-instance
+  presentation is rejected, rotation/revocation/deletion invalidates
+  outstanding contexts, recreation starts a new epoch, and dispatch after
+  shutdown begins is rejected. Binding epoch is not delivery-consumer
+  generation. Provisioning mints through the authorized path only;
+  read-only introspection never mints dispatch authority.
+- Decision: two simultaneously live handles with separate roots, state,
+  registries, ledgers, and shutdown gates are fully isolated — one's
+  shutdown, delivery, and observation never affect the other, and neither
+  accepts the other's contexts or sees the other's provisioned state.
+- Decision: broadcast requires the explicit operation-bundle parameter for
+  every principal kind, with no principal-home fallback. Fan-out scope is
+  never inferred.
+- Decision: `text/plain` lifecycles terminate at transport submission with
+  existing guarantees unchanged. For accept-requiring Content-Types,
+  `transport_ack` is a stage disposition and the lifecycle terminates at
+  accept or timeout, exactly one terminal per lifecycle, with ack/timeout
+  admission serialized through the correlation owner. Submission evidence is
+  three-way — observed `transport_ack` proves submission, observed provable
+  transport failure proves non-submission (distinct no-effect terminal),
+  otherwise submission-unknown (distinct terminal, no timeout, no blind
+  replay). An `accept_ack` admitted before its `transport_ack` is honored as
+  the stronger evidence and records the accepted terminal.
 
 ## Risks / Trade-offs
 

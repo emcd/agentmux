@@ -26,7 +26,14 @@ the embeddable runtime, not a special implementation path beside it.
 - Require topology-independent relay semantics across embedded, standalone, and
   sidecar deployments.
 - Separate caller-supplied identity descriptors from relay-verified principal
-  context in public API types.
+  context in public API types. Verified context is runtime-issued and opaque,
+  bound to its issuing runtime/identity-store instance with a
+  credential-binding-epoch lifetime (rotation/revocation/deletion invalidates;
+  recreation starts a new epoch); introspection describes but never mints
+  authority.
+- Require two simultaneously live runtime handles with separate roots, state,
+  registries, ledgers, and shutdown gates to be fully isolated, with
+  cross-instance context rejection.
 - Require `direct_psk` as a public in-memory credential source for embedded
   hosts and dynamic agents.
 - Define explicit `accept_ack` timeout and stale-correlation cleanup behavior

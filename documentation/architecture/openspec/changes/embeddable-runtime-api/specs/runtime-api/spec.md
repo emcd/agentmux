@@ -41,7 +41,8 @@ Operation inputs SHALL carry an explicit operation-bundle (default-namespace)
 parameter alongside target lists. Bare targets that carry no namespace suffix
 are qualified against that parameter; an explicit target suffix always wins
 over the parameter. Broadcast, which carries no per-target suffixes by
-definition, resolves its scope solely from the parameter.
+definition, resolves its scope solely from the parameter: broadcast requires
+the parameter for every principal kind, with no principal-home fallback.
 
 #### Scenario: Embedded host dispatches without socket frames
 
@@ -83,6 +84,21 @@ definition, resolves its scope solely from the parameter.
 - **THEN** bare targets are qualified against the principal-home bundle
 - **AND** this fallback never precedes an explicit suffix or parameter
 
+#### Scenario: Broadcast without a parameter is rejected for bundle principals
+
+- **GIVEN** a bundle-scoped principal invokes broadcast dispatch
+- **AND** no explicit operation-bundle parameter is present
+- **WHEN** the handler resolves routing
+- **THEN** the operation is rejected rather than fanned out to the
+  principal-home bundle
+
+#### Scenario: Broadcast without a parameter is rejected for relay-wide principals
+
+- **GIVEN** a relay-wide principal invokes broadcast dispatch
+- **AND** no explicit operation-bundle parameter is present
+- **WHEN** the handler resolves routing
+- **THEN** the operation is rejected rather than fanned out relay-wide
+
 
 ### Requirement: Identity Descriptor and Verified Context Separation
 
@@ -114,9 +130,11 @@ independent axes. The single fusion point is bare-target defaulting, with
 explicit precedence: explicit target suffix first, then the explicit
 operation-bundle parameter, then principal-home when and only when it is
 bundle-scoped. Relay-wide principals are rejected, not defaulted, when
-neither a suffix nor a parameter resolves a bare target. The proposal spec's
-routing-default allowance on descriptors defines operation-bundle defaults
-only, never identity.
+neither a suffix nor a parameter resolves a bare target. The principal-home
+fallback applies to bare targets only: broadcast carries no targets and
+requires the operation-bundle parameter with no home fallback. The proposal
+spec's routing-default allowance on descriptors defines operation-bundle
+defaults only, never identity.
 
 #### Scenario: Descriptor cannot authorize dispatch
 
@@ -141,6 +159,90 @@ only, never identity.
   used by other credential sources
 - **AND** no Agentmux-managed credential file or `socket-trust` fallback is
   required
+
+
+### Requirement: Verified Principal Context Authority and Lifetime
+
+Relay-verified principal context SHALL be runtime-issued and
+non-caller-constructible: opaque to embedding hosts and minted only by
+Agentmux verification or authorized provisioning paths. Callers SHALL NOT be
+able to forge dispatch authority by constructing the context type directly.
+
+Each verified context SHALL be bound to the issuing runtime handle and
+identity-store instance. A context verified in runtime A SHALL NOT authorize
+dispatch in runtime B; cross-instance presentation SHALL be rejected before
+routing or authorization.
+
+Authority SHALL be frozen to the credential/principal binding epoch: the
+binding verified at mint time. Credential rotation, revocation, or principal
+deletion SHALL invalidate outstanding contexts minted under the prior
+binding, even when the principal id is later recreated and reused —
+recreation starts a new epoch and does not resurrect old contexts. Home is
+frozen only for the valid binding, never across revocation. Dispatch
+presented with a stale context SHALL be rejected with a typed relay error.
+Dispatch presented after the issuing runtime begins controlled shutdown
+SHALL be rejected regardless of context validity.
+
+The binding epoch is distinct from delivery-consumer generations: epoch
+changes on credential/principal lifecycle events, never on delivery
+progress. Delivery generation replacement SHALL NOT invalidate verified
+context and SHALL NOT extend a revoked binding.
+
+Public provisioning and identity introspection SHALL name their trusted
+administrative boundary: provisioning mints or rotates bindings only
+through the authorized provisioning path, and read-only introspection
+returns descriptive principal data only. Presenting introspected data —
+including a bare principal id — as verified dispatch context SHALL be
+rejected.
+
+#### Scenario: Cross-instance context is rejected
+
+- **GIVEN** runtimes A and B live with separate roots and identity state
+- **WHEN** a context verified in A is presented to B's dispatch handlers
+- **THEN** B rejects the operation before routing or authorization
+
+#### Scenario: Rotation invalidates outstanding context
+
+- **GIVEN** a verified context minted under a credential binding
+- **WHEN** the credential is rotated or revoked, or the principal is deleted
+- **THEN** dispatch with that context is rejected with a typed relay error
+- **AND** recreating the principal under the same id does not revalidate it
+
+#### Scenario: Introspection output cannot authorize dispatch
+
+- **GIVEN** a caller holds read-only introspection data for a principal id
+- **WHEN** the caller presents that data as verified dispatch context
+- **THEN** the operation is rejected before routing or authorization
+
+#### Scenario: Shutdown rejects dispatch regardless of context
+
+- **GIVEN** a runtime with a valid verified context
+- **WHEN** the runtime begins controlled shutdown and dispatch is attempted
+- **THEN** the operation is rejected and no worker is created or resurrected
+
+
+### Requirement: Embedded Runtime Instance Isolation
+
+The system SHALL isolate simultaneously live embedded runtime handles. Two
+handles with separate configuration roots, state roots, registries, ledgers,
+and shutdown gates SHALL be fully isolated. Dispatch, delivery, observation,
+and shutdown in one handle SHALL NOT affect the other.
+
+#### Scenario: One handle's shutdown does not affect the other
+
+- **GIVEN** handles A and B live with separate roots and state
+- **WHEN** A begins controlled shutdown while B dispatches and delivers
+- **THEN** B's dispatch, delivery, and lifecycle observations proceed
+  unaffected
+- **AND** A's terminal dispositions are observable only through A's
+  lifecycle boundary
+
+#### Scenario: Identity state does not cross handles
+
+- **GIVEN** handles A and B live with separate roots and state
+- **WHEN** a principal is provisioned in A
+- **THEN** B's identity store does not contain that principal
+- **AND** B rejects dispatch under any context minted from A's state
 
 
 ### Requirement: Configurable Embedded Runtime Roots
@@ -384,6 +486,30 @@ This requirement does not make terminal application events mandatory. Terminal
 application events, when defined by a Content-Type, remain distinct from
 `transport_ack` and `accept_ack`.
 
+Terminal staging: `text/plain` lifecycles terminate at transport submission —
+the existing submission disposition is the lifecycle's terminal disposition
+and no accept stage exists for that Content-Type. Accept semantics are strictly
+opt-in per Content-Type and SHALL NOT redefine `text/plain` guarantees. For a
+Content-Type whose contract requires `accept_ack`, `transport_ack` is a stage
+disposition (submission proven), not the lifecycle terminal: the lifecycle
+terminates at `accept_ack` (accepted terminal) or `accept_ack_timeout`
+(timeout terminal), with exactly one terminal disposition per envelope
+lifecycle. Timeout admission and ack admission SHALL serialize through the
+pending-correlation owner so the ack-vs-timeout race yields a single
+terminal: whichever is admitted first determines it and the loser is
+diagnosed and discarded. Submission evidence is three-way: observed
+`transport_ack` proves submission (stage disposition); observed provable
+transport failure proves non-submission (a distinct no-effect terminal);
+observing neither proves nothing and SHALL resolve as submission-unknown —
+a distinct terminal disposition, never `accept_ack_timeout` (which requires
+the transport stage) and never an implicit success. A submission-unknown
+lifecycle SHALL NOT trigger blind replay of the envelope; retry is an
+explicit new submission with a new correlation. An `accept_ack` admitted
+before its `transport_ack` is honored as the stronger evidence:
+authenticated acceptance implies the effect, which implies submission, so
+the lifecycle records the accepted terminal and any later transport signal
+for that correlation is diagnosed and discarded.
+
 #### Scenario: Accept ACK timeout clears pending correlation
 
 - **GIVEN** an envelope Content-Type requires `accept_ack`
@@ -402,3 +528,48 @@ application events, when defined by a Content-Type, remain distinct from
 - **AND** discards the late signal
 - **AND** does not recreate the pending correlation
 - **AND** does not alter the prior `accept_ack_timeout` disposition
+
+#### Scenario: Plain-text lifecycle terminates at transport submission
+
+- **GIVEN** an envelope with `Content-Type: text/plain`
+- **WHEN** the relay observes transport submission
+- **THEN** the submission disposition is the lifecycle's terminal disposition
+- **AND** no accept stage is opened for that envelope
+
+#### Scenario: Ack-vs-timeout race yields a single terminal
+
+- **GIVEN** an envelope Content-Type requires `accept_ack`
+- **AND** relay observes `transport_ack` for the envelope
+- **WHEN** an `accept_ack` and the timeout fire in either order
+- **THEN** exactly one terminal disposition is recorded (accepted or
+  `accept_ack_timeout`)
+- **AND** the loser is diagnosed and discarded without altering it
+
+#### Scenario: Unknown submission is not a timeout and is not replayed
+
+- **GIVEN** an envelope Content-Type requires `accept_ack`
+- **AND** relay never observes `transport_ack` nor a provable transport
+  failure for the envelope (the adapter may have written and died, or never
+  written at all)
+- **WHEN** the lifecycle is resolved
+- **THEN** relay records a distinct submission-unknown terminal disposition
+- **AND** does not record `accept_ack_timeout`
+- **AND** does not re-send the envelope; retry requires an explicit new
+  submission
+
+#### Scenario: Proven non-submission contrasts with unknown
+
+- **GIVEN** an envelope Content-Type requires `accept_ack`
+- **AND** relay observes a provable transport failure for the envelope
+- **WHEN** the lifecycle is resolved
+- **THEN** relay records a no-effect terminal disposition distinct from both
+  submission-unknown and `accept_ack_timeout`
+
+#### Scenario: Accept arriving before transport ack is honored
+
+- **GIVEN** an envelope Content-Type requires `accept_ack`
+- **WHEN** a valid `accept_ack` is admitted before its `transport_ack`
+- **THEN** relay records the accepted terminal (acceptance implies the effect,
+  which implies submission)
+- **AND** any later transport signal for that correlation is diagnosed and
+  discarded without altering it
