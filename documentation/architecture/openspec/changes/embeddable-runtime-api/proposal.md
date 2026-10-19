@@ -26,17 +26,32 @@ the embeddable runtime, not a special implementation path beside it.
 - Require topology-independent relay semantics across embedded, standalone, and
   sidecar deployments.
 - Separate caller-supplied identity descriptors from relay-verified principal
-  context in public API types.
+  context in public API types. Verified context is runtime-issued and opaque,
+  bound to its issuing runtime/identity-store instance with a
+  credential-binding-epoch lifetime (rotation/revocation/deletion invalidates;
+  recreation starts a new epoch); introspection describes but never mints
+  authority.
+- Require two simultaneously live runtime handles with separate roots, state,
+  registries, ledgers, and shutdown gates to be fully isolated, with
+  cross-instance context rejection.
 - Require `direct_psk` as a public in-memory credential source for embedded
   hosts and dynamic agents.
 - Define explicit `accept_ack` timeout and stale-correlation cleanup behavior
   for content types that require an accept ACK.
-- Define a transport-neutral delivery execution and observation seam so
-  embedders can control runtime lifecycle and deterministic harnesses can drive
-  delivery outcomes without exposing worker-registry internals.
+- Define a transport-neutral delivery observation seam and controlled shutdown
+  lifecycle so embedders can observe typed delivery outcomes without exposing
+  worker-registry internals. Delivery execution stays runtime-owned in every
+  topology.
+- Carry principal-home and operation-bundle as distinct fields end-to-end
+  (identity descriptor, verified principal context, dispatch inputs), fused at
+  exactly one explicit bare-target defaulting rule. The verified principal
+  context carries home as an explicit field set once at verification time.
 
 ## Non-Goals
 
+- No public host-supplied in-process Rust delivery implementation. External
+  delivery extension belongs at the versioned executable agent-adapter wire
+  boundary defined by the follow-up adapter contract, not inside this API.
 - No extension registry, versioned extension schema discovery, MCP extension
   polling, or extension submit surface. Those belong to Proposal B.
 - No application-domain authorization requirements. Applications such as

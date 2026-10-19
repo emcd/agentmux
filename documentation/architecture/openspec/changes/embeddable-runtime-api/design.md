@@ -19,6 +19,9 @@ the same public runtime boundary in-process.
   topologies.
 - Keep caller-supplied identity descriptors distinct from relay-verified
   principal context.
+- Carry principal-home and operation-bundle as distinct fields with one
+  explicit bare-target fusion rule (decided with Frontend Engineer; authority:
+  0.11 standup sequencing adjustment 2).
 - Accept caller-configured config/state roots for embedded runtime startup.
 - Support `direct_psk` for host-held in-memory credential material.
 - Add `Content-Type` as the canonical envelope payload discriminator.
@@ -61,15 +64,51 @@ the same public runtime boundary in-process.
   keeping `text/plain` behavior compatible with existing message delivery.
 - Decision: content types that require `accept_ack` must have a bounded timeout
   and must clear pending correlation state when the timeout fires.
-- Decision: the runtime owns delivery task construction, worker registration,
-  receipt generation, correlation, and shutdown gating. Embedders may inject a
-  transport-neutral delivery executor that receives resolved public delivery
-  input and returns typed outcomes, and may subscribe to typed delivery lifecycle
-  observations.
+- Decision: the runtime owns delivery task construction, delivery execution,
+  worker registration, receipt generation, correlation, and shutdown gating in
+  every topology. There is no public executor, transport, or worker injection
+  point; external delivery extension belongs at the versioned executable
+  agent-adapter wire boundary of the follow-up adapter contract. Embedders
+  observe typed delivery lifecycle outcomes through the public observer and
+  drive determinism in tests through the existing harness techniques against
+  that observation boundary, not through an injected implementation.
+- Decision: principal-home and operation-bundle are independent axes carried
+  as distinct fields in the identity descriptor, the verified principal
+  context (explicit home field set once at verification), and dispatch inputs
+  (explicit operation-bundle parameter). Fusion happens at exactly one rule:
+  explicit target suffix > operation-bundle parameter > bundle-scoped
+  principal-home > reject for relay-wide principals. Descriptor routing
+  defaults define operation-bundle defaults only, never identity.
 - Decision: the public runtime handle supports ordinary handler dispatch and a
   controlled shutdown lifecycle. Dispatch and observation remain at the runtime
   contract level; callers do not directly enqueue internal tasks, mutate the
   worker registry, close individual workers, or complete outcomes.
+- Decision: verified principal context is opaque and runtime-issued,
+  constructible only on Agentmux verification or authorized provisioning
+  paths. Authority is frozen to the credential/principal binding epoch and
+  bound to the issuing runtime/identity-store instance: cross-instance
+  presentation is rejected, rotation/revocation/deletion invalidates
+  outstanding contexts, recreation starts a new epoch, and dispatch after
+  shutdown begins is rejected. Binding epoch is not delivery-consumer
+  generation. Provisioning mints through the authorized path only;
+  read-only introspection never mints dispatch authority.
+- Decision: two simultaneously live handles with separate roots, state,
+  registries, ledgers, and shutdown gates are fully isolated — one's
+  shutdown, delivery, and observation never affect the other, and neither
+  accepts the other's contexts or sees the other's provisioned state.
+- Decision: broadcast requires the explicit operation-bundle parameter for
+  every principal kind, with no principal-home fallback. Fan-out scope is
+  never inferred.
+- Decision: `text/plain` lifecycles terminate at transport submission with
+  existing guarantees unchanged. For accept-requiring Content-Types,
+  `transport_ack` is a stage disposition and the lifecycle terminates at
+  accept or timeout, exactly one terminal per lifecycle, with ack/timeout
+  admission serialized through the correlation owner. Submission evidence is
+  three-way — observed `transport_ack` proves submission, observed provable
+  transport failure proves non-submission (distinct no-effect terminal),
+  otherwise submission-unknown (distinct terminal, no timeout, no blind
+  replay). An `accept_ack` admitted before its `transport_ack` is honored as
+  the stronger evidence and records the accepted terminal.
 
 ## Risks / Trade-offs
 
@@ -82,12 +121,18 @@ the same public runtime boundary in-process.
 - `Content-Type` support creates space for Proposal B but does not by itself
   define extension registration. Keep extension-specific behavior out until the
   follow-up proposal.
-- An injectable executor can become a test hook disguised as API if it mirrors
-  private worker machinery. Mitigate by exposing resolved delivery input and
-  typed outcomes that are independently useful to alternate transports and
-  hosts, while keeping registry and task invariants inside the runtime.
+- An injectable executor would become a test hook disguised as API mirroring
+  private worker machinery. Resolved by removing the injection point: the
+  contract exposes resolved delivery outcomes for observation, and
+  determinism in tests comes from harness techniques against that boundary.
 
 ## Migration Plan
+
+0. Sequencing prerequisite (not part of this change): `todos/backend/2`
+   (process-global singleton removal) lands first per the operator's
+   2026-08-25 decision, so the public runtime handle can own registry,
+   ledger, configuration, and shutdown state per instance instead of per
+   process.
 
 1. Introduce public runtime state/configuration types and public handler
    functions for existing relay operations.
@@ -103,10 +148,11 @@ the same public runtime boundary in-process.
 6. Add ACK pending-state timeout cleanup for content types that require
    `accept_ack`.
 7. Add parity tests covering standalone socket use and in-process handler use.
-8. Add a transport-neutral delivery executor, lifecycle observer, and controlled
-   runtime shutdown contract without publishing worker-registry internals.
-9. Add deterministic tests that drive delivery outcomes and shutdown races
-   through that public runtime contract.
+8. Add a typed delivery lifecycle observer and controlled runtime shutdown
+   contract without publishing worker-registry internals or any execution
+   injection point.
+9. Add deterministic tests that assert delivery outcomes and shutdown races
+   through the public observation and shutdown boundary.
 
 ## Open Questions
 
