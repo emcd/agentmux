@@ -2,7 +2,7 @@
 
 ### Requirement: Relay reads adapter output through a poll look RPC
 
-The system SHALL provide a relay→adapter per-call `look` RPC. The request SHALL carry a stable logical look-handle id that survives generation replacement (the handle rebinds), the generation (`epoch` reserved per D2), and optional `lines`, `offset`, and `prime_timeout_ms`. The relay SHALL pass only the timeout value as its look-surface policy; the bounded prime-wait SHALL run adapter-side. A zero timeout SHALL mean no wait.
+The system SHALL provide a relay→adapter per-call `look` RPC. The request SHALL carry a stable logical look-handle id that survives generation replacement (the handle rebinds), the adapter_generation per D2 (no epoch field), and optional `lines`, `offset`, and `prime_timeout_ms`. The relay SHALL pass only the timeout value as its look-surface policy; the bounded prime-wait SHALL run adapter-side. A zero timeout SHALL mean no wait.
 
 #### Scenario: Prime-wait bounded by relay-supplied timeout
 
@@ -11,7 +11,7 @@ The system SHALL provide a relay→adapter per-call `look` RPC. The request SHAL
 
 ### Requirement: Look replies carry freshness and generation
 
-Every look reply SHALL carry snapshot entries with full freshness metadata (`entries_total`, `returned_entries_count`, `freshness`, `snapshot_source`, optional `stale_reason_code`, optional `snapshot_age_ms`), the generation, and stale/discontinuity flags. The relay SHALL NOT let a superseded generation's snapshot overwrite a newer one.
+Every look reply SHALL carry snapshot entries with full freshness metadata (`entries_total`, `returned_entries_count`, `freshness`, `snapshot_source`, optional `stale_reason_code`, optional `snapshot_age_ms`), the adapter_generation the snapshot was read from, and stale/discontinuity flags. The ACP profile SHALL map both replay-buffer and pane-capture reads onto snapshot_source live; synthetic marks constructed snapshots and MUST carry stale=true, never fresh. The relay SHALL NOT let a superseded generation's snapshot overwrite a newer one.
 
 #### Scenario: Old generation reply loses to new snapshot
 

@@ -2,12 +2,12 @@
 
 ### Requirement: Adapter requests choices over a blocking reverse-RPC
 
-The system SHALL provide an adapter→relay `request_choice` reverse-RPC that blocks the calling turn resolver until resolved. The request SHALL carry the adapter generation id on every call; `request_id` alone SHALL NOT route. The `epoch` field is reserved and SHALL carry no meaning until the joint freeze defines it. The request SHALL carry the transport-native `request_id`, the originating `message_id`, `target_session`, `decider_sessions`, `title`, `species`, `details`, and `options` (each with `option_id`, `name`, `species`). Routed requests, replies, and events SHALL bind to supervisor-authorized (runtime, adapter, target, generation) correlation. Single-target scope per the supervision scope requirement; scope SHALL NOT be inferred from generation or traffic shape.
+The system SHALL provide an adapter→relay `adapter.requestChoice` reverse-RPC that blocks the calling turn resolver until resolved. The request SHALL carry the adapter generation id on every call; the JSON-RPC `id` alone SHALL NOT route. There is no epoch field: generations are supervisor-issued, monotonic per (instance, target), and echoed by the adapter. The request SHALL carry `acp_request_id` (the agent's ACP u64 id in params; call/reply pairing is the JSON-RPC `id`), the originating `message_id`, `target_session`, `decider_sessions`, `title`, `species`, `details`, and `options` (each with `option_id`, `name`, `species`). Routed requests, replies, and events SHALL bind to supervisor-authorized (runtime, adapter, target, generation) correlation. Single-target scope per the supervision scope requirement; scope SHALL NOT be inferred from generation or traffic shape.
 
 #### Scenario: Choice request carries generation binding
 
 - **WHEN** an adapter raises a tool-call permission mid-turn
-- **THEN** the wire request includes the adapter generation id alongside the transport-native `request_id` and per-delivery correlation fields
+- **THEN** the wire request includes the adapter generation id alongside the JSON-RPC `id` and per-delivery correlation fields, with the agent's ACP id in params `acp_request_id`
 - **AND** the adapter generation is a distinct wire field from the relay consumer generation and the identity binding epoch (never a bare comparable integer across the boundary)
 
 #### Scenario: Response taxonomy crosses unchanged

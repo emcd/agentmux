@@ -32,9 +32,9 @@ Version, framing, and limits negotiation SHALL be settled before an independentl
 - **WHEN** an adapter presents a protocol version outside the negotiated range
 - **THEN** the supervisor refuses the binding with a typed version-skew failure rather than operating degraded
 
-### Requirement: Identity and resume custody stays split with mechanism open
+### Requirement: Identity and resume custody per the supervision store decision
 
-The relay SHALL hold the canonical target identity, distinct at all times from any opaque agent resume handle. Which side persists the resume mapping and by what fence mechanism (compare-and-swap, advisory lock, or generation-tagged replacement) SHALL be decided at joint freeze — this spec mandates the split and the stale-write fence, not the side or the mechanism.
+The relay SHALL hold canonical target identity, current generation currency, and the resume store bytes (never parsing blobs). The adapter SHALL submit resume writes via `persist_state` and receive hydration inside the launch handshake. Cross-restart import does not exist; within-instance replacement imports the current snapshot at publish.
 
 #### Scenario: Stale generation cannot overwrite fresh resume state
 

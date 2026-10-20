@@ -16,23 +16,23 @@ Non-goals: the reference adapter implementation and conformance suite (follow-on
 
 ### D1: One multiplexed stdio JSON-RPC transport, both directions
 
-Adapter→relay reverse calls (`request_choice`, lifecycle events) and relay→adapter calls (`look`, submit, fence signals) multiplex over a single stdio JSON-RPC channel per adapter instance — the same framing the ACP client already speaks (`client/protocol.rs`, `client/reader.rs`).
+Adapter→relay reverse calls (`adapter.requestChoice`, `adapter.submit`, `adapter.persistState`, `adapter.lifecycleEvent`) and relay→adapter calls (`relay.look`, handshake, supervision signals) multiplex over a single stdio JSON-RPC channel per adapter instance — newline-delimited UTF-8 JSON, one object per frame. The canonical JSON-RPC mapping — methods, params, id rules, error shape — is `adapter-wire-schema`; D1's framing promise is satisfied by that mapping.
 
 Alternative considered: a separate socket per direction. Rejected: doubles the supervision surface (two livenesses, two generations to bind) and abandons the proven stdio framing for no gain.
 
 Alternative considered: relay-poll model for choices (adapter exposes pending-choice queue, relay polls). Rejected: it reintroduces the split-blocking-call hazard the `TransportEvent` removal (`ideas/transports/2` amendment) already settled — a choice is one blocking call, not two async halves.
 
-### D2: Generation on every routed message; epoch defined at freeze
+### D2: Generation on every routed message; no epoch field
 
 Every choice request/response, look request/reply, submit, and ack carries the adapter generation id. `request_id` alone never routes: ACP request ids repeat across generations (Tier-2 C4). The relay binds authorization, correlation, and stale-reply invalidation to supervisor-authorized (runtime, adapter, target, generation) correlation — uniqueness is never inferred from generation alone. Scope is single-target per the supervision scope requirement.
 
 Three generation-like axes exist and MUST stay distinct wire fields with distinct types — never a bare comparable u64 across the boundary: the adapter generation (this contract's routing axis), the relay delivery-consumer generation (`ConsumerGenerationId`, five-step fence ack), and the identity binding epoch (merged `runtime-api`). Stale and duplicate controls — for choices and events alike — key on the adapter's own generation and MUST NOT affect replacements; relay fence-ack stays the cessation mechanism.
 
-The `epoch` field is reserved in every routed message and carries NO provisional implementation meaning: until the joint freeze defines it explicitly, implementations MUST NOT read it. Treating an undefined field as adapter-scoped would bake divergent meanings into both sides before the definition exists.
+`epoch` is REMOVED from all routed messages. Rationale: no concrete restart/rebind trace distinguishes a fourth counter — generations are supervisor-issued and monotonic per (instance, target), echoed by the adapter and never restarted at 1, so late traffic is stale by generation inequality with no durable counters anywhere; supervisor restarts are covered by instance identity; credential lifecycle is covered by the binding epoch. The field name stays reserved for a future protocol version with this rationale recorded. The three axes stay separate wire fields.
 
 ### D3: Poll look now, streaming later — with multiplexing as the condition
 
-`look` is a per-call relay→adapter RPC. Accepted cost: no concurrent read without touching the worker. The condition that makes the cut sound (Tier-2 C5): dispatch multiplexes, so a prime-wait in progress never blocks cancel/fence/ack/choice traffic; replies carry generation with stale/discontinuity metadata; the schema keeps `offset` + entry counts so subscribe/stream attaches additively. (`epoch` is reserved everywhere per D2, including here.)
+`look` is a per-call relay→adapter RPC. Accepted cost: no concurrent read without touching the worker. The condition that makes the cut sound (Tier-2 C5): dispatch multiplexes, so a prime-wait in progress never blocks cancel/fence/ack/choice traffic; replies carry generation with stale/discontinuity metadata; the schema keeps `offset` + entry counts so subscribe/stream attaches additively.
 
 Alternative considered: specifying streaming upfront. Rejected: new protocol surface that should ride the reference-adapter slice, where real usage informs the cursor/channel shape.
 
@@ -66,14 +66,17 @@ The generic supervisor never speaks ACP `initialize`/`new`/`load`. The adapter r
 
 None required: purely additive contract, no implementation in this change. The reference-adapter slice migrates nothing; in-process transports keep working until an adapter replaces them per target.
 
-## Decided at freeze (were Open Questions 1-4, plus wait policy, backpressure shape, and scope)1. Version/framing/limits: major equality required, minor overlap of declared windows, limits resolved down — per the supervision version-skew requirement. Skew policy gates the reference adapter as stated.
-2. Stale-write fence: generation-tagged replacement picked (tags checked against relay-held currency on every write); CAS and advisory lock rejected.
-3. Custody: currency (identity + current generation) at the relay, opaque bytes at the adapter, fenced by tag.
+## Proposed freeze resolutions (under review — proposals, not decisions)
+
+The following are ACP+Backend proposals for tier review. None is decided until the freeze; SHALL-language below is draft-contract voice, not normative approval.
+
+1. Version/framing/limits: major equality required, minor overlap of declared windows, limits resolved down — per the supervision version-skew requirement. Skew policy gates the reference adapter as stated.
+2. Stale-write fence: cessation-before-replacement with supervisor-exclusive serialized commit authority, observed out-of-band cessation, immutable per-generation namespaces, fresh-instance restart currency — per the supervision cessation requirement.
+3. Custody: canonical identity, current-generation currency, and the resume store bytes at the supervisor (never parsing blobs); adapter submits via persist_state, hydrates in-handshake; within-instance import at publish, no cross-restart import.
 4. Supervision model: relay-spawned only; no self-registration, no orphan adoption (terminate + relaunch on restart), no detach in this revision.
 5. Human-choice wait policy: unbounded-but-invalidatable with an operator-configured ceiling, dual-cancel path shared with disconnect — per the supervision wait-ceiling requirement.
 6. Backpressure shape: negotiated handshake limits resolved down, refuse-with-typed-code frozen; bound values negotiated, not hardcoded.
 7. Scope: single-target per adapter instance — per the supervision scope requirement.
+8. Epoch: REMOVED from all routed messages — supervisor-issued monotonic generations, field name reserved with rationale per D2.
 
-ACP follow-up obligation: the adapter timeout schema must publish max ack latency per content type, or the watchdog-deadline-vs-latency ordering in the watchdog requirement is unenforceable.
-
-## Remaining for freeze: `epoch` definition (reserved, no provisional meaning until defined).
+ACP follow-up obligation: none remaining on latency publication — `latency_declarations` are handshake fields per the watchdog requirement (todos/acp/32 tracks the adapter timeout-schema side).
