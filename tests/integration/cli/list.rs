@@ -15,6 +15,7 @@ use agentmux::runtime::paths::{
 use serde_json::Value;
 use tempfile::TempDir;
 
+use super::hello_conflict_fake::spawn_fake_relay_with_hello_conflict;
 use super::helpers::*;
 
 #[test]
@@ -112,6 +113,86 @@ fn list_global_session_resolves_without_default_bundle() {
     let requests = request_log.lock().expect("request log lock");
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0]["requester_session"], "user@GLOBAL");
+}
+
+#[test]
+fn list_principals_names_held_identity_instead_of_saturation() {
+    let temporary = TempDir::new().expect("temporary");
+    let config_root = temporary.path().join("config");
+    let state_root = temporary.path().join("state");
+    let inscriptions_root = temporary.path().join("inscriptions");
+    fs::create_dir_all(&config_root).expect("create config root");
+    fs::create_dir_all(&state_root).expect("create state root");
+    fs::create_dir_all(&inscriptions_root).expect("create inscriptions root");
+    write_bundle_configuration(
+        &config_root,
+        "agentmux",
+        Some(&["dev"]),
+        &["tui"],
+    );
+    write_tui_configuration(
+        &config_root,
+        None,
+        Some("user"),
+        &[("user", "default", Some("Operator"))],
+    );
+
+    // Every hello is claim-rejected, so the client exhausts its ~1s conflict
+    // budget and fails without ever sending the list request.
+    let rejected = Arc::new(Mutex::new(Vec::<String>::new()));
+    let relay_thread = spawn_fake_relay_with_hello_conflict(
+        &RelayRuntimePaths::resolve(&state_root).relay_socket,
+        Arc::clone(&rejected),
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_agentmux"))
+        .args([
+            "list",
+            "principals",
+            "--namespace",
+            "GLOBAL",
+            "--as-session",
+            "user@GLOBAL",
+            "--configuration-directory",
+            &config_root.to_string_lossy(),
+            "--state-directory",
+            &state_root.to_string_lossy(),
+            "--inscriptions-directory",
+            &inscriptions_root.to_string_lossy(),
+        ])
+        .output()
+        .expect("run list principals against held identity");
+    relay_thread.join().expect("join fake relay thread");
+    assert!(
+        !output.status.success(),
+        "held identity must fail the command"
+    );
+    let rejected = rejected.lock().expect("rejected lock");
+    assert!(
+        rejected.len() >= 2,
+        "client must retry at least once after the first hello conflict: {rejected:?}"
+    );
+    assert!(
+        rejected.iter().all(|principal| principal == "user@GLOBAL"),
+        "retries must keep claiming the same identity: {rejected:?}"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("runtime_identity_claim_conflict"),
+        "error must name the conflict: {stderr}"
+    );
+    assert!(
+        stderr.contains("user@GLOBAL"),
+        "error must name the held principal: {stderr}"
+    );
+    assert!(
+        stderr.contains("already claimed"),
+        "error must state the holder-live reason: {stderr}"
+    );
+    assert!(
+        !stderr.contains("saturated or unresponsive"),
+        "error must not suggest saturation for a responsive relay: {stderr}"
+    );
 }
 
 #[test]

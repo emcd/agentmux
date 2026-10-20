@@ -387,11 +387,11 @@ impl RelayStreamSession {
                     let remaining =
                         deadline.saturating_duration_since(Instant::now());
                     if remaining.is_zero() {
-                        // Surface an exhausted conflict retry as a timeout so
-                        // `map_relay_request_failure` reports `relay_timeout`
-                        // with the conflict message, rather than the opaque
-                        // `internal_unexpected_failure` that `io::Error::other`
-                        // falls through to.
+                        // Surface an exhausted conflict retry as a timeout
+                        // carrying the conflict report, so the CLI mapper can
+                        // name the held identity instead of reporting
+                        // saturation; the opaque `io::Error::other` fallthrough
+                        // would hide the cause as `internal_unexpected_failure`.
                         return Err(io::Error::new(
                             io::ErrorKind::TimedOut,
                             message,
@@ -529,8 +529,8 @@ impl RelayStreamSession {
                     ..
                 } => {
                     let message = format!(
-                        "relay hello rejected [{}]: {}",
-                        error.code, error.message
+                        "relay hello rejected [{}] for '{}': {}",
+                        error.code, principal_id, error.message
                     );
                     if error.code == "runtime_identity_claim_conflict" {
                         return Err(

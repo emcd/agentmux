@@ -280,6 +280,9 @@ pub(super) fn map_relay_request_failure(
     socket_path: &Path,
     source: std::io::Error,
 ) -> RuntimeError {
+    if let Some(conflict) = map_identity_claim_conflict(socket_path, &source) {
+        return conflict;
+    }
     if is_relay_timeout_error(&source) {
         return RuntimeError::validation(
             "relay_timeout",
@@ -331,6 +334,35 @@ pub(super) fn runtime_error_reason(source: &RuntimeError) -> (String, String) {
 
 fn is_relay_timeout_error(source: &std::io::Error) -> bool {
     matches!(source.kind(), std::io::ErrorKind::TimedOut)
+}
+
+/// Names an exhausted hello-identity-claim retry for what it is.
+///
+/// The stream client surfaces conflict retries exhausted under its hello
+/// budget as a timeout carrying the relay's conflict report. Without this
+/// arm the generic timeout below would blame saturation while the relay is
+/// responsive and the claimed identity is simply held by a live connection.
+fn map_identity_claim_conflict(
+    socket_path: &Path,
+    source: &std::io::Error,
+) -> Option<RuntimeError> {
+    if !is_relay_timeout_error(source) {
+        return None;
+    }
+    if !source
+        .to_string()
+        .contains("runtime_identity_claim_conflict")
+    {
+        return None;
+    }
+    Some(RuntimeError::validation(
+        "runtime_identity_claim_conflict",
+        format!(
+            "identity claim conflict at {}; {}",
+            socket_path.display(),
+            source
+        ),
+    ))
 }
 
 fn is_relay_unavailable_error(source: &std::io::Error) -> bool {
