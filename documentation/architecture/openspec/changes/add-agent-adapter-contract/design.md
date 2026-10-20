@@ -24,7 +24,7 @@ Alternative considered: relay-poll model for choices (adapter exposes pending-ch
 
 ### D2: Generation on every routed message; epoch defined at freeze
 
-Every choice request/response, look request/reply, submit, and ack carries the adapter generation id. `request_id` alone never routes: ACP request ids repeat across generations (Tier-2 C4). The relay binds authorization, correlation, and stale-reply invalidation to supervisor-authorized (runtime, adapter, target, generation) correlation — uniqueness is never inferred from generation alone, and the single-target vs multi-target adapter scope is decided at freeze, not assumed.
+Every choice request/response, look request/reply, submit, and ack carries the adapter generation id. `request_id` alone never routes: ACP request ids repeat across generations (Tier-2 C4). The relay binds authorization, correlation, and stale-reply invalidation to supervisor-authorized (runtime, adapter, target, generation) correlation — uniqueness is never inferred from generation alone. Scope is single-target per the supervision scope requirement.
 
 Three generation-like axes exist and MUST stay distinct wire fields with distinct types — never a bare comparable u64 across the boundary: the adapter generation (this contract's routing axis), the relay delivery-consumer generation (`ConsumerGenerationId`, five-step fence ack), and the identity binding epoch (merged `runtime-api`). Stale and duplicate controls — for choices and events alike — key on the adapter's own generation and MUST NOT affect replacements; relay fence-ack stays the cessation mechanism.
 
@@ -66,14 +66,14 @@ The generic supervisor never speaks ACP `initialize`/`new`/`load`. The adapter r
 
 None required: purely additive contract, no implementation in this change. The reference-adapter slice migrates nothing; in-process transports keep working until an adapter replaces them per target.
 
-## Open Questions
+## Decided at freeze (were Open Questions 1-4, plus wait policy, backpressure shape, and scope)1. Version/framing/limits: major equality required, minor overlap of declared windows, limits resolved down — per the supervision version-skew requirement. Skew policy gates the reference adapter as stated.
+2. Stale-write fence: generation-tagged replacement picked (tags checked against relay-held currency on every write); CAS and advisory lock rejected.
+3. Custody: currency (identity + current generation) at the relay, opaque bytes at the adapter, fenced by tag.
+4. Supervision model: relay-spawned only; no self-registration, no orphan adoption (terminate + relaunch on restart), no detach in this revision.
+5. Human-choice wait policy: unbounded-but-invalidatable with an operator-configured ceiling, dual-cancel path shared with disconnect — per the supervision wait-ceiling requirement.
+6. Backpressure shape: negotiated handshake limits resolved down, refuse-with-typed-code frozen; bound values negotiated, not hardcoded.
+7. Scope: single-target per adapter instance — per the supervision scope requirement.
 
-Shared ACP + Backend ground — decided together before either side freezes (see `ideas/acp/4` §4). Backend task 1.3 plus this joint freeze complete BEFORE approval as a frozen wire contract; submit payloads, event schema, framing/limits/version/skew, the concrete stale-write fence, and the ownership model remain undefined until then.
+ACP follow-up obligation: the adapter timeout schema must publish max ack latency per content type, or the watchdog-deadline-vs-latency ordering in the watchdog requirement is unenforceable.
 
-1. `epoch` definition (reserved, no provisional meaning until frozen).
-2. Single-target vs multi-target adapter scope.
-3. Concrete stale-write fence mechanism for the opaque resume mapping (CAS vs advisory lock vs generation-tagged replacement).
-4. Final custody split for persisted session state (Tier-2 C1 framing: relay holds canonical id, adapter persists tied state).
-5. Version/framing/limits negotiation shape and skew policy (gates the reference adapter).
-6. Frame/queue bounds under stdio backpressure.
-7. Supervision model: relay-spawned vs self-registering, orphan/stale-socket adoption, shutdown/detach semantics (Q4 — must not be inherited silently).
+## Remaining for freeze: `epoch` definition (reserved, no provisional meaning until defined).

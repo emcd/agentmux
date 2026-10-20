@@ -2,7 +2,7 @@
 
 ### Requirement: Adapter requests choices over a blocking reverse-RPC
 
-The system SHALL provide an adapter→relay `request_choice` reverse-RPC that blocks the calling turn resolver until resolved. The request SHALL carry the adapter generation id on every call; `request_id` alone SHALL NOT route. The `epoch` field is reserved and SHALL carry no meaning until the joint freeze defines it. The request SHALL carry the transport-native `request_id`, the originating `message_id`, `target_session`, `decider_sessions`, `title`, `species`, `details`, and `options` (each with `option_id`, `name`, `species`). Routed requests, replies, and events SHALL bind to supervisor-authorized (runtime, adapter, target, generation) correlation; single-target vs multi-target adapter scope is decided at freeze and SHALL NOT be inferred from generation alone.
+The system SHALL provide an adapter→relay `request_choice` reverse-RPC that blocks the calling turn resolver until resolved. The request SHALL carry the adapter generation id on every call; `request_id` alone SHALL NOT route. The `epoch` field is reserved and SHALL carry no meaning until the joint freeze defines it. The request SHALL carry the transport-native `request_id`, the originating `message_id`, `target_session`, `decider_sessions`, `title`, `species`, `details`, and `options` (each with `option_id`, `name`, `species`). Routed requests, replies, and events SHALL bind to supervisor-authorized (runtime, adapter, target, generation) correlation. Single-target scope per the supervision scope requirement; scope SHALL NOT be inferred from generation or traffic shape.
 
 #### Scenario: Choice request carries generation binding
 
