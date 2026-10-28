@@ -4,6 +4,7 @@ mod check;
 mod check_bindings;
 mod drop;
 mod held_bundle_guard;
+mod hello_conflict_fake;
 mod help;
 pub(crate) mod helpers;
 mod host;
