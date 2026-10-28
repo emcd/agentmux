@@ -1,7 +1,7 @@
 # See https://pre-commit.com for more information
 # See https://pre-commit.com/hooks.html for more hooks
 
-default_install_hook_types: [ 'pre-commit', 'pre-push' ]
+default_install_hook_types: [ 'pre-commit', 'pre-push', 'pre-merge-commit' ]
 
 repos:
 - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -44,7 +44,7 @@ repos:
       entry: 'scripts/lint-client-configuration.sh'
       pass_filenames: false
       require_serial: true
-      stages: [ 'pre-commit' ]
+      stages: [ 'pre-commit', 'pre-merge-commit' ]
       fail_fast: true
 
     - id: lint-openspec-deltas
@@ -69,7 +69,7 @@ repos:
       entry: 'scripts/verify-openspec-deltas.py'
       files: '^(documentation/architecture/)?openspec/changes/[^/]+/specs/.*\.md$'
       require_serial: true
-      stages: [ 'pre-commit' ]
+      stages: [ 'pre-commit', 'pre-merge-commit' ]
       verbose: true
       fail_fast: true
 
@@ -96,7 +96,7 @@ repos:
       pass_filenames: false
       always_run: true
       require_serial: true
-      stages: [ 'pre-commit' ]
+      stages: [ 'pre-commit', 'pre-merge-commit' ]
       fail_fast: true
 
     - id: lint-openspec-archive
@@ -128,7 +128,7 @@ repos:
       entry: 'scripts/verify-openspec-deltas.py --archived'
       files: '^(documentation/architecture/)?openspec/changes/archive/'
       require_serial: true
-      stages: [ 'pre-commit' ]
+      stages: [ 'pre-commit', 'pre-merge-commit' ]
       verbose: true
       fail_fast: true
 
@@ -155,7 +155,7 @@ repos:
       pass_filenames: false
       always_run: true
       require_serial: true
-      stages: [ 'pre-commit' ]
+      stages: [ 'pre-commit', 'pre-merge-commit' ]
       fail_fast: true
 
     - id: linecheck
@@ -165,7 +165,7 @@ repos:
       pass_filenames: false
       always_run: true
       require_serial: true
-      stages: [ 'pre-commit' ]
+      stages: [ 'pre-commit', 'pre-merge-commit' ]
       fail_fast: true
 
     - id: cargo-fmt
@@ -174,7 +174,7 @@ repos:
       entry: 'cargo fmt --all -- --check'
       pass_filenames: false
       require_serial: true
-      stages: [ 'pre-commit' ]
+      stages: [ 'pre-commit', 'pre-merge-commit' ]
       fail_fast: true
 
     - id: cargo-clippy
@@ -189,7 +189,7 @@ repos:
       entry: 'cargo clippy --all-targets --features "" -- -D warnings'
       pass_filenames: false
       require_serial: true
-      stages: [ 'pre-commit' ]
+      stages: [ 'pre-commit', 'pre-merge-commit' ]
       fail_fast: true
 
     - id: cargo-clippy-pty
@@ -198,7 +198,7 @@ repos:
       entry: 'scripts/clippy-pty.sh'
       pass_filenames: false
       require_serial: true
-      stages: [ 'pre-commit' ]
+      stages: [ 'pre-commit', 'pre-merge-commit' ]
       files: '^(src/pty/|src/bin/agentmux_pty\.rs|Cargo\.toml|Cargo\.lock)'
       fail_fast: false
 
@@ -221,7 +221,7 @@ repos:
       pass_filenames: false
       always_run: true
       require_serial: true
-      stages: [ 'pre-commit' ]
+      stages: [ 'pre-commit', 'pre-merge-commit' ]
       fail_fast: true
 
     - id: cargo-nextest
@@ -230,7 +230,7 @@ repos:
       entry: 'cargo nextest run --locked --config-file .auxiliary/configuration/nextest.toml'
       pass_filenames: false
       require_serial: true
-      stages: [ 'pre-commit' ]
+      stages: [ 'pre-commit', 'pre-merge-commit' ]
       fail_fast: true
 
     - id: cargo-build
