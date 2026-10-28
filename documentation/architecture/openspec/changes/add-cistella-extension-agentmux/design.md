@@ -1,0 +1,54 @@
+## Context
+
+Cistella hosts external guests (isolators, extensions) over a versioned stdio wire: 4-byte-BE-length-prefixed JSON frames, `hello` (epoch gate + role/capability advertisement) → one `prepare` transaction. The prepare request carries only an opaque `session_id`; per-seat configuration reaches the guest exclusively through spawn argv (static, span-free — `reject_spans` refuses `{{...}}` in all registry text). The response contributes `environment[]`, modeless `mounts[]` placements, `(target, rights)` `permissions[]`, `policy_claims[]`, `guest_hooks[]`, `cleanup[]`, merged centrally under N-extension rules (2026-10-14-extension-composition): placement without permission (or vice versa) refuses, collisions refuse naming all claimants, binding modes render from effective rights (Read→ro, Full→rw).
+
+Today `agentmux.toml` hardcodes one `[[mounts]]` pair per relay scope (`agentmux`, `agentmux-rnd`, `agentmux-rnd-qa`, config+state). The evaluation (`ideas/cistella/2`) verified the registered-guest path (`registry.toml` `[[extensions]]` + static argv + host-side glob) covers dynamic scope discovery, and the Cistella Owner confirmed the container-home and wire-stability guidance the design below encodes. Related work: `todos/general/58` (the `approots` crate owns the same path-grammar domain).
+
+## Goals / Non-Goals
+
+**Goals:**
+
+- One workspace binary that replaces every hardcoded Agentmux mount section with equivalent contributed placements, mount-for-mount.
+- Reuse of the `src/runtime/paths.rs` scope grammar (no copy-paste duplication).
+- Incubation-safe behavior on single-home seats; a defined upgrade path for multi-home seats via a Cistella-side spec delta.
+
+**Non-Goals:**
+
+- No changes to Agentmux relay, CLI, MCP, or TUI behavior.
+- No Cistella wire changes from this change (the `container_home` prepare field is a separate Cistella-side delta).
+- No general-purpose mount manager: scopes outside `agentmux*` are never contributed.
+- No Landlock compiler or merge-pipeline changes; contributed placements join the existing effective-permissions map untouched.
+
+## Decisions
+
+- **Workspace binary linking `paths.rs` first.** The guest links the existing scope/path grammar (application directory name, XDG tiers, env names, 0700 semantics). Alternative (extract a shared `agentmux-paths`/`approots`-adjacent crate up front) is deferred: extraction is justified only if linking the full library proves too heavy for a spawned guest. Coordinate with `todos/general/58` so the extraction, if needed, lands in the crate the Approots Owner is already building rather than a second parallel grammar.
+- **Host-root inputs picked explicitly.** Supported: `HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME` read from the guest's own process environment — seat ambient, identical for every session, so this is host-level discovery rather than per-session profile inference and the session-blindness invariant holds. Not supported at incubation: explicit `AGENTMUX_CONFIGURATION_DIRECTORY` / `AGENTMUX_STATE_DIRECTORY` roots and flag-configured deployments, which stay on hardcoded mounts. The mount-for-mount promise is scoped to eligible seats; rollout ships an eligibility check (enumerate the seat's deployments, confirm default-layout roots) so a non-default deployment never silently loses mounts. Alternative (reading `AGENTMUX_*` from guest ambient) rejected: guest ambient is seat-level and cannot reliably name per-deployment roots.
+
+- **Static `--container-home` argv at incubation.** Contributed `container_target`s must be literal absolute paths (driver-side template expansion applies to profile-declared mounts only). Registry static argv is the only session-blind channel available today. Alternative (fixed image convention) rejected per Owner guidance — sound only when the extension controls the image set. Alternative (guests reading profiles/env for the home) prohibited — breaks the session-blindness invariant the merge gate depends on.
+- **Additive `container_home` prepare field for multi-home.** The correct long-term fix, filed as a Cistella-side extension-protocol spec delta through Tier-1/Tier-2 review. Additive fields do not bump the epoch (precedent: `session_id` itself). Static argv stays the default until the delta lands; mixed-home seats are out of scope for incubation and must keep hardcoded mounts until then.
+- **Closed mode rule, no per-scope config.** Exact-`agentmux` config mounts `Read` (least privilege on production config, matches today's profile); every other scope config+state `Full`; state always `Full` (deliberate same-user authority for log/socket debugging — state holds credentials and sockets by design, so no blanket least-privilege claim). A closed rule keeps the guest's behavior auditable; per-scope knobs would reintroduce the maintenance burden the extension exists to remove. A `--deny-scope` argv escape covers stray directories.
+- **Reject-symlink incubation policy, no canonical comparison.** Canonical equality cannot prove containment safety — a symlink to a subdirectory of protected config passes exact-identity and duplicate tests while exposing protected content writable — so the guest performs no canonicalization at all. Lexical `--deny-scope` match skips first (a denied scope is skipped even if itself a symlink, without refusal); then `lstat` rejects every remaining symlink candidate with prepare refusal naming it; non-directories are skipped; enumeration is sorted. Documented limits: symlinked scopes are unsupported at incubation — seats holding any must resolve them or stay on hardcoded mounts (covered by the eligibility check); legitimate symlinked deployments and any future component-wise overlap policy belong to a follow-up change. Discovery assumes a seat-admin-trusted, quiescent host tree during prepare; concurrent adversarial mutation is out of scope — the `lstat` verdict is not pinned through mount use. No runtime changes; no new dependencies.
+- **Read-only discovery lifecycle.** The guest answers `cleanup=[]` for every pre-existing root and performs no mkdir/chmod/hydration/deletion in prepare or teardown. Linking the Agentmux library executes nothing by itself; the constraint is on the call graph — discovery uses a read-only facade over the path grammar (scope-name constants, XDG tier order, env names) and never calls `ensure_directory_secure`, hydration, or any root-preparation helper on discovered content. If the facade needs a read-only subset of the grammar, it is proposed as part of this change; existing helpers' side effects are untouched. A missing config/state parent (`ENOENT` on the scanned root itself) is empty discovery for that side; any other IO error (permission, mid-walk failure) refuses with a distinct reason. Config and state contribute independently: a present `agentmux-rnd` config with absent state contributes config only, never creating the pair. Alternative (sharing the relay bootstrap path) rejected: bootstrap prepares roots the relay owns; the extension must leave host config alone.
+
+- **Wire strategy: track master, pin refusal behavior.** The epoch is designed to move (currently 2) with sharp pre-1.0 breaks and fail-closed mismatch refusal in both directions — pinning it buys nothing. Instead the change pins hello-layer tests in both refusal directions against a fixed peer, so the next bump announces itself as a loud typed refusal. No unilateral fields (unknown fields refuse deterministically).
+- **Wire safety pinned; reference guest not inherited unchecked.** The tmpdir `read_frame` allocates directly from the u32 length; the new guest bounds the declared length against its inbound ceiling (pre-negotiation class) before allocating and refuses oversized frames without allocation. Prepare validation — epoch, op, request correlation id, session attribution — completes before any filesystem contact, so a malformed prepare cannot reach the host tree. The hello `max_frame` advertisement names the guest's own ceiling; the operative limit is the negotiated maximum per the Cistella extension protocol (guest-proposed, host-clamped to its ceiling) — and the prepare response is checked against it before emission (refuse before any partial frame rather than truncate). Stdout carries complete frames only; diagnostics go to stderr, which the host drains. Unknown envelope fields refuse (inherited wire rule, `deny_unknown_fields` both directions).
+
+- **Reference implementation shape follows `cistella-extension-tmpdir`.** std + serde_json only, argv-selected role, epoch/identity gates before any planning, fail-closed prepare (any failure refuses, never an undeclared session). Keeps the guest reviewable by the Cistella side as a conventional third-party extension.
+
+## Risks / Trade-offs
+
+- [Epoch moves under incubation] → Mitigation: track master, pinned refusal-behavior tests fail loudly on bump; re-verify merged plan after each Cistella update.
+- [Mixed-home seats silently misplace mounts under static argv] → Mitigation: incubation scoped to single-home seats; document the caveat in the registry snippet; multi-home waits for the `container_home` delta.
+- [Scope sprawl: a stray `~/.config/agentmux-foo` gains mounts by glob] → Mitigation: `--deny-scope` argv plus a prepare-time stderr line listing contributed scopes (observability, not a wire field).
+- [Full-library link bloats the spawned guest] → Mitigation: extraction decision at implementation time, coordinated with `todos/general/58`.
+- [Triple-extension composition (landlock + agentmux-mounts + ssh/tmpdir) unproven] → Mitigation: live re-proof at implementation time against the real merge pipeline, never fixtures.
+- [Seat `registry.toml` drift across the team] → Mitigation: ship a documented registry snippet; rollout via agentsmgr-managed content if available.
+
+## Migration Plan
+
+Per seat, atomic per profile: in one edit, delete the hardcoded Agentmux `[[mounts]]` sections from `agentmux.toml` and add `[[extensions]] name = 'agentmux'`, with the seat `registry.toml` entry (`agentmux` / role `agentmux-mounts` / absolute-path source / `--container-home` + optional `--deny-scope`) already in place. Leaving both in collides under N-extension merge rules and conduct refuses loudly — fail-closed, which is the desired property, not a hazard. Rollback is the inverse single edit. Promotion to digest-pinned registry sources after one stable release cycle on dev + CI seats; separate repository only once the extension matures and a Cistella SDK or stable wire contract exists.
+
+## Open Questions
+
+- Exact registry role string (`agentmux-mounts` vs `agentmux`) — confirm with Cistella Owner at implementation time; trivial either way.
+- Whether the `container_home` Cistella-side delta should be filed from this change's tasks or as its own change — decided: its own change, referenced here, so this change never blocks on Cistella-side review.
