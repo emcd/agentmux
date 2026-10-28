@@ -7,6 +7,7 @@
 //! operator-supplied path) exactly once.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use serde_json::Value;
 use time::OffsetDateTime;
@@ -15,6 +16,7 @@ use time::format_description::well_known::Rfc3339;
 use crate::configuration::ConfigurationRoots;
 use crate::relay::authorization::{RelayActionFamily, authorize_relay_action};
 use crate::relay::context::RequestPrincipal;
+use crate::relay::delivery::DeliveryContext;
 use crate::relay::identity::{
     IdentityIntrospectRights, PrincipalRecord, PrincipalStore, PrincipalType,
     classify_principal_id, generate_psk, hash_token_sha256, parse_peer_scope,
@@ -226,6 +228,7 @@ fn scope_vocabulary_diagnostics(scope: Option<&str>) -> Vec<RelayDiagnostic> {
 /// are notified either way, since a cached view of the credential is stale
 /// regardless of who initiated the rotation.
 pub(in crate::relay) fn handle_change_psk(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     requester_principal_id: &str,
@@ -320,6 +323,7 @@ pub(in crate::relay) fn handle_change_psk(
                 }
                 let (revoked_connections, notified_hosts) =
                     revoke_superseded_credential(
+                        delivery,
                         principal_id.as_str(),
                         requester_principal_id,
                     );
@@ -348,6 +352,7 @@ pub(in crate::relay) fn handle_change_psk(
                 // the success path does, then report the typed uncertainty.
                 let (revoked_connections, notified_hosts) =
                     revoke_superseded_credential(
+                        delivery,
                         principal_id.as_str(),
                         requester_principal_id,
                     );
@@ -389,6 +394,7 @@ pub(in crate::relay) fn handle_change_psk(
     // alive on the prior credential: the stream registry keys one entry per
     // `principal_id`, so a self-rotation's only possible match is the requester.
     let (revoked_connections, notified_hosts) = revoke_superseded_credential(
+        delivery,
         principal_id.as_str(),
         requester_principal_id,
     );
@@ -545,6 +551,7 @@ pub(in crate::relay) fn handle_change_scope(
 /// distributed it — for a peer relay it lives under the *connecting* relay's
 /// state root, which this relay cannot see.
 pub(in crate::relay) fn handle_drop_peer(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     requester_principal_id: &str,
@@ -600,8 +607,11 @@ pub(in crate::relay) fn handle_drop_peer(
             Some(serde_json::json!({ "principal_id": principal_id })),
         ),
     };
-    let revoked_connections =
-        revoke_streams_for_identity(principal_id.as_str(), &revoked_frame);
+    let revoked_connections = revoke_streams_for_identity(
+        delivery,
+        principal_id.as_str(),
+        &revoked_frame,
+    );
     let revoked_at = OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_default();
@@ -615,6 +625,7 @@ pub(in crate::relay) fn handle_drop_peer(
         }),
     };
     let notified_hosts = notify_trusted_hosts_of_revocation(
+        delivery,
         principal_id.as_str(),
         &revoked_event,
     );
@@ -828,6 +839,7 @@ fn is_credential_uncertain(error: &RelayError) -> bool {
 /// must not linger. The requester's own connection is exempt (see the rotation
 /// success path for why excluding it is safe).
 fn revoke_superseded_credential(
+    delivery: &Arc<DeliveryContext>,
     principal_id: &str,
     requester_principal_id: &str,
 ) -> (usize, usize) {
@@ -841,7 +853,7 @@ fn revoke_superseded_credential(
     let revoked_connections = if requester_principal_id == principal_id {
         0
     } else {
-        revoke_streams_for_identity(principal_id, &revoked_frame)
+        revoke_streams_for_identity(delivery, principal_id, &revoked_frame)
     };
 
     // Notify every connected trusted host whose scope covers the revoked
@@ -862,8 +874,11 @@ fn revoke_superseded_credential(
             "revoked_at": revoked_at,
         }),
     };
-    let notified_hosts =
-        notify_trusted_hosts_of_revocation(principal_id, &revoked_event);
+    let notified_hosts = notify_trusted_hosts_of_revocation(
+        delivery,
+        principal_id,
+        &revoked_event,
+    );
     (revoked_connections, notified_hosts)
 }
 

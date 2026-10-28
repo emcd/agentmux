@@ -16,8 +16,12 @@
 //! `tests/unit/relay/` directory and are sibling modules under this
 //! hub.
 
+use std::sync::Arc;
+
 use agentmux::configuration::ConfigurationRoots;
-use agentmux::relay::{RelayRequest, RelayResponse, handle_request};
+use agentmux::relay::{
+    DeliveryContext, RelayRequest, RelayResponse, handle_request,
+};
 use tempfile::TempDir;
 
 mod bundle_teardown;
@@ -45,10 +49,28 @@ fn dispatch_request(
     bundle_name: &str,
     tmux_socket: &std::path::Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
+    let delivery = test_delivery();
+    dispatch_request_with_delivery(
+        &delivery,
+        request,
+        configuration_roots,
+        bundle_name,
+        tmux_socket,
+    )
+}
+
+fn dispatch_request_with_delivery(
+    delivery: &Arc<DeliveryContext>,
+    request: RelayRequest,
+    configuration_roots: &ConfigurationRoots,
+    bundle_name: &str,
+    tmux_socket: &std::path::Path,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
     let runtime_directory = tmux_socket
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."));
     handle_request(
+        delivery,
         request,
         configuration_roots,
         bundle_name,
@@ -56,39 +78,32 @@ fn dispatch_request(
     )
 }
 
-/// Shortens the unreachable dwell for a test that drives delivery at a target
-/// nothing is listening for.
-///
-/// The compiled-in default is thirty seconds, deliberately: a bounce asserts to
-/// the sender that a target is gone, so a target that is merely restarting must
-/// not trip it. A test cannot also wait that long. What is shortened is the
-/// policy, not the behaviour — the member still resolves only on a *sustained*
-/// observation, just one measured in a window a test can outlast.
-///
-/// This must be a call and not a `relay.toml`: `DELIVERY_CONFIGURATION` is a
-/// process-global the real host installs at startup, and a test driving
-/// `handle_request` in-process never runs that path, so a `[delivery]` table
-/// beside the bundle is read by nobody. Safe as a `OnceLock` write because
-/// nextest gives each test its own process.
-fn configure_short_unreachable_dwell() {
-    agentmux::relay::configure_delivery(
+/// A fresh delivery context for one test: an isolated ledger, registry set,
+/// and shutdown gate, so no test observes another test's reservations.
+fn test_delivery() -> Arc<DeliveryContext> {
+    Arc::new(DeliveryContext::new(Default::default()))
+}
+
+/// A fresh delivery context with a custom unreachable dwell, for tests that
+/// drive delivery at a target nothing is listening for.
+fn test_delivery_with_dwell(
+    unreachable_dwell_ms: u64,
+) -> Arc<DeliveryContext> {
+    Arc::new(DeliveryContext::new(
         agentmux::relay::DeliveryConfiguration {
-            unreachable_dwell_ms: 500,
+            unreachable_dwell_ms,
             ..Default::default()
         },
-    );
+    ))
 }
+
+/// A dwell short enough for a test to outlast, for tests that drive delivery
+/// at a target nothing is listening for. See `test_delivery_with_dwell`.
+const SHORT_UNREACHABLE_DWELL_MS: u64 = 500;
 
 /// A dwell long enough that no test window reaches it, for asserting that an
 /// unreachable target is *held* rather than resolved.
-fn configure_long_unreachable_dwell() {
-    agentmux::relay::configure_delivery(
-        agentmux::relay::DeliveryConfiguration {
-            unreachable_dwell_ms: 600_000,
-            ..Default::default()
-        },
-    );
-}
+const LONG_UNREACHABLE_DWELL_MS: u64 = 600_000;
 
 fn write_tui_configuration(roots: &ConfigurationRoots, policy: &str) {
     std::fs::write(

@@ -2,11 +2,13 @@ use super::*;
 
 #[test]
 fn raww_rejects_unknown_target() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Raww {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -26,6 +28,7 @@ fn raww_rejects_unknown_target() {
 
 #[test]
 fn raww_without_peer_manager_reports_cross_relay_unavailable() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -33,7 +36,8 @@ fn raww_without_peer_manager_reports_cross_relay_unavailable() {
     // The non-stream single-bundle entry point holds no peer connection manager,
     // so a cross-relay (bang-path) raww target cannot be forwarded and reports as
     // unavailable. The stream path supplies the manager for real forwarding.
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Raww {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -65,11 +69,16 @@ fn raww_rejects_relay_wide_target_as_unsupported_operation() {
         "default",
         "ui@GLOBAL",
     );
-    agentmux::relay::register_configured_relay_wide_principals(&config_root)
-        .expect("register declared relay-wide principals");
+    let delivery = test_delivery();
+    agentmux::relay::register_configured_relay_wide_principals(
+        &delivery,
+        &config_root,
+    )
+    .expect("register declared relay-wide principals");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Raww {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -92,13 +101,15 @@ fn raww_rejects_relay_wide_target_as_unsupported_operation() {
 
 #[test]
 fn raww_rejects_reserved_namespace_target_as_unsupported_namespace() {
+    let delivery = test_delivery();
     // Reserved namespaces (`@EXTERNAL`/`@RELAY`) name no routable session at
     // all; their routing-stage rejection is unchanged by the capability gate.
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Raww {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -118,12 +129,14 @@ fn raww_rejects_reserved_namespace_target_as_unsupported_namespace() {
 
 #[test]
 fn raww_rejects_oversized_text() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
     let text = "x".repeat(32 * 1024 + 1);
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Raww {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -143,6 +156,7 @@ fn raww_rejects_oversized_text() {
 
 #[test]
 fn raww_omitted_from_policy_is_denied_by_default() {
+    let delivery = test_delivery();
     // issues/authz/1: a policy that OMITS `raww` must default to `none` (closed),
     // not `home`. Otherwise any same-bundle peer silently gains keystroke-grade
     // raw input injection. Here `alpha` and `bravo` share the `party` bundle, so
@@ -182,7 +196,8 @@ send = "home"
     );
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Raww {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -208,6 +223,7 @@ send = "home"
 
 #[test]
 fn raww_falls_back_to_none_without_default_policy_or_member_policy_id() {
+    let delivery = test_delivery();
     // issues/authz/1 (review follow-up): the serde omission default is not the
     // only home->none gap. When the policies file declares no `default` selector
     // and the bundle member carries no `policy_id`, resolution falls through to
@@ -249,7 +265,8 @@ raww = "all"
     );
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Raww {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -273,6 +290,7 @@ raww = "all"
 
 #[test]
 fn raww_denial_uses_raww_write_capability() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle_with_policy(
         &temporary,
@@ -308,7 +326,8 @@ raww = "self"
     );
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Raww {
             request_id: None,
             requester_session: "alpha".to_string(),

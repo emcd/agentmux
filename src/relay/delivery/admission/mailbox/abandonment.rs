@@ -23,11 +23,12 @@
 //! entries, which is the split `Transport Health as a Separate Axis` requires.
 
 use crate::protocol::identity::ConsumerBinding;
+use std::sync::Arc;
 
-use super::super::ledger::lock_ledger;
 use super::addressing::target_key;
 use super::generation::active_generation;
 use super::resolution::{ResolvedMember, resolve_positions};
+use crate::relay::delivery::DeliveryContext;
 
 /// Resolves everything the target still holds, reporting what each member
 /// resolved to.
@@ -52,9 +53,10 @@ use super::resolution::{ResolvedMember, resolve_positions};
 /// remembering is the part that would go wrong, since an executor that had
 /// already fired once would stay silent for entries admitted afterwards.
 pub(in crate::relay) fn resolve_target_entries(
+    delivery: &Arc<DeliveryContext>,
     binding: &ConsumerBinding,
 ) -> Vec<ResolvedMember> {
-    let Ok(mut state) = lock_ledger() else {
+    let Ok(mut state) = delivery.lock_ledger() else {
         return Vec::new();
     };
     let key = target_key(&binding.target);
@@ -87,8 +89,9 @@ pub(in crate::relay) fn resolve_target_entries(
 /// Abandoning a target resolves what it holds, by the route each entry's
 /// declaration state calls for.
 ///
-/// Inline for the reason given on the peek block: the ledger is a process-global
-/// behind a crate-private lock, and widening these operations to reach them from
+/// Inline for the reason given on the peek block: the ledger is per-handle
+/// (reached through the owning `DeliveryContext`) behind a crate-private lock,
+/// and widening these operations to reach them from
 /// `tests/` would publish the delivery ledger itself.
 ///
 /// One test because the two routes are one rule seen from both sides. Resolving
@@ -107,14 +110,22 @@ mod abandonment_tests {
     #[test]
     fn abandoning_a_target_resolves_undeclared_and_declared_entries_differently()
      {
+        let delivery = super::super::fixtures::test_delivery();
         let namespace = "mbx-abandon";
-        let bound = claim(namespace);
+        let bound = claim(&delivery, namespace);
         for index in 1..=3 {
-            place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
+            place(
+                &delivery,
+                namespace,
+                &format!("{namespace}-{index}"),
+                1,
+                mail("body"),
+            );
         }
-        declare(&bound, range(1, 1)).expect("declare the head entry");
+        declare(&delivery, &bound, range(1, 1))
+            .expect("declare the head entry");
 
-        let resolved = resolve_target_entries(&bound);
+        let resolved = resolve_target_entries(&delivery, &bound);
 
         let outcomes: Vec<_> = resolved
             .iter()
@@ -152,16 +163,22 @@ mod abandonment_tests {
             "and the undeclared ones are reported as undeclared"
         );
         assert_eq!(
-            peeked(&bound, 10, 1_000),
+            peeked(&delivery, &bound, 10, 1_000),
             Vec::<u64>::new(),
             "the target holds nothing further to serve"
         );
         // The abandoned declaration must not outlive the entries it named, or
         // every later declaration for this target is refused with a unit nobody
         // can acknowledge.
-        place(namespace, &format!("{namespace}-4"), 1, mail("body"));
+        place(
+            &delivery,
+            namespace,
+            &format!("{namespace}-4"),
+            1,
+            mail("body"),
+        );
         assert!(
-            declare(&bound, range(4, 4)).is_ok(),
+            declare(&delivery, &bound, range(4, 4)).is_ok(),
             "a declaration whose members were all resolved here stops blocking"
         );
 
@@ -170,11 +187,11 @@ mod abandonment_tests {
         // would resolve entries the incoming generation is about to serve.
         let stale = binding(namespace, bound.generation.value() + 1);
         assert!(
-            resolve_target_entries(&stale).is_empty(),
+            resolve_target_entries(&delivery, &stale).is_empty(),
             "a generation the target does not hold resolves nothing"
         );
         assert_eq!(
-            peeked(&bound, 10, 1_000),
+            peeked(&delivery, &bound, 10, 1_000),
             vec![4],
             "and the entry it would have resolved is still there"
         );

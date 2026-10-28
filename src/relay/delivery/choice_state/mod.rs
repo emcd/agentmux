@@ -12,6 +12,7 @@ use crate::runtime::{
 };
 use crate::transports::{ChoiceMade, ChoiceToMake, Chooser};
 
+use super::super::delivery::DeliveryContext;
 use super::super::{
     canonical_session_id,
     stream::{RelayStreamEvent, send_event_to_registered_ui},
@@ -101,6 +102,7 @@ pub(in crate::relay) struct ChoiceDecisionRequest {
 
 #[derive(Clone, Debug)]
 pub(in crate::relay) struct ChoiceEventContext {
+    pub(in crate::relay) delivery: Arc<DeliveryContext>,
     pub(in crate::relay) runtime_directory: PathBuf,
     pub(in crate::relay) namespace: String,
     pub(in crate::relay) authorized_ui_sessions: Vec<String>,
@@ -114,12 +116,14 @@ pub(in crate::relay) struct ChoiceEventContext {
 /// queue bound; only the per-delivery decider list rides in each
 /// [`ChoiceToMake`].
 pub(in crate::relay) fn build_acp_chooser(
+    delivery: Arc<DeliveryContext>,
     namespace: String,
     runtime_directory: PathBuf,
     choices_pending_max: usize,
 ) -> Chooser {
     Arc::new(move |choice: ChoiceToMake| -> ChoiceMade {
         let context = ChoiceEventContext {
+            delivery: Arc::clone(&delivery),
             runtime_directory: runtime_directory.clone(),
             namespace: namespace.clone(),
             authorized_ui_sessions: choice.decider_sessions.clone(),
@@ -348,6 +352,7 @@ pub(in crate::relay) fn emit_choices_snapshot_then_replay(
         }),
     };
     let _ = send_event_to_registered_ui(
+        &context.delivery,
         context.namespace.as_str(),
         ui_session_id,
         &snapshot_event,
@@ -359,6 +364,7 @@ pub(in crate::relay) fn emit_choices_snapshot_then_replay(
             &request,
         );
         let _ = send_event_to_registered_ui(
+            &context.delivery,
             context.namespace.as_str(),
             ui_session_id,
             &event,
@@ -530,6 +536,7 @@ fn emit_choices_requested_event(
             request,
         );
         let _ = send_event_to_registered_ui(
+            &context.delivery,
             context.namespace.as_str(),
             ui_session_id,
             &event,
@@ -590,6 +597,7 @@ fn emit_choices_resolved_event(
             }),
         };
         let _ = send_event_to_registered_ui(
+            &context.delivery,
             context.namespace.as_str(),
             ui_session_id,
             &event,

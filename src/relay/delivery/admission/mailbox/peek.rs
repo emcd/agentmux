@@ -4,10 +4,11 @@ use crate::protocol::mailbox::{MailboxEntry, MailboxEntryKind};
 use crate::protocol::operations::{
     PeekRejection, PeekRequest, PeekResponse, PeekResult,
 };
+use std::sync::Arc;
 
-use super::super::ledger::lock_ledger;
 use super::addressing::target_key;
 use super::generation::active_generation;
+use crate::relay::delivery::DeliveryContext;
 
 /// Reads the head of a target's mailbox, advancing nothing.
 ///
@@ -19,8 +20,11 @@ use super::generation::active_generation;
 /// itself at the head, in which case it is returned alone. Returning it alone
 /// rather than skipping past it is what keeps a raw entry from parking a mailbox
 /// permanently behind a bound too small to admit it beside mail.
-pub(in crate::relay) fn peek(request: &PeekRequest) -> PeekResult {
-    let Ok(state) = lock_ledger() else {
+pub(in crate::relay) fn peek(
+    delivery: &Arc<DeliveryContext>,
+    request: &PeekRequest,
+) -> PeekResult {
+    let Ok(state) = delivery.lock_ledger() else {
         return Err(PeekRejection::UnknownTarget);
     };
     let target = target_key(&request.binding.target);
@@ -84,8 +88,9 @@ pub(in crate::relay) fn peek(request: &PeekRequest) -> PeekResult {
 
 /// What bounds the run a peek returns, and what leaves it untouched.
 ///
-/// Inline because the mailbox is reached through a process-global ledger behind
-/// one crate-private lock, and `peek` is `pub(in crate::relay)` by design — the
+/// Inline because the mailbox is reached through a per-handle ledger (owned by
+/// the handle's `DeliveryContext`) behind one crate-private lock, and `peek`
+/// is `pub(in crate::relay)` by design — the
 /// public seam for transports is the delivery-loop executor contract, and
 /// widening these operations to reach them from `tests/` would publish the
 /// delivery ledger itself. No public interface exercises them at all until the
@@ -104,10 +109,12 @@ mod mailbox_peek_tests {
 
     #[test]
     fn a_peek_reports_the_head_run_and_changes_nothing() {
+        let delivery = super::super::fixtures::test_delivery();
         let namespace = "mbx-peek";
-        let bound = claim(namespace);
+        let bound = claim(&delivery, namespace);
         for index in 1..=3 {
             place(
+                &delivery,
                 namespace,
                 &format!("{namespace}-{index}"),
                 10,
@@ -116,7 +123,7 @@ mod mailbox_peek_tests {
         }
 
         assert_eq!(
-            peeked(&bound, 10, 1_000),
+            peeked(&delivery, &bound, 10, 1_000),
             vec![1, 2, 3],
             "an unbounded peek reports the whole contiguous mail run"
         );
@@ -124,12 +131,12 @@ mod mailbox_peek_tests {
         // report the same run, which is what makes a peek safe to retry after a
         // transport decides not to write what it saw.
         assert_eq!(
-            peeked(&bound, 10, 1_000),
+            peeked(&delivery, &bound, 10, 1_000),
             vec![1, 2, 3],
             "peeking twice without an acknowledgment reports the same run"
         );
         assert_eq!(
-            peeked(&bound, 2, 1_000),
+            peeked(&delivery, &bound, 2, 1_000),
             vec![1, 2],
             "the entry bound truncates the run"
         );
@@ -137,12 +144,12 @@ mod mailbox_peek_tests {
         // budget still comes back — because refusing it would park every entry
         // behind it forever. The bound applies from the second entry on.
         assert_eq!(
-            peeked(&bound, 10, 5),
+            peeked(&delivery, &bound, 10, 5),
             vec![1],
             "the byte bound never withholds the head entry"
         );
         assert_eq!(
-            peeked(&bound, 10, 15),
+            peeked(&delivery, &bound, 10, 15),
             vec![1],
             "the byte bound truncates before the entry that would breach it"
         );
@@ -150,11 +157,11 @@ mod mailbox_peek_tests {
         // A raw entry at the head is the whole answer, so a bound too small to
         // carry it beside mail cannot park it.
         let raw_head = "mbx-peek-raw";
-        let raw_bound = claim(raw_head);
-        place(raw_head, "mbx-peek-raw-1", 10, raw("input"));
-        place(raw_head, "mbx-peek-raw-2", 10, mail("body"));
+        let raw_bound = claim(&delivery, raw_head);
+        place(&delivery, raw_head, "mbx-peek-raw-1", 10, raw("input"));
+        place(&delivery, raw_head, "mbx-peek-raw-2", 10, mail("body"));
         assert_eq!(
-            peeked(&raw_bound, 10, 1_000),
+            peeked(&delivery, &raw_bound, 10, 1_000),
             vec![1],
             "a raw head entry is returned alone even when mail behind it would fit"
         );
@@ -162,12 +169,12 @@ mod mailbox_peek_tests {
         // A raw entry behind mail ends the run instead of joining it, so mail is
         // never reordered around it.
         let barrier = "mbx-peek-barrier";
-        let barrier_bound = claim(barrier);
-        place(barrier, "mbx-peek-barrier-1", 10, mail("body"));
-        place(barrier, "mbx-peek-barrier-2", 10, raw("input"));
-        place(barrier, "mbx-peek-barrier-3", 10, mail("body"));
+        let barrier_bound = claim(&delivery, barrier);
+        place(&delivery, barrier, "mbx-peek-barrier-1", 10, mail("body"));
+        place(&delivery, barrier, "mbx-peek-barrier-2", 10, raw("input"));
+        place(&delivery, barrier, "mbx-peek-barrier-3", 10, mail("body"));
         assert_eq!(
-            peeked(&barrier_bound, 10, 1_000),
+            peeked(&delivery, &barrier_bound, 10, 1_000),
             vec![1],
             "the run stops before a raw entry rather than coalescing it into mail"
         );
@@ -175,11 +182,14 @@ mod mailbox_peek_tests {
         // A generation that is not the target's returns nothing at all, which is
         // distinct from returning an empty run.
         assert_eq!(
-            peek(&request(
-                &binding(namespace, bound.generation.value() + 1),
-                10,
-                1_000
-            ))
+            peek(
+                &delivery,
+                &request(
+                    &binding(namespace, bound.generation.value() + 1),
+                    10,
+                    1_000
+                )
+            )
             .unwrap_err(),
             PeekRejection::GenerationSuperseded,
             "a generation the target does not hold is refused rather than handed an empty run"

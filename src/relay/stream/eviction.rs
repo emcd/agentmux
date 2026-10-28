@@ -12,11 +12,13 @@
 //! where the static bundle-runtime shell must persist for a reconnect).
 
 use crate::relay::RelayResponse;
+use crate::relay::delivery::DeliveryContext;
 use crate::relay::identity::scope_permits;
+use std::sync::Arc;
 
 use super::{
     OutgoingFrame, RegistrationSource, RegistryEntry, RelayStreamEvent,
-    is_relay_wide, stream_registry, write_stream_frame_to_writer,
+    is_relay_wide, write_stream_frame_to_writer,
 };
 
 /// Whether to remove a matched entry entirely during eviction, or only detach
@@ -46,6 +48,7 @@ enum EvictionScope {
 /// signals are collected under the registry lock and acted on after it is
 /// released. Returns the number of connections torn down.
 fn evict_streams<F>(
+    delivery: &Arc<DeliveryContext>,
     selector: F,
     response: &RelayResponse,
     removal: EvictionScope,
@@ -53,7 +56,7 @@ fn evict_streams<F>(
 where
     F: Fn(&RegistryEntry) -> bool,
 {
-    let registry = stream_registry();
+    let registry = delivery.stream_registry();
     let targets = {
         let Ok(mut entries) = registry.entries.lock() else {
             return 0;
@@ -114,10 +117,12 @@ where
 /// stays only because the bundle still declares the member. Returns the number
 /// torn down.
 pub(crate) fn revoke_streams_for_identity(
+    delivery: &Arc<DeliveryContext>,
     principal_id: &str,
     response: &RelayResponse,
 ) -> usize {
     evict_streams(
+        delivery,
         |entry| entry.authenticated_identity.as_deref() == Some(principal_id),
         response,
         EvictionScope::DropStreamSourceOnly,
@@ -133,10 +138,12 @@ pub(crate) fn revoke_streams_for_identity(
 /// (`@GLOBAL`/`@EXTERNAL`/`@RELAY`) live in their own reserved namespaces and are
 /// never matched. Returns the number of connections torn down.
 pub(crate) fn evict_streams_for_bundle(
+    delivery: &Arc<DeliveryContext>,
     namespace: &str,
     response: &RelayResponse,
 ) -> usize {
     evict_streams(
+        delivery,
         |entry| entry.namespace == namespace,
         response,
         EvictionScope::DropEntry,
@@ -157,10 +164,11 @@ pub(crate) fn evict_streams_for_bundle(
 /// the registry lock and written after it is released. Returns the number of
 /// hosts notified.
 pub(crate) fn notify_trusted_hosts_of_revocation(
+    delivery: &Arc<DeliveryContext>,
     revoked_principal_id: &str,
     template: &RelayStreamEvent,
 ) -> usize {
-    let registry = stream_registry();
+    let registry = delivery.stream_registry();
     let targets = {
         let Ok(entries) = registry.entries.lock() else {
             return 0;

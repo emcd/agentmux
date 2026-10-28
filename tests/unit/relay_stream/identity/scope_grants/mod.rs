@@ -83,6 +83,7 @@ peer = "all"
 
 /// Submits one `change_scope` admin request as the `@GLOBAL` operator.
 fn change_scope_request(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
@@ -94,7 +95,13 @@ fn change_scope_request(
     if let Some(scope) = scope {
         request["scope"] = Value::String(scope.to_string());
     }
-    operator_request(configuration_roots, bundle_paths, bundle_name, request)
+    operator_request(
+        delivery,
+        configuration_roots,
+        bundle_paths,
+        bundle_name,
+        request,
+    )
 }
 
 /// Reads one principal record from the on-disk store.
@@ -141,13 +148,14 @@ fn write_multi_operator_users(
 /// request, and returns the response frame. Variant of the shared
 /// `operator_request` for tests that hold another operator identity live.
 fn operator_request_as(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     operator: &str,
     request: Value,
 ) -> Value {
     let (mut client, join) =
-        spawn_relay_connection(configuration_roots, bundle_paths);
+        spawn_relay_connection(delivery, configuration_roots, bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -184,6 +192,7 @@ fn operator_request_as(
 /// Registers `principal_id` via `new peer` as an explicit operator and
 /// returns the issued PSK.
 fn register_peer_as(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     operator: &str,
@@ -196,6 +205,7 @@ fn register_peer_as(
         request["scope"] = Value::String(scope.to_string());
     }
     let response = operator_request_as(
+        delivery,
         configuration_roots,
         bundle_paths,
         operator,
@@ -212,6 +222,7 @@ fn register_peer_as(
 }
 /// Submits one ingress Send as a peer relay over a fresh connection.
 fn peer_send_response(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     peer_id: &str,
@@ -219,7 +230,7 @@ fn peer_send_response(
     target: &str,
 ) -> Value {
     let (mut client, join) =
-        spawn_relay_connection(configuration_roots, bundle_paths);
+        spawn_relay_connection(delivery, configuration_roots, bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(

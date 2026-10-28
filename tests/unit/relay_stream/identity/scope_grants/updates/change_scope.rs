@@ -2,6 +2,9 @@ use super::*;
 
 #[test]
 fn change_scope_updates_grant_and_returns_canonical() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_update";
     let configuration_roots =
@@ -12,6 +15,7 @@ fn change_scope_updates_grant_and_returns_canonical() {
     let peer_id = "update@RELAY";
 
     register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -22,6 +26,7 @@ fn change_scope_updates_grant_and_returns_canonical() {
         store_record(&bundle_paths, peer_id)["credential_hash"].clone();
 
     let updated = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -44,6 +49,9 @@ fn change_scope_updates_grant_and_returns_canonical() {
 
 #[test]
 fn change_scope_empty_clears_grant_and_repeats_safely() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_clear";
     let configuration_roots =
@@ -54,6 +62,7 @@ fn change_scope_empty_clears_grant_and_repeats_safely() {
     let peer_id = "clear@RELAY";
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -63,6 +72,7 @@ fn change_scope_empty_clears_grant_and_repeats_safely() {
 
     for _ in 0..2 {
         let cleared = change_scope_request(
+            &delivery,
             &configuration_roots,
             &bundle_paths,
             bundle_name,
@@ -81,6 +91,7 @@ fn change_scope_empty_clears_grant_and_repeats_safely() {
     );
 
     let denied = peer_send_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -96,6 +107,9 @@ fn change_scope_empty_clears_grant_and_repeats_safely() {
 
 #[test]
 fn change_scope_requires_dedicated_authority() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_auth";
     // The shared identity configuration grants change.psk but not
@@ -108,6 +122,7 @@ fn change_scope_requires_dedicated_authority() {
     let peer_id = "auth@RELAY";
 
     register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -116,6 +131,7 @@ fn change_scope_requires_dedicated_authority() {
     );
 
     let denied = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -140,6 +156,9 @@ fn change_scope_requires_dedicated_authority() {
 
 #[test]
 fn change_scope_unknown_peer_reports_behind_authorization() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_unknown";
     let configuration_roots =
@@ -149,6 +168,7 @@ fn change_scope_unknown_peer_reports_behind_authorization() {
         .expect("bundle paths");
 
     let unknown = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -162,6 +182,7 @@ fn change_scope_unknown_peer_reports_behind_authorization() {
     );
 
     let non_relay = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -178,6 +199,9 @@ fn change_scope_unknown_peer_reports_behind_authorization() {
 
 #[test]
 fn change_scope_omitted_scope_is_invalid_not_a_clear() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_omitted";
     let configuration_roots =
@@ -188,6 +212,7 @@ fn change_scope_omitted_scope_is_invalid_not_a_clear() {
     let peer_id = "omitted@RELAY";
 
     register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -196,6 +221,7 @@ fn change_scope_omitted_scope_is_invalid_not_a_clear() {
     );
 
     let rejected = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,

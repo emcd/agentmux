@@ -2,6 +2,9 @@ use super::*;
 
 #[test]
 fn live_narrowing_applies_on_the_same_connection_without_reconnect() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_live";
     let configuration_roots =
@@ -13,6 +16,7 @@ fn live_narrowing_applies_on_the_same_connection_without_reconnect() {
     let target = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -21,7 +25,7 @@ fn live_narrowing_applies_on_the_same_connection_without_reconnect() {
     );
 
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -87,6 +91,7 @@ fn live_narrowing_applies_on_the_same_connection_without_reconnect() {
     );
 
     let narrowed = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -159,6 +164,7 @@ fn live_narrowing_applies_on_the_same_connection_without_reconnect() {
     );
 
     let widened = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -189,6 +195,9 @@ fn live_narrowing_applies_on_the_same_connection_without_reconnect() {
 
 #[test]
 fn rotation_preserves_the_latest_narrowed_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_rotation";
     let configuration_roots =
@@ -199,6 +208,7 @@ fn rotation_preserves_the_latest_narrowed_scope() {
     let peer_id = "rotated@RELAY";
 
     register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -206,6 +216,7 @@ fn rotation_preserves_the_latest_narrowed_scope() {
         Some("*"),
     );
     let narrowed = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -215,6 +226,7 @@ fn rotation_preserves_the_latest_narrowed_scope() {
     assert_eq!(narrowed["response"]["kind"], "change_scope");
 
     let rotation = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -234,6 +246,7 @@ fn rotation_preserves_the_latest_narrowed_scope() {
 
     // The rotated credential authenticates and carries the narrowed grant.
     let accepted = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -242,6 +255,7 @@ fn rotation_preserves_the_latest_narrowed_scope() {
     );
     assert_eq!(accepted["frame"], "hello_ack", "rotated psk: {accepted:?}");
     let denied = peer_send_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -257,6 +271,9 @@ fn rotation_preserves_the_latest_narrowed_scope() {
 
 #[test]
 fn wildcard_peer_reaches_bundle_targets_and_namespace_discovery() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_wildcard";
     let configuration_roots =
@@ -267,6 +284,7 @@ fn wildcard_peer_reaches_bundle_targets_and_namespace_discovery() {
     let peer_id = "wild@RELAY";
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -275,6 +293,7 @@ fn wildcard_peer_reaches_bundle_targets_and_namespace_discovery() {
     );
 
     let sent = peer_send_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -284,7 +303,7 @@ fn wildcard_peer_reaches_bundle_targets_and_namespace_discovery() {
     assert_eq!(sent["response"]["kind"], "send", "wildcard send: {sent:?}");
 
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -326,6 +345,9 @@ fn wildcard_peer_reaches_bundle_targets_and_namespace_discovery() {
 
 #[test]
 fn admitted_delivery_executes_after_narrowing_without_cancellation() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_uiexec";
     let configuration_roots =
@@ -341,8 +363,12 @@ fn admitted_delivery_executes_after_narrowing_without_cancellation() {
         .expect("bundle paths");
     let peer_id = "uiexec@RELAY";
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context =
-        shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context = shared_serve_context(
+        &delivery,
+        &configuration_roots,
+        &state_root,
+        catalog,
+    );
 
     // Arrival-level evidence that narrowing neither tears down admitted work
     // nor the connection carrying it: a delivery admitted under the wildcard
@@ -368,6 +394,7 @@ fn admitted_delivery_executes_after_narrowing_without_cancellation() {
     assert_eq!(read_json(&mut operator_reader)["frame"], "hello_ack");
 
     let peer_psk = register_peer_as(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &admin_id,
@@ -434,6 +461,9 @@ fn admitted_delivery_executes_after_narrowing_without_cancellation() {
 
 #[test]
 fn scope_retry_without_grant_is_denied_not_applied() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_reauth";
     let configuration_roots =
@@ -444,6 +474,7 @@ fn scope_retry_without_grant_is_denied_not_applied() {
     let peer_id = "reauth@RELAY";
 
     register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -451,6 +482,7 @@ fn scope_retry_without_grant_is_denied_not_applied() {
         Some(bundle_name),
     );
     let narrowed = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -494,6 +526,7 @@ peer = "all"
     )
     .expect("revoke scope-update grant");
     let denied = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -517,6 +550,9 @@ peer = "all"
 
 #[test]
 fn committed_update_survives_response_transport_loss() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_resploss";
     let configuration_roots =
@@ -527,6 +563,7 @@ fn committed_update_survives_response_transport_loss() {
     let peer_id = "resploss@RELAY";
 
     let peer_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -537,7 +574,7 @@ fn committed_update_survives_response_transport_loss() {
     // Submit the widening update, then drop the transport without reading the
     // response: the commit does not depend on the caller observing it.
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     let operator_id = global_user_id(bundle_name);
@@ -570,6 +607,7 @@ fn committed_update_survives_response_transport_loss() {
         "update must commit despite response loss"
     );
     let sent = peer_send_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,

@@ -5,6 +5,9 @@ use super::helpers::*;
 
 #[test]
 fn acp_result_serialization_reflects_queued_async_outcome() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         stop_reason: "cancelled".to_string(),
@@ -12,8 +15,11 @@ fn acp_result_serialization_reflects_queued_async_outcome() {
     };
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
-    let response =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let response = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let RelayResponse::Send { results, .. } = response else {
         panic!("expected send response");
     };

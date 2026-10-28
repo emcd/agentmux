@@ -19,6 +19,9 @@ use super::*;
 // rotated credential written to the session's canonical path authenticates.
 #[test]
 fn concurrent_admin_ops_serialize_without_losing_updates() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_concurrent";
     let configuration_roots =
@@ -53,8 +56,12 @@ policy = "operator"
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context =
-        shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context = shared_serve_context(
+        &delivery,
+        &configuration_roots,
+        &state_root,
+        catalog,
+    );
 
     // Pre-register the session we will rotate (response mode).
     let session_id = format!("alpha@{bundle_name}");
@@ -123,6 +130,7 @@ policy = "operator"
     let rotated_psk = std::fs::read_to_string(&canonical)
         .expect("read rotated config credential");
     let accepted = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &session_id,
@@ -141,6 +149,7 @@ policy = "operator"
         .expect("bravo psk in response")
         .to_string();
     let bravo_ok = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &unrelated_id,

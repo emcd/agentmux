@@ -15,6 +15,7 @@ use super::*;
 /// operator. Returns the sender-side `send` response frame. Both connections are
 /// closed before returning.
 fn alpha_send_response_with_token(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
@@ -22,7 +23,7 @@ fn alpha_send_response_with_token(
 ) -> Value {
     let operator_id = global_user_id(bundle_name);
     let (mut operator_client, operator_join) =
-        spawn_relay_connection(configuration_roots, bundle_paths);
+        spawn_relay_connection(delivery, configuration_roots, bundle_paths);
     let mut operator_reader = BufReader::new(
         operator_client.try_clone().expect("clone operator stream"),
     );
@@ -38,7 +39,7 @@ fn alpha_send_response_with_token(
     assert_eq!(read_json(&mut operator_reader)["frame"], "hello_ack");
 
     let (mut alpha_client, alpha_join) =
-        spawn_relay_connection(configuration_roots, bundle_paths);
+        spawn_relay_connection(delivery, configuration_roots, bundle_paths);
     let mut alpha_reader =
         BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
     send_json(
@@ -85,6 +86,7 @@ fn alpha_send_response_with_token(
 /// returns the `incoming_message` event the operator receives on its stream.
 /// Both connections are closed before returning.
 fn operator_incoming_message_for_alpha_send(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
@@ -92,7 +94,7 @@ fn operator_incoming_message_for_alpha_send(
 ) -> Value {
     let operator_id = global_user_id(bundle_name);
     let (mut operator_client, operator_join) =
-        spawn_relay_connection(configuration_roots, bundle_paths);
+        spawn_relay_connection(delivery, configuration_roots, bundle_paths);
     let mut operator_reader = BufReader::new(
         operator_client.try_clone().expect("clone operator stream"),
     );
@@ -108,7 +110,7 @@ fn operator_incoming_message_for_alpha_send(
     assert_eq!(read_json(&mut operator_reader)["frame"], "hello_ack");
 
     let (mut alpha_client, alpha_join) =
-        spawn_relay_connection(configuration_roots, bundle_paths);
+        spawn_relay_connection(delivery, configuration_roots, bundle_paths);
     let mut alpha_reader =
         BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
     send_json(
@@ -158,6 +160,9 @@ fn operator_incoming_message_for_alpha_send(
 // set to the verified principal_id.
 #[test]
 fn send_from_store_backed_session_carries_authenticated_identity() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_attr_store_backed";
     let configuration_roots =
@@ -168,6 +173,7 @@ fn send_from_store_backed_session_carries_authenticated_identity() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -175,6 +181,7 @@ fn send_from_store_backed_session_carries_authenticated_identity() {
         None,
     );
     let response = alpha_send_response_with_token(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -196,6 +203,9 @@ fn send_from_store_backed_session_carries_authenticated_identity() {
 // 3.6 Send response for a socket-trust session omits `authenticated_identity`.
 #[test]
 fn send_from_socket_trust_session_omits_authenticated_identity() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_attr_socket_trust";
     let configuration_roots =
@@ -205,6 +215,7 @@ fn send_from_socket_trust_session_omits_authenticated_identity() {
         .expect("bundle paths");
 
     let response = alpha_send_response_with_token(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -226,6 +237,9 @@ fn send_from_socket_trust_session_omits_authenticated_identity() {
 // set to the sender's verified principal_id.
 #[test]
 fn delivered_envelope_on_recipient_stream_carries_authenticated_identity() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_delivery_store_backed";
     let configuration_roots =
@@ -236,6 +250,7 @@ fn delivered_envelope_on_recipient_stream_carries_authenticated_identity() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -243,6 +258,7 @@ fn delivered_envelope_on_recipient_stream_carries_authenticated_identity() {
         None,
     );
     let event = operator_incoming_message_for_alpha_send(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -265,6 +281,9 @@ fn delivered_envelope_on_recipient_stream_carries_authenticated_identity() {
 // `authenticated_identity`, mirroring the Send response.
 #[test]
 fn delivered_envelope_omits_authenticated_identity_for_socket_trust_sender() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_delivery_socket_trust";
     let configuration_roots =
@@ -274,6 +293,7 @@ fn delivered_envelope_omits_authenticated_identity_for_socket_trust_sender() {
         .expect("bundle paths");
 
     let event = operator_incoming_message_for_alpha_send(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,

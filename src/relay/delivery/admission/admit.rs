@@ -1,6 +1,7 @@
 //! The reservation itself: what a target is, what an entry is charged, the three
 //! refusals, and the one rollback.
 
+use std::sync::Arc;
 use std::time::Instant;
 
 use serde_json::json;
@@ -9,11 +10,10 @@ use crate::configuration::{BundleConfiguration, SessionType};
 use crate::relay::{RelayError, canonical_session_id, relay_error};
 use crate::transports::PeekDimensions;
 
+use super::super::DeliveryContext;
 use super::super::guard::QueueEntryState;
-use super::config::{AdmissionLimits, delivery_configuration};
-use super::ledger::{
-    AdmissionTargetKey, AdmittedEntry, TargetUsage, lock_ledger,
-};
+use super::config::AdmissionLimits;
+use super::ledger::{AdmissionTargetKey, AdmittedEntry, TargetUsage};
 
 const ERROR_CODE_QUEUE_FULL: &str = "runtime_delivery_queue_full";
 const ERROR_CODE_PAYLOAD_TOO_LARGE: &str = "validation_payload_too_large";
@@ -28,12 +28,16 @@ const ERROR_CODE_PAYLOAD_TOO_LARGE: &str = "validation_payload_too_large";
 /// it so the two cannot disagree about a target's transport kind.
 #[must_use]
 pub(in crate::relay) fn target_is_relay_wide(
+    delivery: &Arc<DeliveryContext>,
     bundle_name: &str,
     target_session: &str,
 ) -> bool {
     let principal = canonical_session_id(target_session, bundle_name);
-    crate::relay::stream::registry_target_is_relay_wide(principal.as_str())
-        .unwrap_or_else(|| bundle_name == crate::relay::GLOBAL_NAMESPACE)
+    crate::relay::stream::registry_target_is_relay_wide(
+        delivery,
+        principal.as_str(),
+    )
+    .unwrap_or_else(|| bundle_name == crate::relay::GLOBAL_NAMESPACE)
 }
 
 /// The transport kind that will deliver to this target.
@@ -42,10 +46,15 @@ pub(in crate::relay) fn target_is_relay_wide(
 /// bundle coder declares its own type. A configured target that is neither is a
 /// resolution defect rather than a caller error, and says so.
 pub(in crate::relay) fn resolve_target_session_type(
+    delivery: &Arc<DeliveryContext>,
     bundle: &BundleConfiguration,
     target_session: &str,
 ) -> Result<SessionType, RelayError> {
-    if target_is_relay_wide(bundle.bundle_name.as_str(), target_session) {
+    if target_is_relay_wide(
+        delivery,
+        bundle.bundle_name.as_str(),
+        target_session,
+    ) {
         return Ok(SessionType::Ui);
     }
     bundle
@@ -79,21 +88,24 @@ pub(in crate::relay) fn canonical_payload_bytes(message: &str) -> u64 {
 /// the transport can ever accept, or an exhausted quota. On any rejection nothing
 /// is reserved and no entry is recorded.
 pub(in crate::relay) fn admit(
+    delivery: &Arc<DeliveryContext>,
     message_id: &str,
     target: AdmissionTargetKey,
     session_type: SessionType,
     canonical_bytes: u64,
 ) -> Result<(), RelayError> {
     admit_with_limits(
+        delivery,
         message_id,
         target,
         session_type,
         canonical_bytes,
-        AdmissionLimits::from(delivery_configuration()),
+        AdmissionLimits::from(delivery.delivery_configuration()),
     )
 }
 
 pub(super) fn admit_with_limits(
+    delivery: &Arc<DeliveryContext>,
     message_id: &str,
     target: AdmissionTargetKey,
     session_type: SessionType,
@@ -123,7 +135,7 @@ pub(super) fn admit_with_limits(
         ));
     }
 
-    let mut state = lock_ledger()?;
+    let mut state = delivery.lock_ledger()?;
     let target_usage =
         state.per_target.get(&target).copied().unwrap_or_default();
     if let Some(exhausted) = first_exhausted_limit(
@@ -178,8 +190,11 @@ pub(super) fn admit_with_limits(
 /// reported, and no receipt is owed, because nothing was ever committed.
 ///
 /// Idempotent, and safe for an id that was never admitted.
-pub(in crate::relay) fn rollback_admission(message_id: &str) {
-    let Ok(mut state) = lock_ledger() else {
+pub(in crate::relay) fn rollback_admission(
+    delivery: &Arc<DeliveryContext>,
+    message_id: &str,
+) {
+    let Ok(mut state) = delivery.lock_ledger() else {
         return;
     };
     let Some(entry) = state.entries.remove(message_id) else {

@@ -16,13 +16,16 @@ fn a_long_agent_turn_never_arms_the_execution_watchdog() {
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    configure_delivery(DeliveryConfiguration {
-        submission_timeout_ms: 500,
-        fence_observation_timeout_ms: 500,
-        ..DeliveryConfiguration::default()
-    });
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration {
+            submission_timeout_ms: 500,
+            fence_observation_timeout_ms: 500,
+            ..agentmux::relay::DeliveryConfiguration::default()
+        },
+    ));
 
-    let result = send_result(dispatch_send(&config_root, &tmux_socket));
+    let result =
+        send_result(dispatch_send(&delivery, &config_root, &tmux_socket));
     assert_eq!(result.outcome, SendOutcome::Queued);
 
     // Resolved at the write, while the turn it belongs to is still running.

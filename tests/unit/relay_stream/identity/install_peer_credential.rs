@@ -12,6 +12,7 @@ use super::*;
 /// Issues `install_peer_credential` for `alias` carrying `psk` as
 /// `operator` and returns the full response frame.
 fn install_peer_credential_as(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     operator: &str,
@@ -19,7 +20,7 @@ fn install_peer_credential_as(
     psk: &str,
 ) -> Value {
     let (mut client, join) =
-        spawn_relay_connection(configuration_roots, bundle_paths);
+        spawn_relay_connection(delivery, configuration_roots, bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -60,6 +61,7 @@ fn install_peer_credential_as(
 /// Issues `install_peer_credential` for `alias` carrying `psk` and returns
 /// the full response frame.
 fn install_peer_credential(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
@@ -67,6 +69,7 @@ fn install_peer_credential(
     psk: &str,
 ) -> Value {
     operator_request(
+        delivery,
         configuration_roots,
         bundle_paths,
         bundle_name,
@@ -102,11 +105,15 @@ fn install_paths(
 // owner-only modes and omits it from every response field.
 #[test]
 fn install_peer_credential_writes_slot_and_omits_psk() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_happy";
     let (configuration_roots, bundle_paths, principal_id, slot) =
         install_paths(&temporary, bundle_name, "bravo");
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -115,6 +122,7 @@ fn install_peer_credential_writes_slot_and_omits_psk() {
     );
 
     let response = install_peer_credential(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -176,12 +184,16 @@ fn install_peer_credential_writes_slot_and_omits_psk() {
 // writes nothing.
 #[test]
 fn install_peer_credential_requires_alias_referent() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_referent";
     let (configuration_roots, bundle_paths, _, slot) =
         install_paths(&temporary, bundle_name, "ghost");
 
     let response = install_peer_credential(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -206,6 +218,9 @@ fn install_peer_credential_requires_alias_referent() {
 // Unsafe alias components are refused before any filesystem access.
 #[test]
 fn install_peer_credential_rejects_unsafe_alias() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_alias";
     let (configuration_roots, bundle_paths, _, _) =
@@ -222,6 +237,7 @@ fn install_peer_credential_rejects_unsafe_alias() {
         "has\0nul",
     ] {
         let response = install_peer_credential(
+            &delivery,
             &configuration_roots,
             &bundle_paths,
             bundle_name,
@@ -243,11 +259,15 @@ fn install_peer_credential_rejects_unsafe_alias() {
 // lost-response retry path.
 #[test]
 fn install_peer_credential_identical_retry_is_idempotent() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_retry";
     let (configuration_roots, bundle_paths, principal_id, slot) =
         install_paths(&temporary, bundle_name, "bravo");
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -255,6 +275,7 @@ fn install_peer_credential_identical_retry_is_idempotent() {
         None,
     );
     let first = install_peer_credential(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -264,6 +285,7 @@ fn install_peer_credential_identical_retry_is_idempotent() {
     assert_eq!(first["response"]["kind"], "install_peer_credential");
 
     let second = install_peer_credential(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -285,11 +307,15 @@ fn install_peer_credential_identical_retry_is_idempotent() {
 // external target.
 #[test]
 fn install_peer_credential_rejects_symlinked_ancestor() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_symlink";
     let (configuration_roots, bundle_paths, principal_id, _) =
         install_paths(&temporary, bundle_name, "bravo");
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -305,6 +331,7 @@ fn install_peer_credential_rejects_symlinked_ancestor() {
         .expect("symlink peers");
 
     let response = install_peer_credential(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -454,6 +481,9 @@ fn assert_forbidden(response: &Value) {
 // An absent slot provisions under `new.peer=all` alone.
 #[test]
 fn install_absent_slot_succeeds_with_provision_only_authority() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_absent_new";
     let (configuration_roots, provisioner, _, _) =
@@ -462,6 +492,7 @@ fn install_absent_slot_succeeds_with_provision_only_authority() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
     let register = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -470,6 +501,7 @@ fn install_absent_slot_succeeds_with_provision_only_authority() {
     assert_eq!(register["response"]["kind"], "new_peer");
 
     let response = install_peer_credential_as(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &provisioner,
@@ -484,6 +516,9 @@ fn install_absent_slot_succeeds_with_provision_only_authority() {
 // An absent slot refuses a rotation-only caller.
 #[test]
 fn install_absent_slot_refuses_rotation_only_authority() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_absent_change";
     let (configuration_roots, _, rotator, _) =
@@ -492,6 +527,7 @@ fn install_absent_slot_refuses_rotation_only_authority() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
     let register = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -500,6 +536,7 @@ fn install_absent_slot_refuses_rotation_only_authority() {
     assert_eq!(register["response"]["kind"], "new_peer");
 
     let response = install_peer_credential_as(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &rotator,
@@ -517,6 +554,9 @@ fn install_absent_slot_refuses_rotation_only_authority() {
 // alone and refuses a provision-only caller.
 #[test]
 fn install_different_content_splits_authority() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_rotate";
     let (configuration_roots, provisioner, rotator, _) =
@@ -525,6 +565,7 @@ fn install_different_content_splits_authority() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
     let register = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -534,6 +575,7 @@ fn install_different_content_splits_authority() {
     let slot = state_root.join("peers").join("bravo.psk");
 
     let first = install_peer_credential_as(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &provisioner,
@@ -543,6 +585,7 @@ fn install_different_content_splits_authority() {
     assert_eq!(first["response"]["kind"], "install_peer_credential");
 
     let denied = install_peer_credential_as(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &provisioner,
@@ -557,6 +600,7 @@ fn install_different_content_splits_authority() {
     );
 
     let rotated = install_peer_credential_as(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &rotator,
@@ -579,6 +623,9 @@ fn install_different_content_splits_authority() {
 // succeeds, with content preserved.
 #[test]
 fn install_identical_retry_succeeds_with_provision_only_authority() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_same_retry";
     let (configuration_roots, provisioner, _, _) =
@@ -587,6 +634,7 @@ fn install_identical_retry_succeeds_with_provision_only_authority() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
     let register = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -600,6 +648,7 @@ fn install_identical_retry_succeeds_with_provision_only_authority() {
     // authority.
     let operator = super::super::global_user_id(bundle_name);
     let first = install_peer_credential_as(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &operator,
@@ -609,6 +658,7 @@ fn install_identical_retry_succeeds_with_provision_only_authority() {
     assert_eq!(first["response"]["kind"], "install_peer_credential");
 
     let retry = install_peer_credential_as(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &provisioner,
@@ -629,6 +679,9 @@ fn install_identical_retry_succeeds_with_provision_only_authority() {
 // A caller with neither control is refused on every slot state.
 #[test]
 fn install_refuses_control_free_caller() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_bystander";
     let (configuration_roots, _, _, bystander) =
@@ -637,6 +690,7 @@ fn install_refuses_control_free_caller() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
     let register = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -645,6 +699,7 @@ fn install_refuses_control_free_caller() {
     assert_eq!(register["response"]["kind"], "new_peer");
 
     let absent = install_peer_credential_as(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &bystander,
@@ -658,11 +713,15 @@ fn install_refuses_control_free_caller() {
 // reports durability uncertainty instead of rolling back.
 #[test]
 fn install_dir_sync_failure_stays_published_as_uncertain() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_uncertain";
     let (configuration_roots, bundle_paths, principal_id, slot) =
         install_paths(&temporary, bundle_name, "bravo");
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -678,6 +737,7 @@ fn install_dir_sync_failure_stays_published_as_uncertain() {
     .expect("arm dir-sync fault");
 
     let response = install_peer_credential(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -707,6 +767,9 @@ fn install_dir_sync_failure_stays_published_as_uncertain() {
 // absent-root case is the gate's observable boundary.)
 #[test]
 fn install_gate_denies_before_state_inspection() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_install_gate";
     let (configuration_roots, _, _, bystander) =
@@ -718,6 +781,7 @@ fn install_gate_denies_before_state_inspection() {
     // Absent state root: the gate denies before the empty-store path could
     // report an unknown principal.
     let denied = install_peer_credential_as(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &bystander,

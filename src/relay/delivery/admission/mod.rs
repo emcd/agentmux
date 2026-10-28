@@ -61,7 +61,6 @@ mod mailbox;
 mod reporting;
 mod terminal;
 
-pub use self::config::configure_delivery;
 pub use self::reporting::{
     UndeliveredReporting, configured_undelivered_reporting,
     report_undelivered_queue,
@@ -71,8 +70,10 @@ pub(in crate::relay) use self::admit::{
     admit, canonical_payload_bytes, resolve_target_session_type,
     rollback_admission, target_is_relay_wide,
 };
-pub(in crate::relay) use self::config::delivery_configuration;
 pub(in crate::relay) use self::ledger::AdmissionTargetKey;
+pub(in crate::relay::delivery) use self::ledger::{
+    AdmissionLedger, LedgerState, lock_ledger,
+};
 // `TargetReap` names a reap's answer, which only the test that holds the reap
 // to its contract inspects: production reads the reap for its effect, and names
 // the type through `reap_target`'s own signature rather than importing it.

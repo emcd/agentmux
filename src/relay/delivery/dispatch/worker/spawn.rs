@@ -6,6 +6,7 @@
 //! construction as the original rather than a second path that has to agree
 //! with it.
 
+use std::sync::Arc;
 use std::sync::OnceLock;
 
 use tokio::{runtime::Handle, sync::mpsc::UnboundedReceiver};
@@ -14,6 +15,7 @@ use crate::protocol::DeliveryDoorbell;
 use crate::protocol::identity::{
     ConsumerBinding, ConsumerGenerationId, DeliveryTargetId,
 };
+use crate::relay::delivery::DeliveryContext;
 use crate::relay::delivery::LedgerMailboxConsumer;
 use crate::relay::delivery::admission::{
     GenerationRejection, claim_consumer_generation, register_doorbell,
@@ -80,9 +82,10 @@ pub(in crate::relay::delivery::dispatch) struct WorkerTransportContext {
 impl WorkerTransportContext {
     /// Resolves a worker's construction inputs from the task electing its spawn.
     pub(in crate::relay::delivery::dispatch) fn resolve(
+        delivery: &Arc<DeliveryContext>,
         task: &AsyncDeliveryTask,
     ) -> Result<Self, RelayError> {
-        let target_member = resolve_target_member(task)?.cloned();
+        let target_member = resolve_target_member(delivery, task)?.cloned();
         Ok(Self {
             namespace: task.bundle.bundle_name.clone(),
             runtime_directory: task.runtime_directory.clone(),
@@ -111,6 +114,7 @@ pub(in crate::relay::delivery::dispatch) struct AcpWorkerBootstrap {
 /// readiness mirroring all live inside the transports. Shutdown is observed via
 /// `shutdown_requested()` polled between receives.
 pub(in crate::relay::delivery::dispatch) fn spawn_async_delivery_worker(
+    delivery: Arc<DeliveryContext>,
     key: AsyncWorkerKey,
     owner: WorkerOwner,
     receiver: UnboundedReceiver<AsyncDeliveryTask>,
@@ -118,7 +122,10 @@ pub(in crate::relay::delivery::dispatch) fn spawn_async_delivery_worker(
     source: WorkerTransportSource,
 ) {
     delivery_runtime_handle().spawn(async move {
-        run_async_delivery_worker(key, owner, receiver, pending, source).await;
+        run_async_delivery_worker(
+            delivery, key, owner, receiver, pending, source,
+        )
+        .await;
     });
 }
 
@@ -205,6 +212,7 @@ pub(super) struct BuiltGeneration {
 /// got a transport. Nothing rings such a registration: an entry reaches a mailbox
 /// only through a worker's own intake, and this worker is about to end.
 pub(super) async fn build_generation(
+    delivery: &Arc<DeliveryContext>,
     key: &AsyncWorkerKey,
     owner: WorkerOwner,
     source: &WorkerTransportSource,
@@ -213,7 +221,7 @@ pub(super) async fn build_generation(
     step: ConsumerGenerationStep,
 ) -> Result<BuiltGeneration, RelayError> {
     let target = consumer_target(key);
-    let generation = issue_consumer_generation(&target, step)?;
+    let generation = issue_consumer_generation(delivery, &target, step)?;
     // Recorded on the registry entry in the same breath as it is issued, because
     // the entry is what the reap reads to name this generation and the reap is
     // the only thing that gives a target up. Binding here rather than on the
@@ -223,16 +231,22 @@ pub(super) async fn build_generation(
     // process. A replacement rebinds for the same reason — it issues a new
     // identifier, and an entry still naming the outgoing one would leave the
     // incoming generation just as unreleasable.
-    bind_worker_consumer_generation(key, owner, generation);
+    bind_worker_consumer_generation(
+        delivery.async_registry(),
+        key,
+        owner,
+        generation,
+    );
     let binding = ConsumerBinding::new(target.clone(), generation);
-    let doorbell = register_generation_doorbell(&target);
-    let delivery = executor_context(&binding, doorbell);
+    let doorbell = register_generation_doorbell(delivery, &target);
+    let executor = executor_context(delivery, &binding, doorbell);
     let transport = build_transport(
+        delivery,
         key,
         source,
         batch_settings,
         readiness_changed,
-        delivery,
+        executor,
     )
     .await?;
     Ok(BuiltGeneration { transport, binding })
@@ -246,18 +260,19 @@ pub(super) async fn build_generation(
 /// this worker uses, so a missed ring costs the same delay on both sides of the
 /// mailbox rather than two unrelated ones.
 fn executor_context(
+    delivery: &Arc<DeliveryContext>,
     binding: &ConsumerBinding,
     doorbell: DeliveryDoorbell,
 ) -> DeliveryExecutorContext {
-    let delivery = crate::relay::delivery::admission::delivery_configuration();
+    let configuration = delivery.delivery_configuration();
     DeliveryExecutorContext {
-        consumer: LedgerMailboxConsumer::bind(binding.clone()),
+        consumer: LedgerMailboxConsumer::bind(delivery, binding.clone()),
         doorbell,
         poll_interval: std::time::Duration::from_millis(
             ASYNC_WORKER_POLL_INTERVAL_MS,
         ),
         unreachable_dwell: std::time::Duration::from_millis(
-            delivery.unreachable_dwell_ms,
+            configuration.unreachable_dwell_ms,
         ),
     }
 }
@@ -270,17 +285,21 @@ fn executor_context(
 /// still owes its sender a terminal outcome, and the ledger call that resolved
 /// them deliberately emits none.
 fn issue_consumer_generation(
+    delivery: &Arc<DeliveryContext>,
     target: &DeliveryTargetId,
     step: ConsumerGenerationStep,
 ) -> Result<ConsumerGenerationId, RelayError> {
     match step {
-        ConsumerGenerationStep::Claim => claim_consumer_generation(target)
-            .map_err(|rejection| generation_failure(step, rejection)),
+        ConsumerGenerationStep::Claim => {
+            claim_consumer_generation(delivery, target)
+                .map_err(|rejection| generation_failure(step, rejection))
+        },
         ConsumerGenerationStep::Replace { outgoing } => {
             // Positive by construction: this arm is reached only from the
             // positive branch of a fence verdict the worker has already
             // observed, and the ledger refuses anything else.
             let replacement = replace_consumer_generation(
+                delivery,
                 target,
                 outgoing,
                 FenceVerdict::Positive,
@@ -288,6 +307,7 @@ fn issue_consumer_generation(
             .map_err(|rejection| generation_failure(step, rejection))?;
             for member in &replacement.resolved {
                 report_resolved_member(
+                    delivery,
                     member,
                     None,
                     Some(
@@ -363,33 +383,39 @@ fn consumer_target(key: &AsyncWorkerKey) -> DeliveryTargetId {
 /// failed, and nothing rings one of those, since an entry reaches a mailbox only
 /// through a worker's own intake and that worker is about to end.
 fn register_generation_doorbell(
+    delivery: &Arc<DeliveryContext>,
     target: &DeliveryTargetId,
 ) -> DeliveryDoorbell {
     let doorbell = DeliveryDoorbell::new();
     let ring = doorbell.clone();
-    register_doorbell(target, std::sync::Arc::new(move || ring.ring()));
+    register_doorbell(
+        delivery,
+        target,
+        std::sync::Arc::new(move || ring.ring()),
+    );
     doorbell
 }
 
 /// The transport half of building a generation, separated so the identity and
 /// the doorbell above are settled before anything can consume under them.
 async fn build_transport(
+    relay: &Arc<DeliveryContext>,
     key: &AsyncWorkerKey,
     source: &WorkerTransportSource,
     batch_settings: PromptBatchSettings,
     readiness_changed: &std::sync::Arc<tokio::sync::Notify>,
-    delivery: DeliveryExecutorContext,
+    executor: DeliveryExecutorContext,
 ) -> Result<TransportImpl, RelayError> {
     match source {
         WorkerTransportSource::Acp(bootstrap) => {
-            let services = build_acp_driver_services(key, bootstrap);
+            let services = build_acp_driver_services(relay, key, bootstrap);
             let mut transport = TransportImpl::acp(
                 bootstrap.target_member.clone(),
                 bootstrap.runtime_directory.clone(),
                 key.namespace.clone(),
                 services,
                 batch_settings,
-                delivery,
+                executor,
             );
             // The bootstrap runs supervised in the background; construction itself
             // cannot fail here, which is why only the Direct arm returns an error.
@@ -405,11 +431,12 @@ async fn build_transport(
             let readiness_notifier: crate::tmux::ReadinessNotifier =
                 std::sync::Arc::new(move || notify.notify_waiters());
             build_worker_transport(
+                relay,
                 context,
                 key,
                 batch_settings,
                 readiness_notifier,
-                delivery,
+                executor,
             )
             .await
         },

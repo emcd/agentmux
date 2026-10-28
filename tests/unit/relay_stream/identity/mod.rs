@@ -111,13 +111,14 @@ fn principal_store_file(bundle_paths: &BundleRuntimePaths) -> PathBuf {
 /// Connects as the `@GLOBAL` operator, submits one relay-admin request, and
 /// returns the response frame. The connection is closed before returning.
 fn operator_request(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     request: Value,
 ) -> Value {
     let (mut client, join) =
-        spawn_relay_connection(configuration_roots, bundle_paths);
+        spawn_relay_connection(delivery, configuration_roots, bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     let operator = global_user_id(bundle_name);
@@ -200,6 +201,7 @@ fn operator_request_on_context(
 
 /// Registers `principal_id` via `new peer` and returns the issued PSK.
 fn register_peer(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
@@ -212,6 +214,7 @@ fn register_peer(
         request["scope"] = Value::String(scope.to_string());
     }
     let response = operator_request(
+        delivery,
         configuration_roots,
         bundle_paths,
         bundle_name,
@@ -231,6 +234,7 @@ fn register_peer(
 /// (a `hello_ack` on success, or an error `response` on rejection). The
 /// connection is closed before returning.
 fn hello_first_frame(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     principal_id: &str,
@@ -238,6 +242,7 @@ fn hello_first_frame(
     require_session_credentials: bool,
 ) -> Value {
     let (mut client, join) = spawn_relay_connection_with_enforcement(
+        delivery,
         configuration_roots,
         bundle_paths,
         require_session_credentials,

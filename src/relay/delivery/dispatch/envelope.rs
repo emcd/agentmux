@@ -15,14 +15,14 @@
 //! `noop_tmux_chooser` is a private helper of `build_worker_transport` kept
 //! here so the transport builder is self-contained.
 
-use std::sync::Arc;
-
 use serde_json::{Value, json};
+use std::sync::Arc;
 
 use super::outcomes;
 use super::payload::build_delivery_message;
 use super::worker::{AcpWorkerBootstrap, WorkerTransportContext};
 
+use crate::relay::delivery::DeliveryContext;
 use crate::relay::delivery::async_worker::{
     AsyncWorkerKey, install_acp_worker_output_view, set_worker_failure,
     set_worker_readiness,
@@ -140,6 +140,7 @@ async fn start_transport_off_runtime(
 /// and deferred every construction failure past the point where the spawn site
 /// could still report it to the sender synchronously.
 pub(super) async fn build_worker_transport(
+    relay: &Arc<DeliveryContext>,
     context: &WorkerTransportContext,
     key: &AsyncWorkerKey,
     batch_settings: PromptBatchSettings,
@@ -175,7 +176,10 @@ pub(super) async fn build_worker_transport(
         // only resolves to `None` for one, since a configured coder target with no
         // member fails resolution outright.
         return start_transport_inline(
-            TransportImpl::ui(build_ui_transport_services(key), delivery),
+            TransportImpl::ui(
+                build_ui_transport_services(relay, key),
+                delivery,
+            ),
             startup(&relay_wide_member(key)),
             context.target_session.clone(),
         );
@@ -195,7 +199,10 @@ pub(super) async fn build_worker_transport(
             .await
         },
         SessionType::Ui => start_transport_inline(
-            TransportImpl::ui(build_ui_transport_services(key), delivery),
+            TransportImpl::ui(
+                build_ui_transport_services(relay, key),
+                delivery,
+            ),
             startup(target_member),
             context.target_session.clone(),
         ),
@@ -235,7 +242,7 @@ pub(super) async fn build_worker_transport(
             // Mirror ACP's `MirrorStateFn` pattern (see
             // `build_acp_driver_services` above): the relay constructs
             // the closure closing over
-            // `set_worker_readiness(namespace, runtime_directory,
+            // `set_worker_readiness(delivery.async_registry(), namespace, runtime_directory,
             // target_session, state)`. The transport holds an opaque
             // `Arc<dyn Fn>` so `src/pty` does not import `crate::relay`.
             // The transport uses the closure to publish
@@ -246,8 +253,10 @@ pub(super) async fn build_worker_transport(
                 let namespace = context.namespace.clone();
                 let runtime_directory = context.runtime_directory.clone();
                 let target_session = target_member.id.clone();
+                let delivery = Arc::clone(relay);
                 Arc::new(move |state| {
                     set_worker_readiness(
+                        delivery.async_registry(),
                         namespace.as_str(),
                         runtime_directory.as_path(),
                         target_session.as_str(),
@@ -340,6 +349,7 @@ pub(super) fn build_coder_envelope(
 /// the driver holds them as opaque `Arc<dyn Fn>`s, so `src/acp` imports nothing
 /// from `crate::relay`.
 pub(super) fn build_acp_driver_services(
+    delivery: &Arc<DeliveryContext>,
     key: &AsyncWorkerKey,
     bootstrap: &AcpWorkerBootstrap,
 ) -> AcpDriverServices {
@@ -353,8 +363,10 @@ pub(super) fn build_acp_driver_services(
             let namespace = namespace.clone();
             let runtime_directory = runtime_directory.clone();
             let target_session = target_session.clone();
+            let delivery = Arc::clone(delivery);
             Arc::new(move |state| {
                 set_worker_readiness(
+                    delivery.async_registry(),
                     namespace.as_str(),
                     runtime_directory.as_path(),
                     target_session.as_str(),
@@ -366,8 +378,10 @@ pub(super) fn build_acp_driver_services(
             let namespace = namespace.clone();
             let runtime_directory = runtime_directory.clone();
             let target_session = target_session.clone();
+            let delivery = Arc::clone(delivery);
             Arc::new(move |failure| {
                 set_worker_failure(
+                    delivery.async_registry(),
                     namespace.as_str(),
                     runtime_directory.as_path(),
                     target_session.as_str(),
@@ -379,8 +393,10 @@ pub(super) fn build_acp_driver_services(
             let namespace = namespace.clone();
             let runtime_directory = runtime_directory.clone();
             let target_session = target_session.clone();
+            let delivery = Arc::clone(delivery);
             Arc::new(move |output_view| {
                 install_acp_worker_output_view(
+                    delivery.async_registry(),
                     namespace.as_str(),
                     runtime_directory.as_path(),
                     target_session.as_str(),
@@ -391,8 +407,10 @@ pub(super) fn build_acp_driver_services(
         broadcast_ui: {
             let namespace = namespace.clone();
             let target_session = target_session.clone();
+            let delivery = Arc::clone(delivery);
             Arc::new(move |event_type: &str, payload: Value| {
                 broadcast_event_to_bundle_ui(
+                    &delivery,
                     namespace.as_str(),
                     &outcomes::acp_respawn_stream_event(
                         event_type,
@@ -407,12 +425,15 @@ pub(super) fn build_acp_driver_services(
             let namespace = namespace.clone();
             let runtime_directory = runtime_directory.clone();
             let target_session = target_session.clone();
+            let delivery = Arc::clone(delivery);
             Arc::new(move || {
                 let context = ChoiceEventContext {
+                    delivery: Arc::clone(&delivery),
                     runtime_directory: runtime_directory.clone(),
                     namespace: namespace.clone(),
                     authorized_ui_sessions:
                         list_registered_ui_sessions_for_bundle(
+                            &delivery,
                             namespace.as_str(),
                         ),
                 };
@@ -432,6 +453,7 @@ pub(super) fn build_acp_driver_services(
             })
         },
         chooser: build_acp_chooser(
+            Arc::clone(delivery),
             namespace,
             runtime_directory,
             choices_pending_max,
@@ -445,6 +467,7 @@ pub(super) fn build_acp_driver_services(
 /// `src/transports` imports nothing from `crate::relay` (mirrors
 /// `build_acp_driver_services`).
 pub(super) fn build_ui_transport_services(
+    delivery: &Arc<DeliveryContext>,
     key: &AsyncWorkerKey,
 ) -> UiTransportServices {
     let namespace = key.namespace.clone();
@@ -453,6 +476,7 @@ pub(super) fn build_ui_transport_services(
         broadcast_incoming: {
             let namespace = namespace.clone();
             let target_session = target_session.clone();
+            let delivery = Arc::clone(delivery);
             Arc::new(move |incoming: &UiIncomingMessage| {
                 let mut payload = json!({
                     "message_id": incoming.message_id,
@@ -484,6 +508,7 @@ pub(super) fn build_ui_transport_services(
                     payload,
                 };
                 stream_send_to_broadcast_status(send_event_to_registered_ui(
+                    &delivery,
                     namespace.as_str(),
                     target_session.as_str(),
                     &event,
@@ -493,6 +518,7 @@ pub(super) fn build_ui_transport_services(
         emit_phase: {
             let namespace = namespace.clone();
             let target_session = target_session.clone();
+            let delivery = Arc::clone(delivery);
             Arc::new(move |phase: UiOutcomePhase| {
                 let mut payload = serde_json::Map::new();
                 payload.insert(
@@ -530,6 +556,7 @@ pub(super) fn build_ui_transport_services(
                     payload: Value::Object(payload),
                 };
                 stream_send_to_broadcast_status(send_event_to_registered_ui(
+                    &delivery,
                     namespace.as_str(),
                     target_session.as_str(),
                     &event,

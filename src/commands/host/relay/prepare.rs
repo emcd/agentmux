@@ -5,9 +5,8 @@ use serde_json::json;
 use crate::{
     configuration::load_bundle_group_memberships,
     relay::{
-        BundleCatalog, ConnectionServeContext, HostingIntent,
-        PeerConnectionManager, configure_delivery, persist_startup_failures,
-        startup_bundle,
+        BundleCatalog, ConnectionServeContext, DeliveryContext, HostingIntent,
+        PeerConnectionManager, persist_startup_failures, startup_bundle,
     },
     runtime::{
         bootstrap::{
@@ -152,10 +151,13 @@ pub(super) fn prepare_relay_host(
         &roots.state_root,
     )
     .map_err(shared::map_relay_error)?;
-    // Published before anything can be admitted: the listener is not bound yet,
-    // so no request boundary has run and no entry can have reserved quota against
-    // the defaults.
-    configure_delivery(relay_configuration.delivery);
+    // Published as the handle's delivery state before anything can be admitted:
+    // the listener is not bound yet, so no request boundary has run and no entry
+    // can have reserved quota against the defaults. Per-handle construction
+    // (rather than a process-global publish) is what lets two handles in one
+    // process resolve different `[delivery]` tables.
+    let delivery_context =
+        Arc::new(DeliveryContext::new(relay_configuration.delivery));
 
     let memberships =
         load_bundle_group_memberships(&roots.configuration_roots)
@@ -223,6 +225,7 @@ pub(super) fn prepare_relay_host(
             RelayHostStartupMode::Autostart
         };
         let (mut outcome, hosted_bundle) = host_selected_bundle(
+            &delivery_context,
             roots,
             membership.bundle_name.as_str(),
             startup_mode,
@@ -244,6 +247,7 @@ pub(super) fn prepare_relay_host(
     // registry entries so look/raww resolve their capabilities from the unified
     // registry and a declared-but-disconnected principal is a known target.
     crate::relay::register_configured_relay_wide_principals(
+        &delivery_context,
         &roots.configuration_roots,
     )
     .map_err(shared::map_relay_error)?;
@@ -349,6 +353,7 @@ pub(super) fn prepare_relay_host(
         relay_aliases,
         relay_configuration.require_session_credentials,
         pre_hello_idle_timeout,
+        Arc::clone(&delivery_context),
     );
 
     Ok(RelayHostPreparation::Serve(Box::new(RelayHostServePlan {
@@ -363,6 +368,7 @@ pub(super) fn prepare_relay_host(
 }
 
 pub(super) fn host_selected_bundle(
+    delivery: &Arc<DeliveryContext>,
     roots: &RuntimeRoots,
     bundle_name: &str,
     startup_mode: RelayHostStartupMode,
@@ -395,6 +401,7 @@ pub(super) fn host_selected_bundle(
     // performs this registration inside `startup_bundle`.
     if let RelayHostStartupMode::ProcessOnly = startup_mode
         && let Err(source) = crate::relay::register_configured_bundle(
+            delivery,
             &roots.configuration_roots,
             &paths.bundle_name,
         )
@@ -406,18 +413,20 @@ pub(super) fn host_selected_bundle(
     }
     let mut startup_report = None;
     if let RelayHostStartupMode::Autostart = startup_mode {
-        let report = match startup_bundle(&roots.configuration_roots, &paths) {
-            Ok(report) => report,
-            Err(source) => {
-                return (
-                    failed_startup_bundle_from_relay_error(
-                        bundle_name,
-                        source,
-                    ),
-                    None,
-                );
-            },
-        };
+        let report =
+            match startup_bundle(delivery, &roots.configuration_roots, &paths)
+            {
+                Ok(report) => report,
+                Err(source) => {
+                    return (
+                        failed_startup_bundle_from_relay_error(
+                            bundle_name,
+                            source,
+                        ),
+                        None,
+                    );
+                },
+            };
         let mut report = report;
         match persist_startup_failures(
             bundle_name,

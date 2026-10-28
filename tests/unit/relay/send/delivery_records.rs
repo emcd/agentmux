@@ -19,6 +19,7 @@ use super::*;
 /// and ready unconditionally, so it reaches the guarded state this test is about.
 #[test]
 fn a_terminal_outcome_names_the_entry_it_resolved_under() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
@@ -28,7 +29,8 @@ fn a_terminal_outcome_names_the_entry_it_resolved_under() {
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    dispatch_request(
+    dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Send {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -85,6 +87,7 @@ fn a_terminal_outcome_names_the_entry_it_resolved_under() {
 /// test asserting it would be flaky rather than strict.
 #[test]
 fn a_declared_partition_names_its_unit_and_members() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
@@ -94,7 +97,8 @@ fn a_declared_partition_names_its_unit_and_members() {
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    dispatch_request(
+    dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Send {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -170,6 +174,7 @@ fn a_declared_partition_names_its_unit_and_members() {
 /// coalesces, so there is no load this test could apply that would produce one.
 #[test]
 fn an_enqueued_entry_precedes_the_partition_that_binds_it() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
@@ -179,7 +184,8 @@ fn an_enqueued_entry_precedes_the_partition_that_binds_it() {
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    dispatch_request(
+    dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Send {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -266,11 +272,12 @@ fn a_member_produces_exactly_one_terminal_record() {
     );
     // No tmux server backs this socket, so the target is unreachable and the
     // member resolves on the dwell rather than on a write that never happens.
-    configure_short_unreachable_dwell();
+    let delivery = test_delivery_with_dwell(SHORT_UNREACHABLE_DWELL_MS);
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    dispatch_request(
+    dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Send {
             request_id: None,
             requester_session: "alpha".to_string(),

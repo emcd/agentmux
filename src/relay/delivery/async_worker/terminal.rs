@@ -16,17 +16,21 @@ use crate::relay::delivery::guard::{
     GuardKey, GuardTrigger, SubmissionEvidence,
 };
 use crate::relay::{AsyncDeliveryTask, RelayError, SendOutcome, SendResult};
+use std::sync::Arc;
 
 use super::reporting::report_terminal_outcome;
+use crate::relay::delivery::DeliveryContext;
 
 const DROPPED_ON_SHUTDOWN_REASON: &str =
     "relay shutdown requested before delivery";
 const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 
 pub(in crate::relay::delivery) fn complete_task_on_shutdown(
+    delivery: &Arc<DeliveryContext>,
     task: &AsyncDeliveryTask,
 ) {
     complete_task_outcome(
+        delivery,
         task,
         Ok(SendResult {
             target_session: task.target_session.clone(),
@@ -54,9 +58,11 @@ pub(in crate::relay::delivery) fn complete_task_on_shutdown(
 /// `Some((None, _))` is the receipt case — reportable, with no recorded evidence
 /// because nothing was ever admitted to record any against.
 fn resolve_terminal_transition(
+    delivery: &Arc<DeliveryContext>,
     task: &AsyncDeliveryTask,
 ) -> Option<TerminalResolution> {
     match crate::relay::delivery::admission::terminalize(
+        delivery,
         task.message_id.as_str(),
     ) {
         TerminalTransition::Won {
@@ -105,6 +111,7 @@ struct TerminalResolution {
 /// written for it, while the same shutdown reaching one already bound to a
 /// packing unit resolves `submission_unknown`.
 pub(in crate::relay::delivery) fn complete_task_outcome_from_trigger(
+    delivery: &Arc<DeliveryContext>,
     task: &AsyncDeliveryTask,
     trigger: GuardTrigger,
 ) {
@@ -115,7 +122,7 @@ pub(in crate::relay::delivery) fn complete_task_outcome_from_trigger(
         evidence,
         bound: _,
         guard,
-    }) = resolve_terminal_transition(task)
+    }) = resolve_terminal_transition(delivery, task)
     else {
         return;
     };
@@ -123,6 +130,7 @@ pub(in crate::relay::delivery) fn complete_task_outcome_from_trigger(
     // reported honestly as unknown.
     let evidence = evidence.unwrap_or(SubmissionEvidence::SubmissionUnknown);
     report_terminal_outcome(
+        delivery,
         task,
         Ok(SendResult {
             target_session: task.target_session.clone(),
@@ -154,6 +162,7 @@ pub(in crate::relay::delivery) fn complete_task_outcome_from_trigger(
 /// "delivery channel full" are what a sender needs and the evidence order cannot
 /// know either.
 pub(in crate::relay::delivery) fn complete_task_refusal(
+    delivery: &Arc<DeliveryContext>,
     task: &AsyncDeliveryTask,
     reason_code: &str,
     reason: &str,
@@ -164,7 +173,7 @@ pub(in crate::relay::delivery) fn complete_task_refusal(
         evidence,
         bound: _,
         guard,
-    }) = resolve_terminal_transition(task)
+    }) = resolve_terminal_transition(delivery, task)
     else {
         return;
     };
@@ -175,6 +184,7 @@ pub(in crate::relay::delivery) fn complete_task_refusal(
     // inference from the ledger.
     let evidence = evidence.unwrap_or(SubmissionEvidence::NotSubmitted);
     report_terminal_outcome(
+        delivery,
         task,
         Ok(SendResult {
             target_session: task.target_session.clone(),
@@ -210,6 +220,7 @@ pub(in crate::relay::delivery) fn complete_task_refusal(
 /// the evidence's own to speak for itself, which is what an ordinary
 /// acknowledgment wants, since the write is the whole story.
 pub(in crate::relay::delivery) fn report_resolved_member(
+    delivery: &Arc<DeliveryContext>,
     member: &ResolvedMember,
     reason_code: Option<&str>,
     reason: Option<&str>,
@@ -224,6 +235,7 @@ pub(in crate::relay::delivery) fn report_resolved_member(
     // startup history to clear — it is served by the UI stream and never started.
     if member.evidence == SubmissionEvidence::Submitted
         && !crate::relay::delivery::admission::target_is_relay_wide(
+            delivery,
             member.task.bundle.bundle_name.as_str(),
             member.task.target_session.as_str(),
         )
@@ -234,6 +246,7 @@ pub(in crate::relay::delivery) fn report_resolved_member(
         );
     }
     report_resolved_outcome(
+        delivery,
         member,
         SendResult {
             target_session: member.task.target_session.clone(),
@@ -254,13 +267,15 @@ pub(in crate::relay::delivery) fn report_resolved_member(
 /// Everything downstream — the observability floor, the receipt routing, the
 /// non-recursion marker — is identical, and identical is the point.
 pub(in crate::relay::delivery) fn report_resolved_outcome(
+    delivery: &Arc<DeliveryContext>,
     member: &ResolvedMember,
     result: SendResult,
 ) {
-    report_terminal_outcome(&member.task, Ok(result), member.guard);
+    report_terminal_outcome(delivery, &member.task, Ok(result), member.guard);
 }
 
 pub(in crate::relay::delivery) fn complete_task_outcome(
+    delivery: &Arc<DeliveryContext>,
     task: &AsyncDeliveryTask,
     outcome: Result<SendResult, RelayError>,
 ) {
@@ -273,7 +288,7 @@ pub(in crate::relay::delivery) fn complete_task_outcome(
         evidence,
         bound,
         guard,
-    }) = resolve_terminal_transition(task)
+    }) = resolve_terminal_transition(delivery, task)
     else {
         return;
     };
@@ -286,7 +301,7 @@ pub(in crate::relay::delivery) fn complete_task_outcome(
         Some(evidence) => reconcile_with_evidence(result, evidence, bound),
         None => result,
     });
-    report_terminal_outcome(task, outcome, guard);
+    report_terminal_outcome(delivery, task, outcome, guard);
 }
 
 /// Resolves a member's reported outcome against the evidence the ledger holds
@@ -549,6 +564,9 @@ mod unbound_resolution_tests {
     /// stated rather than left to be assumed.
     #[test]
     fn an_unbound_member_resolves_not_submitted_under_any_trigger() {
+        let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
+            Default::default(),
+        ));
         let temporary = tempfile::TempDir::new().expect("temporary");
         let inscriptions = temporary.path().join("inscriptions.log");
         let _ = crate::runtime::inscriptions::configure_process_inscriptions(
@@ -574,7 +592,8 @@ mod unbound_resolution_tests {
             // finds: an entry waiting in its target's mailbox for an executor to
             // peek. No unit is ever declared, which is the whole fixture —
             // nothing was written and the ledger can prove it.
-            admit(message_id, target, SessionType::Tmux, 1).expect("admit");
+            admit(&delivery, message_id, target, SessionType::Tmux, 1)
+                .expect("admit");
 
             let task = AsyncDeliveryTask {
                 admitted: true,
@@ -601,7 +620,7 @@ mod unbound_resolution_tests {
                 sender_return_route: None,
             };
 
-            complete_task_outcome_from_trigger(&task, trigger);
+            complete_task_outcome_from_trigger(&delivery, &task, trigger);
 
             let completed = std::fs::read_to_string(&inscriptions)
                 .expect("inscriptions file")

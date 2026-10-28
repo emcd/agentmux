@@ -10,7 +10,7 @@
 use std::{
     collections::HashMap,
     sync::{
-        Arc, Mutex, OnceLock,
+        Arc, Mutex,
         atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     thread,
@@ -31,6 +31,7 @@ use crate::transports::{
 };
 
 use crate::protocol::identity::ConsumerGenerationId;
+use crate::relay::delivery::DeliveryContext;
 use crate::relay::delivery::observability;
 use crate::relay::{AsyncDeliveryTask, RelayError, relay_error};
 
@@ -46,18 +47,19 @@ const ACP_ERROR_CODE_QUEUE_FULL: &str = "runtime_acp_queue_full";
 const ACP_PENDING_MAX: usize = 64;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
-pub(in crate::relay::delivery) struct AsyncWorkerKey {
+pub(in crate::relay) struct AsyncWorkerKey {
     pub runtime_directory: PathBuf,
     pub namespace: String,
     pub target_session: String,
 }
 
 #[derive(Default)]
-pub(in crate::relay::delivery) struct AsyncDeliveryRegistry {
-    pub workers: Mutex<HashMap<AsyncWorkerKey, AsyncWorkerEntry>>,
+pub(crate) struct AsyncDeliveryRegistry {
+    pub(in crate::relay) workers:
+        Mutex<HashMap<AsyncWorkerKey, AsyncWorkerEntry>>,
 }
 
-pub(in crate::relay::delivery) struct AsyncWorkerEntry {
+pub(in crate::relay) struct AsyncWorkerEntry {
     /// Identifies the worker that installed this entry.
     ///
     /// Registry keys are per-target and outlive individual workers, so a key
@@ -130,16 +132,10 @@ pub(in crate::relay::delivery) fn build_worker_key(
     }
 }
 
-static ASYNC_DELIVERY_REGISTRY: OnceLock<AsyncDeliveryRegistry> =
-    OnceLock::new();
-
-pub(in crate::relay::delivery) fn async_delivery_registry()
--> &'static AsyncDeliveryRegistry {
-    ASYNC_DELIVERY_REGISTRY.get_or_init(AsyncDeliveryRegistry::default)
-}
-
-pub(in crate::relay::delivery) fn async_worker_count() -> usize {
-    async_delivery_registry()
+pub(in crate::relay::delivery) fn async_worker_count(
+    registry: &AsyncDeliveryRegistry,
+) -> usize {
+    registry
         .workers
         .lock()
         .map(|workers| workers.len())
@@ -147,9 +143,10 @@ pub(in crate::relay::delivery) fn async_worker_count() -> usize {
 }
 
 pub(in crate::relay::delivery) fn worker_exists(
+    registry: &AsyncDeliveryRegistry,
     key: &AsyncWorkerKey,
 ) -> Result<bool, RelayError> {
-    let workers = async_delivery_registry().workers.lock().map_err(|_| {
+    let workers = registry.workers.lock().map_err(|_| {
         relay_error(
             "internal_unexpected_failure",
             "failed to lock async delivery registry",
@@ -160,14 +157,15 @@ pub(in crate::relay::delivery) fn worker_exists(
 }
 
 pub(in crate::relay::delivery) fn wait_for_async_delivery_shutdown(
+    delivery: &Arc<DeliveryContext>,
     timeout: Duration,
 ) -> usize {
-    if !shutdown_requested() {
+    if !shutdown_requested() && !delivery.is_shutting_down() {
         return 0;
     }
     let deadline = Instant::now() + timeout;
     loop {
-        let remaining = async_worker_count();
+        let remaining = async_worker_count(delivery.async_registry());
         if remaining == 0 || Instant::now() >= deadline {
             return remaining;
         }
@@ -238,10 +236,10 @@ pub(in crate::relay::delivery) enum WorkerDispatch {
 /// consults the other's queue, so this shared path is the whole of the
 /// mechanism.
 pub(in crate::relay::delivery) fn try_existing_worker(
+    registry: &AsyncDeliveryRegistry,
     key: &AsyncWorkerKey,
     task: AsyncDeliveryTask,
 ) -> Result<WorkerDispatch, RelayError> {
-    let registry = async_delivery_registry();
     let mut workers = registry.workers.lock().map_err(|_| {
         relay_error(
             "internal_unexpected_failure",
@@ -291,7 +289,7 @@ pub(in crate::relay::delivery) fn try_existing_worker(
 /// Identifies one worker installation, distinct from every other for the same
 /// target. Minted by whichever caller wins the registry insert.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(in crate::relay::delivery) struct WorkerOwner(u64);
+pub(in crate::relay) struct WorkerOwner(u64);
 
 static NEXT_WORKER_OWNER: AtomicU64 = AtomicU64::new(1);
 
@@ -303,13 +301,14 @@ impl WorkerOwner {
 
 #[cfg(test)]
 pub(in crate::relay::delivery) fn register_worker(
+    registry: &AsyncDeliveryRegistry,
     key: AsyncWorkerKey,
     sender: UnboundedSender<AsyncDeliveryTask>,
     pending: std::sync::Arc<AtomicUsize>,
     bounded_acp_queue: bool,
 ) -> WorkerOwner {
     let owner = WorkerOwner::mint();
-    if let Ok(mut workers) = async_delivery_registry().workers.lock() {
+    if let Ok(mut workers) = registry.workers.lock() {
         workers.insert(
             key,
             AsyncWorkerEntry {
@@ -331,19 +330,19 @@ pub(in crate::relay::delivery) fn register_worker(
 }
 
 pub(in crate::relay::delivery) fn register_worker_if_absent(
+    registry: &AsyncDeliveryRegistry,
     key: AsyncWorkerKey,
     sender: UnboundedSender<AsyncDeliveryTask>,
     pending: std::sync::Arc<AtomicUsize>,
     bounded_acp_queue: bool,
 ) -> Result<Option<WorkerOwner>, RelayError> {
-    let mut workers =
-        async_delivery_registry().workers.lock().map_err(|_| {
-            relay_error(
-                "internal_unexpected_failure",
-                "failed to lock async delivery registry",
-                None,
-            )
-        })?;
+    let mut workers = registry.workers.lock().map_err(|_| {
+        relay_error(
+            "internal_unexpected_failure",
+            "failed to lock async delivery registry",
+            None,
+        )
+    })?;
     if workers.contains_key(&key) {
         return Ok(None);
     }
@@ -377,10 +376,11 @@ pub(in crate::relay::delivery) fn register_worker_if_absent(
 /// this target". `raww` needs no separate barrier because it reaches the target
 /// through this same registry lookup.
 pub(in crate::relay::delivery) fn mark_worker_fail_stopped(
+    registry: &AsyncDeliveryRegistry,
     key: &AsyncWorkerKey,
     owner: WorkerOwner,
 ) {
-    if let Ok(mut workers) = async_delivery_registry().workers.lock()
+    if let Ok(mut workers) = registry.workers.lock()
         && let Some(entry) = workers.get_mut(key)
         && entry.owner == owner
     {
@@ -392,9 +392,10 @@ pub(in crate::relay::delivery) fn mark_worker_fail_stopped(
 /// down. Read by the worker's own loop, which is the only thing that may act on
 /// it: the drain runs on the worker's runtime.
 pub(in crate::relay::delivery) fn worker_stop_requested(
+    registry: &AsyncDeliveryRegistry,
     key: &AsyncWorkerKey,
 ) -> bool {
-    async_delivery_registry()
+    registry
         .workers
         .lock()
         .map(|workers| workers.get(key).is_some_and(|entry| entry.stopping))
@@ -418,10 +419,11 @@ pub(in crate::relay::delivery) fn worker_stop_requested(
 /// Signalling only asks. The worker ends on its own next poll, which is what
 /// [`wait_for_bundle_workers_stopped`] waits for.
 pub(in crate::relay) fn stop_workers_for_bundle(
+    registry: &AsyncDeliveryRegistry,
     namespace: &str,
     runtime_directory: &Path,
 ) -> usize {
-    let Ok(mut workers) = async_delivery_registry().workers.lock() else {
+    let Ok(mut workers) = registry.workers.lock() else {
         return 0;
     };
     let mut signalled = 0usize;
@@ -449,13 +451,15 @@ pub(in crate::relay) fn stop_workers_for_bundle(
 /// entries are excluded for the reason [`stop_workers_for_bundle`] gives — they
 /// never leave, so counting them would turn every wait into a full timeout.
 pub(in crate::relay) fn wait_for_bundle_workers_stopped(
+    registry: &AsyncDeliveryRegistry,
     namespace: &str,
     runtime_directory: &Path,
     timeout: Duration,
 ) -> usize {
     let deadline = Instant::now() + timeout;
     loop {
-        let remaining = bundle_worker_count(namespace, runtime_directory);
+        let remaining =
+            bundle_worker_count(registry, namespace, runtime_directory);
         if remaining == 0 || Instant::now() >= deadline {
             return remaining;
         }
@@ -464,8 +468,12 @@ pub(in crate::relay) fn wait_for_bundle_workers_stopped(
 }
 
 /// Registered, non-fail-stopped workers belonging to one bundle.
-fn bundle_worker_count(namespace: &str, runtime_directory: &Path) -> usize {
-    async_delivery_registry()
+fn bundle_worker_count(
+    registry: &AsyncDeliveryRegistry,
+    namespace: &str,
+    runtime_directory: &Path,
+) -> usize {
+    registry
         .workers
         .lock()
         .map(|workers| {
@@ -486,10 +494,11 @@ fn bundle_worker_count(namespace: &str, runtime_directory: &Path) -> usize {
 /// finishes draining and unregisters. Called at the start of the shutdown drain
 /// to close the accept-after-drain race without dropping the count early.
 pub(in crate::relay::delivery) fn close_worker(
+    registry: &AsyncDeliveryRegistry,
     key: &AsyncWorkerKey,
     owner: WorkerOwner,
 ) {
-    if let Ok(mut workers) = async_delivery_registry().workers.lock()
+    if let Ok(mut workers) = registry.workers.lock()
         && let Some(entry) = workers.get_mut(key)
         && entry.owner == owner
     {
@@ -498,13 +507,14 @@ pub(in crate::relay::delivery) fn close_worker(
 }
 
 pub(in crate::relay) fn set_worker_readiness(
+    registry: &AsyncDeliveryRegistry,
     namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
     state: WorkerReadinessState,
 ) {
     let key = build_worker_key(namespace, runtime_directory, target_session);
-    if let Ok(mut workers) = async_delivery_registry().workers.lock()
+    if let Ok(mut workers) = registry.workers.lock()
         && let Some(entry) = workers.get_mut(&key)
     {
         entry.readiness = Some(state);
@@ -525,12 +535,13 @@ pub(in crate::relay) fn set_worker_readiness(
 }
 
 pub(in crate::relay) fn get_worker_readiness(
+    registry: &AsyncDeliveryRegistry,
     namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
 ) -> Option<WorkerReadinessState> {
     let key = build_worker_key(namespace, runtime_directory, target_session);
-    async_delivery_registry()
+    registry
         .workers
         .lock()
         .ok()?
@@ -539,13 +550,14 @@ pub(in crate::relay) fn get_worker_readiness(
 }
 
 pub(in crate::relay) fn set_worker_failure(
+    registry: &AsyncDeliveryRegistry,
     namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
     failure: WorkerFailureReason,
 ) {
     let key = build_worker_key(namespace, runtime_directory, target_session);
-    if let Ok(mut workers) = async_delivery_registry().workers.lock()
+    if let Ok(mut workers) = registry.workers.lock()
         && let Some(entry) = workers.get_mut(&key)
     {
         entry.last_failure = Some(failure);
@@ -553,12 +565,13 @@ pub(in crate::relay) fn set_worker_failure(
 }
 
 pub(in crate::relay) fn get_worker_failure(
+    registry: &AsyncDeliveryRegistry,
     namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
 ) -> Option<WorkerFailureReason> {
     let key = build_worker_key(namespace, runtime_directory, target_session);
-    async_delivery_registry()
+    registry
         .workers
         .lock()
         .ok()?
@@ -567,13 +580,14 @@ pub(in crate::relay) fn get_worker_failure(
 }
 
 pub(in crate::relay) fn install_acp_worker_output_view(
+    registry: &AsyncDeliveryRegistry,
     namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
     output_view: Option<Arc<dyn OutputView>>,
 ) {
     let key = build_worker_key(namespace, runtime_directory, target_session);
-    if let Ok(mut workers) = async_delivery_registry().workers.lock()
+    if let Ok(mut workers) = registry.workers.lock()
         && let Some(entry) = workers.get_mut(&key)
     {
         entry.acp_output_view = output_view;
@@ -581,12 +595,13 @@ pub(in crate::relay) fn install_acp_worker_output_view(
 }
 
 pub(in crate::relay) fn get_acp_worker_output_view(
+    registry: &AsyncDeliveryRegistry,
     namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
 ) -> Option<Arc<dyn OutputView>> {
     let key = build_worker_key(namespace, runtime_directory, target_session);
-    async_delivery_registry()
+    registry
         .workers
         .lock()
         .ok()?
@@ -605,12 +620,14 @@ pub(in crate::relay) fn get_acp_worker_output_view(
 /// failed bootstrap, or mid-respawn); the look handler maps that `None` to an
 /// empty stale/unavailable snapshot.
 pub(in crate::relay) fn get_output_view(
+    registry: &AsyncDeliveryRegistry,
     namespace: &str,
     runtime_directory: &Path,
     member: &BundleMember,
 ) -> Option<Arc<dyn OutputView>> {
     match &member.target {
         TargetConfiguration::Acp(_) => get_acp_worker_output_view(
+            registry,
             namespace,
             runtime_directory,
             member.id.as_str(),
@@ -655,11 +672,13 @@ pub(in crate::relay) fn acp_readiness_is_ready(
 }
 
 pub(in crate::relay) fn acp_session_is_ready(
+    registry: &AsyncDeliveryRegistry,
     namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
 ) -> bool {
     acp_readiness_is_ready(get_worker_readiness(
+        registry,
         namespace,
         runtime_directory,
         target_session,
@@ -674,8 +693,11 @@ pub(in crate::relay) fn acp_session_is_ready(
 /// so `AcpStdioClient::shutdown` never runs. The harness kills the `acp_stub`
 /// children explicitly in `GuardedTempDir::drop` (verified: registry removal
 /// alone still leaked 3 per run; with the harness kill loop the leak is 0).
-pub(crate) fn remove_workers_for_runtime_directory(runtime_directory: &Path) {
-    if let Ok(mut workers) = async_delivery_registry().workers.lock() {
+pub(crate) fn remove_workers_for_runtime_directory(
+    registry: &AsyncDeliveryRegistry,
+    runtime_directory: &Path,
+) {
+    if let Ok(mut workers) = registry.workers.lock() {
         workers.retain(|key, _| key.runtime_directory != runtime_directory);
     }
 }
@@ -727,6 +749,7 @@ pub(in crate::relay::delivery) fn release_pending_slot(pending: &AtomicUsize) {
 }
 
 pub(in crate::relay::delivery) fn drop_pending_async_tasks_on_stop(
+    delivery: &Arc<DeliveryContext>,
     receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
     pending: &AtomicUsize,
     trigger: GuardTrigger,
@@ -740,8 +763,10 @@ pub(in crate::relay::delivery) fn drop_pending_async_tasks_on_stop(
         // shutdown would tell this sender the relay is going away while it
         // carries on serving every other bundle.
         match trigger {
-            GuardTrigger::GracefulShutdown => complete_task_on_shutdown(&task),
-            _ => complete_task_outcome_from_trigger(&task, trigger),
+            GuardTrigger::GracefulShutdown => {
+                complete_task_on_shutdown(delivery, &task)
+            },
+            _ => complete_task_outcome_from_trigger(delivery, &task, trigger),
         }
         release_pending_slot(pending);
     }

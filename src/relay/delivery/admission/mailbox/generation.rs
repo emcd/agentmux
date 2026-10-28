@@ -25,11 +25,13 @@
 //! that is reclaimed underneath it.
 
 use crate::protocol::identity::{ConsumerGenerationId, DeliveryTargetId};
+use std::sync::Arc;
 
 use super::super::super::fence::FenceVerdict;
-use super::super::ledger::{AdmissionTargetKey, LedgerState, lock_ledger};
+use super::super::ledger::{AdmissionTargetKey, LedgerState};
 use super::addressing::target_key;
 use super::resolution::{ResolvedMember, resolve_positions};
+use crate::relay::delivery::DeliveryContext;
 
 /// Why a target's consumer generation was not issued or replaced.
 ///
@@ -80,9 +82,10 @@ pub(in crate::relay) struct GenerationReplacement {
 /// consumers for one target is the condition every generation check exists to
 /// exclude, and handing out a second identifier would make it representable.
 pub(in crate::relay) fn claim_consumer_generation(
+    delivery: &Arc<DeliveryContext>,
     target: &DeliveryTargetId,
 ) -> Result<ConsumerGenerationId, GenerationRejection> {
-    let Ok(mut state) = lock_ledger() else {
+    let Ok(mut state) = delivery.lock_ledger() else {
         return Err(GenerationRejection::LedgerUnavailable);
     };
     let key = target_key(target);
@@ -105,11 +108,12 @@ pub(in crate::relay) fn claim_consumer_generation(
 /// as superseded. Neither order lets one commit against a generation that has
 /// already lost the target.
 pub(in crate::relay) fn replace_consumer_generation(
+    delivery: &Arc<DeliveryContext>,
     target: &DeliveryTargetId,
     outgoing: ConsumerGenerationId,
     verdict: FenceVerdict,
 ) -> Result<GenerationReplacement, GenerationRejection> {
-    let Ok(mut state) = lock_ledger() else {
+    let Ok(mut state) = delivery.lock_ledger() else {
         return Err(GenerationRejection::LedgerUnavailable);
     };
     let key = target_key(target);
@@ -205,8 +209,9 @@ fn resolve_outgoing_declaration(
 /// A target is owned by one generation, which changes hands only behind a
 /// positive fence, and never under an identifier the target has used before.
 ///
-/// Inline for the reason given on the peek block: the ledger is a process-global
-/// behind a crate-private lock, and widening these operations to reach them from
+/// Inline for the reason given on the peek block: the ledger is per-handle
+/// (reached through the owning `DeliveryContext`) behind a crate-private lock,
+/// and widening these operations to reach them from
 /// `tests/` would publish the delivery ledger itself.
 ///
 /// One test rather than several because the ownership rule is a single property
@@ -237,8 +242,9 @@ mod consumer_generation_tests {
     #[test]
     fn a_target_changes_generations_only_behind_a_fence_and_never_reuses_one()
     {
+        let delivery = super::super::fixtures::test_delivery();
         let namespace = "mbx-generation";
-        let first = claim(namespace);
+        let first = claim(&delivery, namespace);
 
         // No second consumer binds beside the incumbent. This is the whole of
         // the single-active-generation rule at its only entry point: everything
@@ -246,7 +252,7 @@ mod consumer_generation_tests {
         // here would make two live consumers representable before any of those
         // checks ran.
         assert_eq!(
-            claim_consumer_generation(&target(namespace)),
+            claim_consumer_generation(&delivery, &target(namespace)),
             Err(GenerationRejection::AlreadyHeld {
                 active: first.generation
             }),
@@ -254,10 +260,18 @@ mod consumer_generation_tests {
         );
 
         for index in 1..=4 {
-            place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
+            place(
+                &delivery,
+                namespace,
+                &format!("{namespace}-{index}"),
+                1,
+                mail("body"),
+            );
         }
-        let acknowledged = declare(&first, range(1, 1)).expect("declare");
+        let acknowledged =
+            declare(&delivery, &first, range(1, 1)).expect("declare");
         acknowledge(
+            &delivery,
             &first,
             acknowledged.unit,
             &[MemberAcknowledgment {
@@ -267,11 +281,12 @@ mod consumer_generation_tests {
         )
         .expect("the first unit resolves");
         assert_eq!(
-            acknowledge(&first, acknowledged.unit, &[]),
+            acknowledge(&delivery, &first, acknowledged.unit, &[]),
             Ok(AckAccepted::AlreadyTerminalized { range: range(1, 1) }),
             "the incumbent's own repeat acknowledgment is the no-op it is"
         );
-        let declared = declare(&first, range(2, 3)).expect("declare");
+        let declared =
+            declare(&delivery, &first, range(2, 3)).expect("declare");
 
         // A negative verdict leaves the target held rather than merely returning
         // an error: the incumbent still owns it, and its declaration is still
@@ -279,6 +294,7 @@ mod consumer_generation_tests {
         // replacement that flipped the generation and reported failure anyway.
         assert_eq!(
             replace_consumer_generation(
+                &delivery,
                 &target(namespace),
                 first.generation,
                 FenceVerdict::Negative
@@ -288,7 +304,7 @@ mod consumer_generation_tests {
             "a generation not observed to cease is not replaced"
         );
         assert_eq!(
-            peeked(&first, 10, 1_000),
+            peeked(&delivery, &first, 10, 1_000),
             vec![2, 3, 4],
             "the incumbent still owns the target after a refused replacement"
         );
@@ -300,6 +316,7 @@ mod consumer_generation_tests {
         let stale = binding(namespace, first.generation.value() + 7);
         assert_eq!(
             replace_consumer_generation(
+                &delivery,
                 &target(namespace),
                 stale.generation,
                 FenceVerdict::Positive
@@ -312,6 +329,7 @@ mod consumer_generation_tests {
         );
 
         let replacement = replace_consumer_generation(
+            &delivery,
             &target(namespace),
             first.generation,
             FenceVerdict::Positive,
@@ -368,17 +386,17 @@ mod consumer_generation_tests {
         // the generation at its own head and one could be left reading the old
         // field while the others moved.
         assert_eq!(
-            peek(&request(&first, 10, 1_000)).unwrap_err(),
+            peek(&delivery, &request(&first, 10, 1_000)).unwrap_err(),
             PeekRejection::GenerationSuperseded,
             "a superseded generation peeks nothing"
         );
         assert_eq!(
-            declare(&first, range(4, 4)),
+            declare(&delivery, &first, range(4, 4)),
             Err(DeclareRejection::GenerationSuperseded),
             "a superseded generation declares nothing"
         );
         assert_eq!(
-            acknowledge(&first, declared.unit, &[]),
+            acknowledge(&delivery, &first, declared.unit, &[]),
             Err(AckRejection::GenerationSuperseded),
             "a superseded generation acknowledges nothing"
         );
@@ -388,7 +406,7 @@ mod consumer_generation_tests {
         // it. A unit resolved before the replacement is one this caller never
         // declared, rather than one it is told it already acknowledged.
         assert_eq!(
-            acknowledge(&second, acknowledged.unit, &[]),
+            acknowledge(&delivery, &second, acknowledged.unit, &[]),
             Err(AckRejection::UnitNotDeclared),
             "the outgoing generation's resolved units are not the incoming one's to see"
         );
@@ -396,16 +414,16 @@ mod consumer_generation_tests {
         // serve, while the resolved run is behind the cursor rather than parking
         // the mailbox in front of it.
         assert_eq!(
-            peeked(&second, 10, 1_000),
+            peeked(&delivery, &second, 10, 1_000),
             vec![4],
             "the incoming generation serves what was never declared, from a cursor that moved"
         );
         assert!(
-            declare(&second, range(4, 4)).is_ok(),
+            declare(&delivery, &second, range(4, 4)).is_ok(),
             "and the outgoing generation's declaration no longer blocks its own"
         );
         assert_eq!(
-            reserved_envelopes(namespace),
+            reserved_envelopes(&delivery, namespace),
             1,
             "the resolved members released their reservations, leaving only the entry still held"
         );
@@ -417,10 +435,10 @@ mod consumer_generation_tests {
         // issued after. What the reap itself refuses and reclaims is its own
         // property and is asserted with it; this is only the teardown the
         // sequence has to outlive.
-        terminalize(&format!("{namespace}-4"));
-        reap_target(&target(namespace), Some(second.generation))
+        terminalize(&delivery, &format!("{namespace}-4"));
+        reap_target(&delivery, &target(namespace), Some(second.generation))
             .expect("the incumbent gives up the target it holds");
-        let third = claim_consumer_generation(&target(namespace))
+        let third = claim_consumer_generation(&delivery, &target(namespace))
             .expect("a reaped target is free to claim again");
         assert_eq!(
             third.value(),
@@ -432,9 +450,16 @@ mod consumer_generation_tests {
         // default generation to guess, which is what makes every check above a
         // check rather than a comparison against a constant every caller knows.
         let unclaimed = "mbx-generation-unclaimed";
-        place(unclaimed, "mbx-generation-unclaimed-1", 1, mail("body"));
+        place(
+            &delivery,
+            unclaimed,
+            "mbx-generation-unclaimed-1",
+            1,
+            mail("body"),
+        );
         assert_eq!(
-            peek(&request(&binding(unclaimed, 1), 10, 1_000)).unwrap_err(),
+            peek(&delivery, &request(&binding(unclaimed, 1), 10, 1_000))
+                .unwrap_err(),
             PeekRejection::GenerationSuperseded,
             "an unclaimed target refuses the caller that guessed the first identifier"
         );
@@ -480,10 +505,17 @@ mod executor_death_tests {
     #[test]
     fn a_dead_executor_leaves_one_answer_per_declared_member_and_the_rest_peekable()
      {
+        let delivery = super::super::fixtures::test_delivery();
         let namespace = "mbx-executor-death";
-        let bound = claim(namespace);
+        let bound = claim(&delivery, namespace);
         for index in 1..=3 {
-            place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
+            place(
+                &delivery,
+                namespace,
+                &format!("{namespace}-{index}"),
+                1,
+                mail("body"),
+            );
         }
 
         // The delivery loop's own work, on its own thread, ending where a
@@ -494,10 +526,11 @@ mod executor_death_tests {
         let (report, reported) = std::sync::mpsc::channel();
         let executor = {
             let bound = bound.clone();
+            let delivery = Arc::clone(&delivery);
             std::thread::spawn(move || {
-                let response = peek(&request(&bound, 10, 1_000))
+                let response = peek(&delivery, &request(&bound, 10, 1_000))
                     .expect("the executor's generation");
-                let accepted = declare(&bound, range(1, 2))
+                let accepted = declare(&delivery, &bound, range(1, 2))
                     .expect("a well-formed range binds");
                 report
                     .send((response.entries.len(), accepted.unit))
@@ -519,7 +552,7 @@ mod executor_death_tests {
             "the executor saw the whole run before it declared a prefix of it"
         );
         assert_eq!(
-            peeked(&bound, 10, 1_000),
+            peeked(&delivery, &bound, 10, 1_000),
             vec![1, 2, 3],
             "a declaration moves no cursor, so the run the dead executor peeked is still there"
         );
@@ -528,6 +561,7 @@ mod executor_death_tests {
         // fence establishes that execution ceased, never whether the write took
         // effect first.
         let replacement = replace_consumer_generation(
+            &delivery,
             &target(namespace),
             bound.generation,
             FenceVerdict::Positive,
@@ -568,12 +602,12 @@ mod executor_death_tests {
         // member finds nothing left to win. A member resolved twice would look
         // identical from its outcome alone.
         assert_eq!(
-            terminalize(&format!("{namespace}-1")),
+            terminalize(&delivery, &format!("{namespace}-1")),
             TerminalTransition::NoReservation,
             "a member the recovery resolved has no reservation left for a second resolver"
         );
         assert_eq!(
-            terminalize(&format!("{namespace}-2")),
+            terminalize(&delivery, &format!("{namespace}-2")),
             TerminalTransition::NoReservation,
             "and neither does its groupmate"
         );
@@ -581,7 +615,7 @@ mod executor_death_tests {
         // would be answering for members another path has already resolved — so
         // it is refused on its generation, before the unit is looked up at all.
         assert_eq!(
-            acknowledge(&bound, unit, &[]),
+            acknowledge(&delivery, &bound, unit, &[]),
             Err(AckRejection::GenerationSuperseded),
             "the dead executor's late acknowledgment produces no second answer"
         );
@@ -591,12 +625,12 @@ mod executor_death_tests {
         // the incoming generation intact rather than being swept up with the
         // unit that died beside it.
         assert_eq!(
-            peeked(&second, 10, 1_000),
+            peeked(&delivery, &second, 10, 1_000),
             vec![3],
             "the entry the dead executor peeked and never declared is the replacement's to serve"
         );
         assert_eq!(
-            reserved_envelopes(namespace),
+            reserved_envelopes(&delivery, namespace),
             1,
             "the resolved members released their reservations, and only the unserved entry holds one"
         );
@@ -605,7 +639,7 @@ mod executor_death_tests {
         // reached the guard: no unit bound it, so it carries no guard identity
         // and the stronger spelling is available to it.
         assert_eq!(
-            resolve_target_entries(&second)
+            resolve_target_entries(&delivery, &second)
                 .iter()
                 .map(|member| (
                     member.message_id.as_str(),
@@ -623,7 +657,7 @@ mod executor_death_tests {
             "an undeclared member never reached the guard, and resolves saying so"
         );
         assert_eq!(
-            reserved_envelopes(namespace),
+            reserved_envelopes(&delivery, namespace),
             0,
             "and the last reservation went with it"
         );

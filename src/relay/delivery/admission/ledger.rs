@@ -1,4 +1,4 @@
-//! The process-global reservation ledger and the one lock that guards it.
+//! The per-handle reservation ledger and the one lock that guards it.
 //!
 //! Every event in this subsystem — admission, authorization, binding, evidence,
 //! the terminal transition, and the reporting pass — mutates this state under
@@ -8,7 +8,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
     time::Instant,
 };
 
@@ -327,7 +327,7 @@ impl TargetGenerations {
 }
 
 #[derive(Default)]
-pub(super) struct LedgerState {
+pub(crate) struct LedgerState {
     /// Live reservations by message id. The authoritative record of what is
     /// reserved: the counters below are maintained in the same locked section, so
     /// they cannot drift from it.
@@ -352,18 +352,13 @@ pub(super) struct LedgerState {
 }
 
 #[derive(Default)]
-pub(super) struct AdmissionLedger {
+pub(crate) struct AdmissionLedger {
     state: Mutex<LedgerState>,
 }
 
-static ADMISSION_LEDGER: OnceLock<AdmissionLedger> = OnceLock::new();
-
-fn ledger() -> &'static AdmissionLedger {
-    ADMISSION_LEDGER.get_or_init(AdmissionLedger::default)
-}
-
-pub(super) fn lock_ledger()
--> Result<std::sync::MutexGuard<'static, LedgerState>, RelayError> {
+pub(in crate::relay::delivery) fn lock_ledger(
+    ledger: &AdmissionLedger,
+) -> Result<std::sync::MutexGuard<'_, LedgerState>, RelayError> {
     // The two reports sit on opposite sides of the acquisition deliberately, and
     // they are the only way an interleaving at this boundary is observable at
     // all: from outside, a caller inside the critical section and a caller that
@@ -371,7 +366,7 @@ pub(super) fn lock_ledger()
     // crate's own tests.
     #[cfg(test)]
     super::lock_boundary::reaching();
-    let guard = ledger().state.lock().map_err(|_| {
+    let guard = ledger.state.lock().map_err(|_| {
         relay_error(
             "internal_unexpected_failure",
             "failed to lock the delivery admission ledger",

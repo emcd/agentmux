@@ -1,14 +1,6 @@
-//! The published `[delivery]` table, and the quota bounds projected out of it.
-
-use std::sync::OnceLock;
-
-use serde_json::json;
+//! The resolved `[delivery]` table, and the quota bounds projected out of it.
 
 use crate::relay::DeliveryConfiguration;
-use crate::runtime::inscriptions::emit_inscription;
-
-const INSCRIPTION_CONFIGURATION_CONFLICT: &str =
-    "relay.delivery.configuration.conflict";
 
 /// The four admission quota limits, projected out of the `[delivery]` table.
 ///
@@ -40,42 +32,4 @@ impl Default for AdmissionLimits {
     fn default() -> Self {
         Self::from(DeliveryConfiguration::default())
     }
-}
-
-/// The relay's resolved `[delivery]` settings, published once at relay startup.
-///
-/// Admission runs at the request boundary, far from anything holding the startup
-/// configuration, and threading nine values through every send path would buy
-/// nothing: the table is relay-wide and immutable for the process lifetime.
-/// Before startup publishes — in tests, and on any path that never hosts a relay
-/// — reads yield the documented defaults, which is what a missing `relay.toml`
-/// resolves to anyway.
-static DELIVERY_CONFIGURATION: OnceLock<DeliveryConfiguration> =
-    OnceLock::new();
-
-/// Publishes the resolved `[delivery]` table for the process. Called once, during
-/// relay startup, before the accept loop can admit anything.
-///
-/// A second call with a *different* table would mean two startup paths resolved
-/// configuration differently, which no caller could detect from the return value
-/// of a setter; it is recorded rather than swallowed. A redundant call with the
-/// same values is silent, because nothing observable differs.
-pub fn configure_delivery(configuration: DeliveryConfiguration) {
-    if let Err(rejected) = DELIVERY_CONFIGURATION.set(configuration)
-        && DELIVERY_CONFIGURATION.get() != Some(&rejected)
-    {
-        emit_inscription(
-            INSCRIPTION_CONFIGURATION_CONFLICT,
-            &json!({
-                "detail": "delivery configuration was already published with different values",
-            }),
-        );
-    }
-}
-
-/// The published `[delivery]` table, or the documented defaults before startup
-/// publishes one.
-#[must_use]
-pub(in crate::relay) fn delivery_configuration() -> DeliveryConfiguration {
-    DELIVERY_CONFIGURATION.get().copied().unwrap_or_default()
 }

@@ -1,5 +1,6 @@
 //! Recording the run an executor is about to submit as one packing unit.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
@@ -12,9 +13,10 @@ use crate::protocol::operations::{
 use crate::runtime::inscriptions::emit_inscription;
 
 use super::super::super::guard::{GuardKey, PackingUnitId};
-use super::super::ledger::{OutstandingDeclaration, lock_ledger};
+use super::super::ledger::OutstandingDeclaration;
 use super::addressing::target_key;
 use super::generation::active_generation;
+use crate::relay::delivery::DeliveryContext;
 
 /// Records, before any write is attempted, the exact run an executor is about to
 /// submit as one packing unit.
@@ -39,10 +41,11 @@ use super::generation::active_generation;
 /// range — so naming the wrong one sends a caller somewhere it cannot make
 /// progress.
 pub(in crate::relay) fn declare(
+    delivery: &Arc<DeliveryContext>,
     binding: &ConsumerBinding,
     range: EntryRange,
 ) -> DeclareResult {
-    let Ok(mut state) = lock_ledger() else {
+    let Ok(mut state) = delivery.lock_ledger() else {
         return Err(DeclareRejection::UnknownTarget);
     };
     let target = target_key(&binding.target);
@@ -144,9 +147,10 @@ pub(in crate::relay) fn declare(
 /// must not arm its watchdog on a declaration a successor made, and after a
 /// replacement the outgoing declaration is resolved rather than inherited.
 pub(in crate::relay) fn declaration_age(
+    delivery: &Arc<DeliveryContext>,
     binding: &ConsumerBinding,
 ) -> Option<Duration> {
-    let state = lock_ledger().ok()?;
+    let state = delivery.lock_ledger().ok()?;
     let key = target_key(&binding.target);
     if active_generation(&state, &key) != Some(binding.generation) {
         return None;
@@ -175,14 +179,22 @@ mod mailbox_declaration_tests {
 
     #[test]
     fn a_declaration_binds_one_well_formed_range_at_a_time() {
+        let delivery = super::super::fixtures::test_delivery();
         let namespace = "mbx-declare";
-        let bound = claim(namespace);
+        let bound = claim(&delivery, namespace);
         for index in 1..=5 {
-            place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
+            place(
+                &delivery,
+                namespace,
+                &format!("{namespace}-{index}"),
+                1,
+                mail("body"),
+            );
         }
 
         assert_eq!(
             declare(
+                &delivery,
                 &binding(namespace, bound.generation.value() + 1),
                 range(1, 1)
             ),
@@ -190,7 +202,7 @@ mod mailbox_declaration_tests {
             "a generation the target does not hold binds nothing"
         );
         assert_eq!(
-            declare(&bound, range(2, 3)),
+            declare(&delivery, &bound, range(2, 3)),
             Err(DeclareRejection::NotAtCursor {
                 expected: seq(1),
                 requested: seq(2),
@@ -198,7 +210,7 @@ mod mailbox_declaration_tests {
             "a range that does not begin at the cursor plus one is refused"
         );
         assert_eq!(
-            declare(&bound, range(1, 9)),
+            declare(&delivery, &bound, range(1, 9)),
             Err(DeclareRejection::PastMailboxEnd {
                 highest: Some(seq(5)),
                 requested: seq(9),
@@ -206,8 +218,8 @@ mod mailbox_declaration_tests {
             "a range past what the mailbox holds is refused"
         );
 
-        let accepted =
-            declare(&bound, range(1, 3)).expect("a well-formed range binds");
+        let accepted = declare(&delivery, &bound, range(1, 3))
+            .expect("a well-formed range binds");
         assert_eq!(accepted.range, range(1, 3));
 
         // The teeth of the single-outstanding rule. The identical range passes
@@ -216,7 +228,7 @@ mod mailbox_declaration_tests {
         // where the first declaration found it — so without this the relay would
         // mint a second unit over entries already bound to the first.
         assert_eq!(
-            declare(&bound, range(1, 3)),
+            declare(&delivery, &bound, range(1, 3)),
             Err(DeclareRejection::UnitAlreadyOutstanding {
                 outstanding: accepted.unit,
             }),
@@ -226,7 +238,7 @@ mod mailbox_declaration_tests {
         // this from an overlap check: declaration is totally ordered per target,
         // not merely non-overlapping.
         assert_eq!(
-            declare(&bound, range(4, 5)),
+            declare(&delivery, &bound, range(4, 5)),
             Err(DeclareRejection::UnitAlreadyOutstanding {
                 outstanding: accepted.unit,
             }),
@@ -234,6 +246,7 @@ mod mailbox_declaration_tests {
         );
 
         acknowledge(
+            &delivery,
             &bound,
             accepted.unit,
             &[
@@ -253,7 +266,7 @@ mod mailbox_declaration_tests {
         )
         .expect("the outstanding unit resolves");
         assert!(
-            declare(&bound, range(4, 5)).is_ok(),
+            declare(&delivery, &bound, range(4, 5)).is_ok(),
             "declaring again is possible once the outstanding unit is acknowledged"
         );
 
@@ -261,12 +274,12 @@ mod mailbox_declaration_tests {
         // shortening the bound range, because a transport that asked for five
         // entries and was handed three would write a set the relay did not record.
         let gapped = "mbx-declare-gap";
-        let gapped_bound = claim(gapped);
-        place(gapped, "mbx-declare-gap-1", 1, mail("body"));
-        admit_only(gapped, "mbx-declare-gap-2", 1);
-        place(gapped, "mbx-declare-gap-3", 1, mail("body"));
+        let gapped_bound = claim(&delivery, gapped);
+        place(&delivery, gapped, "mbx-declare-gap-1", 1, mail("body"));
+        admit_only(&delivery, gapped, "mbx-declare-gap-2", 1);
+        place(&delivery, gapped, "mbx-declare-gap-3", 1, mail("body"));
         assert_eq!(
-            declare(&gapped_bound, range(1, 3)),
+            declare(&delivery, &gapped_bound, range(1, 3)),
             Err(DeclareRejection::NotContiguous { absent: seq(2) }),
             "a range spanning a position the mailbox does not hold is refused"
         );
@@ -276,7 +289,7 @@ mod mailbox_declaration_tests {
         // `UnitAlreadyOutstanding`, leaving the mailbox holding a unit no
         // executor ever declared and none can acknowledge.
         assert!(
-            declare(&gapped_bound, range(1, 1)).is_ok(),
+            declare(&delivery, &gapped_bound, range(1, 1)).is_ok(),
             "a refused declaration binds nothing, so the head is still declarable"
         );
     }
@@ -314,23 +327,34 @@ mod declaration_serialization_tests {
     use super::*;
 
     /// A claimed target holding three undeclared entries.
-    fn three_queued(namespace: &str) -> ConsumerBinding {
-        let outgoing = claim(namespace);
+    fn three_queued(
+        delivery: &Arc<DeliveryContext>,
+        namespace: &str,
+    ) -> ConsumerBinding {
+        let outgoing = claim(delivery, namespace);
         for index in 1..=3 {
-            place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
+            place(
+                delivery,
+                namespace,
+                &format!("{namespace}-{index}"),
+                1,
+                mail("body"),
+            );
         }
         outgoing
     }
 
     #[test]
     fn a_declaration_and_a_replacement_never_both_take_effect() {
+        let delivery = super::super::fixtures::test_delivery();
         let namespace = "mbx-declare-inflight";
-        let outgoing = three_queued(namespace);
+        let outgoing = three_queued(&delivery, namespace);
 
         let boundary = lock_boundary::watch();
         let declaring = {
             let binding = outgoing.clone();
-            boundary.spawn(move || declare(&binding, range(1, 3)))
+            let delivery = Arc::clone(&delivery);
+            boundary.spawn(move || declare(&delivery, &binding, range(1, 3)))
         };
         // Inside the critical section with the guard in hand: a declaration
         // genuinely in flight, not merely dispatched.
@@ -339,8 +363,10 @@ mod declaration_serialization_tests {
         let replacing = {
             let target = target(namespace);
             let generation = outgoing.generation;
+            let delivery = Arc::clone(&delivery);
             boundary.spawn(move || {
                 replace_consumer_generation(
+                    &delivery,
                     &target,
                     generation,
                     FenceVerdict::Positive,
@@ -381,12 +407,12 @@ mod declaration_serialization_tests {
             "and the replacement resolves what it bound, through the guard"
         );
         assert_eq!(
-            peeked(&incoming, 10, 1_000),
+            peeked(&delivery, &incoming, 10, 1_000),
             Vec::<u64>::new(),
             "so the incoming generation is handed nothing that was about to be written"
         );
         assert_eq!(
-            reserved_envelopes(namespace),
+            reserved_envelopes(&delivery, namespace),
             0,
             "and every resolved member released its reservation"
         );
@@ -396,8 +422,9 @@ mod declaration_serialization_tests {
         // bind nothing, and the entries it named must survive undisturbed for
         // the generation that now owns them.
         let namespace = "mbx-declare-late";
-        let outgoing = three_queued(namespace);
+        let outgoing = three_queued(&delivery, namespace);
         let replacement = replace_consumer_generation(
+            &delivery,
             &target(namespace),
             outgoing.generation,
             FenceVerdict::Positive,
@@ -407,7 +434,7 @@ mod declaration_serialization_tests {
             ConsumerBinding::new(target(namespace), replacement.generation);
 
         assert_eq!(
-            declare(&outgoing, range(1, 3)),
+            declare(&delivery, &outgoing, range(1, 3)),
             Err(DeclareRejection::GenerationSuperseded),
             "a declaration reaching the relay after the flip is refused on its generation"
         );
@@ -416,16 +443,16 @@ mod declaration_serialization_tests {
             "the replacement had no declaration to resolve, so it resolved nothing"
         );
         assert_eq!(
-            peeked(&incoming, 10, 1_000),
+            peeked(&delivery, &incoming, 10, 1_000),
             vec![1, 2, 3],
             "the entries the refused declaration named stay queued for the current generation"
         );
         assert!(
-            declare(&incoming, range(1, 3)).is_ok(),
+            declare(&delivery, &incoming, range(1, 3)).is_ok(),
             "and undeclared, so the incoming generation may bind them itself"
         );
         assert_eq!(
-            reserved_envelopes(namespace),
+            reserved_envelopes(&delivery, namespace),
             3,
             "the refusal resolved nothing, so it released no reservation"
         );

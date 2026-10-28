@@ -6,6 +6,9 @@ use super::helpers::*;
 
 #[test]
 fn acp_worker_state_transitions_busy_then_available() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
@@ -16,7 +19,7 @@ fn acp_worker_state_transitions_busy_then_available() {
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_send(&config_root, &tmux_socket);
+    let response = dispatch_send(&delivery, &config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -25,6 +28,7 @@ fn acp_worker_state_transitions_busy_then_available() {
     // converge back to available once the turn completes.
     assert!(
         wait_for_worker_state(
+            &delivery,
             temporary.path(),
             "bravo",
             "busy",
@@ -34,6 +38,7 @@ fn acp_worker_state_transitions_busy_then_available() {
     );
     assert!(
         wait_for_worker_state(
+            &delivery,
             temporary.path(),
             "bravo",
             "available",
@@ -45,6 +50,9 @@ fn acp_worker_state_transitions_busy_then_available() {
 
 #[test]
 fn acp_request_permission_keeps_worker_busy_while_pending_decision() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
@@ -55,12 +63,13 @@ fn acp_request_permission_keeps_worker_busy_while_pending_decision() {
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_send(&config_root, &tmux_socket);
+    let response = dispatch_send(&delivery, &config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
     assert!(
         wait_for_worker_state(
+            &delivery,
             temporary.path(),
             "bravo",
             "busy",
@@ -70,6 +79,7 @@ fn acp_request_permission_keeps_worker_busy_while_pending_decision() {
     );
     assert!(
         !wait_for_worker_state(
+            &delivery,
             temporary.path(),
             "bravo",
             "available",
@@ -78,13 +88,16 @@ fn acp_request_permission_keeps_worker_busy_while_pending_decision() {
         "worker_state unexpectedly converged to available without permission decision"
     );
     assert_eq!(
-        read_worker_state(temporary.path(), "bravo").as_deref(),
+        read_worker_state(&delivery, temporary.path(), "bravo").as_deref(),
         Some("busy")
     );
 }
 
 #[test]
 fn acp_worker_state_stays_available_after_protocol_error() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     // A JSON-RPC error response to session/prompt is a logical error from
     // a still-responsive agent. Under the fire-and-forget design, the
     // persistent worker stays alive (Available) for subsequent prompts.
@@ -97,12 +110,16 @@ fn acp_worker_state_stays_available_after_protocol_error() {
     };
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
-    let response =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let response = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     assert!(
         wait_for_worker_state(
+            &delivery,
             temporary.path(),
             "bravo",
             "available",
@@ -112,6 +129,7 @@ fn acp_worker_state_stays_available_after_protocol_error() {
     );
     assert!(
         !wait_for_worker_state(
+            &delivery,
             temporary.path(),
             "bravo",
             "unavailable",
@@ -123,6 +141,9 @@ fn acp_worker_state_stays_available_after_protocol_error() {
 
 #[test]
 fn acp_async_queue_overflow_returns_runtime_queue_full() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         prompt_delay_sec: 1,
@@ -134,7 +155,8 @@ fn acp_async_queue_overflow_returns_runtime_queue_full() {
 
     let mut overflow_response = None::<RelayResponse>;
     for _ in 0..70 {
-        let response = dispatch_send_result(&config_root, &tmux_socket);
+        let response =
+            dispatch_send_result(&delivery, &config_root, &tmux_socket);
         match response {
             Ok(response) => {
                 if let RelayResponse::Error { error } = &response

@@ -46,6 +46,7 @@ send = "home"
 /// Connects as a bundle-bound `alpha` session and issues one cross-bundle `look`
 /// at `target_session`, returning the response frame.
 fn cross_bundle_look(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: BundleCatalog,
@@ -53,6 +54,7 @@ fn cross_bundle_look(
     target_session: &str,
 ) -> Value {
     let (mut client, join) = spawn_relay_connection_with_catalog(
+        delivery,
         configuration_roots,
         state_root,
         catalog,
@@ -96,6 +98,9 @@ fn cross_bundle_look(
 /// peer-bundle and member resolution both succeeded.
 #[test]
 fn cross_bundle_look_permitted_under_all_scope_resolves_peer() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "look_peer_a";
     let bundle_b = "look_peer_b";
@@ -110,6 +115,7 @@ fn cross_bundle_look_permitted_under_all_scope_resolves_peer() {
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_look(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog,
@@ -134,6 +140,9 @@ fn cross_bundle_look_permitted_under_all_scope_resolves_peer() {
 /// pre-authorization capability gate passes and the policy denial surfaces.
 #[test]
 fn cross_bundle_look_denied_under_home_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "look_home_a";
     let bundle_b = "look_home_b";
@@ -148,6 +157,7 @@ fn cross_bundle_look_denied_under_home_scope() {
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_look(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog,
@@ -169,6 +179,9 @@ fn cross_bundle_look_denied_under_home_scope() {
 /// A target naming a bundle absent from the catalog is rejected fail-closed.
 #[test]
 fn cross_bundle_look_rejects_unknown_peer_bundle() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "look_nobundle_a";
     let configuration_roots = write_bundle_configuration(&temporary, bundle_a);
@@ -179,6 +192,7 @@ fn cross_bundle_look_rejects_unknown_peer_bundle() {
     let catalog = multi_bundle_catalog(&[paths_a]);
 
     let response = cross_bundle_look(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog,
@@ -197,6 +211,9 @@ fn cross_bundle_look_rejects_unknown_peer_bundle() {
 /// the requester is permitted to look cross-bundle.
 #[test]
 fn cross_bundle_look_rejects_unknown_target_in_peer_bundle() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "look_notarget_a";
     let bundle_b = "look_notarget_b";
@@ -211,6 +228,7 @@ fn cross_bundle_look_rejects_unknown_target_in_peer_bundle() {
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_look(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog,

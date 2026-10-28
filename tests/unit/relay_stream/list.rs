@@ -15,6 +15,7 @@ use agentmux::configuration::ConfigurationRoots;
 /// Connects as a bundle-bound `alpha` session and issues one `list` whose wire
 /// frame carries the given routing `namespace`, returning the response frame.
 fn cross_bundle_list(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: BundleCatalog,
@@ -22,6 +23,7 @@ fn cross_bundle_list(
     namespace: &str,
 ) -> Value {
     let (mut client, join) = spawn_relay_connection_with_catalog(
+        delivery,
         configuration_roots,
         state_root,
         catalog,
@@ -59,6 +61,9 @@ fn cross_bundle_list(
 /// sessions rather than being rejected as an unknown sender.
 #[test]
 fn cross_bundle_list_permitted_under_all_scope_enumerates_peer() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "list_peer_a";
     let bundle_b = "list_peer_b";
@@ -73,6 +78,7 @@ fn cross_bundle_list_permitted_under_all_scope_enumerates_peer() {
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_list(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog,
@@ -97,6 +103,9 @@ fn cross_bundle_list_permitted_under_all_scope_enumerates_peer() {
 /// to enumerate a peer bundle.
 #[test]
 fn cross_bundle_list_denied_under_home_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "list_home_a";
     let bundle_b = "list_home_b";
@@ -111,6 +120,7 @@ fn cross_bundle_list_denied_under_home_scope() {
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_list(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog,
@@ -133,6 +143,9 @@ fn cross_bundle_list_denied_under_home_scope() {
 /// lists its own bundle by name under `home`.
 #[test]
 fn same_bundle_list_permitted_under_home_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "list_same_home";
     let configuration_roots =
@@ -144,6 +157,7 @@ fn same_bundle_list_permitted_under_home_scope() {
     let catalog = multi_bundle_catalog(&[paths]);
 
     let response = cross_bundle_list(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog,
@@ -157,6 +171,7 @@ fn same_bundle_list_permitted_under_home_scope() {
 
 /// Connects as the given relay-wide operator and lists the given `namespace`.
 fn relay_wide_list(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: BundleCatalog,
@@ -164,6 +179,7 @@ fn relay_wide_list(
     namespace: &str,
 ) -> Value {
     let (mut client, join) = spawn_relay_connection_with_catalog(
+        delivery,
         configuration_roots,
         state_root,
         catalog,
@@ -201,6 +217,9 @@ fn relay_wide_list(
 /// therefore cross-namespace and permitted only under `all`.
 #[test]
 fn relay_wide_list_of_bundle_permitted_under_all_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "list_relay_wide_all";
     let configuration_roots =
@@ -214,6 +233,7 @@ fn relay_wide_list_of_bundle_permitted_under_all_scope() {
     let operator_id = global_user_id(bundle_name);
 
     let response = relay_wide_list(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog,
@@ -229,6 +249,9 @@ fn relay_wide_list_of_bundle_permitted_under_all_scope() {
 /// `home` confers authority only within its own (`GLOBAL`) namespace.
 #[test]
 fn relay_wide_list_of_bundle_denied_under_home_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "list_relay_wide_home";
     let configuration_roots =
@@ -242,6 +265,7 @@ fn relay_wide_list_of_bundle_denied_under_home_scope() {
     let operator_id = global_user_id(bundle_name);
 
     let response = relay_wide_list(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog,
@@ -263,6 +287,9 @@ fn relay_wide_list_of_bundle_denied_under_home_scope() {
 /// A `namespace` naming a bundle absent from the catalog is rejected fail-closed.
 #[test]
 fn cross_bundle_list_rejects_unknown_namespace() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "list_nobundle_a";
     let configuration_roots = write_bundle_configuration(&temporary, bundle_a);
@@ -273,6 +300,7 @@ fn cross_bundle_list_rejects_unknown_namespace() {
     let catalog = multi_bundle_catalog(&[paths_a]);
 
     let response = cross_bundle_list(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog,

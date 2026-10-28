@@ -1,6 +1,7 @@
 //! Ending a worker: the pre-generation exit, the fence-bounded drain, and the
 //! records both leave behind.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -8,6 +9,7 @@ use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::protocol::identity::{ConsumerBinding, DeliveryTargetId};
+use crate::relay::delivery::DeliveryContext;
 use crate::relay::delivery::admission::{
     ResolvedMember, reap_target, resolve_target_entries,
 };
@@ -36,8 +38,12 @@ const DROPPED_ON_SHUTDOWN_REASON_CODE: &str = "dropped_on_shutdown";
 /// guard's, and the contract admits it for exactly this shape: an undeclared
 /// entry is provably unwritten, so `dropped_on_shutdown` is both true and more
 /// informative than the `not_submitted` the evidence order would otherwise give.
-fn complete_resolved_on_shutdown(member: &ResolvedMember) {
+fn complete_resolved_on_shutdown(
+    delivery: &Arc<DeliveryContext>,
+    member: &ResolvedMember,
+) {
     report_resolved_outcome(
+        delivery,
         member,
         SendResult {
             target_session: member.task.target_session.clone(),
@@ -59,20 +65,31 @@ fn complete_resolved_on_shutdown(member: &ResolvedMember) {
 /// constructs no transport: a relay on its way out has no use for a target, and
 /// starting one here would spawn a pane or a child purely to tear it down.
 pub(super) fn shutdown_before_generation(
+    delivery: &Arc<DeliveryContext>,
     key: &AsyncWorkerKey,
     owner: WorkerOwner,
     receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
     pending: &std::sync::atomic::AtomicUsize,
 ) {
-    super::super::super::async_worker::close_worker(key, owner);
+    super::super::super::async_worker::close_worker(
+        delivery.async_registry(),
+        key,
+        owner,
+    );
     // Reached only under `shutdown_requested()`, so the shutdown spelling is the
     // true one here rather than a default.
     super::super::super::async_worker::drop_pending_async_tasks_on_stop(
+        delivery,
         receiver,
         pending,
         GuardTrigger::GracefulShutdown,
     );
-    super::super::super::async_worker::unregister_worker(key, owner);
+    super::super::super::async_worker::unregister_worker(
+        delivery,
+        delivery.async_registry(),
+        key,
+        owner,
+    );
 }
 
 /// Resolves every task still queued for a worker that cannot deliver, reporting
@@ -99,6 +116,7 @@ pub(super) fn shutdown_before_generation(
 /// claimed and is refused by one somebody claimed in the meantime, which is the
 /// answer that case wants.
 pub(super) fn resolve_queued_tasks_and_reclaim(
+    delivery: &Arc<DeliveryContext>,
     key: &AsyncWorkerKey,
     receiver: &mut UnboundedReceiver<AsyncDeliveryTask>,
     pending: &std::sync::atomic::AtomicUsize,
@@ -106,12 +124,14 @@ pub(super) fn resolve_queued_tasks_and_reclaim(
 ) {
     while let Ok(task) = receiver.try_recv() {
         super::super::super::async_worker::complete_task_outcome(
+            delivery,
             &task,
             Err(error.clone()),
         );
         super::super::super::async_worker::release_pending_slot(pending);
     }
     reap_target(
+        delivery,
         &DeliveryTargetId::new(
             key.namespace.as_str(),
             key.runtime_directory.as_path(),
@@ -163,11 +183,12 @@ pub(super) fn emit_fence_verdict(
 /// Members already resolved are not reported twice: the terminal transition is
 /// contested, and only what this call wins comes back.
 pub(super) fn abandon_target(
+    delivery: &Arc<DeliveryContext>,
     binding: &ConsumerBinding,
     trigger: GuardTrigger,
 ) {
-    for member in &resolve_target_entries(binding) {
-        report_resolved_member(member, None, Some(trigger.reason()));
+    for member in &resolve_target_entries(delivery, binding) {
+        report_resolved_member(delivery, member, None, Some(trigger.reason()));
     }
 }
 
@@ -181,16 +202,21 @@ pub(super) fn abandon_target(
 /// it takes the guard's evidence order — `submission_unknown` where no
 /// acknowledgment arrived. Collapsing the two would let a lifecycle event choose
 /// an outcome, which is precisely what the evidence order exists to prevent.
-fn resolve_mailbox_at_stop(binding: &ConsumerBinding, cause: StopCause) {
-    for member in &resolve_target_entries(binding) {
+fn resolve_mailbox_at_stop(
+    delivery: &Arc<DeliveryContext>,
+    binding: &ConsumerBinding,
+    cause: StopCause,
+) {
+    for member in &resolve_target_entries(delivery, binding) {
         if member.declared || cause != StopCause::Shutdown {
             report_resolved_member(
+                delivery,
                 member,
                 None,
                 Some(cause.guard_trigger().reason()),
             );
         } else {
-            complete_resolved_on_shutdown(member);
+            complete_resolved_on_shutdown(delivery, member);
         }
     }
 }
@@ -262,7 +288,9 @@ impl StopCause {
 /// fence straight into the unbounded wait it exists to replace. Cessation has
 /// already been initiated by the fence's forced step; what is abandoned is the
 /// waiting, and the process is exiting anyway.
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn stop_drain(
+    delivery: &Arc<DeliveryContext>,
     key: &AsyncWorkerKey,
     binding: &ConsumerBinding,
     transport: &mut TransportImpl,
@@ -284,6 +312,7 @@ pub(super) async fn stop_drain(
     // sender either enqueued before the close (and is drained here) or observed
     // the entry closing and never enqueued at all.
     super::super::super::async_worker::drop_pending_async_tasks_on_stop(
+        delivery,
         receiver,
         pending,
         cause.guard_trigger(),
@@ -318,11 +347,12 @@ pub(super) async fn stop_drain(
     // for — and after the teardown above, so an acknowledgment that arrived
     // during the observation windows has already taken its own members and this
     // finds only what genuinely went unresolved.
-    resolve_mailbox_at_stop(binding, cause);
+    resolve_mailbox_at_stop(delivery, binding, cause);
     // Defensive only. Nothing can have arrived since the pre-fence drain above,
     // for the reason given there; this costs one `try_recv` and means a future
     // change that reopens a producer during shutdown loses nothing silently.
     super::super::super::async_worker::drop_pending_async_tasks_on_stop(
+        delivery,
         receiver,
         pending,
         cause.guard_trigger(),
@@ -365,6 +395,9 @@ mod reclaim_after_drain_tests {
 
     #[test]
     fn draining_a_queue_the_reap_had_to_keep_lets_the_retry_reclaim_it() {
+        let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
+            Default::default(),
+        ));
         let runtime_directory = PathBuf::from("/nonexistent").join(NAMESPACE);
         let admission = AdmissionTargetKey::new(
             NAMESPACE,
@@ -382,6 +415,7 @@ mod reclaim_after_drain_tests {
         };
 
         admit(
+            &delivery,
             "reclaim-after-drain-1",
             admission.clone(),
             SessionType::Tmux,
@@ -389,6 +423,7 @@ mod reclaim_after_drain_tests {
         )
         .expect("admit");
         enqueue(
+            &delivery,
             &Arc::new(queued_task(
                 runtime_directory.as_path(),
                 "reclaim-after-drain-1",
@@ -401,7 +436,7 @@ mod reclaim_after_drain_tests {
         // the drain. It finds the queued task still admitted and keeps the
         // mailbox rather than resolving an entry it could not report.
         assert_eq!(
-            reap_target(&target, None),
+            reap_target(&delivery, &target, None),
             Ok(TargetReap::Retained { entries_held: 1 }),
             "the reap ahead of the drain keeps the mailbox it cannot empty"
         );
@@ -421,6 +456,7 @@ mod reclaim_after_drain_tests {
             None,
         );
         resolve_queued_tasks_and_reclaim(
+            &delivery,
             &AsyncWorkerKey {
                 runtime_directory: runtime_directory.clone(),
                 namespace: NAMESPACE.to_string(),
@@ -434,10 +470,17 @@ mod reclaim_after_drain_tests {
         // The numbering is the discriminating observation, not emptiness. Had the
         // mailbox survived the retry, this entry would be position two in a
         // mailbox belonging to a target that no longer has a worker.
-        admit("reclaim-after-drain-2", admission, SessionType::Tmux, 1)
-            .expect("admit");
+        admit(
+            &delivery,
+            "reclaim-after-drain-2",
+            admission,
+            SessionType::Tmux,
+            1,
+        )
+        .expect("admit");
         assert_eq!(
             enqueue(
+                &delivery,
                 &Arc::new(queued_task(
                     runtime_directory.as_path(),
                     "reclaim-after-drain-2",

@@ -33,7 +33,9 @@ impl AsRef<Path> for GuardedTempDir {
 
 impl Drop for GuardedTempDir {
     fn drop(&mut self) {
-        agentmux::relay::test_cleanup_acp_workers(self.inner.path());
+        // No registry cleanup: each test holds its own DeliveryContext, so
+        // dropping it releases that test's workers. Only the stub children
+        // below need explicit killing.
         // Kill acp_stub children logged to acp_child_pids.txt, gated on
         // /proc/<pid>/cmdline containing acp_stub.sh to avoid signalling a
         // recycled pid that no longer belongs to us. This belongs in the

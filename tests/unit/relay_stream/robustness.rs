@@ -16,6 +16,7 @@ fn ensure_fast_write_timeout_for_tests() {
 // Spawns `serve_connection` without unwrapping its result, so a test can assert
 // on the error-return paths (write timeout, invalid frame bytes).
 fn spawn_relay_connection_capturing(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
 ) -> (UnixStream, thread::JoinHandle<Result<(), std::io::Error>>) {
@@ -24,8 +25,15 @@ fn spawn_relay_connection_capturing(
     let root = configuration_roots.clone();
     let state_root = bundle_paths.state_root.clone();
     let catalog = super::single_bundle_catalog(bundle_paths);
+    let serve_delivery = std::sync::Arc::clone(delivery);
     let join_handle = thread::spawn(move || {
-        run_serve_connection(server_stream, root, state_root, catalog)
+        run_serve_connection(
+            &serve_delivery,
+            server_stream,
+            root,
+            state_root,
+            catalog,
+        )
     });
     (client_stream, join_handle)
 }
@@ -129,6 +137,9 @@ directory = "/tmp"
 
 #[test]
 fn stalled_client_write_timeout_releases_connection_worker() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     ensure_fast_write_timeout_for_tests();
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_write_timeout";
@@ -138,8 +149,11 @@ fn stalled_client_write_timeout_releases_connection_worker() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
 
-    let (mut client_stream, join_handle) =
-        spawn_relay_connection_capturing(&configuration_roots, &bundle_paths);
+    let (mut client_stream, join_handle) = spawn_relay_connection_capturing(
+        &delivery,
+        &configuration_roots,
+        &bundle_paths,
+    );
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -211,7 +225,7 @@ fn stalled_client_write_timeout_releases_connection_worker() {
     // The connection must have been released from the registry: a fresh hello
     // with the same identity registers instead of conflicting.
     let (mut reconnect_client, reconnect_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let reconnect_read = reconnect_client
         .try_clone()
         .expect("clone reconnect stream");
@@ -227,6 +241,9 @@ fn stalled_client_write_timeout_releases_connection_worker() {
 
 #[test]
 fn idle_ui_stream_write_timeout_tears_down_connection() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     ensure_fast_write_timeout_for_tests();
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_idle_ui_timeout";
@@ -242,8 +259,11 @@ fn idle_ui_stream_write_timeout_tears_down_connection() {
     // TUI-regression shape: an idle SessionType::Ui stream the relay keeps
     // pushing events to. Captured so we can assert the worker returns instead
     // of pinning on a parked read loop behind a dead writer.
-    let (mut ui_client, ui_handle) =
-        spawn_relay_connection_capturing(&configuration_roots, &bundle_paths);
+    let (mut ui_client, ui_handle) = spawn_relay_connection_capturing(
+        &delivery,
+        &configuration_roots,
+        &bundle_paths,
+    );
     let ui_read = ui_client.try_clone().expect("clone ui stream");
     let mut ui_reader = BufReader::new(ui_read);
     send_json(&mut ui_client, hello_frame_for("panel", bundle_name));
@@ -264,7 +284,7 @@ fn idle_ui_stream_write_timeout_tears_down_connection() {
     // buffer fills, the relay-to-client write blocks past the 300 ms timeout,
     // the writer task exits, and the connection must tear down.
     let (mut sender_client, sender_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let sender_read = sender_client.try_clone().expect("clone sender stream");
     let mut sender_reader = BufReader::new(sender_read);
     send_json(&mut sender_client, agent_hello_frame(bundle_name));
@@ -306,7 +326,7 @@ fn idle_ui_stream_write_timeout_tears_down_connection() {
     // The torn-down connection must have released its registry entry: the same
     // UI identity reconnects without an identity-claim conflict.
     let (mut reconnect_client, reconnect_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let reconnect_read = reconnect_client
         .try_clone()
         .expect("clone reconnect stream");
@@ -328,6 +348,9 @@ fn idle_ui_stream_write_timeout_tears_down_connection() {
 // todos/relay/65.
 #[test]
 fn idle_global_operator_stream_write_timeout_tears_down_connection() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     ensure_fast_write_timeout_for_tests();
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_idle_global_ui_timeout";
@@ -346,7 +369,11 @@ fn idle_global_operator_stream_write_timeout_tears_down_connection() {
     // reads again. Captured so the worker's return is observable instead of
     // pinning on a parked read loop behind a dead writer.
     let (mut operator_client, operator_handle) =
-        spawn_relay_connection_capturing(&configuration_roots, &bundle_paths);
+        spawn_relay_connection_capturing(
+            &delivery,
+            &configuration_roots,
+            &bundle_paths,
+        );
     let operator_read =
         operator_client.try_clone().expect("clone operator stream");
     let mut operator_reader = BufReader::new(operator_read);
@@ -373,7 +400,7 @@ fn idle_global_operator_stream_write_timeout_tears_down_connection() {
     // onto the relay-wide stream until the shrunk buffer fills and the write
     // times out, the writer task exits, and the connection must tear down.
     let (mut sender_client, sender_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let sender_read = sender_client.try_clone().expect("clone sender stream");
     let mut sender_reader = BufReader::new(sender_read);
     send_json(&mut sender_client, agent_hello_frame(bundle_name));
@@ -415,7 +442,7 @@ fn idle_global_operator_stream_write_timeout_tears_down_connection() {
     // The torn-down connection must have released its registry entry: the same
     // `@GLOBAL` identity reconnects without an identity-claim conflict.
     let (mut reconnect_client, reconnect_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let reconnect_read = reconnect_client
         .try_clone()
         .expect("clone reconnect stream");
@@ -468,8 +495,13 @@ fn shutdown_signal_drains_parked_connection_worker() {
     let root = configuration_roots.clone();
     let state = bundle_paths.state_root.clone();
     let catalog = super::single_bundle_catalog(&bundle_paths);
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
+    let serve_delivery = std::sync::Arc::clone(&delivery);
     let join_handle = thread::spawn(move || {
         run_serve_connection_with_slot(
+            &serve_delivery,
             server_stream,
             root,
             state,
@@ -537,6 +569,9 @@ fn drain_wait_reports_timeout_for_undrained_workers() {
 
 #[test]
 fn connection_loop_error_releases_hello_claim() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_error_release";
     let configuration_roots =
@@ -545,8 +580,11 @@ fn connection_loop_error_releases_hello_claim() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
 
-    let (mut client_stream, join_handle) =
-        spawn_relay_connection_capturing(&configuration_roots, &bundle_paths);
+    let (mut client_stream, join_handle) = spawn_relay_connection_capturing(
+        &delivery,
+        &configuration_roots,
+        &bundle_paths,
+    );
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(&mut client_stream, agent_hello_frame(bundle_name));
@@ -568,7 +606,7 @@ fn connection_loop_error_releases_hello_claim() {
     // The errored connection must release its registry entry so the same
     // identity can reconnect without an identity-claim conflict.
     let (mut reconnect_client, reconnect_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let reconnect_read = reconnect_client
         .try_clone()
         .expect("clone reconnect stream");

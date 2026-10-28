@@ -2,6 +2,7 @@ pub(crate) mod admission;
 pub(crate) mod async_worker;
 mod choice_state;
 mod consumer;
+pub(crate) mod context;
 mod dispatch;
 pub(in crate::relay) mod fence;
 pub(in crate::relay) mod guard;
@@ -19,6 +20,7 @@ pub(in crate::relay) use self::choice_state::{
     resolve_choice_request,
 };
 pub(in crate::relay) use self::consumer::LedgerMailboxConsumer;
+pub use self::context::DeliveryContext;
 pub(in crate::relay) use self::dispatch::{
     enqueue_async_delivery, initialize_acp_target_for_startup,
     wait_for_async_delivery_shutdown,

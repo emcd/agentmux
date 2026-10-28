@@ -8,6 +8,9 @@ use super::helpers::*;
 
 #[test]
 fn acp_next_send_recovers_after_connection_closed_failure() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let failing = AcpStubOptions {
         disconnect_on_prompt: Some("before_activity".to_string()),
@@ -15,8 +18,11 @@ fn acp_next_send_recovers_after_connection_closed_failure() {
     };
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &failing);
-    let first =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let first = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let first_result = send_result(first);
     assert_eq!(first_result.outcome, SendOutcome::Queued);
 
@@ -27,6 +33,7 @@ fn acp_next_send_recovers_after_connection_closed_failure() {
         write_configuration(temporary.path(), &recovered);
     assert!(
         wait_for_worker_state(
+            &delivery,
             temporary.path(),
             "bravo",
             "available",
@@ -34,14 +41,20 @@ fn acp_next_send_recovers_after_connection_closed_failure() {
         ),
         "worker did not auto-respawn back to available after disconnect"
     );
-    let second =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let second = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let second_result = send_result(second);
     assert_eq!(second_result.outcome, SendOutcome::Queued);
 }
 
 #[test]
 fn acp_next_send_recovers_after_post_accept_disconnect() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let failing = AcpStubOptions {
         disconnect_on_prompt: Some("after_activity".to_string()),
@@ -50,8 +63,11 @@ fn acp_next_send_recovers_after_post_accept_disconnect() {
     };
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &failing);
-    let first =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let first = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let first_result = send_result(first);
     assert_eq!(first_result.outcome, SendOutcome::Queued);
 
@@ -60,6 +76,7 @@ fn acp_next_send_recovers_after_post_accept_disconnect() {
         write_configuration(temporary.path(), &recovered);
     assert!(
         wait_for_worker_state(
+            &delivery,
             temporary.path(),
             "bravo",
             "available",
@@ -67,13 +84,17 @@ fn acp_next_send_recovers_after_post_accept_disconnect() {
         ),
         "worker did not auto-respawn back to available after disconnect"
     );
-    let second =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let second = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let second_result = send_result(second);
     assert_eq!(second_result.outcome, SendOutcome::Queued);
 }
 
 fn wait_for_worker_state(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     root: &std::path::Path,
     target_session: &str,
     expected: &str,
@@ -81,7 +102,8 @@ fn wait_for_worker_state(
 ) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if read_worker_state(root, target_session).as_deref() == Some(expected)
+        if read_worker_state(delivery, root, target_session).as_deref()
+            == Some(expected)
         {
             return true;
         }
@@ -105,6 +127,9 @@ fn wait_for_worker_state(
 // channel-backed waits are deterministic; the budget reverts to 5 s.
 #[test]
 fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let exiting = AcpStubOptions {
         request_permission_on_prompt: true,
@@ -120,8 +145,11 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
     let mut queue_receiver =
         subscribe_bravo_permission_queue(temporary.path());
 
-    let first =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let first = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let first_result = send_result(first);
     assert_eq!(first_result.outcome, SendOutcome::Queued);
 
@@ -174,6 +202,9 @@ fn acp_respawn_recovers_when_agent_exits_during_pending_permission() {
 
 #[test]
 fn acp_respawn_with_missing_load_capability_is_permanent_failure() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     // load_capability is irrelevant on the initial bootstrap because no
     // session id is persisted yet; the worker uses session/new. After the
@@ -188,13 +219,17 @@ fn acp_respawn_with_missing_load_capability_is_permanent_failure() {
     };
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
-    let first =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let first = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let first_result = send_result(first);
     assert_eq!(first_result.outcome, SendOutcome::Queued);
 
     assert!(
         wait_for_worker_state(
+            &delivery,
             temporary.path(),
             "bravo",
             "unavailable",
@@ -204,6 +239,7 @@ fn acp_respawn_with_missing_load_capability_is_permanent_failure() {
     );
 
     assert_acp_delivery_unavailable(
+        &delivery,
         &config_root,
         &temporary.path().join("tmux.sock"),
     );

@@ -24,12 +24,30 @@ use crate::support::relay_delivery::{
 const RELAY_NEGATIVE_DELIVERY_BUDGET: Duration = Duration::from_millis(2_000);
 
 fn dispatch_request(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
+    request: RelayRequest,
+    configuration_roots: &ConfigurationRoots,
+    bundle_name: &str,
+    runtime_directory: &std::path::Path,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
+    dispatch_request_with_delivery(
+        delivery,
+        request,
+        configuration_roots,
+        bundle_name,
+        runtime_directory,
+    )
+}
+
+fn dispatch_request_with_delivery(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     runtime_directory: &std::path::Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     handle_request(
+        delivery,
         request,
         configuration_roots,
         bundle_name,
@@ -39,6 +57,9 @@ fn dispatch_request(
 
 #[test]
 fn relay_send_delivers_when_prompt_readiness_template_matches() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -98,6 +119,7 @@ fn relay_send_delivers_when_prompt_readiness_template_matches() {
 
     let marker = "PROMPT-TEMPLATE-MARKER";
     let response = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-ready".to_string()),
             requester_session: "alpha".to_string(),
@@ -139,6 +161,9 @@ fn relay_send_delivers_when_prompt_readiness_template_matches() {
 /// whose target is reachable but not at a prompt is held, not written.
 #[test]
 fn relay_send_times_out_when_prompt_readiness_never_matches() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -198,6 +223,7 @@ fn relay_send_times_out_when_prompt_readiness_never_matches() {
 
     let marker = "PROMPT-NEVER-MARKER";
     let response = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-unready".to_string()),
             requester_session: "alpha".to_string(),
@@ -231,6 +257,9 @@ fn relay_send_times_out_when_prompt_readiness_never_matches() {
 
 #[test]
 fn relay_send_delivers_when_prompt_idle_column_matches() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -296,6 +325,7 @@ fn relay_send_delivers_when_prompt_idle_column_matches() {
 
     let marker = "IDLE-COLUMN-MARKER";
     let response = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-idle-match".to_string()),
             requester_session: "alpha".to_string(),
@@ -328,6 +358,9 @@ fn relay_send_delivers_when_prompt_idle_column_matches() {
 
 #[test]
 fn relay_send_delivers_when_prompt_regex_requires_blank_separator_line() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -395,6 +428,7 @@ fn relay_send_delivers_when_prompt_regex_requires_blank_separator_line() {
 
     let marker = "BLANK-SEPARATOR-MARKER";
     let response = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-blank-line".to_string()),
             requester_session: "alpha".to_string(),
@@ -431,6 +465,9 @@ fn relay_send_delivers_when_prompt_regex_requires_blank_separator_line() {
 /// would pass the other test.
 #[test]
 fn relay_send_times_out_when_prompt_idle_column_does_not_match() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -505,6 +542,7 @@ fn relay_send_times_out_when_prompt_idle_column_does_not_match() {
 
     let marker = "IDLE-MISMATCH-MARKER";
     let response = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-idle-mismatch".to_string()),
             requester_session: "alpha".to_string(),
@@ -596,7 +634,8 @@ fn await_inscription(
 #[test]
 fn a_member_held_on_readiness_keeps_its_quota_and_delivers_when_the_prompt_arrives()
  {
-    use agentmux::relay::{DeliveryConfiguration, configure_delivery};
+    use agentmux::relay::DeliveryConfiguration;
+    use std::sync::Arc;
 
     if !tmux_available() {
         eprintln!("skipping readiness-hold test because tmux is unavailable");
@@ -609,17 +648,19 @@ fn a_member_held_on_readiness_keeps_its_quota_and_delivers_when_the_prompt_arriv
         &inscriptions,
     );
 
-    configure_delivery(DeliveryConfiguration {
-        // One slot per target, so the second send can ask whether the first
-        // member still holds its reservation.
-        queued_envelopes_per_target_max: 1,
-        // Far longer than this test runs. The target is reachable throughout, so
-        // the dwell should never be consulted; setting it high means a passing
-        // run cannot be one where an unreachable reading resolved the member on
-        // the other axis.
-        unreachable_dwell_ms: 600_000,
-        ..DeliveryConfiguration::default()
-    });
+    let delivery = Arc::new(agentmux::relay::DeliveryContext::new(
+        DeliveryConfiguration {
+            // One slot per target, so the second send can ask whether the first
+            // member still holds its reservation.
+            queued_envelopes_per_target_max: 1,
+            // Far longer than this test runs. The target is reachable throughout, so
+            // the dwell should never be consulted; setting it high means a passing
+            // run cannot be one where an unreachable reading resolved the member on
+            // the other axis.
+            unreachable_dwell_ms: 600_000,
+            ..DeliveryConfiguration::default()
+        },
+    ));
 
     let bundle_name = "party";
     let config_root = write_bundle_configuration_members(
@@ -680,7 +721,8 @@ fn a_member_held_on_readiness_keeps_its_quota_and_delivers_when_the_prompt_arriv
 
     let marker = "READINESS-HOLD-MARKER";
     let send = |request_id: &str| {
-        dispatch_request(
+        dispatch_request_with_delivery(
+            &delivery,
             RelayRequest::Send {
                 request_id: Some(request_id.to_string()),
                 requester_session: "alpha".to_string(),

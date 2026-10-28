@@ -130,6 +130,9 @@ impl Drop for HeldTmuxServer {
 /// necessarily executed after the commit.
 #[test]
 fn held_tmux_delivery_runs_after_narrowing_with_original_text() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     // Scratch space under /tmp keeps the tmux socket path portable: unix
     // socket paths must fit sun_path (104 bytes on macOS), which
     // runner-controlled TMPDIR layouts can exceed, failing the bind with
@@ -149,8 +152,12 @@ fn held_tmux_delivery_runs_after_narrowing_with_original_text() {
     let peer_id = "tmuxhold@RELAY";
     let target = format!("alpha@{bundle_name}");
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context =
-        shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context = shared_serve_context(
+        &delivery,
+        &configuration_roots,
+        &state_root,
+        catalog,
+    );
 
     let seed = operator_request_on_context(
         &context,

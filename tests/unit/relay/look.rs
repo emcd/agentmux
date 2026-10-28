@@ -7,6 +7,7 @@ use super::*;
 
 #[test]
 fn look_rejects_cross_relay_target_as_unsupported() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -15,7 +16,8 @@ fn look_rejects_cross_relay_target_as_unsupported() {
     // inspection needs request/response snapshot semantics over the peer boundary
     // and is a deferred follow-on. A well-formed cross-relay Look target is a
     // permanent, honest rejection rather than a routing-unavailable outcome.
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo@other!peer-relay".to_string(),
@@ -32,6 +34,7 @@ fn look_rejects_cross_relay_target_as_unsupported() {
 
 #[test]
 fn look_rejects_unknown_peer_bundle() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -39,7 +42,8 @@ fn look_rejects_unknown_peer_bundle() {
     // A peer-qualified target routes by suffix; the non-stream entry point
     // carries an empty catalog, so an unconfigured peer bundle is rejected
     // fail-closed rather than the retired cross-bundle stub.
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo@other".to_string(),
@@ -56,11 +60,13 @@ fn look_rejects_unknown_peer_bundle() {
 
 #[test]
 fn look_rejects_out_of_range_lines() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo@party".to_string(),
@@ -77,11 +83,13 @@ fn look_rejects_out_of_range_lines() {
 
 #[test]
 fn look_rejects_offset_for_tmux_target() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Look {
             requester_session: "bravo".to_string(),
             target_session: "bravo@party".to_string(),
@@ -98,6 +106,7 @@ fn look_rejects_offset_for_tmux_target() {
 
 #[test]
 fn look_allows_zero_offset_for_tmux_target() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
@@ -106,7 +115,8 @@ fn look_allows_zero_offset_for_tmux_target() {
     // only a nonzero offset is rejected. Pane capture fails afterward because no
     // tmux server is running, so the error code must be anything other than the
     // offset gate — proving Some(0) passed the gate rather than tripping it.
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Look {
             requester_session: "bravo".to_string(),
             target_session: "bravo@party".to_string(),
@@ -131,11 +141,16 @@ fn look_rejects_relay_wide_target_as_unsupported_operation() {
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
-    agentmux::relay::register_configured_relay_wide_principals(&config_root)
-        .expect("register declared relay-wide principals");
+    let delivery = test_delivery();
+    agentmux::relay::register_configured_relay_wide_principals(
+        &delivery,
+        &config_root,
+    )
+    .expect("register declared relay-wide principals");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "user@GLOBAL".to_string(),
@@ -156,6 +171,7 @@ fn look_rejects_relay_wide_target_as_unsupported_operation() {
 
 #[test]
 fn look_rejects_unconfigured_relay_wide_target_as_unknown() {
+    let delivery = test_delivery();
     // A `@GLOBAL` target absent from the global users configuration has no
     // session type to derive a capability from and sorts as unknown.
     let temporary = TempDir::new().expect("temporary");
@@ -163,7 +179,8 @@ fn look_rejects_unconfigured_relay_wide_target_as_unknown() {
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "stranger@GLOBAL".to_string(),
@@ -181,13 +198,15 @@ fn look_rejects_unconfigured_relay_wide_target_as_unknown() {
 
 #[test]
 fn look_rejects_reserved_namespace_target_as_unsupported_namespace() {
+    let delivery = test_delivery();
     // Reserved namespaces (`@EXTERNAL`/`@RELAY`) name no routable session at
     // all; their routing-stage rejection is unchanged by the capability gate.
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "service@EXTERNAL".to_string(),
@@ -205,11 +224,13 @@ fn look_rejects_reserved_namespace_target_as_unsupported_namespace() {
 
 #[test]
 fn look_rejects_unknown_target() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "missing@party".to_string(),
@@ -226,11 +247,13 @@ fn look_rejects_unknown_target() {
 
 #[test]
 fn look_returns_empty_snapshot_for_acp_target_without_recorded_updates() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_acp_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Look {
             requester_session: "bravo".to_string(),
             target_session: "bravo@party".to_string(),
@@ -257,10 +280,12 @@ fn look_returns_empty_snapshot_for_acp_target_without_recorded_updates() {
 
 #[test]
 fn look_denies_same_bundle_non_self_target_under_default_self_scope() {
+    let delivery = test_delivery();
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo@party".to_string(),

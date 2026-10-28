@@ -12,6 +12,9 @@ use super::*;
 
 #[test]
 fn relay_accepts_hello_for_configured_bundle_member() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -21,7 +24,7 @@ fn relay_accepts_hello_for_configured_bundle_member() {
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
             .expect("bundle paths");
     let (mut client, handle) =
-        spawn_relay_stream(&configuration_roots, &bundle_paths);
+        spawn_relay_stream(&delivery, &configuration_roots, &bundle_paths);
     let reader_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(reader_stream);
 

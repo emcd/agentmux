@@ -10,7 +10,10 @@
 use super::super::guard::{
     GuardKey, QueueEntryState, SubmissionEvidence, resolve_from_binding,
 };
-use super::ledger::{LedgerState, lock_ledger};
+use std::sync::Arc;
+
+use super::ledger::LedgerState;
+use crate::relay::delivery::DeliveryContext;
 
 /// The outcome of attempting the single terminal transition for one member.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,8 +68,11 @@ pub(in crate::relay) enum TerminalTransition {
 /// [`TerminalTransition::Won`]. Every lifecycle trigger routes through this same
 /// call, and none of them chooses the outcome — the returned `evidence` comes
 /// from the guard's one evidence order.
-pub(in crate::relay) fn terminalize(message_id: &str) -> TerminalTransition {
-    let Ok(mut state) = lock_ledger() else {
+pub(in crate::relay) fn terminalize(
+    delivery: &Arc<DeliveryContext>,
+    message_id: &str,
+) -> TerminalTransition {
+    let Ok(mut state) = delivery.lock_ledger() else {
         // A poisoned ledger cannot be reasoned about, and reporting an outcome
         // whose uniqueness we cannot establish is worse than reporting none.
         return TerminalTransition::AlreadyTerminal;
@@ -176,6 +182,9 @@ mod terminal_contention_tests {
     /// actual gate, not the state comparison beside it — makes all eight win.
     #[test]
     fn only_one_of_many_racing_resolvers_wins_a_member() {
+        let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
+            Default::default(),
+        ));
         const RESOLVERS: usize = 8;
         const MESSAGE: &str = "contention-test-member";
 
@@ -184,7 +193,8 @@ mod terminal_contention_tests {
             Path::new("/nonexistent/contention-test"),
             "target",
         );
-        admit(MESSAGE, target, SessionType::Tmux, 1).expect("admit");
+        admit(&delivery, MESSAGE, target, SessionType::Tmux, 1)
+            .expect("admit");
 
         let winners = Arc::new(AtomicUsize::new(0));
         let barrier = Arc::new(Barrier::new(RESOLVERS));
@@ -192,10 +202,11 @@ mod terminal_contention_tests {
             .map(|_| {
                 let winners = Arc::clone(&winners);
                 let barrier = Arc::clone(&barrier);
+                let delivery = Arc::clone(&delivery);
                 std::thread::spawn(move || {
                     barrier.wait();
                     if matches!(
-                        terminalize(MESSAGE),
+                        terminalize(&delivery, MESSAGE),
                         TerminalTransition::Won { .. }
                     ) {
                         winners.fetch_add(1, Ordering::SeqCst);

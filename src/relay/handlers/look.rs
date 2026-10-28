@@ -1,9 +1,11 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
 use time::format_description::well_known::Rfc3339;
 
+use crate::relay::delivery::DeliveryContext;
 use crate::{
     acp::state::ACP_LOOK_PRIME_TIMEOUT_MS,
     configuration::{BundleConfiguration, ConfigurationRoots},
@@ -50,6 +52,7 @@ struct LookPrepared {
 /// `GLOBAL`); the target's bundle is loaded separately for the snapshot. See
 /// `dispatch_look`.
 pub(in crate::relay) fn handle_look_routed(
+    delivery: &Arc<DeliveryContext>,
     home_namespace: &str,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
@@ -124,6 +127,7 @@ pub(in crate::relay) fn handle_look_routed(
         },
         |route| {
             prepare_look(
+                delivery,
                 route,
                 home_namespace,
                 home_bundle.as_ref(),
@@ -133,6 +137,7 @@ pub(in crate::relay) fn handle_look_routed(
         },
         |route, prepared| {
             execute_look(
+                delivery,
                 route,
                 prepared,
                 requester.session_id.as_str(),
@@ -151,6 +156,7 @@ pub(in crate::relay) fn handle_look_routed(
 /// a same-namespace one. Runs before authorization, so an unknown or
 /// transport-incapable target sorts before `authorization_forbidden`.
 fn prepare_look(
+    delivery: &Arc<DeliveryContext>,
     route: &ResolvedRoute,
     home_namespace: &str,
     home_bundle: Option<&BundleConfiguration>,
@@ -171,7 +177,7 @@ fn prepare_look(
         // transport carries `can_be_looked = false`), an unregistered one as
         // `unknown_target`.
         let Some(session_type) =
-            lookup_registry_session_type(target_session_id)
+            lookup_registry_session_type(delivery, target_session_id)
         else {
             return Err(relay_error(
                 "validation_unknown_target",
@@ -210,8 +216,9 @@ fn prepare_look(
     // falls back to its configured transport, which derives the same flags.
     let target_principal =
         canonical_session_id(target_session_id, target_namespace);
-    let session_type = lookup_registry_session_type(target_principal.as_str())
-        .unwrap_or_else(|| member.target.session_type());
+    let session_type =
+        lookup_registry_session_type(delivery, target_principal.as_str())
+            .unwrap_or_else(|| member.target.session_type());
     if !session_type.can_be_looked() {
         return Err(unsupported_operation(
             target_principal.as_str(),
@@ -297,7 +304,9 @@ fn map_look_transport_error(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_look(
+    delivery: &Arc<DeliveryContext>,
     route: &ResolvedRoute,
     prepared: LookPrepared,
     requester_session_id: &str,
@@ -331,6 +340,7 @@ fn execute_look(
         prime_timeout: Duration::from_millis(ACP_LOOK_PRIME_TIMEOUT_MS),
     };
     let snapshot = match get_output_view(
+        delivery.async_registry(),
         look_bundle.bundle_name.as_str(),
         look_runtime_directory.as_path(),
         target,

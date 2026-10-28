@@ -61,12 +61,14 @@ pub(crate) use peer_support::{
 };
 
 fn dispatch_request(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     runtime_directory: &Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     handle_request(
+        delivery,
         request,
         configuration_roots,
         bundle_name,
@@ -161,6 +163,7 @@ coder = "shell"
 }
 
 fn spawn_relay_stream(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
 ) -> (UnixStream, thread::JoinHandle<()>) {
@@ -169,9 +172,16 @@ fn spawn_relay_stream(
     let root = configuration_roots.clone();
     let state_root = bundle_paths.state_root.clone();
     let catalog = BundleCatalog::from_paths([bundle_paths.clone()]);
+    let delivery = std::sync::Arc::clone(delivery);
     let handle = thread::spawn(move || {
-        run_serve_connection(server_stream, root, state_root, catalog)
-            .expect("serve connection");
+        run_serve_connection(
+            &delivery,
+            server_stream,
+            root,
+            state_root,
+            catalog,
+        )
+        .expect("serve connection");
     });
     (client_stream, handle)
 }
@@ -179,6 +189,7 @@ fn spawn_relay_stream(
 // Bridges `serve_connection` (now async) into a synchronous test thread by
 // owning a dedicated current-thread tokio runtime per connection.
 fn run_serve_connection(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     server_stream: UnixStream,
     configuration_roots: ConfigurationRoots,
     state_root: PathBuf,
@@ -208,6 +219,7 @@ fn run_serve_connection(
             Vec::new(),
             false,
             Duration::from_secs(2),
+            std::sync::Arc::clone(delivery),
         );
         serve_connection(
             stream,

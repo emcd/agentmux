@@ -75,7 +75,8 @@ fn await_inscription(path: &Path, event: &str, budget: Duration) -> String {
 #[test]
 fn a_transient_unreachability_resolves_nothing_and_the_member_still_delivers()
 {
-    use agentmux::relay::{DeliveryConfiguration, configure_delivery};
+    use agentmux::relay::DeliveryConfiguration;
+    use std::sync::Arc;
 
     if !tmux_available() {
         eprintln!("skipping dwell-recovery test because tmux is unavailable");
@@ -91,10 +92,12 @@ fn a_transient_unreachability_resolves_nothing_and_the_member_still_delivers()
     // Long enough that this test cannot reach it. The point is that the member
     // is held by an unreachability that ends *before* the threshold, so a dwell
     // short enough to fire would be measuring the wrong thing entirely.
-    configure_delivery(DeliveryConfiguration {
-        unreachable_dwell_ms: 600_000,
-        ..DeliveryConfiguration::default()
-    });
+    let delivery = Arc::new(agentmux::relay::DeliveryContext::new(
+        DeliveryConfiguration {
+            unreachable_dwell_ms: 600_000,
+            ..DeliveryConfiguration::default()
+        },
+    ));
 
     let bundle_name = "party";
     let config_root = write_bundle_configuration(
@@ -109,6 +112,7 @@ fn a_transient_unreachability_resolves_nothing_and_the_member_still_delivers()
     // No tmux server yet: the target is unreachable from the first observation.
     let marker = "DWELL-RECOVERY-MARKER";
     let response = handle_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-dwell-recovery".to_string()),
             requester_session: "alpha".to_string(),
@@ -222,11 +226,13 @@ fn outcome_for(path: &Path, message_id: &str) -> Option<String> {
 
 /// Queues one member for `bravo` and returns its message id.
 fn send_to_bravo(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &agentmux::configuration::ConfigurationRoots,
     runtime_directory: &Path,
     marker: &str,
 ) -> String {
     let response = handle_request(
+        delivery,
         RelayRequest::Send {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -288,7 +294,8 @@ fn await_all_resolved(path: &Path, message_ids: &[String], budget: Duration) {
 /// observation path production uses.
 #[test]
 fn a_target_flapping_across_the_dwell_resolves_every_member_exactly_once() {
-    use agentmux::relay::{DeliveryConfiguration, configure_delivery};
+    use agentmux::relay::DeliveryConfiguration;
+    use std::sync::Arc;
 
     if !tmux_available() {
         eprintln!("skipping flapping test because tmux is unavailable");
@@ -303,10 +310,12 @@ fn a_target_flapping_across_the_dwell_resolves_every_member_exactly_once() {
 
     // Long enough that the first pair cannot reach it before the server appears,
     // short enough that the third and fourth reach it inside the test.
-    configure_delivery(DeliveryConfiguration {
-        unreachable_dwell_ms: 1_500,
-        ..DeliveryConfiguration::default()
-    });
+    let delivery = Arc::new(agentmux::relay::DeliveryContext::new(
+        DeliveryConfiguration {
+            unreachable_dwell_ms: 1_500,
+            ..DeliveryConfiguration::default()
+        },
+    ));
 
     let bundle_name = "party";
     let config_root = write_bundle_configuration(
@@ -321,8 +330,18 @@ fn a_target_flapping_across_the_dwell_resolves_every_member_exactly_once() {
 
     // Unreachable, under the dwell: two members are held.
     let mut sent = vec![
-        send_to_bravo(&config_root, &paths.runtime_directory, "FLAP-A"),
-        send_to_bravo(&config_root, &paths.runtime_directory, "FLAP-B"),
+        send_to_bravo(
+            &delivery,
+            &config_root,
+            &paths.runtime_directory,
+            "FLAP-A",
+        ),
+        send_to_bravo(
+            &delivery,
+            &config_root,
+            &paths.runtime_directory,
+            "FLAP-B",
+        ),
     ];
     std::thread::sleep(Duration::from_millis(200));
 
@@ -339,8 +358,18 @@ fn a_target_flapping_across_the_dwell_resolves_every_member_exactly_once() {
     let _ = tmux_command(&paths.tmux_socket, &["kill-server"]);
     std::thread::sleep(Duration::from_millis(400));
     let past_dwell = vec![
-        send_to_bravo(&config_root, &paths.runtime_directory, "FLAP-C"),
-        send_to_bravo(&config_root, &paths.runtime_directory, "FLAP-D"),
+        send_to_bravo(
+            &delivery,
+            &config_root,
+            &paths.runtime_directory,
+            "FLAP-C",
+        ),
+        send_to_bravo(
+            &delivery,
+            &config_root,
+            &paths.runtime_directory,
+            "FLAP-D",
+        ),
     ];
     await_all_resolved(
         &inscriptions,
@@ -370,8 +399,12 @@ fn a_target_flapping_across_the_dwell_resolves_every_member_exactly_once() {
     // near the threshold has members bounced that could have been delivered.
     spawn_session(&paths.tmux_socket, "bravo", "exec sleep 45");
     std::thread::sleep(Duration::from_millis(400));
-    let after_recovery =
-        send_to_bravo(&config_root, &paths.runtime_directory, "FLAP-E");
+    let after_recovery = send_to_bravo(
+        &delivery,
+        &config_root,
+        &paths.runtime_directory,
+        "FLAP-E",
+    );
     await_all_resolved(
         &inscriptions,
         std::slice::from_ref(&after_recovery),
@@ -434,7 +467,8 @@ fn a_target_flapping_across_the_dwell_resolves_every_member_exactly_once() {
 /// scopes `look` to `self`. Requester identity is not part of the property.
 #[test]
 fn look_survives_the_health_gate_that_holds_raww_on_an_unreachable_target() {
-    use agentmux::relay::{DeliveryConfiguration, configure_delivery};
+    use agentmux::relay::DeliveryConfiguration;
+    use std::sync::Arc;
 
     if !tmux_available() {
         eprintln!(
@@ -451,10 +485,12 @@ fn look_survives_the_health_gate_that_holds_raww_on_an_unreachable_target() {
 
     // Short enough that the raww half resolves inside the test, which is what
     // establishes the health axis reads `Unreachable` before the look is issued.
-    configure_delivery(DeliveryConfiguration {
-        unreachable_dwell_ms: 400,
-        ..DeliveryConfiguration::default()
-    });
+    let delivery = Arc::new(agentmux::relay::DeliveryContext::new(
+        DeliveryConfiguration {
+            unreachable_dwell_ms: 400,
+            ..DeliveryConfiguration::default()
+        },
+    ));
 
     let bundle_name = "party";
     let config_root = write_bundle_configuration(
@@ -469,6 +505,7 @@ fn look_survives_the_health_gate_that_holds_raww_on_an_unreachable_target() {
     // No tmux server is ever created here: the target is unreachable from the
     // first observation and stays that way.
     let response = handle_request(
+        &delivery,
         RelayRequest::Raww {
             request_id: Some("req-raww-gated".to_string()),
             requester_session: "alpha".to_string(),
@@ -503,6 +540,7 @@ fn look_survives_the_health_gate_that_holds_raww_on_an_unreachable_target() {
     // The health axis now reads `Unreachable` for this target. A look against it
     // is still dispatched.
     let error = handle_request(
+        &delivery,
         RelayRequest::Look {
             requester_session: "bravo".to_string(),
             target_session: "bravo@party".to_string(),

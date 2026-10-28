@@ -9,12 +9,16 @@ use super::helpers::*;
 
 #[test]
 fn acp_raww_returns_queued_and_dispatches_prompt() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, log_path) =
         write_configuration(temporary.path(), &options);
 
     let response = dispatch_raww(
+        &delivery,
         &config_root,
         &temporary.path().join("tmux.sock"),
         "alpha",

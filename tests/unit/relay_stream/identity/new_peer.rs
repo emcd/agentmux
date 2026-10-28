@@ -17,6 +17,7 @@ use super::*;
 /// and returns the full response frame (a `new_peer` response on success, or an
 /// error response when the writer rejects the path).
 fn new_peer_with_output(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
@@ -24,6 +25,7 @@ fn new_peer_with_output(
     output_path: &Path,
 ) -> Value {
     operator_request(
+        delivery,
         configuration_roots,
         bundle_paths,
         bundle_name,
@@ -38,12 +40,14 @@ fn new_peer_with_output(
 /// Issues `new peer` for `principal_id` with the relay-owned `config`
 /// destination and returns the full response frame.
 fn new_peer_with_config(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     principal_id: &str,
 ) -> Value {
     operator_request(
+        delivery,
         configuration_roots,
         bundle_paths,
         bundle_name,
@@ -69,6 +73,9 @@ fn assert_invalid_output_path(response: &Value) {
 // `new peer --output` rejects a non-absolute path.
 #[test]
 fn new_peer_output_rejects_relative_path() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_output_relative";
     let configuration_roots =
@@ -78,6 +85,7 @@ fn new_peer_output_rejects_relative_path() {
         .expect("bundle paths");
 
     let response = new_peer_with_output(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -91,6 +99,9 @@ fn new_peer_output_rejects_relative_path() {
 // auto-creation of directory trees).
 #[test]
 fn new_peer_output_rejects_missing_parent_directory() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_output_missing_parent";
     let configuration_roots =
@@ -101,6 +112,7 @@ fn new_peer_output_rejects_missing_parent_directory() {
     let output_path = temporary.path().join("absent").join("credential.psk");
 
     let response = new_peer_with_output(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -118,6 +130,9 @@ fn new_peer_output_rejects_missing_parent_directory() {
 // (O_NOFOLLOW), so a symlinked output cannot redirect the credential write.
 #[test]
 fn new_peer_output_rejects_symlinked_target() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_output_symlink";
     let configuration_roots =
@@ -136,6 +151,7 @@ fn new_peer_output_rejects_symlinked_target() {
     .expect("create output symlink");
 
     let response = new_peer_with_output(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -149,6 +165,9 @@ fn new_peer_output_rejects_symlinked_target() {
 // PSK from the response, and the written credential authenticates at Hello.
 #[test]
 fn new_peer_output_writes_credential_with_mode_0600() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     use std::os::unix::fs::PermissionsExt;
 
     let temporary = TempDir::new().expect("temporary directory");
@@ -162,6 +181,7 @@ fn new_peer_output_writes_credential_with_mode_0600() {
     let output_path = temporary.path().join("credential.psk");
 
     let response = new_peer_with_output(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -193,6 +213,7 @@ fn new_peer_output_writes_credential_with_mode_0600() {
         std::fs::read_to_string(&output_path).expect("read credential file");
     assert!(!psk.is_empty(), "written credential must be non-empty");
     let frame = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -211,6 +232,9 @@ fn new_peer_output_writes_credential_with_mode_0600() {
 // and the written credential authenticates at Hello.
 #[test]
 fn new_peer_config_writes_session_identity_and_authenticates() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     use std::os::unix::fs::PermissionsExt;
 
     let temporary = TempDir::new().expect("temporary directory");
@@ -223,6 +247,7 @@ fn new_peer_config_writes_session_identity_and_authenticates() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let response = new_peer_with_config(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -255,6 +280,7 @@ fn new_peer_config_writes_session_identity_and_authenticates() {
         std::fs::read_to_string(&canonical).expect("read config credential");
     assert!(!psk.is_empty(), "written credential must be non-empty");
     let frame = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -273,6 +299,9 @@ fn new_peer_config_writes_session_identity_and_authenticates() {
 // instead of colliding.
 #[test]
 fn new_peer_config_rejected_for_relay_principal_leaves_store_unchanged() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_config_relay";
     let configuration_roots =
@@ -283,6 +312,7 @@ fn new_peer_config_rejected_for_relay_principal_leaves_store_unchanged() {
     let principal_id = "peer1@RELAY";
 
     let rejected = new_peer_with_config(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -298,6 +328,7 @@ fn new_peer_config_rejected_for_relay_principal_leaves_store_unchanged() {
     );
 
     let retry = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -314,6 +345,9 @@ fn new_peer_config_rejected_for_relay_principal_leaves_store_unchanged() {
 // configured session could own, with `validation_invalid_principal_id`.
 #[test]
 fn new_peer_config_rejected_for_non_grammar_session_id() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_config_grammar";
     let configuration_roots =
@@ -324,6 +358,7 @@ fn new_peer_config_rejected_for_non_grammar_session_id() {
 
     for session_id in ["1worker", "worker.name"] {
         let response = new_peer_with_config(
+            &delivery,
             &configuration_roots,
             &bundle_paths,
             bundle_name,
@@ -347,6 +382,9 @@ fn new_peer_config_rejected_for_non_grammar_session_id() {
 // id succeeds rather than colliding.
 #[test]
 fn new_peer_output_finalization_failure_leaves_store_unchanged() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_output_finalization";
     let configuration_roots =
@@ -363,6 +401,7 @@ fn new_peer_output_finalization_failure_leaves_store_unchanged() {
         .expect("create directory at output path");
 
     let response = new_peer_with_output(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -375,6 +414,7 @@ fn new_peer_output_finalization_failure_leaves_store_unchanged() {
     );
 
     let retry = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -391,6 +431,9 @@ fn new_peer_output_finalization_failure_leaves_store_unchanged() {
 // real configured bundle such as `team.one` must not be rejected.
 #[test]
 fn new_peer_config_accepts_dotted_bundle_name() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_config_dotted";
     let configuration_roots =
@@ -402,6 +445,7 @@ fn new_peer_config_accepts_dotted_bundle_name() {
     let principal_id = format!("alpha@{dotted_namespace}");
 
     let response = new_peer_with_config(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -429,6 +473,9 @@ fn new_peer_config_accepts_dotted_bundle_name() {
 // the state root), before any canonical path is derived or written.
 #[test]
 fn new_peer_config_rejected_for_traversal_principal_id() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_config_traversal";
     let configuration_roots =
@@ -438,6 +485,7 @@ fn new_peer_config_rejected_for_traversal_principal_id() {
         .expect("bundle paths");
 
     let response = new_peer_with_config(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -460,6 +508,9 @@ fn new_peer_config_rejected_for_traversal_principal_id() {
 // the relay advises and registers rather than refusing.
 #[test]
 fn new_peer_advises_on_a_scope_spelled_as_a_policy_tier() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_tier_advice";
     let configuration_roots =
@@ -473,6 +524,7 @@ fn new_peer_advises_on_a_scope_spelled_as_a_policy_tier() {
     {
         let principal_id = format!("tier{index}@RELAY");
         let response = operator_request(
+            &delivery,
             &configuration_roots,
             &bundle_paths,
             bundle_name,
@@ -506,6 +558,9 @@ fn new_peer_advises_on_a_scope_spelled_as_a_policy_tier() {
 // evidence of a mistake the way a tier word is.
 #[test]
 fn new_peer_stays_silent_for_a_scope_that_merely_resolves_to_nothing() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_silent";
     let configuration_roots =
@@ -515,6 +570,7 @@ fn new_peer_stays_silent_for_a_scope_that_merely_resolves_to_nothing() {
         .expect("bundle paths");
 
     let response = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -542,6 +598,9 @@ fn new_peer_stays_silent_for_a_scope_that_merely_resolves_to_nothing() {
 // state directory, which this relay cannot see.
 #[test]
 fn new_peer_relay_snippet_names_no_local_state_root_path() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_snippet_relay";
     let configuration_roots =
@@ -551,6 +610,7 @@ fn new_peer_relay_snippet_names_no_local_state_root_path() {
         .expect("bundle paths");
 
     let response = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -580,6 +640,9 @@ fn new_peer_relay_snippet_names_no_local_state_root_path() {
 // A registration with no scope at all raises nothing.
 #[test]
 fn new_peer_without_a_scope_raises_no_diagnostics() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_absent";
     let configuration_roots =
@@ -589,6 +652,7 @@ fn new_peer_without_a_scope_raises_no_diagnostics() {
         .expect("bundle paths");
 
     let response = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,

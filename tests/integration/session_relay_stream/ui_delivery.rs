@@ -19,6 +19,9 @@ use super::*;
 
 #[test]
 fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -28,7 +31,7 @@ fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
         BundleRuntimePaths::resolve(&state_root, bundle_name.as_str())
             .expect("bundle paths");
     let (mut ui_client, ui_handle) =
-        spawn_relay_stream(&configuration_roots, &bundle_paths);
+        spawn_relay_stream(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = ui_client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -40,6 +43,7 @@ fn relay_send_routes_to_connected_ui_stream_with_event_frames() {
     assert_eq!(hello_ack["frame"], "hello_ack");
 
     let response = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-1".to_string()),
             requester_session: "alpha".to_string(),
@@ -120,12 +124,12 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
     // which no test window outlasts; the relay runs in-process here, so the
     // process-global the real host would install at startup has to be set
     // directly. Shortens the policy, not the sustained-observation behaviour.
-    agentmux::relay::configure_delivery(
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
         agentmux::relay::DeliveryConfiguration {
             unreachable_dwell_ms: 500,
             ..Default::default()
         },
-    );
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -136,7 +140,7 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
             .expect("bundle paths");
 
     let (mut sender_client, sender_handle) =
-        spawn_relay_stream(&configuration_roots, &bundle_paths);
+        spawn_relay_stream(&delivery, &configuration_roots, &bundle_paths);
     let sender_read_stream =
         sender_client.try_clone().expect("clone sender stream");
     sender_read_stream
@@ -151,6 +155,7 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
     assert_eq!(sender_ack["frame"], "hello_ack");
 
     let response = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-async-sender".to_string()),
             requester_session: global_user_id(&bundle_name),
@@ -216,6 +221,9 @@ fn relay_async_send_emits_terminal_delivery_outcome_to_sender_ui_stream() {
 // the worker before any UI stream existed.
 #[test]
 fn relay_configured_ui_target_recovers_after_late_stream_registration() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -231,6 +239,7 @@ fn relay_configured_ui_target_recovers_after_late_stream_registration() {
     // (the registry has no UI entry yet). Under a latched resolution this would
     // bind the worker to non-UI for its lifetime.
     let first = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-ui-pre".to_string()),
             requester_session: "alpha".to_string(),
@@ -256,7 +265,7 @@ fn relay_configured_ui_target_recovers_after_late_stream_registration() {
 
     // The UI client now connects and registers a Ui stream for `display`.
     let (mut ui_client, ui_handle) =
-        spawn_relay_stream(&configuration_roots, &bundle_paths);
+        spawn_relay_stream(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = ui_client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -269,6 +278,7 @@ fn relay_configured_ui_target_recovers_after_late_stream_registration() {
     // Send #2 to the same target: the worker must re-evaluate routing, observe
     // the now-registered UI stream, and deliver via UiTransport.
     let second = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-ui-post".to_string()),
             requester_session: "alpha".to_string(),

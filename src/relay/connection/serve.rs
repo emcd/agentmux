@@ -27,7 +27,9 @@ use super::super::stream::{
     StreamRevokeSignal, parse_incoming_frame, spawn_stream_writer,
     unregister_stream, write_stream_frame_to_writer,
 };
-use super::super::{IdentityIntrospectRights, RelayResponse, relay_error};
+use super::super::{
+    DeliveryContext, IdentityIntrospectRights, RelayResponse, relay_error,
+};
 use super::context::ConnectionServeContext;
 use super::framing::{ReadLineOutcome, read_next_line};
 use super::{hello, requests};
@@ -180,10 +182,16 @@ pub async fn serve_connection(
 #[derive(Default)]
 pub(super) struct RegistrationGuard {
     registration: Option<StreamRegistration>,
+    delivery: Option<Arc<DeliveryContext>>,
 }
 
 impl RegistrationGuard {
-    pub(super) fn set(&mut self, registration: StreamRegistration) {
+    pub(super) fn set(
+        &mut self,
+        delivery: &Arc<DeliveryContext>,
+        registration: StreamRegistration,
+    ) {
+        self.delivery = Some(Arc::clone(delivery));
         self.registration = Some(registration);
     }
 
@@ -194,8 +202,10 @@ impl RegistrationGuard {
 
 impl Drop for RegistrationGuard {
     fn drop(&mut self) {
-        if let Some(registration) = self.registration.take() {
-            let _ = unregister_stream(&registration);
+        if let (Some(delivery), Some(registration)) =
+            (self.delivery.take(), self.registration.take())
+        {
+            let _ = unregister_stream(&delivery, &registration);
         }
     }
 }

@@ -74,13 +74,14 @@ pub(crate) fn write_authenticated_session_store(
 // Hellos as `principal_id` (a peer relay) with its registered PSK, submits one
 // request, and returns the decoded response frame.
 pub(crate) fn ingress_request_response(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     principal_id: &str,
     request: Value,
 ) -> Value {
     let (mut client, handle) =
-        spawn_relay_stream(configuration_roots, bundle_paths);
+        spawn_relay_stream(delivery, configuration_roots, bundle_paths);
     let reader_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(reader_stream);
     send_json(
@@ -111,12 +112,14 @@ pub(crate) fn ingress_request_response(
 
 // Convenience wrapper: forwards an ingress Send to a single `target`.
 pub(crate) fn ingress_send_response(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     principal_id: &str,
     target: &str,
 ) -> Value {
     ingress_request_response(
+        delivery,
         configuration_roots,
         bundle_paths,
         principal_id,

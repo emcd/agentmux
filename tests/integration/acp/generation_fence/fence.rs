@@ -70,12 +70,15 @@ fn a_fenced_acp_generation_leaves_no_surviving_child() {
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    configure_delivery(DeliveryConfiguration {
-        fence_observation_timeout_ms: 500,
-        ..DeliveryConfiguration::default()
-    });
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration {
+            fence_observation_timeout_ms: 500,
+            ..agentmux::relay::DeliveryConfiguration::default()
+        },
+    ));
 
-    let result = send_result(dispatch_send(&config_root, &tmux_socket));
+    let result =
+        send_result(dispatch_send(&delivery, &config_root, &tmux_socket));
     assert_eq!(result.outcome, SendOutcome::Queued);
 
     let pid_path = acp_child_pid_path(temporary.path());
@@ -158,12 +161,14 @@ fn a_fence_ends_a_respawn_bootstrap() {
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    configure_delivery(DeliveryConfiguration {
-        fence_observation_timeout_ms: 500,
-        ..DeliveryConfiguration::default()
-    });
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration {
+            fence_observation_timeout_ms: 500,
+            ..agentmux::relay::DeliveryConfiguration::default()
+        },
+    ));
 
-    let _ = send_result(dispatch_send(&config_root, &tmux_socket));
+    let _ = send_result(dispatch_send(&delivery, &config_root, &tmux_socket));
 
     // The target's *second* agent is the respawn this test is about: the first
     // disconnected on its prompt, and the replacement is the one that hangs in
@@ -267,10 +272,12 @@ fn a_fence_ends_a_hung_initial_bootstrap() {
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    configure_delivery(DeliveryConfiguration {
-        fence_observation_timeout_ms: 500,
-        ..DeliveryConfiguration::default()
-    });
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration {
+            fence_observation_timeout_ms: 500,
+            ..agentmux::relay::DeliveryConfiguration::default()
+        },
+    ));
 
     // Startup waits on a target whose agent never answers, so it runs on its own
     // thread; this test is about what the worker does while that wait is
@@ -279,7 +286,8 @@ fn a_fence_ends_a_hung_initial_bootstrap() {
     let dispatch_roots = config_root.clone();
     let dispatch_socket = tmux_socket.clone();
     let dispatcher = std::thread::spawn(move || {
-        let _ = dispatch_send_result(&dispatch_roots, &dispatch_socket);
+        let _ =
+            dispatch_send_result(&delivery, &dispatch_roots, &dispatch_socket);
         let _ = dispatch_done.send(());
     });
 
@@ -378,17 +386,24 @@ fn an_executor_blocked_past_the_bound_is_fenced_and_its_member_resolved() {
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    configure_delivery(DeliveryConfiguration {
-        submission_timeout_ms: 500,
-        fence_observation_timeout_ms: 500,
-        ..DeliveryConfiguration::default()
-    });
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration {
+            submission_timeout_ms: 500,
+            fence_observation_timeout_ms: 500,
+            ..agentmux::relay::DeliveryConfiguration::default()
+        },
+    ));
 
     // Comfortably past a pipe's 64 KiB buffer and well under the 256 KiB
     // payload maximum, so admission accepts it and the write cannot complete.
     let result = send_result(
-        dispatch_sized_send_result(&config_root, &tmux_socket, 150_000)
-            .expect("relay request should parse"),
+        dispatch_sized_send_result(
+            &delivery,
+            &config_root,
+            &tmux_socket,
+            150_000,
+        )
+        .expect("relay request should parse"),
     );
     assert_eq!(result.outcome, SendOutcome::Queued);
 

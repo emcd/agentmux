@@ -1,6 +1,8 @@
 use serde_json::json;
+use std::sync::Arc;
 use uuid::Uuid;
 
+use crate::relay::delivery::DeliveryContext;
 use crate::relay::delivery::admission::{
     AdmissionTargetKey, admit, canonical_payload_bytes,
     resolve_target_session_type, rollback_admission,
@@ -25,6 +27,7 @@ use super::groups::DeliveryGroup;
 /// stage takes the route, the groups, and one context rather than a long
 /// positional argument list.
 pub(super) struct SendExecutionContext<'a> {
+    pub(super) delivery: &'a Arc<DeliveryContext>,
     pub(super) sender: &'a SenderIdentity,
     pub(super) authenticated_identity: Option<String>,
     /// Identity the sender's connection was admitted under, credential-backed or
@@ -55,6 +58,7 @@ pub(super) fn execute_send(
     context: SendExecutionContext<'_>,
 ) -> Result<RelayResponse, RelayError> {
     let SendExecutionContext {
+        delivery,
         sender,
         authenticated_identity,
         admitted_identity,
@@ -93,7 +97,7 @@ pub(super) fn execute_send(
     // request's quota up front is what makes a refusal clean: a request that
     // cannot be admitted holds nothing and queues nothing, rather than leaving a
     // half-admitted send behind for the caller to reason about.
-    let admitted = admit_request_targets(&groups, message)?;
+    let admitted = admit_request_targets(delivery, &groups, message)?;
     let mut admitted_index = 0usize;
     for group in &groups {
         for target in &group.targets {
@@ -116,13 +120,13 @@ pub(super) fn execute_send(
                 is_receipt: false,
                 sender_return_route: sender_return_route.clone(),
             };
-            if let Err(error) = enqueue_async_delivery(task) {
+            if let Err(error) = enqueue_async_delivery(delivery, task) {
                 // This entry never became a queue entry, and neither will the
                 // ones behind it in this request. Release every reservation with
                 // no task to terminalize it; entries already queued are live and
                 // release on their own terminal transition.
                 for orphaned in &admitted[admitted_index..] {
-                    rollback_admission(orphaned);
+                    rollback_admission(delivery, orphaned);
                 }
                 return Err(error);
             }
@@ -223,6 +227,7 @@ pub(super) fn execute_send(
 /// relay rather than queued locally, and the peer admits them against its own
 /// quota.
 pub(super) fn admit_request_targets(
+    delivery: &Arc<DeliveryContext>,
     groups: &[DeliveryGroup],
     message: &str,
 ) -> Result<Vec<String>, RelayError> {
@@ -232,11 +237,13 @@ pub(super) fn admit_request_targets(
         for target in &group.targets {
             let message_id = Uuid::new_v4().to_string();
             let admission = resolve_target_session_type(
+                delivery,
                 &group.bundle,
                 target.session_id.as_str(),
             )
             .and_then(|session_type| {
                 admit(
+                    delivery,
                     message_id.as_str(),
                     AdmissionTargetKey::new(
                         group.bundle.bundle_name.as_str(),
@@ -251,7 +258,7 @@ pub(super) fn admit_request_targets(
                 Ok(()) => admitted.push(message_id),
                 Err(error) => {
                     for reserved in &admitted {
-                        rollback_admission(reserved);
+                        rollback_admission(delivery, reserved);
                     }
                     return Err(error);
                 },

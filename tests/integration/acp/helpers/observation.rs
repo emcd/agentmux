@@ -28,17 +28,25 @@ pub(super) fn count_logged_method(log_path: &Path, method: &str) -> usize {
 /// Polls the persistent ACP worker for `target_session` until it converges to
 /// the expected readiness state, returning true on success within the timeout.
 pub(in crate::acp) fn wait_for_worker_state(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     root: &Path,
     target_session: &str,
     expected: &str,
     timeout: Duration,
 ) -> bool {
-    wait_for_any_worker_state(root, target_session, &[expected], timeout)
+    wait_for_any_worker_state(
+        delivery,
+        root,
+        target_session,
+        &[expected],
+        timeout,
+    )
 }
 
 /// Polls the persistent ACP worker for `target_session` until it converges to
 /// any of the expected readiness states, returning true on success.
 pub(in crate::acp) fn wait_for_any_worker_state(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     root: &Path,
     target_session: &str,
     expected: &[&str],
@@ -46,7 +54,7 @@ pub(in crate::acp) fn wait_for_any_worker_state(
 ) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if let Some(state) = read_worker_state(root, target_session)
+        if let Some(state) = read_worker_state(delivery, root, target_session)
             && expected.iter().any(|candidate| state == *candidate)
         {
             return true;
@@ -165,12 +173,13 @@ pub(super) const ACP_FAIL_LOAD_SETTLE_BUDGET: Duration =
 /// in-process watch channel, so the wider deadline costs nothing in the
 /// happy case.
 pub(in crate::acp) fn assert_acp_delivery_unavailable(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
 ) {
     let root = tmux_socket.parent().unwrap_or_else(|| Path::new("."));
     let mut receiver = subscribe_bravo_worker_state(root);
-    match dispatch_send_result(config_root, tmux_socket) {
+    match dispatch_send_result(delivery, config_root, tmux_socket) {
         Err(error) => assert_eq!(error.code, "runtime_acp_worker_unavailable"),
         Ok(response) => {
             let _result = send_result(response);
@@ -191,7 +200,8 @@ pub(in crate::acp) fn assert_acp_delivery_unavailable(
             //
             // The watch is still needed for the other ordering, where the worker
             // is mid-respawn at this point and settles shortly after.
-            let settled = read_worker_state(root, "bravo").as_deref()
+            let settled = read_worker_state(delivery, root, "bravo")
+                .as_deref()
                 == Some("unavailable")
                 || await_acp_worker_state(
                     &mut receiver,
@@ -205,7 +215,7 @@ pub(in crate::acp) fn assert_acp_delivery_unavailable(
                     .unwrap_or_else(|| {
                         "None (no transitions published)".to_string()
                     });
-                let poll_state = read_worker_state(root, "bravo")
+                let poll_state = read_worker_state(delivery, root, "bravo")
                     .unwrap_or_else(|| {
                         "None (worker not registered)".to_string()
                     });

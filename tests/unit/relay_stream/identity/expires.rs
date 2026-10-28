@@ -41,13 +41,14 @@ fn expire_principal_in_store(
 /// read). Used to assert that a rejected Hello delivers its typed error frame
 /// before the connection is torn down.
 fn hello_frame_and_eof(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     principal_id: &str,
     identity_token: &str,
 ) -> (Value, bool) {
     let (mut client, join) =
-        spawn_relay_connection(configuration_roots, bundle_paths);
+        spawn_relay_connection(delivery, configuration_roots, bundle_paths);
     let mut reader =
         BufReader::new(client.try_clone().expect("clone hello stream"));
     send_json(
@@ -74,6 +75,9 @@ fn hello_frame_and_eof(
 // connection.
 #[test]
 fn expired_principal_receives_runtime_identity_expired_before_close() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_expired_teardown";
     let configuration_roots =
@@ -84,6 +88,7 @@ fn expired_principal_receives_runtime_identity_expired_before_close() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -94,6 +99,7 @@ fn expired_principal_receives_runtime_identity_expired_before_close() {
     expire_principal_in_store(&bundle_paths, &principal_id);
 
     let (frame, closed) = hello_frame_and_eof(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -125,6 +131,9 @@ fn expired_principal_receives_runtime_identity_expired_before_close() {
 // revoked credential apart from a relay outage.
 #[test]
 fn typed_identity_error_codes_are_distinct_from_relay_unavailable() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_typed_codes";
     let configuration_roots =
@@ -136,6 +145,7 @@ fn typed_identity_error_codes_are_distinct_from_relay_unavailable() {
     // Expiry path: an expired credential is rejected at Hello.
     let expired_id = format!("alpha@{bundle_name}");
     let expired_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -144,6 +154,7 @@ fn typed_identity_error_codes_are_distinct_from_relay_unavailable() {
     );
     expire_principal_in_store(&bundle_paths, &expired_id);
     let (expired_frame, _) = hello_frame_and_eof(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &expired_id,
@@ -157,6 +168,7 @@ fn typed_identity_error_codes_are_distinct_from_relay_unavailable() {
     // Revocation path: rotating a live session's credential tears it down.
     let revoked_id = format!("bravo@{bundle_name}");
     let revoked_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -164,7 +176,7 @@ fn typed_identity_error_codes_are_distinct_from_relay_unavailable() {
         None,
     );
     let (mut live_client, live_join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut live_reader =
         BufReader::new(live_client.try_clone().expect("clone live stream"));
     send_json(
@@ -182,6 +194,7 @@ fn typed_identity_error_codes_are_distinct_from_relay_unavailable() {
         "live hello not acked"
     );
     let rotation = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,

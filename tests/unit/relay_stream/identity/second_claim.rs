@@ -13,8 +13,11 @@ use super::*;
 // write-timeout teardown race.
 #[test]
 fn second_claim_against_closed_prior_writer_is_reclaimed_not_conflicted() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     assert!(
-        !second_claim_is_live_conflict_for_testing(false),
+        !second_claim_is_live_conflict_for_testing(&delivery, false),
         "a closed prior writer is a stale attachment and must be reclaimed"
     );
 }
@@ -23,8 +26,11 @@ fn second_claim_against_closed_prior_writer_is_reclaimed_not_conflicted() {
 // principal must be rejected as a live identity-claim conflict.
 #[test]
 fn second_claim_against_open_prior_writer_is_a_live_conflict() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     assert!(
-        second_claim_is_live_conflict_for_testing(true),
+        second_claim_is_live_conflict_for_testing(&delivery, true),
         "an open prior writer is a live owner and must conflict"
     );
 }

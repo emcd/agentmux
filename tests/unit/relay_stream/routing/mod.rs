@@ -36,13 +36,14 @@ mod send;
 /// Connects as a bundle-bound `alpha` session, sends one `list` request whose
 /// frame carries the given routing `namespace`, and returns the response frame.
 fn bundle_session_list_with_namespace(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     namespace: &str,
 ) -> Value {
     let (mut client, join) =
-        spawn_relay_connection(configuration_roots, bundle_paths);
+        spawn_relay_connection(delivery, configuration_roots, bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,

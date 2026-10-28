@@ -1,5 +1,7 @@
 use serde_json::json;
+use std::sync::Arc;
 
+use crate::relay::delivery::DeliveryContext;
 use crate::{
     configuration::BundleMember,
     envelope::{
@@ -56,15 +58,16 @@ fn sender_session_name(task: &AsyncDeliveryTask) -> String {
     }
 }
 
-pub(super) fn resolve_target_member(
-    task: &AsyncDeliveryTask,
-) -> Result<Option<&BundleMember>, RelayError> {
+pub(super) fn resolve_target_member<'a>(
+    delivery: &Arc<DeliveryContext>,
+    task: &'a AsyncDeliveryTask,
+) -> Result<Option<&'a BundleMember>, RelayError> {
     let target_member = task
         .bundle
         .members
         .iter()
         .find(|member| member.id == task.target_session);
-    if target_member.is_none() && !target_is_relay_wide(task) {
+    if target_member.is_none() && !target_is_relay_wide(delivery, task) {
         return Err(super::super::super::relay_error(
             "internal_unexpected_failure",
             "resolved target member is missing from bundle configuration",
@@ -82,8 +85,12 @@ pub(super) fn resolve_target_member(
 /// The task-shaped wrapper over the shared predicate admission uses; the
 /// judgement itself lives there because admission must reach it first, at the
 /// request boundary, where no task exists yet.
-pub(super) fn target_is_relay_wide(task: &AsyncDeliveryTask) -> bool {
+pub(super) fn target_is_relay_wide(
+    delivery: &Arc<DeliveryContext>,
+    task: &AsyncDeliveryTask,
+) -> bool {
     super::super::admission::target_is_relay_wide(
+        delivery,
         task.bundle.bundle_name.as_str(),
         task.target_session.as_str(),
     )

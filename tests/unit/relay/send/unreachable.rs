@@ -22,11 +22,12 @@ fn a_sustained_unreachable_target_resolves_not_submitted() {
     );
     // No tmux server backs this socket, so the target is unreachable from the
     // first observation and stays that way.
-    configure_short_unreachable_dwell();
+    let delivery = test_delivery_with_dwell(SHORT_UNREACHABLE_DWELL_MS);
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    dispatch_request(
+    dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Send {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -80,11 +81,12 @@ fn an_unreachable_target_under_the_dwell_is_never_authorized() {
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
         &inscriptions,
     );
-    configure_long_unreachable_dwell();
+    let delivery = test_delivery_with_dwell(LONG_UNREACHABLE_DWELL_MS);
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    dispatch_request(
+    dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Send {
             request_id: None,
             requester_session: "alpha".to_string(),

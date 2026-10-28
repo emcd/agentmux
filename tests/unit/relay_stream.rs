@@ -11,8 +11,8 @@ use std::{
 use agentmux::{
     relay::{
         BundleCatalog, ConnectionDrainCoordinator, ConnectionDrainReport,
-        ConnectionWorkerSlot, second_claim_is_live_conflict_for_testing,
-        serve_connection,
+        ConnectionWorkerSlot, DeliveryContext,
+        second_claim_is_live_conflict_for_testing, serve_connection,
     },
     runtime::paths::BundleRuntimePaths,
 };
@@ -319,10 +319,12 @@ fn read_until_event_type(
 }
 
 fn spawn_relay_connection(
+    delivery: &std::sync::Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
 ) -> (UnixStream, thread::JoinHandle<()>) {
     spawn_relay_connection_with_enforcement(
+        delivery,
         configuration_roots,
         bundle_paths,
         false,
@@ -330,6 +332,7 @@ fn spawn_relay_connection(
 }
 
 fn spawn_relay_connection_with_enforcement(
+    delivery: &std::sync::Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     require_session_credentials: bool,
@@ -339,8 +342,10 @@ fn spawn_relay_connection_with_enforcement(
     let root = configuration_roots.clone();
     let state_root = bundle_paths.state_root.clone();
     let catalog = single_bundle_catalog(bundle_paths);
+    let delivery = std::sync::Arc::clone(delivery);
     let join_handle = thread::spawn(move || {
         run_serve_connection_with_enforcement(
+            &delivery,
             server_stream,
             root,
             state_root,
@@ -413,6 +418,7 @@ coder = "shell"
 // Spawns a connection served against an explicit (typically multi-bundle)
 // catalog, so a Send can fan out to peer bundles the connection is not bound to.
 fn spawn_relay_connection_with_catalog(
+    delivery: &std::sync::Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: BundleCatalog,
@@ -421,8 +427,10 @@ fn spawn_relay_connection_with_catalog(
         UnixStream::pair().expect("unix stream pair");
     let root = configuration_roots.clone();
     let state = state_root.to_path_buf();
+    let delivery = std::sync::Arc::clone(delivery);
     let join_handle = thread::spawn(move || {
         run_serve_connection_with_enforcement(
+            &delivery,
             server_stream,
             root,
             state,
@@ -441,6 +449,7 @@ fn spawn_relay_connection_with_catalog(
 // fresh context per connection and cannot exercise cross-connection
 // serialization.
 fn shared_serve_context(
+    delivery: &std::sync::Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: BundleCatalog,
@@ -459,6 +468,7 @@ fn shared_serve_context(
         Vec::new(),
         false,
         TEST_PRE_HELLO_IDLE_TIMEOUT,
+        std::sync::Arc::clone(delivery),
     ))
 }
 
@@ -498,12 +508,14 @@ fn spawn_relay_connection_on_context(
 // read/dispatch loop (a single-worker runtime starves the writer until the
 // reader yields). Matches the production runtime flavor.
 fn run_serve_connection(
+    delivery: &std::sync::Arc<DeliveryContext>,
     server_stream: UnixStream,
     configuration_roots: ConfigurationRoots,
     state_root: PathBuf,
     bundle_catalog: BundleCatalog,
 ) -> Result<(), std::io::Error> {
     run_serve_connection_with_enforcement(
+        delivery,
         server_stream,
         configuration_roots,
         state_root,
@@ -513,6 +525,7 @@ fn run_serve_connection(
 }
 
 fn run_serve_connection_with_enforcement(
+    delivery: &std::sync::Arc<DeliveryContext>,
     server_stream: UnixStream,
     configuration_roots: ConfigurationRoots,
     state_root: PathBuf,
@@ -520,6 +533,7 @@ fn run_serve_connection_with_enforcement(
     require_session_credentials: bool,
 ) -> Result<(), std::io::Error> {
     run_serve_connection_with_slot(
+        delivery,
         server_stream,
         configuration_roots,
         state_root,
@@ -533,6 +547,7 @@ fn run_serve_connection_with_enforcement(
 // issued `worker_slot`, so it can fire the shutdown signal and assert on the
 // drain report from outside the connection thread.
 fn run_serve_connection_with_slot(
+    delivery: &std::sync::Arc<DeliveryContext>,
     server_stream: UnixStream,
     configuration_roots: ConfigurationRoots,
     state_root: PathBuf,
@@ -563,6 +578,7 @@ fn run_serve_connection_with_slot(
             Vec::new(),
             require_session_credentials,
             TEST_PRE_HELLO_IDLE_TIMEOUT,
+            std::sync::Arc::clone(delivery),
         );
         serve_connection(stream, &serve_context, worker_slot).await
     })
@@ -637,6 +653,9 @@ fn shutdown_stream(stream: &UnixStream, context: &str) {
 
 #[test]
 fn stream_request_before_hello_is_rejected() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_before_hello";
     let configuration_roots =
@@ -645,7 +664,7 @@ fn stream_request_before_hello_is_rejected() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -670,6 +689,9 @@ fn stream_request_before_hello_is_rejected() {
 
 #[test]
 fn stream_hello_acknowledges_and_allows_request() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_allow_request";
     let configuration_roots =
@@ -678,7 +700,7 @@ fn stream_hello_acknowledges_and_allows_request() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -718,6 +740,9 @@ fn stream_hello_acknowledges_and_allows_request() {
 
 #[test]
 fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_reconnect";
     let configuration_roots =
@@ -727,13 +752,13 @@ fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
         .expect("bundle paths");
 
     let (mut first_client, first_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let first_read_stream =
         first_client.try_clone().expect("clone first stream");
     let mut first_reader = BufReader::new(first_read_stream);
 
     let (mut second_client, second_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let second_read_stream =
         second_client.try_clone().expect("clone second stream");
     let mut second_reader = BufReader::new(second_read_stream);
@@ -795,6 +820,9 @@ fn duplicate_live_hello_claim_is_rejected_with_identity_conflict() {
 
 #[test]
 fn hello_claim_is_accepted_after_prior_owner_disconnects() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_reconnect_after_disconnect";
     let configuration_roots =
@@ -804,7 +832,7 @@ fn hello_claim_is_accepted_after_prior_owner_disconnects() {
         .expect("bundle paths");
 
     let (mut first_client, first_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let first_read_stream =
         first_client.try_clone().expect("clone first stream");
     let mut first_reader = BufReader::new(first_read_stream);
@@ -824,7 +852,7 @@ fn hello_claim_is_accepted_after_prior_owner_disconnects() {
     first_handle.join().expect("join first relay thread");
 
     let (mut second_client, second_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let second_read_stream =
         second_client.try_clone().expect("clone second stream");
     let mut second_reader = BufReader::new(second_read_stream);

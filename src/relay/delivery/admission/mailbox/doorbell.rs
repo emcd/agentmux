@@ -29,12 +29,11 @@
 //! generations that come back register again — the mailbox contents, not the
 //! doorbell, are what a new generation's first peek recovers.
 
+use crate::protocol::identity::DeliveryTargetId;
 use std::sync::Arc;
 
-use crate::protocol::identity::DeliveryTargetId;
-
-use super::super::ledger::lock_ledger;
 use super::addressing::target_key;
+use crate::relay::delivery::DeliveryContext;
 
 /// What the relay rings.
 ///
@@ -75,10 +74,11 @@ pub(in crate::relay) type Doorbell = Arc<dyn Fn() + Send + Sync>;
 /// will poll, which is what it would have done for a notification that was rung
 /// and missed.
 pub(in crate::relay) fn register_doorbell(
+    delivery: &Arc<DeliveryContext>,
     target: &DeliveryTargetId,
     doorbell: Doorbell,
 ) {
-    let Ok(mut state) = lock_ledger() else {
+    let Ok(mut state) = delivery.lock_ledger() else {
         return;
     };
     state.doorbells.insert(target_key(target), doorbell);
@@ -87,8 +87,9 @@ pub(in crate::relay) fn register_doorbell(
 /// A doorbell rings when a peek that would have come back empty would now come
 /// back with something, and not otherwise.
 ///
-/// Inline for the reason given on the peek block: the ledger is a process-global
-/// behind a crate-private lock, and widening these operations to reach them from
+/// Inline for the reason given on the peek block: the ledger is per-handle
+/// (reached through the owning `DeliveryContext`) behind a crate-private lock,
+/// and widening these operations to reach them from
 /// `tests/` would publish the delivery ledger itself.
 ///
 /// One test because the property is one claim with a boundary on each side. A
@@ -115,10 +116,12 @@ mod doorbell_tests {
 
     #[test]
     fn a_doorbell_rings_when_the_head_becomes_peekable_and_not_otherwise() {
+        let delivery = super::super::fixtures::test_delivery();
         let namespace = "mbx-doorbell";
         let rings = Arc::new(AtomicUsize::new(0));
         let counter = Arc::clone(&rings);
         register_doorbell(
+            &delivery,
             &target(namespace),
             Arc::new(move || {
                 counter.fetch_add(1, Ordering::SeqCst);
@@ -126,7 +129,7 @@ mod doorbell_tests {
         );
 
         // Nothing was peekable and now something is.
-        place(namespace, "mbx-doorbell-1", 1, mail("body"));
+        place(&delivery, namespace, "mbx-doorbell-1", 1, mail("body"));
         assert_eq!(
             rings.load(Ordering::SeqCst),
             1,
@@ -135,7 +138,7 @@ mod doorbell_tests {
 
         // The head is already peekable, so a consumer that has been told once has
         // been told. Ringing here would wake it for a run it can already see.
-        place(namespace, "mbx-doorbell-2", 1, mail("body"));
+        place(&delivery, namespace, "mbx-doorbell-2", 1, mail("body"));
         assert_eq!(
             rings.load(Ordering::SeqCst),
             1,
@@ -145,8 +148,8 @@ mod doorbell_tests {
         // The cursor moving is not an arrival. Entry two was behind the head and
         // is now at it, but no consumer needs telling about a position that was
         // in the mailbox before.
-        terminalize("mbx-doorbell-1");
-        place(namespace, "mbx-doorbell-3", 1, mail("body"));
+        terminalize(&delivery, "mbx-doorbell-1");
+        place(&delivery, namespace, "mbx-doorbell-3", 1, mail("body"));
         assert_eq!(
             rings.load(Ordering::SeqCst),
             1,
@@ -158,18 +161,18 @@ mod doorbell_tests {
         // admitted and left unfilled while five is enqueued behind it: the
         // mailbox is no longer empty, and a peek still returns nothing, because
         // the run has to start at the cursor.
-        terminalize("mbx-doorbell-2");
-        terminalize("mbx-doorbell-3");
-        admit_only(namespace, "mbx-doorbell-4", 1);
-        admit_only(namespace, "mbx-doorbell-5", 1);
-        enqueue(&task(namespace, "mbx-doorbell-5"), mail("body"))
+        terminalize(&delivery, "mbx-doorbell-2");
+        terminalize(&delivery, "mbx-doorbell-3");
+        admit_only(&delivery, namespace, "mbx-doorbell-4", 1);
+        admit_only(&delivery, namespace, "mbx-doorbell-5", 1);
+        enqueue(&delivery, &task(namespace, "mbx-doorbell-5"), mail("body"))
             .expect("enqueue");
         assert_eq!(
             rings.load(Ordering::SeqCst),
             1,
             "an entry that fills a position behind an unfilled one rings nothing"
         );
-        enqueue(&task(namespace, "mbx-doorbell-4"), mail("body"))
+        enqueue(&delivery, &task(namespace, "mbx-doorbell-4"), mail("body"))
             .expect("enqueue");
         assert_eq!(
             rings.load(Ordering::SeqCst),
@@ -187,21 +190,22 @@ mod doorbell_tests {
         // worth pinning, because it is the one where the consumer-generation
         // naming refuses nothing and the successor's doorbell survives on the
         // registration rule alone.
-        terminalize("mbx-doorbell-4");
-        terminalize("mbx-doorbell-5");
+        terminalize(&delivery, "mbx-doorbell-4");
+        terminalize(&delivery, "mbx-doorbell-5");
         let successor_rings = Arc::new(AtomicUsize::new(0));
         let successor_counter = Arc::clone(&successor_rings);
         register_doorbell(
+            &delivery,
             &target(namespace),
             Arc::new(move || {
                 successor_counter.fetch_add(1, Ordering::SeqCst);
             }),
         );
         assert!(
-            reap_target(&target(namespace), None).is_ok(),
+            reap_target(&delivery, &target(namespace), None).is_ok(),
             "the fixture target is unclaimed, so a reap naming nothing is its reap"
         );
-        place(namespace, "mbx-doorbell-6", 1, mail("body"));
+        place(&delivery, namespace, "mbx-doorbell-6", 1, mail("body"));
         assert_eq!(
             successor_rings.load(Ordering::SeqCst),
             1,
