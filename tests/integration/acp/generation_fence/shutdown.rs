@@ -46,10 +46,12 @@ use super::*;
 #[test]
 fn graceful_shutdown_resolves_a_parked_member_and_a_held_one_exactly_once() {
     let temporary = GuardedTempDir::new();
-    let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+    let inscriptions = shared_inscriptions_path();
+    agentmux::runtime::inscriptions::configure_process_inscriptions(
         &inscriptions,
-    );
+    )
+    .expect("single shared inscription sink for the fence suite");
+    std::fs::write(&inscriptions, "").expect("clear shared inscription log");
 
     let options = AcpStubOptions {
         stop_reading_stdin_after_new: true,
@@ -172,10 +174,12 @@ fn graceful_shutdown_resolves_a_parked_member_and_a_held_one_exactly_once() {
 fn a_generation_replaced_under_an_in_flight_member_resolves_it_once_and_frees_the_target()
  {
     let temporary = GuardedTempDir::new();
-    let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+    let inscriptions = shared_inscriptions_path();
+    agentmux::runtime::inscriptions::configure_process_inscriptions(
         &inscriptions,
-    );
+    )
+    .expect("single shared inscription sink for the fence suite");
+    std::fs::write(&inscriptions, "").expect("clear shared inscription log");
 
     let options = AcpStubOptions {
         stop_reading_stdin_after_new: true,
@@ -308,10 +312,12 @@ fn a_generation_replaced_under_an_in_flight_member_resolves_it_once_and_frees_th
 fn a_pending_member_survives_a_generation_replacement_and_the_new_one_delivers_it()
  {
     let temporary = GuardedTempDir::new();
-    let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+    let inscriptions = shared_inscriptions_path();
+    agentmux::runtime::inscriptions::configure_process_inscriptions(
         &inscriptions,
-    );
+    )
+    .expect("single shared inscription sink for the fence suite");
+    std::fs::write(&inscriptions, "").expect("clear shared inscription log");
 
     let options = AcpStubOptions {
         stop_reading_stdin_after_new: true,

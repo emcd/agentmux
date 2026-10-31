@@ -8,11 +8,39 @@
 //! is empty for the whole steady state.
 
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use agentmux::relay::SendOutcome;
+use tempfile::TempDir;
 
 use super::helpers::*;
+
+/// Process-wide inscription sink shared by these tests.
+///
+/// The relay's inscription sink is process-global and set-once
+/// (`OnceLock`): the first `configure_process_inscriptions` call in the
+/// test process wins, and later calls with a different path are rejected.
+/// Per-test log files therefore strand every test after the first — its
+/// relay emits, but into the first test's (deleted) directory, and its
+/// awaits time out waiting on lines that land elsewhere.
+///
+/// Sharing one file restores per-test semantics under serial execution:
+/// each test truncates it before dispatching, so an await only ever sees
+/// lines this test's relay emitted. Serial execution is a hard requirement
+/// anyway: several of these tests deliver a real SIGTERM to the test
+/// process, whose shutdown flag is likewise process-global.
+static SHARED_INSCRIPTIONS: OnceLock<(TempDir, std::path::PathBuf)> =
+    OnceLock::new();
+
+fn shared_inscriptions_path() -> std::path::PathBuf {
+    let (_dir, path) = SHARED_INSCRIPTIONS.get_or_init(|| {
+        let dir = TempDir::new().expect("temporary");
+        let path = dir.path().join("inscriptions.log");
+        (dir, path)
+    });
+    path.clone()
+}
 
 /// Polls until an agent has reached the `initialize` hang, which it signals by
 /// creating the fifo it is about to block on.

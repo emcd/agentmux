@@ -3,10 +3,12 @@ use super::*;
 #[test]
 fn a_long_agent_turn_never_arms_the_execution_watchdog() {
     let temporary = GuardedTempDir::new();
-    let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+    let inscriptions = shared_inscriptions_path();
+    agentmux::runtime::inscriptions::configure_process_inscriptions(
         &inscriptions,
-    );
+    )
+    .expect("single shared inscription sink for the fence suite");
+    std::fs::write(&inscriptions, "").expect("clear shared inscription log");
 
     let options = AcpStubOptions {
         never_respond_to_prompt: true,

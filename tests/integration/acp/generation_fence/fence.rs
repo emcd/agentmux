@@ -53,10 +53,12 @@ use super::*;
 #[test]
 fn a_fenced_acp_generation_leaves_no_surviving_child() {
     let temporary = GuardedTempDir::new();
-    let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+    let inscriptions = shared_inscriptions_path();
+    agentmux::runtime::inscriptions::configure_process_inscriptions(
         &inscriptions,
-    );
+    )
+    .expect("single shared inscription sink for the fence suite");
+    std::fs::write(&inscriptions, "").expect("clear shared inscription log");
 
     // A turn that never comes back, so the member is still in flight when the
     // signal lands. Deliberately not a `sleep`-based stall: that helper process
@@ -147,10 +149,12 @@ fn a_fenced_acp_generation_leaves_no_surviving_child() {
 #[test]
 fn a_fence_ends_a_respawn_bootstrap() {
     let temporary = GuardedTempDir::new();
-    let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+    let inscriptions = shared_inscriptions_path();
+    agentmux::runtime::inscriptions::configure_process_inscriptions(
         &inscriptions,
-    );
+    )
+    .expect("single shared inscription sink for the fence suite");
+    std::fs::write(&inscriptions, "").expect("clear shared inscription log");
 
     let options = AcpStubOptions {
         disconnect_on_prompt: Some("before_activity".to_string()),
@@ -257,10 +261,12 @@ fn a_fence_ends_a_respawn_bootstrap() {
 #[test]
 fn a_fence_ends_a_hung_initial_bootstrap() {
     let temporary = GuardedTempDir::new();
-    let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+    let inscriptions = shared_inscriptions_path();
+    agentmux::runtime::inscriptions::configure_process_inscriptions(
         &inscriptions,
-    );
+    )
+    .expect("single shared inscription sink for the fence suite");
+    std::fs::write(&inscriptions, "").expect("clear shared inscription log");
 
     // From the very first agent: the target this asserts on has never had a
     // runtime, so the bootstrap in flight is its initial one.
@@ -373,10 +379,12 @@ fn a_fence_ends_a_hung_initial_bootstrap() {
 #[test]
 fn an_executor_blocked_past_the_bound_is_fenced_and_its_member_resolved() {
     let temporary = GuardedTempDir::new();
-    let inscriptions = temporary.path().join("inscriptions.log");
-    let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
+    let inscriptions = shared_inscriptions_path();
+    agentmux::runtime::inscriptions::configure_process_inscriptions(
         &inscriptions,
-    );
+    )
+    .expect("single shared inscription sink for the fence suite");
+    std::fs::write(&inscriptions, "").expect("clear shared inscription log");
 
     let options = AcpStubOptions {
         stop_reading_stdin_after_new: true,
