@@ -23,6 +23,6 @@
 
 ## 4. Conformance planning (joint with QA Partner; input to the frozen contract's task 3.2)
 
-- [ ] 4.1 Draft round-trip equivalence cases per `ideas/mcp/4` (submit-content, choice, look-poll) with adapted-is-direct assertions.
+- [x] 4.1 Draft round-trip equivalence cases per `ideas/mcp/4` (submit-content, choice, look-poll) with adapted-is-direct assertions.
 - [ ] 4.2 Apply the exclusion list (`help`, supervision-only methods, adapter-local errors) and the seam-exercise rule to every new case.
 - [ ] 4.3 Run `cargo fmt`, clippy, and the canonical `cargo nextest run` suite; `openspec validate --strict`.
