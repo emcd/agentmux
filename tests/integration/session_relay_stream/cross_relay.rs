@@ -229,6 +229,9 @@ fn cross_relay_send_requires_all_tier() {
 
 #[test]
 fn cross_relay_ingress_accepts_in_scope_target() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -246,6 +249,7 @@ fn cross_relay_ingress_accepts_in_scope_target() {
     );
 
     let response = ingress_send_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -265,6 +269,9 @@ fn cross_relay_ingress_accepts_in_scope_target() {
 
 #[test]
 fn cross_relay_ingress_denies_out_of_scope_target() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -282,6 +289,7 @@ fn cross_relay_ingress_denies_out_of_scope_target() {
     );
 
     let response = ingress_send_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -300,6 +308,9 @@ fn cross_relay_ingress_denies_out_of_scope_target() {
 
 #[test]
 fn cross_relay_ingress_denies_absent_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -317,6 +328,7 @@ fn cross_relay_ingress_denies_absent_scope() {
     );
 
     let response = ingress_send_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -331,6 +343,9 @@ fn cross_relay_ingress_denies_absent_scope() {
 
 #[test]
 fn cross_relay_ingress_unknown_target_sorts_before_authorization() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -350,6 +365,7 @@ fn cross_relay_ingress_unknown_target_sorts_before_authorization() {
     );
 
     let response = ingress_send_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -364,6 +380,9 @@ fn cross_relay_ingress_unknown_target_sorts_before_authorization() {
 
 #[test]
 fn cross_relay_ingress_rejects_bang_path_send_before_forwarding() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -384,6 +403,7 @@ fn cross_relay_ingress_rejects_bang_path_send_before_forwarding() {
     );
 
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -408,6 +428,9 @@ fn cross_relay_ingress_rejects_bang_path_send_before_forwarding() {
 
 #[test]
 fn cross_relay_ingress_rejects_bang_path_raww_before_forwarding() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -427,6 +450,7 @@ fn cross_relay_ingress_rejects_bang_path_raww_before_forwarding() {
     // target must be rejected there, not forwarded onward under this relay's
     // identity.
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),

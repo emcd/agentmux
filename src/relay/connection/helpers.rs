@@ -7,6 +7,7 @@
 //! state.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use serde_json::{Value, json};
 use time::OffsetDateTime;
@@ -21,6 +22,7 @@ use super::super::stream::HelloFrame;
 use super::super::stream::StreamRegistration;
 use super::super::{RelayError, SCHEMA_VERSION};
 use super::hello::HelloBinding;
+use crate::relay::delivery::DeliveryContext;
 use crate::relay::errors::{map_config, map_tui_config};
 use crate::runtime::paths::BundleRuntimePaths;
 use crate::{
@@ -128,6 +130,7 @@ pub(super) fn identity_claim_conflict_error(
 /// configured bundle's snapshot — a global operator sees pending requests
 /// across the whole relay on (re)connect.
 pub(super) fn emit_registration_choices_snapshots(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_catalog: &BundleCatalog,
     binding: &HelloBinding,
@@ -139,6 +142,7 @@ pub(super) fn emit_registration_choices_snapshots(
                 split_principal_id(binding.principal_id.as_str())
             {
                 emit_choices_snapshot_for_ui_registration(
+                    delivery,
                     configuration_roots,
                     namespace,
                     &bundle_paths.runtime_directory,
@@ -152,6 +156,7 @@ pub(super) fn emit_registration_choices_snapshots(
         None => {
             for bundle_paths in bundle_catalog.snapshot() {
                 emit_choices_snapshot_for_ui_registration(
+                    delivery,
                     configuration_roots,
                     &bundle_paths.bundle_name,
                     &bundle_paths.runtime_directory,

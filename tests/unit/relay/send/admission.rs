@@ -230,20 +230,23 @@ send = "home"
 /// the default, so the assertion cannot pass against the wrong bound.
 #[test]
 fn a_configured_quota_binds_at_admission() {
-    use agentmux::relay::{DeliveryConfiguration, configure_delivery};
+    use agentmux::relay::DeliveryConfiguration;
 
     let temporary = TempDir::new().expect("temporary");
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    configure_delivery(DeliveryConfiguration {
-        queued_envelopes_per_target_max: 1,
-        ..DeliveryConfiguration::default()
-    });
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        DeliveryConfiguration {
+            queued_envelopes_per_target_max: 1,
+            ..DeliveryConfiguration::default()
+        },
+    ));
 
     let send = || {
-        dispatch_request(
+        dispatch_request_with_delivery(
+            &delivery,
             RelayRequest::Send {
                 request_id: None,
                 requester_session: "alpha".to_string(),

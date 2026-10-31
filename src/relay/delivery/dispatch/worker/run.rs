@@ -7,6 +7,7 @@
 //! ends. The writing is the transport's own delivery-loop executor, which
 //! consumes the mailbox this loop fills.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -14,6 +15,7 @@ use serde_json::json;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::relay::AsyncDeliveryTask;
+use crate::relay::delivery::DeliveryContext;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::signals::shutdown_requested;
 
@@ -31,6 +33,7 @@ use super::stop::{
 };
 
 pub(super) async fn run_async_delivery_worker(
+    delivery: Arc<DeliveryContext>,
     key: AsyncWorkerKey,
     owner: WorkerOwner,
     mut receiver: UnboundedReceiver<AsyncDeliveryTask>,
@@ -69,6 +72,7 @@ pub(super) async fn run_async_delivery_worker(
     // one.
     if shutdown_requested() {
         shutdown_before_generation(
+            &delivery,
             &key,
             owner,
             &mut receiver,
@@ -87,6 +91,7 @@ pub(super) async fn run_async_delivery_worker(
         mut binding,
         ..
     } = match build_generation(
+        &delivery,
         &key,
         owner,
         &source,
@@ -113,8 +118,14 @@ pub(super) async fn run_async_delivery_worker(
             // lost with the receiver: no terminal outcome, no quota release. That
             // is the accept-after-drain race `close_worker` exists to prevent on
             // the shutdown path, and this path has to close the same way.
-            super::super::super::async_worker::unregister_worker(&key, owner);
+            super::super::super::async_worker::unregister_worker(
+                &delivery,
+                delivery.async_registry(),
+                &key,
+                owner,
+            );
             resolve_queued_tasks_and_reclaim(
+                &delivery,
                 &key,
                 &mut receiver,
                 pending.as_ref(),
@@ -127,11 +138,12 @@ pub(super) async fn run_async_delivery_worker(
     let mut senders_dropped = false;
     // Graceful shutdown and the execution watchdog are what fence a generation.
     // Both bounds are the relay's own `[delivery]` settings, read once per worker.
-    let delivery = super::super::super::admission::delivery_configuration();
-    let fence_observation =
-        Duration::from_millis(delivery.fence_observation_timeout_ms);
+    let relay_configuration = delivery.delivery_configuration();
+    let fence_observation = Duration::from_millis(
+        relay_configuration.fence_observation_timeout_ms,
+    );
     let submission_timeout =
-        Duration::from_millis(delivery.submission_timeout_ms);
+        Duration::from_millis(relay_configuration.submission_timeout_ms);
     // The execution watchdog's fence, present only while one is in progress.
     let mut watchdog: Option<FenceInProgress> = None;
     // Set by a negative verdict and never cleared. From then on this worker keeps
@@ -146,6 +158,7 @@ pub(super) async fn run_async_delivery_worker(
         let stop_cause = if shutdown_requested() {
             Some(StopCause::Shutdown)
         } else if super::super::super::async_worker::worker_stop_requested(
+            delivery.async_registry(),
             &key,
         ) {
             Some(StopCause::BundleStop)
@@ -163,8 +176,13 @@ pub(super) async fn run_async_delivery_worker(
             // the shutdown-barrier worker count still counts this still-draining
             // worker; the final unregister below drops it. Anything already queued
             // before this point is still drained.
-            super::super::super::async_worker::close_worker(&key, owner);
+            super::super::super::async_worker::close_worker(
+                delivery.async_registry(),
+                &key,
+                owner,
+            );
             stop_drain(
+                &delivery,
                 &key,
                 &binding,
                 &mut transport,
@@ -186,8 +204,10 @@ pub(super) async fn run_async_delivery_worker(
         // observation windows still resolves its own members.
         if watchdog.is_none()
             && !fail_stopped
-            && super::super::super::admission::declaration_age(&binding)
-                .is_some_and(|age| age >= submission_timeout)
+            && super::super::super::admission::declaration_age(
+                &delivery, &binding,
+            )
+            .is_some_and(|age| age >= submission_timeout)
         {
             emit_inscription(
                 "relay.delivery.watchdog.armed",
@@ -226,6 +246,7 @@ pub(super) async fn run_async_delivery_worker(
                     // generation had declared and not acknowledged is resolved as
                     // part of taking the target over, and reported there.
                     match build_generation(
+                        &delivery,
                         &key,
                         owner,
                         &source,
@@ -252,12 +273,14 @@ pub(super) async fn run_async_delivery_worker(
                             // is there: while the entry is live a send can land
                             // between the drain observing empty and the entry
                             // going, and it would be lost with the receiver.
-                            super::super::super::async_worker::unregister_worker(&key, owner);
+                            super::super::super::async_worker::unregister_worker(&delivery, delivery.async_registry(), &key, owner);
                             abandon_target(
+                                &delivery,
                                 &binding,
                                 GuardTrigger::ExecutionBound,
                             );
                             resolve_queued_tasks_and_reclaim(
+                                &delivery,
                                 &key,
                                 &mut receiver,
                                 pending.as_ref(),
@@ -276,7 +299,7 @@ pub(super) async fn run_async_delivery_worker(
                     // it joins the very threads that were just not observed to
                     // stop, which would run the bounded fence into the unbounded
                     // wait it exists to replace.
-                    super::super::super::async_worker::mark_worker_fail_stopped(&key, owner);
+                    super::super::super::async_worker::mark_worker_fail_stopped(delivery.async_registry(), &key, owner);
                     fail_stopped = true;
                     // Nothing will ever peek this mailbox again, so everything in
                     // it is owed an answer — including entries whose target is
@@ -285,7 +308,11 @@ pub(super) async fn run_async_delivery_worker(
                     // and it is not really elapsed duration: the finding is that
                     // no consumer can be elected for this target, and a member
                     // held behind that can never be delivered by anything.
-                    abandon_target(&binding, GuardTrigger::ExecutionBound);
+                    abandon_target(
+                        &delivery,
+                        &binding,
+                        GuardTrigger::ExecutionBound,
+                    );
                 },
             }
         }
@@ -295,7 +322,7 @@ pub(super) async fn run_async_delivery_worker(
                 match maybe_task {
                     Some(task) => {
                         if shutdown_requested() {
-                            super::super::super::async_worker::complete_task_on_shutdown(&task);
+                            super::super::super::async_worker::complete_task_on_shutdown(&delivery, &task);
                             super::super::super::async_worker::release_pending_slot(pending.as_ref());
                             continue;
                         }
@@ -305,6 +332,7 @@ pub(super) async fn run_async_delivery_worker(
                             // never declared, so the evidence order proves
                             // non-delivery rather than inferring it.
                             super::super::super::async_worker::complete_task_outcome_from_trigger(
+                                &delivery,
                                 &task,
                                 GuardTrigger::ExecutionBound,
                             );
@@ -323,7 +351,7 @@ pub(super) async fn run_async_delivery_worker(
                         // here would only delay it — where under the push model
                         // the same wait had to gate a handover this loop was about
                         // to perform.
-                        take_into_mailbox(task, &transport, pending.as_ref());
+                        take_into_mailbox(&delivery, task, &transport, pending.as_ref());
                     }
                     None => senders_dropped = true,
                 }
@@ -340,5 +368,10 @@ pub(super) async fn run_async_delivery_worker(
             }
         }
     }
-    super::super::super::async_worker::unregister_worker(&key, owner);
+    super::super::super::async_worker::unregister_worker(
+        &delivery,
+        delivery.async_registry(),
+        &key,
+        owner,
+    );
 }

@@ -41,6 +41,7 @@ pub(super) async fn handle_request(
     let writer = frame.writer;
     let bundle_catalog = &frame.context.bundle_catalog;
     let peer_connection_manager = &frame.context.peer_connection_manager;
+    let delivery = Arc::clone(frame.context.delivery_context());
     let Some(active_registration) = guard.current() else {
         let error = relay_error(
             "validation_missing_hello",
@@ -56,7 +57,7 @@ pub(super) async fn handle_request(
         )?;
         return Ok(FrameOutcome::Next);
     };
-    if !registration_is_current(active_registration)? {
+    if !registration_is_current(&delivery, active_registration)? {
         let error = relay_error(
             "validation_stale_stream_binding",
             "stream binding has been replaced by a newer hello registration",
@@ -92,8 +93,10 @@ pub(super) async fn handle_request(
             let state_root = Arc::clone(frame.state_root);
             let identity_admin_lock =
                 Arc::clone(&frame.context.identity_admin_lock);
+            let delivery = Arc::clone(frame.context.delivery_context());
             dispatch_on_blocking_pool(move || {
                 dispatch_identity_admin(
+                    &delivery,
                     request,
                     &configuration_roots,
                     &state_root,
@@ -148,7 +151,8 @@ pub(super) async fn handle_request(
     if matches!(request, RelayRequest::List { .. })
         && target_namespace.as_deref() == Some("GLOBAL")
     {
-        let response = handlers::handle_global_list();
+        let delivery = Arc::clone(frame.context.delivery_context());
+        let response = handlers::handle_global_list(&delivery);
         write_stream_frame_to_writer(
             writer,
             OutgoingFrame::Response {
@@ -190,8 +194,10 @@ pub(super) async fn handle_request(
             .unwrap_or_else(|| enumerate_paths.clone());
         let response = {
             let configuration_roots = Arc::clone(frame.configuration_roots);
+            let delivery = Arc::clone(frame.context.delivery_context());
             dispatch_on_blocking_pool(move || {
                 dispatch_list(
+                    &delivery,
                     request,
                     &configuration_roots,
                     &dispatch_paths,
@@ -227,6 +233,7 @@ pub(super) async fn handle_request(
             let bound_bundle = binding.bound_bundle.clone();
             let bundle_catalog = bundle_catalog.clone();
             let peer_connection_manager = Arc::clone(peer_connection_manager);
+            let delivery = Arc::clone(frame.context.delivery_context());
             let state_root = Arc::clone(frame.state_root);
             let identity_admin_lock =
                 Arc::clone(&frame.context.identity_admin_lock);
@@ -236,6 +243,7 @@ pub(super) async fn handle_request(
                     admin_lock: identity_admin_lock.as_ref(),
                 };
                 dispatch_send(
+                    &delivery,
                     request,
                     &configuration_roots,
                     bound_bundle.as_ref(),
@@ -268,8 +276,10 @@ pub(super) async fn handle_request(
             let configuration_roots = Arc::clone(frame.configuration_roots);
             let bound_bundle = binding.bound_bundle.clone();
             let bundle_catalog = bundle_catalog.clone();
+            let delivery = Arc::clone(frame.context.delivery_context());
             dispatch_on_blocking_pool(move || {
                 dispatch_look(
+                    &delivery,
                     request,
                     &configuration_roots,
                     bound_bundle.as_ref(),
@@ -304,12 +314,14 @@ pub(super) async fn handle_request(
             let state_root = Arc::clone(frame.state_root);
             let identity_admin_lock =
                 Arc::clone(&frame.context.identity_admin_lock);
+            let delivery = Arc::clone(frame.context.delivery_context());
             dispatch_on_blocking_pool(move || {
                 let ingress_authority = PeerIngressAuthority {
                     state_root: state_root.as_ref(),
                     admin_lock: identity_admin_lock.as_ref(),
                 };
                 dispatch_raww(
+                    &delivery,
                     request,
                     &configuration_roots,
                     bound_bundle.as_ref(),
@@ -366,6 +378,7 @@ pub(super) async fn handle_request(
                     admin_lock: identity_admin_lock.as_ref(),
                 };
                 dispatch_discovery(
+                    &delivery,
                     request,
                     &configuration_roots,
                     principal,
@@ -417,8 +430,10 @@ pub(super) async fn handle_request(
     let response = {
         let configuration_roots = Arc::clone(frame.configuration_roots);
         let bundle_catalog = bundle_catalog.clone();
+        let delivery = Arc::clone(frame.context.delivery_context());
         dispatch_on_blocking_pool(move || {
             dispatch_request(
+                &delivery,
                 request,
                 &configuration_roots,
                 &bundle_paths.bundle_name,

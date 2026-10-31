@@ -10,9 +10,7 @@
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use agentmux::relay::{
-    DeliveryConfiguration, SendOutcome, configure_delivery,
-};
+use agentmux::relay::SendOutcome;
 
 use super::helpers::*;
 

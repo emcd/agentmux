@@ -16,14 +16,18 @@ use super::helpers::*;
 /// an ACP-only bundle impossible to bring up with `up` at all.
 #[test]
 fn reconcile_starts_acp_members_rather_than_reporting_them_failed() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
     let paths = flat_bundle_paths(temporary.path());
 
-    let report = agentmux::relay::reconcile_bundle(&config_root, &paths)
-        .expect("reconcile an ACP-only bundle");
+    let report =
+        agentmux::relay::reconcile_bundle(&delivery, &config_root, &paths)
+            .expect("reconcile an ACP-only bundle");
 
     assert!(
         report.failed_startups.is_empty(),
@@ -38,8 +42,9 @@ fn reconcile_starts_acp_members_rather_than_reporting_them_failed() {
 
     // Repeating the pass must not re-register the workers or start a second
     // agent process for the same target.
-    let second = agentmux::relay::reconcile_bundle(&config_root, &paths)
-        .expect("reconcile is idempotent for ACP members");
+    let second =
+        agentmux::relay::reconcile_bundle(&delivery, &config_root, &paths)
+            .expect("reconcile is idempotent for ACP members");
     assert!(second.failed_startups.is_empty());
     assert_eq!(second.ready_session_count, 2);
 }
@@ -57,6 +62,9 @@ fn reconcile_starts_acp_members_rather_than_reporting_them_failed() {
 /// before this change too. The `list` side is what discriminates.
 #[test]
 fn a_busy_acp_session_reads_ready_on_both_up_and_list() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         never_respond_to_prompt: true,
@@ -68,7 +76,7 @@ fn a_busy_acp_session_reads_ready_on_both_up_and_list() {
     let mut worker_state = subscribe_bravo_worker_state(temporary.path());
 
     // Leaves a turn in flight, holding bravo's worker in `Busy`.
-    let _ = dispatch_send(&config_root, &tmux_socket);
+    let _ = dispatch_send(&delivery, &config_root, &tmux_socket);
     await_acp_worker_state(
         &mut worker_state,
         WorkerReadinessState::Busy,
@@ -76,6 +84,7 @@ fn a_busy_acp_session_reads_ready_on_both_up_and_list() {
     );
 
     let listed = agentmux::relay::handle_request(
+        &delivery,
         agentmux::relay::RelayRequest::List {
             requester_session: Some("alpha".to_string()),
         },
@@ -100,6 +109,7 @@ fn a_busy_acp_session_reads_ready_on_both_up_and_list() {
     assert_eq!(bundle.state, ListedBundleState::Up);
 
     let report = agentmux::relay::reconcile_bundle(
+        &delivery,
         &config_root,
         &flat_bundle_paths(temporary.path()),
     )
@@ -117,12 +127,18 @@ fn a_busy_acp_session_reads_ready_on_both_up_and_list() {
 
 #[test]
 fn acp_send_selects_session_new_without_coder_session_id() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, log_path) =
         write_configuration(temporary.path(), &options);
-    let response =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let response = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -148,14 +164,17 @@ fn acp_send_selects_session_new_without_coder_session_id() {
 
 #[test]
 fn acp_send_reuses_persistent_worker_across_requests() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, log_path) =
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let first = dispatch_send(&config_root, &tmux_socket);
-    let second = dispatch_send(&config_root, &tmux_socket);
+    let first = dispatch_send(&delivery, &config_root, &tmux_socket);
+    let second = dispatch_send(&delivery, &config_root, &tmux_socket);
     let first_result = send_result(first);
     let second_result = send_result(second);
     assert_eq!(first_result.outcome, SendOutcome::Queued);
@@ -172,12 +191,18 @@ fn acp_send_reuses_persistent_worker_across_requests() {
 
 #[test]
 fn acp_initialize_request_uses_protocol_version_integer_and_client_version() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, log_path) =
         write_configuration(temporary.path(), &options);
-    let response =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let response = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -200,12 +225,18 @@ fn acp_initialize_request_uses_protocol_version_integer_and_client_version() {
 
 #[test]
 fn acp_session_setup_requests_include_mcp_servers_array() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, log_path) =
         write_configuration(temporary.path(), &options);
-    let response =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let response = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -224,6 +255,7 @@ fn acp_session_setup_requests_include_mcp_servers_array() {
     let (config_root, log_path) =
         write_configuration(second_temporary.path(), &options);
     let response = dispatch_send(
+        &delivery,
         &config_root,
         &second_temporary.path().join("tmux.sock"),
     );
@@ -240,6 +272,9 @@ fn acp_session_setup_requests_include_mcp_servers_array() {
 
 #[test]
 fn acp_send_uses_persisted_session_id_when_config_id_is_absent() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         disconnect_on_prompt: Some("after_activity".to_string()),
@@ -250,7 +285,7 @@ fn acp_send_uses_persisted_session_id_when_config_id_is_absent() {
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let first = dispatch_send(&config_root, &tmux_socket);
+    let first = dispatch_send(&delivery, &config_root, &tmux_socket);
     let first_result = send_result(first);
     assert_eq!(first_result.outcome, SendOutcome::Queued);
 
@@ -274,6 +309,9 @@ fn acp_send_uses_persisted_session_id_when_config_id_is_absent() {
 
 #[test]
 fn acp_send_selects_session_load_with_configured_coder_session_id() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         configured_session_id: Some("sess-abc".to_string()),
@@ -281,8 +319,11 @@ fn acp_send_selects_session_load_with_configured_coder_session_id() {
     };
     let (config_root, log_path) =
         write_configuration(temporary.path(), &options);
-    let response =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let response = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     let log = fs::read_to_string(log_path).expect("read ACP log");
@@ -292,6 +333,9 @@ fn acp_send_selects_session_load_with_configured_coder_session_id() {
 
 #[test]
 fn acp_load_failure_does_not_fallback_to_session_new() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         fail_load: true,
@@ -301,6 +345,7 @@ fn acp_load_failure_does_not_fallback_to_session_new() {
     let (config_root, log_path) =
         write_configuration(temporary.path(), &options);
     assert_acp_delivery_unavailable(
+        &delivery,
         &config_root,
         &temporary.path().join("tmux.sock"),
     );
@@ -310,6 +355,9 @@ fn acp_load_failure_does_not_fallback_to_session_new() {
 
 #[test]
 fn acp_new_failure_returns_runtime_stage_code() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         fail_new: true,
@@ -318,6 +366,7 @@ fn acp_new_failure_returns_runtime_stage_code() {
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
     assert_acp_delivery_unavailable(
+        &delivery,
         &config_root,
         &temporary.path().join("tmux.sock"),
     );
@@ -340,6 +389,9 @@ fn acp_new_failure_returns_runtime_stage_code() {
 // bootstrap publishes a real Unavailable, so state-based waits race it).
 #[test]
 fn acp_repeated_new_failure_gives_up_instead_of_respawning_forever() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         fail_new: true,
@@ -353,7 +405,7 @@ fn acp_repeated_new_failure_gives_up_instead_of_respawning_forever() {
     // attempt re-spawns the stub and re-issues session/new (nothing was
     // persisted, so the load-vs-new lifecycle stays on new), so the count of
     // logged session/new requests is a direct census of respawn attempts.
-    let _ = dispatch_send_result(&config_root, &tmux_socket);
+    let _ = dispatch_send_result(&delivery, &config_root, &tmux_socket);
 
     // Let the respawn monitor run to its terminal decision. The stage-agnostic
     // give-up abandons the repeatedly-failing session/new after a bounded number
@@ -378,6 +430,9 @@ fn acp_repeated_new_failure_gives_up_instead_of_respawning_forever() {
 
 #[test]
 fn acp_missing_load_capability_returns_canonical_failure_code_and_details() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         load_capability: false,
@@ -387,6 +442,7 @@ fn acp_missing_load_capability_returns_canonical_failure_code_and_details() {
     let (config_root, log_path) =
         write_configuration(temporary.path(), &options);
     assert_acp_delivery_unavailable(
+        &delivery,
         &config_root,
         &temporary.path().join("tmux.sock"),
     );
@@ -396,6 +452,9 @@ fn acp_missing_load_capability_returns_canonical_failure_code_and_details() {
 
 #[test]
 fn acp_missing_prompt_capability_returns_canonical_failure_code_and_details() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         prompt_capability: false,
@@ -404,6 +463,7 @@ fn acp_missing_prompt_capability_returns_canonical_failure_code_and_details() {
     let (config_root, log_path) =
         write_configuration(temporary.path(), &options);
     assert_acp_delivery_unavailable(
+        &delivery,
         &config_root,
         &temporary.path().join("tmux.sock"),
     );
@@ -413,6 +473,9 @@ fn acp_missing_prompt_capability_returns_canonical_failure_code_and_details() {
 
 #[test]
 fn acp_initialize_failure_returns_canonical_runtime_code() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         fail_initialize: true,
@@ -421,6 +484,7 @@ fn acp_initialize_failure_returns_canonical_runtime_code() {
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
     assert_acp_delivery_unavailable(
+        &delivery,
         &config_root,
         &temporary.path().join("tmux.sock"),
     );
@@ -428,6 +492,9 @@ fn acp_initialize_failure_returns_canonical_runtime_code() {
 
 #[test]
 fn acp_prompt_failure_keeps_persistent_worker_available() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         fail_prompt: true,
@@ -435,14 +502,18 @@ fn acp_prompt_failure_keeps_persistent_worker_available() {
     };
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
-    let response =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let response = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     // A JSON-RPC prompt error is a logical failure from a still-responsive
     // agent; the persistent worker stays available for subsequent prompts.
     assert!(
         wait_for_worker_state(
+            &delivery,
             temporary.path(),
             "bravo",
             "available",
@@ -454,6 +525,9 @@ fn acp_prompt_failure_keeps_persistent_worker_available() {
 
 #[test]
 fn acp_disconnect_before_first_activity_engages_auto_respawn() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         disconnect_on_prompt: Some("before_activity".to_string()),
@@ -461,8 +535,11 @@ fn acp_disconnect_before_first_activity_engages_auto_respawn() {
     };
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
-    let response =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let response = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     // Auto-respawn pulls the worker out of `unavailable` as soon as it
@@ -471,6 +548,7 @@ fn acp_disconnect_before_first_activity_engages_auto_respawn() {
     // rather than staying terminally unavailable.
     assert!(
         wait_for_any_worker_state(
+            &delivery,
             temporary.path(),
             "bravo",
             &["recovering", "available", "busy"],
@@ -482,6 +560,9 @@ fn acp_disconnect_before_first_activity_engages_auto_respawn() {
 
 #[test]
 fn acp_disconnect_after_first_activity_preserves_accepted_response() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         disconnect_on_prompt: Some("after_activity".to_string()),
@@ -490,13 +571,17 @@ fn acp_disconnect_after_first_activity_preserves_accepted_response() {
     };
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
-    let response =
-        dispatch_send(&config_root, &temporary.path().join("tmux.sock"));
+    let response = dispatch_send(
+        &delivery,
+        &config_root,
+        &temporary.path().join("tmux.sock"),
+    );
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
     assert_eq!(result.reason_code, None);
     assert!(
         wait_for_any_worker_state(
+            &delivery,
             temporary.path(),
             "bravo",
             &["recovering", "available", "busy"],
@@ -507,6 +592,7 @@ fn acp_disconnect_after_first_activity_preserves_accepted_response() {
 }
 
 fn wait_for_any_worker_state(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     root: &std::path::Path,
     target_session: &str,
     expected: &[&str],
@@ -514,7 +600,7 @@ fn wait_for_any_worker_state(
 ) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if let Some(state) = read_worker_state(root, target_session)
+        if let Some(state) = read_worker_state(delivery, root, target_session)
             && expected.iter().any(|candidate| state == *candidate)
         {
             return true;

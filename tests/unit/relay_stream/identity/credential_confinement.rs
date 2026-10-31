@@ -71,6 +71,9 @@ fn config_destination_request(principal_id: &str) -> Value {
 // without registering the principal.
 #[test]
 fn new_peer_config_rejects_symlinked_bundles_ancestor() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_bundles";
     let configuration_roots =
@@ -81,6 +84,7 @@ fn new_peer_config_rejects_symlinked_bundles_ancestor() {
     let external = symlink_ancestor(&temporary, &state_root, "bundles");
 
     let response = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -99,6 +103,7 @@ fn new_peer_config_rejects_symlinked_bundles_ancestor() {
     std::fs::create_dir_all(state_root.join("bundles"))
         .expect("restore bundles");
     let retry = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -114,6 +119,9 @@ fn new_peer_config_rejects_symlinked_bundles_ancestor() {
 // rotating: the prior credential still authenticates.
 #[test]
 fn change_psk_config_rejects_symlinked_ancestor_without_rotating() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_rotate";
     let configuration_roots =
@@ -123,6 +131,7 @@ fn change_psk_config_rejects_symlinked_ancestor_without_rotating() {
         .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -132,6 +141,7 @@ fn change_psk_config_rejects_symlinked_ancestor_without_rotating() {
     let external = symlink_ancestor(&temporary, &state_root, "bundles");
 
     let response = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -146,6 +156,7 @@ fn change_psk_config_rejects_symlinked_ancestor_without_rotating() {
 
     std::fs::remove_file(state_root.join("bundles")).expect("remove symlink");
     let frame = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -162,6 +173,9 @@ fn change_psk_config_rejects_symlinked_ancestor_without_rotating() {
 // store, so even Hello fail-closes with the confinement code.
 #[test]
 fn store_load_rejects_symlinked_identity() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_load";
     let configuration_roots =
@@ -175,6 +189,7 @@ fn store_load_rejects_symlinked_identity() {
         .expect("write decoy store");
 
     let frame = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &format!("alpha@{bundle_name}"),
@@ -201,6 +216,9 @@ fn store_load_rejects_symlinked_identity() {
 // persist-side traversal observes the symlink.
 #[test]
 fn store_persist_rejects_symlinked_identity() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_persist";
     let configuration_roots =
@@ -219,6 +237,7 @@ fn store_persist_rejects_symlinked_identity() {
     );
 
     let response = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -256,6 +275,9 @@ fn arm_ancestor_exchange(
 // sink write before publication.
 #[test]
 fn sink_commit_aborts_on_ancestor_exchange() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_exchange_sink";
     let configuration_roots =
@@ -271,6 +293,7 @@ fn sink_commit_aborts_on_ancestor_exchange() {
         arm_ancestor_exchange(state_root.clone(), "bundles", external.clone());
 
     let response = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -295,6 +318,9 @@ fn sink_commit_aborts_on_ancestor_exchange() {
 // peer-slot install before publication.
 #[test]
 fn install_commit_aborts_on_ancestor_exchange() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_exchange_slot";
     let configuration_roots =
@@ -304,6 +330,7 @@ fn install_commit_aborts_on_ancestor_exchange() {
         .expect("bundle paths");
     let principal_id = "bravo@RELAY".to_string();
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -318,6 +345,7 @@ fn install_commit_aborts_on_ancestor_exchange() {
         arm_ancestor_exchange(state_root.clone(), "peers", external.clone());
 
     let response = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -361,6 +389,9 @@ fn walkdir_tmp_residue(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
 // parent directory still carries a successful write.
 #[test]
 fn path_sink_through_symlinked_parent_still_succeeds() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_path_ok";
     let configuration_roots =
@@ -375,6 +406,7 @@ fn path_sink_through_symlinked_parent_still_succeeds() {
     let output = temporary.path().join("linked-out").join("credential.psk");
 
     let response = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -398,6 +430,9 @@ fn path_sink_through_symlinked_parent_still_succeeds() {
 // replaced: the link stands and the external target is untouched.
 #[test]
 fn config_sink_refuses_symlinked_final_target() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_final";
     let configuration_roots =
@@ -422,6 +457,7 @@ fn config_sink_refuses_symlinked_final_target() {
     .expect("plant final symlink");
 
     let response = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -443,6 +479,9 @@ fn config_sink_refuses_symlinked_final_target() {
 // file path, while file-sink responses omit the PSK and carry the path.
 #[test]
 fn issuance_response_carries_psk_while_file_sinks_omit_it() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_boundary";
     let configuration_roots =
@@ -452,6 +491,7 @@ fn issuance_response_carries_psk_while_file_sinks_omit_it() {
         .expect("bundle paths");
 
     let issued = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -473,6 +513,7 @@ fn issuance_response_carries_psk_while_file_sinks_omit_it() {
     );
 
     let filed = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -495,6 +536,9 @@ fn issuance_response_carries_psk_while_file_sinks_omit_it() {
 // stands.
 #[test]
 fn new_peer_config_dir_sync_failure_preserves_registration() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_sink_new";
     let configuration_roots =
@@ -513,6 +557,7 @@ fn new_peer_config_dir_sync_failure_preserves_registration() {
         .expect("arm dir-sync fault");
 
     let response = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -540,6 +585,7 @@ fn new_peer_config_dir_sync_failure_preserves_registration() {
     );
 
     let retry = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -556,6 +602,9 @@ fn new_peer_config_dir_sync_failure_preserves_registration() {
 // stops authenticating and the slot file holds the replacement.
 #[test]
 fn change_psk_config_dir_sync_failure_preserves_rotation() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_conf_sink_rotate";
     let configuration_roots =
@@ -565,6 +614,7 @@ fn change_psk_config_dir_sync_failure_preserves_rotation() {
         .expect("bundle paths");
     let principal_id = format!("alpha@{bundle_name}");
     let old_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -581,6 +631,7 @@ fn change_psk_config_dir_sync_failure_preserves_rotation() {
         .expect("arm dir-sync fault");
 
     let response = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -601,6 +652,7 @@ fn change_psk_config_dir_sync_failure_preserves_rotation() {
     );
 
     let stale = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -612,6 +664,7 @@ fn change_psk_config_dir_sync_failure_preserves_rotation() {
         "superseded credential must stop authenticating: {stale:?}"
     );
     let rotated = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,

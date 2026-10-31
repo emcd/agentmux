@@ -2,6 +2,9 @@ use super::*;
 
 #[test]
 fn drop_revokes_the_peer_connection_and_isolates_re_registration() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_dropbind";
     let configuration_roots =
@@ -13,6 +16,7 @@ fn drop_revokes_the_peer_connection_and_isolates_re_registration() {
     let target = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -21,7 +25,7 @@ fn drop_revokes_the_peer_connection_and_isolates_re_registration() {
     );
 
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -38,6 +42,7 @@ fn drop_revokes_the_peer_connection_and_isolates_re_registration() {
     // Dropping the peer revokes its live connection: the relay delivers a
     // typed revocation frame rather than leaving a stale session behind.
     let dropped = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -58,6 +63,7 @@ fn drop_revokes_the_peer_connection_and_isolates_re_registration() {
     // Re-registering the same id mints an unrelated credential: the old PSK
     // authenticates nothing, so no stale binding can survive under the id.
     let fresh_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -66,6 +72,7 @@ fn drop_revokes_the_peer_connection_and_isolates_re_registration() {
     );
     assert_ne!(fresh_psk, psk);
     let stale_hello = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -80,6 +87,7 @@ fn drop_revokes_the_peer_connection_and_isolates_re_registration() {
     );
 
     let fresh = peer_send_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -94,6 +102,9 @@ fn drop_revokes_the_peer_connection_and_isolates_re_registration() {
 
 #[test]
 fn rotation_revokes_a_live_peer_session_with_typed_frame() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_rotrevoke";
     let configuration_roots =
@@ -104,6 +115,7 @@ fn rotation_revokes_a_live_peer_session_with_typed_frame() {
     let peer_id = "rotrevoke@RELAY";
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -112,7 +124,7 @@ fn rotation_revokes_a_live_peer_session_with_typed_frame() {
     );
 
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -129,6 +141,7 @@ fn rotation_revokes_a_live_peer_session_with_typed_frame() {
     // Rotating from the operator revokes the peer's live session: a stale
     // dispatched credential cannot linger after its record is superseded.
     let rotation = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -150,6 +163,7 @@ fn rotation_revokes_a_live_peer_session_with_typed_frame() {
         .expect("rotated psk")
         .to_string();
     let stale = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -163,6 +177,7 @@ fn rotation_revokes_a_live_peer_session_with_typed_frame() {
         "superseded credential must not authenticate: {stale:?}"
     );
     let accepted = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,

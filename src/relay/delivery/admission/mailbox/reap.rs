@@ -23,13 +23,14 @@
 //! arriving behind a live successor on its own terms.
 
 use serde_json::json;
+use std::sync::Arc;
 
 use crate::protocol::identity::{ConsumerGenerationId, DeliveryTargetId};
 use crate::runtime::inscriptions::emit_inscription;
 
-use super::super::ledger::lock_ledger;
 use super::addressing::target_key;
 use super::generation::GenerationRejection;
+use crate::relay::delivery::DeliveryContext;
 
 const INSCRIPTION_MAILBOX_REAPED: &str = "relay.delivery.mailbox.reaped";
 
@@ -68,10 +69,11 @@ pub(in crate::relay) enum TargetReap {
 /// real answer rather than a wildcard: a caller that never claimed one matches a
 /// target nobody has claimed, and is refused by a target somebody has.
 pub(in crate::relay) fn reap_target(
+    delivery: &Arc<DeliveryContext>,
     target: &DeliveryTargetId,
     outgoing: Option<ConsumerGenerationId>,
 ) -> Result<TargetReap, GenerationRejection> {
-    let Ok(mut state) = lock_ledger() else {
+    let Ok(mut state) = delivery.lock_ledger() else {
         return Err(GenerationRejection::LedgerUnavailable);
     };
     let key = target_key(target);
@@ -138,8 +140,9 @@ pub(in crate::relay) fn reap_target(
 /// A reap gives up only what it names, takes the mailbox with it, and never
 /// takes the sequence.
 ///
-/// Inline for the reason given on the peek block: the ledger is a process-global
-/// behind a crate-private lock, and widening these operations to reach them from
+/// Inline for the reason given on the peek block: the ledger is per-handle
+/// (reached through the owning `DeliveryContext`) behind a crate-private lock,
+/// and widening these operations to reach them from
 /// `tests/` would publish the delivery ledger itself.
 ///
 /// One test because the three are one property rather than three. A reap that
@@ -162,22 +165,35 @@ mod mailbox_reap_tests {
 
     #[test]
     fn a_reap_gives_up_what_it_names_and_leaves_the_sequence_behind() {
+        let delivery = super::super::fixtures::test_delivery();
         // A target nobody claimed is reaped by a caller naming nothing, which is
         // the shape every reap has today: no worker claims a generation until
         // the delivery-loop executors arrive.
         let unclaimed = "mbx-reap-unclaimed";
-        place(unclaimed, "mbx-reap-unclaimed-1", 1, mail("body"));
-        terminalize("mbx-reap-unclaimed-1");
+        place(
+            &delivery,
+            unclaimed,
+            "mbx-reap-unclaimed-1",
+            1,
+            mail("body"),
+        );
+        terminalize(&delivery, "mbx-reap-unclaimed-1");
         assert_eq!(
-            reap_target(&target(unclaimed), None),
+            reap_target(&delivery, &target(unclaimed), None),
             Ok(TargetReap::Reclaimed),
             "a target nobody holds is reaped by a caller that holds nothing"
         );
 
         let namespace = "mbx-reap";
-        let held = claim(namespace);
+        let held = claim(&delivery, namespace);
         for index in 1..=2 {
-            place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
+            place(
+                &delivery,
+                namespace,
+                &format!("{namespace}-{index}"),
+                1,
+                mail("body"),
+            );
         }
 
         // Naming nothing against a claimed target is a mismatch rather than a
@@ -185,14 +201,14 @@ mod mailbox_reap_tests {
         // other side: a worker that never claimed must not reap a target that
         // somebody else has since claimed.
         assert_eq!(
-            reap_target(&target(namespace), None),
+            reap_target(&delivery, &target(namespace), None),
             Err(GenerationRejection::NotActive {
                 active: Some(held.generation)
             }),
             "a caller holding no generation reaps nothing from a target that is held"
         );
         assert_eq!(
-            reap_target(&target(namespace), Some(stale_of(&held))),
+            reap_target(&delivery, &target(namespace), Some(stale_of(&held))),
             Err(GenerationRejection::NotActive {
                 active: Some(held.generation)
             }),
@@ -202,14 +218,14 @@ mod mailbox_reap_tests {
         // Asserting the return value alone would pass against a reap that
         // cleared the owner and said no.
         assert_eq!(
-            claim_consumer_generation(&target(namespace)),
+            claim_consumer_generation(&delivery, &target(namespace)),
             Err(GenerationRejection::AlreadyHeld {
                 active: held.generation
             }),
             "a refused reap leaves the target held"
         );
         assert_eq!(
-            peeked(&held, 10, 1_000),
+            peeked(&delivery, &held, 10, 1_000),
             vec![1, 2],
             "and leaves its mailbox where it was"
         );
@@ -220,14 +236,16 @@ mod mailbox_reap_tests {
         // them. Dropping them here would be the silent loss the retention is
         // there to refuse.
         assert_eq!(
-            reap_target(&target(namespace), Some(held.generation)),
+            reap_target(&delivery, &target(namespace), Some(held.generation)),
             Ok(TargetReap::Retained { entries_held: 2 }),
             "a reap with entries outstanding gives up the target but keeps its mailbox"
         );
-        let inherited = claim_consumer_generation(&target(namespace))
-            .expect("the reaped target is free to claim");
+        let inherited =
+            claim_consumer_generation(&delivery, &target(namespace))
+                .expect("the reaped target is free to claim");
         assert_eq!(
             peeked(
+                &delivery,
                 &crate::protocol::identity::ConsumerBinding::new(
                     target(namespace),
                     inherited
@@ -242,15 +260,15 @@ mod mailbox_reap_tests {
         // Now empty. The whole mailbox goes: not only its slots but the cursor
         // and the next position it would hand out, which is what the sequence
         // restarting from one below actually demonstrates.
-        terminalize(&format!("{namespace}-1"));
-        terminalize(&format!("{namespace}-2"));
+        terminalize(&delivery, &format!("{namespace}-1"));
+        terminalize(&delivery, &format!("{namespace}-2"));
         assert_eq!(
-            reap_target(&target(namespace), Some(inherited)),
+            reap_target(&delivery, &target(namespace), Some(inherited)),
             Ok(TargetReap::Reclaimed),
             "a reap with nothing left takes the mailbox with the registration"
         );
         assert_eq!(
-            peek(&request(&held, 10, 1_000)).unwrap_err(),
+            peek(&delivery, &request(&held, 10, 1_000)).unwrap_err(),
             PeekRejection::UnknownTarget,
             "a reclaimed target is one the relay no longer holds a mailbox for"
         );
@@ -259,9 +277,15 @@ mod mailbox_reap_tests {
         // would be position three behind a cursor at two — a mailbox that peeks
         // exactly the same way and is numbered from a target that no longer
         // exists.
-        place(namespace, &format!("{namespace}-3"), 1, mail("body"));
+        place(
+            &delivery,
+            namespace,
+            &format!("{namespace}-3"),
+            1,
+            mail("body"),
+        );
         assert_eq!(
-            peeked(&claim(namespace), 10, 1_000),
+            peeked(&delivery, &claim(&delivery, namespace), 10, 1_000),
             vec![1],
             "the recreated mailbox numbers from its own start rather than the reaped cursor"
         );
@@ -271,7 +295,7 @@ mod mailbox_reap_tests {
         // out an identifier already issued — precisely the collision that makes
         // a stale identifier dangerous rather than merely wrong.
         assert!(
-            target_generation(namespace) > inherited.value(),
+            target_generation(&delivery, namespace) > inherited.value(),
             "the sequence continued across both reaps rather than restarting"
         );
 
@@ -284,16 +308,16 @@ mod mailbox_reap_tests {
         // gave the generation up, so naming the generation it held would be
         // refused by the target it just released.
         let deferred = "mbx-reap-deferred";
-        let owner = claim(deferred);
-        place(deferred, "mbx-reap-deferred-1", 1, mail("body"));
+        let owner = claim(&delivery, deferred);
+        place(&delivery, deferred, "mbx-reap-deferred-1", 1, mail("body"));
         assert_eq!(
-            reap_target(&target(deferred), Some(owner.generation)),
+            reap_target(&delivery, &target(deferred), Some(owner.generation)),
             Ok(TargetReap::Retained { entries_held: 1 }),
             "the early reap finds the queue still admitted and keeps the mailbox"
         );
-        terminalize("mbx-reap-deferred-1");
+        terminalize(&delivery, "mbx-reap-deferred-1");
         assert_eq!(
-            reap_target(&target(deferred), None),
+            reap_target(&delivery, &target(deferred), None),
             Ok(TargetReap::Reclaimed),
             "and the retry after the drain names nothing, because nothing holds the target"
         );

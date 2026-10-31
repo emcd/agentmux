@@ -16,13 +16,14 @@ use super::*;
 /// bound bundle), sends one `send` request with the given target list, and
 /// returns the response frame.
 fn relay_wide_operator_send(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     targets: Value,
 ) -> Value {
     let (mut client, join) =
-        spawn_relay_connection(configuration_roots, bundle_paths);
+        spawn_relay_connection(delivery, configuration_roots, bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     let operator_id = global_user_id(bundle_name);
     send_json(
@@ -63,6 +64,9 @@ fn relay_wide_operator_send(
 /// registered relay-wide operator stream.
 #[test]
 fn send_to_global_target_is_delivered_to_registered_operator() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_send_global_target";
     let configuration_roots =
@@ -75,7 +79,7 @@ fn send_to_global_target_is_delivered_to_registered_operator() {
 
     // The operator registers as a relay-wide session and stays connected.
     let (mut operator_client, operator_join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut operator_reader = BufReader::new(
         operator_client.try_clone().expect("clone operator stream"),
     );
@@ -92,7 +96,7 @@ fn send_to_global_target_is_delivered_to_registered_operator() {
 
     // A bundle-bound session sends to the operator by its `@GLOBAL` id.
     let (mut alpha_client, alpha_join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut alpha_reader =
         BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
     send_json(
@@ -147,6 +151,9 @@ fn send_to_global_target_is_delivered_to_registered_operator() {
 /// is cross-namespace and requires `all` send scope.
 #[test]
 fn relay_wide_send_routes_to_bundle_target_by_suffix() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_to_bundle";
     let configuration_roots =
@@ -158,6 +165,7 @@ fn relay_wide_send_routes_to_bundle_target_by_suffix() {
         .expect("bundle paths");
 
     let response = relay_wide_operator_send(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -178,6 +186,9 @@ fn relay_wide_send_routes_to_bundle_target_by_suffix() {
 /// (`GLOBAL`) namespace, not into bundle namespaces.
 #[test]
 fn relay_wide_send_into_bundle_denied_under_home_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_home_denied";
     let configuration_roots =
@@ -189,6 +200,7 @@ fn relay_wide_send_into_bundle_denied_under_home_scope() {
         .expect("bundle paths");
 
     let response = relay_wide_operator_send(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -211,6 +223,9 @@ fn relay_wide_send_into_bundle_denied_under_home_scope() {
 /// client never filled them in.
 #[test]
 fn relay_wide_send_with_bare_target_is_rejected() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_bare";
     let configuration_roots =
@@ -221,6 +236,7 @@ fn relay_wide_send_with_bare_target_is_rejected() {
         .expect("bundle paths");
 
     let response = relay_wide_operator_send(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -240,6 +256,9 @@ fn relay_wide_send_with_bare_target_is_rejected() {
 /// retired.
 #[test]
 fn send_mixing_relay_wide_and_session_targets_fans_out() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_mixed_targets";
     let configuration_roots =
@@ -251,7 +270,7 @@ fn send_mixing_relay_wide_and_session_targets_fans_out() {
     let operator_id = global_user_id(bundle_name);
 
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -300,6 +319,9 @@ fn send_mixing_relay_wide_and_session_targets_fans_out() {
 /// the relay fans out and delivers to each in its own namespace.
 #[test]
 fn send_fans_out_across_bundle_and_global_namespaces() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "party_fanout_a";
     let bundle_b = "party_fanout_b";
@@ -320,6 +342,7 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
     // The relay-wide operator registers and stays connected.
     let (mut operator_client, operator_join) =
         spawn_relay_connection_with_catalog(
+            &delivery,
             &configuration_roots,
             &state_root,
             catalog.clone(),
@@ -340,6 +363,7 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
 
     // The `agent` UI session in bundle-b registers and stays connected.
     let (mut agent_client, agent_join) = spawn_relay_connection_with_catalog(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog.clone(),
@@ -359,6 +383,7 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
 
     // A bundle-a session fans one Send out to both namespaces.
     let (mut alpha_client, alpha_join) = spawn_relay_connection_with_catalog(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog.clone(),
@@ -442,6 +467,9 @@ fn send_fans_out_across_bundle_and_global_namespaces() {
 /// send.
 #[test]
 fn cross_bundle_send_denied_under_home_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "party_send_home_a";
     let bundle_b = "party_send_home_b";
@@ -456,6 +484,7 @@ fn cross_bundle_send_denied_under_home_scope() {
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let (mut client, join) = spawn_relay_connection_with_catalog(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog,
@@ -507,6 +536,9 @@ fn cross_bundle_send_denied_under_home_scope() {
 /// sends to a peer in its own bundle under `home` and the message is queued.
 #[test]
 fn same_bundle_send_permitted_under_home_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_send_same_home";
     let configuration_roots =
@@ -517,7 +549,7 @@ fn same_bundle_send_permitted_under_home_scope() {
         .expect("bundle paths");
 
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -562,6 +594,9 @@ fn same_bundle_send_permitted_under_home_scope() {
 /// rejected as an unknown target.
 #[test]
 fn send_to_unknown_bundle_target_is_rejected() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_unknown_bundle";
     let configuration_roots =
@@ -571,7 +606,7 @@ fn send_to_unknown_bundle_target_is_rejected() {
         .expect("bundle paths");
 
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -615,6 +650,9 @@ fn send_to_unknown_bundle_target_is_rejected() {
 /// rejected as an unsupported namespace.
 #[test]
 fn send_to_external_namespace_target_is_rejected() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_external_target";
     let configuration_roots =
@@ -624,7 +662,7 @@ fn send_to_external_namespace_target_is_rejected() {
         .expect("bundle paths");
 
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,

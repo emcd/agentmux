@@ -12,7 +12,10 @@
 //! costs an agent process. What is *not* covered here is the ACP-specific
 //! consequence of the worker ending, namely its child process being reaped.
 
-use super::{dispatch_request, write_bundle, write_tui_configuration};
+use super::{
+    dispatch_request_with_delivery, test_delivery, write_bundle,
+    write_tui_configuration,
+};
 use agentmux::relay::RelayRequest;
 use std::time::{Duration, Instant};
 use tempfile::TempDir;
@@ -220,8 +223,10 @@ fn tearing_a_bundle_down_stops_the_workers_it_owns() {
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
     let runtime_directory = temporary.path();
+    let delivery = test_delivery();
 
-    dispatch_request(
+    dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Send {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -249,6 +254,7 @@ fn tearing_a_bundle_down_stops_the_workers_it_owns() {
     // loosely would take another bundle's workers down with it — a far worse
     // failure than the leak this change fixes.
     let other = agentmux::relay::shutdown_bundle_runtime(
+        &delivery,
         "elsewhere",
         runtime_directory,
         &tmux_socket,
@@ -260,6 +266,7 @@ fn tearing_a_bundle_down_stops_the_workers_it_owns() {
     );
 
     let report = agentmux::relay::shutdown_bundle_runtime(
+        &delivery,
         "party",
         runtime_directory,
         &tmux_socket,
@@ -317,8 +324,10 @@ fn a_teardown_with_no_tmux_effects_still_reports_the_bundle_hosted() {
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
     let runtime_directory = temporary.path();
+    let delivery = test_delivery();
 
-    dispatch_request(
+    dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Send {
             request_id: None,
             requester_session: "alpha".to_string(),
@@ -339,6 +348,7 @@ fn a_teardown_with_no_tmux_effects_still_reports_the_bundle_hosted() {
     );
 
     let report = agentmux::relay::shutdown_bundle_runtime(
+        &delivery,
         "party",
         runtime_directory,
         &tmux_socket,
@@ -405,9 +415,11 @@ fn a_torn_down_target_can_be_served_again() {
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
     let runtime_directory = temporary.path();
+    let delivery = test_delivery();
 
     let send = |message: &str| {
-        dispatch_request(
+        dispatch_request_with_delivery(
+            &delivery,
             RelayRequest::Send {
                 request_id: None,
                 requester_session: "alpha".to_string(),
@@ -431,6 +443,7 @@ fn a_torn_down_target_can_be_served_again() {
     );
 
     let report = agentmux::relay::shutdown_bundle_runtime(
+        &delivery,
         "party",
         runtime_directory,
         &tmux_socket,
@@ -487,7 +500,7 @@ fn a_torn_down_target_can_be_served_again() {
 /// otherwise quietly degrade into a second copy of the test above.
 #[test]
 fn a_target_that_replaced_its_generation_can_still_be_served_again() {
-    use agentmux::relay::{DeliveryConfiguration, configure_delivery};
+    use agentmux::relay::DeliveryConfiguration;
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
@@ -506,16 +519,18 @@ fn a_target_that_replaced_its_generation_can_still_be_served_again() {
     // observed and fail-stop the target instead of replacing its generation.
     //
     // The submission bound is the smallest an operator can actually configure.
-    // `configure_delivery` takes the resolved struct and so validates nothing,
+    // `DeliveryContext::new` takes the resolved struct and so validates nothing,
     // which makes it easy to write a fixture around a value `relay.toml` would
     // reject — and a fence provoked only by an impossible setting would prove
     // nothing about the shipped one.
-    configure_delivery(DeliveryConfiguration {
-        submission_timeout_ms: 500,
-        fence_observation_timeout_ms: 5_000,
-        unreachable_dwell_ms: 600_000,
-        ..Default::default()
-    });
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        DeliveryConfiguration {
+            submission_timeout_ms: 500,
+            fence_observation_timeout_ms: 5_000,
+            unreachable_dwell_ms: 600_000,
+            ..Default::default()
+        },
+    ));
 
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
@@ -523,7 +538,8 @@ fn a_target_that_replaced_its_generation_can_still_be_served_again() {
     let runtime_directory = temporary.path();
 
     let send = |message: &str| {
-        dispatch_request(
+        dispatch_request_with_delivery(
+            &delivery,
             RelayRequest::Send {
                 request_id: None,
                 requester_session: "alpha".to_string(),
@@ -564,6 +580,7 @@ fn a_target_that_replaced_its_generation_can_still_be_served_again() {
     );
 
     let report = agentmux::relay::shutdown_bundle_runtime(
+        &delivery,
         "party",
         runtime_directory,
         &tmux_socket,

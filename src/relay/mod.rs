@@ -1,5 +1,6 @@
 //! Relay IPC contract and message-routing implementation.
 
+use std::sync::Arc;
 use std::{collections::HashSet, path::Path, time::Duration};
 
 use crate::configuration::{ConfigurationRoots, load_bundle_configuration};
@@ -45,9 +46,10 @@ pub use self::connection::{ConnectionServeContext, serve_connection};
 use self::constants::*;
 use self::context::*;
 pub use self::contract::*;
+pub use self::delivery::DeliveryContext;
 pub use self::delivery::admission::{
-    UndeliveredReporting, configure_delivery,
-    configured_undelivered_reporting, report_undelivered_queue,
+    UndeliveredReporting, configured_undelivered_reporting,
+    report_undelivered_queue,
 };
 pub use self::delivery::fence::{
     FenceOutcome, FenceResolution, FenceVerdict, acknowledge_fence,
@@ -70,6 +72,7 @@ pub use self::watcher::{WatchWake, run_bundle_watch_loop};
 
 /// Executes one relay request for a configured bundle.
 pub fn handle_request(
+    delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
@@ -97,6 +100,7 @@ pub fn handle_request(
         tmux_socket: tmux_socket_path_for_runtime_directory(runtime_directory),
     }]);
     handle_request_with_principal(
+        delivery,
         request,
         configuration_roots,
         bundle_name,
@@ -107,6 +111,7 @@ pub fn handle_request(
 }
 
 fn handle_request_with_principal(
+    delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
@@ -114,6 +119,13 @@ fn handle_request_with_principal(
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
 ) -> Result<RelayResponse, RelayError> {
+    if delivery.is_shutting_down() {
+        return Err(relay_error(
+            "runtime_shutting_down",
+            "relay handle is shutting down",
+            None,
+        ));
+    }
     // The target operations (`Send`/`Look`/`Raww`) flow through the
     // namespace-centric paths, which resolve the requester in its home namespace
     // rather than a borrowed dispatch bundle. The single-bundle entry point is
@@ -126,6 +138,7 @@ fn handle_request_with_principal(
             // manager, so a cross-relay target reports as unavailable here; the
             // stream path supplies the manager for real forwarding.
             return handlers::handle_send_routed(
+                delivery,
                 bundle_name,
                 request,
                 configuration_roots,
@@ -137,6 +150,7 @@ fn handle_request_with_principal(
         },
         RelayRequest::Look { .. } => {
             return handlers::handle_look_routed(
+                delivery,
                 bundle_name,
                 request,
                 configuration_roots,
@@ -149,6 +163,7 @@ fn handle_request_with_principal(
             // manager, so a cross-relay target reports as unavailable here; the
             // stream path supplies the manager for real forwarding.
             return handlers::handle_raww_routed(
+                delivery,
                 bundle_name,
                 request,
                 configuration_roots,
@@ -165,6 +180,7 @@ fn handle_request_with_principal(
     let authorization =
         load_authorization_context(configuration_roots, Some(&bundle))?;
     handlers::handle_request(
+        delivery,
         request,
         &bundle,
         &authorization,
@@ -185,10 +201,11 @@ fn handle_request_with_principal(
 /// Returns structured validation/configuration errors when bundle loading
 /// fails, and internal failures when tmux session operations fail.
 pub fn reconcile_bundle(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     paths: &BundleRuntimePaths,
 ) -> Result<ReconciliationReport, RelayError> {
-    lifecycle::reconcile_bundle(configuration_roots, paths)
+    lifecycle::reconcile_bundle(delivery, configuration_roots, paths)
 }
 
 /// Validates a bundle's configuration the way startup would (bundle + coders
@@ -213,10 +230,11 @@ pub fn preflight_bundle_configuration(
 /// here, and re-deriving it by walking up from the runtime directory would be
 /// the guesswork this propagation exists to remove.
 pub fn startup_bundle(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     paths: &BundleRuntimePaths,
 ) -> Result<BundleStartupReport, RelayError> {
-    lifecycle::startup_bundle(configuration_roots, paths)
+    lifecycle::startup_bundle(delivery, configuration_roots, paths)
 }
 
 /// Registers the relay-wide principals declared in `users.toml` as static
@@ -224,9 +242,13 @@ pub fn startup_bundle(
 /// their capabilities from the registry and a declared-but-disconnected principal
 /// is a known target rather than an unknown one.
 pub fn register_configured_relay_wide_principals(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
 ) -> Result<(), RelayError> {
-    lifecycle::register_configured_relay_wide_principals(configuration_roots)
+    lifecycle::register_configured_relay_wide_principals(
+        delivery,
+        configuration_roots,
+    )
 }
 
 /// Registers a bundle's configured members as static (offline) unified-registry
@@ -234,18 +256,26 @@ pub fn register_configured_relay_wide_principals(
 /// host path where no startup or reconcile runs. Keeps the registry holding every
 /// configured principal before the relay serves requests.
 pub fn register_configured_bundle(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
 ) -> Result<(), RelayError> {
-    lifecycle::register_configured_bundle(configuration_roots, bundle_name)
+    lifecycle::register_configured_bundle(
+        delivery,
+        configuration_roots,
+        bundle_name,
+    )
 }
 
 /// Returns the canonical `principal_id`s currently registered in `namespace`,
 /// connected or not. Exposes the unified registry's membership so host startup
 /// paths (and embedders) can confirm that every configured principal is known —
 /// offline is a state, not absence — independent of transport readiness.
-pub fn registered_principal_ids(namespace: &str) -> Vec<String> {
-    stream::list_namespace_sessions(namespace)
+pub fn registered_principal_ids(
+    delivery: &Arc<DeliveryContext>,
+    namespace: &str,
+) -> Vec<String> {
+    stream::list_namespace_sessions(delivery, namespace)
         .into_iter()
         .map(|(principal_id, _session_type, _ready)| principal_id)
         .collect()
@@ -262,11 +292,13 @@ pub fn registered_principal_ids(namespace: &str) -> Vec<String> {
 ///
 /// Returns internal failures when tmux session operations fail.
 pub fn shutdown_bundle_runtime(
+    delivery: &Arc<DeliveryContext>,
     bundle_name: &str,
     runtime_directory: &Path,
     tmux_socket: &Path,
 ) -> Result<ShutdownReport, RelayError> {
     lifecycle::shutdown_bundle_runtime(
+        delivery,
         bundle_name,
         runtime_directory,
         tmux_socket,
@@ -284,8 +316,11 @@ pub fn shutdown_bundle_runtime(
 /// teardown in `AcpStdioClient::shutdown` never runs. The harness kills them
 /// explicitly in `GuardedTempDir::drop`.
 #[doc(hidden)]
-pub fn test_cleanup_acp_workers(root: &Path) {
-    crate::relay::delivery::async_worker::registry::remove_workers_for_runtime_directory(root);
+pub fn test_cleanup_acp_workers(delivery: &Arc<DeliveryContext>, root: &Path) {
+    crate::relay::delivery::async_worker::registry::remove_workers_for_runtime_directory(
+        delivery.async_registry(),
+        root,
+    );
 }
 
 /// Loads persisted startup-failure history for one bundle runtime directory.
@@ -363,8 +398,11 @@ pub fn persist_startup_failures(
 ///
 /// Returns the number of workers still running when timeout is reached.
 #[must_use]
-pub fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
-    delivery::wait_for_async_delivery_shutdown(timeout)
+pub fn wait_for_async_delivery_shutdown(
+    delivery: &Arc<DeliveryContext>,
+    timeout: Duration,
+) -> usize {
+    delivery::wait_for_async_delivery_shutdown(delivery, timeout)
 }
 
 /// Reads the in-memory worker readiness state for an observability check.
@@ -379,11 +417,13 @@ pub fn wait_for_async_delivery_shutdown(timeout: Duration) -> usize {
 /// the value should treat it as non-ready.
 #[must_use]
 pub fn read_worker_readiness(
+    delivery: &Arc<DeliveryContext>,
     namespace: &str,
     runtime_directory: &Path,
     target_session: &str,
 ) -> Option<&'static str> {
     delivery::get_worker_readiness(
+        delivery.async_registry(),
         namespace,
         runtime_directory,
         target_session,
@@ -398,6 +438,7 @@ pub fn read_worker_readiness(
 }
 
 pub(in crate::relay) fn dispatch_request(
+    delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
@@ -406,6 +447,7 @@ pub(in crate::relay) fn dispatch_request(
     bundle_catalog: &BundleCatalog,
 ) -> RelayResponse {
     match handle_request_with_principal(
+        delivery,
         request,
         configuration_roots,
         bundle_name,
@@ -429,6 +471,7 @@ pub(in crate::relay) fn dispatch_request(
 /// list a peer bundle without being rejected as unknown in the wrong bundle's
 /// members.
 pub(in crate::relay) fn dispatch_list(
+    delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     dispatch_paths: &crate::runtime::paths::BundleRuntimePaths,
@@ -457,6 +500,7 @@ pub(in crate::relay) fn dispatch_list(
         )
         .map_err(map_config)?;
         handlers::handle_list_routed(
+            delivery,
             &dispatch_bundle,
             &dispatch_authorization,
             &enumerate_bundle,
@@ -478,7 +522,9 @@ pub(in crate::relay) fn dispatch_list(
 /// `None` for relay-wide senders. The send path loads the home bundle and its
 /// authorization context from the namespace; per-target delivery loads every
 /// target bundle — the home bundle included — from the catalog.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::relay) fn dispatch_send(
+    delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
@@ -487,11 +533,21 @@ pub(in crate::relay) fn dispatch_send(
     peer_connection_manager: &PeerConnectionManager,
     ingress_authority: Option<PeerIngressAuthority<'_>>,
 ) -> RelayResponse {
+    if delivery.is_shutting_down() {
+        return RelayResponse::Error {
+            error: relay_error(
+                "runtime_shutting_down",
+                "relay handle is shutting down",
+                None,
+            ),
+        };
+    }
     let home_namespace = match bound_bundle {
         Some(paths) => paths.bundle_name.clone(),
         None => GLOBAL_NAMESPACE.to_string(),
     };
     match handlers::handle_send_routed(
+        delivery,
         home_namespace.as_str(),
         request,
         configuration_roots,
@@ -513,17 +569,28 @@ pub(in crate::relay) fn dispatch_send(
 /// requester in its home namespace and loads the target's bundle separately for
 /// the snapshot — never a borrowed dispatch bundle.
 pub(in crate::relay) fn dispatch_look(
+    delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
     principal: Option<RequestPrincipal>,
     bundle_catalog: &BundleCatalog,
 ) -> RelayResponse {
+    if delivery.is_shutting_down() {
+        return RelayResponse::Error {
+            error: relay_error(
+                "runtime_shutting_down",
+                "relay handle is shutting down",
+                None,
+            ),
+        };
+    }
     let home_namespace = match bound_bundle {
         Some(paths) => paths.bundle_name.clone(),
         None => GLOBAL_NAMESPACE.to_string(),
     };
     match handlers::handle_look_routed(
+        delivery,
         home_namespace.as_str(),
         request,
         configuration_roots,
@@ -542,7 +609,9 @@ pub(in crate::relay) fn dispatch_look(
 /// the target's bundle is loaded separately for delivery. This is what lets a
 /// cross-namespace raww authorize the sender in its home namespace rather than a
 /// borrowed target bundle.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::relay) fn dispatch_raww(
+    delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     bound_bundle: Option<&crate::runtime::paths::BundleRuntimePaths>,
@@ -551,11 +620,21 @@ pub(in crate::relay) fn dispatch_raww(
     peer_connection_manager: &PeerConnectionManager,
     ingress_authority: Option<PeerIngressAuthority<'_>>,
 ) -> RelayResponse {
+    if delivery.is_shutting_down() {
+        return RelayResponse::Error {
+            error: relay_error(
+                "runtime_shutting_down",
+                "relay handle is shutting down",
+                None,
+            ),
+        };
+    }
     let home_namespace = match bound_bundle {
         Some(paths) => paths.bundle_name.clone(),
         None => GLOBAL_NAMESPACE.to_string(),
     };
     match handlers::handle_raww_routed(
+        delivery,
         home_namespace.as_str(),
         request,
         configuration_roots,
@@ -575,7 +654,9 @@ pub(in crate::relay) fn dispatch_raww(
 /// forwards foreign discovery through the peer connection manager. The requester
 /// is identified by its authenticated `principal`, never a wire field, so no
 /// bound bundle is threaded here.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::relay) fn dispatch_discovery(
+    delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     principal: RequestPrincipal,
@@ -585,6 +666,7 @@ pub(in crate::relay) fn dispatch_discovery(
     ingress_authority: Option<PeerIngressAuthority<'_>>,
 ) -> RelayResponse {
     let context = handlers::DiscoveryContext {
+        delivery,
         configuration_roots,
         bundle_catalog,
         peer_connection_manager,
@@ -620,6 +702,7 @@ pub(in crate::relay) fn dispatch_discovery(
 /// bundle context. `requester_principal_id` is the full claimed identity of the
 /// caller, used to resolve operator authorization relay-wide.
 pub(in crate::relay) fn dispatch_identity_admin(
+    delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
@@ -634,6 +717,7 @@ pub(in crate::relay) fn dispatch_identity_admin(
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     match handlers::handle_identity_admin_request(
+        delivery,
         request,
         configuration_roots,
         state_root,

@@ -59,15 +59,22 @@ fn graceful_shutdown_resolves_a_parked_member_and_a_held_one_exactly_once() {
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    configure_delivery(DeliveryConfiguration {
-        submission_timeout_ms: 60_000,
-        fence_observation_timeout_ms: 500,
-        ..DeliveryConfiguration::default()
-    });
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration {
+            submission_timeout_ms: 60_000,
+            fence_observation_timeout_ms: 500,
+            ..agentmux::relay::DeliveryConfiguration::default()
+        },
+    ));
 
     let parked = send_result(
-        dispatch_sized_send_result(&config_root, &tmux_socket, 150_000)
-            .expect("relay request should parse"),
+        dispatch_sized_send_result(
+            &delivery,
+            &config_root,
+            &tmux_socket,
+            150_000,
+        )
+        .expect("relay request should parse"),
     );
     assert_eq!(parked.outcome, SendOutcome::Queued);
 
@@ -81,8 +88,12 @@ fn graceful_shutdown_resolves_a_parked_member_and_a_held_one_exactly_once() {
     );
 
     let held = send_result(
-        dispatch_send_without_startup_result(&config_root, &tmux_socket)
-            .expect("relay request should parse"),
+        dispatch_send_without_startup_result(
+            &delivery,
+            &config_root,
+            &tmux_socket,
+        )
+        .expect("relay request should parse"),
     );
     assert_eq!(held.outcome, SendOutcome::Queued);
 
@@ -176,16 +187,23 @@ fn a_generation_replaced_under_an_in_flight_member_resolves_it_once_and_frees_th
 
     // Far enough out that the quota probe below lands while the member is still
     // parked, and the watchdog is still what ends it.
-    configure_delivery(DeliveryConfiguration {
-        submission_timeout_ms: 2_000,
-        fence_observation_timeout_ms: 500,
-        queued_envelopes_per_target_max: 1,
-        ..DeliveryConfiguration::default()
-    });
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration {
+            submission_timeout_ms: 2_000,
+            fence_observation_timeout_ms: 500,
+            queued_envelopes_per_target_max: 1,
+            ..agentmux::relay::DeliveryConfiguration::default()
+        },
+    ));
 
     let parked = send_result(
-        dispatch_sized_send_result(&config_root, &tmux_socket, 150_000)
-            .expect("relay request should parse"),
+        dispatch_sized_send_result(
+            &delivery,
+            &config_root,
+            &tmux_socket,
+            150_000,
+        )
+        .expect("relay request should parse"),
     );
     assert_eq!(parked.outcome, SendOutcome::Queued);
 
@@ -199,9 +217,12 @@ fn a_generation_replaced_under_an_in_flight_member_resolves_it_once_and_frees_th
     );
 
     // The slot is genuinely held while the member is in flight.
-    let refused =
-        dispatch_send_without_startup_result(&config_root, &tmux_socket)
-            .expect_err("a per-target quota of one must refuse a second send");
+    let refused = dispatch_send_without_startup_result(
+        &delivery,
+        &config_root,
+        &tmux_socket,
+    )
+    .expect_err("a per-target quota of one must refuse a second send");
     assert_eq!(refused.code, "runtime_delivery_queue_full");
 
     await_inscription(
@@ -233,8 +254,14 @@ fn a_generation_replaced_under_an_in_flight_member_resolves_it_once_and_frees_th
 
     // Quota returned, and the target's FIFO moves again on the new generation.
     let next = send_result(
-        dispatch_send_without_startup_result(&config_root, &tmux_socket)
-            .expect("the replaced target must accept a send once its slot is released"),
+        dispatch_send_without_startup_result(
+            &delivery,
+            &config_root,
+            &tmux_socket,
+        )
+        .expect(
+            "the replaced target must accept a send once its slot is released",
+        ),
     );
     assert_eq!(next.outcome, SendOutcome::Queued);
     assert_eq!(
@@ -294,16 +321,23 @@ fn a_pending_member_survives_a_generation_replacement_and_the_new_one_delivers_i
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    configure_delivery(DeliveryConfiguration {
-        submission_timeout_ms: 2_000,
-        fence_observation_timeout_ms: 500,
-        queued_envelopes_per_target_max: 2,
-        ..DeliveryConfiguration::default()
-    });
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration {
+            submission_timeout_ms: 2_000,
+            fence_observation_timeout_ms: 500,
+            queued_envelopes_per_target_max: 2,
+            ..agentmux::relay::DeliveryConfiguration::default()
+        },
+    ));
 
     let parked = send_result(
-        dispatch_sized_send_result(&config_root, &tmux_socket, 150_000)
-            .expect("relay request should parse"),
+        dispatch_sized_send_result(
+            &delivery,
+            &config_root,
+            &tmux_socket,
+            150_000,
+        )
+        .expect("relay request should parse"),
     );
     assert_eq!(parked.outcome, SendOutcome::Queued);
 
@@ -320,8 +354,12 @@ fn a_pending_member_survives_a_generation_replacement_and_the_new_one_delivers_i
     );
 
     let held = send_result(
-        dispatch_send_without_startup_result(&config_root, &tmux_socket)
-            .expect("a per-target quota of two must admit a second send"),
+        dispatch_send_without_startup_result(
+            &delivery,
+            &config_root,
+            &tmux_socket,
+        )
+        .expect("a per-target quota of two must admit a second send"),
     );
     assert_eq!(held.outcome, SendOutcome::Queued);
 

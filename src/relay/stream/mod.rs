@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     io,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -27,6 +27,7 @@ use super::identity::{
     split_principal_id,
 };
 use super::{RelayRequest, RelayResponse};
+use crate::relay::delivery::DeliveryContext;
 
 /// Free-fn helpers that tear down registry entries (or fan revocation events
 /// out to trusted hosts). Extracted to a sibling module so the registry
@@ -187,7 +188,7 @@ pub(super) struct RelayStreamEvent {
 /// state — readiness is owned by the delivery worker registry and resolved at
 /// read time.
 #[derive(Clone, Debug)]
-struct RegistryEntry {
+pub(super) struct RegistryEntry {
     principal_id: String,
     session_id: String,
     namespace: String,
@@ -234,11 +235,9 @@ impl RegistryEntry {
 }
 
 #[derive(Default)]
-struct StreamRegistry {
-    entries: Mutex<HashMap<String, RegistryEntry>>,
+pub(crate) struct StreamRegistry {
+    pub(super) entries: Mutex<HashMap<String, RegistryEntry>>,
 }
-
-static STREAM_REGISTRY: OnceLock<StreamRegistry> = OnceLock::new();
 
 /// Parses a qualified `principal_id` into `(session_id, namespace, class)`.
 /// Returns `None` for an unqualified id, which the unified registry rejects:
@@ -351,6 +350,7 @@ fn relay_connection_write_timeout() -> Duration {
 /// idempotent — a reconcile refreshes the static attributes while preserving any
 /// attached dynamic stream state. The `principal_id` must be fully qualified.
 pub(super) fn register_configured_session(
+    delivery: &Arc<DeliveryContext>,
     principal_id: &str,
     session_type: SessionType,
 ) -> Result<(), io::Error> {
@@ -358,7 +358,7 @@ pub(super) fn register_configured_session(
         parse_principal_parts(principal_id).ok_or_else(|| {
             io::Error::other("configured principal_id is not qualified")
         })?;
-    let registry = stream_registry();
+    let registry = delivery.stream_registry();
     let mut entries = registry
         .entries
         .lock()
@@ -401,6 +401,7 @@ pub(super) fn register_configured_session(
 /// static entry gets a fresh dynamic entry. A second connection for an already
 /// live principal id surfaces the standard identity-claim conflict.
 pub(super) fn register_stream(
+    delivery: &Arc<DeliveryContext>,
     principal_id: &str,
     session_type: SessionType,
     writer: SharedStreamWriter,
@@ -412,7 +413,7 @@ pub(super) fn register_stream(
         parse_principal_parts(principal_id).ok_or_else(|| {
             io::Error::other("hello principal_id is not a qualified principal")
         })?;
-    let registry = stream_registry();
+    let registry = delivery.stream_registry();
     let mut entries = registry
         .entries
         .lock()
@@ -508,9 +509,10 @@ pub(super) enum RegisterStreamOutcome {
 }
 
 pub(super) fn registration_is_current(
+    delivery: &Arc<DeliveryContext>,
     registration: &StreamRegistration,
 ) -> Result<bool, io::Error> {
-    let registry = stream_registry();
+    let registry = delivery.stream_registry();
     let entries = registry
         .entries
         .lock()
@@ -526,9 +528,10 @@ pub(super) fn registration_is_current(
 /// entry keeps its static shell so a reconnect reattaches; a purely dynamic
 /// (relay-wide / UI) entry is removed entirely.
 pub(super) fn unregister_stream(
+    delivery: &Arc<DeliveryContext>,
     registration: &StreamRegistration,
 ) -> Result<(), io::Error> {
-    let registry = stream_registry();
+    let registry = delivery.stream_registry();
     let mut entries = registry
         .entries
         .lock()
@@ -571,9 +574,10 @@ fn is_relay_wide(principal_class: PrincipalType) -> bool {
 /// delivery from the unified registry rather than a carried flag, falling back to
 /// namespace classification when the entry is absent.
 pub(in crate::relay) fn registry_target_is_relay_wide(
+    delivery: &Arc<DeliveryContext>,
     principal_id: &str,
 ) -> Option<bool> {
-    let registry = stream_registry();
+    let registry = delivery.stream_registry();
     let entries = registry.entries.lock().ok()?;
     entries
         .get(principal_id)
@@ -586,9 +590,10 @@ pub(in crate::relay) fn registry_target_is_relay_wide(
 /// registered target gates on its `SessionType` capabilities, an unregistered one
 /// is an unknown target.
 pub(super) fn lookup_registry_session_type(
+    delivery: &Arc<DeliveryContext>,
     principal_id: &str,
 ) -> Option<SessionType> {
-    let registry = stream_registry();
+    let registry = delivery.stream_registry();
     let entries = registry.entries.lock().ok()?;
     entries.get(principal_id).map(|entry| entry.session_type)
 }
@@ -599,9 +604,10 @@ pub(super) fn lookup_registry_session_type(
 // bundle-local entries and `principal_id`s for relay-wide entries; both forms
 // round-trip through `send_event_to_registered_ui`, which re-derives the key.
 pub(super) fn list_registered_ui_sessions_for_bundle(
+    delivery: &Arc<DeliveryContext>,
     namespace: &str,
 ) -> Vec<String> {
-    let registry = stream_registry();
+    let registry = delivery.stream_registry();
     let Ok(entries) = registry.entries.lock() else {
         return Vec::new();
     };
@@ -631,9 +637,10 @@ pub(super) fn list_registered_ui_sessions_for_bundle(
 // connection: a relay-wide principal is ready iff online, and a declared-but-
 // offline principal is listed with `ready = false` rather than omitted.
 pub(super) fn list_namespace_sessions(
+    delivery: &Arc<DeliveryContext>,
     namespace: &str,
 ) -> Vec<(String, SessionType, bool)> {
-    let registry = stream_registry();
+    let registry = delivery.stream_registry();
     let Ok(entries) = registry.entries.lock() else {
         return Vec::new();
     };
@@ -656,10 +663,12 @@ pub(super) fn list_namespace_sessions(
 // existing per-session filtering still works; bundle-local recipient ids are
 // bare and must be qualified, relay-wide principal ids pass through unchanged.
 pub(super) fn broadcast_event_to_bundle_ui(
+    delivery: &Arc<DeliveryContext>,
     namespace: &str,
     template: &RelayStreamEvent,
 ) -> Vec<String> {
-    let ui_session_ids = list_registered_ui_sessions_for_bundle(namespace);
+    let ui_session_ids =
+        list_registered_ui_sessions_for_bundle(delivery, namespace);
     let mut delivered = Vec::new();
     for ui_session_id in ui_session_ids {
         let mut event = template.clone();
@@ -667,6 +676,7 @@ pub(super) fn broadcast_event_to_bundle_ui(
             canonical_session_id(ui_session_id.as_str(), namespace);
         if matches!(
             send_event_to_registered_ui(
+                delivery,
                 namespace,
                 ui_session_id.as_str(),
                 &event
@@ -680,11 +690,12 @@ pub(super) fn broadcast_event_to_bundle_ui(
 }
 
 pub(super) fn send_event_to_registered_ui(
+    delivery: &Arc<DeliveryContext>,
     namespace: &str,
     session_id: &str,
     event: &RelayStreamEvent,
 ) -> Result<StreamEventSendOutcome, io::Error> {
-    let registry = stream_registry();
+    let registry = delivery.stream_registry();
     let principal_id = canonical_session_id(session_id, namespace);
     let (session_type, writer) = {
         let entries = registry
@@ -758,10 +769,6 @@ fn note_write_timeout(error: &io::Error) {
     }
 }
 
-fn stream_registry() -> &'static StreamRegistry {
-    STREAM_REGISTRY.get_or_init(StreamRegistry::default)
-}
-
 /// Test-only seam exercising the stale-vs-live identity-claim distinction in
 /// [`register_stream`] deterministically, without the connection layer's
 /// write-timeout teardown race. Registers a first connection for a unique
@@ -774,6 +781,7 @@ fn stream_registry() -> &'static StreamRegistry {
 #[doc(hidden)]
 #[must_use]
 pub fn second_claim_is_live_conflict_for_testing(
+    delivery: &Arc<DeliveryContext>,
     prior_writer_open: bool,
 ) -> bool {
     let principal_id = format!("staleprobe{}@GLOBAL", Uuid::new_v4().simple());
@@ -781,6 +789,7 @@ pub fn second_claim_is_live_conflict_for_testing(
 
     let (first_writer, first_receiver) = mpsc::unbounded_channel::<Vec<u8>>();
     let _ = register_stream(
+        delivery,
         principal_id.as_str(),
         SessionType::Ui,
         first_writer,
@@ -800,6 +809,7 @@ pub fn second_claim_is_live_conflict_for_testing(
     let (second_writer, _second_receiver) =
         mpsc::unbounded_channel::<Vec<u8>>();
     let outcome = register_stream(
+        delivery,
         principal_id.as_str(),
         SessionType::Ui,
         second_writer,
@@ -808,7 +818,7 @@ pub fn second_claim_is_live_conflict_for_testing(
         None,
     );
 
-    if let Ok(mut entries) = stream_registry().entries.lock() {
+    if let Ok(mut entries) = delivery.stream_registry().entries.lock() {
         entries.remove(principal_id.as_str());
     }
 

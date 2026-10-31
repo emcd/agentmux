@@ -27,19 +27,20 @@ use super::*;
 /// suspend delivery.
 #[test]
 fn a_policy_tightening_governs_the_next_send_and_not_the_one_already_queued() {
-    use agentmux::relay::{UndeliveredReporting, report_undelivered_queue};
+    use agentmux::relay::UndeliveredReporting;
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
         &inscriptions,
     );
-    configure_long_unreachable_dwell();
+    let delivery = test_delivery_with_dwell(LONG_UNREACHABLE_DWELL_MS);
     let config_root = write_bundle(&temporary, "party");
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let send = || {
-        dispatch_request(
+        dispatch_request_with_delivery(
+            &delivery,
             RelayRequest::Send {
                 request_id: None,
                 requester_session: "alpha".to_string(),
@@ -81,7 +82,10 @@ fn a_policy_tightening_governs_the_next_send_and_not_the_one_already_queued() {
     // entries that are queued and unguarded, so an entry purged by the change
     // would be missing here and one blocked by it would have had to resolve to
     // get that way.
-    report_undelivered_queue(UndeliveredReporting::default());
+    agentmux::relay::report_undelivered_queue(
+        &delivery,
+        UndeliveredReporting::default(),
+    );
     let aggregates =
         read_inscriptions(&inscriptions, "relay.delivery.undelivered");
     // A pass with nothing waiting emits no aggregate at all, so an absent record

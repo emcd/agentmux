@@ -8,6 +8,7 @@
 //! propagated, because the member is already resolved and refusing to release its
 //! quota over a reporting problem would leak the reservation.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::json;
@@ -29,12 +30,14 @@ use crate::relay::{
 };
 
 use super::registry::{WorkerDispatch, build_worker_key, try_existing_worker};
+use crate::relay::delivery::DeliveryContext;
 
 /// Emits the observability floor for a resolved member and routes its receipt.
 ///
 /// Reached only after the terminal transition has been won, so everything it
 /// emits happens exactly once per member.
 pub(super) fn report_terminal_outcome(
+    delivery: &Arc<DeliveryContext>,
     task: &AsyncDeliveryTask,
     outcome: Result<SendResult, RelayError>,
     guard: Option<GuardKey>,
@@ -59,6 +62,7 @@ pub(super) fn report_terminal_outcome(
     match outcome {
         Ok(result) => {
             emit_sender_delivery_outcome_event(
+                delivery,
                 task.bundle.bundle_name.as_str(),
                 task.sender_namespace.as_str(),
                 task.sender.id.as_str(),
@@ -85,6 +89,7 @@ pub(super) fn report_terminal_outcome(
         },
         Err(error) => {
             emit_sender_delivery_outcome_event(
+                delivery,
                 task.bundle.bundle_name.as_str(),
                 task.sender_namespace.as_str(),
                 task.sender.id.as_str(),
@@ -112,6 +117,7 @@ pub(super) fn report_terminal_outcome(
     // best-effort a terminal-outcome receipt back to the sender for the
     // non-delivered ones.
     deliver_terminal_outcome_receipt(
+        delivery,
         task,
         &terminal_outcome,
         terminal_reason_code.as_deref(),
@@ -154,6 +160,7 @@ fn is_non_delivered_outcome(outcome: &SendOutcome) -> bool {
 /// unreachable sender's receipt is dropped, never persisted or retried. The
 /// terminal outcome is already on the `relay.log` floor regardless.
 fn deliver_terminal_outcome_receipt(
+    delivery: &Arc<DeliveryContext>,
     task: &AsyncDeliveryTask,
     outcome: &SendOutcome,
     reason_code: Option<&str>,
@@ -194,7 +201,8 @@ fn deliver_terminal_outcome_receipt(
     // and the contract requires a closed or dropped path be counted and
     // recorded. A draining worker and an unreadable registry are the relay's own
     // problems and count for the same reason.
-    match try_existing_worker(&sender_key, receipt) {
+    match try_existing_worker(delivery.async_registry(), &sender_key, receipt)
+    {
         Ok(WorkerDispatch::Accepted) | Ok(WorkerDispatch::Missing(_)) => {},
         Ok(WorkerDispatch::Dropped(_)) => {
             note_outcome_notification_failure(
@@ -330,6 +338,7 @@ fn render_receipt_body(
 /// outcomes once the agent turn finishes.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::relay::delivery) fn emit_sender_delivery_outcome_event(
+    delivery: &Arc<DeliveryContext>,
     target_namespace: &str,
     sender_namespace: &str,
     sender_session: &str,
@@ -404,8 +413,12 @@ pub(in crate::relay::delivery) fn emit_sender_delivery_outcome_event(
     // to release quota because nobody heard about it would leak the reservation
     // over a reporting problem. So the failure is counted and recorded here
     // rather than propagated.
-    match send_event_to_registered_ui(sender_namespace, sender_session, &event)
-    {
+    match send_event_to_registered_ui(
+        delivery,
+        sender_namespace,
+        sender_session,
+        &event,
+    ) {
         // Nobody was listening. Not a failure — a sender with no attached UI is
         // an ordinary state, and counting it would drown the real signal.
         Ok(
@@ -506,6 +519,9 @@ mod tests {
     /// misroute.
     #[test]
     fn terminal_outcome_receipt_routes_to_sender_worker_not_target() {
+        let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
+            Default::default(),
+        ));
         let sender_namespace = "receipt-sender-ns";
         let sender_runtime = "/receipt-sender-rt";
         let sender_member_id = "receipt-sender-mem";
@@ -524,6 +540,7 @@ mod tests {
         let (sender_tx, mut sender_rx) =
             tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
         let sender_owner = register_worker(
+            delivery.async_registry(),
             sender_key.clone(),
             sender_tx,
             Arc::new(AtomicUsize::new(0)),
@@ -537,6 +554,7 @@ mod tests {
         let (target_tx, mut target_rx) =
             tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
         let owner = register_worker(
+            delivery.async_registry(),
             target_key.clone(),
             target_tx,
             Arc::new(AtomicUsize::new(0)),
@@ -574,7 +592,7 @@ mod tests {
             }),
         };
 
-        complete_task_outcome(
+        complete_task_outcome(&delivery,
             &task,
             Ok(SendResult {
                 target_session: target_session.to_string(),
@@ -614,8 +632,18 @@ mod tests {
             "the receipt must not route to a worker at the target key"
         );
 
-        unregister_worker(&sender_key, sender_owner);
-        unregister_worker(&target_key, owner);
+        unregister_worker(
+            &delivery,
+            delivery.async_registry(),
+            &sender_key,
+            sender_owner,
+        );
+        unregister_worker(
+            &delivery,
+            delivery.async_registry(),
+            &target_key,
+            owner,
+        );
     }
 }
 
@@ -657,6 +685,9 @@ mod receipt_non_recursion_tests {
     /// Without the `is_receipt` gate a receipt for a receipt would land here.
     #[test]
     fn a_receipt_outcome_spawns_no_second_receipt() {
+        let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
+            Default::default(),
+        ));
         let sender_namespace = "recursion-sender-ns";
         let sender_runtime = "/recursion-sender-rt";
         let sender_member_id = "recursion-sender-mem";
@@ -672,6 +703,7 @@ mod receipt_non_recursion_tests {
         let (sender_tx, mut sender_rx) =
             tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
         let owner = register_worker(
+            delivery.async_registry(),
             sender_key.clone(),
             sender_tx,
             Arc::new(AtomicUsize::new(0)),
@@ -710,7 +742,7 @@ mod receipt_non_recursion_tests {
             }),
         };
 
-        complete_task_outcome(
+        complete_task_outcome(&delivery,
             &task,
             Ok(SendResult {
                 target_session: sender_member_id.to_string(),
@@ -734,6 +766,11 @@ mod receipt_non_recursion_tests {
              would mean the worker was never live, voiding the proof)"
         );
 
-        unregister_worker(&sender_key, owner);
+        unregister_worker(
+            &delivery,
+            delivery.async_registry(),
+            &sender_key,
+            owner,
+        );
     }
 }

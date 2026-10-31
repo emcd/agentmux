@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use serde_json::json;
 use uuid::Uuid;
@@ -6,6 +7,7 @@ use uuid::Uuid;
 use crate::configuration::{
     BundleConfiguration, ConfigurationRoots, TargetConfiguration,
 };
+use crate::relay::delivery::DeliveryContext;
 
 use super::super::authorization::{
     AuthorizationContext, RouteAuthorization, authorize_route,
@@ -50,7 +52,9 @@ struct RawwPrepared {
 /// `GLOBAL`); the target's bundle is loaded separately for delivery, so a
 /// cross-namespace raww authorizes the sender in its home rather than a borrowed
 /// target bundle. See `dispatch_raww`.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::relay) fn handle_raww_routed(
+    delivery: &Arc<DeliveryContext>,
     home_namespace: &str,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
@@ -212,6 +216,7 @@ pub(in crate::relay) fn handle_raww_routed(
         || Ok(route.clone()),
         |route| {
             prepare_raww(
+                delivery,
                 route,
                 home_namespace,
                 home_bundle.as_ref(),
@@ -221,6 +226,7 @@ pub(in crate::relay) fn handle_raww_routed(
         },
         |route, prepared| {
             execute_raww(
+                delivery,
                 route,
                 prepared,
                 &sender,
@@ -325,6 +331,7 @@ fn forward_raww_cross_relay(
 /// an unknown or transport-incapable target sorts before
 /// `authorization_forbidden`.
 fn prepare_raww(
+    delivery: &Arc<DeliveryContext>,
     route: &ResolvedRoute,
     home_namespace: &str,
     home_bundle: Option<&BundleConfiguration>,
@@ -345,7 +352,7 @@ fn prepare_raww(
         // transport carries `can_be_written = false`), an unregistered one as
         // `unknown_target`.
         let Some(session_type) =
-            lookup_registry_session_type(target_session_id)
+            lookup_registry_session_type(delivery, target_session_id)
         else {
             return Err(relay_error(
                 "validation_unknown_target",
@@ -394,8 +401,9 @@ fn prepare_raww(
     // falls back to its configured transport, which derives the same flags.
     let target_principal =
         canonical_session_id(target_session_id, target_namespace);
-    let session_type = lookup_registry_session_type(target_principal.as_str())
-        .unwrap_or_else(|| member.target.session_type());
+    let session_type =
+        lookup_registry_session_type(delivery, target_principal.as_str())
+            .unwrap_or_else(|| member.target.session_type());
     if !session_type.can_be_written() {
         return Err(unsupported_operation(
             target_principal.as_str(),
@@ -420,7 +428,9 @@ fn prepare_raww(
 /// per delivery). The terminal delivery outcome is reported out-of-band via
 /// `delivery_outcome` stream events; only enqueue-time failures (e.g. an
 /// unavailable ACP worker) surface synchronously.
+#[allow(clippy::too_many_arguments)]
 fn execute_raww(
+    delivery: &Arc<DeliveryContext>,
     route: &ResolvedRoute,
     prepared: RawwPrepared,
     sender: &SenderIdentity,
@@ -460,6 +470,7 @@ fn execute_raww(
     // writable coder transports, the capability gate above having rejected the
     // rest, so the not-implemented refusal is unreachable from here.
     admit(
+        delivery,
         message_id.as_str(),
         AdmissionTargetKey::new(
             raww_bundle.bundle_name.as_str(),
@@ -507,10 +518,10 @@ fn execute_raww(
         TargetConfiguration::Acp(_)
         | TargetConfiguration::Tmux(_)
         | TargetConfiguration::Pty(_) => {
-            if let Err(error) = enqueue_async_delivery(task) {
+            if let Err(error) = enqueue_async_delivery(delivery, task) {
                 // No queue entry was created, so nothing will terminalize this
                 // reservation; release it here rather than leaking it.
-                rollback_admission(message_id.as_str());
+                rollback_admission(delivery, message_id.as_str());
                 return Err(error);
             }
         },

@@ -17,12 +17,30 @@ use crate::support::relay_delivery::{
 };
 
 fn dispatch_request(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
+    request: RelayRequest,
+    configuration_roots: &ConfigurationRoots,
+    bundle_name: &str,
+    runtime_directory: &std::path::Path,
+) -> Result<RelayResponse, agentmux::relay::RelayError> {
+    dispatch_request_with_delivery(
+        delivery,
+        request,
+        configuration_roots,
+        bundle_name,
+        runtime_directory,
+    )
+}
+
+fn dispatch_request_with_delivery(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     runtime_directory: &std::path::Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     handle_request(
+        delivery,
         request,
         configuration_roots,
         bundle_name,
@@ -40,6 +58,9 @@ fn dispatch_request(
 /// sentinel, so observing the sentinel without a receipt proves none was sent.
 #[test]
 fn relay_send_async_emits_no_receipt_for_a_delivered_outcome() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!(
             "skipping delivered-no-receipt test because tmux is unavailable"
@@ -64,6 +85,7 @@ fn relay_send_async_emits_no_receipt_for_a_delivered_outcome() {
 
     // Prime alpha's delivery worker (charlie -> alpha).
     dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-prime".to_string()),
             requester_session: "charlie".to_string(),
@@ -86,6 +108,7 @@ fn relay_send_async_emits_no_receipt_for_a_delivered_outcome() {
 
     // alpha sends to responsive charlie; this delivers successfully.
     let response = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-delivered".to_string()),
             requester_session: "alpha".to_string(),
@@ -114,6 +137,7 @@ fn relay_send_async_emits_no_receipt_for_a_delivered_outcome() {
     // Sentinel to alpha: a FIFO checkpoint after the delivered outcome resolved.
     let sentinel = "SENTINEL-AFTER-DELIVERED";
     dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-sentinel".to_string()),
             requester_session: "charlie".to_string(),
@@ -164,6 +188,9 @@ fn relay_send_async_emits_no_receipt_for_a_delivered_outcome() {
 /// against an implementation that wiped the whole bundle's history on delivery.
 #[test]
 fn relay_send_async_clears_the_targets_startup_failure_records_on_delivery() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!(
             "skipping delivery-clears-startup-failures test because tmux is unavailable"
@@ -206,6 +233,7 @@ fn relay_send_async_clears_the_targets_startup_failure_records_on_delivery() {
     }
 
     let response = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-clears-history".to_string()),
             requester_session: "alpha".to_string(),
@@ -274,6 +302,9 @@ fn relay_send_async_clears_the_targets_startup_failure_records_on_delivery() {
 
 #[test]
 fn relay_send_async_processes_repeated_target_messages_in_fifo_order() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -298,6 +329,7 @@ fn relay_send_async_processes_repeated_target_messages_in_fifo_order() {
     let second_marker = "FIFO-TWO-MARKER";
 
     let first = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-fifo-1".to_string()),
             requester_session: "alpha".to_string(),
@@ -322,6 +354,7 @@ fn relay_send_async_processes_repeated_target_messages_in_fifo_order() {
     assert_eq!(first_results[0].outcome, SendOutcome::Queued);
 
     let second = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-fifo-2".to_string()),
             requester_session: "alpha".to_string(),
@@ -377,6 +410,9 @@ fn relay_send_async_processes_repeated_target_messages_in_fifo_order() {
 /// delivery does not wait for a quiet pane or a prompt-readiness timeout.
 #[test]
 fn relay_send_async_writes_while_target_is_active() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -409,6 +445,7 @@ fn relay_send_async_writes_while_target_is_active() {
 
     let marker = "ASYNC-DIRECT-WRITE-MARKER";
     let response = dispatch_request(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-async-default".to_string()),
             requester_session: "alpha".to_string(),
@@ -451,6 +488,9 @@ fn relay_send_async_writes_while_target_is_active() {
 /// if the submit is delivered as `send-keys Enter` instead of a paste.
 #[test]
 fn relay_raww_submits_through_copy_mode_pane() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!(
             "skipping copy-mode delivery test because tmux is unavailable"
@@ -486,6 +526,7 @@ fn relay_raww_submits_through_copy_mode_pane() {
 
     let marker = "COPYMODE_SUBMIT_MARKER";
     let response = dispatch_request(
+        &delivery,
         RelayRequest::Raww {
             request_id: Some("req-copymode-submit".to_string()),
             requester_session: "alpha".to_string(),
@@ -554,6 +595,9 @@ fn relay_raww_submits_through_copy_mode_pane() {
 /// what preserves a raw barrier's position relative to the envelopes around it.
 #[test]
 fn relay_interleaves_mail_and_raw_in_one_per_target_order() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping relay delivery test because tmux is unavailable");
         return;
@@ -582,6 +626,7 @@ fn relay_interleaves_mail_and_raw_in_one_per_target_order() {
 
     let send_mail = |marker: &str, request_id: &str| {
         let response = dispatch_request(
+            &delivery,
             RelayRequest::Send {
                 request_id: Some(request_id.to_string()),
                 requester_session: "alpha".to_string(),
@@ -605,6 +650,7 @@ fn relay_interleaves_mail_and_raw_in_one_per_target_order() {
     send_mail(markers[0], "req-order-1");
 
     let raw = dispatch_request(
+        &delivery,
         RelayRequest::Raww {
             request_id: Some("req-order-2".to_string()),
             requester_session: "alpha".to_string(),
@@ -692,19 +738,20 @@ fn relay_send_async_delivers_a_receipt_for_a_non_delivered_outcome() {
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
-    agentmux::relay::configure_delivery(
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
         agentmux::relay::DeliveryConfiguration {
             unreachable_dwell_ms: 400,
             ..agentmux::relay::DeliveryConfiguration::default()
         },
-    );
+    ));
 
     // Only alpha gets a session. bravo is configured but has no pane, so it is
     // unreachable from the first observation.
     spawn_session(&paths.tmux_socket, "alpha", "exec sleep 45");
 
     // Prime alpha's delivery worker, which the receipt needs to already exist.
-    dispatch_request(
+    dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-prime-alpha".to_string()),
             requester_session: "bravo".to_string(),
@@ -726,7 +773,8 @@ fn relay_send_async_delivers_a_receipt_for_a_non_delivered_outcome() {
     );
 
     // alpha sends to the unreachable target; this is the send that owes a receipt.
-    let response = dispatch_request(
+    let response = dispatch_request_with_delivery(
+        &delivery,
         RelayRequest::Send {
             request_id: Some("req-undeliverable".to_string()),
             requester_session: "alpha".to_string(),

@@ -13,6 +13,9 @@ use super::helpers::*;
 
 #[test]
 fn acp_send_without_startup_fails_when_worker_is_unavailable() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         update_count: 1,
@@ -22,14 +25,20 @@ fn acp_send_without_startup_fails_when_worker_is_unavailable() {
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let error =
-        dispatch_send_without_startup_result(&config_root, &tmux_socket)
-            .expect_err("ACP send should fail without startup worker");
+    let error = dispatch_send_without_startup_result(
+        &delivery,
+        &config_root,
+        &tmux_socket,
+    )
+    .expect_err("ACP send should fail without startup worker");
     assert_eq!(error.code, "runtime_acp_worker_unavailable");
 }
 
 #[test]
 fn acp_look_without_startup_returns_unavailable_stale_metadata() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, _log_path) =
@@ -37,6 +46,7 @@ fn acp_look_without_startup_returns_unavailable_stale_metadata() {
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let look = dispatch_look_without_startup(
+        &delivery,
         &config_root,
         &tmux_socket,
         "bravo",
@@ -55,6 +65,9 @@ fn acp_look_without_startup_returns_unavailable_stale_metadata() {
 
 #[test]
 fn acp_look_returns_oldest_to_newest_session_update_lines() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         update_count: 3,
@@ -63,13 +76,14 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket);
+    let response = dispatch_send(&delivery, &config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
     // Settle: wait until the post-coalescence buffer holds both the User
     // prompt and the coalesced Agent entry.
     let look = wait_for_look(
+        &delivery,
         &config_root,
         &tmux_socket,
         "bravo",
@@ -115,6 +129,9 @@ fn acp_look_returns_oldest_to_newest_session_update_lines() {
 
 #[test]
 fn acp_look_coalesces_long_streaming_response_into_single_entry() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     // 1105 streaming chunks would have produced 1105 fragment Agent entries
     // before coalescence, exercising the buffer cap at 1000. With
     // reader-thread same-kind adjacency coalescence in place, the same input coalesces
@@ -129,11 +146,12 @@ fn acp_look_coalesces_long_streaming_response_into_single_entry() {
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket);
+    let response = dispatch_send(&delivery, &config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
     let look = wait_for_look(
+        &delivery,
         &config_root,
         &tmux_socket,
         "bravo",
@@ -175,6 +193,9 @@ fn acp_look_coalesces_long_streaming_response_into_single_entry() {
 
 #[test]
 fn acp_look_emits_one_coalesced_invocation_entry_for_tool_call_lifecycle() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     // End-to-end coverage for the `replace-pending-completed-tool-call-in-place`
     // proposal: an ACP session that streams a single `tool_call` followed by
     // its terminal `tool_call_update` must surface exactly one
@@ -190,7 +211,7 @@ fn acp_look_emits_one_coalesced_invocation_entry_for_tool_call_lifecycle() {
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket);
+    let response = dispatch_send(&delivery, &config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
@@ -198,6 +219,7 @@ fn acp_look_emits_one_coalesced_invocation_entry_for_tool_call_lifecycle() {
     // Invocation entry (status mutated to Completed in place). The
     // post-tool-call-update buffer does NOT have a second Pending entry.
     let look = wait_for_look(
+        &delivery,
         &config_root,
         &tmux_socket,
         "bravo",
@@ -250,6 +272,9 @@ fn acp_look_emits_one_coalesced_invocation_entry_for_tool_call_lifecycle() {
 
 #[test]
 fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     // Under reader-thread same-kind adjacency coalescence, a 10-chunk Agent stream
     // coalesces into a single Agent entry; the buffer additionally holds
     // the User prompt entry, so `entries_total == 2`. The offset-walking
@@ -263,11 +288,12 @@ fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket);
+    let response = dispatch_send(&delivery, &config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
     let full_look = wait_for_look(
+        &delivery,
         &config_root,
         &tmux_socket,
         "bravo",
@@ -284,6 +310,7 @@ fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
     // offset = 0 returns the newest window (tail-N). With a 2-entry buffer
     // and lines=1, the window is [entries[1]] (the coalesced Agent).
     let newest = expect_acp_snapshot(dispatch_look_with_offset(
+        &delivery,
         &config_root,
         &tmux_socket,
         "bravo",
@@ -298,6 +325,7 @@ fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
     // offset = 1 skips the newest entry and returns the one before it
     // (the User prompt entry).
     let older = expect_acp_snapshot(dispatch_look_with_offset(
+        &delivery,
         &config_root,
         &tmux_socket,
         "bravo",
@@ -311,6 +339,7 @@ fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
 
     // Walking past the start yields an empty window over a still-live buffer.
     let past_start = expect_acp_snapshot(dispatch_look_with_offset(
+        &delivery,
         &config_root,
         &tmux_socket,
         "bravo",
@@ -326,14 +355,23 @@ fn acp_look_offset_walks_backward_through_replay_buffer_with_metadata() {
 
 #[test]
 fn acp_look_returns_empty_snapshot_when_no_updates_exist() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions::default();
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let look =
-        dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(5));
+    let look = dispatch_look(
+        &delivery,
+        &config_root,
+        &tmux_socket,
+        "bravo",
+        "bravo",
+        Some(5),
+    );
     let snapshot = expect_acp_snapshot(look);
     assert!(snapshot.lines.is_empty());
     assert_eq!(snapshot.freshness, LookFreshness::Stale);
@@ -343,6 +381,9 @@ fn acp_look_returns_empty_snapshot_when_no_updates_exist() {
 
 #[test]
 fn acp_look_reflects_outgoing_user_prompt_before_session_updates_arrive() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     // Spec scenario (acp-client/spec.md, "Replay buffer updated immediately on
     // outgoing user prompt"): when relay writes a user prompt to ACP stdin,
     // the prompt SHALL be appended to the shared replay buffer as a
@@ -356,11 +397,12 @@ fn acp_look_reflects_outgoing_user_prompt_before_session_updates_arrive() {
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket);
+    let response = dispatch_send(&delivery, &config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
     let look = wait_for_look(
+        &delivery,
         &config_root,
         &tmux_socket,
         "bravo",
@@ -382,6 +424,9 @@ fn acp_look_reflects_outgoing_user_prompt_before_session_updates_arrive() {
 
 #[test]
 fn acp_look_captures_updates_emitted_after_prompt_response() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     // The stub agent emits 3 chunks before the response and 3 more after a
     // 20ms delay; both batches coalesce against the buffer tail under the
     // reader-thread same-kind adjacency coalescence rule. The buffer ends with a User
@@ -397,11 +442,12 @@ fn acp_look_captures_updates_emitted_after_prompt_response() {
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket);
+    let response = dispatch_send(&delivery, &config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
     let look = wait_for_look(
+        &delivery,
         &config_root,
         &tmux_socket,
         "bravo",
@@ -437,6 +483,9 @@ fn acp_look_captures_updates_emitted_after_prompt_response() {
 
 #[test]
 fn acp_look_reuses_persistent_worker_without_one_shot_replay_refresh() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         update_count: 1,
@@ -449,12 +498,18 @@ fn acp_look_reuses_persistent_worker_without_one_shot_replay_refresh() {
     let (config_root, _log_path) =
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
-    let response = dispatch_send(&config_root, &tmux_socket);
+    let response = dispatch_send(&delivery, &config_root, &tmux_socket);
     let result = send_result(response);
     assert_eq!(result.outcome, SendOutcome::Queued);
 
-    let look =
-        dispatch_look(&config_root, &tmux_socket, "bravo", "bravo", Some(10));
+    let look = dispatch_look(
+        &delivery,
+        &config_root,
+        &tmux_socket,
+        "bravo",
+        "bravo",
+        Some(10),
+    );
     let snapshot = expect_acp_snapshot(look);
     let snapshot_lines = snapshot.lines;
     assert!(snapshot_lines.iter().any(|line| line == "LIVE-LINE-1"));
@@ -473,6 +528,9 @@ fn acp_look_reuses_persistent_worker_without_one_shot_replay_refresh() {
 /// well-formed, bounded, target-scoped ACP snapshot.
 #[test]
 fn acp_look_across_respawn_window_returns_clean_snapshots() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = GuardedTempDir::new();
     let options = AcpStubOptions {
         disconnect_on_prompt: Some("before_activity".to_string()),
@@ -482,7 +540,7 @@ fn acp_look_across_respawn_window_returns_clean_snapshots() {
         write_configuration(temporary.path(), &options);
     let tmux_socket = temporary.path().join("tmux.sock");
 
-    let response = dispatch_send(&config_root, &tmux_socket);
+    let response = dispatch_send(&delivery, &config_root, &tmux_socket);
     assert_eq!(send_result(response).outcome, SendOutcome::Queued);
 
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -490,6 +548,7 @@ fn acp_look_across_respawn_window_returns_clean_snapshots() {
         // `expect_acp_snapshot` panics if the payload is not a well-formed
         // `StructuredEntriesV1`, so a malformed or wrong-typed response fails the test.
         let look = dispatch_look(
+            &delivery,
             &config_root,
             &tmux_socket,
             "bravo",
@@ -516,6 +575,7 @@ fn acp_look_across_respawn_window_returns_clean_snapshots() {
 }
 
 fn wait_for_look(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &std::path::Path,
     requester_session: &str,
@@ -526,6 +586,7 @@ fn wait_for_look(
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let look = dispatch_look(
+            delivery,
             config_root,
             tmux_socket,
             requester_session,

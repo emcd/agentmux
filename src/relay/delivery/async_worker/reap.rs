@@ -7,10 +7,13 @@
 //! replacement and never arrives here, so reaching here means the target itself
 //! is going rather than changing hands.
 
+use std::sync::Arc;
+
 use crate::protocol::identity::{ConsumerGenerationId, DeliveryTargetId};
+use crate::relay::delivery::DeliveryContext;
 use crate::relay::delivery::admission::reap_target;
 
-use super::registry::{AsyncWorkerKey, WorkerOwner, async_delivery_registry};
+use super::registry::{AsyncDeliveryRegistry, AsyncWorkerKey, WorkerOwner};
 
 /// Records the consumer generation a worker has claimed for its target, so the
 /// reap can name it.
@@ -29,11 +32,12 @@ use super::registry::{AsyncWorkerKey, WorkerOwner, async_delivery_registry};
 /// this as it issues, before the transport is built, so a construction that
 /// fails afterwards still leaves the entry naming what is held.
 pub(in crate::relay::delivery) fn bind_worker_consumer_generation(
+    registry: &AsyncDeliveryRegistry,
     key: &AsyncWorkerKey,
     owner: WorkerOwner,
     generation: ConsumerGenerationId,
 ) {
-    if let Ok(mut workers) = async_delivery_registry().workers.lock()
+    if let Ok(mut workers) = registry.workers.lock()
         && let Some(entry) = workers.get_mut(key)
         && entry.owner == owner
     {
@@ -59,10 +63,12 @@ pub(in crate::relay::delivery) fn bind_worker_consumer_generation(
 /// the reap holds a generation this entry never named, so the reap refuses
 /// rather than reclaiming a mailbox somebody is already serving.
 pub(in crate::relay::delivery) fn unregister_worker(
+    delivery: &Arc<DeliveryContext>,
+    registry: &AsyncDeliveryRegistry,
     key: &AsyncWorkerKey,
     owner: WorkerOwner,
 ) {
-    let Some(held) = remove_owned_entry(key, owner) else {
+    let Some(held) = remove_owned_entry(registry, key, owner) else {
         return;
     };
     let target = DeliveryTargetId::new(
@@ -77,7 +83,7 @@ pub(in crate::relay::delivery) fn unregister_worker(
     // that owed those entries their outcomes did not run. The reap records that
     // and deliberately resolves nothing, because it knows the entries by id and
     // could not report a single one of them.
-    let _ = reap_target(&target, held);
+    let _ = reap_target(delivery, &target, held);
 }
 
 /// Removes the entry if `owner` holds it, reporting the consumer generation it
@@ -89,10 +95,11 @@ pub(in crate::relay::delivery) fn unregister_worker(
 /// holding no generation was removed" — the first must reap nothing, and the
 /// second must reap a target nobody claimed.
 fn remove_owned_entry(
+    registry: &AsyncDeliveryRegistry,
     key: &AsyncWorkerKey,
     owner: WorkerOwner,
 ) -> Option<Option<ConsumerGenerationId>> {
-    let mut workers = async_delivery_registry().workers.lock().ok()?;
+    let mut workers = registry.workers.lock().ok()?;
     if workers.get(key).is_none_or(|entry| entry.owner != owner) {
         return None;
     }
@@ -137,21 +144,37 @@ mod worker_reap_tests {
     #[test]
     fn unregistering_an_owned_entry_reaps_its_target_and_a_foreign_one_reaps_nothing()
      {
+        let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
+            Default::default(),
+        ));
         let key =
             build_worker_key(NAMESPACE, runtime_directory().as_path(), TARGET);
         let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
         let owner = register_worker(
+            delivery.async_registry(),
             key.clone(),
             sender,
             Arc::new(AtomicUsize::new(0)),
             false,
         );
-        let generation = claim_consumer_generation(&target())
+        let generation = claim_consumer_generation(&delivery, &target())
             .expect("the test target is unclaimed");
-        bind_worker_consumer_generation(&key, owner, generation);
-        admit("worker-reap-1", admission_key(), SessionType::Tmux, 1)
-            .expect("admit");
+        bind_worker_consumer_generation(
+            delivery.async_registry(),
+            &key,
+            owner,
+            generation,
+        );
+        admit(
+            &delivery,
+            "worker-reap-1",
+            admission_key(),
+            SessionType::Tmux,
+            1,
+        )
+        .expect("admit");
         enqueue(
+            &delivery,
             &Arc::new(queued_task("worker-reap-1")),
             MailboxPayload::Raw {
                 content: "body".to_string(),
@@ -159,7 +182,7 @@ mod worker_reap_tests {
             },
         )
         .expect("enqueue");
-        terminalize("worker-reap-1");
+        terminalize(&delivery, "worker-reap-1");
 
         // A second worker's owner, which never held this entry. Unregistering
         // under it must leave both the registration and the target alone —
@@ -168,6 +191,7 @@ mod worker_reap_tests {
         let (other_sender, _other_receiver) =
             tokio::sync::mpsc::unbounded_channel();
         let stranger = register_worker(
+            delivery.async_registry(),
             build_worker_key(
                 NAMESPACE,
                 runtime_directory().as_path(),
@@ -177,17 +201,22 @@ mod worker_reap_tests {
             Arc::new(AtomicUsize::new(0)),
             false,
         );
-        unregister_worker(&key, stranger);
+        unregister_worker(
+            &delivery,
+            delivery.async_registry(),
+            &key,
+            stranger,
+        );
         assert_eq!(
-            claim_consumer_generation(&target()),
+            claim_consumer_generation(&delivery, &target()),
             Err(GenerationRejection::AlreadyHeld { active: generation }),
             "a non-owner's unregister gives up nothing"
         );
 
         // The owner's unregister is the reap: the generation is given up and the
         // mailbox goes with the registration.
-        unregister_worker(&key, owner);
-        let next = claim_consumer_generation(&target())
+        unregister_worker(&delivery, delivery.async_registry(), &key, owner);
+        let next = claim_consumer_generation(&delivery, &target())
             .expect("the reaped target is free to claim again");
         assert!(
             next.value() > generation.value(),
@@ -198,7 +227,7 @@ mod worker_reap_tests {
         // could not report if the first had left the mailbox in place holding a
         // cursor.
         assert_eq!(
-            reap_target(&target(), Some(next)),
+            reap_target(&delivery, &target(), Some(next)),
             Ok(TargetReap::Reclaimed),
             "the target the reap left behind holds nothing"
         );

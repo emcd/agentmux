@@ -6,12 +6,13 @@ use crate::protocol::mailbox::EntrySequence;
 use crate::protocol::operations::{
     AckAccepted, AckRejection, AckResult, MemberAcknowledgment,
 };
+use std::sync::Arc;
 
 use super::super::super::guard::PackingUnitId;
-use super::super::ledger::lock_ledger;
 use super::addressing::target_key;
 use super::generation::active_generation;
 use super::resolution::{ResolvedMember, resolve_positions};
+use crate::relay::delivery::DeliveryContext;
 
 /// What an acknowledgment did, and what its caller must now report.
 ///
@@ -39,24 +40,26 @@ pub(in crate::relay) struct Acknowledgment {
 /// declaration can therefore advance no cursor and release no quota — the gap a
 /// caller-supplied endpoint would leave open.
 pub(in crate::relay) fn ack(
+    delivery: &Arc<DeliveryContext>,
     binding: &ConsumerBinding,
     unit: PackingUnitId,
     members: &[MemberAcknowledgment],
 ) -> Acknowledgment {
     let mut resolved = Vec::new();
-    let result = apply(binding, unit, members, &mut resolved);
+    let result = apply(delivery, binding, unit, members, &mut resolved);
     Acknowledgment { result, resolved }
 }
 
 /// The acknowledgment itself, with everything it resolves collected into
 /// `resolved` for the caller to report once the lock is gone.
 fn apply(
+    delivery: &Arc<DeliveryContext>,
     binding: &ConsumerBinding,
     unit: PackingUnitId,
     members: &[MemberAcknowledgment],
     resolved: &mut Vec<ResolvedMember>,
 ) -> AckResult {
-    let Ok(mut state) = lock_ledger() else {
+    let Ok(mut state) = delivery.lock_ledger() else {
         return Err(AckRejection::UnknownTarget);
     };
     let target = target_key(&binding.target);
@@ -158,12 +161,20 @@ mod mailbox_evidence_tests {
 
     #[test]
     fn an_acknowledgment_needs_one_report_per_member_and_uses_each() {
+        let delivery = super::super::fixtures::test_delivery();
         let namespace = "mbx-evidence";
-        let bound = claim(namespace);
+        let bound = claim(&delivery, namespace);
         for index in 1..=3 {
-            place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
+            place(
+                &delivery,
+                namespace,
+                &format!("{namespace}-{index}"),
+                1,
+                mail("body"),
+            );
         }
-        let accepted = declare(&bound, range(1, 3)).expect("declare");
+        let accepted =
+            declare(&delivery, &bound, range(1, 3)).expect("declare");
 
         let report = |sequence: u64, evidence: SubmissionEvidence| {
             MemberAcknowledgment {
@@ -182,6 +193,7 @@ mod mailbox_evidence_tests {
         // write that may never have happened.
         assert_eq!(
             acknowledge(
+                &delivery,
                 &bound,
                 accepted.unit,
                 &[
@@ -194,6 +206,7 @@ mod mailbox_evidence_tests {
         );
         assert_eq!(
             acknowledge(
+                &delivery,
                 &bound,
                 accepted.unit,
                 &[
@@ -207,6 +220,7 @@ mod mailbox_evidence_tests {
         );
         assert_eq!(
             acknowledge(
+                &delivery,
                 &bound,
                 accepted.unit,
                 &[
@@ -223,7 +237,7 @@ mod mailbox_evidence_tests {
         // range could not be taken back, so the check has to precede every
         // mutation rather than merely accompany it.
         assert_eq!(
-            peeked(&bound, 10, 1_000),
+            peeked(&delivery, &bound, 10, 1_000),
             vec![1, 2, 3],
             "a refused acknowledgment resolves nothing and moves no cursor"
         );
@@ -235,6 +249,7 @@ mod mailbox_evidence_tests {
         // own would come back `Submitted` here, which is the substitution this
         // asserts against.
         let acknowledgment = ack(
+            &delivery,
             &bound,
             accepted.unit,
             &[
@@ -286,22 +301,29 @@ mod mailbox_acknowledgment_tests {
 
     #[test]
     fn an_acknowledgment_resolves_exactly_the_declared_range() {
+        let delivery = super::super::fixtures::test_delivery();
         let namespace = "mbx-ack";
-        let bound = claim(namespace);
+        let bound = claim(&delivery, namespace);
         for index in 1..=5 {
-            place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
+            place(
+                &delivery,
+                namespace,
+                &format!("{namespace}-{index}"),
+                1,
+                mail("body"),
+            );
         }
 
         // The whole run is peekable first, so what follows is a *partial*
         // acknowledgment rather than a complete one: the executor could see all
         // five and chose to bind three.
         assert_eq!(
-            peeked(&bound, 10, 1_000),
+            peeked(&delivery, &bound, 10, 1_000),
             vec![1, 2, 3, 4, 5],
             "the executor peeks the whole run before deciding how much of it to declare"
         );
-        let accepted =
-            declare(&bound, range(1, 3)).expect("a well-formed range binds");
+        let accepted = declare(&delivery, &bound, range(1, 3))
+            .expect("a well-formed range binds");
         let members: Vec<MemberAcknowledgment> = range(1, 3)
             .sequences()
             .map(|sequence| MemberAcknowledgment {
@@ -310,7 +332,7 @@ mod mailbox_acknowledgment_tests {
             })
             .collect();
         assert_eq!(
-            acknowledge(&bound, accepted.unit, &members),
+            acknowledge(&delivery, &bound, accepted.unit, &members),
             Ok(AckAccepted::Terminalized {
                 range: range(1, 3),
                 cursor: CursorPosition::advanced_through(seq(3)),
@@ -323,7 +345,7 @@ mod mailbox_acknowledgment_tests {
         // leave this empty, and entries 4 and 5 would be lost with no record that
         // anything had happened to them.
         assert_eq!(
-            peeked(&bound, 10, 1_000),
+            peeked(&delivery, &bound, 10, 1_000),
             vec![4, 5],
             "entries outside the declared range stay queued and undeclared"
         );
@@ -332,7 +354,7 @@ mod mailbox_acknowledgment_tests {
         // no-op rather than a rejection — and it must not advance the cursor a
         // second time.
         assert_eq!(
-            acknowledge(&bound, accepted.unit, &members),
+            acknowledge(&delivery, &bound, accepted.unit, &members),
             Ok(AckAccepted::AlreadyTerminalized { range: range(1, 3) }),
             "acknowledging a resolved unit again is a no-op"
         );
@@ -341,12 +363,12 @@ mod mailbox_acknowledgment_tests {
         // than invented, so the identifier is well-formed and only its binding is
         // missing.
         assert_eq!(
-            acknowledge(&bound, PackingUnitId::mint(), &members),
+            acknowledge(&delivery, &bound, PackingUnitId::mint(), &members),
             Err(AckRejection::UnitNotDeclared),
             "an acknowledgment without a matching declaration is refused"
         );
         assert_eq!(
-            peeked(&bound, 10, 1_000),
+            peeked(&delivery, &bound, 10, 1_000),
             vec![4, 5],
             "a refused acknowledgment advances no cursor"
         );
@@ -355,7 +377,7 @@ mod mailbox_acknowledgment_tests {
         // it: an acknowledged member's reservation is gone, so nothing is left to
         // terminalize, while an unacknowledged one is still held.
         assert_eq!(
-            terminalize("mbx-ack-1"),
+            terminalize(&delivery, "mbx-ack-1"),
             TerminalTransition::NoReservation,
             "an acknowledged member's reservation was released"
         );
@@ -365,7 +387,7 @@ mod mailbox_acknowledgment_tests {
         // way, and would then carry a guard identity and the weaker spelling
         // into whatever resolved it.
         assert_eq!(
-            terminalize("mbx-ack-4"),
+            terminalize(&delivery, "mbx-ack-4"),
             TerminalTransition::Won {
                 evidence: SubmissionEvidence::NotSubmitted,
                 bound: false,
@@ -380,9 +402,10 @@ mod mailbox_acknowledgment_tests {
         // executor its own completed work never happened. Remembering only the
         // most recent unit is what produces that answer, so this is the assertion
         // that rules it out.
-        let later =
-            declare(&bound, range(5, 5)).expect("declare the remaining entry");
+        let later = declare(&delivery, &bound, range(5, 5))
+            .expect("declare the remaining entry");
         acknowledge(
+            &delivery,
             &bound,
             later.unit,
             &[MemberAcknowledgment {
@@ -392,7 +415,7 @@ mod mailbox_acknowledgment_tests {
         )
         .expect("the later unit resolves");
         assert_eq!(
-            acknowledge(&bound, accepted.unit, &members),
+            acknowledge(&delivery, &bound, accepted.unit, &members),
             Ok(AckAccepted::AlreadyTerminalized { range: range(1, 3) }),
             "an earlier resolved unit is still remembered once a later one resolves"
         );
@@ -450,13 +473,20 @@ mod cross_generation_contention_tests {
     /// A target holding three entries, all bound to one declared unit, and the
     /// reports that acknowledge them.
     fn three_declared(
+        delivery: &Arc<DeliveryContext>,
         namespace: &str,
     ) -> (ConsumerBinding, PackingUnitId, Vec<MemberAcknowledgment>) {
-        let outgoing = claim(namespace);
+        let outgoing = claim(delivery, namespace);
         for index in 1..=3 {
-            place(namespace, &format!("{namespace}-{index}"), 1, mail("body"));
+            place(
+                delivery,
+                namespace,
+                &format!("{namespace}-{index}"),
+                1,
+                mail("body"),
+            );
         }
-        let declared = declare(&outgoing, range(1, 3))
+        let declared = declare(delivery, &outgoing, range(1, 3))
             .expect("a well-formed range binds");
         let members = range(1, 3)
             .sequences()
@@ -471,14 +501,16 @@ mod cross_generation_contention_tests {
     #[test]
     fn two_acknowledgments_under_different_generations_answer_each_entry_once()
     {
+        let delivery = super::super::fixtures::test_delivery();
         let namespace = "mbx-ack-inflight";
-        let (outgoing, unit, members) = three_declared(namespace);
+        let (outgoing, unit, members) = three_declared(&delivery, namespace);
 
         let boundary = lock_boundary::watch();
         let incumbent = {
             let binding = outgoing.clone();
             let members = members.clone();
-            boundary.spawn(move || ack(&binding, unit, &members))
+            let delivery = Arc::clone(&delivery);
+            boundary.spawn(move || ack(&delivery, &binding, unit, &members))
         };
         // Inside the critical section, holding the guard, and staying there.
         // Everything below happens while an acknowledgment is genuinely in
@@ -489,8 +521,10 @@ mod cross_generation_contention_tests {
             let target = target(namespace);
             let generation = outgoing.generation;
             let members = members.clone();
+            let delivery = Arc::clone(&delivery);
             boundary.spawn(move || {
                 let replacement = replace_consumer_generation(
+                    &delivery,
                     &target,
                     generation,
                     FenceVerdict::Positive,
@@ -498,7 +532,8 @@ mod cross_generation_contention_tests {
                 .expect("a fenced incumbent is replaced");
                 let binding =
                     ConsumerBinding::new(target, replacement.generation);
-                let inherited = ack(&binding, unit, &members).result;
+                let inherited =
+                    ack(&delivery, &binding, unit, &members).result;
                 (replacement, inherited)
             })
         };
@@ -552,7 +587,7 @@ mod cross_generation_contention_tests {
             "each entry is answered exactly once, by exactly one of the two paths"
         );
         assert_eq!(
-            reserved_envelopes(namespace),
+            reserved_envelopes(&delivery, namespace),
             0,
             "every reservation was released, and each of them exactly once"
         );
@@ -563,14 +598,15 @@ mod cross_generation_contention_tests {
         // scheduling. It must resolve nothing at all — a rejection that had
         // terminalized part of its range could not be taken back.
         let namespace = "mbx-ack-late";
-        let (outgoing, unit, members) = three_declared(namespace);
+        let (outgoing, unit, members) = three_declared(&delivery, namespace);
         let replacement = replace_consumer_generation(
+            &delivery,
             &target(namespace),
             outgoing.generation,
             FenceVerdict::Positive,
         )
         .expect("a fenced incumbent is replaced");
-        let late = ack(&outgoing, unit, &members);
+        let late = ack(&delivery, &outgoing, unit, &members);
 
         assert_eq!(
             late.result,
@@ -597,7 +633,7 @@ mod cross_generation_contention_tests {
             "and each entry is still answered exactly once"
         );
         assert_eq!(
-            reserved_envelopes(namespace),
+            reserved_envelopes(&delivery, namespace),
             0,
             "with every reservation released exactly once"
         );

@@ -10,6 +10,9 @@ use super::*;
 
 #[test]
 fn request_namespace_external_is_rejected_as_reserved() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_namespace_external";
     let configuration_roots =
@@ -19,6 +22,7 @@ fn request_namespace_external_is_rejected_as_reserved() {
         .expect("bundle paths");
 
     let response = bundle_session_list_with_namespace(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -38,6 +42,9 @@ fn request_namespace_external_is_rejected_as_reserved() {
 
 #[test]
 fn request_namespace_relay_is_rejected_as_reserved() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_namespace_relay";
     let configuration_roots =
@@ -47,6 +54,7 @@ fn request_namespace_relay_is_rejected_as_reserved() {
         .expect("bundle paths");
 
     let response = bundle_session_list_with_namespace(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -66,6 +74,9 @@ fn request_namespace_relay_is_rejected_as_reserved() {
 
 #[test]
 fn relay_wide_principal_without_namespace_is_rejected() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_namespace_missing";
     let configuration_roots =
@@ -76,7 +87,7 @@ fn relay_wide_principal_without_namespace_is_rejected() {
         .expect("bundle paths");
 
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     let operator = global_user_id(bundle_name);
     send_json(

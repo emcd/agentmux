@@ -23,7 +23,7 @@ use super::*;
 /// The teardown then ends all three.
 #[test]
 fn a_bundle_stop_is_never_reported_to_a_sender_as_a_relay_shutdown() {
-    use agentmux::relay::{DeliveryConfiguration, configure_delivery};
+    use agentmux::relay::DeliveryConfiguration;
     use std::time::{Duration, Instant};
 
     let temporary = TempDir::new().expect("temporary");
@@ -45,12 +45,14 @@ fn a_bundle_stop_is_never_reported_to_a_sender_as_a_relay_shutdown() {
     // queue down before the teardown ever runs. The fence observation is
     // shortened instead, because the teardown waits on it and nothing here needs
     // a realistic cessation window.
-    configure_delivery(DeliveryConfiguration {
-        submission_timeout_ms: 60_000,
-        unreachable_dwell_ms: 600_000,
-        fence_observation_timeout_ms: 200,
-        ..Default::default()
-    });
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        DeliveryConfiguration {
+            submission_timeout_ms: 60_000,
+            unreachable_dwell_ms: 600_000,
+            fence_observation_timeout_ms: 200,
+            ..Default::default()
+        },
+    ));
 
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
@@ -58,7 +60,8 @@ fn a_bundle_stop_is_never_reported_to_a_sender_as_a_relay_shutdown() {
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let send = || {
-        dispatch_request(
+        dispatch_request_with_delivery(
+            &delivery,
             RelayRequest::Send {
                 request_id: None,
                 requester_session: "alpha".to_string(),
@@ -103,6 +106,7 @@ fn a_bundle_stop_is_never_reported_to_a_sender_as_a_relay_shutdown() {
     );
 
     agentmux::relay::shutdown_bundle_runtime(
+        &delivery,
         "party",
         temporary.path(),
         &tmux_socket,

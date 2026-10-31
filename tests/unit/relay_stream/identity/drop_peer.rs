@@ -59,6 +59,9 @@ psk = "all"
 // authenticated a moment ago no longer does.
 #[test]
 fn drop_peer_deletes_the_record_and_its_credential_stops_authenticating() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_deletes";
     let configuration_roots =
@@ -69,6 +72,7 @@ fn drop_peer_deletes_the_record_and_its_credential_stops_authenticating() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -76,6 +80,7 @@ fn drop_peer_deletes_the_record_and_its_credential_stops_authenticating() {
         None,
     );
     let accepted = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -88,6 +93,7 @@ fn drop_peer_deletes_the_record_and_its_credential_stops_authenticating() {
     );
 
     let dropped = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -101,6 +107,7 @@ fn drop_peer_deletes_the_record_and_its_credential_stops_authenticating() {
     assert_eq!(dropped["response"]["principal_type"], "session");
 
     let rejected = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -119,6 +126,9 @@ fn drop_peer_deletes_the_record_and_its_credential_stops_authenticating() {
 // revocation frame ahead of EOF.
 #[test]
 fn drop_peer_revokes_the_live_session_it_deletes() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_revokes";
     let configuration_roots =
@@ -129,6 +139,7 @@ fn drop_peer_revokes_the_live_session_it_deletes() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -137,7 +148,7 @@ fn drop_peer_revokes_the_live_session_it_deletes() {
     );
 
     let (mut alpha_client, alpha_join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut alpha_reader =
         BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
     send_json(
@@ -156,6 +167,7 @@ fn drop_peer_revokes_the_live_session_it_deletes() {
     );
 
     let dropped = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -195,6 +207,9 @@ fn drop_peer_revokes_the_live_session_it_deletes() {
 // the operator unable to tell a committed drop from a failed one.
 #[test]
 fn drop_peer_refuses_to_drop_the_requester_itself() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_self";
     let configuration_roots =
@@ -205,6 +220,7 @@ fn drop_peer_refuses_to_drop_the_requester_itself() {
     let operator_id = global_user_id(bundle_name);
 
     let refused = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -225,6 +241,9 @@ fn drop_peer_refuses_to_drop_the_requester_itself() {
 // learning their grant is missing.
 #[test]
 fn self_drop_is_refused_ahead_of_an_authorization_denial() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_self_ungranted";
     let configuration_roots =
@@ -235,6 +254,7 @@ fn self_drop_is_refused_ahead_of_an_authorization_denial() {
     let operator_id = global_user_id(bundle_name);
 
     let refused = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -251,6 +271,9 @@ fn self_drop_is_refused_ahead_of_an_authorization_denial() {
 // principal exists.
 #[test]
 fn an_ungranted_caller_is_denied_rather_than_told_the_principal_is_absent() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_nondisclosure";
     let configuration_roots =
@@ -260,6 +283,7 @@ fn an_ungranted_caller_is_denied_rather_than_told_the_principal_is_absent() {
         .expect("bundle paths");
 
     let denied = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -275,6 +299,9 @@ fn an_ungranted_caller_is_denied_rather_than_told_the_principal_is_absent() {
 // distinct and a policy file without it fails closed.
 #[test]
 fn new_and_change_grants_do_not_confer_drop() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_distinct_grant";
     let configuration_roots =
@@ -287,6 +314,7 @@ fn new_and_change_grants_do_not_confer_drop() {
     // The same operator can mint, which pins that only the drop control is
     // missing rather than the whole operator preset being unauthorized.
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -295,6 +323,7 @@ fn new_and_change_grants_do_not_confer_drop() {
     );
 
     let denied = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -307,6 +336,7 @@ fn new_and_change_grants_do_not_confer_drop() {
 
     // And the principal survives the denial.
     let accepted = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -322,6 +352,9 @@ fn new_and_change_grants_do_not_confer_drop() {
 // Dropping an unregistered principal is not success.
 #[test]
 fn drop_peer_rejects_an_unregistered_principal() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_unknown";
     let configuration_roots =
@@ -331,6 +364,7 @@ fn drop_peer_rejects_an_unregistered_principal() {
         .expect("bundle paths");
 
     let rejected = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -346,6 +380,9 @@ fn drop_peer_rejects_an_unregistered_principal() {
 // the dropping relay reports no path rather than one derived from its own.
 #[test]
 fn drop_peer_reports_no_credential_path_for_a_peer_relay() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_relay_path";
     let configuration_roots =
@@ -356,6 +393,7 @@ fn drop_peer_reports_no_credential_path_for_a_peer_relay() {
     let principal_id = "rnd-main@RELAY";
 
     register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -364,6 +402,7 @@ fn drop_peer_reports_no_credential_path_for_a_peer_relay() {
     );
 
     let dropped = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -384,6 +423,9 @@ fn drop_peer_reports_no_credential_path_for_a_peer_relay() {
 // so its path is reported for the operator to clean up.
 #[test]
 fn drop_peer_reports_the_relay_owned_credential_path_for_a_session() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_session_path";
     let configuration_roots =
@@ -394,6 +436,7 @@ fn drop_peer_reports_the_relay_owned_credential_path_for_a_session() {
     let principal_id = format!("alpha@{bundle_name}");
 
     register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -402,6 +445,7 @@ fn drop_peer_reports_the_relay_owned_credential_path_for_a_session() {
     );
 
     let dropped = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -426,6 +470,9 @@ fn drop_peer_reports_the_relay_owned_credential_path_for_a_session() {
 // distributed it.
 #[test]
 fn drop_peer_leaves_the_credential_file_on_disk() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_drop_keeps_file";
     let configuration_roots =
@@ -439,6 +486,7 @@ fn drop_peer_leaves_the_credential_file_on_disk() {
         .expect("create state root for the credential destination");
 
     let registration = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -458,6 +506,7 @@ fn drop_peer_leaves_the_credential_file_on_disk() {
     );
 
     let dropped = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,

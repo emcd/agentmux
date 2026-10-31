@@ -2,6 +2,9 @@ use super::*;
 
 #[test]
 fn new_peer_canonicalizes_set_scope_in_store() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_canon";
     let configuration_roots =
@@ -12,6 +15,7 @@ fn new_peer_canonicalizes_set_scope_in_store() {
     let peer_id = "canon@RELAY";
 
     register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -28,6 +32,9 @@ fn new_peer_canonicalizes_set_scope_in_store() {
 
 #[test]
 fn new_peer_rejects_malformed_scopes() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_malformed";
     let configuration_roots =
@@ -48,6 +55,7 @@ fn new_peer_rejects_malformed_scopes() {
     ];
     for (peer_id, scope) in cases {
         let response = operator_request(
+            &delivery,
             &configuration_roots,
             &bundle_paths,
             bundle_name,

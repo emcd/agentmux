@@ -32,12 +32,14 @@ fn tmux_command(socket: &Path, arguments: &[&str]) -> std::process::Output {
 }
 
 fn dispatch_request(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
     runtime_directory: &Path,
 ) -> Result<RelayResponse, agentmux::relay::RelayError> {
     handle_request(
+        delivery,
         request,
         configuration_roots,
         bundle_name,
@@ -168,6 +170,9 @@ fn spawn_session(socket: &Path, session_name: &str, shell_command: &str) {
 
 #[test]
 fn relay_look_returns_oldest_to_newest_snapshot_lines() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping relay look test because tmux is unavailable");
         return;
@@ -203,6 +208,7 @@ fn relay_look_returns_oldest_to_newest_snapshot_lines() {
     );
 
     let response = dispatch_request(
+        &delivery,
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo@party".to_string(),
@@ -226,6 +232,9 @@ fn relay_look_returns_oldest_to_newest_snapshot_lines() {
 
 #[test]
 fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping relay look test because tmux is unavailable");
         return;
@@ -261,6 +270,7 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
     );
 
     let omitted_bundle = dispatch_request(
+        &delivery,
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo@party".to_string(),
@@ -284,6 +294,7 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
     };
 
     let matching_bundle = dispatch_request(
+        &delivery,
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo@party".to_string(),
@@ -307,6 +318,7 @@ fn relay_look_allows_optional_or_matching_bundle_and_applies_default_lines() {
     };
 
     let explicit_default = dispatch_request(
+        &delivery,
         RelayRequest::Look {
             requester_session: "alpha".to_string(),
             target_session: "bravo@party".to_string(),

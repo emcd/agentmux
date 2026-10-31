@@ -13,6 +13,9 @@ use super::*;
 /// relay-wide sessions, including the requesting operator's own session.
 #[test]
 fn list_global_namespace_returns_registered_relay_wide_sessions() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_global_list_present";
     let configuration_roots =
@@ -24,7 +27,7 @@ fn list_global_namespace_returns_registered_relay_wide_sessions() {
     let operator_id = global_user_id(bundle_name);
 
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -65,10 +68,13 @@ fn list_global_namespace_returns_registered_relay_wide_sessions() {
 }
 
 /// Task 3.4 (companion): the `GLOBAL` list contains only relay-wide sessions;
-/// bundle sessions never appear. Robust under the process-wide registry shared
-/// across parallel tests because it asserts the absence of a session-keyed id.
+/// bundle sessions never appear. Each test holds its own `DeliveryContext`, so the
+/// registry under test holds only what this test registered.
 #[test]
 fn list_global_namespace_excludes_bundle_sessions() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_global_list_excludes";
     let configuration_roots =
@@ -78,6 +84,7 @@ fn list_global_namespace_excludes_bundle_sessions() {
         .expect("bundle paths");
 
     let response = bundle_session_list_with_namespace(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -109,13 +116,18 @@ fn process_only_registration_seeds_configured_bundle_members() {
     let configuration_roots =
         write_bundle_configuration(&temporary, bundle_name);
 
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     agentmux::relay::register_configured_bundle(
+        &delivery,
         &configuration_roots,
         bundle_name,
     )
     .expect("register configured bundle members");
 
-    let ids = agentmux::relay::registered_principal_ids(bundle_name);
+    let ids =
+        agentmux::relay::registered_principal_ids(&delivery, bundle_name);
     assert!(
         ids.iter().any(|id| id == &format!("alpha@{bundle_name}")),
         "configured member alpha is a static registry shell before any Hello"
@@ -130,7 +142,7 @@ fn process_only_registration_seeds_configured_bundle_members() {
 /// in the `GLOBAL` namespace with `ready = false` — offline is a state, not
 /// absence — rather than being filtered out. The declared operator id is unique
 /// per test (`global_user_id`) and is never connected here, so its offline state
-/// is stable under the process-wide registry shared across parallel tests.
+/// is stable under this test's own `DeliveryContext`.
 #[test]
 fn list_global_namespace_includes_declared_offline_relay_wide_principal() {
     let temporary = TempDir::new().expect("temporary directory");
@@ -145,12 +157,17 @@ fn list_global_namespace_includes_declared_offline_relay_wide_principal() {
 
     // Seed the declared relay-wide principal as a static (offline) registry entry,
     // as the host startup path does, without connecting it.
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     agentmux::relay::register_configured_relay_wide_principals(
+        &delivery,
         &configuration_roots,
     )
     .expect("register declared relay-wide principals");
 
     let response = bundle_session_list_with_namespace(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,

@@ -1,4 +1,5 @@
 use std::path::Path;
+use std::sync::Arc;
 
 use serde_json::json;
 
@@ -13,6 +14,7 @@ use crate::{
 use super::super::authorization::{
     AuthorizationContext, RouteAuthorization, choices_pending_max,
 };
+use super::super::delivery::DeliveryContext;
 use super::super::delivery::acp_session_is_ready;
 use super::super::lifecycle::{
     reconcile_loaded_bundle, shutdown_bundle_runtime,
@@ -32,6 +34,7 @@ use super::routed::run_target_operation;
 use crate::tmux::pane::resolve_active_pane_target;
 
 pub(super) fn handle_bundle_up(
+    delivery: &Arc<DeliveryContext>,
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     catalog: &BundleCatalog,
@@ -56,6 +59,7 @@ pub(super) fn handle_bundle_up(
     // The reconcile pass starts every configured member, ACP targets included,
     // so it needs the same pending-choice bound the startup path passes.
     let report = reconcile_loaded_bundle(
+        delivery,
         bundle,
         &paths,
         choices_pending_max(authorization),
@@ -141,6 +145,7 @@ fn partially_started_entry(
 }
 
 pub(super) fn handle_bundle_down(
+    delivery: &Arc<DeliveryContext>,
     bundle: &BundleConfiguration,
     runtime_directory: &Path,
     catalog: &BundleCatalog,
@@ -153,6 +158,7 @@ pub(super) fn handle_bundle_down(
     let tmux_socket =
         tmux_socket_path_for_runtime_directory(runtime_directory);
     let report = shutdown_bundle_runtime(
+        delivery,
         bundle.bundle_name.as_str(),
         runtime_directory,
         tmux_socket.as_path(),
@@ -214,6 +220,7 @@ pub(super) fn handle_bundle_down(
 /// the requester's `list` scope to reach the `all` tier; a same-namespace
 /// enumeration needs only `home`.
 pub(in crate::relay) fn handle_list_routed(
+    delivery: &Arc<DeliveryContext>,
     dispatch_bundle: &BundleConfiguration,
     dispatch_authorization: &AuthorizationContext,
     enumerate_bundle: &BundleConfiguration,
@@ -259,6 +266,7 @@ pub(in crate::relay) fn handle_list_routed(
         |_route| Ok(()),
         |_route, ()| {
             execute_list(
+                delivery,
                 enumerate_bundle,
                 enumerate_runtime_directory,
                 tmux_socket.as_path(),
@@ -271,12 +279,14 @@ pub(in crate::relay) fn handle_list_routed(
 /// Enumerates a bundle's sessions and builds the list response. Runs as the
 /// spine's `execute` stage, after authorization.
 fn execute_list(
+    delivery: &Arc<DeliveryContext>,
     enumerate_bundle: &BundleConfiguration,
     enumerate_runtime_directory: &Path,
     tmux_socket: &Path,
     requester_session_id: &str,
 ) -> Result<RelayResponse, RelayError> {
     let bundle = build_listed_bundle(
+        delivery,
         enumerate_bundle,
         enumerate_runtime_directory,
         tmux_socket,
@@ -309,6 +319,7 @@ fn execute_list(
 /// always carries `principals_partial: None`; a filtered caller sets the marker
 /// itself after trimming principals.
 pub(in crate::relay) fn build_listed_bundle(
+    delivery: &Arc<DeliveryContext>,
     enumerate_bundle: &BundleConfiguration,
     enumerate_runtime_directory: &Path,
     tmux_socket: &Path,
@@ -324,6 +335,7 @@ pub(in crate::relay) fn build_listed_bundle(
             name: member.name.clone(),
             transport: member.target.session_type().into(),
             ready: session_ready_for_list(
+                delivery,
                 enumerate_bundle,
                 enumerate_runtime_directory,
                 tmux_socket,
@@ -378,6 +390,7 @@ pub(in crate::relay) fn build_listed_bundle(
 /// session one surface calls ready and the other calls failed makes the word
 /// mean nothing.
 fn session_ready_for_list(
+    delivery: &Arc<DeliveryContext>,
     bundle: &BundleConfiguration,
     runtime_directory: &Path,
     tmux_socket: &Path,
@@ -388,6 +401,7 @@ fn session_ready_for_list(
             resolve_active_pane_target(tmux_socket, member.id.as_str()).is_ok()
         },
         TargetConfiguration::Acp(_) => acp_session_is_ready(
+            delivery.async_registry(),
             bundle.bundle_name.as_str(),
             runtime_directory,
             member.id.as_str(),

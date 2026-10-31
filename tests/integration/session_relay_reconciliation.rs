@@ -158,6 +158,9 @@ fn list_owned_sessions(socket: &Path) -> Vec<String> {
 
 #[test]
 fn reconciliation_creates_missing_members_and_sets_owned_metadata() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping reconciliation test because tmux is unavailable");
         return;
@@ -214,8 +217,8 @@ fn reconciliation_creates_missing_members_and_sets_owned_metadata() {
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
-    let report =
-        reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
+    let report = reconcile_bundle(&delivery, &config_root, &paths)
+        .expect("bundle reconciliation");
     assert_eq!(report.bootstrap_session.as_deref(), Some("alpha"));
     assert_eq!(report.pruned_sessions, Vec::<String>::new());
     assert_eq!(report.created_sessions.len(), 2);
@@ -240,6 +243,9 @@ fn reconciliation_creates_missing_members_and_sets_owned_metadata() {
 #[test]
 fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions()
  {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping reconciliation test because tmux is unavailable");
         return;
@@ -295,8 +301,8 @@ fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions
         String::from_utf8_lossy(&mark_stale.stderr)
     );
 
-    let report =
-        reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
+    let report = reconcile_bundle(&delivery, &config_root, &paths)
+        .expect("bundle reconciliation");
     assert_eq!(report.created_sessions, Vec::<String>::new());
     assert_eq!(report.pruned_sessions, vec!["stale".to_string()]);
 
@@ -314,6 +320,9 @@ fn reconciliation_prunes_stale_owned_sessions_without_killing_non_owned_sessions
 
 #[test]
 fn reconciliation_evaluates_readiness_and_reports_it_alongside_what_changed() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping reconciliation test because tmux is unavailable");
         return;
@@ -341,8 +350,8 @@ fn reconciliation_evaluates_readiness_and_reports_it_alongside_what_changed() {
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
-    let created =
-        reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
+    let created = reconcile_bundle(&delivery, &config_root, &paths)
+        .expect("bundle reconciliation");
     assert_eq!(created.created_sessions, vec!["alpha".to_string()]);
     assert_eq!(created.ready_session_count, 1);
     assert!(created.failed_startups.is_empty());
@@ -350,8 +359,8 @@ fn reconciliation_evaluates_readiness_and_reports_it_alongside_what_changed() {
     // The second pass creates nothing, so a report that counted only what it
     // changed would say the bundle has no ready session. Readiness is evaluated
     // for members the pass did not create, so the count survives.
-    let unchanged =
-        reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
+    let unchanged = reconcile_bundle(&delivery, &config_root, &paths)
+        .expect("bundle reconciliation");
     assert_eq!(unchanged.created_sessions, Vec::<String>::new());
     assert_eq!(unchanged.ready_session_count, 1);
     assert!(unchanged.failed_startups.is_empty());
@@ -359,6 +368,9 @@ fn reconciliation_evaluates_readiness_and_reports_it_alongside_what_changed() {
 
 #[test]
 fn reconciliation_registers_configured_members_in_unified_registry() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     if !tmux_available() {
         eprintln!("skipping reconciliation test because tmux is unavailable");
         return;
@@ -396,12 +408,13 @@ fn reconciliation_registers_configured_members_in_unified_registry() {
     ensure_bundle_runtime_directory(&paths).expect("create runtime directory");
     let _tmux_guard = TmuxServerGuard::new(paths.tmux_socket.clone());
 
-    reconcile_bundle(&config_root, &paths).expect("bundle reconciliation");
+    reconcile_bundle(&delivery, &config_root, &paths)
+        .expect("bundle reconciliation");
 
     // The reconcile/`up` path registers every configured member as a static
     // registry shell, so the unified registry holds them regardless of transport
     // readiness.
-    let ids = registered_principal_ids(bundle_name);
+    let ids = registered_principal_ids(&delivery, bundle_name);
     assert!(
         ids.iter().any(|id| id == &format!("alpha@{bundle_name}")),
         "reconcile registers configured member alpha in the unified registry"

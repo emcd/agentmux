@@ -13,7 +13,7 @@ use std::{
     collections::{HashMap, HashSet},
     io,
     path::Path,
-    sync::mpsc,
+    sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -29,6 +29,7 @@ use crate::configuration::{
     ConfigurationRoots, bundle_configuration_path,
     effective_bundle_definitions, load_bundle_configuration,
 };
+use crate::relay::delivery::DeliveryContext;
 use crate::runtime::error::RuntimeError;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::{
@@ -105,6 +106,7 @@ impl Drop for BundleWatcher {
 /// spawned. The relay host treats this as non-fatal and continues serving
 /// without dynamic reconciliation.
 pub fn spawn_bundle_watcher(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     state_root: impl AsRef<Path>,
     catalog: BundleCatalog,
@@ -150,6 +152,7 @@ pub fn spawn_bundle_watcher(
         failed: HashMap::new(),
     };
 
+    let delivery = Arc::clone(delivery);
     let consumer = thread::Builder::new()
         .name("agentmux-bundle-watcher".to_string())
         .spawn(move || {
@@ -159,6 +162,7 @@ pub fn spawn_bundle_watcher(
                 |wake| match wake {
                     WatchWake::Reconcile => {
                         reconcile_bundles(
+                            &delivery,
                             &configuration_roots,
                             &state_root,
                             &catalog,
@@ -277,6 +281,7 @@ struct ReconcileState {
 /// in a later layer and reloads again; and editing a file which an earlier layer
 /// still shadows changes no effective content, so it is inert.
 fn reconcile_bundles(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: &BundleCatalog,
@@ -307,7 +312,7 @@ fn reconcile_bundles(
 
     // Disappeared: loaded bundles whose file is no longer on disk.
     for bundle_name in loaded.difference(&on_disk) {
-        unload_bundle(catalog, bundle_name, state);
+        unload_bundle(delivery, catalog, bundle_name, state);
     }
 
     // New or modified bundles present on disk.
@@ -339,6 +344,7 @@ fn reconcile_bundles(
                 continue;
             }
             reload_bundle(
+                delivery,
                 configuration_roots,
                 state_root,
                 catalog,
@@ -351,6 +357,7 @@ fn reconcile_bundles(
                 continue;
             }
             load_new_bundle(
+                delivery,
                 configuration_roots,
                 state_root,
                 catalog,
@@ -369,7 +376,9 @@ fn reconcile_bundles(
 /// boot-time process-only path — so a later edit does not silently start it. A
 /// validation or startup failure is recorded and the bundle is left unloaded;
 /// other bundles continue serving.
+#[allow(clippy::too_many_arguments)]
 fn load_new_bundle(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: &BundleCatalog,
@@ -423,7 +432,7 @@ fn load_new_bundle(
         };
     if no_autostart || !configuration.autostart {
         if let Err(error) =
-            register_configured_bundle_principals(&configuration)
+            register_configured_bundle_principals(delivery, &configuration)
         {
             record_load_failure(
                 bundle_name,
@@ -453,7 +462,7 @@ fn load_new_bundle(
         );
         return;
     }
-    match startup_bundle(configuration_roots, &paths) {
+    match startup_bundle(delivery, configuration_roots, &paths) {
         Ok(report) if report.ready_session_count > 0 => {
             catalog.insert(paths, HostingIntent::Run);
             state
@@ -495,6 +504,7 @@ fn load_new_bundle(
 /// then bring it back up with the new configuration. If the new configuration is
 /// invalid the bundle is left unloaded with a recorded failure.
 fn reload_bundle(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: &BundleCatalog,
@@ -503,6 +513,7 @@ fn reload_bundle(
     state: &mut ReconcileState,
 ) {
     let evicted_session_count = evict_streams_for_bundle(
+        delivery,
         bundle_name,
         &bundle_reloaded_response(bundle_name),
     );
@@ -526,6 +537,7 @@ fn reload_bundle(
     // not block the attempt — it reports what tmux could not be asked, which the
     // restart may well fix.
     let teardown = shutdown_bundle_runtime(
+        delivery,
         bundle_name,
         &paths.runtime_directory,
         &paths.tmux_socket,
@@ -566,7 +578,7 @@ fn reload_bundle(
         return;
     }
 
-    match startup_bundle(configuration_roots, &paths) {
+    match startup_bundle(delivery, configuration_roots, &paths) {
         Ok(report) if report.ready_session_count > 0 => {
             // Reload is reached only for a bundle whose intent is `Run` (held
             // bundles are suppressed above), so the refreshed entry stays `Run`.
@@ -614,17 +626,20 @@ fn reload_bundle(
 /// Unloads a bundle whose file disappeared: evict every active session, remove it
 /// from the catalog so new connections fail fast, and tear the runtime down.
 fn unload_bundle(
+    delivery: &Arc<DeliveryContext>,
     catalog: &BundleCatalog,
     bundle_name: &str,
     state: &mut ReconcileState,
 ) {
     let removed = catalog.remove(bundle_name);
     let evicted_session_count = evict_streams_for_bundle(
+        delivery,
         bundle_name,
         &bundle_unloaded_response(bundle_name),
     );
     if let Some(paths) = removed {
         let _ = shutdown_bundle_runtime(
+            delivery,
             bundle_name,
             &paths.runtime_directory,
             &paths.tmux_socket,

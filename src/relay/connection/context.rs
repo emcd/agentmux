@@ -13,6 +13,7 @@ use std::{
 };
 
 use crate::configuration::ConfigurationRoots;
+use crate::relay::delivery::DeliveryContext;
 
 use super::super::PeerConnectionManager;
 use super::super::catalog::BundleCatalog;
@@ -35,6 +36,10 @@ pub struct ConnectionServeContext {
     pub(super) relay_aliases: Arc<Vec<String>>,
     pub(super) require_session_credentials: bool,
     pub(super) pre_hello_idle_timeout: Duration,
+    /// The handle's delivery state: admission quota, ledgers, registries,
+    /// drain coordination, and controlled-shutdown gate. Shared across every
+    /// cloned per-connection context via the `Arc`.
+    pub(super) delivery_context: Arc<DeliveryContext>,
     /// Relay-scope mutex serializing identity-admin (`new peer` / `change psk`)
     /// store transactions. Each admin op runs a load/stage/persist/rename
     /// sequence on the blocking pool against the on-disk principal store; without
@@ -49,6 +54,7 @@ impl ConnectionServeContext {
     /// Assembles the shared serving context from resolved relay runtime state; it
     /// is cloned per accepted connection.
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         configuration_roots: ConfigurationRoots,
         state_root: PathBuf,
@@ -57,6 +63,7 @@ impl ConnectionServeContext {
         relay_aliases: Vec<String>,
         require_session_credentials: bool,
         pre_hello_idle_timeout: Duration,
+        delivery_context: Arc<DeliveryContext>,
     ) -> Self {
         let mut relay_aliases = relay_aliases;
         relay_aliases.sort();
@@ -70,6 +77,7 @@ impl ConnectionServeContext {
             require_session_credentials,
             pre_hello_idle_timeout,
             identity_admin_lock: Arc::new(Mutex::new(())),
+            delivery_context,
         }
     }
 
@@ -92,5 +100,11 @@ impl ConnectionServeContext {
     #[must_use]
     pub fn bundle_catalog(&self) -> &BundleCatalog {
         &self.bundle_catalog
+    }
+
+    /// The handle's delivery state, shared across every connection worker.
+    #[must_use]
+    pub fn delivery_context(&self) -> &Arc<DeliveryContext> {
+        &self.delivery_context
     }
 }

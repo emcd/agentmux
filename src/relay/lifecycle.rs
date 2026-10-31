@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::{collections::HashSet, path::Path, thread, time::Duration};
 
 use serde_json::json;
@@ -24,6 +25,7 @@ use super::{
 use crate::relay::authorization::{
     choices_pending_max, load_authorization_context,
 };
+use crate::relay::delivery::DeliveryContext;
 use crate::relay::delivery::{
     initialize_acp_target_for_startup, stop_workers_for_bundle,
     wait_for_bundle_workers_stopped,
@@ -51,6 +53,7 @@ impl From<TmuxLifecycleError> for RelayError {
 /// Returns structured validation/configuration errors when bundle loading
 /// fails, and internal failures when tmux session operations fail.
 pub(super) fn reconcile_bundle(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     paths: &BundleRuntimePaths,
 ) -> Result<ReconciliationReport, RelayError> {
@@ -58,6 +61,7 @@ pub(super) fn reconcile_bundle(
     let authorization =
         load_authorization_context(configuration_roots, Some(&bundle))?;
     reconcile_loaded_bundle(
+        delivery,
         &bundle,
         paths,
         choices_pending_max(&authorization),
@@ -108,23 +112,30 @@ pub(super) fn preflight_bundle_configuration(
 ///
 /// Returns internal failures when tmux session operations fail.
 pub(super) fn shutdown_bundle_runtime(
+    delivery: &Arc<DeliveryContext>,
     bundle_name: &str,
     runtime_directory: &Path,
     tmux_socket: &Path,
 ) -> Result<ShutdownReport, RelayError> {
     let mut report = ShutdownReport::default();
-    let signalled = stop_workers_for_bundle(bundle_name, runtime_directory);
+    let signalled = stop_workers_for_bundle(
+        delivery.async_registry(),
+        bundle_name,
+        runtime_directory,
+    );
     // Bounded by what the operator configured the fence to spend, plus room for
     // the worker's own bookkeeping afterwards. Deriving it rather than fixing a
     // constant keeps a relay configured for slow targets from reporting a
     // teardown incomplete that its own settings said to wait for.
     let stop_timeout = Duration::from_millis(
-        crate::relay::delivery::admission::delivery_configuration()
+        delivery
+            .delivery_configuration()
             .fence_observation_timeout_ms
             + BUNDLE_WORKER_STOP_MARGIN_MS,
     );
     report.signalled_worker_count = signalled;
     report.unstopped_worker_count = wait_for_bundle_workers_stopped(
+        delivery.async_registry(),
         bundle_name,
         runtime_directory,
         stop_timeout,
@@ -200,13 +211,19 @@ fn members_for_spawn(
 }
 
 pub(super) fn startup_bundle(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     paths: &BundleRuntimePaths,
 ) -> Result<BundleStartupReport, RelayError> {
     let bundle = load_hosted_bundle(configuration_roots, paths)?;
     let authorization =
         load_authorization_context(configuration_roots, Some(&bundle))?;
-    startup_loaded_bundle(&bundle, paths, choices_pending_max(&authorization))
+    startup_loaded_bundle(
+        delivery,
+        &bundle,
+        paths,
+        choices_pending_max(&authorization),
+    )
 }
 
 /// Registers the relay-wide principals declared in `users.toml` as static
@@ -219,6 +236,7 @@ pub(super) fn startup_bundle(
 /// (capability gate) rather than `validation_unknown_target` — and a Hello later
 /// flips the same entry online. Absent `users.toml` is not an error.
 pub(super) fn register_configured_relay_wide_principals(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
 ) -> Result<(), RelayError> {
     let Some(users) =
@@ -227,7 +245,12 @@ pub(super) fn register_configured_relay_wide_principals(
         return Ok(());
     };
     for session in &users.sessions {
-        register_configured_session(session.id.as_str(), session.session_type).map_err(
+        register_configured_session(
+            delivery,
+            session.id.as_str(),
+            session.session_type,
+        )
+        .map_err(
             |error| {
                 relay_error(
                     "internal_unexpected_failure",
@@ -249,10 +272,12 @@ pub(super) fn register_configured_relay_wide_principals(
 /// refreshes the static shell and preserves any stream state already attached by a
 /// live connection.
 pub(super) fn register_configured_bundle_principals(
+    delivery: &Arc<DeliveryContext>,
     bundle: &BundleConfiguration,
 ) -> Result<(), RelayError> {
     for member in &bundle.members {
         register_configured_session(
+            delivery,
             canonical_session_id(member.id.as_str(), bundle.bundle_name.as_str()).as_str(),
             member.target.session_type(),
         )
@@ -275,12 +300,13 @@ pub(super) fn register_configured_bundle_principals(
 /// the relay begins serving, so a declared-but-offline member is a known target
 /// rather than an unknown one.
 pub(super) fn register_configured_bundle(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_name: &str,
 ) -> Result<(), RelayError> {
     let bundle = load_bundle_configuration(configuration_roots, bundle_name)
         .map_err(map_config)?;
-    register_configured_bundle_principals(&bundle)
+    register_configured_bundle_principals(delivery, &bundle)
 }
 
 /// Reconciles `bundle`'s configured sessions against tmux state and reports what
@@ -293,6 +319,7 @@ pub(super) fn register_configured_bundle(
 /// principal registration) still fail the whole operation, because a pass that
 /// cannot say what it did or did not do has nothing to report.
 pub(super) fn reconcile_loaded_bundle(
+    delivery: &Arc<DeliveryContext>,
     bundle: &BundleConfiguration,
     paths: &BundleRuntimePaths,
     choices_pending_max: usize,
@@ -302,7 +329,7 @@ pub(super) fn reconcile_loaded_bundle(
     // Refresh the static registry shells for every configured member so the
     // reconcile/`up` path keeps the unified registry complete (offline members
     // included), independent of transport readiness.
-    register_configured_bundle_principals(bundle)?;
+    register_configured_bundle_principals(delivery, bundle)?;
     let mut members = members_for_spawn(bundle, paths);
     members.sort_by(|left, right| left.id.cmp(&right.id));
     let configured_sessions = members
@@ -425,6 +452,7 @@ pub(super) fn reconcile_loaded_bundle(
         .cloned()
         .collect::<Vec<_>>();
     let (ready_session_count, mut failed_startups) = startup_members(
+        delivery,
         bundle.bundle_name.as_str(),
         runtime_directory,
         tmux_socket,
@@ -507,6 +535,7 @@ fn member_failure_record(
 /// checked for readiness, and an ACP member whose worker is already registered is
 /// left alone — so a repeated pass over a healthy bundle changes nothing.
 fn startup_member(
+    delivery: &Arc<DeliveryContext>,
     bundle_name: &str,
     runtime_directory: &Path,
     tmux_socket: &Path,
@@ -518,6 +547,7 @@ fn startup_member(
             startup_tmux_member(tmux_socket, member)
         },
         TargetConfiguration::Acp(_) => initialize_acp_target_for_startup(
+            delivery,
             bundle_name,
             runtime_directory,
             member,
@@ -545,6 +575,7 @@ fn startup_member(
 /// Brings up each member of `members`, returning how many reached ready state and
 /// a record for each that did not.
 fn startup_members(
+    delivery: &Arc<DeliveryContext>,
     bundle_name: &str,
     runtime_directory: &Path,
     tmux_socket: &Path,
@@ -555,6 +586,7 @@ fn startup_members(
     let mut failed_startups = Vec::<StartupFailureRecord>::new();
     for member in members {
         match startup_member(
+            delivery,
             bundle_name,
             runtime_directory,
             tmux_socket,
@@ -577,6 +609,7 @@ fn startup_members(
 }
 
 fn startup_loaded_bundle(
+    delivery: &Arc<DeliveryContext>,
     bundle: &BundleConfiguration,
     paths: &BundleRuntimePaths,
     choices_pending_max: usize,
@@ -606,12 +639,13 @@ fn startup_loaded_bundle(
     // from the registry and an offline-but-declared principal is a known target
     // (not an unknown one). The entries persist independently of transport
     // readiness; a Hello later flips a member online.
-    register_configured_bundle_principals(bundle)?;
+    register_configured_bundle_principals(delivery, bundle)?;
 
     let mut members = members_for_spawn(bundle, paths);
     members.sort_by(|left, right| left.id.cmp(&right.id));
 
     let (ready_session_count, failed_startups) = startup_members(
+        delivery,
         bundle.bundle_name.as_str(),
         runtime_directory,
         tmux_socket,

@@ -5,6 +5,8 @@ use serde_json::json;
 use crate::configuration::{
     BundleConfiguration, ConfigurationRoots, load_bundle_configuration,
 };
+use crate::relay::delivery::DeliveryContext;
+use std::sync::Arc;
 
 use super::super::authorization::{
     AuthorizationContext, authorize_choose, authorize_choose_for_list,
@@ -23,6 +25,7 @@ use super::super::{
 };
 
 pub(super) fn emit_choices_snapshot_for_ui_registration(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     namespace: &str,
     runtime_directory: &Path,
@@ -41,6 +44,7 @@ pub(super) fn emit_choices_snapshot_for_ui_registration(
         return Ok(());
     }
     let context = ChoiceEventContext {
+        delivery: Arc::clone(delivery),
         runtime_directory: runtime_directory.to_path_buf(),
         namespace: bundle.bundle_name.clone(),
         authorized_ui_sessions: authorized_sessions,
@@ -61,6 +65,7 @@ pub(super) fn emit_choices_snapshot_for_ui_registration(
 }
 
 pub(super) fn handle_choices_pick(
+    delivery: &Arc<DeliveryContext>,
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
     request: ChoiceDecisionRequestContext,
@@ -91,6 +96,7 @@ pub(super) fn handle_choices_pick(
         choice_request_id.as_str(),
     )?;
     let context = ChoiceEventContext {
+        delivery: Arc::clone(delivery),
         runtime_directory: runtime_directory.to_path_buf(),
         namespace: bundle.bundle_name.clone(),
         authorized_ui_sessions: choose_authorized_ui_sessions(

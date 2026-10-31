@@ -13,6 +13,7 @@ pub(in crate::acp) fn flat_bundle_paths(root: &Path) -> BundleRuntimePaths {
     }
 }
 pub(in crate::acp) fn startup_bundle(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
 ) -> Result<(), agentmux::relay::RelayError> {
@@ -21,7 +22,7 @@ pub(in crate::acp) fn startup_bundle(
         tmux_socket.parent().unwrap_or_else(|| Path::new("."));
     let mut paths = flat_bundle_paths(runtime_directory);
     paths.tmux_socket = tmux_socket.to_path_buf();
-    let _ = agentmux::relay::startup_bundle(config_root, &paths)?;
+    let _ = agentmux::relay::startup_bundle(delivery, config_root, &paths)?;
     Ok(())
 }
 
@@ -35,11 +36,17 @@ pub(in crate::acp) fn persisted_state_path(
 }
 
 pub(in crate::acp) fn read_worker_state(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     root: &Path,
     target_session: &str,
 ) -> Option<String> {
-    agentmux::relay::read_worker_readiness("party", root, target_session)
-        .map(ToString::to_string)
+    agentmux::relay::read_worker_readiness(
+        delivery,
+        "party",
+        root,
+        target_session,
+    )
+    .map(ToString::to_string)
 }
 
 pub(in crate::acp) fn send_result(

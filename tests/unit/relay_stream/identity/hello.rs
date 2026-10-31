@@ -11,6 +11,9 @@ use super::*;
 // stable principal_id.
 #[test]
 fn hello_with_valid_session_credential_registers_principal() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_valid_session";
     let configuration_roots =
@@ -21,6 +24,7 @@ fn hello_with_valid_session_credential_registers_principal() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -28,6 +32,7 @@ fn hello_with_valid_session_credential_registers_principal() {
         None,
     );
     let frame = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -43,6 +48,9 @@ fn hello_with_valid_session_credential_registers_principal() {
 // principal store entry created.
 #[test]
 fn hello_with_socket_trust_enforcement_off_accepts_without_store_entry() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_socket_trust_off";
     let configuration_roots =
@@ -53,6 +61,7 @@ fn hello_with_socket_trust_enforcement_off_accepts_without_store_entry() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let frame = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -72,6 +81,9 @@ fn hello_with_socket_trust_enforcement_off_accepts_without_store_entry() {
 // registered.
 #[test]
 fn hello_with_socket_trust_enforcement_on_is_rejected() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_socket_trust_on";
     let configuration_roots =
@@ -82,6 +94,7 @@ fn hello_with_socket_trust_enforcement_on_is_rejected() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let frame = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -104,6 +117,9 @@ fn hello_with_socket_trust_enforcement_on_is_rejected() {
 // enforcement setting.
 #[test]
 fn hello_with_unrecognized_credential_is_rejected() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_unrecognized";
     let configuration_roots =
@@ -115,6 +131,7 @@ fn hello_with_unrecognized_credential_is_rejected() {
 
     for enforcement in [false, true] {
         let frame = hello_first_frame(
+            &delivery,
             &configuration_roots,
             &bundle_paths,
             &principal_id,
@@ -135,6 +152,9 @@ fn hello_with_unrecognized_credential_is_rejected() {
 // store.
 #[test]
 fn reconnect_with_same_credential_resolves_same_principal() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_reconnect";
     let configuration_roots =
@@ -145,6 +165,7 @@ fn reconnect_with_same_credential_resolves_same_principal() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -152,6 +173,7 @@ fn reconnect_with_same_credential_resolves_same_principal() {
         None,
     );
     let first = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -159,6 +181,7 @@ fn reconnect_with_same_credential_resolves_same_principal() {
         false,
     );
     let second = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -177,6 +200,9 @@ fn reconnect_with_same_credential_resolves_same_principal() {
 // exercised separately in [`introspect`].
 #[test]
 fn application_principal_hello_is_accepted() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_application";
     let configuration_roots =
@@ -195,6 +221,7 @@ fn application_principal_hello_is_accepted() {
         "scope": "introspect",
     });
     let registration = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -211,6 +238,7 @@ fn application_principal_hello_is_accepted() {
         .to_string();
 
     let frame = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         principal_id.as_str(),
@@ -225,6 +253,9 @@ fn application_principal_hello_is_accepted() {
 // session not registered.
 #[test]
 fn hello_with_mismatched_principal_id_is_rejected() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_binding_mismatch";
     let configuration_roots =
@@ -236,6 +267,7 @@ fn hello_with_mismatched_principal_id_is_rejected() {
     let claimed_id = format!("bravo@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -244,6 +276,7 @@ fn hello_with_mismatched_principal_id_is_rejected() {
     );
     // Present alpha's credential while claiming bravo's identity.
     let frame = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &claimed_id,
@@ -263,6 +296,9 @@ fn hello_with_mismatched_principal_id_is_rejected() {
 // subsequent Hello with that PSK resolves to the correct principal_id.
 #[test]
 fn new_peer_creates_principal_resolved_by_subsequent_hello() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_new_peer";
     let configuration_roots =
@@ -273,6 +309,7 @@ fn new_peer_creates_principal_resolved_by_subsequent_hello() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -286,6 +323,7 @@ fn new_peer_creates_principal_resolved_by_subsequent_hello() {
     assert!(!psk.is_empty(), "new peer must return a non-empty psk");
 
     let frame = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,

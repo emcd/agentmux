@@ -1,9 +1,11 @@
 use serde_json::json;
+use std::sync::Arc;
 
 use crate::configuration::ConfigurationRoots;
 use crate::relay::authorization::{
     RouteAuthorization, reject_cross_relay_ingress,
 };
+use crate::relay::delivery::DeliveryContext;
 use crate::relay::handlers::routed::{
     load_home_context, run_target_operation,
 };
@@ -40,7 +42,9 @@ use route::{
 /// bundle, or `GLOBAL`), without borrowing a peer bundle. Delivery context for
 /// every target bundle — the home bundle included — comes from the catalog. See
 /// `dispatch_send`.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::relay) fn handle_send_routed(
+    delivery: &Arc<DeliveryContext>,
     home_namespace: &str,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
@@ -65,6 +69,7 @@ pub(in crate::relay) fn handle_send_routed(
         ));
     };
     handle_send(
+        delivery,
         home_namespace,
         SendRequestContext {
             request_id,
@@ -82,7 +87,9 @@ pub(in crate::relay) fn handle_send_routed(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_send(
+    delivery: &Arc<DeliveryContext>,
     home_namespace: &str,
     request: SendRequestContext,
     configuration_roots: &ConfigurationRoots,
@@ -292,6 +299,7 @@ fn handle_send(
                 route,
                 groups,
                 SendExecutionContext {
+                    delivery,
                     sender: &sender,
                     authenticated_identity,
                     admitted_identity,

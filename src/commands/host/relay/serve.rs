@@ -17,7 +17,7 @@ use tokio::{
 
 use crate::{
     relay::{
-        ConnectionDrainCoordinator, ConnectionServeContext,
+        ConnectionDrainCoordinator, ConnectionServeContext, DeliveryContext,
         configured_undelivered_reporting, report_undelivered_queue,
         serve_connection, shutdown_bundle_runtime, spawn_bundle_watcher,
         wait_for_async_delivery_shutdown,
@@ -63,7 +63,11 @@ pub(super) async fn serve_relay_host(
     let stop_requested = Arc::new(AtomicBool::new(false));
     let max_connections = relay_max_connections();
     let connection_permits = Arc::new(Semaphore::new(max_connections));
-    let drain_coordinator = ConnectionDrainCoordinator::new();
+    // Drain coordination lives on the handle's delivery context so a second
+    // handle in this process drains independently; the global shutdown flag
+    // below remains the process-level kill switch only.
+    let drain_coordinator =
+        Arc::clone(serve_context.delivery_context().drain_coordinator());
 
     // Remove any stale sentinel left by a crashed predecessor before we publish
     // ours. Otherwise a waiter could observe "stale sentinel + new socket
@@ -106,6 +110,7 @@ pub(super) async fn serve_relay_host(
     // and a removal produces no event at all.
     let bundle_watcher = if watch_bundles {
         match spawn_bundle_watcher(
+            serve_context.delivery_context(),
             serve_context.configuration_roots(),
             serve_context.state_root(),
             serve_context.bundle_catalog().clone(),
@@ -131,8 +136,12 @@ pub(super) async fn serve_relay_host(
     // relay startup.
     write_relay_ready_sentinel(&relay_paths)?;
 
-    let accept_outcome =
-        supervise_accept_loop(&stop_requested, accept_handle).await;
+    let accept_outcome = supervise_accept_loop(
+        &stop_requested,
+        accept_handle,
+        serve_context.delivery_context(),
+    )
+    .await;
 
     if shutdown_requested() {
         emit_inscription(
@@ -142,6 +151,13 @@ pub(super) async fn serve_relay_host(
     }
     stop_requested.store(true, Ordering::SeqCst);
 
+    // Signal this handle's controlled shutdown before draining: new dispatch
+    // is refused from here on, while the process-global flag below remains
+    // the process-termination kill switch only.
+    serve_context
+        .delivery_context()
+        .shutdown_gate()
+        .signal_shutdown();
     // Cooperative connection-worker drain: signal every worker to wrap up, then
     // wait a bounded window for them to exit. A worker parked on a stream read
     // exits immediately; one mid-request finishes its in-flight dispatch first.
@@ -177,8 +193,13 @@ pub(super) async fn serve_relay_host(
     // Cleanup (async-delivery drain, socket removal, tmux shutdown per bundle)
     // is blocking. The relay-level runtime lock is held until cleanup returns.
     let cleanup_relay_paths = relay_paths.clone();
+    let cleanup_delivery = Arc::clone(serve_context.delivery_context());
     tokio::task::spawn_blocking(move || {
-        cleanup_relay_host(cleanup_relay_paths, bundle_paths_for_cleanup)
+        cleanup_relay_host(
+            &cleanup_delivery,
+            cleanup_relay_paths,
+            bundle_paths_for_cleanup,
+        )
     })
     .await
     .map_err(|source| supervisor_join_error("relay host cleanup", source))??;
@@ -194,10 +215,14 @@ pub(super) async fn serve_relay_host(
 pub(super) async fn supervise_accept_loop(
     stop_requested: &Arc<AtomicBool>,
     accept_handle: tokio::task::JoinHandle<Result<(), RuntimeError>>,
+    delivery: &Arc<DeliveryContext>,
 ) -> Result<(), RuntimeError> {
     let mut accept_handle = accept_handle;
     loop {
-        if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
+        if shutdown_requested()
+            || stop_requested.load(Ordering::SeqCst)
+            || delivery.is_shutting_down()
+        {
             // Drive the loop to completion so the JoinHandle is consumed.
             return accept_loop_join_outcome(accept_handle.await);
         }
@@ -240,6 +265,7 @@ pub(super) fn supervisor_join_error(
 /// delivery workers (on shutdown), removes the relay socket and sentinel, and
 /// shuts down tmux per bundle.
 pub(super) fn cleanup_relay_host(
+    delivery: &Arc<DeliveryContext>,
     relay_paths: RelayRuntimePaths,
     bundle_paths: Vec<BundleRuntimePaths>,
 ) -> Result<(), RuntimeError> {
@@ -248,10 +274,13 @@ pub(super) fn cleanup_relay_host(
         // bound is the most this step may take; the deadline is what it must fit
         // inside, and the reserve is for the socket removal and per-bundle tmux
         // teardown below, which still have to run after this returns.
-        wait_for_async_delivery_shutdown(budget_within_shutdown(
-            Duration::from_millis(RELAY_SHUTDOWN_WORKER_DRAIN_TIMEOUT_MS),
-            Duration::from_millis(RELAY_SHUTDOWN_TEARDOWN_RESERVE_MS),
-        ))
+        wait_for_async_delivery_shutdown(
+            delivery,
+            budget_within_shutdown(
+                Duration::from_millis(RELAY_SHUTDOWN_WORKER_DRAIN_TIMEOUT_MS),
+                Duration::from_millis(RELAY_SHUTDOWN_TEARDOWN_RESERVE_MS),
+            ),
+        )
     } else {
         0
     };
@@ -259,6 +288,7 @@ pub(super) fn cleanup_relay_host(
     shared::remove_relay_socket_file(&relay_paths.relay_socket)?;
     for paths in bundle_paths {
         let shutdown = shutdown_bundle_runtime(
+            delivery,
             paths.bundle_name.as_str(),
             &paths.runtime_directory,
             &paths.tmux_socket,
@@ -333,13 +363,17 @@ pub(super) async fn run_relay_accept_loop(
     // it is exactly relay-lifetime scoped, needs no shutdown coordination, and
     // does no work worth a thread. The first tick fires immediately, so skip it —
     // a relay that has just started has nothing queued to report.
-    let undelivered_reporting = configured_undelivered_reporting();
+    let undelivered_reporting =
+        configured_undelivered_reporting(serve_context.delivery_context());
     let mut undelivered_report =
         tokio::time::interval(undelivered_reporting.interval);
     undelivered_report.tick().await;
 
     loop {
-        if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
+        if shutdown_requested()
+            || stop_requested.load(Ordering::SeqCst)
+            || serve_context.delivery_context().is_shutting_down()
+        {
             break Ok(());
         }
         tokio::select! {
@@ -347,7 +381,10 @@ pub(super) async fn run_relay_accept_loop(
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, _address)) => {
-                        if shutdown_requested() || stop_requested.load(Ordering::SeqCst) {
+                        if shutdown_requested()
+                            || stop_requested.load(Ordering::SeqCst)
+                            || serve_context.delivery_context().is_shutting_down()
+                        {
                             break Ok(());
                         }
                         match Arc::clone(&connection_permits).try_acquire_owned() {
@@ -376,7 +413,10 @@ pub(super) async fn run_relay_accept_loop(
                 }
             }
             _ = undelivered_report.tick() => {
-                report_undelivered_queue(undelivered_reporting);
+                report_undelivered_queue(
+                    serve_context.delivery_context(),
+                    undelivered_reporting,
+                );
             }
             () = tokio::time::sleep(Duration::from_millis(RELAY_SHUTDOWN_POLL_INTERVAL_MS)) => {}
         }

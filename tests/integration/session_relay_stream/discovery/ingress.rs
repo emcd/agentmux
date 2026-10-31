@@ -24,6 +24,9 @@ use super::super::{
 
 #[test]
 fn ingress_namespace_discovery_derives_from_receiver_catalog() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -40,6 +43,7 @@ fn ingress_namespace_discovery_derives_from_receiver_catalog() {
         Some(bundle_name.as_str()),
     );
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -58,6 +62,9 @@ fn ingress_namespace_discovery_derives_from_receiver_catalog() {
 
 #[test]
 fn ingress_namespace_discovery_denies_absent_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -73,6 +80,7 @@ fn ingress_namespace_discovery_denies_absent_scope() {
         None,
     );
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -87,6 +95,9 @@ fn ingress_namespace_discovery_denies_absent_scope() {
 
 #[test]
 fn ingress_namespace_discovery_omits_empty_namespace() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -104,6 +115,7 @@ fn ingress_namespace_discovery_omits_empty_namespace() {
         Some("phantom"),
     );
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -170,6 +182,9 @@ fn configure_inscriptions(state_root: &Path) -> std::path::PathBuf {
 /// original smoke-test failure undiagnosable.
 #[test]
 fn ingress_namespace_discovery_records_a_scope_that_matched_nothing() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -187,6 +202,7 @@ fn ingress_namespace_discovery_records_a_scope_that_matched_nothing() {
     );
 
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -227,6 +243,9 @@ fn ingress_namespace_discovery_records_a_scope_that_matched_nothing() {
 /// emitting, fails on the control instead of satisfying the absence.
 #[test]
 fn ingress_namespace_discovery_records_nothing_when_the_scope_matches() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -244,6 +263,7 @@ fn ingress_namespace_discovery_records_nothing_when_the_scope_matches() {
         Some("phantom"),
     );
     ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         unmatched_principal.as_str(),
@@ -267,6 +287,7 @@ fn ingress_namespace_discovery_records_nothing_when_the_scope_matches() {
         Some(bundle_name.as_str()),
     );
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         matched_principal.as_str(),
@@ -293,6 +314,9 @@ fn ingress_namespace_discovery_records_nothing_when_the_scope_matches() {
 #[test]
 fn ingress_principal_discovery_returns_complete_namespace_under_namespace_scope()
  {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -308,6 +332,7 @@ fn ingress_principal_discovery_returns_complete_namespace_under_namespace_scope(
         Some(bundle_name.as_str()),
     );
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -330,6 +355,9 @@ fn ingress_principal_discovery_returns_complete_namespace_under_namespace_scope(
 #[test]
 fn ingress_principal_discovery_denies_out_of_scope_namespace_without_disclosure()
  {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -347,6 +375,7 @@ fn ingress_principal_discovery_denies_out_of_scope_namespace_without_disclosure(
         Some("some-other-bundle"),
     );
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -371,6 +400,9 @@ fn ingress_principal_discovery_denies_out_of_scope_namespace_without_disclosure(
 
 #[test]
 fn ingress_principal_discovery_denies_absent_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -388,6 +420,7 @@ fn ingress_principal_discovery_denies_absent_scope() {
         None,
     );
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -423,6 +456,9 @@ fn break_bundle_configuration(
 #[test]
 fn ingress_principal_discovery_hides_collection_errors_from_out_of_scope_peer()
 {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -440,6 +476,7 @@ fn ingress_principal_discovery_hides_collection_errors_from_out_of_scope_peer()
     break_bundle_configuration(&configuration_roots, &bundle_name);
 
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -460,6 +497,9 @@ fn ingress_principal_discovery_hides_collection_errors_from_out_of_scope_peer()
 
 #[test]
 fn ingress_principal_discovery_absent_scope_denies_despite_broken_config() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -477,6 +517,7 @@ fn ingress_principal_discovery_absent_scope_denies_despite_broken_config() {
     break_bundle_configuration(&configuration_roots, &bundle_name);
 
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -491,6 +532,9 @@ fn ingress_principal_discovery_absent_scope_denies_despite_broken_config() {
 
 #[test]
 fn ingress_principal_discovery_reports_collection_errors_to_covered_peer() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -508,6 +552,7 @@ fn ingress_principal_discovery_reports_collection_errors_to_covered_peer() {
     break_bundle_configuration(&configuration_roots, &bundle_name);
 
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -524,6 +569,9 @@ fn ingress_principal_discovery_reports_collection_errors_to_covered_peer() {
 #[test]
 fn ingress_namespace_discovery_hides_collection_errors_from_out_of_scope_peer()
 {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -541,6 +589,7 @@ fn ingress_namespace_discovery_hides_collection_errors_from_out_of_scope_peer()
     break_bundle_configuration(&configuration_roots, &bundle_name);
 
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -555,6 +604,9 @@ fn ingress_namespace_discovery_hides_collection_errors_from_out_of_scope_peer()
 
 #[test]
 fn ingress_namespace_discovery_reports_collection_errors_to_wildcard_peer() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -572,6 +624,7 @@ fn ingress_namespace_discovery_reports_collection_errors_to_wildcard_peer() {
     break_bundle_configuration(&configuration_roots, &bundle_name);
 
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -589,6 +642,9 @@ fn ingress_namespace_discovery_reports_collection_errors_to_wildcard_peer() {
 #[test]
 fn ingress_global_principal_discovery_enumerates_registry_under_namespace_scope()
  {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -611,11 +667,13 @@ fn ingress_global_principal_discovery_enumerates_registry_under_namespace_scope(
     // configuration declares exactly this operator.
     let global_id = global_user_id(&bundle_name);
     let (global_client, global_handle) = spawn_live_global_principal(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         global_id.as_str(),
     );
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -650,6 +708,9 @@ fn ingress_global_principal_discovery_enumerates_registry_under_namespace_scope(
 
 #[test]
 fn ingress_discovery_rejects_peer_reforward_without_dialing() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -669,6 +730,7 @@ fn ingress_discovery_rejects_peer_reforward_without_dialing() {
     // `validation_unknown_peer`; `authorization_forbidden` proves the re-forward
     // was refused before any onward lookup or dial.
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -689,12 +751,13 @@ fn ingress_discovery_rejects_peer_reforward_without_dialing() {
 // stream registry, returning the client stream and serve handle so the caller can
 // keep it alive across a discovery request and tear it down afterward.
 fn spawn_live_global_principal(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     global_id: &str,
 ) -> (UnixStream, thread::JoinHandle<()>) {
     let (mut client, handle) =
-        spawn_relay_stream(configuration_roots, bundle_paths);
+        spawn_relay_stream(delivery, configuration_roots, bundle_paths);
     let reader_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(reader_stream);
     send_json(

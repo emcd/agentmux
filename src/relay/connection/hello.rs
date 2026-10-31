@@ -91,6 +91,7 @@ pub(super) async fn handle_hello(
         .as_ref()
         .and_then(|rights| rights.scope.clone());
     match register_stream(
+        frame.context.delivery_context(),
         binding.principal_id.as_str(),
         binding.session_type,
         writer.clone(),
@@ -99,7 +100,7 @@ pub(super) async fn handle_hello(
         connection_scope,
     )? {
         RegisterStreamOutcome::Registered(value) => {
-            guard.set(value);
+            guard.set(frame.context.delivery_context(), value);
         },
         RegisterStreamOutcome::IdentityClaimConflict {
             existing_connection_id,
@@ -125,6 +126,7 @@ pub(super) async fn handle_hello(
     )?;
     if binding.session_type == SessionType::Ui
         && let Err(error) = emit_registration_choices_snapshots(
+            frame.context.delivery_context(),
             frame.configuration_roots,
             bundle_catalog,
             &binding,

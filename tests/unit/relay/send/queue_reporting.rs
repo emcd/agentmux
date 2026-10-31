@@ -23,21 +23,21 @@ use super::*;
 /// stays in flight.
 #[test]
 fn undelivered_reporting_counts_waiting_entries_and_not_declared_ones() {
-    use agentmux::relay::{UndeliveredReporting, report_undelivered_queue};
+    use agentmux::relay::UndeliveredReporting;
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
         &inscriptions,
     );
-    configure_long_unreachable_dwell();
+    let delivery = test_delivery_with_dwell(LONG_UNREACHABLE_DWELL_MS);
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
     let reporting = UndeliveredReporting::default();
 
     // Nothing admitted yet: the aggregate is suppressed.
-    report_undelivered_queue(reporting);
+    agentmux::relay::report_undelivered_queue(&delivery, reporting);
     assert_eq!(
         count_inscriptions(&inscriptions, "relay.delivery.undelivered"),
         0,
@@ -45,7 +45,8 @@ fn undelivered_reporting_counts_waiting_entries_and_not_declared_ones() {
     );
 
     let send = |target: &str| {
-        dispatch_request(
+        dispatch_request_with_delivery(
+            &delivery,
             RelayRequest::Send {
                 request_id: None,
                 requester_session: "alpha".to_string(),
@@ -68,7 +69,7 @@ fn undelivered_reporting_counts_waiting_entries_and_not_declared_ones() {
     // Several worker poll ticks: long enough for every member to have reached
     // the state it will hold, far short of the dwell.
     std::thread::sleep(std::time::Duration::from_millis(600));
-    report_undelivered_queue(reporting);
+    agentmux::relay::report_undelivered_queue(&delivery, reporting);
 
     // Teeth for the count: none of the three tmux members resolved during the
     // window, so three is the depth of a queue that is still waiting rather than
@@ -154,20 +155,21 @@ fn undelivered_reporting_counts_waiting_entries_and_not_declared_ones() {
 /// nothing was reported at all".
 #[test]
 fn a_backlogged_target_warns_once_while_the_aggregate_repeats() {
-    use agentmux::relay::{UndeliveredReporting, report_undelivered_queue};
+    use agentmux::relay::UndeliveredReporting;
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
     let _ = agentmux::runtime::inscriptions::configure_process_inscriptions(
         &inscriptions,
     );
-    configure_long_unreachable_dwell();
+    let delivery = test_delivery_with_dwell(LONG_UNREACHABLE_DWELL_MS);
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let send = |target: &str| {
-        dispatch_request(
+        dispatch_request_with_delivery(
+            &delivery,
             RelayRequest::Send {
                 request_id: None,
                 requester_session: "alpha".to_string(),
@@ -195,8 +197,8 @@ fn a_backlogged_target_warns_once_while_the_aggregate_repeats() {
         warning: std::time::Duration::ZERO,
         ..UndeliveredReporting::default()
     };
-    report_undelivered_queue(reporting);
-    report_undelivered_queue(reporting);
+    agentmux::relay::report_undelivered_queue(&delivery, reporting);
+    agentmux::relay::report_undelivered_queue(&delivery, reporting);
 
     let warnings =
         read_inscriptions(&inscriptions, "relay.delivery.undelivered.warning");
@@ -264,7 +266,7 @@ fn a_backlogged_target_warns_once_while_the_aggregate_repeats() {
 /// scheduled.
 #[test]
 fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
-    use agentmux::relay::{UndeliveredReporting, report_undelivered_queue};
+    use agentmux::relay::UndeliveredReporting;
     use std::time::{Duration, Instant};
 
     /// How far the declared member is aged past the waiting ones. Also the
@@ -292,13 +294,13 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
     // terminalize the very reservation the mix depends on. The dwell is
     // lengthened alongside it so a stray unobservable moment cannot resolve a
     // waiting member either.
-    agentmux::relay::configure_delivery(
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
         agentmux::relay::DeliveryConfiguration {
             submission_timeout_ms: 60_000,
             unreachable_dwell_ms: 600_000,
             ..Default::default()
         },
-    );
+    ));
 
     let config_root = write_bundle(&temporary, "party");
     write_tui_configuration(&config_root, "default");
@@ -306,7 +308,8 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let send = || {
-        dispatch_request(
+        dispatch_request_with_delivery(
+            &delivery,
             RelayRequest::Send {
                 request_id: None,
                 requester_session: "alpha".to_string(),
@@ -353,10 +356,13 @@ fn a_warning_counts_the_waiting_members_and_ages_from_the_oldest_of_them() {
 
     // A zero threshold puts every waiting entry past it, so what the warning
     // reports is decided by the scoping rule alone.
-    report_undelivered_queue(UndeliveredReporting {
-        warning: Duration::ZERO,
-        ..UndeliveredReporting::default()
-    });
+    agentmux::relay::report_undelivered_queue(
+        &delivery,
+        UndeliveredReporting {
+            warning: Duration::ZERO,
+            ..UndeliveredReporting::default()
+        },
+    );
 
     // The ledger state the assertions below rest on, established rather than
     // assumed: three members admitted against one target, none of them resolved,

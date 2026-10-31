@@ -16,10 +16,12 @@
 
 use crate::configuration::ConfigurationRoots;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use serde_json::json;
 
 use crate::configuration::load_bundle_configuration;
+use crate::relay::delivery::DeliveryContext;
 use crate::runtime::inscriptions::emit_inscription;
 use crate::runtime::paths::tmux_socket_path_for_runtime_directory;
 
@@ -44,6 +46,7 @@ use super::listing::build_listed_bundle;
 /// Grouped so the handler signatures stay within the argument budget rather than
 /// suppressing the lint.
 pub(in crate::relay) struct DiscoveryContext<'a> {
+    pub(in crate::relay) delivery: &'a Arc<DeliveryContext>,
     pub(in crate::relay) configuration_roots: &'a ConfigurationRoots,
     pub(in crate::relay) bundle_catalog: &'a BundleCatalog,
     pub(in crate::relay) peer_connection_manager: &'a PeerConnectionManager,
@@ -236,7 +239,8 @@ fn collect_namespace_snapshot(
             namespaces.insert(paths.bundle_name);
         }
     }
-    if !list_namespace_sessions(GLOBAL_NAMESPACE).is_empty() {
+    if !list_namespace_sessions(context.delivery, GLOBAL_NAMESPACE).is_empty()
+    {
         namespaces.insert(GLOBAL_NAMESPACE.to_string());
     }
     Ok(namespaces)
@@ -308,7 +312,7 @@ fn collect_principal_snapshot(
         // `GLOBAL` is registry-backed, not a catalog bundle; its snapshot is a
         // fast in-process registry read with no probes, collected here for
         // shape symmetry with hosted bundles.
-        return Ok(Some(build_scoped_global_bundle("*")));
+        return Ok(Some(build_scoped_global_bundle(context.delivery, "*")));
     }
     let Some(paths) = context
         .bundle_catalog
@@ -324,6 +328,7 @@ fn collect_principal_snapshot(
     let tmux_socket =
         tmux_socket_path_for_runtime_directory(&paths.runtime_directory);
     let bundle = build_listed_bundle(
+        context.delivery,
         &bundle_config,
         &paths.runtime_directory,
         tmux_socket.as_path(),
@@ -399,8 +404,11 @@ fn decide_principal_snapshot(
 /// `GLOBAL` returns every registry principal with canonical list state —
 /// hosted/up iff a principal is ready (see `handle_global_list`) — and no
 /// scope-induced `principals_partial` marker.
-fn build_scoped_global_bundle(scope: &str) -> ListedBundle {
-    let sessions = list_namespace_sessions(GLOBAL_NAMESPACE);
+fn build_scoped_global_bundle(
+    delivery: &Arc<DeliveryContext>,
+    scope: &str,
+) -> ListedBundle {
+    let sessions = list_namespace_sessions(delivery, GLOBAL_NAMESPACE);
     let mut principals = sessions
         .into_iter()
         .filter(|(principal_id, _, _)| {

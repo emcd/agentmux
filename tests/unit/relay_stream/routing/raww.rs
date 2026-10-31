@@ -14,13 +14,14 @@ use super::*;
 /// bound bundle), sends one `raww` request to the given target, and returns the
 /// response frame.
 fn relay_wide_operator_raww(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     target: &str,
 ) -> Value {
     let (mut client, join) =
-        spawn_relay_connection(configuration_roots, bundle_paths);
+        spawn_relay_connection(delivery, configuration_roots, bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     let operator_id = global_user_id(bundle_name);
     send_json(
@@ -58,13 +59,14 @@ fn relay_wide_operator_raww(
 /// Connects as a bundle-bound `alpha` session and sends one `raww` request to a
 /// same-bundle target, returning the response frame.
 fn bundle_session_raww(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     target: &str,
 ) -> Value {
     let (mut client, join) =
-        spawn_relay_connection(configuration_roots, bundle_paths);
+        spawn_relay_connection(delivery, configuration_roots, bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -103,6 +105,7 @@ fn bundle_session_raww(
 /// `bundle_session_raww`, this uses a multi-bundle catalog so the peer target's
 /// bundle is resolvable.
 fn cross_bundle_raww(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
     catalog: BundleCatalog,
@@ -110,6 +113,7 @@ fn cross_bundle_raww(
     target_session: &str,
 ) -> Value {
     let (mut client, join) = spawn_relay_connection_with_catalog(
+        delivery,
         configuration_roots,
         state_root,
         catalog,
@@ -157,6 +161,9 @@ fn cross_bundle_raww(
 /// reported out-of-band via a delivery_outcome event, not in this response.
 #[test]
 fn relay_wide_raww_routes_to_bundle_target_by_suffix() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_raww_to_bundle";
     let configuration_roots =
@@ -168,6 +175,7 @@ fn relay_wide_raww_routes_to_bundle_target_by_suffix() {
         .expect("bundle paths");
 
     let response = relay_wide_operator_raww(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -188,6 +196,9 @@ fn relay_wide_raww_routes_to_bundle_target_by_suffix() {
 /// `relay_wide_send_into_bundle_denied_under_home_scope`.
 #[test]
 fn relay_wide_raww_into_bundle_denied_under_home_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_raww_home_denied";
     let configuration_roots =
@@ -199,6 +210,7 @@ fn relay_wide_raww_into_bundle_denied_under_home_scope() {
         .expect("bundle paths");
 
     let response = relay_wide_operator_raww(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -222,6 +234,9 @@ fn relay_wide_raww_into_bundle_denied_under_home_scope() {
 /// outcome against the absent harness pane is reported out-of-band).
 #[test]
 fn same_bundle_raww_permitted_under_home_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_same_bundle_raww_home";
     let configuration_roots =
@@ -232,6 +247,7 @@ fn same_bundle_raww_permitted_under_home_scope() {
         .expect("bundle paths");
 
     let response = bundle_session_raww(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -250,6 +266,9 @@ fn same_bundle_raww_permitted_under_home_scope() {
 /// `validation_missing_routing_namespace` routing-bundle artifact.
 #[test]
 fn relay_wide_raww_with_bare_target_is_rejected() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_relay_wide_raww_bare";
     let configuration_roots =
@@ -260,6 +279,7 @@ fn relay_wide_raww_with_bare_target_is_rejected() {
         .expect("bundle paths");
 
     let response = relay_wide_operator_raww(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -283,6 +303,9 @@ fn relay_wide_raww_with_bare_target_is_rejected() {
 /// peer-bundle and member resolution both succeeded.
 #[test]
 fn cross_bundle_raww_permitted_under_all_scope_resolves_peer() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "raww_peer_a";
     let bundle_b = "raww_peer_b";
@@ -297,6 +320,7 @@ fn cross_bundle_raww_permitted_under_all_scope_resolves_peer() {
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_raww(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog,
@@ -325,6 +349,9 @@ fn cross_bundle_raww_permitted_under_all_scope_resolves_peer() {
 /// surfaces.
 #[test]
 fn cross_bundle_raww_denied_under_home_scope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_a = "raww_home_a";
     let bundle_b = "raww_home_b";
@@ -339,6 +366,7 @@ fn cross_bundle_raww_denied_under_home_scope() {
     let catalog = multi_bundle_catalog(&[paths_a, paths_b]);
 
     let response = cross_bundle_raww(
+        &delivery,
         &configuration_roots,
         &state_root,
         catalog,

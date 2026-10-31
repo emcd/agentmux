@@ -15,6 +15,9 @@ use super::*;
 // old PSK is rejected.
 #[test]
 fn change_psk_rotates_credential() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_change_psk";
     let configuration_roots =
@@ -25,6 +28,7 @@ fn change_psk_rotates_credential() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let original_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -33,6 +37,7 @@ fn change_psk_rotates_credential() {
     );
 
     let rotation = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -49,6 +54,7 @@ fn change_psk_rotates_credential() {
     assert_ne!(rotated_psk, original_psk, "rotation must mint a new psk");
 
     let accepted = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -59,6 +65,7 @@ fn change_psk_rotates_credential() {
     assert_eq!(accepted["principal_id"], principal_id);
 
     let rejected = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -82,6 +89,9 @@ fn change_psk_rotates_credential() {
 // tests exercise.
 #[test]
 fn change_psk_config_writes_under_the_state_root_not_a_configuration_layer() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_change_layered";
     let base = write_identity_configuration(&temporary, bundle_name);
@@ -98,6 +108,7 @@ fn change_psk_config_writes_under_the_state_root_not_a_configuration_layer() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let original_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -108,6 +119,7 @@ fn change_psk_config_writes_under_the_state_root_not_a_configuration_layer() {
     let layers_before = layer_file_inventory(&configuration_roots);
 
     let rotation = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -179,6 +191,9 @@ fn layer_file_inventory(roots: &ConfigurationRoots) -> Vec<PathBuf> {
 // rejected.
 #[test]
 fn change_psk_config_writes_session_identity_and_omits_psk() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     use std::os::unix::fs::PermissionsExt;
 
     let temporary = TempDir::new().expect("temporary directory");
@@ -191,6 +206,7 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let original_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -199,6 +215,7 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
     );
 
     let rotation = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -240,6 +257,7 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
     assert_ne!(rotated_psk, original_psk, "rotation must mint a new psk");
 
     let accepted = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -252,6 +270,7 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
     );
 
     let rejected = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -272,6 +291,9 @@ fn change_psk_config_writes_session_identity_and_omits_psk() {
 #[test]
 fn change_psk_config_rejected_for_relay_principal_leaves_credential_unrotated()
 {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_change_config_relay";
     let configuration_roots =
@@ -282,6 +304,7 @@ fn change_psk_config_rejected_for_relay_principal_leaves_credential_unrotated()
     let principal_id = "peer1@RELAY";
 
     let original_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -290,6 +313,7 @@ fn change_psk_config_rejected_for_relay_principal_leaves_credential_unrotated()
     );
 
     let rejected = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -311,6 +335,7 @@ fn change_psk_config_rejected_for_relay_principal_leaves_credential_unrotated()
     // The rejected rotation must not have replaced the stored hash: the original
     // credential still authenticates.
     let accepted = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         principal_id,
@@ -330,6 +355,9 @@ fn change_psk_config_rejected_for_relay_principal_leaves_credential_unrotated()
 // (the revoke step is unreachable past the failed commit).
 #[test]
 fn change_psk_output_finalization_failure_leaves_credential_unrotated() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_change_finalization";
     let configuration_roots =
@@ -340,6 +368,7 @@ fn change_psk_output_finalization_failure_leaves_credential_unrotated() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let original_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -351,6 +380,7 @@ fn change_psk_output_finalization_failure_leaves_credential_unrotated() {
     std::fs::create_dir_all(&output_path)
         .expect("create directory at output path");
     let response = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -368,6 +398,7 @@ fn change_psk_output_finalization_failure_leaves_credential_unrotated() {
     // Rollback restored the prior record: the original credential still
     // authenticates, so the rotation did not take effect.
     let accepted = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         &principal_id,
@@ -386,6 +417,9 @@ fn change_psk_output_finalization_failure_leaves_credential_unrotated() {
 // connection is then closed.
 #[test]
 fn change_psk_revokes_live_session_holding_old_credential() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_revoke_live";
     let configuration_roots =
@@ -396,6 +430,7 @@ fn change_psk_revokes_live_session_holding_old_credential() {
     let principal_id = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -405,7 +440,7 @@ fn change_psk_revokes_live_session_holding_old_credential() {
 
     // Bring up a live, store-backed session and keep its connection open.
     let (mut alpha_client, alpha_join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut alpha_reader =
         BufReader::new(alpha_client.try_clone().expect("clone alpha stream"));
     send_json(
@@ -427,6 +462,7 @@ fn change_psk_revokes_live_session_holding_old_credential() {
     // credential and must be revoked. `operator_request` only returns after the
     // rotation handler has run, by which point the revocation frame is queued.
     let rotation = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -477,6 +513,9 @@ fn change_psk_revokes_live_session_holding_old_credential() {
 // pass against unfixed code.
 #[test]
 fn change_psk_on_the_requesters_own_identity_returns_the_rotated_credential() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_self_rotate";
     let configuration_roots =
@@ -487,6 +526,7 @@ fn change_psk_on_the_requesters_own_identity_returns_the_rotated_credential() {
     let operator = global_user_id(bundle_name);
 
     let operator_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -495,7 +535,7 @@ fn change_psk_on_the_requesters_own_identity_returns_the_rotated_credential() {
     );
 
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -547,6 +587,9 @@ fn change_psk_on_the_requesters_own_identity_returns_the_rotated_credential() {
 // inside the self-rotation exclusion.
 #[test]
 fn self_rotation_still_fans_out_identity_revoked_to_trusted_hosts() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_self_rotate_fanout";
     let configuration_roots =
@@ -558,6 +601,7 @@ fn self_rotation_still_fans_out_identity_revoked_to_trusted_hosts() {
     let app_principal_id = format!("engine_{bundle_name}@EXTERNAL");
 
     let operator_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -567,6 +611,7 @@ fn self_rotation_still_fans_out_identity_revoked_to_trusted_hosts() {
     // Scoped to the reserved namespace the operator lives in, so the fan-out's
     // scope check covers the rotated principal.
     let app_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -575,7 +620,7 @@ fn self_rotation_still_fans_out_identity_revoked_to_trusted_hosts() {
     );
 
     let (mut app_client, app_join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut app_reader =
         BufReader::new(app_client.try_clone().expect("clone app stream"));
     send_json(
@@ -594,7 +639,7 @@ fn self_rotation_still_fans_out_identity_revoked_to_trusted_hosts() {
     );
 
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
     send_json(
         &mut client,
@@ -644,6 +689,9 @@ fn self_rotation_still_fans_out_identity_revoked_to_trusted_hosts() {
 // every connected trusted host whose scope covers the revoked principal.
 #[test]
 fn change_psk_fans_out_identity_revoked_to_trusted_hosts() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_revoked_fanout";
     let configuration_roots =
@@ -657,6 +705,7 @@ fn change_psk_fans_out_identity_revoked_to_trusted_hosts() {
     // An in-scope session principal to revoke, plus a trusted host scoped to the
     // whole bundle.
     register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -664,6 +713,7 @@ fn change_psk_fans_out_identity_revoked_to_trusted_hosts() {
         None,
     );
     let app_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -674,7 +724,7 @@ fn change_psk_fans_out_identity_revoked_to_trusted_hosts() {
     // Connect the trusted host and keep its connection open; it receives the
     // connect-time identity.snapshot first, which the revoked-event read skips.
     let (mut app_client, app_join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let mut app_reader =
         BufReader::new(app_client.try_clone().expect("clone app stream"));
     send_json(
@@ -696,6 +746,7 @@ fn change_psk_fans_out_identity_revoked_to_trusted_hosts() {
     // `operator_request` returns only after the rotation handler has run, by
     // which point the fan-out event is queued to the host's writer.
     let rotation = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,

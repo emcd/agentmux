@@ -2,6 +2,9 @@ use super::*;
 
 #[test]
 fn choice_decision_rejects_submitter_without_choose_capability() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     // Permission decisioning is now gated on the `choose` policy capability
     // rather than a hello-asserted client class. The `alpha` bundle member
     // resolves to the default policy, which omits `choose`.
@@ -13,7 +16,7 @@ fn choice_decision_rejects_submitter_without_choose_capability() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -64,6 +67,9 @@ fn choice_decision_rejects_submitter_without_choose_capability() {
 
 #[test]
 fn choice_decision_denial_uses_choose_capability() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_choose_capability";
     let configuration_roots =
@@ -73,7 +79,7 @@ fn choice_decision_denial_uses_choose_capability() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -121,6 +127,9 @@ fn choice_decision_denial_uses_choose_capability() {
 
 #[test]
 fn choice_decision_rejects_empty_option_id() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_empty_option";
     let configuration_roots =
@@ -130,7 +139,7 @@ fn choice_decision_rejects_empty_option_id() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -179,6 +188,9 @@ fn choice_decision_rejects_empty_option_id() {
 
 #[test]
 fn choice_decision_rejects_selected_without_option_id() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_selected_missing_option";
     let configuration_roots =
@@ -188,7 +200,7 @@ fn choice_decision_rejects_selected_without_option_id() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -236,6 +248,9 @@ fn choice_decision_rejects_selected_without_option_id() {
 
 #[test]
 fn choice_decision_rejects_cancelled_with_option_id() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_cancelled_with_option";
     let configuration_roots =
@@ -245,7 +260,7 @@ fn choice_decision_rejects_cancelled_with_option_id() {
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -294,6 +309,9 @@ fn choice_decision_rejects_cancelled_with_option_id() {
 
 #[test]
 fn choices_snapshot_then_replay_carries_option_metadata() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_snapshot_options";
     let configuration_roots =
@@ -309,7 +327,7 @@ fn choices_snapshot_then_replay_carries_option_metadata() {
     );
 
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -359,6 +377,9 @@ fn choices_snapshot_then_replay_carries_option_metadata() {
 
 #[test]
 fn choice_request_persists_across_authorized_ui_reconnect() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_persists";
     let configuration_roots =
@@ -382,7 +403,7 @@ fn choice_request_persists_across_authorized_ui_reconnect() {
     });
 
     let (mut first_client, first_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let first_read = first_client.try_clone().expect("clone first stream");
     let mut first_reader = BufReader::new(first_read);
     send_json(&mut first_client, hello_frame.clone());
@@ -403,7 +424,7 @@ fn choice_request_persists_across_authorized_ui_reconnect() {
     thread::sleep(RELAY_CONNECTION_CLEANUP_BUDGET);
 
     let (mut second_client, second_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let second_read = second_client.try_clone().expect("clone second stream");
     let mut second_reader = BufReader::new(second_read);
     send_json(&mut second_client, hello_frame);
@@ -425,6 +446,9 @@ fn choice_request_persists_across_authorized_ui_reconnect() {
 
 #[test]
 fn choices_pick_selected_emits_resolved_event_with_option_id() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_selected_emit";
     let configuration_roots =
@@ -441,7 +465,7 @@ fn choices_pick_selected_emits_resolved_event_with_option_id() {
     );
 
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -498,6 +522,9 @@ fn choices_pick_selected_emits_resolved_event_with_option_id() {
 
 #[test]
 fn choices_pick_cancelled_emits_resolved_event_with_reason_code() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_cancelled_emit";
     let configuration_roots =
@@ -514,7 +541,7 @@ fn choices_pick_cancelled_emits_resolved_event_with_reason_code() {
     );
 
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -568,6 +595,9 @@ fn choices_pick_cancelled_emits_resolved_event_with_reason_code() {
 
 #[test]
 fn choices_pending_max_out_of_range_is_rejected() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choices_pending_max_invalid";
     let configuration_roots =
@@ -587,7 +617,7 @@ pending-max = 10000
         .expect("bundle paths");
 
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 
@@ -622,6 +652,9 @@ pending-max = 10000
 
 #[test]
 fn choices_pick_selected_rejects_unknown_option_id() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "party_choice_unknown_option";
     let configuration_roots =
@@ -637,7 +670,7 @@ fn choices_pick_selected_rejects_unknown_option_id() {
         "allow-once",
     );
     let (mut client_stream, join_handle) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client_stream.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
 

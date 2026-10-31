@@ -13,6 +13,9 @@ fn dir_sync_fault_file(
 
 #[test]
 fn drop_under_dirsync_failure_revokes_and_reports_uncertainty() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_dropfault";
     let configuration_roots =
@@ -23,6 +26,7 @@ fn drop_under_dirsync_failure_revokes_and_reports_uncertainty() {
     let peer_id = "dropfault@RELAY";
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -33,7 +37,7 @@ fn drop_under_dirsync_failure_revokes_and_reports_uncertainty() {
     // The peer stays connected so the test can observe whether revocation
     // still runs when durability is uncertain.
     let (mut client, join) =
-        spawn_relay_connection(&configuration_roots, &bundle_paths);
+        spawn_relay_connection(&delivery, &configuration_roots, &bundle_paths);
     let read_stream = client.try_clone().expect("clone stream");
     let mut reader = BufReader::new(read_stream);
     send_json(
@@ -50,6 +54,7 @@ fn drop_under_dirsync_failure_revokes_and_reports_uncertainty() {
     std::fs::write(dir_sync_fault_file(&bundle_paths), "fail")
         .expect("arm fault");
     let dropped = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -77,6 +82,7 @@ fn drop_under_dirsync_failure_revokes_and_reports_uncertainty() {
     join.join().expect("join revoked peer thread");
 
     let stale = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -93,6 +99,9 @@ fn drop_under_dirsync_failure_revokes_and_reports_uncertainty() {
 
 #[test]
 fn precommit_validation_failure_leaves_old_grant_intact() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_prename";
     let configuration_roots =
@@ -104,6 +113,7 @@ fn precommit_validation_failure_leaves_old_grant_intact() {
     let target = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -114,6 +124,7 @@ fn precommit_validation_failure_leaves_old_grant_intact() {
     // A malformed replacement fails before the store transaction begins: the
     // failure is reported as field validation, never durability uncertainty.
     let failed = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -134,6 +145,7 @@ fn precommit_validation_failure_leaves_old_grant_intact() {
         "failed update must not touch the record"
     );
     let allowed = peer_send_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -148,6 +160,9 @@ fn precommit_validation_failure_leaves_old_grant_intact() {
 
 #[test]
 fn postrename_dirsync_failure_keeps_replacement_effective() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_postrename";
     let configuration_roots =
@@ -159,6 +174,7 @@ fn postrename_dirsync_failure_keeps_replacement_effective() {
     let target = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -169,6 +185,7 @@ fn postrename_dirsync_failure_keeps_replacement_effective() {
     std::fs::write(dir_sync_fault_file(&bundle_paths), "fail")
         .expect("arm fault");
     let uncertain = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -190,6 +207,7 @@ fn postrename_dirsync_failure_keeps_replacement_effective() {
     // The published replacement governs ingress even though success was never
     // acknowledged: the narrowed grant denies the previously covered target.
     let denied = peer_send_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -206,6 +224,7 @@ fn postrename_dirsync_failure_keeps_replacement_effective() {
     // again: the retry performs authorization and synchronization rather than
     // short-circuiting as a no-op success.
     let rearmed = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -224,6 +243,7 @@ fn postrename_dirsync_failure_keeps_replacement_effective() {
     std::fs::remove_file(dir_sync_fault_file(&bundle_paths))
         .expect("clear fault");
     let retried = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -250,6 +270,9 @@ fn prename_fault_file(
 
 #[test]
 fn prename_storage_failure_leaves_old_grant_intact() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_prestorage";
     let configuration_roots =
@@ -261,6 +284,7 @@ fn prename_storage_failure_leaves_old_grant_intact() {
     let target = format!("alpha@{bundle_name}");
 
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -274,6 +298,7 @@ fn prename_storage_failure_leaves_old_grant_intact() {
     std::fs::write(prename_fault_file(&bundle_paths), "fail")
         .expect("arm fault");
     let failed = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -293,6 +318,7 @@ fn prename_storage_failure_leaves_old_grant_intact() {
         "failed update must not touch the record"
     );
     let allowed = peer_send_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -306,6 +332,7 @@ fn prename_storage_failure_leaves_old_grant_intact() {
 
     // Clearing the fault lets the same replacement commit normally.
     let retried = change_scope_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -317,6 +344,9 @@ fn prename_storage_failure_leaves_old_grant_intact() {
 
 #[test]
 fn rotation_compensation_uncertainty_preserves_old_credential() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_doublefault";
     let configuration_roots =
@@ -327,6 +357,7 @@ fn rotation_compensation_uncertainty_preserves_old_credential() {
     let peer_id = "doublefault@RELAY";
 
     let original_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -340,6 +371,7 @@ fn rotation_compensation_uncertainty_preserves_old_credential() {
     std::fs::write(dir_sync_fault_file(&bundle_paths), "fail")
         .expect("arm fault");
     let failed = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -352,6 +384,7 @@ fn rotation_compensation_uncertainty_preserves_old_credential() {
         "compensation uncertainty must report uncertainty: {failed:?}"
     );
     let live = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -367,6 +400,7 @@ fn rotation_compensation_uncertainty_preserves_old_credential() {
     std::fs::remove_file(dir_sync_fault_file(&bundle_paths))
         .expect("clear fault");
     let rotation = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -382,6 +416,7 @@ fn rotation_compensation_uncertainty_preserves_old_credential() {
         .to_string();
     assert_ne!(rotated_psk, original_psk);
     let accepted = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -396,6 +431,9 @@ fn rotation_compensation_uncertainty_preserves_old_credential() {
 
 #[test]
 fn rotation_compensation_uncertainty_discards_staged_file() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_filefault";
     let configuration_roots =
@@ -407,6 +445,7 @@ fn rotation_compensation_uncertainty_discards_staged_file() {
     let output_path = temporary.path().join("rotated.psk");
 
     let original_psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -421,6 +460,7 @@ fn rotation_compensation_uncertainty_discards_staged_file() {
     std::fs::write(dir_sync_fault_file(&bundle_paths), "fail")
         .expect("arm fault");
     let failed = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -441,6 +481,7 @@ fn rotation_compensation_uncertainty_discards_staged_file() {
         "staged file must be discarded when the old credential stays effective"
     );
     let live = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -454,6 +495,7 @@ fn rotation_compensation_uncertainty_discards_staged_file() {
     std::fs::remove_file(dir_sync_fault_file(&bundle_paths))
         .expect("clear fault");
     let rotation = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -467,6 +509,7 @@ fn rotation_compensation_uncertainty_discards_staged_file() {
     let file_psk =
         std::fs::read_to_string(&output_path).expect("read published file");
     let accepted = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -481,6 +524,9 @@ fn rotation_compensation_uncertainty_discards_staged_file() {
 
 #[test]
 fn uncertain_registration_retry_observes_clean_unknown_principal() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = "ident_scope_regretry";
     let configuration_roots =
@@ -498,6 +544,7 @@ fn uncertain_registration_retry_observes_clean_unknown_principal() {
     std::fs::write(dir_sync_fault_file(&bundle_paths), "fail")
         .expect("arm fault");
     let failed = operator_request(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -512,6 +559,7 @@ fn uncertain_registration_retry_observes_clean_unknown_principal() {
     std::fs::remove_file(dir_sync_fault_file(&bundle_paths))
         .expect("clear fault");
     let psk = register_peer(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name,
@@ -519,6 +567,7 @@ fn uncertain_registration_retry_observes_clean_unknown_principal() {
         Some("*"),
     );
     let accepted = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,

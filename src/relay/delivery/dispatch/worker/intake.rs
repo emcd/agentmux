@@ -13,8 +13,6 @@
 //! there is no such write and no such gate any more, and an entry that never
 //! reaches the mailbox is one no executor will ever see.
 
-use std::sync::Arc;
-
 use crate::protocol::mailbox::MailboxPayload;
 use crate::relay::{AsyncDeliveryTask, DeliveryPayloadMode, RelayError};
 use crate::transports::TransportImpl;
@@ -25,6 +23,9 @@ use super::super::super::async_worker::{
 };
 use super::super::envelope::{build_coder_envelope, build_ui_envelope};
 use super::super::outcomes::now_rfc3339;
+use crate::relay::delivery::DeliveryContext;
+use std::sync::Arc;
+
 use super::super::payload::{
     build_delivery_message, emit_envelope_metadata_inscription,
     resolve_target_member,
@@ -37,6 +38,7 @@ use super::super::payload::{
 /// transition, which for an enqueued entry is its acknowledgment. It is released
 /// here only on the two paths where no entry exists to release it later.
 pub(super) fn take_into_mailbox(
+    delivery: &Arc<DeliveryContext>,
     task: AsyncDeliveryTask,
     transport: &TransportImpl,
     pending: &std::sync::atomic::AtomicUsize,
@@ -45,8 +47,12 @@ pub(super) fn take_into_mailbox(
     // One read of the clock per entry. `Date` therefore names when the relay
     // built the envelope rather than when a transport got round to writing it,
     // which is the only stamp that can be the same on both sides of the mailbox.
-    let payload = match build_payload(&task, transport, now_rfc3339().as_str())
-    {
+    let payload = match build_payload(
+        delivery,
+        &task,
+        transport,
+        now_rfc3339().as_str(),
+    ) {
         Ok(payload) => payload,
         Err(error) => {
             // No payload means no entry, and no entry means nothing will ever
@@ -57,6 +63,7 @@ pub(super) fn take_into_mailbox(
             // it, because the guard knows the member was not written but not that
             // its target member could not be resolved.
             complete_task_refusal(
+                delivery,
                 &task,
                 error.code.as_str(),
                 error.message.as_str(),
@@ -65,7 +72,7 @@ pub(super) fn take_into_mailbox(
             return;
         },
     };
-    if let Err(rejection) = enqueue(&task, payload) {
+    if let Err(rejection) = enqueue(delivery, &task, payload) {
         // The ledger refused the position. Every shape of this is a relay-side
         // condition rather than anything about the target, and each leaves the
         // entry unwritten — so the sender is told so here rather than waiting on
@@ -84,7 +91,7 @@ pub(super) fn take_into_mailbox(
                 "the relay could not reach its delivery ledger to queue this message",
             ),
         };
-        complete_task_refusal(&task, code, reason);
+        complete_task_refusal(delivery, &task, code, reason);
         release_pending_slot(pending);
     }
 }
@@ -95,6 +102,7 @@ pub(super) fn take_into_mailbox(
 /// — before the gate, before readiness, before anything that could produce a
 /// target-side effect.
 fn build_payload(
+    delivery: &Arc<DeliveryContext>,
     task: &AsyncDeliveryTask,
     transport: &TransportImpl,
     created_at: &str,
@@ -110,7 +118,7 @@ fn build_payload(
     }
     match task.payload_mode {
         DeliveryPayloadMode::EnvelopeMessage => {
-            let target_member = resolve_target_member(task)?;
+            let target_member = resolve_target_member(delivery, task)?;
             let message =
                 build_delivery_message(task, target_member, created_at);
             // Emitted where the payload is built, and only here. Left at the write

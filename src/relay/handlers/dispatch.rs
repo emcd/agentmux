@@ -4,8 +4,10 @@
 //! submodule; this module owns only the routing and request normalization.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::configuration::{BundleConfiguration, ConfigurationRoots};
+use crate::relay::delivery::DeliveryContext;
 
 use super::super::authorization::{AuthorizationContext, authorize_updown};
 use super::super::identity::IdentityIntrospectRights;
@@ -23,6 +25,7 @@ use super::{choices, identity, install, listing};
 /// target operations (`Send`/`Look`/`Raww`) are dispatched through their
 /// namespace-centric paths and never reach here.
 pub(in crate::relay) fn handle_request(
+    delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     bundle: &BundleConfiguration,
     authorization: &AuthorizationContext,
@@ -39,7 +42,12 @@ pub(in crate::relay) fn handle_request(
                 authorization,
                 principal.as_ref(),
             )?;
-            listing::handle_bundle_up(bundle, authorization, bundle_catalog)
+            listing::handle_bundle_up(
+                delivery,
+                bundle,
+                authorization,
+                bundle_catalog,
+            )
         },
         RelayRequest::Down => {
             authorize_bundle_principal(
@@ -48,6 +56,7 @@ pub(in crate::relay) fn handle_request(
                 principal.as_ref(),
             )?;
             listing::handle_bundle_down(
+                delivery,
                 bundle,
                 runtime_directory,
                 bundle_catalog,
@@ -55,6 +64,7 @@ pub(in crate::relay) fn handle_request(
         },
         RelayRequest::List { requester_session } => {
             listing::handle_list_routed(
+                delivery,
                 bundle,
                 authorization,
                 bundle,
@@ -78,6 +88,7 @@ pub(in crate::relay) fn handle_request(
             outcome,
             option_id,
         } => choices::handle_choices_pick(
+            delivery,
             bundle,
             authorization,
             ChoiceDecisionRequestContext {
@@ -122,8 +133,10 @@ pub(in crate::relay) fn handle_request(
 /// synthetic `GLOBAL` bundle view so clients reuse the existing list payload; the
 /// bundle is `hosted`/`up` iff at least one principal is ready. An empty registry
 /// yields an empty session set (a `down` bundle), not an error.
-pub(in crate::relay) fn handle_global_list() -> RelayResponse {
-    let mut sessions = list_namespace_sessions(GLOBAL_NAMESPACE)
+pub(in crate::relay) fn handle_global_list(
+    delivery: &Arc<DeliveryContext>,
+) -> RelayResponse {
+    let mut sessions = list_namespace_sessions(delivery, GLOBAL_NAMESPACE)
         .into_iter()
         .map(|(principal_id, session_type, ready)| ListedSession {
             id: principal_id,
@@ -162,6 +175,7 @@ pub(in crate::relay) fn handle_global_list() -> RelayResponse {
 /// and authorize against the requester's policy preset relay-wide rather
 /// than within a bundle context.
 pub(in crate::relay) fn handle_identity_admin_request(
+    delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
     state_root: &Path,
@@ -186,6 +200,7 @@ pub(in crate::relay) fn handle_identity_admin_request(
             principal_id,
             destination,
         } => identity::handle_change_psk(
+            delivery,
             configuration_roots,
             state_root,
             requester_principal_id,
@@ -203,6 +218,7 @@ pub(in crate::relay) fn handle_identity_admin_request(
             scope,
         ),
         RelayRequest::DropPeer { principal_id } => identity::handle_drop_peer(
+            delivery,
             configuration_roots,
             state_root,
             requester_principal_id,
@@ -254,12 +270,14 @@ pub(in crate::relay) fn build_identity_snapshot_event(
 }
 
 pub(in crate::relay) fn emit_choices_snapshot_for_ui_registration(
+    delivery: &Arc<DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     namespace: &str,
     runtime_directory: &Path,
     ui_session_id: &str,
 ) -> Result<(), RelayError> {
     choices::emit_choices_snapshot_for_ui_registration(
+        delivery,
         configuration_roots,
         namespace,
         runtime_directory,

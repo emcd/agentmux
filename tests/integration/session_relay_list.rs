@@ -88,11 +88,13 @@ coder = "shell"
 }
 
 fn list_bundle(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     bundle_name: &str,
     runtime_directory: &Path,
 ) -> RelayResponse {
     handle_request(
+        delivery,
         RelayRequest::List {
             requester_session: Some("alpha".to_string()),
         },
@@ -121,9 +123,16 @@ fn list_reports_hosted_round_trip_for_tmux_bundle() {
     let _tmux_guard = TmuxServerGuard {
         socket: paths.tmux_socket.clone(),
     };
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
 
-    let pre_response =
-        list_bundle(&config_root, bundle_name, &paths.runtime_directory);
+    let pre_response = list_bundle(
+        &delivery,
+        &config_root,
+        bundle_name,
+        &paths.runtime_directory,
+    );
     let RelayResponse::List {
         bundle: pre_bundle, ..
     } = pre_response
@@ -140,10 +149,15 @@ fn list_reports_hosted_round_trip_for_tmux_bundle() {
         "no session should be ready before reconcile"
     );
 
-    reconcile_bundle(&config_root, &paths).expect("reconcile bundle hosting");
+    reconcile_bundle(&delivery, &config_root, &paths)
+        .expect("reconcile bundle hosting");
 
-    let hosted_response =
-        list_bundle(&config_root, bundle_name, &paths.runtime_directory);
+    let hosted_response = list_bundle(
+        &delivery,
+        &config_root,
+        bundle_name,
+        &paths.runtime_directory,
+    );
     let RelayResponse::List {
         bundle: hosted_bundle,
         ..
@@ -161,14 +175,19 @@ fn list_reports_hosted_round_trip_for_tmux_bundle() {
     );
 
     shutdown_bundle_runtime(
+        &delivery,
         bundle_name,
         &paths.runtime_directory,
         &paths.tmux_socket,
     )
     .expect("shutdown bundle runtime");
 
-    let post_response =
-        list_bundle(&config_root, bundle_name, &paths.runtime_directory);
+    let post_response = list_bundle(
+        &delivery,
+        &config_root,
+        bundle_name,
+        &paths.runtime_directory,
+    );
     let RelayResponse::List {
         bundle: post_bundle,
         ..

@@ -31,6 +31,7 @@ use super::*;
 // async delivery outlives the ingress connection on the process-global runtime,
 // so the still-open UI subscriber observes it.
 fn ingress_send_to_ui_display(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
@@ -38,7 +39,7 @@ fn ingress_send_to_ui_display(
     on_behalf_of: Option<&str>,
 ) -> (Value, Value) {
     let (mut ui_client, ui_handle) =
-        spawn_relay_stream(configuration_roots, bundle_paths);
+        spawn_relay_stream(delivery, configuration_roots, bundle_paths);
     let ui_read = ui_client.try_clone().expect("clone ui stream");
     let mut ui_reader = BufReader::new(ui_read);
     send_json(&mut ui_client, hello_payload(bundle_name, "display"));
@@ -55,6 +56,7 @@ fn ingress_send_to_ui_display(
         request["on_behalf_of"] = json!(value);
     }
     let response = ingress_request_response(
+        delivery,
         configuration_roots,
         bundle_paths,
         relay_principal_id,
@@ -90,13 +92,14 @@ fn ingress_send_to_ui_display(
 // payload. The in-process `dispatch_request` path carries no relay principal, so
 // it models a non-relay requester for the spoof gate.
 fn local_send_to_ui_display_payload(
+    delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &ConfigurationRoots,
     bundle_paths: &BundleRuntimePaths,
     bundle_name: &str,
     on_behalf_of: Option<String>,
 ) -> Value {
     let (mut ui_client, ui_handle) =
-        spawn_relay_stream(configuration_roots, bundle_paths);
+        spawn_relay_stream(delivery, configuration_roots, bundle_paths);
     let ui_read = ui_client.try_clone().expect("clone ui stream");
     let mut ui_reader = BufReader::new(ui_read);
     send_json(&mut ui_client, hello_payload(bundle_name, "display"));
@@ -104,6 +107,7 @@ fn local_send_to_ui_display_payload(
 
     let display_target = format!("display@{bundle_name}");
     let response = dispatch_request(
+        delivery,
         RelayRequest::Send {
             request_id: Some(format!("req-{}", Uuid::new_v4().simple())),
             requester_session: "alpha".to_string(),
@@ -355,6 +359,9 @@ fn cross_relay_send_discards_a_requester_supplied_on_behalf_of() {
 
 #[test]
 fn cross_relay_ingress_surfaces_on_behalf_of_in_delivered_envelope() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -371,6 +378,7 @@ fn cross_relay_ingress_surfaces_on_behalf_of_in_delivered_envelope() {
     );
 
     let (response, payload) = ingress_send_to_ui_display(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name.as_str(),
@@ -408,6 +416,9 @@ fn peer_name_of(principal_id: &str) -> String {
 // survived. Assert the sender itself.
 #[test]
 fn cross_relay_ingress_names_the_origin_and_the_asserting_peer() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -424,6 +435,7 @@ fn cross_relay_ingress_names_the_origin_and_the_asserting_peer() {
     );
 
     let (_response, payload) = ingress_send_to_ui_display(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name.as_str(),
@@ -451,6 +463,9 @@ fn cross_relay_ingress_names_the_origin_and_the_asserting_peer() {
 // doubled `@RELAY@RELAY` this asserts against.
 #[test]
 fn cross_relay_ingress_without_an_origin_names_the_peer_qualified_once() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -467,6 +482,7 @@ fn cross_relay_ingress_without_an_origin_names_the_peer_qualified_once() {
     );
 
     let (_response, payload) = ingress_send_to_ui_display(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name.as_str(),
@@ -492,6 +508,9 @@ fn cross_relay_ingress_without_an_origin_names_the_peer_qualified_once() {
 // separately in the routing tests.
 #[test]
 fn cross_relay_ingress_composes_a_non_routable_origin_unaltered() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     for origin in ["app@EXTERNAL", "not-a-principal"] {
         let temporary = TempDir::new().expect("temporary directory");
         let bundle_name = format!("party-{}", Uuid::new_v4().simple());
@@ -511,6 +530,7 @@ fn cross_relay_ingress_composes_a_non_routable_origin_unaltered() {
         );
 
         let (response, payload) = ingress_send_to_ui_display(
+            &delivery,
             &configuration_roots,
             &bundle_paths,
             bundle_name.as_str(),
@@ -532,6 +552,9 @@ fn cross_relay_ingress_composes_a_non_routable_origin_unaltered() {
 
 #[test]
 fn cross_relay_ingress_ignores_on_behalf_of_for_authorization() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -550,6 +573,7 @@ fn cross_relay_ingress_ignores_on_behalf_of_for_authorization() {
     );
 
     let response = ingress_request_response(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         relay_principal_id.as_str(),
@@ -575,6 +599,9 @@ fn cross_relay_ingress_ignores_on_behalf_of_for_authorization() {
 
 #[test]
 fn local_send_drops_self_asserted_on_behalf_of() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -587,6 +614,7 @@ fn local_send_drops_self_asserted_on_behalf_of() {
     // A non-relay requester sets on_behalf_of directly; the spoof gate must drop
     // it so it never reaches the delivered envelope.
     let payload = local_send_to_ui_display_payload(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name.as_str(),
@@ -600,6 +628,9 @@ fn local_send_drops_self_asserted_on_behalf_of() {
 
 #[test]
 fn local_send_omits_on_behalf_of_by_default() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new().expect("temporary directory");
     let bundle_name = format!("party-{}", Uuid::new_v4().simple());
     let configuration_roots =
@@ -611,6 +642,7 @@ fn local_send_omits_on_behalf_of_by_default() {
 
     // Regression: an ordinary local delivery carries no on_behalf_of.
     let payload = local_send_to_ui_display_payload(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         bundle_name.as_str(),

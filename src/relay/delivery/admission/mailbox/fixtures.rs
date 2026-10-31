@@ -1,9 +1,8 @@
 //! Fixture builders shared by this module's test blocks.
 //!
-//! The ledger is a process-global, so every fixture is namespaced by the test
-//! that owns it: two tests sharing a target would share a cursor and an
-//! outstanding declaration, and the one that ran second would be asserting
-//! against the other's leftovers.
+//! Each test builds its own [`DeliveryContext`]: two tests sharing a target
+//! would share a cursor and an outstanding declaration, and the one that ran
+//! second would be asserting against the other's leftovers.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -24,8 +23,15 @@ use super::super::admit::admit;
 use super::super::ledger::AdmissionTargetKey;
 use super::enqueue::enqueue;
 use super::generation::claim_consumer_generation;
+use crate::relay::delivery::DeliveryContext;
 
 pub(super) const TARGET_SESSION: &str = "target";
+
+/// A fresh delivery context for one test: an isolated ledger, registry set,
+/// and shutdown gate, so no test observes another test's reservations.
+pub(super) fn test_delivery() -> Arc<DeliveryContext> {
+    Arc::new(DeliveryContext::new(Default::default()))
+}
 
 pub(super) fn runtime_directory(namespace: &str) -> PathBuf {
     Path::new("/nonexistent").join(namespace)
@@ -55,8 +61,11 @@ pub(super) fn binding(namespace: &str, generation: u64) -> ConsumerBinding {
 /// back is the relay's business: each fixture namespace is its own target, so the
 /// sequence starts fresh, and a test that named the number instead of taking it
 /// would be re-asserting the sequence rather than using it.
-pub(super) fn claim(namespace: &str) -> ConsumerBinding {
-    let issued = claim_consumer_generation(&target(namespace))
+pub(super) fn claim(
+    delivery: &Arc<DeliveryContext>,
+    namespace: &str,
+) -> ConsumerBinding {
+    let issued = claim_consumer_generation(delivery, &target(namespace))
         .expect("the fixture target is free");
     ConsumerBinding::new(target(namespace), issued)
 }
@@ -67,8 +76,11 @@ pub(super) fn claim(namespace: &str) -> ConsumerBinding {
 /// through any operation: what a caller sees is the identifier it was handed,
 /// and the high-water mark behind it is exactly the state a reap must leave
 /// alone.
-pub(super) fn target_generation(namespace: &str) -> u64 {
-    let state = super::super::ledger::lock_ledger().expect("ledger");
+pub(super) fn target_generation(
+    delivery: &Arc<DeliveryContext>,
+    namespace: &str,
+) -> u64 {
+    let state = delivery.lock_ledger().expect("ledger");
     state
         .generations
         .get(&admission_key(namespace))
@@ -82,8 +94,11 @@ pub(super) fn target_generation(namespace: &str) -> u64 {
 /// inside this module, and the mailbox emptying does not imply it: depth and
 /// reservation are separate state released by one transition, so one can return
 /// while the other leaks.
-pub(super) fn reserved_envelopes(namespace: &str) -> usize {
-    let state = super::super::ledger::lock_ledger().expect("ledger");
+pub(super) fn reserved_envelopes(
+    delivery: &Arc<DeliveryContext>,
+    namespace: &str,
+) -> usize {
+    let state = delivery.lock_ledger().expect("ledger");
     state
         .per_target
         .get(&admission_key(namespace))
@@ -175,25 +190,33 @@ pub(super) fn task(
 
 /// Admits an entry and makes it peekable, returning its message id.
 pub(super) fn place(
+    delivery: &Arc<DeliveryContext>,
     namespace: &str,
     message_id: &str,
     bytes: u64,
     payload: MailboxPayload,
 ) {
     admit(
+        delivery,
         message_id,
         admission_key(namespace),
         SessionType::Tmux,
         bytes,
     )
     .expect("admit");
-    enqueue(&task(namespace, message_id), payload).expect("enqueue");
+    enqueue(delivery, &task(namespace, message_id), payload).expect("enqueue");
 }
 
 /// Admits an entry without making it peekable, leaving a hole at the
 /// position it was given.
-pub(super) fn admit_only(namespace: &str, message_id: &str, bytes: u64) {
+pub(super) fn admit_only(
+    delivery: &Arc<DeliveryContext>,
+    namespace: &str,
+    message_id: &str,
+    bytes: u64,
+) {
     admit(
+        delivery,
         message_id,
         admission_key(namespace),
         SessionType::Tmux,
@@ -224,11 +247,12 @@ pub(super) fn request(
 }
 
 pub(super) fn peeked(
+    delivery: &Arc<DeliveryContext>,
     binding: &ConsumerBinding,
     entry_max: usize,
     bytes_max: u64,
 ) -> Vec<u64> {
-    super::peek::peek(&request(binding, entry_max, bytes_max))
+    super::peek::peek(delivery, &request(binding, entry_max, bytes_max))
         .expect("the fixture generation is current")
         .entries
         .iter()
@@ -244,9 +268,10 @@ pub(super) fn peeked(
 /// up. The one test that does care about the resolved members reads them
 /// directly, where they are the subject rather than a by-product.
 pub(super) fn acknowledge(
+    delivery: &Arc<DeliveryContext>,
     binding: &ConsumerBinding,
     unit: PackingUnitId,
     members: &[MemberAcknowledgment],
 ) -> AckResult {
-    super::ack::ack(binding, unit, members).result
+    super::ack::ack(delivery, binding, unit, members).result
 }

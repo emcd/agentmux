@@ -1,15 +1,15 @@
 //! Placing an admitted entry into its target's mailbox, and naming the
 //! generation entitled to consume it.
 
-use std::sync::Arc;
-
 use serde_json::json;
+use std::sync::Arc;
 
 use crate::protocol::mailbox::{EntrySequence, MailboxPayload};
 use crate::runtime::inscriptions::emit_inscription;
 
 use super::super::super::guard::QueueEntryState;
-use super::super::ledger::{AdmissionTargetKey, MailboxSlot, lock_ledger};
+use super::super::ledger::{AdmissionTargetKey, MailboxSlot};
+use crate::relay::delivery::DeliveryContext;
 
 const INSCRIPTION_MAILBOX_ENQUEUED: &str = "relay.delivery.mailbox.enqueued";
 
@@ -48,11 +48,12 @@ pub(in crate::relay) enum EnqueueRejection {
 /// reservation, and the only thing that follows from lacking one is that its
 /// acknowledgment releases none.
 pub(in crate::relay) fn enqueue(
+    delivery: &Arc<DeliveryContext>,
     task: &Arc<crate::relay::AsyncDeliveryTask>,
     payload: MailboxPayload,
 ) -> Result<EntrySequence, EnqueueRejection> {
     let message_id = task.message_id.as_str();
-    let Ok(mut state) = lock_ledger() else {
+    let Ok(mut state) = delivery.lock_ledger() else {
         return Err(EnqueueRejection::LedgerUnavailable);
     };
     let admitted = state.entries.get(message_id);
@@ -199,24 +200,29 @@ mod mailbox_retirement_tests {
     #[test]
     fn a_position_abandoned_or_resolved_outside_an_ack_does_not_park_the_mailbox()
      {
+        let delivery = super::super::fixtures::test_delivery();
         // A reservation taken and rolled back before its payload was enqueued.
         // Its position is gone, and the entry behind it must still be reachable:
         // the cursor expects the abandoned position, so leaving it merely absent
         // parks every later entry for this target permanently.
         let rolled_back = "mbx-retire-rollback";
-        let rollback_bound = claim(rolled_back);
-        admit_only(rolled_back, "mbx-retire-rollback-a", 1);
-        admit_only(rolled_back, "mbx-retire-rollback-b", 1);
-        rollback_admission("mbx-retire-rollback-a");
-        enqueue(&task(rolled_back, "mbx-retire-rollback-b"), mail("body"))
-            .expect("enqueue");
+        let rollback_bound = claim(&delivery, rolled_back);
+        admit_only(&delivery, rolled_back, "mbx-retire-rollback-a", 1);
+        admit_only(&delivery, rolled_back, "mbx-retire-rollback-b", 1);
+        rollback_admission(&delivery, "mbx-retire-rollback-a");
+        enqueue(
+            &delivery,
+            &task(rolled_back, "mbx-retire-rollback-b"),
+            mail("body"),
+        )
+        .expect("enqueue");
         assert_eq!(
-            peeked(&rollback_bound, 10, 1_000),
+            peeked(&delivery, &rollback_bound, 10, 1_000),
             vec![2],
             "an entry behind an abandoned position is still peekable"
         );
         assert!(
-            declare(&rollback_bound, range(2, 2)).is_ok(),
+            declare(&delivery, &rollback_bound, range(2, 2)).is_ok(),
             "the cursor moved over the abandoned position, so the entry behind it can be declared"
         );
 
@@ -224,13 +230,19 @@ mod mailbox_retirement_tests {
         // acknowledgment. Its slot must go with its reservation, or the head of
         // the mailbox names an entry the ledger no longer holds.
         let triggered = "mbx-retire-trigger";
-        let trigger_bound = claim(triggered);
+        let trigger_bound = claim(&delivery, triggered);
         for index in 1..=3 {
-            place(triggered, &format!("{triggered}-{index}"), 1, mail("body"));
+            place(
+                &delivery,
+                triggered,
+                &format!("{triggered}-{index}"),
+                1,
+                mail("body"),
+            );
         }
-        terminalize("mbx-retire-trigger-1");
+        terminalize(&delivery, "mbx-retire-trigger-1");
         assert_eq!(
-            peeked(&trigger_bound, 10, 1_000),
+            peeked(&delivery, &trigger_bound, 10, 1_000),
             vec![2, 3],
             "a member resolved outside an acknowledgment leaves the head clear"
         );
@@ -238,10 +250,11 @@ mod mailbox_retirement_tests {
         // The same trigger against a *declared* member. Its declaration then
         // describes nothing, and leaving it outstanding would refuse every later
         // declaration for this target with a unit no one can ever acknowledge.
-        let declared = declare(&trigger_bound, range(2, 2)).expect("declare");
-        terminalize("mbx-retire-trigger-2");
+        let declared =
+            declare(&delivery, &trigger_bound, range(2, 2)).expect("declare");
+        terminalize(&delivery, "mbx-retire-trigger-2");
         assert_eq!(
-            declare(&trigger_bound, range(3, 3))
+            declare(&delivery, &trigger_bound, range(3, 3))
                 .map(|accepted| accepted.range),
             Ok(range(3, 3)),
             "a declaration whose members were all resolved elsewhere stops blocking"
@@ -249,7 +262,7 @@ mod mailbox_retirement_tests {
         // And the executor that acknowledges it afterwards is told what actually
         // happened — already resolved — rather than that it never declared it.
         assert_eq!(
-            acknowledge(&trigger_bound, declared.unit, &[]),
+            acknowledge(&delivery, &trigger_bound, declared.unit, &[]),
             Ok(AckAccepted::AlreadyTerminalized { range: range(2, 2) }),
             "the abandoned declaration is remembered as resolved, not as never made"
         );

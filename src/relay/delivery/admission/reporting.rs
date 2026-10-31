@@ -5,6 +5,7 @@
 //! reads reservations and writes inscriptions, resolves no entry, releases no
 //! quota, and touches no scheduling position.
 
+use std::sync::Arc;
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
@@ -16,8 +17,8 @@ use crate::relay::DeliveryConfiguration;
 use crate::runtime::inscriptions::emit_inscription;
 
 use super::super::guard::QueueEntryState;
-use super::config::delivery_configuration;
-use super::ledger::{AdmissionTargetKey, TargetUsage, lock_ledger};
+use super::ledger::{AdmissionTargetKey, TargetUsage};
+use crate::relay::delivery::DeliveryContext;
 
 const INSCRIPTION_UNDELIVERED_AGGREGATE: &str = "relay.delivery.undelivered";
 const INSCRIPTION_UNDELIVERED_WARNING: &str =
@@ -61,8 +62,10 @@ impl Default for UndeliveredReporting {
 
 /// The undelivered-queue reporting settings the relay is running with.
 #[must_use]
-pub fn configured_undelivered_reporting() -> UndeliveredReporting {
-    UndeliveredReporting::from(delivery_configuration())
+pub fn configured_undelivered_reporting(
+    delivery: &Arc<DeliveryContext>,
+) -> UndeliveredReporting {
+    UndeliveredReporting::from(delivery.delivery_configuration())
 }
 
 /// Reports the undelivered queue: one periodic aggregate, plus a first-crossing
@@ -74,9 +77,12 @@ pub fn configured_undelivered_reporting() -> UndeliveredReporting {
 /// quota, and touches no scheduling position. The single piece of state it does
 /// write is each target's warned flag, which exists only to suppress a repeat of
 /// its own inscription.
-pub fn report_undelivered_queue(reporting: UndeliveredReporting) {
+pub fn report_undelivered_queue(
+    delivery: &Arc<DeliveryContext>,
+    reporting: UndeliveredReporting,
+) {
     let now = Instant::now();
-    let Ok(mut state) = lock_ledger() else {
+    let Ok(mut state) = delivery.lock_ledger() else {
         return;
     };
 

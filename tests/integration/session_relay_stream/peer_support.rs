@@ -95,6 +95,9 @@ pub(crate) fn run_serve_connection_with_peers(
             peers.iter().map(|peer| peer.alias.clone()).collect(),
             false,
             Duration::from_secs(2),
+            std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+                agentmux::relay::DeliveryConfiguration::default(),
+            )),
         );
         serve_connection(
             stream,

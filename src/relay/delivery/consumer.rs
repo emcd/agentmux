@@ -26,8 +26,7 @@
 //! sender at all: the executor that made it knows sequence numbers, and the send
 //! owed an outcome is known only to the mailbox that held the entry.
 
-use std::sync::Arc;
-
+use super::DeliveryContext;
 use crate::protocol::PackingUnitId;
 use crate::protocol::identity::ConsumerBinding;
 use crate::protocol::mailbox::EntryRange;
@@ -35,6 +34,7 @@ use crate::protocol::operations::{
     AckResult, DeclareResult, MemberAcknowledgment, PeekRequest, PeekResult,
 };
 use crate::transports::MailboxConsumer;
+use std::sync::Arc;
 
 use super::admission::{Acknowledgment, ResolvedMember};
 use super::async_worker::report_resolved_member;
@@ -51,6 +51,7 @@ const UNREACHABLE_REASON: &str =
 
 /// One target's mailbox, bound to the generation entitled to consume it.
 pub(in crate::relay) struct LedgerMailboxConsumer {
+    delivery: Arc<DeliveryContext>,
     binding: ConsumerBinding,
 }
 
@@ -64,9 +65,13 @@ impl LedgerMailboxConsumer {
     /// comes back is the trait object the transport side holds and never this
     /// type.
     pub(in crate::relay) fn bind(
+        delivery: &Arc<DeliveryContext>,
         binding: ConsumerBinding,
     ) -> Arc<dyn MailboxConsumer> {
-        Arc::new(Self { binding })
+        Arc::new(Self {
+            delivery: Arc::clone(delivery),
+            binding,
+        })
     }
 
     /// Publishes what a resolving operation resolved.
@@ -76,27 +81,31 @@ impl LedgerMailboxConsumer {
     /// it will ever get — a caller that skipped it would leave a sender waiting
     /// on a receipt for a message that had already resolved.
     fn report(
+        delivery: &Arc<DeliveryContext>,
         resolved: &[ResolvedMember],
         reason_code: Option<&str>,
         reason: Option<&str>,
     ) {
         for member in resolved {
-            report_resolved_member(member, reason_code, reason);
+            report_resolved_member(delivery, member, reason_code, reason);
         }
     }
 }
 
 impl MailboxConsumer for LedgerMailboxConsumer {
     fn peek(&self, entry_max: usize, canonical_bytes_max: u64) -> PeekResult {
-        super::admission::peek(&PeekRequest {
-            binding: self.binding.clone(),
-            entry_max,
-            canonical_bytes_max,
-        })
+        super::admission::peek(
+            &self.delivery,
+            &PeekRequest {
+                binding: self.binding.clone(),
+                entry_max,
+                canonical_bytes_max,
+            },
+        )
     }
 
     fn declare(&self, range: EntryRange) -> DeclareResult {
-        super::admission::declare(&self.binding, range)
+        super::admission::declare(&self.delivery, &self.binding, range)
     }
 
     fn ack(
@@ -104,18 +113,26 @@ impl MailboxConsumer for LedgerMailboxConsumer {
         unit: PackingUnitId,
         members: &[MemberAcknowledgment],
     ) -> AckResult {
-        let Acknowledgment { result, resolved } =
-            super::admission::ack(&self.binding, unit, members);
+        let Acknowledgment { result, resolved } = super::admission::ack(
+            &self.delivery,
+            &self.binding,
+            unit,
+            members,
+        );
         // No cause: the executor reported what its write observed for each
         // member, and the evidence is the whole story. Naming a reason here
         // would be this layer narrating a write it did not perform.
-        Self::report(&resolved, None, None);
+        Self::report(&self.delivery, &resolved, None, None);
         result
     }
 
     fn resolve_unreachable(&self) {
-        let resolved = super::admission::resolve_target_entries(&self.binding);
+        let resolved = super::admission::resolve_target_entries(
+            &self.delivery,
+            &self.binding,
+        );
         Self::report(
+            &self.delivery,
             &resolved,
             Some(UNREACHABLE_REASON_CODE),
             Some(UNREACHABLE_REASON),

@@ -6,6 +6,9 @@ use agentmux::relay::test_hooks::{
 
 #[test]
 fn concurrent_scope_updates_and_rotation_serialize_on_shared_context() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_race";
     let configuration_roots =
@@ -19,8 +22,12 @@ fn concurrent_scope_updates_and_rotation_serialize_on_shared_context() {
         .expect("bundle paths");
     let peer_id = "raced@RELAY";
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context =
-        shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context = shared_serve_context(
+        &delivery,
+        &configuration_roots,
+        &state_root,
+        catalog,
+    );
 
     // Seed the peer serially so every racer starts from a known record.
     let seed = operator_request_on_context(
@@ -84,6 +91,7 @@ fn concurrent_scope_updates_and_rotation_serialize_on_shared_context() {
         .expect("rotated psk")
         .to_string();
     let accepted = hello_first_frame(
+        &delivery,
         &configuration_roots,
         &bundle_paths,
         peer_id,
@@ -95,6 +103,9 @@ fn concurrent_scope_updates_and_rotation_serialize_on_shared_context() {
 
 #[test]
 fn admitted_send_survives_narrowing_without_teardown() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_admitted";
     let configuration_roots =
@@ -110,8 +121,12 @@ fn admitted_send_survives_narrowing_without_teardown() {
     let peer_id = "admitted@RELAY";
     let target = format!("alpha@{bundle_name}");
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context =
-        shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context = shared_serve_context(
+        &delivery,
+        &configuration_roots,
+        &state_root,
+        catalog,
+    );
 
     let seed = operator_request_on_context(
         &context,
@@ -210,6 +225,9 @@ fn admitted_send_survives_narrowing_without_teardown() {
 
 #[test]
 fn scope_update_progresses_while_a_principal_probe_is_stalled() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     // Scratch space under /tmp keeps the tmux socket path portable: unix
     // socket paths must fit sun_path (104 bytes on macOS), which
     // runner-controlled TMPDIR layouts can exceed, failing the bind with
@@ -228,8 +246,12 @@ fn scope_update_progresses_while_a_principal_probe_is_stalled() {
         .expect("bundle paths");
     let peer_id = "stalled@RELAY";
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context =
-        shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context = shared_serve_context(
+        &delivery,
+        &configuration_roots,
+        &state_root,
+        catalog,
+    );
 
     let seed = operator_request_on_context(
         &context,
@@ -359,6 +381,9 @@ fn scope_update_progresses_while_a_principal_probe_is_stalled() {
 /// `shared_serial_narrow_then_send_denies`), which fix each order exactly.
 #[test]
 fn raced_admission_and_narrowing_resolve_safely_smoke() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_raceorder";
     let configuration_roots =
@@ -374,8 +399,12 @@ fn raced_admission_and_narrowing_resolve_safely_smoke() {
     let peer_id = "raceorder@RELAY";
     let target = format!("alpha@{bundle_name}");
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context =
-        shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context = shared_serve_context(
+        &delivery,
+        &configuration_roots,
+        &state_root,
+        catalog,
+    );
 
     let seed = operator_request_on_context(
         &context,
@@ -467,6 +496,9 @@ fn raced_admission_and_narrowing_resolve_safely_smoke() {
 /// all on one peer connection sharing the admin lock with the updater.
 #[test]
 fn shared_serial_narrow_then_send_denies() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_sharedserial";
     let configuration_roots =
@@ -482,8 +514,12 @@ fn shared_serial_narrow_then_send_denies() {
     let peer_id = "sharedserial@RELAY";
     let target = format!("alpha@{bundle_name}");
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context =
-        shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context = shared_serve_context(
+        &delivery,
+        &configuration_roots,
+        &state_root,
+        catalog,
+    );
 
     let seed = operator_request_on_context(
         &context,
@@ -574,6 +610,9 @@ fn shared_serial_narrow_then_send_denies() {
 /// the lock stays free during the pause so the update can commit.
 #[test]
 fn gated_update_before_final_admission_denies() {
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        agentmux::relay::DeliveryConfiguration::default(),
+    ));
     let temporary = TempDir::new_in("/tmp").expect("short scratch space");
     let bundle_name = "ident_scope_gate";
     let configuration_roots =
@@ -589,8 +628,12 @@ fn gated_update_before_final_admission_denies() {
     let peer_id = "gated@RELAY";
     let target = format!("alpha@{bundle_name}");
     let catalog = single_bundle_catalog(&bundle_paths);
-    let context =
-        shared_serve_context(&configuration_roots, &state_root, catalog);
+    let context = shared_serve_context(
+        &delivery,
+        &configuration_roots,
+        &state_root,
+        catalog,
+    );
 
     let seed = operator_request_on_context(
         &context,
