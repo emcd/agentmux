@@ -16,7 +16,9 @@
 //! makes a missing program a deterministic construction failure with no timing in
 //! it: the file is either there or it is not.
 
-use super::{dispatch_request, write_tui_configuration};
+use super::{
+    dispatch_request_with_delivery, test_delivery, write_tui_configuration,
+};
 use agentmux::configuration::ConfigurationRoots;
 use agentmux::relay::RelayRequest;
 use std::time::{Duration, Instant};
@@ -199,9 +201,11 @@ fn a_target_whose_transport_failed_to_build_can_still_be_served() {
     let config_root = write_pty_bundle(&temporary, "party", &agent, &marker);
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
+    let delivery = test_delivery();
 
     let send = |message: &str| {
-        dispatch_request(
+        dispatch_request_with_delivery(
+            &delivery,
             RelayRequest::Send {
                 request_id: None,
                 requester_session: "alpha".to_string(),
@@ -268,7 +272,7 @@ fn a_target_whose_transport_failed_to_build_can_still_be_served() {
 /// program really is gone.
 #[test]
 fn a_replacement_whose_transport_failed_to_build_gives_the_target_back() {
-    use agentmux::relay::{DeliveryConfiguration, configure_delivery};
+    use agentmux::relay::DeliveryConfiguration;
 
     let temporary = TempDir::new().expect("temporary");
     let inscriptions = temporary.path().join("inscriptions.log");
@@ -283,19 +287,22 @@ fn a_replacement_whose_transport_failed_to_build_gives_the_target_back() {
     // The smallest submission bound an operator can configure, against a write
     // held open for about a second, inside a fence window of five. Both margins
     // are hundreds of milliseconds against seconds.
-    configure_delivery(DeliveryConfiguration {
-        submission_timeout_ms: 500,
-        fence_observation_timeout_ms: 5_000,
-        unreachable_dwell_ms: 600_000,
-        ..Default::default()
-    });
+    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+        DeliveryConfiguration {
+            submission_timeout_ms: 500,
+            fence_observation_timeout_ms: 5_000,
+            unreachable_dwell_ms: 600_000,
+            ..Default::default()
+        },
+    ));
 
     let config_root = write_pty_bundle(&temporary, "party", &agent, &marker);
     write_tui_configuration(&config_root, "default");
     let tmux_socket = temporary.path().join("tmux.sock");
 
     let send = |message: String| {
-        dispatch_request(
+        dispatch_request_with_delivery(
+            &delivery,
             RelayRequest::Send {
                 request_id: None,
                 requester_session: "alpha".to_string(),
