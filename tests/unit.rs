@@ -6,12 +6,16 @@ mod acp_replay_tool_call_lifecycle;
 mod acp_transport;
 #[path = "unit/adapter_binding.rs"]
 mod adapter_binding;
+#[path = "unit/adapter_choice.rs"]
+mod adapter_choice;
 #[path = "unit/adapter_clock.rs"]
 mod adapter_clock;
 #[path = "unit/adapter_frame.rs"]
 mod adapter_frame;
 #[path = "unit/adapter_handshake.rs"]
 mod adapter_handshake;
+#[path = "unit/adapter_submit.rs"]
+mod adapter_submit;
 #[path = "unit/association.rs"]
 mod association;
 #[path = "unit/config/mod.rs"]
