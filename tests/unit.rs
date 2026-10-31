@@ -4,6 +4,8 @@ mod acp_replay_coalescence;
 mod acp_replay_tool_call_lifecycle;
 #[path = "unit/acp_transport.rs"]
 mod acp_transport;
+#[path = "unit/adapter_binding.rs"]
+mod adapter_binding;
 #[path = "unit/adapter_clock.rs"]
 mod adapter_clock;
 #[path = "unit/adapter_frame.rs"]
