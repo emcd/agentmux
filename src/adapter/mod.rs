@@ -235,8 +235,8 @@ impl<'a> Runner<'a> {
         self.table.retire(Direction::Outbound, hello_wire);
         self.binding = Some(binding);
         self.liveness = Some(Liveness::new(self.clock.now_ms(), 60_000));
-        for event in &self.config.script.events {
-            self.record(&format!("lifecycle_{}", event.kind), &event.code);
+        for event in &self.config.script.events.clone() {
+            self.emit_lifecycle(&event.kind, &event.code);
         }
         Ok(())
     }
@@ -341,20 +341,36 @@ impl<'a> Runner<'a> {
         ));
     }
 
+    fn emit_lifecycle(&mut self, kind: &str, code: &str) {
+        let Some(binding) = &self.binding else {
+            return;
+        };
+        let _ = self.write_value(&json!({
+            "jsonrpc": "2.0",
+            "method": "adapter.lifecycleEvent",
+            "params": {
+                "runtime_instance": binding.runtime_instance,
+                "target_session": binding.target_session,
+                "adapter_generation": binding.adapter_generation,
+                "kind": kind,
+                "code": code,
+            },
+        }));
+    }
+
     fn write_value(&mut self, value: &Value) -> Result<(), ()> {
         let bytes = serde_json::to_vec(value).map_err(|_| ())?;
         if self.outbox.push_data(bytes.len()).is_err() {
             self.record("outbox_full", "response dropped at queue cap");
             return Err(());
         }
-        let bound = self.outbox_cap();
-        let result = write_frame(&mut *self.writer, &bytes, bound);
+        // Operative bound is the negotiated maximum; the bootstrap
+        // ceiling applies only before the handshake completes (when
+        // inbound_bound still holds it).
+        let result =
+            write_frame(&mut *self.writer, &bytes, self.inbound_bound);
         self.outbox.release_data(bytes.len());
         result.map_err(|_| ())
-    }
-
-    fn outbox_cap(&self) -> usize {
-        BOOTSTRAP_MAX_FRAME_BYTES.max(self.inbound_bound)
     }
 
     fn record(&mut self, code: &str, detail: &str) {
@@ -870,9 +886,10 @@ impl<'a> Runner<'a> {
     }
 
     fn terminalize_all(&mut self, reason: &str) {
+        self.record("terminalize", reason);
         if let Some(pending) = self.pending_submit.take() {
             if pending.choice.is_some() {
-                self.record(reason, "pending choice cancelled locally");
+                self.record("choice_cancelled", reason);
             }
             if self.turn.complete().is_some() {
                 self.record(
@@ -884,8 +901,14 @@ impl<'a> Runner<'a> {
         } else {
             self.turn.complete();
         }
-        self.table.clear();
-        let _ = reason;
+        for entry in self.table.clear() {
+            if entry.kind == CallKind::Persist {
+                self.record(
+                    "persist_unknown",
+                    "open persist at teardown; no commit proof",
+                );
+            }
+        }
     }
 }
 

@@ -1,5 +1,12 @@
 # Example fixture script for the reference adapter (generic profile).
 #
+# Requirement: Adapter submit replies preserve the submission-evidence trichotomy
+# Capability: adapter-submit-acks
+# Requirement: Adapter requests choices over a blocking reverse-RPC
+# Capability: adapter-choice-rpc
+# Requirement: Relay reads adapter output through a poll look RPC
+# Capability: adapter-look-poll
+#
 # Schema:
 # - [clock] advances_ms: virtual-clock advances in trace order (timeouts
 #   expire only on these events; the trace replays byte-identical).

@@ -187,21 +187,24 @@ fn full_run_terminates_clean() {
     let (code, output, _) = run_transcript(&config, &input);
     assert_eq!(code, EXIT_CLEAN);
     let frames = split_frames(&output);
-    assert_eq!(frames.len(), 5, "unexpected frames: {frames:?}");
+    assert_eq!(frames.len(), 6, "unexpected frames: {frames:?}");
     // 0: hello request carries the pinned launch inputs.
     assert_eq!(frames[0]["method"], "adapter.handshakeHello");
     assert_eq!(frames[0]["params"]["target_session"], "seat-1");
-    // 1: submit resolves Submitted; evidence only on non-Submitted.
-    assert_eq!(frames[1]["result"]["outcome"], "Submitted");
-    assert_eq!(frames[1]["result"]["correlation_id"], "c-1");
-    assert!(frames[1]["result"].get("evidence_basis").is_none());
-    // 2: persist marker follows the completed turn.
-    assert_eq!(frames[2]["method"], "adapter.persistState");
-    // 3: look renders the scripted snapshot as live.
-    assert_eq!(frames[3]["result"]["freshness"], "live");
-    assert_eq!(frames[3]["result"]["entries"][0]["seq"], 1);
-    // 4: ping answers the empty object.
-    assert_eq!(frames[4]["result"], json!({}));
+    // 1: scripted ready event emits as a lifecycle notification.
+    assert_eq!(frames[1]["method"], "adapter.lifecycleEvent");
+    assert_eq!(frames[1]["params"]["kind"], "ready");
+    // 2: submit resolves Submitted; evidence only on non-Submitted.
+    assert_eq!(frames[2]["result"]["outcome"], "Submitted");
+    assert_eq!(frames[2]["result"]["correlation_id"], "c-1");
+    assert!(frames[2]["result"].get("evidence_basis").is_none());
+    // 3: persist marker follows the completed turn.
+    assert_eq!(frames[3]["method"], "adapter.persistState");
+    // 4: look renders the scripted snapshot as live.
+    assert_eq!(frames[4]["result"]["freshness"], "live");
+    assert_eq!(frames[4]["result"]["entries"][0]["seq"], 1);
+    // 5: ping answers the empty object.
+    assert_eq!(frames[5]["result"], json!({}));
 }
 
 /// The same input trace replays byte-identical: the determinism gate.
@@ -279,6 +282,65 @@ species = "confirm"
     assert_eq!(frames[2]["result"]["outcome"], "Submitted");
     assert_eq!(frames[2]["result"]["correlation_id"], "c-2");
     assert_eq!(frames[3]["method"], "adapter.persistState");
+}
+
+/// A fence-hint with a pending submit terminalizes locally: the
+/// choice cancels, the submit records unknown, entries retire.
+#[test]
+fn fence_with_pending_choice_terminalizes_locally() {
+    let script = r#"
+[[turns]]
+correlation = "c-2"
+ack = "submitted"
+
+[[turns.choices]]
+title = "Deploy?"
+species = "approval"
+details = "ship it"
+
+[[turns.choices.options]]
+option_id = "yes"
+name = "Yes"
+species = "confirm"
+"#;
+    let config = test_config(script);
+    let fence = json!({
+        "jsonrpc": "2.0",
+        "method": "relay.supervisionSignal",
+        "params": {
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "signal": "fence-hint",
+        },
+    });
+    let terminate = json!({
+        "jsonrpc": "2.0",
+        "method": "relay.supervisionSignal",
+        "params": {
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "signal": "terminate",
+        },
+    });
+    let input = transcript(&[
+        hello_result(),
+        submit_request("10", "c-2"),
+        fence,
+        terminate,
+    ]);
+    let (code, output, sink) = run_transcript(&config, &input);
+    assert_eq!(code, EXIT_CLEAN);
+    let frames = split_frames(&output);
+    // hello, requestChoice; no submit result: the turn never completed.
+    assert_eq!(frames.len(), 2);
+    assert_eq!(frames[1]["method"], "adapter.requestChoice");
+    let codes: Vec<&str> =
+        sink.iter().map(|entry| entry.code.as_str()).collect();
+    assert!(codes.contains(&"terminalize"), "sink: {codes:?}");
+    assert!(codes.contains(&"choice_cancelled"), "sink: {codes:?}");
+    assert!(codes.contains(&"submission_unknown"), "sink: {codes:?}");
 }
 
 /// The bootstrap ceiling is the 64KiB pre-negotiation bound.
