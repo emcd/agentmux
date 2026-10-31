@@ -20,6 +20,8 @@ mod adapter_lifecycle;
 mod adapter_look;
 #[path = "unit/adapter_persist.rs"]
 mod adapter_persist;
+#[path = "unit/adapter_script.rs"]
+mod adapter_script;
 #[path = "unit/adapter_submit.rs"]
 mod adapter_submit;
 #[path = "unit/association.rs"]
