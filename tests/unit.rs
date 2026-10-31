@@ -10,6 +10,8 @@ mod adapter_binding;
 mod adapter_clock;
 #[path = "unit/adapter_frame.rs"]
 mod adapter_frame;
+#[path = "unit/adapter_handshake.rs"]
+mod adapter_handshake;
 #[path = "unit/association.rs"]
 mod association;
 #[path = "unit/config/mod.rs"]
