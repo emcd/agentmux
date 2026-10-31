@@ -14,6 +14,12 @@ mod adapter_clock;
 mod adapter_frame;
 #[path = "unit/adapter_handshake.rs"]
 mod adapter_handshake;
+#[path = "unit/adapter_lifecycle.rs"]
+mod adapter_lifecycle;
+#[path = "unit/adapter_look.rs"]
+mod adapter_look;
+#[path = "unit/adapter_persist.rs"]
+mod adapter_persist;
 #[path = "unit/adapter_submit.rs"]
 mod adapter_submit;
 #[path = "unit/association.rs"]
