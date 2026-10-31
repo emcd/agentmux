@@ -199,7 +199,7 @@ repos:
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-commit', 'pre-merge-commit' ]
-      files: '^(src/pty/|src/bin/agentmux_pty\.rs|Cargo\.toml|Cargo\.lock)'
+      files: '^(src/pty/|src/bin/agentmux_pty\.rs|Cargo\.toml|Cargo\.lock|tests/unit/relay/pty_generation_release\.rs|tests/unit/pty_transport\.rs|tests/integration/cli/mod\.rs)'
       fail_fast: false
 
     - id: lint-tui-binding-documentation
