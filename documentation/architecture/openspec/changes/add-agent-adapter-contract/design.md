@@ -16,7 +16,7 @@ Non-goals: the reference adapter implementation and conformance suite (follow-on
 
 ### D1: One multiplexed stdio JSON-RPC transport, both directions
 
-Adapter→relay reverse calls (`adapter.requestChoice`, `adapter.submit`, `adapter.persistState`, `adapter.lifecycleEvent`) and relay→adapter calls (`relay.look`, handshake, supervision signals) multiplex over a single stdio JSON-RPC channel per adapter instance — newline-delimited UTF-8 JSON, one object per frame. The canonical JSON-RPC mapping — methods, params, id rules, error shape — is `adapter-wire-schema`; D1's framing promise is satisfied by that mapping.
+Requests, responses, and notifications multiplex over a single stdio JSON-RPC channel per adapter instance — newline-delimited UTF-8 JSON, one object per frame. The `adapter.*` / `relay.*` prefix names the domain that defines the method, not the call direction: the adapter calls `adapter.requestChoice` (reverse-RPC raising a permission need), `adapter.handshakeHello` (bootstrap introduction), and `adapter.persistState` (resume writes), and emits `adapter.lifecycleEvent` notifications; the supervisor calls `adapter.submit` (delivering an authorized batch for the adapter to execute and acknowledge) and `relay.look` (polling the adapter's output). The canonical JSON-RPC mapping — methods, params, id rules, error shape — is `adapter-wire-schema`; D1's framing promise is satisfied by that mapping.
 
 Alternative considered: a separate socket per direction. Rejected: doubles the supervision surface (two livenesses, two generations to bind) and abandons the proven stdio framing for no gain.
 
