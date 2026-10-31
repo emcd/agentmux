@@ -18,6 +18,8 @@
 # - [[snapshots]]: scripted look answers per target session.
 #   freshness is informational (live | cache | synthetic | none);
 #   entries carry literal text (base64 at render time).
+#   delay_ms withholds fresh until first-poll + delay (default 0);
+#   earlier polls answer stale-tagged priming without blocking.
 # - [[events]]: scripted lifecycleEvent emissions in turn order.
 #
 # Scripted transport_ack evidence models a fake agent effect boundary,

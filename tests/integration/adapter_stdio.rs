@@ -343,6 +343,56 @@ species = "confirm"
     assert!(codes.contains(&"submission_unknown"), "sink: {codes:?}");
 }
 
+/// A scripted snapshot with a delay answers stale-tagged priming
+/// until the delay elapses after the target's first poll.
+#[test]
+fn delayed_snapshot_priming_then_fresh() {
+    let script = r#"
+[[snapshots]]
+target = "seat-1"
+freshness = "live"
+delay_ms = 200
+
+[[snapshots.entries]]
+kind = "text"
+seq = 1
+text = "slow hello"
+"#;
+    let config = test_config(script);
+    let look = json!({
+        "jsonrpc": "2.0",
+        "id": "11",
+        "method": "relay.look",
+        "params": {
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "correlation_id": "look-1",
+            "look_handle_id": "h-1",
+            "prime_timeout_ms": 2000,
+        },
+    });
+    let terminate = json!({
+        "jsonrpc": "2.0",
+        "method": "relay.supervisionSignal",
+        "params": {
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "signal": "terminate",
+        },
+    });
+    // Fixed clock: the first poll anchors availability 200ms out, so
+    // the answer stays stale-tagged priming without blocking traffic.
+    let input = transcript(&[hello_result(), look, terminate]);
+    let (code, output, _) = run_transcript(&config, &input);
+    assert_eq!(code, EXIT_CLEAN);
+    let frames = split_frames(&output);
+    assert_eq!(frames[1]["result"]["freshness"], "synthetic");
+    assert_eq!(frames[1]["result"]["stale"], true);
+    assert_eq!(frames[1]["result"]["stale_reason_code"], "priming");
+}
+
 /// The bootstrap ceiling is the 64KiB pre-negotiation bound.
 #[test]
 fn bootstrap_bound_is_64kib() {

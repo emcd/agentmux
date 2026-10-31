@@ -69,6 +69,14 @@ pub struct ScriptedSnapshot {
     pub freshness: String,
     #[serde(default)]
     pub entries: Vec<ScriptedEntry>,
+    /// Milliseconds after the target's first poll when the snapshot
+    /// becomes available. Zero (the default) answers fresh immediately;
+    /// a nonzero delay answers stale-tagged priming until the delay
+    /// elapses. Never blocks the run loop: fence, cancel, ack, and
+    /// choice traffic keep flowing while a snapshot is priming, which
+    /// a blocking prime-wait could not honor.
+    #[serde(default)]
+    pub delay_ms: u64,
 }
 
 /// One scripted snapshot entry; text is literal (base64 at render).

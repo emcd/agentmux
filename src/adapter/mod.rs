@@ -26,6 +26,7 @@ pub mod persist;
 pub mod script;
 pub mod submit;
 
+use std::collections::HashMap;
 use std::io::{BufRead, Write};
 
 use serde_json::{Value, json};
@@ -115,6 +116,7 @@ struct Runner<'a> {
     table: PendingTable,
     binding: Option<Binding>,
     inbound_bound: usize,
+    prime_anchors: HashMap<String, u64>,
     turn: TurnGate,
     choice_gate: ChoiceGate,
     persist: PersistTracker,
@@ -138,6 +140,7 @@ impl<'a> Runner<'a> {
             table: PendingTable::new(),
             binding: None,
             inbound_bound: BOOTSTRAP_MAX_FRAME_BYTES,
+            prime_anchors: HashMap::new(),
             turn: TurnGate::new(),
             choice_gate: ChoiceGate::new(
                 config.proposal.max_choices_in_flight as usize,
@@ -442,27 +445,45 @@ impl<'a> Runner<'a> {
             .as_ref()
             .map(|binding| binding.adapter_generation)
             .unwrap_or(0);
+        let now = self.clock.now_ms();
         let snapshot = match self.config.script.snapshot_for(target) {
             Some(scripted) => {
-                let entries: Vec<SnapshotEntry> = scripted
-                    .entries
-                    .iter()
-                    .map(|entry| SnapshotEntry {
-                        kind: entry.kind.clone(),
-                        seq: entry.seq,
-                        text_base64: base64_encode(&entry.text),
-                        truncated: entry.truncated,
-                    })
-                    .collect();
-                Snapshot {
-                    correlation_id: correlation.clone(),
-                    adapter_generation: generation,
-                    entries,
-                    freshness: Freshness::Live,
-                    source: SnapshotSource::Live,
-                    stale: false,
-                    discontinuity: false,
-                    stale_reason_code: None,
+                let first = *self
+                    .prime_anchors
+                    .entry(target.to_string())
+                    .or_insert(now);
+                if now < first.saturating_add(scripted.delay_ms) {
+                    Snapshot {
+                        correlation_id: correlation.clone(),
+                        adapter_generation: generation,
+                        entries: Vec::new(),
+                        freshness: Freshness::Synthetic,
+                        source: SnapshotSource::Synthetic,
+                        stale: true,
+                        discontinuity: false,
+                        stale_reason_code: Some("priming".to_string()),
+                    }
+                } else {
+                    let entries: Vec<SnapshotEntry> = scripted
+                        .entries
+                        .iter()
+                        .map(|entry| SnapshotEntry {
+                            kind: entry.kind.clone(),
+                            seq: entry.seq,
+                            text_base64: base64_encode(&entry.text),
+                            truncated: entry.truncated,
+                        })
+                        .collect();
+                    Snapshot {
+                        correlation_id: correlation.clone(),
+                        adapter_generation: generation,
+                        entries,
+                        freshness: Freshness::Live,
+                        source: SnapshotSource::Live,
+                        stale: false,
+                        discontinuity: false,
+                        stale_reason_code: None,
+                    }
                 }
             },
             None => Snapshot {
@@ -887,6 +908,7 @@ impl<'a> Runner<'a> {
 
     fn terminalize_all(&mut self, reason: &str) {
         self.record("terminalize", reason);
+        self.prime_anchors.clear();
         if let Some(pending) = self.pending_submit.take() {
             if pending.choice.is_some() {
                 self.record("choice_cancelled", reason);
