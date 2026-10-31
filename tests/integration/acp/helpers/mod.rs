@@ -13,8 +13,12 @@ mod stub;
 pub(super) use dispatch::{
     dispatch_look, dispatch_look_with_offset, dispatch_look_without_startup,
     dispatch_raww, dispatch_send, dispatch_send_result,
-    dispatch_send_without_startup_result, dispatch_sized_send_result,
+    dispatch_send_without_startup_result,
 };
+// Fence-only helpers, also used by the integration_acp_fence binary,
+// which shares this helpers module.
+#[allow(unused_imports)]
+pub(super) use dispatch::dispatch_sized_send_result;
 pub use guard::GuardedTempDir;
 pub(super) use observation::{
     assert_acp_delivery_unavailable, await_acp_worker_state,
@@ -30,6 +34,8 @@ pub(super) use state::{
 pub(super) use agentmux::relay::ChoicesQueueEvent;
 pub(super) use agentmux::transports::WorkerReadinessState;
 
-pub(super) use stub::{
-    AcpStubOptions, acp_child_pid_path, write_acp_stub, write_configuration,
-};
+pub(super) use stub::{AcpStubOptions, write_acp_stub, write_configuration};
+// Fence-only helper, also used by the integration_acp_fence binary,
+// which shares this helpers module.
+#[allow(unused_imports)]
+pub(super) use stub::acp_child_pid_path;

@@ -4,7 +4,7 @@ use agentmux::runtime::paths::BundleRuntimePaths;
 use std::path::{Path, PathBuf};
 
 use super::stub::ensure_fast_respawn_for_tests;
-pub(in crate::acp) fn flat_bundle_paths(root: &Path) -> BundleRuntimePaths {
+pub(crate) fn flat_bundle_paths(root: &Path) -> BundleRuntimePaths {
     BundleRuntimePaths {
         state_root: root.to_path_buf(),
         bundle_name: "party".to_string(),
@@ -12,7 +12,7 @@ pub(in crate::acp) fn flat_bundle_paths(root: &Path) -> BundleRuntimePaths {
         tmux_socket: root.join("tmux.sock"),
     }
 }
-pub(in crate::acp) fn startup_bundle(
+pub(crate) fn startup_bundle(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
@@ -26,7 +26,7 @@ pub(in crate::acp) fn startup_bundle(
     Ok(())
 }
 
-pub(in crate::acp) fn persisted_state_path(
+pub(crate) fn persisted_state_path(
     root: &Path,
     target_session: &str,
 ) -> PathBuf {
@@ -35,7 +35,7 @@ pub(in crate::acp) fn persisted_state_path(
         .join("state.json")
 }
 
-pub(in crate::acp) fn read_worker_state(
+pub(crate) fn read_worker_state(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     root: &Path,
     target_session: &str,
@@ -49,7 +49,7 @@ pub(in crate::acp) fn read_worker_state(
     .map(ToString::to_string)
 }
 
-pub(in crate::acp) fn send_result(
+pub(crate) fn send_result(
     response: RelayResponse,
 ) -> agentmux::relay::SendResult {
     let RelayResponse::Send { results, .. } = response else {

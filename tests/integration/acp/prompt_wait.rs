@@ -26,7 +26,9 @@ fn spawn_stub_client(
         stub_path.display().to_string().as_str(),
         temporary.path(),
         &environment,
-        false,
+        // Match the relay worker path: a parallel cargo build rewriting the
+        // stub interpreter must not fail the spawn with a transient ETXTBSY.
+        true,
     )
     .expect("spawn stub ACP client");
     (temporary, client)

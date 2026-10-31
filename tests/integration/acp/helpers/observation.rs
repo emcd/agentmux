@@ -27,7 +27,7 @@ pub(super) fn count_logged_method(log_path: &Path, method: &str) -> usize {
 
 /// Polls the persistent ACP worker for `target_session` until it converges to
 /// the expected readiness state, returning true on success within the timeout.
-pub(in crate::acp) fn wait_for_worker_state(
+pub(crate) fn wait_for_worker_state(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     root: &Path,
     target_session: &str,
@@ -45,7 +45,7 @@ pub(in crate::acp) fn wait_for_worker_state(
 
 /// Polls the persistent ACP worker for `target_session` until it converges to
 /// any of the expected readiness states, returning true on success.
-pub(in crate::acp) fn wait_for_any_worker_state(
+pub(crate) fn wait_for_any_worker_state(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     root: &Path,
     target_session: &str,
@@ -68,7 +68,7 @@ pub(in crate::acp) fn wait_for_any_worker_state(
 /// test bundle (`party`). Callers must invoke this BEFORE dispatching the
 /// action that triggers the transition; the watch::Receiver yields the
 /// current value on first borrow and every subsequent published transition.
-pub(in crate::acp) fn subscribe_bravo_worker_state(
+pub(crate) fn subscribe_bravo_worker_state(
     root: &Path,
 ) -> watch::Receiver<Option<WorkerReadinessState>> {
     subscribe_worker_readiness("party", root, "bravo")
@@ -77,7 +77,7 @@ pub(in crate::acp) fn subscribe_bravo_worker_state(
 /// Subscribes to permission-queue mutation events for the runtime directory.
 /// Subscriptions must be established BEFORE the action that publishes events;
 /// the broadcast::Receiver only observes events that arrive after subscribe.
-pub(in crate::acp) fn subscribe_bravo_permission_queue(
+pub(crate) fn subscribe_bravo_permission_queue(
     root: &Path,
 ) -> broadcast::Receiver<ChoicesQueueEvent> {
     subscribe_choices_queue_events(root)
@@ -88,7 +88,7 @@ pub(in crate::acp) fn subscribe_bravo_permission_queue(
 /// called from synchronous test bodies without a tokio runtime; the channel
 /// is updated in-process by the producer, so each poll is a cheap atomic
 /// read with no filesystem or RPC cost.
-pub(in crate::acp) fn await_acp_worker_state(
+pub(crate) fn await_acp_worker_state(
     receiver: &mut watch::Receiver<Option<WorkerReadinessState>>,
     expected: WorkerReadinessState,
     timeout: Duration,
@@ -96,7 +96,7 @@ pub(in crate::acp) fn await_acp_worker_state(
     await_acp_worker_any_state(receiver, &[expected], timeout)
 }
 
-pub(in crate::acp) fn await_acp_worker_any_state(
+pub(crate) fn await_acp_worker_any_state(
     receiver: &mut watch::Receiver<Option<WorkerReadinessState>>,
     expected: &[WorkerReadinessState],
     timeout: Duration,
@@ -118,7 +118,7 @@ pub(in crate::acp) fn await_acp_worker_any_state(
 /// Polls a broadcast::Receiver for the first permission-queue event matching
 /// the predicate. Drops non-matching events; treats `Lagged` as a continue
 /// (tests should subscribe before the action so lag is not expected).
-pub(in crate::acp) fn await_permission_event<F>(
+pub(crate) fn await_permission_event<F>(
     receiver: &mut broadcast::Receiver<ChoicesQueueEvent>,
     mut matcher: F,
     timeout: Duration,
@@ -172,7 +172,7 @@ pub(super) const ACP_FAIL_LOAD_SETTLE_BUDGET: Duration =
 /// path the production bootstrap can take; the test thread is parked on the
 /// in-process watch channel, so the wider deadline costs nothing in the
 /// happy case.
-pub(in crate::acp) fn assert_acp_delivery_unavailable(
+pub(crate) fn assert_acp_delivery_unavailable(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
@@ -232,7 +232,7 @@ pub(in crate::acp) fn assert_acp_delivery_unavailable(
 /// Qualifies a bare target id with the fixture bundle namespace, mirroring the
 /// client-side fill-in the relay now requires. Already-qualified ids pass
 /// through unchanged.
-pub(in crate::acp) fn read_request_log(path: &Path) -> Vec<Value> {
+pub(crate) fn read_request_log(path: &Path) -> Vec<Value> {
     fs::read_to_string(path)
         .expect("read ACP request log")
         .lines()
@@ -244,7 +244,7 @@ pub(in crate::acp) fn read_request_log(path: &Path) -> Vec<Value> {
         .collect()
 }
 
-pub(in crate::acp) fn request_by_method<'a>(
+pub(crate) fn request_by_method<'a>(
     requests: &'a [Value],
     method: &str,
 ) -> &'a Value {
@@ -256,7 +256,7 @@ pub(in crate::acp) fn request_by_method<'a>(
         .unwrap_or_else(|| panic!("missing ACP request for method '{method}'"))
 }
 
-pub(in crate::acp) fn request_count_by_method(
+pub(crate) fn request_count_by_method(
     requests: &[Value],
     method: &str,
 ) -> usize {

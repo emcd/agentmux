@@ -41,7 +41,7 @@ fn acp_send_request() -> RelayRequest {
 /// the persistent ACP worker has acted on the queued task -- its
 /// `session/prompt` reached the stub, or the worker settled `unavailable` --
 /// so callers can inspect post-delivery side effects deterministically.
-pub(in crate::acp) fn dispatch_send(
+pub(crate) fn dispatch_send(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
@@ -66,7 +66,7 @@ pub(in crate::acp) fn dispatch_send(
 
 /// Starts the bundle and dispatches an async send to `bravo`, returning the
 /// immediate relay response without waiting for the worker to act.
-pub(in crate::acp) fn dispatch_send_result(
+pub(crate) fn dispatch_send_result(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
@@ -88,7 +88,11 @@ pub(in crate::acp) fn dispatch_send_result(
 /// the relay's own executor inside its framed write, which is the only state the
 /// execution watchdog exists to bound. Well under the 256 KiB payload maximum,
 /// so admission accepts it.
-pub(in crate::acp) fn dispatch_sized_send_result(
+//
+// Fence-test-only helper (also used by the integration_acp_fence binary,
+// which shares this helpers module).
+#[allow(dead_code)]
+pub(crate) fn dispatch_sized_send_result(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
@@ -104,7 +108,11 @@ pub(in crate::acp) fn dispatch_sized_send_result(
 }
 
 /// Dispatches a sized send against an already-started bundle.
-pub(in crate::acp) fn dispatch_sized_send_without_startup_result(
+//
+// Fence-test-only helper (also used by the integration_acp_fence binary,
+// which shares this helpers module).
+#[allow(dead_code)]
+pub(crate) fn dispatch_sized_send_without_startup_result(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
@@ -117,7 +125,7 @@ pub(in crate::acp) fn dispatch_sized_send_without_startup_result(
     dispatch_request(delivery, request, config_root, "party", tmux_socket)
 }
 
-pub(in crate::acp) fn dispatch_send_without_startup_result(
+pub(crate) fn dispatch_send_without_startup_result(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
@@ -139,7 +147,7 @@ fn qualify_party_target(target_session: &str) -> String {
     }
 }
 
-pub(in crate::acp) fn dispatch_look(
+pub(crate) fn dispatch_look(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
@@ -158,7 +166,7 @@ pub(in crate::acp) fn dispatch_look(
     )
 }
 
-pub(in crate::acp) fn dispatch_look_with_offset(
+pub(crate) fn dispatch_look_with_offset(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
@@ -184,7 +192,7 @@ pub(in crate::acp) fn dispatch_look_with_offset(
     .expect("relay look should parse")
 }
 
-pub(in crate::acp) fn dispatch_look_without_startup(
+pub(crate) fn dispatch_look_without_startup(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
@@ -207,7 +215,7 @@ pub(in crate::acp) fn dispatch_look_without_startup(
     .expect("relay look should parse")
 }
 
-pub(in crate::acp) fn dispatch_raww(
+pub(crate) fn dispatch_raww(
     delivery: &std::sync::Arc<agentmux::relay::DeliveryContext>,
     config_root: &ConfigurationRoots,
     tmux_socket: &Path,
