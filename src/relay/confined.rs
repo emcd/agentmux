@@ -149,13 +149,23 @@ fn walk_confined(
                         CONFINED_DIR_MODE as libc::mode_t,
                     )
                 };
-                if created != 0 {
+                if created != 0
+                    && io::Error::last_os_error().kind()
+                        != io::ErrorKind::AlreadyExists
+                {
                     return Err(map_open_error(
                         io::Error::last_os_error(),
                         &component.display().to_string(),
                     ));
                 }
-                sync_fd(&current).map_err(ConfineError::io)?;
+                // `AlreadyExists` means a concurrent creator won the race.
+                // Fall through to the reopen below, which refuses a
+                // symlinked or non-directory entry exactly as if the open
+                // had found it in the first place — creation stays
+                // idempotent instead of failing whichever caller lost.
+                if created == 0 {
+                    sync_fd(&current).map_err(ConfineError::io)?;
+                }
                 let reopen_fd = current.as_raw_fd();
                 current = open_at(reopen_fd, &cname, open_dir_flags(), 0)
                     .map_err(|source| {

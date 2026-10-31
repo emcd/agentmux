@@ -9,7 +9,9 @@ pub(crate) use credentials::{
 };
 pub(crate) use paths::{invalid_credential_path, state_relative_path};
 pub(in crate::relay) use session::{bare_session_id, canonical_session_id};
-pub(crate) use store::{PrincipalRecord, PrincipalStore, PrincipalType};
+pub(crate) use store::{
+    PrincipalRecord, PrincipalStore, PrincipalType, lock_store_transaction,
+};
 pub(crate) use verify::{
     IdentityIntrospectRights, SOCKET_TRUST_TOKEN, VerifiedIdentity,
     classify_principal_id, hash_token_sha256, scope_permits,

@@ -2,6 +2,7 @@ use std::{
     collections::HashMap,
     io,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex, OnceLock},
 };
 
 use serde::{Deserialize, Serialize};
@@ -21,6 +22,40 @@ use super::paths::{invalid_credential_path, state_relative_path};
 use super::verify::record_is_expired;
 
 const PRINCIPAL_STORE_FORMAT_VERSION: u32 = 1;
+
+/// Process-wide registry of per-store transaction locks, keyed by canonical
+/// state-root path.
+///
+/// The store file's atomic rename protects publication, not read-modify-write
+/// transactions: two writers loading the same snapshot overwrite each other's
+/// registrations, and a stale snapshot can restore a principal after a drop or
+/// rotation already returned. Every load→mutate→persist sequence for the same
+/// store — public provisioning on any handle and the socket identity-admin
+/// path alike — holds the same lock for its whole transaction, so writers
+/// serialize per store rather than per handle. Readers load fresh snapshots
+/// per call and rely on atomic publication instead; they take no lock.
+/// A poisoned lock is recovered rather than propagated: a prior panic must
+/// not wedge all future credential administration for the store.
+static STORE_TRANSACTION_LOCKS: OnceLock<
+    Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>,
+> = OnceLock::new();
+
+/// Returns the transaction lock for the identity store under `state_root`.
+///
+/// The key is the canonicalized root when resolution succeeds, so two handles
+/// naming the same store through different spellings still coordinate.
+pub(crate) fn lock_store_transaction(state_root: &Path) -> Arc<Mutex<()>> {
+    let key = std::fs::canonicalize(state_root)
+        .unwrap_or_else(|_| state_root.to_path_buf());
+    let mut registry = STORE_TRANSACTION_LOCKS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    registry
+        .entry(key)
+        .or_insert_with(|| Arc::new(Mutex::new(())))
+        .clone()
+}
 
 /// Categorizes a principal by namespace partition.
 ///

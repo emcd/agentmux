@@ -819,7 +819,7 @@ fn classify_target_principal(
 /// store intact; uncertain ones already published the replacement, so callers
 /// must compensate (or complete the effective state) instead of assuming the
 /// old record survived.
-fn is_durability_uncertain(error: &RelayError) -> bool {
+pub(in crate::relay) fn is_durability_uncertain(error: &RelayError) -> bool {
     error.code == "internal_store_durability_uncertain"
 }
 
@@ -827,7 +827,7 @@ fn is_durability_uncertain(error: &RelayError) -> bool {
 /// uncertainty rather than a pre-publication failure. The file is published
 /// and the store record committed, so callers must preserve both instead of
 /// compensating the store.
-fn is_credential_uncertain(error: &RelayError) -> bool {
+pub(in crate::relay) fn is_credential_uncertain(error: &RelayError) -> bool {
     error.code == "internal_credential_durability_uncertain"
 }
 
@@ -838,7 +838,7 @@ fn is_credential_uncertain(error: &RelayError) -> bool {
 /// the rotated hash may still be effective and sessions on the old credential
 /// must not linger. The requester's own connection is exempt (see the rotation
 /// success path for why excluding it is safe).
-fn revoke_superseded_credential(
+pub(in crate::relay) fn revoke_superseded_credential(
     delivery: &Arc<DeliveryContext>,
     principal_id: &str,
     requester_principal_id: &str,
@@ -892,7 +892,7 @@ fn revoke_superseded_credential(
 /// The operator reconciles by inspecting and re-rotating or recreating; staged
 /// Response-destination secrets that could not be delivered are lost, but
 /// nothing referenced them yet.
-fn credential_rollback_failed(
+pub(in crate::relay) fn credential_rollback_failed(
     write_error: RelayError,
     rollback_error: RelayError,
 ) -> RelayError {
@@ -908,7 +908,7 @@ fn credential_rollback_failed(
 
 /// Builds a human-facing snippet describing where the new credential is read
 /// from at Hello time, keyed by principal type.
-fn build_config_snippet(
+pub(in crate::relay) fn build_config_snippet(
     principal_type: PrincipalType,
     principal_id: &str,
     state_root: &Path,

@@ -86,7 +86,7 @@ impl DeliveryContext {
 
     /// The handle's resolved `[delivery]` table.
     #[must_use]
-    pub(crate) fn delivery_configuration(&self) -> DeliveryConfiguration {
+    pub fn delivery_configuration(&self) -> DeliveryConfiguration {
         self.configuration
     }
 }

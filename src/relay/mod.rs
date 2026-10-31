@@ -27,6 +27,8 @@ mod lifecycle;
 mod peer_connection;
 pub(crate) mod peer_scope;
 mod routing;
+mod runtime;
+mod runtime_domains;
 mod startup_state;
 mod stream;
 #[doc(hidden)]
@@ -65,6 +67,12 @@ pub use self::drain::{
 use self::errors::*;
 use self::identity::*;
 pub use self::peer_connection::PeerConnectionManager;
+pub use self::runtime::{
+    CredentialSource, IdentityDescriptor, PrincipalSnapshot, ProvisionParams,
+    ProvisionedCredential, RelayRuntime, VerifiedPrincipal, check_context,
+    drop_principal, introspect_principal, provision_principal,
+    rotate_principal_credential, verify_identity,
+};
 pub use self::stream::second_claim_is_live_conflict_for_testing;
 pub use self::watcher::{BundleWatcher, spawn_bundle_watcher};
 #[doc(hidden)]
@@ -716,8 +724,25 @@ pub(in crate::relay) fn dispatch_identity_admin(
     let _guard = identity_admin_lock
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Same per-store transaction lock the public provisioning paths hold:
+    // lock order is always serve-context admin lock first, store lock second.
+    // Readers load fresh snapshots per call and rely on atomic publication.
+    let store_lock =
+        crate::relay::identity::lock_store_transaction(state_root);
+    let _store_guard = store_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // Route revocation and notification effects through the owning runtime's
+    // delivery state when this process hosts one for the root: the socket
+    // path and the public handle path share one revocation domain per
+    // store, so a drop over either surface tears down the same live
+    // sessions. Without a hosted runtime (the standalone host path), the
+    // serving connection's own delivery state applies unchanged.
+    let effective_delivery =
+        crate::relay::runtime_domains::owning_delivery_context(state_root)
+            .unwrap_or_else(|| Arc::clone(delivery));
     match handlers::handle_identity_admin_request(
-        delivery,
+        &effective_delivery,
         request,
         configuration_roots,
         state_root,
@@ -764,6 +789,11 @@ pub(in crate::relay) fn dispatch_identity_introspect(
 /// created. Intended to run once at relay startup; per-connection access prunes
 /// in memory, and store mutations persist the pruned set.
 pub fn prune_principal_store(state_root: &Path) -> Result<usize, RelayError> {
+    let store_lock =
+        crate::relay::identity::lock_store_transaction(state_root);
+    let _store_guard = store_lock
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     let mut store = PrincipalStore::load(state_root)?;
     let pruned = store.prune_expired(time::OffsetDateTime::now_utc());
     if pruned > 0 {

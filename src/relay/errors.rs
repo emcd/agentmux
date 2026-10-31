@@ -79,7 +79,7 @@ pub(super) fn map_config(error: ConfigurationError) -> RelayError {
 pub(super) const UNREADABLE_LAYER_CODE: &str =
     "validation_unreadable_configuration_layer";
 
-pub(super) fn relay_error(
+pub(in crate::relay) fn relay_error(
     code: &str,
     message: &str,
     details: Option<Value>,
