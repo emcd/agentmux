@@ -6,19 +6,19 @@ use std::{
     sync::OnceLock,
 };
 
-pub(in crate::acp) struct AcpStubOptions {
-    pub(in crate::acp) fail_initialize: bool,
-    pub(in crate::acp) fail_load: bool,
-    pub(in crate::acp) fail_new: bool,
-    pub(in crate::acp) fail_prompt: bool,
-    pub(in crate::acp) load_capability: bool,
-    pub(in crate::acp) prompt_capability: bool,
-    pub(in crate::acp) stop_reason: String,
-    pub(in crate::acp) prompt_delay_sec: u64,
+pub(crate) struct AcpStubOptions {
+    pub(crate) fail_initialize: bool,
+    pub(crate) fail_load: bool,
+    pub(crate) fail_new: bool,
+    pub(crate) fail_prompt: bool,
+    pub(crate) load_capability: bool,
+    pub(crate) prompt_capability: bool,
+    pub(crate) stop_reason: String,
+    pub(crate) prompt_delay_sec: u64,
     /// Leave the turn in flight forever without spawning a helper process. A
     /// `sleep`-based delay would inherit the child's stdout, so killing the
     /// agent would leave the pipe open and no reader could observe EOF.
-    pub(in crate::acp) never_respond_to_prompt: bool,
+    pub(crate) never_respond_to_prompt: bool,
     /// Make every agent from this one onward (counting from zero, across the
     /// whole bundle) hang inside `initialize`, by blocking on a fifo that has no
     /// writer until a test opens one.
@@ -27,18 +27,18 @@ pub(in crate::acp) struct AcpStubOptions {
     /// in which the relay must not report the generation ceased. `Some(0)` hangs
     /// the very first agent, which is a target's *initial* bootstrap; `Some(1)`
     /// leaves the first agent healthy and hangs every respawn after it.
-    pub(in crate::acp) hang_initialize_from_agent: Option<usize>,
-    pub(in crate::acp) update_count: usize,
-    pub(in crate::acp) update_line_prefix: String,
-    pub(in crate::acp) update_after_response: bool,
-    pub(in crate::acp) update_delay_ms: u64,
-    pub(in crate::acp) load_replay_count: usize,
-    pub(in crate::acp) load_replay_line_prefix: String,
-    pub(in crate::acp) request_permission_on_prompt: bool,
-    pub(in crate::acp) disconnect_on_prompt: Option<String>,
-    pub(in crate::acp) configured_session_id: Option<String>,
-    pub(in crate::acp) tool_call_on_prompt: bool,
-    pub(in crate::acp) tool_call_id: String,
+    pub(crate) hang_initialize_from_agent: Option<usize>,
+    pub(crate) update_count: usize,
+    pub(crate) update_line_prefix: String,
+    pub(crate) update_after_response: bool,
+    pub(crate) update_delay_ms: u64,
+    pub(crate) load_replay_count: usize,
+    pub(crate) load_replay_line_prefix: String,
+    pub(crate) request_permission_on_prompt: bool,
+    pub(crate) disconnect_on_prompt: Option<String>,
+    pub(crate) configured_session_id: Option<String>,
+    pub(crate) tool_call_on_prompt: bool,
+    pub(crate) tool_call_id: String,
     /// Stop draining stdin once `session/new` has been answered, while staying
     /// alive and holding the pipe open.
     ///
@@ -53,7 +53,7 @@ pub(in crate::acp) struct AcpStubOptions {
     /// agent would leave that pipe open and the relay's reader would never observe
     /// EOF — turning a positive fence verdict into a negative one for a reason
     /// belonging entirely to the harness.
-    pub(in crate::acp) stop_reading_stdin_after_new: bool,
+    pub(crate) stop_reading_stdin_after_new: bool,
 }
 
 impl Default for AcpStubOptions {
@@ -88,11 +88,14 @@ impl Default for AcpStubOptions {
 /// Where the ACP stub appends the pid of every child it spawns, so a test can
 /// assert on the fate of the real process rather than on the relay's account of
 /// it.
-pub(in crate::acp) fn acp_child_pid_path(root: &Path) -> PathBuf {
+// Fence-test-only helper (also used by the integration_acp_fence binary,
+// which shares this helpers module).
+#[allow(dead_code)]
+pub(crate) fn acp_child_pid_path(root: &Path) -> PathBuf {
     root.join("acp_child_pids.txt")
 }
 
-pub(in crate::acp) fn write_acp_stub(path: &Path) {
+pub(crate) fn write_acp_stub(path: &Path) {
     let script = r#"#!/bin/sh
 set -eu
 
@@ -253,11 +256,11 @@ done
     fs::set_permissions(path, permissions).expect("chmod ACP stub");
 }
 
-pub(in crate::acp) fn as_json_boolean(value: bool) -> &'static str {
+pub(crate) fn as_json_boolean(value: bool) -> &'static str {
     if value { "true" } else { "false" }
 }
 
-pub(in crate::acp) fn write_configuration(
+pub(crate) fn write_configuration(
     root: &Path,
     options: &AcpStubOptions,
 ) -> (ConfigurationRoots, PathBuf) {
@@ -447,7 +450,7 @@ coder = "acp"
 }
 
 pub(super) static FAST_RESPAWN_INIT: OnceLock<()> = OnceLock::new();
-pub(in crate::acp) fn ensure_fast_respawn_for_tests() {
+pub(crate) fn ensure_fast_respawn_for_tests() {
     FAST_RESPAWN_INIT.get_or_init(|| unsafe {
         std::env::set_var("AGENTMUX_RELAY_ACP_RESPAWN_BACKOFF_MAX_MS", "50");
     });

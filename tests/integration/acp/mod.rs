@@ -1,5 +1,4 @@
 mod coalescing;
-mod generation_fence;
 pub(crate) mod helpers;
 mod lifecycle;
 mod look;
