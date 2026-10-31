@@ -73,6 +73,10 @@ default = []
 pty = ["dep:libghostty-vt", "dep:portable-pty", "dep:shell-words"]
 
 [[bin]]
+name = "agentmux-adapter"
+path = "src/bin/agentmux_adapter.rs"
+
+[[bin]]
 name = "agentmux-acp"
 path = "src/bin/agentmux_acp.rs"
 

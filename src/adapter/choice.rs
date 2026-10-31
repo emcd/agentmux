@@ -119,7 +119,10 @@ impl ChoiceGate {
     }
 
     /// Admits a choice need or sheds it, inscribing the shed.
-    pub fn request(&mut self, sink: &mut impl DiagnosticSink) -> GateDecision {
+    pub fn request(
+        &mut self,
+        sink: &mut (impl DiagnosticSink + ?Sized),
+    ) -> GateDecision {
         if self.outstanding >= self.max_outstanding {
             let code = "adapter_single_flight_busy".to_string();
             sink.record(DiagnosticEntry {

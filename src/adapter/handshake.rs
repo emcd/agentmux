@@ -26,9 +26,40 @@ pub struct VersionOffer {
     pub max_minor: u16,
 }
 
-/// Adapter-side limits proposal: our declarations for the negotiation
-/// table. The supervisor resolves the effective values; the adapter
-/// verifies the result against this proposal and the contract ranges.
+impl VersionOffer {
+    /// The protocol version this reference adapter implements.
+    #[must_use]
+    pub fn current() -> Self {
+        Self {
+            major: 2,
+            min_minor: 0,
+            max_minor: 0,
+        }
+    }
+}
+
+impl LimitsProposal {
+    /// Contract table NEGOTIATED-WITH-DEFAULTS values. Latency
+    /// declarations come from the deployment and are never defaulted.
+    #[must_use]
+    pub fn negotiation_defaults(
+        latency_declarations: HashMap<String, u64>,
+    ) -> Self {
+        Self {
+            max_frame_bytes: 1_048_576,
+            queue_tx_bytes: 16_777_216,
+            queue_rx_bytes: 16_777_216,
+            max_control_pending: 32,
+            max_events_per_second: 100,
+            window_seconds: 1,
+            max_submits_in_flight: 64,
+            max_choices_in_flight: 16,
+            max_looks_in_flight: 8,
+            drain_wait_ms: 250,
+            latency_declarations,
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LimitsProposal {
     pub max_frame_bytes: u64,
@@ -146,6 +177,91 @@ pub fn validate_selection(
         });
     }
     Ok(())
+}
+
+/// Validated hello result: assigned binding inputs, selected
+/// versions, and post-resolution limits.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HelloResult {
+    pub runtime_instance: String,
+    pub adapter_generation: u64,
+    pub selected_major: u32,
+    pub selected_minor: u16,
+    pub negotiated: NegotiatedLimits,
+}
+
+fn malformed(reason: impl Into<String>) -> HandshakeError {
+    HandshakeError::MalformedResult {
+        reason: reason.into(),
+    }
+}
+
+fn get_u64(result: &Value, field: &str) -> Result<u64, HandshakeError> {
+    result
+        .get(field)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| malformed(format!("missing numeric {field}")))
+}
+
+fn get_string(result: &Value, field: &str) -> Result<String, HandshakeError> {
+    result
+        .get(field)
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .ok_or_else(|| malformed(format!("missing string {field}")))
+}
+
+fn get_u32(result: &Value, field: &str) -> Result<u32, HandshakeError> {
+    let value = get_u64(result, field)?;
+    u32::try_from(value)
+        .map_err(|_| malformed(format!("{field} out of range")))
+}
+
+/// Parses and shape-checks a hello result object (the `result` member
+/// of the supervisor's reply). The result carries no target and no
+/// binding triple: identity comes from the pinned launch context, and
+/// versions/limits are validated separately against the offer.
+///
+/// # Errors
+///
+/// Returns [`HandshakeError::MalformedResult`] for a missing or
+/// misshapen field.
+pub fn parse_hello_result(
+    result: &Value,
+) -> Result<HelloResult, HandshakeError> {
+    let selected_major = get_u32(result, "selected_major")?;
+    let minor = get_u64(result, "selected_minor")?;
+    let selected_minor = u16::try_from(minor)
+        .map_err(|_| malformed("selected_minor out of range"))?;
+    let limits = result
+        .get("negotiated_limits")
+        .filter(|limits| limits.is_object())
+        .ok_or_else(|| malformed("missing negotiated_limits"))?;
+    let get = |field: &str| get_u64(limits, field);
+    let get32 = |field: &str| {
+        get(field).and_then(|value| {
+            u32::try_from(value)
+                .map_err(|_| malformed(format!("{field} out of range")))
+        })
+    };
+    Ok(HelloResult {
+        runtime_instance: get_string(result, "runtime_instance")?,
+        adapter_generation: get_u64(result, "adapter_generation")?,
+        selected_major,
+        selected_minor,
+        negotiated: NegotiatedLimits {
+            max_frame_bytes: get("max_frame_bytes")?,
+            queue_tx_bytes: get("queue_tx_bytes")?,
+            queue_rx_bytes: get("queue_rx_bytes")?,
+            max_control_pending: get32("max_control_pending")?,
+            max_events_per_second: get32("max_events_per_second")?,
+            window_seconds: get32("window_seconds")?,
+            max_submits_in_flight: get32("max_submits_in_flight")?,
+            max_choices_in_flight: get32("max_choices_in_flight")?,
+            max_looks_in_flight: get32("max_looks_in_flight")?,
+            drain_wait_ms: get("drain_wait_ms")?,
+        },
+    })
 }
 
 fn invalid_limit(field: &str, reason: impl Into<String>) -> HandshakeError {

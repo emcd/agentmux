@@ -48,6 +48,8 @@ pub struct ScriptedChoice {
     pub species: String,
     #[serde(default)]
     pub details: String,
+    #[serde(default)]
+    pub deciders: Vec<String>,
     pub options: Vec<ScriptedOption>,
 }
 

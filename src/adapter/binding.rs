@@ -41,6 +41,7 @@ pub enum Direction {
 /// Operation class of a pending call, driving per-type terminalization.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CallKind {
+    Handshake,
     Submit,
     RequestChoice,
     Look,
@@ -147,6 +148,35 @@ impl PendingTable {
         wire_id: u64,
     ) -> Option<&PendingEntry> {
         self.entries.get(&(direction, wire_id))
+    }
+
+    /// Opens an inbound entry for a supervisor-originated call.
+    /// A duplicate inbound id is a typed framing failure: the
+    /// originator must never reuse a wire id.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`BindingError::ReusedWireId`] when the id is already
+    /// open in the inbound space.
+    pub fn note_inbound(
+        &mut self,
+        wire_id: u64,
+        kind: CallKind,
+        correlation_id: Option<String>,
+    ) -> Result<(), BindingError> {
+        if self.entries.contains_key(&(Direction::Inbound, wire_id)) {
+            return Err(BindingError::ReusedWireId { wire_id });
+        }
+        self.entries.insert(
+            (Direction::Inbound, wire_id),
+            PendingEntry {
+                wire_id,
+                direction: Direction::Inbound,
+                correlation_id,
+                kind,
+            },
+        );
+        Ok(())
     }
 
     /// Retires an entry after its terminal outcome is recorded.

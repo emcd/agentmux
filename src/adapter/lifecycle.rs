@@ -195,3 +195,19 @@ impl Liveness {
 pub fn ping_reply() -> Value {
     json!({})
 }
+
+/// Diagnostic sink writing JSON lines to stderr. Stdout stays
+/// frame-only, so diagnostics never corrupt the frame stream.
+pub struct StderrSink;
+
+impl super::choice::DiagnosticSink for StderrSink {
+    fn record(&mut self, entry: super::choice::DiagnosticEntry) {
+        eprintln!(
+            "{}",
+            json!({
+                "code": entry.code,
+                "detail": entry.detail,
+            })
+        );
+    }
+}

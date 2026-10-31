@@ -10,7 +10,7 @@
 use std::{
     error::Error,
     fmt::{Display, Formatter},
-    io::{self, BufRead, Read, Write},
+    io::{self, BufRead, Write},
 };
 
 use serde_json::{Value, json};
@@ -98,7 +98,7 @@ impl Error for FrameError {
 /// Returns [`FrameError::Oversize`] past the bound, [`FrameError::Io`]
 /// on read failure, [`FrameError::Unparseable`] on a truncated frame.
 pub fn read_frame(
-    reader: &mut impl BufRead,
+    reader: &mut (impl BufRead + ?Sized),
     bound: usize,
 ) -> Result<Option<Vec<u8>>, FrameError> {
     let mut frame: Vec<u8> = Vec::new();
@@ -106,10 +106,18 @@ pub fn read_frame(
     // and bytes past the newline stay buffered for the next frame.
     // Allocation never exceeds `bound + 1` no matter how large the
     // peer's frame grows.
-    for byte in reader.by_ref().bytes() {
-        let byte =
-            byte.map_err(|source| FrameError::io("read frame", source))?;
-        if byte == b'\n' {
+    let mut byte = [0_u8; 1];
+    loop {
+        match reader.read_exact(&mut byte) {
+            Ok(()) => {},
+            Err(source) if source.kind() == io::ErrorKind::UnexpectedEof => {
+                break;
+            },
+            Err(source) => {
+                return Err(FrameError::io("read frame", source));
+            },
+        }
+        if byte[0] == b'\n' {
             if frame.last() == Some(&b'\r') {
                 frame.pop();
             }
@@ -118,7 +126,7 @@ pub fn read_frame(
         if frame.len() >= bound.saturating_add(1) {
             return Err(FrameError::oversize(bound));
         }
-        frame.push(byte);
+        frame.push(byte[0]);
     }
     if frame.is_empty() {
         return Ok(None);
@@ -136,7 +144,7 @@ pub fn read_frame(
 /// Returns [`FrameError::MessageTooLarge`] past the bound and
 /// [`FrameError::Io`] on write or flush failure.
 pub fn write_frame(
-    writer: &mut impl Write,
+    writer: &mut (impl Write + ?Sized),
     payload: &[u8],
     bound: usize,
 ) -> Result<(), FrameError> {
