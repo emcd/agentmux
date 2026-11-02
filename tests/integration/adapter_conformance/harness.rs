@@ -164,6 +164,10 @@ impl SupervisorDouble {
     }
 
     /// Reads the adapter-originated `handshakeHello` call within `deadline`.
+    /// Only a call carrying the version offer (`protocol_major` plus
+    /// `protocol_minor` on params, per the contract) is admitted; anything
+    /// else reads as absent and stays on the transcript for the test to
+    /// inspect.
     pub(crate) fn expect_hello(
         &mut self,
         deadline: Duration,
@@ -173,13 +177,20 @@ impl SupervisorDouble {
                 if frame["method"] != "adapter.handshakeHello" {
                     return None;
                 }
-                Some(HelloCall {
-                    wire_id: frame["id"]
-                        .as_str()
-                        .unwrap_or_default()
-                        .to_string(),
-                    params: frame["params"].clone(),
-                })
+                let params = frame["params"].clone();
+                if params["protocol_major"].is_number()
+                    && params["protocol_minor"].is_number()
+                {
+                    Some(HelloCall {
+                        wire_id: frame["id"]
+                            .as_str()
+                            .unwrap_or_default()
+                            .to_string(),
+                        params,
+                    })
+                } else {
+                    None
+                }
             },
             _ => None,
         }
@@ -277,7 +288,7 @@ mod tests {
             "sh",
             &[
                 "-c",
-                r#"printf '%s\n' '{"jsonrpc":"2.0","id":"1","method":"adapter.handshakeHello","params":{"adapter_profile":"generic"}}'; read -r line"#,
+                r#"printf '%s\n' '{"jsonrpc":"2.0","id":"1","method":"adapter.handshakeHello","params":{"adapter_profile":"generic","protocol_major":1,"protocol_minor":0}}'; read -r line"#,
             ],
         )
         .expect("spawn stub adapter");
@@ -295,6 +306,23 @@ mod tests {
         assert!(matches!(transcript[0].direction, Direction::FromAdapter));
         assert!(matches!(transcript[1].direction, Direction::ToAdapter));
         assert!(transcript[1].raw.contains("instance-1"));
+    }
+
+    #[test]
+    fn hello_without_version_offer_reads_as_absent() {
+        let mut double = SupervisorDouble::spawn(
+            "sh",
+            &[
+                "-c",
+                r#"printf '%s\n' '{"jsonrpc":"2.0","id":"1","method":"adapter.handshakeHello","params":{"adapter_profile":"generic"}}'; read -r line"#,
+            ],
+        )
+        .expect("spawn version-less stub");
+        let call = double.expect_hello(Duration::from_secs(5));
+        assert!(call.is_none());
+        let transcript = double.disconnect();
+        assert_eq!(transcript.len(), 1);
+        assert!(transcript[0].raw.contains("adapter.handshakeHello"));
     }
 
     #[test]
