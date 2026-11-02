@@ -80,6 +80,17 @@ No equivalence case for `help` (no operation), supervision-only methods
 adapter-local errors (not in the canonical error set). A ping/pong
 protocol fixture is still required outside the equivalence set.
 
+## Persist payload-richness limit (Tier-1 review constraint)
+
+Persist origination is per completed turn with a turn-marker blob
+(`{"last_turn":"..."}`); the resume-state trigger is a named follow-on.
+Every normative persist behavior (tag echo, refusal/commit handling,
+persist-unknown at teardown) is implemented, so behavioral cases execute
+now — but any case asserting on blob content needs the follow-on first
+and fails otherwise looking like an implementation defect. Fixture
+headers cite this limit alongside the requirement citations so it
+travels with the fixtures.
+
 ## Seam-exercise rule (binds future cases)
 
 Any case added at a shape-rule-vs-admission-rule seam is exercised against
