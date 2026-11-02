@@ -89,6 +89,11 @@ fn spawn_line_forwarder(stdout: ChildStdout) -> mpsc::Receiver<String> {
 
 impl SupervisorDouble {
     /// Spawns `program` with piped stdio. The child speaks the adapter wire.
+    /// Single-process scope: teardown signals the direct child only, which
+    /// suffices for the scripted generic profile (no agent child). Stub
+    /// scripts in the self-tests use `exec` so no grandchild outlives the
+    /// direct child; multi-process teardown belongs to the real
+    /// supervisor, not to this pipe.
     pub(crate) fn spawn(
         program: &str,
         arguments: &[&str],
@@ -265,7 +270,21 @@ impl SupervisorDouble {
             }
         }
         let _ = self.child.kill();
-        let _ = self.child.wait();
+        // Bounded reap poll. A blocking wait on a silent piped child
+        // returns immediately in some environments without reaping, so
+        // the reap is polled explicitly rather than trusted to wait.
+        let reaped = Instant::now() + Duration::from_secs(2);
+        loop {
+            match self.child.try_wait() {
+                Ok(Some(_)) | Err(_) => break,
+                Ok(None) => {
+                    if Instant::now() >= reaped {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                },
+            }
+        }
         self.transcript
     }
 }
@@ -400,7 +419,7 @@ mod tests {
 
     #[test]
     fn kill_escalation_reaps_a_child_that_ignores_eof() {
-        let double = SupervisorDouble::spawn("sh", &["-c", "sleep 30"])
+        let double = SupervisorDouble::spawn("sh", &["-c", "exec sleep 30"])
             .expect("spawn sleeper stub");
         let started = Instant::now();
         let transcript =
