@@ -363,10 +363,11 @@ mod tests {
         let mut double =
             SupervisorDouble::spawn("sh", &["-c", "read -r line"])
                 .expect("spawn reader stub");
-        double.respond("4", json!({"chosen": {"option_id": "a"}}));
+        double
+            .respond("4", json!({"outcome": {"chosen": {"option_id": "a"}}}));
         let transcript = double.disconnect();
         assert_eq!(transcript.len(), 1);
-        assert!(transcript[0].raw.contains("\"id\":\"4\""));
+        assert!(transcript[0].raw.contains("\"outcome\""));
     }
 
     #[test]

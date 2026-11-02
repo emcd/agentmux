@@ -40,9 +40,11 @@ shapes appear in no draft.
 - Setup: two isolated equivalent pending choices, one resolved via wire
   round-trip, one via direct decide invocation, for the same input +
   verified context.
-- Assertion: both resolutions carry the same outcome (`Chosen` with
-  `option_id` + `decided_by`, or `Cancelled` with `decided_by`,
-  `reason_code`, optional `reason`). Covers the spoofed-decider negative:
+- Assertion: both resolutions carry the same outcome, and the wire result
+  nests it under exactly one key — `{"chosen": {"option_id",
+  "decided_by"}}` or `{"cancelled": {"decided_by"?, "reason_code",
+  "reason"?}}` with `correlation_id` echoed (both keys present or neither
+  is a framing failure). Covers the spoofed-decider negative:
   an adapter-presented decider the relay did not authorize is rejected
   rather than applied.
 
@@ -80,14 +82,14 @@ No equivalence case for `help` (no operation), supervision-only methods
 adapter-local errors (not in the canonical error set). A ping/pong
 protocol fixture is still required outside the equivalence set.
 
-## Persist payload-richness limit (Tier-1 review constraint)
+## Persist payload-richness limit (Tier-2 review constraint)
 
-Persist origination is per completed turn with a turn-marker blob
-(`{"last_turn":"..."}`); the resume-state trigger is a named follow-on.
-Every normative persist behavior (tag echo, refusal/commit handling,
-persist-unknown at teardown) is implemented, so behavioral cases execute
-now — but any case asserting on blob content needs the follow-on first
-and fails otherwise looking like an implementation defect. Fixture
+Persist origination is per completed turn with a scripted turn-marker
+blob (`{"last_turn":"..."}`). Behavioral cases (tag echo, refusal/commit
+handling, persist-unknown at teardown) execute now; the limit excuses
+exactly one thing: rich-content resume assertions against the scripted
+turn-marker fixture wait for the resume-state follow-on. It excuses no
+protocol or lifecycle defect and no genuinely invalid content. Fixture
 headers cite this limit alongside the requirement citations so it
 travels with the fixtures.
 
