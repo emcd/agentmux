@@ -7,6 +7,10 @@
 # Requirement: Relay reads adapter output through a poll look RPC
 # Capability: adapter-look-poll
 #
+# Scope note: turn-marker payloads only. The reference adapter persists
+# {"last_turn": ...} markers; conformance cases MUST NOT assert on
+# resume-state CONTENT until the resume-state trigger follow-on lands.
+#
 # Schema:
 # - [clock] advances_ms: virtual-clock advances in trace order (timeouts
 #   expire only on these events; the trace replays byte-identical).
