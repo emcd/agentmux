@@ -269,7 +269,7 @@ impl<'a> Runner<'a> {
         envelope: &Value,
     ) -> Option<i32> {
         match method {
-            "relay.submit" => self.handle_submit(envelope),
+            "adapter.submit" => self.handle_submit(envelope),
             "relay.look" => self.handle_look(envelope),
             "relay.ping" => self.handle_ping(envelope),
             "relay.supervisionSignal" => self.handle_signal(envelope),
@@ -457,7 +457,7 @@ impl<'a> Runner<'a> {
                         correlation_id: correlation.clone(),
                         adapter_generation: generation,
                         entries: Vec::new(),
-                        freshness: Freshness::Synthetic,
+                        freshness: Freshness::Stale,
                         source: SnapshotSource::Synthetic,
                         stale: true,
                         discontinuity: false,
@@ -478,7 +478,7 @@ impl<'a> Runner<'a> {
                         correlation_id: correlation.clone(),
                         adapter_generation: generation,
                         entries,
-                        freshness: Freshness::Live,
+                        freshness: Freshness::Fresh,
                         source: SnapshotSource::Live,
                         stale: false,
                         discontinuity: false,
@@ -490,7 +490,7 @@ impl<'a> Runner<'a> {
                 correlation_id: correlation.clone(),
                 adapter_generation: generation,
                 entries: Vec::new(),
-                freshness: Freshness::Synthetic,
+                freshness: Freshness::Stale,
                 source: SnapshotSource::Synthetic,
                 stale: true,
                 discontinuity: false,
@@ -829,37 +829,47 @@ impl<'a> Runner<'a> {
             return;
         }
         let mut resolver = choice.resolver;
+        let mut malformed = false;
         if let Some(result) = envelope.get("result") {
-            if let Some(chosen) = result.get("chosen") {
-                let option_id = chosen
-                    .get("option_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let decided_by = chosen
-                    .get("decided_by")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string();
-                let _ = resolver.resolve(ChoiceResolution::Chosen {
-                    option_id,
-                    decided_by,
-                });
-            } else if let Some(cancelled) = result.get("cancelled") {
-                let reason = cancelled
-                    .get("reason_code")
-                    .and_then(Value::as_str)
-                    .unwrap_or("relay_cancelled")
-                    .to_string();
-                let decided_by = cancelled
-                    .get("decided_by")
-                    .and_then(Value::as_str)
-                    .map(str::to_string);
-                let _ = resolver.resolve(ChoiceResolution::Cancelled {
-                    decided_by,
-                    reason_code: reason,
-                });
+            let outcome = result.get("outcome");
+            let chosen = outcome.and_then(|outcome| outcome.get("chosen"));
+            let cancelled =
+                outcome.and_then(|outcome| outcome.get("cancelled"));
+            if let Some(chosen) = chosen {
+                let option = chosen.get("option_id").and_then(Value::as_str);
+                let decider = chosen.get("decided_by").and_then(Value::as_str);
+                match (option, decider) {
+                    (Some(option_id), Some(decided_by)) => {
+                        let _ = resolver.resolve(ChoiceResolution::Chosen {
+                            option_id: option_id.to_string(),
+                            decided_by: decided_by.to_string(),
+                        });
+                    },
+                    _ => {
+                        malformed = true;
+                        let _ = resolver.cancel("malformed_choice_result");
+                    },
+                }
+            } else if let Some(cancelled) = cancelled {
+                match cancelled.get("reason_code").and_then(Value::as_str) {
+                    Some(reason_code) => {
+                        let decided_by = cancelled
+                            .get("decided_by")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                        let _ =
+                            resolver.resolve(ChoiceResolution::Cancelled {
+                                decided_by,
+                                reason_code: reason_code.to_string(),
+                            });
+                    },
+                    None => {
+                        malformed = true;
+                        let _ = resolver.cancel("malformed_choice_result");
+                    },
+                }
             } else {
+                malformed = true;
                 let _ = resolver.cancel("malformed_choice_result");
             }
         } else if let Some(error) = envelope.get("error") {
@@ -871,13 +881,17 @@ impl<'a> Runner<'a> {
                 .to_string();
             let _ = resolver.cancel(&reason);
         } else {
+            malformed = true;
             let _ = resolver.cancel("malformed_choice_reply");
         }
         self.choice_gate.release();
-        let turn = self.config.script.turn_for(&pending.correlation);
-        let ack = turn
-            .map(|turn| turn.ack.as_outcome())
-            .unwrap_or(OutcomeLiteral::Submitted);
+        let ack = if malformed {
+            OutcomeLiteral::SubmissionUnknown
+        } else {
+            let turn = self.config.script.turn_for(&pending.correlation);
+            turn.map(|turn| turn.ack.as_outcome())
+                .unwrap_or(OutcomeLiteral::Submitted)
+        };
         self.table.retire(Direction::Outbound, wire);
         let id = Value::String(pending.inbound_wire.to_string());
         self.complete_submit(

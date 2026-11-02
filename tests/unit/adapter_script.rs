@@ -111,7 +111,6 @@ species = "confirm"
 
 [[snapshots]]
 target = "seat-1"
-freshness = "live"
 
 [[snapshots.entries]]
 kind = "text"

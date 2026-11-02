@@ -11,19 +11,17 @@ use serde_json::{Value, json};
 /// Snapshot freshness as carried on the wire.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Freshness {
-    Live,
-    Cache,
-    Synthetic,
-    None,
+    Fresh,
+    Stale,
+    Initializing,
 }
 
 impl Freshness {
     fn as_wire(&self) -> &'static str {
         match self {
-            Self::Live => "live",
-            Self::Cache => "cache",
-            Self::Synthetic => "synthetic",
-            Self::None => "none",
+            Self::Fresh => "fresh",
+            Self::Stale => "stale",
+            Self::Initializing => "initializing",
         }
     }
 }
@@ -129,7 +127,7 @@ pub fn snapshot_result(snapshot: &Snapshot) -> Value {
         "returned_entries_count": rendered.len(),
         "freshness": snapshot.freshness.as_wire(),
         "snapshot_source": snapshot.source.as_wire(),
-        "stale": snapshot.stale || snapshot.freshness == Freshness::Synthetic,
+        "stale": snapshot.stale,
         "discontinuity": snapshot.discontinuity,
     });
     if let Some(code) = &snapshot.stale_reason_code {
@@ -146,7 +144,7 @@ pub fn fence_snapshot(correlation_id: &str, adapter_generation: u64) -> Value {
         correlation_id: correlation_id.to_string(),
         adapter_generation,
         entries: Vec::new(),
-        freshness: Freshness::Synthetic,
+        freshness: Freshness::Stale,
         source: SnapshotSource::Synthetic,
         stale: true,
         discontinuity: true,

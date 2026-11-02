@@ -31,34 +31,48 @@ fn snapshot_carries_freshness_metadata() {
         correlation_id: "c-1".to_string(),
         adapter_generation: 2,
         entries,
-        freshness: Freshness::Live,
+        freshness: Freshness::Fresh,
         source: SnapshotSource::Live,
         stale: false,
         discontinuity: false,
         stale_reason_code: None,
     });
     assert_eq!(result["correlation_id"], "c-1");
-    assert_eq!(result["freshness"], "live");
+    assert_eq!(result["freshness"], "fresh");
     assert_eq!(result["stale"], false);
     assert_eq!(result["entries_total"], 1);
     assert_eq!(result["entries"][0]["seq"], 3);
 }
 
-/// Synthetic snapshots always carry stale=true, never fresh.
+/// Fresh snapshots render fresh with stale false; stale snapshots
+/// render stale with the coded reason.
 #[test]
-fn synthetic_snapshot_is_always_stale() {
-    let result = snapshot_result(&Snapshot {
-        correlation_id: "c-2".to_string(),
+fn snapshot_freshness_renders_verbatim() {
+    let fresh = snapshot_result(&Snapshot {
+        correlation_id: "c-1".to_string(),
         adapter_generation: 2,
         entries: Vec::new(),
-        freshness: Freshness::Synthetic,
-        source: SnapshotSource::Synthetic,
+        freshness: Freshness::Fresh,
+        source: SnapshotSource::Live,
         stale: false,
         discontinuity: false,
         stale_reason_code: None,
     });
-    assert_eq!(result["stale"], true);
-    assert_ne!(result["freshness"], "fresh");
+    assert_eq!(fresh["freshness"], "fresh");
+    assert_eq!(fresh["stale"], false);
+    let stale = snapshot_result(&Snapshot {
+        correlation_id: "c-2".to_string(),
+        adapter_generation: 2,
+        entries: Vec::new(),
+        freshness: Freshness::Stale,
+        source: SnapshotSource::Synthetic,
+        stale: true,
+        discontinuity: true,
+        stale_reason_code: Some("priming".to_string()),
+    });
+    assert_eq!(stale["freshness"], "stale");
+    assert_eq!(stale["stale"], true);
+    assert_eq!(stale["stale_reason_code"], "priming");
 }
 
 /// The fence snapshot is synthetic, stale, empty, and discontinuous.

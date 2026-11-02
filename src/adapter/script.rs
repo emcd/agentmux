@@ -63,10 +63,11 @@ pub struct ScriptedTurn {
 }
 
 /// One scripted snapshot answering look polls for a target.
+/// Freshness is derived, never scripted: an available scripted
+/// snapshot renders fresh; priming and absent snapshots render stale.
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
 pub struct ScriptedSnapshot {
     pub target: String,
-    pub freshness: String,
     #[serde(default)]
     pub entries: Vec<ScriptedEntry>,
     /// Milliseconds after the target's first poll when the snapshot

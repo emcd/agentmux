@@ -73,7 +73,7 @@ fn submit_request(id: &str, correlation: &str) -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": id,
-        "method": "relay.submit",
+        "method": "adapter.submit",
         "params": {
             "runtime_instance": "rt-9",
             "target_session": "seat-1",
@@ -127,7 +127,6 @@ ack = "submitted"
 
 [[snapshots]]
 target = "seat-1"
-freshness = "live"
 
 [[snapshots.entries]]
 kind = "text"
@@ -201,7 +200,7 @@ fn full_run_terminates_clean() {
     // 3: persist marker follows the completed turn.
     assert_eq!(frames[3]["method"], "adapter.persistState");
     // 4: look renders the scripted snapshot as live.
-    assert_eq!(frames[4]["result"]["freshness"], "live");
+    assert_eq!(frames[4]["result"]["freshness"], "fresh");
     assert_eq!(frames[4]["result"]["entries"][0]["seq"], 1);
     // 5: ping answers the empty object.
     assert_eq!(frames[5]["result"], json!({}));
@@ -254,7 +253,7 @@ species = "confirm"
         "id": "2",
         "result": {
             "correlation_id": "ch-2",
-            "chosen": {"option_id": "yes", "decided_by": "op-9"},
+            "outcome": {"chosen": {"option_id": "yes", "decided_by": "op-9"}},
         },
     });
     let terminate = json!({
@@ -350,7 +349,6 @@ fn delayed_snapshot_priming_then_fresh() {
     let script = r#"
 [[snapshots]]
 target = "seat-1"
-freshness = "live"
 delay_ms = 200
 
 [[snapshots.entries]]
@@ -388,7 +386,8 @@ text = "slow hello"
     let (code, output, _) = run_transcript(&config, &input);
     assert_eq!(code, EXIT_CLEAN);
     let frames = split_frames(&output);
-    assert_eq!(frames[1]["result"]["freshness"], "synthetic");
+    assert_eq!(frames[1]["result"]["freshness"], "stale");
+    assert_eq!(frames[1]["result"]["snapshot_source"], "synthetic");
     assert_eq!(frames[1]["result"]["stale"], true);
     assert_eq!(frames[1]["result"]["stale_reason_code"], "priming");
 }

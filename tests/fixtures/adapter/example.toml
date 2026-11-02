@@ -7,7 +7,7 @@
 # Requirement: Relay reads adapter output through a poll look RPC
 # Capability: adapter-look-poll
 #
-# Limit: persist blobs are turn markers only ({"last_turn":"..."}); blob-content assertions wait for the resume-state follow-on
+# Limit: scripted turn-marker fixture carries no resume content; rich-content persist assertions wait for the resume-state follow-on
 #
 # Schema:
 # - [clock] advances_ms: virtual-clock advances in trace order (timeouts
@@ -51,7 +51,6 @@ species = "confirm"
 
 [[snapshots]]
 target = "seat-1"
-freshness = "live"
 
 [[snapshots.entries]]
 kind = "text"
