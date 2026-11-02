@@ -1,5 +1,7 @@
 #[path = "integration/acp/mod.rs"]
 mod acp;
+#[path = "integration/adapter_pipes.rs"]
+mod adapter_pipes;
 #[path = "integration/adapter_stdio.rs"]
 mod adapter_stdio;
 #[path = "integration/cli/mod.rs"]
