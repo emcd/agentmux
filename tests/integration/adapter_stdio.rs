@@ -11,6 +11,8 @@ use serde_json::{Value, json};
 fn test_config(script_toml: &str) -> AdapterConfig {
     let script = agentmux::adapter::script::parse_script(script_toml)
         .expect("script parses");
+    let mut latency = HashMap::from([("default".to_string(), 5_000_u64)]);
+    latency.insert("text".to_string(), 5_000);
     AdapterConfig {
         executable: "agentmux-adapter".to_string(),
         profile: "generic".to_string(),
@@ -31,10 +33,7 @@ fn test_config(script_toml: &str) -> AdapterConfig {
             max_choices_in_flight: 16,
             max_looks_in_flight: 8,
             drain_wait_ms: 250,
-            latency_declarations: HashMap::from([(
-                "default".to_string(),
-                5_000,
-            )]),
+            latency_declarations: latency,
         },
         script,
     }
@@ -60,10 +59,13 @@ fn hello_result() -> Value {
         "jsonrpc": "2.0",
         "id": "1",
         "result": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
             "runtime_instance": "rt-9",
             "adapter_generation": 3,
             "selected_major": 2,
             "selected_minor": 1,
+            "snapshot_b64": "",
             "negotiated_limits": limits_value(),
         },
     })
@@ -75,6 +77,8 @@ fn submit_request(id: &str, correlation: &str) -> Value {
         "id": id,
         "method": "adapter.submit",
         "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
             "runtime_instance": "rt-9",
             "target_session": "seat-1",
             "adapter_generation": 3,
@@ -147,6 +151,8 @@ fn full_run_terminates_clean() {
         "jsonrpc": "2.0",
         "method": "relay.supervisionSignal",
         "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
             "runtime_instance": "rt-9",
             "target_session": "seat-1",
             "adapter_generation": 3,
@@ -158,6 +164,8 @@ fn full_run_terminates_clean() {
         "id": "11",
         "method": "relay.look",
         "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
             "runtime_instance": "rt-9",
             "target_session": "seat-1",
             "adapter_generation": 3,
@@ -171,6 +179,8 @@ fn full_run_terminates_clean() {
         "id": "12",
         "method": "relay.ping",
         "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
             "runtime_instance": "rt-9",
             "target_session": "seat-1",
             "adapter_generation": 3,
@@ -214,6 +224,8 @@ fn replay_is_byte_identical() {
         "jsonrpc": "2.0",
         "method": "relay.supervisionSignal",
         "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
             "runtime_instance": "rt-9",
             "target_session": "seat-1",
             "adapter_generation": 3,
@@ -260,6 +272,8 @@ species = "confirm"
         "jsonrpc": "2.0",
         "method": "relay.supervisionSignal",
         "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
             "runtime_instance": "rt-9",
             "target_session": "seat-1",
             "adapter_generation": 3,
@@ -307,6 +321,8 @@ species = "confirm"
         "jsonrpc": "2.0",
         "method": "relay.supervisionSignal",
         "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
             "runtime_instance": "rt-9",
             "target_session": "seat-1",
             "adapter_generation": 3,
@@ -317,6 +333,8 @@ species = "confirm"
         "jsonrpc": "2.0",
         "method": "relay.supervisionSignal",
         "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
             "runtime_instance": "rt-9",
             "target_session": "seat-1",
             "adapter_generation": 3,
@@ -362,6 +380,8 @@ text = "slow hello"
         "id": "11",
         "method": "relay.look",
         "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
             "runtime_instance": "rt-9",
             "target_session": "seat-1",
             "adapter_generation": 3,
@@ -374,6 +394,8 @@ text = "slow hello"
         "jsonrpc": "2.0",
         "method": "relay.supervisionSignal",
         "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
             "runtime_instance": "rt-9",
             "target_session": "seat-1",
             "adapter_generation": 3,
@@ -390,6 +412,168 @@ text = "slow hello"
     assert_eq!(frames[1]["result"]["snapshot_source"], "synthetic");
     assert_eq!(frames[1]["result"]["stale"], true);
     assert_eq!(frames[1]["result"]["stale_reason_code"], "priming");
+}
+
+/// A submit naming an unbound member target is refused structurally
+/// and holds no turn: the next well-formed submit proceeds.
+#[test]
+fn wrong_member_target_is_structural() {
+    let config = test_config(SCRIPT);
+    let bad = json!({
+        "jsonrpc": "2.0",
+        "id": "10",
+        "method": "adapter.submit",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "correlation_id": "c-bad",
+            "members": [{
+                "message_id": "m-1",
+                "target_session": "elsewhere",
+                "adapter_generation": 3,
+                "content_type": "default",
+                "payload_b64": "aGk=",
+            }],
+        },
+    });
+    let terminate = json!({
+        "jsonrpc": "2.0",
+        "method": "relay.supervisionSignal",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "signal": "terminate",
+        },
+    });
+    let input = transcript(&[
+        hello_result(),
+        bad,
+        submit_request("11", "c-1"),
+        terminate,
+    ]);
+    let (code, output, _) = run_transcript(&config, &input);
+    assert_eq!(code, EXIT_CLEAN);
+    let frames = split_frames(&output);
+    // hello, structural refusal, submit result, persist marker.
+    assert_eq!(frames[2]["error"]["code"], -32000);
+    assert_eq!(frames[2]["error"]["data"]["code"], "validation_structural");
+    assert_eq!(frames[2]["error"]["data"]["correlation_id"], "c-bad");
+    assert_eq!(frames[3]["result"]["outcome"], "Submitted");
+}
+
+/// An unknown content type is a structural refusal, never a default
+/// latency.
+#[test]
+fn unknown_content_type_is_structural() {
+    let config = test_config(SCRIPT);
+    let bad = json!({
+        "jsonrpc": "2.0",
+        "id": "10",
+        "method": "adapter.submit",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "correlation_id": "c-bad",
+            "members": [{
+                "message_id": "m-1",
+                "target_session": "seat-1",
+                "adapter_generation": 3,
+                "content_type": "nope",
+                "payload_b64": "aGk=",
+            }],
+        },
+    });
+    let terminate = json!({
+        "jsonrpc": "2.0",
+        "method": "relay.supervisionSignal",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "signal": "terminate",
+        },
+    });
+    let input = transcript(&[hello_result(), bad, terminate]);
+    let (code, output, _) = run_transcript(&config, &input);
+    assert_eq!(code, EXIT_CLEAN);
+    let frames = split_frames(&output);
+    assert_eq!(frames[2]["error"]["code"], -32000);
+    assert_eq!(frames[2]["error"]["data"]["code"], "validation_structural");
+}
+
+/// A choice result with a mismatched correlation echo is kept open:
+/// only the correctly echoed reply resolves the turn.
+#[test]
+fn mismatched_choice_echo_kept_open() {
+    let script = r#"
+[[turns]]
+correlation = "c-2"
+ack = "submitted"
+
+[[turns.choices]]
+title = "Deploy?"
+species = "approval"
+
+[[turns.choices.options]]
+option_id = "yes"
+name = "Yes"
+species = "confirm"
+"#;
+    let config = test_config(script);
+    let wrong_echo = json!({
+        "jsonrpc": "2.0",
+        "id": "2",
+        "result": {
+            "correlation_id": "ch-WRONG",
+            "outcome": {"chosen": {"option_id": "yes", "decided_by": "op-9"}},
+        },
+    });
+    let right_echo = json!({
+        "jsonrpc": "2.0",
+        "id": "2",
+        "result": {
+            "correlation_id": "ch-2",
+            "outcome": {"chosen": {"option_id": "yes", "decided_by": "op-9"}},
+        },
+    });
+    let terminate = json!({
+        "jsonrpc": "2.0",
+        "method": "relay.supervisionSignal",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "signal": "terminate",
+        },
+    });
+    let input = transcript(&[
+        hello_result(),
+        submit_request("10", "c-2"),
+        wrong_echo,
+        right_echo,
+        terminate,
+    ]);
+    let (code, output, _) = run_transcript(&config, &input);
+    assert_eq!(code, EXIT_CLEAN);
+    let frames = split_frames(&output);
+    // hello, requestChoice, submit result (only after the right echo),
+    // persist marker. The mismatched echo resolves nothing.
+    assert_eq!(frames[1]["method"], "adapter.requestChoice");
+    assert_eq!(frames[2]["result"]["outcome"], "Submitted");
+    assert_eq!(frames[2]["result"]["correlation_id"], "c-2");
 }
 
 /// The bootstrap ceiling is the 64KiB pre-negotiation bound.

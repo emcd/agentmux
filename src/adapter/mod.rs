@@ -31,29 +31,17 @@ use std::io::{BufRead, Write};
 
 use serde_json::{Value, json};
 
-use binding::{
-    Binding, CallKind, Direction, PendingTable, PinnedLaunch,
-    establish_binding,
-};
-use choice::{
-    ChoiceGate, ChoiceResolution, ChoiceResolver, DiagnosticEntry,
-    DiagnosticSink, GateDecision,
-};
+use binding::{Binding, CallKind, Direction, PendingTable};
+use choice::{ChoiceGate, ChoiceResolver, DiagnosticEntry, DiagnosticSink};
 use frame::{
     BOOTSTRAP_MAX_FRAME_BYTES, contract_error, parse_frame, read_frame,
     write_frame,
 };
-use handshake::{
-    LimitsProposal, VersionOffer, hello_request, parse_hello_result,
-    validate_limits, validate_selection,
-};
-use lifecycle::{Clock, Liveness, Outbox, ping_reply};
-use look::{
-    Freshness, Snapshot, SnapshotEntry, SnapshotSource, snapshot_result,
-};
+use handshake::{LimitsProposal, VersionOffer};
+use lifecycle::{Clock, Liveness, Outbox};
 use persist::PersistTracker;
-use script::{Script, ScriptedChoice};
-use submit::{OutcomeLiteral, TurnGate, outcome_for_attempt};
+use script::Script;
+use submit::TurnGate;
 
 /// Configuration for one adapter run: launch inputs, the version
 /// offer, limits proposal, and the fixture script driving turns.
@@ -93,40 +81,43 @@ pub fn run_stdio(
     writer: &mut impl Write,
     sink: &mut impl DiagnosticSink,
 ) -> i32 {
-    let mut runner = Runner::new(config, clock, writer, sink);
+    let mut runner = Adapter::new(config, clock, writer, sink);
     runner.serve(reader)
 }
 
-struct PendingSubmit {
-    correlation: String,
-    inbound_wire: u64,
-    choice: Option<PendingChoice>,
+pub(crate) struct PendingSubmit {
+    pub(crate) correlation: String,
+    pub(crate) inbound_wire: u64,
+    pub(crate) choice: Option<PendingChoice>,
 }
 
-struct PendingChoice {
-    wire_id: u64,
-    resolver: ChoiceResolver,
+pub(crate) struct PendingChoice {
+    pub(crate) wire_id: u64,
+    pub(crate) resolver: ChoiceResolver,
 }
 
-struct Runner<'a> {
-    config: &'a AdapterConfig,
-    clock: &'a dyn Clock,
-    writer: &'a mut dyn Write,
-    sink: &'a mut dyn DiagnosticSink,
-    table: PendingTable,
-    binding: Option<Binding>,
-    inbound_bound: usize,
-    prime_anchors: HashMap<String, u64>,
-    turn: TurnGate,
-    choice_gate: ChoiceGate,
-    persist: PersistTracker,
-    outbox: Outbox,
-    liveness: Option<Liveness>,
-    pending_submit: Option<PendingSubmit>,
+pub(crate) struct Adapter<'a> {
+    pub(crate) config: &'a AdapterConfig,
+    pub(crate) clock: &'a dyn Clock,
+    pub(crate) writer: &'a mut dyn Write,
+    pub(crate) sink: &'a mut dyn DiagnosticSink,
+    pub(crate) table: PendingTable,
+    pub(crate) binding: Option<Binding>,
+    pub(crate) inbound_bound: usize,
+    pub(crate) selected_major: u32,
+    pub(crate) selected_minor: u16,
+    pub(crate) prime_anchors: HashMap<String, u64>,
+    pub(crate) persist_wires: HashMap<u64, String>,
+    pub(crate) turn: TurnGate,
+    pub(crate) choice_gate: ChoiceGate,
+    pub(crate) persist: PersistTracker,
+    pub(crate) outbox: Outbox,
+    pub(crate) liveness: Option<Liveness>,
+    pub(crate) pending_submit: Option<PendingSubmit>,
 }
 
-impl<'a> Runner<'a> {
-    fn new(
+impl<'a> Adapter<'a> {
+    pub(crate) fn new(
         config: &'a AdapterConfig,
         clock: &'a dyn Clock,
         writer: &'a mut dyn Write,
@@ -140,7 +131,10 @@ impl<'a> Runner<'a> {
             table: PendingTable::new(),
             binding: None,
             inbound_bound: BOOTSTRAP_MAX_FRAME_BYTES,
+            selected_major: 0,
+            selected_minor: 0,
             prime_anchors: HashMap::new(),
+            persist_wires: HashMap::new(),
             turn: TurnGate::new(),
             choice_gate: ChoiceGate::new(
                 config.proposal.max_choices_in_flight as usize,
@@ -155,7 +149,7 @@ impl<'a> Runner<'a> {
         }
     }
 
-    fn serve<R: BufRead>(&mut self, reader: &mut R) -> i32 {
+    pub(crate) fn serve<R: BufRead>(&mut self, reader: &mut R) -> i32 {
         if self.handshake(reader).is_err() {
             return EXIT_REFUSAL;
         }
@@ -187,64 +181,7 @@ impl<'a> Runner<'a> {
         }
     }
 
-    fn handshake<R: BufRead>(&mut self, reader: &mut R) -> Result<(), ()> {
-        let pinned = PinnedLaunch {
-            target_session: self.config.target_session.clone(),
-            adapter_profile: self.config.profile.clone(),
-            adapter_executable: self.config.executable.clone(),
-        };
-        let request =
-            hello_request(&pinned, &self.config.offer, &self.config.proposal)
-                .map_err(|_| ())?;
-        let hello_wire = self
-            .table
-            .mint(Direction::Outbound, CallKind::Handshake, None)
-            .map_err(|_| ())?;
-        self.write_value(&json!({
-            "jsonrpc": "2.0",
-            "id": hello_wire.to_string(),
-            "method": "adapter.handshakeHello",
-            "params": request,
-        }))
-        .map_err(|_| ())?;
-        let bytes = match read_frame(reader, BOOTSTRAP_MAX_FRAME_BYTES) {
-            Ok(Some(bytes)) => bytes,
-            _ => return Err(()),
-        };
-        let envelope = parse_frame(&bytes).map_err(|_| ())?;
-        if envelope.get("id").and_then(Value::as_str)
-            != Some(&hello_wire.to_string())
-        {
-            return Err(());
-        }
-        let result = envelope
-            .get("result")
-            .ok_or(())
-            .and_then(|result| parse_hello_result(result).map_err(|_| ()))?;
-        validate_selection(
-            &self.config.offer,
-            result.selected_major,
-            result.selected_minor,
-        )
-        .map_err(|_| ())?;
-        validate_limits(&self.config.proposal, &result.negotiated)
-            .map_err(|_| ())?;
-        self.inbound_bound = result.negotiated.max_frame_bytes as usize;
-        let (binding, _) = establish_binding(
-            &pinned,
-            result.runtime_instance,
-            result.adapter_generation,
-        );
-        self.table.retire(Direction::Outbound, hello_wire);
-        self.binding = Some(binding);
-        self.liveness = Some(Liveness::new(self.clock.now_ms(), 60_000));
-        for event in &self.config.script.events.clone() {
-            self.emit_lifecycle(&event.kind, &event.code);
-        }
-        Ok(())
-    }
-
-    fn dispatch(&mut self, bytes: &[u8]) -> Option<i32> {
+    pub(crate) fn dispatch(&mut self, bytes: &[u8]) -> Option<i32> {
         let envelope = match parse_frame(bytes) {
             Ok(envelope) => envelope,
             Err(_) => {
@@ -263,7 +200,7 @@ impl<'a> Runner<'a> {
         None
     }
 
-    fn dispatch_request(
+    pub(crate) fn dispatch_request(
         &mut self,
         method: &str,
         envelope: &Value,
@@ -280,11 +217,11 @@ impl<'a> Runner<'a> {
         }
     }
 
-    fn wire_id_of(&mut self, envelope: &Value) -> Option<u64> {
+    pub(crate) fn wire_id_of(&mut self, envelope: &Value) -> Option<u64> {
         envelope.get("id")?.as_str()?.parse::<u64>().ok()
     }
 
-    fn binding_triple_of(
+    pub(crate) fn binding_triple_of(
         &self,
         params: &Value,
     ) -> Option<(String, String, u64)> {
@@ -295,7 +232,7 @@ impl<'a> Runner<'a> {
         ))
     }
 
-    fn check_binding(&self, params: &Value) -> bool {
+    pub(crate) fn check_binding(&self, params: &Value) -> bool {
         let Some(binding) = &self.binding else {
             return false;
         };
@@ -304,19 +241,26 @@ impl<'a> Runner<'a> {
         else {
             return false;
         };
-        runtime == binding.runtime_instance
-            && target == binding.target_session
-            && generation == binding.adapter_generation
+        if runtime != binding.runtime_instance
+            || target != binding.target_session
+            || generation != binding.adapter_generation
+        {
+            return false;
+        }
+        let major = params.get("protocol_major").and_then(Value::as_u64);
+        let minor = params.get("protocol_minor").and_then(Value::as_u64);
+        major == Some(u64::from(self.selected_major))
+            && minor == Some(u64::from(self.selected_minor))
     }
 
-    fn correlation_of(&self, params: &Value) -> Option<String> {
+    pub(crate) fn correlation_of(&self, params: &Value) -> Option<String> {
         params
             .get("correlation_id")
             .and_then(Value::as_str)
             .map(str::to_string)
     }
 
-    fn answer_invalid(&mut self, id: Option<&Value>) {
+    pub(crate) fn answer_invalid(&mut self, id: Option<&Value>) {
         let _ = self.write_value(&contract_error(
             id,
             "invalid_request",
@@ -326,7 +270,7 @@ impl<'a> Runner<'a> {
         ));
     }
 
-    fn answer_method_unknown(&mut self, id: Option<&Value>) {
+    pub(crate) fn answer_method_unknown(&mut self, id: Option<&Value>) {
         let _ = self.write_value(&json!({
             "jsonrpc": "2.0",
             "id": id.cloned().unwrap_or(Value::Null),
@@ -334,34 +278,39 @@ impl<'a> Runner<'a> {
         }));
     }
 
-    fn answer_binding_mismatch(&mut self, id: Option<&Value>) {
+    pub(crate) fn answer_binding_mismatch(
+        &mut self,
+        id: Option<&Value>,
+        params: Option<&Value>,
+    ) {
+        let correlation = params
+            .and_then(|params| params.get("correlation_id"))
+            .and_then(Value::as_str);
         let _ = self.write_value(&contract_error(
             id,
             "binding_mismatch",
-            "binding triple does not match the captured binding",
+            "binding triple or protocol version does not match",
             None,
-            None,
+            correlation,
         ));
     }
 
-    fn emit_lifecycle(&mut self, kind: &str, code: &str) {
-        let Some(binding) = &self.binding else {
-            return;
-        };
-        let _ = self.write_value(&json!({
-            "jsonrpc": "2.0",
-            "method": "adapter.lifecycleEvent",
-            "params": {
-                "runtime_instance": binding.runtime_instance,
-                "target_session": binding.target_session,
-                "adapter_generation": binding.adapter_generation,
-                "kind": kind,
-                "code": code,
-            },
-        }));
+    pub(crate) fn answer_structural(
+        &mut self,
+        id: Option<&Value>,
+        correlation: &str,
+        reason: &str,
+    ) {
+        let _ = self.write_value(&contract_error(
+            id,
+            "validation_structural",
+            reason,
+            None,
+            Some(correlation),
+        ));
     }
 
-    fn write_value(&mut self, value: &Value) -> Result<(), ()> {
+    pub(crate) fn write_value(&mut self, value: &Value) -> Result<(), ()> {
         let bytes = serde_json::to_vec(value).map_err(|_| ())?;
         if self.outbox.push_data(bytes.len()).is_err() {
             self.record("outbox_full", "response dropped at queue cap");
@@ -376,391 +325,14 @@ impl<'a> Runner<'a> {
         result.map_err(|_| ())
     }
 
-    fn record(&mut self, code: &str, detail: &str) {
+    pub(crate) fn record(&mut self, code: &str, detail: &str) {
         self.sink.record(DiagnosticEntry {
             code: code.to_string(),
             detail: detail.to_string(),
         });
     }
 
-    fn handle_ping(&mut self, envelope: &Value) -> Option<i32> {
-        let id = envelope.get("id").cloned().unwrap_or(Value::Null);
-        let Some(params) = envelope.get("params") else {
-            self.answer_invalid(envelope.get("id"));
-            return None;
-        };
-        if !self.check_binding(params) {
-            self.answer_binding_mismatch(envelope.get("id"));
-            return None;
-        }
-        let wire = match self.wire_id_of(envelope) {
-            Some(wire) => wire,
-            None => {
-                self.answer_invalid(envelope.get("id"));
-                return None;
-            },
-        };
-        if self.table.note_inbound(wire, CallKind::Ping, None).is_err() {
-            self.answer_binding_mismatch(envelope.get("id"));
-            return None;
-        }
-        let _ = self.write_value(&json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": ping_reply(),
-        }));
-        self.table.retire(Direction::Inbound, wire);
-        None
-    }
-
-    fn handle_look(&mut self, envelope: &Value) -> Option<i32> {
-        let Some(params) = envelope.get("params") else {
-            self.answer_invalid(envelope.get("id"));
-            return None;
-        };
-        if !self.check_binding(params) {
-            self.answer_binding_mismatch(envelope.get("id"));
-            return None;
-        }
-        let (Some(wire), Some(correlation)) =
-            (self.wire_id_of(envelope), self.correlation_of(params))
-        else {
-            self.answer_invalid(envelope.get("id"));
-            return None;
-        };
-        if self
-            .table
-            .note_inbound(wire, CallKind::Look, Some(correlation.clone()))
-            .is_err()
-        {
-            self.answer_binding_mismatch(envelope.get("id"));
-            return None;
-        }
-        let target = params
-            .get("target_session")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let generation = self
-            .binding
-            .as_ref()
-            .map(|binding| binding.adapter_generation)
-            .unwrap_or(0);
-        let now = self.clock.now_ms();
-        let snapshot = match self.config.script.snapshot_for(target) {
-            Some(scripted) => {
-                let first = *self
-                    .prime_anchors
-                    .entry(target.to_string())
-                    .or_insert(now);
-                if now < first.saturating_add(scripted.delay_ms) {
-                    Snapshot {
-                        correlation_id: correlation.clone(),
-                        adapter_generation: generation,
-                        entries: Vec::new(),
-                        freshness: Freshness::Stale,
-                        source: SnapshotSource::Synthetic,
-                        stale: true,
-                        discontinuity: false,
-                        stale_reason_code: Some("priming".to_string()),
-                    }
-                } else {
-                    let entries: Vec<SnapshotEntry> = scripted
-                        .entries
-                        .iter()
-                        .map(|entry| SnapshotEntry {
-                            kind: entry.kind.clone(),
-                            seq: entry.seq,
-                            text_base64: base64_encode(&entry.text),
-                            truncated: entry.truncated,
-                        })
-                        .collect();
-                    Snapshot {
-                        correlation_id: correlation.clone(),
-                        adapter_generation: generation,
-                        entries,
-                        freshness: Freshness::Fresh,
-                        source: SnapshotSource::Live,
-                        stale: false,
-                        discontinuity: false,
-                        stale_reason_code: None,
-                    }
-                }
-            },
-            None => Snapshot {
-                correlation_id: correlation.clone(),
-                adapter_generation: generation,
-                entries: Vec::new(),
-                freshness: Freshness::Stale,
-                source: SnapshotSource::Synthetic,
-                stale: true,
-                discontinuity: false,
-                stale_reason_code: Some("no_snapshot_scripted".to_string()),
-            },
-        };
-        let _ = self.write_value(&json!({
-            "jsonrpc": "2.0",
-            "id": envelope.get("id").cloned().unwrap_or(Value::Null),
-            "result": snapshot_result(&snapshot),
-        }));
-        self.table.retire(Direction::Inbound, wire);
-        None
-    }
-
-    fn handle_submit(&mut self, envelope: &Value) -> Option<i32> {
-        let Some(params) = envelope.get("params") else {
-            self.answer_invalid(envelope.get("id"));
-            return None;
-        };
-        if !self.check_binding(params) {
-            self.answer_binding_mismatch(envelope.get("id"));
-            return None;
-        }
-        let (Some(wire), Some(correlation)) =
-            (self.wire_id_of(envelope), self.correlation_of(params))
-        else {
-            self.answer_invalid(envelope.get("id"));
-            return None;
-        };
-        if self
-            .table
-            .note_inbound(wire, CallKind::Submit, Some(correlation.clone()))
-            .is_err()
-        {
-            self.answer_binding_mismatch(envelope.get("id"));
-            return None;
-        }
-        let message_id = params
-            .get("members")
-            .and_then(Value::as_array)
-            .and_then(|members| members.first())
-            .and_then(|member| member.get("message_id"))
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let message_id = if message_id.is_empty() {
-            correlation.clone()
-        } else {
-            message_id.to_string()
-        };
-        let null_id = Value::Null;
-        let id = envelope.get("id").unwrap_or(&null_id);
-        if self.turn.begin(correlation.clone()).is_err() {
-            self.answer_submit(
-                envelope.get("id"),
-                &correlation,
-                OutcomeLiteral::RefusedBusy,
-                "adapter_single_flight",
-            );
-            self.table.retire(Direction::Inbound, wire);
-            return None;
-        }
-        let turn = self.config.script.turn_for(&correlation);
-        let ack = turn
-            .map(|turn| turn.ack.as_outcome())
-            .unwrap_or(OutcomeLiteral::Submitted);
-        let choices: Vec<ScriptedChoice> =
-            turn.map(|turn| turn.choices.clone()).unwrap_or_default();
-        if choices.is_empty() {
-            self.complete_submit(id, wire, &correlation, ack);
-            return None;
-        }
-        let request_id = match self.table.mint(
-            Direction::Outbound,
-            CallKind::RequestChoice,
-            None,
-        ) {
-            Ok(id) => id,
-            Err(_) => {
-                self.complete_submit(
-                    id,
-                    wire,
-                    &correlation,
-                    OutcomeLiteral::SubmissionUnknown,
-                );
-                return None;
-            },
-        };
-        match self.choice_gate.request(&mut *self.sink) {
-            GateDecision::Admit => {},
-            GateDecision::Shed { .. } => {
-                self.table.retire(Direction::Outbound, request_id);
-                self.complete_submit(
-                    id,
-                    wire,
-                    &correlation,
-                    OutcomeLiteral::SubmissionUnknown,
-                );
-                return None;
-            },
-        }
-        let choice_correlation = format!("ch-{request_id}");
-        let choice = &choices[0];
-        let deciders = if choice.deciders.is_empty() {
-            vec![self.config.target_session.clone()]
-        } else {
-            choice.deciders.clone()
-        };
-        let options: Vec<Value> = choice
-            .options
-            .iter()
-            .map(|option| {
-                json!({
-                    "option_id": option.option_id,
-                    "name": option.name,
-                    "species": option.species,
-                })
-            })
-            .collect();
-        let binding = self.binding.as_ref().expect("binding established");
-        let request = json!({
-            "jsonrpc": "2.0",
-            "id": request_id.to_string(),
-            "method": "adapter.requestChoice",
-            "params": {
-                "runtime_instance": binding.runtime_instance,
-                "adapter_generation": binding.adapter_generation,
-                "correlation_id": choice_correlation,
-                "message_id": message_id,
-                "target_session": binding.target_session,
-                "decider_sessions": deciders,
-                "title": choice.title,
-                "species": choice.species,
-                "details": choice.details,
-                "options": options,
-            },
-        });
-        if self.write_value(&request).is_err() {
-            self.table.retire(Direction::Outbound, request_id);
-            self.complete_submit(
-                id,
-                wire,
-                &correlation,
-                OutcomeLiteral::SubmissionUnknown,
-            );
-            return None;
-        }
-        self.pending_submit = Some(PendingSubmit {
-            correlation,
-            inbound_wire: wire,
-            choice: Some(PendingChoice {
-                wire_id: request_id,
-                resolver: ChoiceResolver::new(),
-            }),
-        });
-        None
-    }
-
-    fn complete_submit(
-        &mut self,
-        id: &Value,
-        inbound_wire: u64,
-        correlation: &str,
-        outcome: OutcomeLiteral,
-    ) {
-        let (literal, evidence) = match outcome {
-            OutcomeLiteral::Submitted => {
-                outcome_for_attempt(submit::WriteEvidence::SubmittedOutbox)
-            },
-            OutcomeLiteral::TransportUnavailable => {
-                outcome_for_attempt(submit::WriteEvidence::NoRuntime)
-            },
-            OutcomeLiteral::SubmissionUnknown => {
-                outcome_for_attempt(submit::WriteEvidence::FailedUnknown)
-            },
-            OutcomeLiteral::RefusedBusy => {
-                (OutcomeLiteral::RefusedBusy, "adapter_single_flight")
-            },
-        };
-        let mut result = json!({
-            "outcome": literal.as_wire(),
-            "correlation_id": correlation,
-        });
-        if literal != OutcomeLiteral::Submitted {
-            result["evidence_basis"] = Value::String(evidence.to_string());
-        }
-        let _ = self.write_value(&json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": result,
-        }));
-        self.turn.complete();
-        self.table.retire(Direction::Inbound, inbound_wire);
-        self.maybe_persist_turn(correlation);
-    }
-
-    fn answer_submit(
-        &mut self,
-        id: Option<&Value>,
-        correlation: &str,
-        outcome: OutcomeLiteral,
-        evidence: &str,
-    ) {
-        let _ = self.write_value(&json!({
-            "jsonrpc": "2.0",
-            "id": id.cloned().unwrap_or(Value::Null),
-            "result": {
-                "outcome": outcome.as_wire(),
-                "correlation_id": correlation,
-                "evidence_basis": evidence,
-            },
-        }));
-    }
-
-    fn maybe_persist_turn(&mut self, correlation: &str) {
-        let Some(binding) = self.binding.clone() else {
-            return;
-        };
-        let wire =
-            match self
-                .table
-                .mint(Direction::Outbound, CallKind::Persist, None)
-            {
-                Ok(wire) => wire,
-                Err(_) => {
-                    self.record("persist_cap", "turn marker skipped");
-                    return;
-                },
-            };
-        let tag = persist::ResumeTag {
-            runtime_instance: binding.runtime_instance.clone(),
-            target_session: binding.target_session.clone(),
-            adapter_generation: binding.adapter_generation,
-        };
-        if self
-            .persist
-            .submit(correlation.to_string(), tag.clone())
-            .is_err()
-        {
-            self.table.retire(Direction::Outbound, wire);
-            self.record("persist_cap", "turn marker skipped");
-            return;
-        }
-        let blob =
-            base64_encode(&format!("{{\"last_turn\":\"{correlation}\"}}"));
-        let request = json!({
-            "jsonrpc": "2.0",
-            "id": wire.to_string(),
-            "method": "adapter.persistState",
-            "params": {
-                "runtime_instance": binding.runtime_instance,
-                "target_session": binding.target_session,
-                "adapter_generation": binding.adapter_generation,
-                "correlation_id": format!("persist-{wire}"),
-                "tag": {
-                    "runtime_instance": tag.runtime_instance,
-                    "target_session": tag.target_session,
-                    "adapter_generation": tag.adapter_generation,
-                },
-                "write_id": correlation,
-                "blob_b64": blob,
-            },
-        });
-        if self.write_value(&request).is_err() {
-            self.persist.retire(correlation);
-            self.table.retire(Direction::Outbound, wire);
-        }
-    }
-
-    fn dispatch_reply(&mut self, envelope: &Value) {
+    pub(crate) fn dispatch_reply(&mut self, envelope: &Value) {
         let id = match envelope.get("id").and_then(Value::as_str) {
             Some(id) => id,
             None => {
@@ -782,19 +354,94 @@ impl<'a> Runner<'a> {
                 return;
             },
         };
+        let has_result = envelope.get("result").is_some();
+        let has_error = envelope.get("error").is_some();
+        if has_result == has_error {
+            self.record(
+                "result_error_exclusive",
+                "reply carries both or neither; discarded",
+            );
+            return;
+        }
+        let code = envelope
+            .get("error")
+            .and_then(|error| error.get("data"))
+            .and_then(|data| data.get("code"))
+            .and_then(Value::as_str);
+        let exempt = code == Some("correlation_invalid");
+        if !exempt {
+            let echoed = envelope
+                .get("result")
+                .and_then(|result| result.get("correlation_id"))
+                .and_then(Value::as_str)
+                .or_else(|| {
+                    envelope
+                        .get("error")
+                        .and_then(|error| error.get("data"))
+                        .and_then(|data| data.get("correlation_id"))
+                        .and_then(Value::as_str)
+                });
+            match (&entry.correlation_id, echoed) {
+                (Some(expected), Some(actual)) if expected == actual => {},
+                (None, _) => {},
+                _ => {
+                    self.record(
+                        "correlation_echo_mismatch",
+                        "reply kept open pending a valid echo",
+                    );
+                    return;
+                },
+            }
+        }
         match entry.kind {
             CallKind::RequestChoice => self.resolve_choice(envelope, wire),
             CallKind::Persist => {
-                if envelope
+                let persisted = envelope
                     .get("result")
                     .and_then(|result| result.get("persisted"))
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
-                    self.table.retire(Direction::Outbound, wire);
-                } else {
-                    self.record("persist_refused", "write not committed");
-                    self.table.retire(Direction::Outbound, wire);
+                    .and_then(Value::as_bool);
+                let refused = envelope
+                    .get("result")
+                    .and_then(|result| result.get("refusal_code"))
+                    .and_then(Value::as_str)
+                    .is_some();
+                match (persisted, refused, code) {
+                    (Some(true), false, _) => {
+                        if let Some(write_id) =
+                            self.persist_wires.remove(&wire)
+                        {
+                            self.persist.retire(&write_id);
+                        }
+                        self.table.retire(Direction::Outbound, wire);
+                    },
+                    (Some(false), true, _) => {
+                        self.record("persist_refused", "write not committed");
+                        if let Some(write_id) =
+                            self.persist_wires.remove(&wire)
+                        {
+                            self.persist.retire(&write_id);
+                        }
+                        self.table.retire(Direction::Outbound, wire);
+                    },
+                    (_, _, Some("correlation_invalid")) => {
+                        self.record(
+                            "persist_correlation_invalid",
+                            "write dead on arrival",
+                        );
+                        if let Some(write_id) =
+                            self.persist_wires.remove(&wire)
+                        {
+                            self.persist.retire(&write_id);
+                        }
+                        self.table.retire(Direction::Outbound, wire);
+                    },
+                    _ => {
+                        self.record(
+                            "persist_outcome_malformed",
+                            "uncertain write kept open",
+                        );
+                        self.table.retire(Direction::Outbound, wire);
+                    },
                 }
                 let _ = entry;
             },
@@ -811,116 +458,7 @@ impl<'a> Runner<'a> {
         }
     }
 
-    fn resolve_choice(&mut self, envelope: &Value, wire: u64) {
-        let Some(mut pending) = self.pending_submit.take() else {
-            self.record("orphan_choice_reply", "no pending submit");
-            self.table.retire(Direction::Outbound, wire);
-            return;
-        };
-        let Some(choice) = pending.choice.take() else {
-            self.record("orphan_choice_reply", "no pending choice");
-            self.table.retire(Direction::Outbound, wire);
-            return;
-        };
-        if choice.wire_id != wire {
-            self.record("mismatched_choice_reply", "discarded");
-            pending.choice = Some(choice);
-            self.pending_submit = Some(pending);
-            return;
-        }
-        let mut resolver = choice.resolver;
-        let mut malformed = false;
-        if let Some(result) = envelope.get("result") {
-            let outcome = result.get("outcome");
-            let chosen = outcome.and_then(|outcome| outcome.get("chosen"));
-            let cancelled =
-                outcome.and_then(|outcome| outcome.get("cancelled"));
-            if let Some(chosen) = chosen {
-                let option = chosen.get("option_id").and_then(Value::as_str);
-                let decider = chosen.get("decided_by").and_then(Value::as_str);
-                match (option, decider) {
-                    (Some(option_id), Some(decided_by)) => {
-                        let _ = resolver.resolve(ChoiceResolution::Chosen {
-                            option_id: option_id.to_string(),
-                            decided_by: decided_by.to_string(),
-                        });
-                    },
-                    _ => {
-                        malformed = true;
-                        let _ = resolver.cancel("malformed_choice_result");
-                    },
-                }
-            } else if let Some(cancelled) = cancelled {
-                match cancelled.get("reason_code").and_then(Value::as_str) {
-                    Some(reason_code) => {
-                        let decided_by = cancelled
-                            .get("decided_by")
-                            .and_then(Value::as_str)
-                            .map(str::to_string);
-                        let _ =
-                            resolver.resolve(ChoiceResolution::Cancelled {
-                                decided_by,
-                                reason_code: reason_code.to_string(),
-                            });
-                    },
-                    None => {
-                        malformed = true;
-                        let _ = resolver.cancel("malformed_choice_result");
-                    },
-                }
-            } else {
-                malformed = true;
-                let _ = resolver.cancel("malformed_choice_result");
-            }
-        } else if let Some(error) = envelope.get("error") {
-            let reason = error
-                .get("data")
-                .and_then(|data| data.get("code"))
-                .and_then(Value::as_str)
-                .unwrap_or("relay_error")
-                .to_string();
-            let _ = resolver.cancel(&reason);
-        } else {
-            malformed = true;
-            let _ = resolver.cancel("malformed_choice_reply");
-        }
-        self.choice_gate.release();
-        let ack = if malformed {
-            OutcomeLiteral::SubmissionUnknown
-        } else {
-            let turn = self.config.script.turn_for(&pending.correlation);
-            turn.map(|turn| turn.ack.as_outcome())
-                .unwrap_or(OutcomeLiteral::Submitted)
-        };
-        self.table.retire(Direction::Outbound, wire);
-        let id = Value::String(pending.inbound_wire.to_string());
-        self.complete_submit(
-            &id,
-            pending.inbound_wire,
-            &pending.correlation,
-            ack,
-        );
-    }
-
-    fn handle_signal(&mut self, envelope: &Value) -> Option<i32> {
-        let params = envelope.get("params")?;
-        if !self.check_binding(params) {
-            return None;
-        }
-        match params.get("signal").and_then(Value::as_str) {
-            Some("terminate") => {
-                self.terminalize_all("terminate");
-                Some(EXIT_CLEAN)
-            },
-            Some("fence-hint") => {
-                self.terminalize_all("fence_hint");
-                None
-            },
-            _ => None,
-        }
-    }
-
-    fn terminalize_all(&mut self, reason: &str) {
+    pub(crate) fn terminalize_all(&mut self, reason: &str) {
         self.record("terminalize", reason);
         self.prime_anchors.clear();
         if let Some(pending) = self.pending_submit.take() {
@@ -946,9 +484,4 @@ impl<'a> Runner<'a> {
             }
         }
     }
-}
-
-fn base64_encode(text: &str) -> String {
-    use base64::{Engine as _, engine::general_purpose::STANDARD};
-    STANDARD.encode(text.as_bytes())
 }

@@ -189,7 +189,6 @@ pub struct HelloResult {
     pub selected_minor: u16,
     pub negotiated: NegotiatedLimits,
 }
-
 fn malformed(reason: impl Into<String>) -> HandshakeError {
     HandshakeError::MalformedResult {
         reason: reason.into(),
@@ -233,6 +232,9 @@ pub fn parse_hello_result(
     let minor = get_u64(result, "selected_minor")?;
     let selected_minor = u16::try_from(minor)
         .map_err(|_| malformed("selected_minor out of range"))?;
+    // snapshot_b64 is required (empty string when none); v1 records no
+    // resume store of its own, so the value is validated and ignored.
+    get_string(result, "snapshot_b64")?;
     let limits = result
         .get("negotiated_limits")
         .filter(|limits| limits.is_object())
@@ -380,4 +382,75 @@ pub fn hello_request(
         },
         "latency_declarations": proposal.latency_declarations,
     }))
+}
+
+use std::io::BufRead;
+
+use super::Adapter;
+use super::binding::{CallKind, Direction, establish_binding};
+use super::frame::{BOOTSTRAP_MAX_FRAME_BYTES, parse_frame, read_frame};
+use super::lifecycle::Liveness;
+
+impl Adapter<'_> {
+    pub(crate) fn handshake<R: BufRead>(
+        &mut self,
+        reader: &mut R,
+    ) -> Result<(), ()> {
+        let pinned = PinnedLaunch {
+            target_session: self.config.target_session.clone(),
+            adapter_profile: self.config.profile.clone(),
+            adapter_executable: self.config.executable.clone(),
+        };
+        let request =
+            hello_request(&pinned, &self.config.offer, &self.config.proposal)
+                .map_err(|_| ())?;
+        let hello_wire = self
+            .table
+            .mint(Direction::Outbound, CallKind::Handshake, None)
+            .map_err(|_| ())?;
+        self.write_value(&json!({
+            "jsonrpc": "2.0",
+            "id": hello_wire.to_string(),
+            "method": "adapter.handshakeHello",
+            "params": request,
+        }))
+        .map_err(|_| ())?;
+        let bytes = match read_frame(reader, BOOTSTRAP_MAX_FRAME_BYTES) {
+            Ok(Some(bytes)) => bytes,
+            _ => return Err(()),
+        };
+        let envelope = parse_frame(&bytes).map_err(|_| ())?;
+        if envelope.get("id").and_then(Value::as_str)
+            != Some(&hello_wire.to_string())
+        {
+            return Err(());
+        }
+        let result = envelope
+            .get("result")
+            .ok_or(())
+            .and_then(|result| parse_hello_result(result).map_err(|_| ()))?;
+        validate_selection(
+            &self.config.offer,
+            result.selected_major,
+            result.selected_minor,
+        )
+        .map_err(|_| ())?;
+        validate_limits(&self.config.proposal, &result.negotiated)
+            .map_err(|_| ())?;
+        self.selected_major = result.selected_major;
+        self.selected_minor = result.selected_minor;
+        self.inbound_bound = result.negotiated.max_frame_bytes as usize;
+        let (binding, _) = establish_binding(
+            &pinned,
+            result.runtime_instance,
+            result.adapter_generation,
+        );
+        self.table.retire(Direction::Outbound, hello_wire);
+        self.binding = Some(binding);
+        self.liveness = Some(Liveness::new(self.clock.now_ms(), 60_000));
+        for event in &self.config.script.events.clone() {
+            self.emit_lifecycle(&event.kind, &event.code);
+        }
+        Ok(())
+    }
 }

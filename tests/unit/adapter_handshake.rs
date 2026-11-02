@@ -167,3 +167,30 @@ fn hello_request_carries_launch_inputs() {
         "hello carries the frame bound proposal"
     );
 }
+
+/// A hello result without snapshot_b64 is malformed.
+#[test]
+fn missing_snapshot_is_malformed() {
+    use agentmux::adapter::handshake::parse_hello_result;
+    let result = serde_json::json!({
+        "runtime_instance": "rt-9",
+        "adapter_generation": 3,
+        "selected_major": 2,
+        "selected_minor": 0,
+        "negotiated_limits": {
+            "max_frame_bytes": 65536,
+            "queue_tx_bytes": 16777216,
+            "queue_rx_bytes": 16777216,
+            "max_control_pending": 32,
+            "max_events_per_second": 100,
+            "window_seconds": 1,
+            "max_submits_in_flight": 64,
+            "max_choices_in_flight": 16,
+            "max_looks_in_flight": 8,
+            "drain_wait_ms": 250,
+        },
+    });
+    let error =
+        parse_hello_result(&result).expect_err("snapshot_b64 required");
+    assert!(error.to_string().contains("snapshot_b64"));
+}

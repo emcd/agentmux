@@ -151,3 +151,112 @@ pub fn fence_snapshot(correlation_id: &str, adapter_generation: u64) -> Value {
         stale_reason_code: Some("fence_terminalized".to_string()),
     })
 }
+
+use super::Adapter;
+use super::binding::{CallKind, Direction};
+
+pub(crate) fn base64_encode(text: &str) -> String {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    STANDARD.encode(text.as_bytes())
+}
+
+impl Adapter<'_> {
+    pub(crate) fn handle_look(&mut self, envelope: &Value) -> Option<i32> {
+        let Some(params) = envelope.get("params") else {
+            self.answer_invalid(envelope.get("id"));
+            return None;
+        };
+        if !self.check_binding(params) {
+            self.answer_binding_mismatch(
+                envelope.get("id"),
+                envelope.get("params"),
+            );
+            return None;
+        }
+        let (Some(wire), Some(correlation)) =
+            (self.wire_id_of(envelope), self.correlation_of(params))
+        else {
+            self.answer_invalid(envelope.get("id"));
+            return None;
+        };
+        if self
+            .table
+            .note_inbound(wire, CallKind::Look, Some(correlation.clone()))
+            .is_err()
+        {
+            self.answer_binding_mismatch(
+                envelope.get("id"),
+                envelope.get("params"),
+            );
+            return None;
+        }
+        let target = params
+            .get("target_session")
+            .and_then(Value::as_str)
+            .unwrap_or("");
+        let generation = self
+            .binding
+            .as_ref()
+            .map(|binding| binding.adapter_generation)
+            .unwrap_or(0);
+        let now = self.clock.now_ms();
+        let snapshot = match self.config.script.snapshot_for(target) {
+            Some(scripted) => {
+                let first = *self
+                    .prime_anchors
+                    .entry(target.to_string())
+                    .or_insert(now);
+                if now < first.saturating_add(scripted.delay_ms) {
+                    Snapshot {
+                        correlation_id: correlation.clone(),
+                        adapter_generation: generation,
+                        entries: Vec::new(),
+                        freshness: Freshness::Stale,
+                        source: SnapshotSource::Synthetic,
+                        stale: true,
+                        discontinuity: false,
+                        stale_reason_code: Some("priming".to_string()),
+                    }
+                } else {
+                    let entries: Vec<SnapshotEntry> = scripted
+                        .entries
+                        .iter()
+                        .map(|entry| SnapshotEntry {
+                            kind: entry.kind.clone(),
+                            seq: entry.seq,
+                            text_base64: base64_encode(&entry.text),
+                            truncated: entry.truncated,
+                        })
+                        .collect();
+                    Snapshot {
+                        correlation_id: correlation.clone(),
+                        adapter_generation: generation,
+                        entries,
+                        freshness: Freshness::Fresh,
+                        source: SnapshotSource::Live,
+                        stale: false,
+                        discontinuity: false,
+                        stale_reason_code: None,
+                    }
+                }
+            },
+            None => Snapshot {
+                correlation_id: correlation.clone(),
+                adapter_generation: generation,
+                entries: Vec::new(),
+                freshness: Freshness::Stale,
+                source: SnapshotSource::Synthetic,
+                stale: true,
+                discontinuity: false,
+                stale_reason_code: Some("no_snapshot_scripted".to_string()),
+            },
+        };
+        let _ = self.write_value(&json!({
+            "jsonrpc": "2.0",
+            "id": envelope.get("id").cloned().unwrap_or(Value::Null),
+            "result": snapshot_result(&snapshot),
+        }));
+        self.table.retire(Direction::Inbound, wire);
+        None
+    }
+}

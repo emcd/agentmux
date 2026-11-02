@@ -72,3 +72,77 @@ impl PersistTracker {
         self.outstanding.len()
     }
 }
+
+use serde_json::json;
+
+use super::Adapter;
+use super::binding::{CallKind, Direction};
+use super::look::base64_encode;
+
+impl Adapter<'_> {
+    pub(crate) fn maybe_persist_turn(&mut self, correlation: &str) {
+        let Some(binding) = self.binding.clone() else {
+            return;
+        };
+        let wire =
+            match self
+                .table
+                .mint(Direction::Outbound, CallKind::Persist, None)
+            {
+                Ok(wire) => wire,
+                Err(_) => {
+                    self.record("persist_cap", "turn marker skipped");
+                    return;
+                },
+            };
+        let persist_correlation = format!("persist-{wire}");
+        self.table.set_correlation(
+            Direction::Outbound,
+            wire,
+            persist_correlation.clone(),
+        );
+        self.persist_wires.insert(wire, correlation.to_string());
+        let tag = ResumeTag {
+            runtime_instance: binding.runtime_instance.clone(),
+            target_session: binding.target_session.clone(),
+            adapter_generation: binding.adapter_generation,
+        };
+        if self
+            .persist
+            .submit(correlation.to_string(), tag.clone())
+            .is_err()
+        {
+            self.persist_wires.remove(&wire);
+            self.table.retire(Direction::Outbound, wire);
+            self.record("persist_cap", "turn marker skipped");
+            return;
+        }
+        let blob =
+            base64_encode(&format!("{{\"last_turn\":\"{correlation}\"}}"));
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": wire.to_string(),
+            "method": "adapter.persistState",
+            "params": {
+                "protocol_major": self.selected_major,
+                "protocol_minor": self.selected_minor,
+                "runtime_instance": binding.runtime_instance,
+                "target_session": binding.target_session,
+                "adapter_generation": binding.adapter_generation,
+                "correlation_id": persist_correlation,
+                "tag": {
+                    "runtime_instance": tag.runtime_instance,
+                    "target_session": tag.target_session,
+                    "adapter_generation": tag.adapter_generation,
+                },
+                "write_id": correlation,
+                "blob_b64": blob,
+            },
+        });
+        if self.write_value(&request).is_err() {
+            self.persist_wires.remove(&wire);
+            self.persist.retire(correlation);
+            self.table.retire(Direction::Outbound, wire);
+        }
+    }
+}

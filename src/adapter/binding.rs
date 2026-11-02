@@ -188,6 +188,20 @@ impl PendingTable {
         self.entries.remove(&(direction, wire_id))
     }
 
+    /// Attaches the originator-minted correlation id to an open entry.
+    /// Replies are admitted only when they echo it (except the
+    /// correlation_invalid exemption, which is admitted by table match).
+    pub fn set_correlation(
+        &mut self,
+        direction: Direction,
+        wire_id: u64,
+        correlation_id: String,
+    ) {
+        if let Some(entry) = self.entries.get_mut(&(direction, wire_id)) {
+            entry.correlation_id = Some(correlation_id);
+        }
+    }
+
     /// Clears all entries for disconnect, fence, generation replacement,
     /// or binding refusal, returning them for per-type terminalization.
     /// Wire ids are never reused across the cleanup: counters keep

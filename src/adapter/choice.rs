@@ -146,3 +146,102 @@ impl ChoiceGate {
         self.outstanding
     }
 }
+
+use serde_json::Value;
+
+use super::Adapter;
+use super::binding::Direction;
+use super::submit::OutcomeLiteral;
+
+impl Adapter<'_> {
+    pub(crate) fn resolve_choice(&mut self, envelope: &Value, wire: u64) {
+        let Some(mut pending) = self.pending_submit.take() else {
+            self.record("orphan_choice_reply", "no pending submit");
+            self.table.retire(Direction::Outbound, wire);
+            return;
+        };
+        let Some(choice) = pending.choice.take() else {
+            self.record("orphan_choice_reply", "no pending choice");
+            self.table.retire(Direction::Outbound, wire);
+            return;
+        };
+        if choice.wire_id != wire {
+            self.record("mismatched_choice_reply", "discarded");
+            pending.choice = Some(choice);
+            self.pending_submit = Some(pending);
+            return;
+        }
+        let mut resolver = choice.resolver;
+        let mut malformed = false;
+        if let Some(result) = envelope.get("result") {
+            let outcome = result.get("outcome");
+            let chosen = outcome.and_then(|outcome| outcome.get("chosen"));
+            let cancelled =
+                outcome.and_then(|outcome| outcome.get("cancelled"));
+            if let Some(chosen) = chosen {
+                let option = chosen.get("option_id").and_then(Value::as_str);
+                let decider = chosen.get("decided_by").and_then(Value::as_str);
+                match (option, decider) {
+                    (Some(option_id), Some(decided_by)) => {
+                        let _ = resolver.resolve(ChoiceResolution::Chosen {
+                            option_id: option_id.to_string(),
+                            decided_by: decided_by.to_string(),
+                        });
+                    },
+                    _ => {
+                        malformed = true;
+                        let _ = resolver.cancel("malformed_choice_result");
+                    },
+                }
+            } else if let Some(cancelled) = cancelled {
+                match cancelled.get("reason_code").and_then(Value::as_str) {
+                    Some(reason_code) => {
+                        let decided_by = cancelled
+                            .get("decided_by")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
+                        let _ =
+                            resolver.resolve(ChoiceResolution::Cancelled {
+                                decided_by,
+                                reason_code: reason_code.to_string(),
+                            });
+                    },
+                    None => {
+                        malformed = true;
+                        let _ = resolver.cancel("malformed_choice_result");
+                    },
+                }
+            } else {
+                malformed = true;
+                let _ = resolver.cancel("malformed_choice_result");
+            }
+        } else if let Some(error) = envelope.get("error") {
+            let reason = error
+                .get("data")
+                .and_then(|data| data.get("code"))
+                .and_then(Value::as_str)
+                .unwrap_or("relay_error")
+                .to_string();
+            let _ = resolver.cancel(&reason);
+        } else {
+            malformed = true;
+            let _ = resolver.cancel("malformed_choice_reply");
+        }
+        self.choice_gate.release();
+        let ack = if malformed {
+            OutcomeLiteral::SubmissionUnknown
+        } else {
+            let turn = self.config.script.turn_for(&pending.correlation);
+            turn.map(|turn| turn.ack.as_outcome())
+                .unwrap_or(OutcomeLiteral::Submitted)
+        };
+        self.table.retire(Direction::Outbound, wire);
+        let id = Value::String(pending.inbound_wire.to_string());
+        self.complete_submit(
+            &id,
+            pending.inbound_wire,
+            &pending.correlation,
+            ack,
+        );
+    }
+}

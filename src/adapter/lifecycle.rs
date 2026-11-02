@@ -211,3 +211,82 @@ impl super::choice::DiagnosticSink for StderrSink {
         );
     }
 }
+
+use super::Adapter;
+use super::EXIT_CLEAN;
+use super::binding::{CallKind, Direction};
+
+impl Adapter<'_> {
+    pub(crate) fn handle_ping(&mut self, envelope: &Value) -> Option<i32> {
+        let id = envelope.get("id").cloned().unwrap_or(Value::Null);
+        let Some(params) = envelope.get("params") else {
+            self.answer_invalid(envelope.get("id"));
+            return None;
+        };
+        if !self.check_binding(params) {
+            self.answer_binding_mismatch(
+                envelope.get("id"),
+                envelope.get("params"),
+            );
+            return None;
+        }
+        let wire = match self.wire_id_of(envelope) {
+            Some(wire) => wire,
+            None => {
+                self.answer_invalid(envelope.get("id"));
+                return None;
+            },
+        };
+        if self.table.note_inbound(wire, CallKind::Ping, None).is_err() {
+            self.answer_binding_mismatch(
+                envelope.get("id"),
+                envelope.get("params"),
+            );
+            return None;
+        }
+        let _ = self.write_value(&json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": ping_reply(),
+        }));
+        self.table.retire(Direction::Inbound, wire);
+        None
+    }
+
+    pub(crate) fn handle_signal(&mut self, envelope: &Value) -> Option<i32> {
+        let params = envelope.get("params")?;
+        if !self.check_binding(params) {
+            return None;
+        }
+        match params.get("signal").and_then(Value::as_str) {
+            Some("terminate") => {
+                self.terminalize_all("terminate");
+                Some(EXIT_CLEAN)
+            },
+            Some("fence-hint") => {
+                self.terminalize_all("fence_hint");
+                None
+            },
+            _ => None,
+        }
+    }
+
+    pub(crate) fn emit_lifecycle(&mut self, kind: &str, code: &str) {
+        let Some(binding) = &self.binding else {
+            return;
+        };
+        let _ = self.write_value(&json!({
+            "jsonrpc": "2.0",
+            "method": "adapter.lifecycleEvent",
+            "params": {
+                "protocol_major": self.selected_major,
+                "protocol_minor": self.selected_minor,
+                "runtime_instance": binding.runtime_instance,
+                "target_session": binding.target_session,
+                "adapter_generation": binding.adapter_generation,
+                "kind": kind,
+                "code": code,
+            },
+        }));
+    }
+}
