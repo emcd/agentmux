@@ -526,5 +526,7 @@ impl Adapter<'_> {
             .min(negotiated.max_events_per_second);
         self.ev_window_ms =
             u64::from(negotiated.window_seconds.saturating_mul(1000));
+        self.ev_window_start = None;
+        self.ev_count = 0;
     }
 }
