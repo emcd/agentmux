@@ -2,12 +2,17 @@
 
 ### Requirement: In-tree conformance inputs
 
-Conformance inputs SHALL live in-tree under `tests/fixtures/adapter/`: fixture scripts, request/response transcript pairs, and adversarial frames (version skew, oversize, unknown correlation, duplicate/stale acks, cross-target traffic, generation mismatch). Every input SHALL cite the contract requirement it exercises by requirement name plus capability file (e.g. "Adapter submit replies preserve the submission-evidence trichotomy", `adapter-submit-acks`). The off-tree corpus/checker scratch informs coverage but gates nothing.
+Conformance inputs SHALL live in-tree under `tests/fixtures/adapter/`: fixture scripts, request/response transcript pairs, and adversarial frames (version skew, oversize, unknown correlation, duplicate/stale acks, cross-target traffic, generation mismatch). Every input SHALL cite the contract requirement it exercises by requirement name plus capability file (e.g. "Adapter submit replies preserve the submission-evidence trichotomy", `adapter-submit-acks`). Every fixture that asserts persist behavior SHALL cite the payload-richness limit alongside: turn-marker blobs are fixture-harness completeness, and resume-state CONTENT assertions require the follow-on trigger — so a content assertion against a turn marker reads as a fixture limitation, never an implementation defect. The off-tree corpus/checker scratch informs coverage but gates nothing.
 
 #### Scenario: Fixture cites its requirement by name
 
 - **WHEN** a fixture is added for submit-ack trichotomy
 - **THEN** it names "Adapter submit replies preserve the submission-evidence trichotomy" (`adapter-submit-acks`), not the capability directory alone
+
+#### Scenario: Persist fixture cites the payload limit
+
+- **WHEN** a fixture asserts persist behavior
+- **THEN** it cites the payload-richness limit: turn-marker blobs only, resume-state content assertions require the follow-on trigger
 
 ### Requirement: Operation round-trip equivalence cases
 
