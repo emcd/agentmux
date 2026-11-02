@@ -11,11 +11,17 @@ use std::{
     collections::HashMap,
     error::Error,
     fmt::{Display, Formatter},
+    sync::{atomic::Ordering, mpsc::Receiver},
 };
 
 use serde_json::{Value, json};
 
-use super::binding::PinnedLaunch;
+use super::Adapter;
+use super::binding::{CallKind, Direction, PinnedLaunch, establish_binding};
+use super::choice::ChoiceGate;
+use super::frame::parse_frame;
+use super::lifecycle::{Liveness, Outbox};
+use super::{Incoming, ReadEvent};
 
 /// Adapter-supported protocol window: one major, an inclusive minor
 /// range. Majors never negotiate; minors interoperate within overlap.
@@ -299,26 +305,41 @@ pub fn validate_limits(
             "negotiated value exceeds the proposal",
         ));
     }
-    for (field, value) in [
+    for (field, value, proposed) in [
         (
             "max_control_pending",
             u64::from(negotiated.max_control_pending),
+            u64::from(proposal.max_control_pending),
         ),
         (
             "max_events_per_second",
             u64::from(negotiated.max_events_per_second),
+            u64::from(proposal.max_events_per_second),
         ),
         (
             "max_submits_in_flight",
             u64::from(negotiated.max_submits_in_flight),
+            u64::from(proposal.max_submits_in_flight),
         ),
         (
             "max_choices_in_flight",
             u64::from(negotiated.max_choices_in_flight),
+            u64::from(proposal.max_choices_in_flight),
         ),
         (
             "max_looks_in_flight",
             u64::from(negotiated.max_looks_in_flight),
+            u64::from(proposal.max_looks_in_flight),
+        ),
+        (
+            "queue_tx_bytes",
+            negotiated.queue_tx_bytes,
+            proposal.queue_tx_bytes,
+        ),
+        (
+            "queue_rx_bytes",
+            negotiated.queue_rx_bytes,
+            proposal.queue_rx_bytes,
         ),
     ] {
         if value == 0 {
@@ -327,6 +348,28 @@ pub fn validate_limits(
                 "zero cap is invalid, not unlimited",
             ));
         }
+        if value > proposed {
+            return Err(invalid_limit(
+                field,
+                "negotiated value exceeds the proposal",
+            ));
+        }
+    }
+    if negotiated.max_control_pending == 0
+        || negotiated.max_control_pending > 1024
+    {
+        return Err(invalid_limit(
+            "max_control_pending",
+            "must lie within 1..=1024",
+        ));
+    }
+    if negotiated.max_events_per_second == 0
+        || negotiated.max_events_per_second > 10_000
+    {
+        return Err(invalid_limit(
+            "max_events_per_second",
+            "must lie within 1..=10000",
+        ));
     }
     if negotiated.window_seconds == 0 || negotiated.window_seconds > 60 {
         return Err(invalid_limit("window_seconds", "must lie within 1..=60"));
@@ -384,17 +427,11 @@ pub fn hello_request(
     }))
 }
 
-use std::io::BufRead;
-
-use super::Adapter;
-use super::binding::{CallKind, Direction, establish_binding};
-use super::frame::{BOOTSTRAP_MAX_FRAME_BYTES, parse_frame, read_frame};
-use super::lifecycle::Liveness;
-
 impl Adapter<'_> {
-    pub(crate) fn handshake<R: BufRead>(
+    pub(crate) fn handshake(
         &mut self,
-        reader: &mut R,
+        rx: &Receiver<ReadEvent>,
+        start_ms: u64,
     ) -> Result<(), ()> {
         let pinned = PinnedLaunch {
             target_session: self.config.target_session.clone(),
@@ -404,10 +441,8 @@ impl Adapter<'_> {
         let request =
             hello_request(&pinned, &self.config.offer, &self.config.proposal)
                 .map_err(|_| ())?;
-        let hello_wire = self
-            .table
-            .mint(Direction::Outbound, CallKind::Handshake, None)
-            .map_err(|_| ())?;
+        let hello_wire =
+            self.table.mint(CallKind::Handshake, None).map_err(|_| ())?;
         self.write_value(&json!({
             "jsonrpc": "2.0",
             "id": hello_wire.to_string(),
@@ -415,16 +450,26 @@ impl Adapter<'_> {
             "params": request,
         }))
         .map_err(|_| ())?;
-        let bytes = match read_frame(reader, BOOTSTRAP_MAX_FRAME_BYTES) {
-            Ok(Some(bytes)) => bytes,
-            _ => return Err(()),
+        let deadline =
+            start_ms.saturating_add(self.config.handshake_timeout_ms);
+        let envelope = loop {
+            match self.recv(rx, deadline) {
+                Incoming::Frame(bytes) => {
+                    let envelope = parse_frame(&bytes).map_err(|_| ())?;
+                    if envelope.get("id").and_then(Value::as_str)
+                        == Some(&hello_wire.to_string())
+                    {
+                        break envelope;
+                    }
+                    self.record(
+                        "unexpected_pre_bind_frame",
+                        "discarded before binding",
+                    );
+                },
+                Incoming::Timeout => return Err(()),
+                Incoming::Eof | Incoming::Unusable => return Err(()),
+            }
         };
-        let envelope = parse_frame(&bytes).map_err(|_| ())?;
-        if envelope.get("id").and_then(Value::as_str)
-            != Some(&hello_wire.to_string())
-        {
-            return Err(());
-        }
         let result = envelope
             .get("result")
             .ok_or(())
@@ -439,7 +484,11 @@ impl Adapter<'_> {
             .map_err(|_| ())?;
         self.selected_major = result.selected_major;
         self.selected_minor = result.selected_minor;
-        self.inbound_bound = result.negotiated.max_frame_bytes as usize;
+        self.frame_bound.store(
+            result.negotiated.max_frame_bytes as usize,
+            Ordering::Relaxed,
+        );
+        self.install_negotiated(&result.negotiated);
         let (binding, _) = establish_binding(
             &pinned,
             result.runtime_instance,
@@ -447,10 +496,35 @@ impl Adapter<'_> {
         );
         self.table.retire(Direction::Outbound, hello_wire);
         self.binding = Some(binding);
-        self.liveness = Some(Liveness::new(self.clock.now_ms(), 60_000));
-        for event in &self.config.script.events.clone() {
-            self.emit_lifecycle(&event.kind, &event.code);
+        self.liveness = Some(Liveness::new(
+            self.clock.now_ms(),
+            self.config.liveness_timeout_ms,
+        ));
+        for event in self.config.script.events.clone() {
+            if self.emit_lifecycle(&event.kind, &event.code).is_some() {
+                return Err(());
+            }
         }
         Ok(())
+    }
+
+    fn install_negotiated(&mut self, negotiated: &NegotiatedLimits) {
+        let proposal = &self.config.proposal;
+        self.choice_gate = ChoiceGate::new(
+            (proposal
+                .max_choices_in_flight
+                .min(negotiated.max_choices_in_flight)) as usize,
+        );
+        self.outbox = Outbox::new(
+            proposal.queue_tx_bytes.min(negotiated.queue_tx_bytes) as usize,
+            proposal
+                .max_control_pending
+                .min(negotiated.max_control_pending) as usize,
+        );
+        self.ev_max = proposal
+            .max_events_per_second
+            .min(negotiated.max_events_per_second);
+        self.ev_window_ms =
+            u64::from(negotiated.window_seconds.saturating_mul(1000));
     }
 }

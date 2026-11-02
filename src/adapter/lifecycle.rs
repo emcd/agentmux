@@ -9,7 +9,8 @@
 //! records, never stdout, so diagnostics cannot corrupt the frame stream.
 
 use std::cell::Cell;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::LazyLock;
+use std::time::Instant;
 
 use serde_json::{Value, json};
 
@@ -25,16 +26,20 @@ pub trait Clock {
     fn now_ms(&self) -> u64;
 }
 
-/// System-backed [`Clock`] for the live executable.
+/// Monotonic millisecond source for adapter-side deadlines.
+/// Backed by a steady clock anchored at first use: readings never go
+/// backwards, unlike wall-clock time. The live executable feeds on
+/// this; tests and replay use [`ManualClock`].
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SystemClock;
 
+/// Process-start anchor for [`SystemClock`]. Lazily initialized on
+/// first use; `elapsed` is monotonic by construction thereafter.
+static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+
 impl Clock for SystemClock {
     fn now_ms(&self) -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|duration| duration.as_millis() as u64)
-            .unwrap_or(0)
+        START.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
     }
 }
 
@@ -187,6 +192,12 @@ impl Liveness {
     pub fn is_expired(&self, now_ms: u64) -> bool {
         now_ms.saturating_sub(self.last_valid_frame_ms) >= self.timeout_ms
     }
+
+    /// Returns the instant at which silence becomes expiry.
+    #[must_use]
+    pub fn deadline_ms(&self) -> u64 {
+        self.last_valid_frame_ms.saturating_add(self.timeout_ms)
+    }
 }
 
 /// Builds the `relay.ping` reply: the empty object. Presence of the
@@ -213,8 +224,8 @@ impl super::choice::DiagnosticSink for StderrSink {
 }
 
 use super::Adapter;
-use super::EXIT_CLEAN;
 use super::binding::{CallKind, Direction};
+use super::{EXIT_CLEAN, EXIT_REFUSAL};
 
 impl Adapter<'_> {
     pub(crate) fn handle_ping(&mut self, envelope: &Value) -> Option<i32> {
@@ -244,11 +255,17 @@ impl Adapter<'_> {
             );
             return None;
         }
-        let _ = self.write_value(&json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": ping_reply(),
-        }));
+        if self
+            .write_control(&json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": ping_reply(),
+            }))
+            .is_err()
+        {
+            self.terminalize_all("ping_write_failed");
+            return Some(EXIT_REFUSAL);
+        }
         self.table.retire(Direction::Inbound, wire);
         None
     }
@@ -269,24 +286,5 @@ impl Adapter<'_> {
             },
             _ => None,
         }
-    }
-
-    pub(crate) fn emit_lifecycle(&mut self, kind: &str, code: &str) {
-        let Some(binding) = &self.binding else {
-            return;
-        };
-        let _ = self.write_value(&json!({
-            "jsonrpc": "2.0",
-            "method": "adapter.lifecycleEvent",
-            "params": {
-                "protocol_major": self.selected_major,
-                "protocol_minor": self.selected_minor,
-                "runtime_instance": binding.runtime_instance,
-                "target_session": binding.target_session,
-                "adapter_generation": binding.adapter_generation,
-                "kind": kind,
-                "code": code,
-            },
-        }));
     }
 }

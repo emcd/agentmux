@@ -121,6 +121,13 @@ pub fn read_frame(
             if frame.last() == Some(&b'\r') {
                 frame.pop();
             }
+            // A bound+1 body is refused even though it fits the
+            // accumulation cap: the cap bounds allocation, the bound
+            // bounds the frame. CRLF endings are stripped first, so
+            // the carriage return never counts against the frame.
+            if frame.len() > bound {
+                return Err(FrameError::oversize(bound));
+            }
             return Ok(Some(frame));
         }
         if frame.len() >= bound.saturating_add(1) {

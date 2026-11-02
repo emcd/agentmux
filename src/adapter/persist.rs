@@ -84,17 +84,13 @@ impl Adapter<'_> {
         let Some(binding) = self.binding.clone() else {
             return;
         };
-        let wire =
-            match self
-                .table
-                .mint(Direction::Outbound, CallKind::Persist, None)
-            {
-                Ok(wire) => wire,
-                Err(_) => {
-                    self.record("persist_cap", "turn marker skipped");
-                    return;
-                },
-            };
+        let wire = match self.table.mint(CallKind::Persist, None) {
+            Ok(wire) => wire,
+            Err(_) => {
+                self.record("persist_cap", "turn marker skipped");
+                return;
+            },
+        };
         let persist_correlation = format!("persist-{wire}");
         self.table.set_correlation(
             Direction::Outbound,

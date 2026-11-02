@@ -194,3 +194,34 @@ fn missing_snapshot_is_malformed() {
         parse_hello_result(&result).expect_err("snapshot_b64 required");
     assert!(error.to_string().contains("snapshot_b64"));
 }
+
+/// A zero queue cap is invalid, never unlimited.
+#[test]
+fn zero_queue_cap_is_invalid() {
+    let mut limits = negotiated();
+    limits.queue_tx_bytes = 0;
+    let error = validate_limits(&proposal(), &limits)
+        .expect_err("zero queue cap must refuse");
+    assert!(error.to_string().contains("queue_tx_bytes"));
+}
+
+/// An out-of-range control cap is invalid even when non-zero.
+#[test]
+fn out_of_range_control_cap_is_invalid() {
+    let mut limits = negotiated();
+    limits.max_control_pending = 2048;
+    let error = validate_limits(&proposal(), &limits)
+        .expect_err("control cap above 1024 must refuse");
+    assert!(error.to_string().contains("max_control_pending"));
+}
+
+/// A negotiated value above the proposal refuses: the min rule runs
+/// one direction only.
+#[test]
+fn negotiated_in_flight_above_proposal_refuses() {
+    let mut limits = negotiated();
+    limits.max_choices_in_flight = 64;
+    let error = validate_limits(&proposal(), &limits)
+        .expect_err("negotiated value must not exceed the proposal");
+    assert!(error.to_string().contains("max_choices_in_flight"));
+}

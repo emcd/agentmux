@@ -30,9 +30,10 @@ fn manual_clocks_are_independent() {
     assert_eq!(second.now_ms(), 0);
 }
 
-/// The system clock reports a non-decreasing reading.
+/// The system clock is monotonic: readings never go backwards,
+/// regardless of wall-clock adjustments.
 #[test]
-fn system_clock_is_non_decreasing() {
+fn system_clock_is_monotonic() {
     let clock = SystemClock;
     let first = clock.now_ms();
     let second = clock.now_ms();

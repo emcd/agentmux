@@ -84,53 +84,55 @@ impl std::fmt::Display for BindingError {
 impl std::error::Error for BindingError {}
 
 /// Pending-call table keyed by (direction, wire id), with
-/// originator-monotonic minting from 1 per direction.
+/// originator-monotonic minting from 1 for originated calls.
+/// Inbound ids carry a high-water mark instead: any id at or below
+/// the maximum seen from the supervisor is a reuse or regression and
+/// is refused, so a retired entry can never be reopened by replay.
+/// The mark survives cleanup; only a new binding resets it.
 #[derive(Debug, Default)]
 pub struct PendingTable {
     next_outbound: u64,
-    next_inbound: u64,
+    max_seen_inbound: u64,
     entries: HashMap<(Direction, u64), PendingEntry>,
 }
 
 impl PendingTable {
-    /// Creates an empty table with both directions starting at wire id 1.
+    /// Creates an empty table with outbound minting starting at
+    /// wire id 1 and no inbound ids seen.
     #[must_use]
     pub fn new() -> Self {
         Self {
             next_outbound: 1,
-            next_inbound: 1,
+            max_seen_inbound: 0,
             entries: HashMap::new(),
         }
     }
 
     /// Mints the next wire id for an originated call and opens its
-    /// entry. Reaching `u64::MAX` is a binding error: close the binding
-    /// and re-handshake.
+    /// entry. Originated calls are always outbound; inbound ids arrive
+    /// from the supervisor and are tracked by [`PendingTable::note_inbound`],
+    /// never minted here. Reaching `u64::MAX` is a binding error: close
+    /// the binding and re-handshake.
     ///
     /// # Errors
     ///
-    /// Returns [`BindingError::WireIdExhausted`] when the counter for
-    /// the direction cannot advance.
+    /// Returns [`BindingError::WireIdExhausted`] when the counter
+    /// cannot advance.
     pub fn mint(
         &mut self,
-        direction: Direction,
         kind: CallKind,
         correlation_id: Option<String>,
     ) -> Result<u64, BindingError> {
-        let next = match direction {
-            Direction::Outbound => &mut self.next_outbound,
-            Direction::Inbound => &mut self.next_inbound,
-        };
-        if *next == u64::MAX {
+        if self.next_outbound == u64::MAX {
             return Err(BindingError::WireIdExhausted);
         }
-        let wire_id = *next;
-        *next = next.saturating_add(1);
+        let wire_id = self.next_outbound;
+        self.next_outbound = self.next_outbound.saturating_add(1);
         self.entries.insert(
-            (direction, wire_id),
+            (Direction::Outbound, wire_id),
             PendingEntry {
                 wire_id,
-                direction,
+                direction: Direction::Outbound,
                 correlation_id,
                 kind,
             },
@@ -151,22 +153,24 @@ impl PendingTable {
     }
 
     /// Opens an inbound entry for a supervisor-originated call.
-    /// A duplicate inbound id is a typed framing failure: the
-    /// originator must never reuse a wire id.
+    /// The id must exceed every previously seen inbound id: anything
+    /// at or below the high-water mark is a reuse or regression and is
+    /// refused as a typed framing failure, even after the original
+    /// entry retired or the table was cleared.
     ///
     /// # Errors
     ///
-    /// Returns [`BindingError::ReusedWireId`] when the id is already
-    /// open in the inbound space.
+    /// Returns [`BindingError::ReusedWireId`] for a non-monotonic id.
     pub fn note_inbound(
         &mut self,
         wire_id: u64,
         kind: CallKind,
         correlation_id: Option<String>,
     ) -> Result<(), BindingError> {
-        if self.entries.contains_key(&(Direction::Inbound, wire_id)) {
+        if wire_id <= self.max_seen_inbound {
             return Err(BindingError::ReusedWireId { wire_id });
         }
+        self.max_seen_inbound = wire_id;
         self.entries.insert(
             (Direction::Inbound, wire_id),
             PendingEntry {

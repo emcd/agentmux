@@ -36,6 +36,50 @@ fn oversize_frame_refuses_past_bound() {
     );
 }
 
+/// A body of exactly the bound reads fine; bound+1 refuses.
+#[test]
+fn exact_bound_fits_lf() {
+    for (body_len, bound, ok) in [(16_usize, 16_usize, true), (17, 16, false)]
+    {
+        let mut wire = vec![b'x'; body_len];
+        wire.push(b'\n');
+        let mut reader = BufReader::new(wire.as_slice());
+        match read_frame(&mut reader, bound) {
+            Ok(Some(frame)) => {
+                assert!(ok, "bound {bound} should refuse {body_len} bytes");
+                assert_eq!(frame.len(), body_len);
+            },
+            Ok(None) => panic!("expected a frame"),
+            Err(error) => assert!(
+                !ok,
+                "bound {bound} should accept {body_len} bytes: {error}"
+            ),
+        }
+    }
+}
+
+/// CRLF endings strip the carriage return before the bound applies.
+#[test]
+fn exact_bound_fits_crlf() {
+    for (body_len, bound, ok) in [(16_usize, 16_usize, true), (17, 16, false)]
+    {
+        let mut wire = vec![b'x'; body_len];
+        wire.extend_from_slice(b"\r\n");
+        let mut reader = BufReader::new(wire.as_slice());
+        match read_frame(&mut reader, bound) {
+            Ok(Some(frame)) => {
+                assert!(ok, "bound {bound} should refuse {body_len} bytes");
+                assert_eq!(frame.len(), body_len);
+            },
+            Ok(None) => panic!("expected a frame"),
+            Err(error) => assert!(
+                !ok,
+                "bound {bound} should accept {body_len} bytes: {error}"
+            ),
+        }
+    }
+}
+
 /// Invalid JSON fails as unparseable with the serde reason attached.
 #[test]
 fn invalid_json_is_unparseable() {

@@ -183,11 +183,7 @@ impl Adapter<'_> {
             self.complete_submit(id, wire, &correlation, ack);
             return None;
         }
-        let request_id = match self.table.mint(
-            Direction::Outbound,
-            CallKind::RequestChoice,
-            None,
-        ) {
+        let request_id = match self.table.mint(CallKind::RequestChoice, None) {
             Ok(id) => id,
             Err(_) => {
                 self.complete_submit(
@@ -309,7 +305,12 @@ impl Adapter<'_> {
             "id": id,
             "result": result,
         }));
-        self.turn.complete();
+        // An unknown outcome never releases the single-flight gate:
+        // the attempt may still be live, and only observed cessation
+        // frees its slot. Every other terminal outcome releases it.
+        if outcome != OutcomeLiteral::SubmissionUnknown {
+            self.turn.complete();
+        }
         self.table.retire(Direction::Inbound, inbound_wire);
         self.maybe_persist_turn(correlation);
     }

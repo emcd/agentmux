@@ -28,6 +28,11 @@ pub mod submit;
 
 use std::collections::HashMap;
 use std::io::{BufRead, Write};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::thread;
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -44,7 +49,10 @@ use script::Script;
 use submit::TurnGate;
 
 /// Configuration for one adapter run: launch inputs, the version
-/// offer, limits proposal, and the fixture script driving turns.
+/// offer, limits proposal, the fixture script driving turns, and
+/// adapter-local timeout bounds. The timeout bounds are adapter-local:
+/// the supervisor enforces its own configured handshake and liveness
+/// timeouts independently.
 pub struct AdapterConfig {
     pub executable: String,
     pub profile: String,
@@ -52,6 +60,8 @@ pub struct AdapterConfig {
     pub offer: VersionOffer,
     pub proposal: LimitsProposal,
     pub script: Script,
+    pub handshake_timeout_ms: u64,
+    pub liveness_timeout_ms: u64,
 }
 
 /// Clean shutdown: EOF, processed terminate, or handled liveness loss.
@@ -65,24 +75,70 @@ pub const EXIT_REFUSAL: i32 = 2;
 /// assumed; this bound is adapter-local.
 const PERSIST_CAP: usize = 64;
 
-/// Runs the adapter stdio loop: handshake, then one JSON-RPC frame at
-/// a time until EOF, terminate, or refusal. v1 originates
+/// Runs the adapter stdio loop: handshake, then one JSON-RPC frame
+/// at a time until EOF, terminate, or refusal. v1 originates
 /// `persistState` only for completed-turn markers (adapter-owned
 /// resume state); it never fabricates agent-effect bytes.
+///
+/// Reads run on a dedicated thread so liveness and handshake
+/// deadlines fire while the peer is silent; the main loop admits one
+/// frame at a time under the negotiated bound. On return the reader
+/// thread may stay blocked on a silent transport: close the transport
+/// to release it. The binary exits the process, which reclaims it.
 ///
 /// # Panics
 ///
 /// Never panics on protocol input; malformed traffic is refused or
 /// discarded per the contract.
-pub fn run_stdio(
+pub fn run_stdio<R: BufRead + Send + 'static>(
     config: &AdapterConfig,
     clock: &impl Clock,
-    reader: &mut impl BufRead,
+    reader: R,
     writer: &mut impl Write,
     sink: &mut impl DiagnosticSink,
 ) -> i32 {
     let mut runner = Adapter::new(config, clock, writer, sink);
     runner.serve(reader)
+}
+
+#[derive(Debug)]
+pub(crate) enum ReadEvent {
+    Frame(Vec<u8>),
+    Eof,
+    Unusable,
+}
+
+fn read_loop(
+    reader: impl BufRead + Send,
+    bound: Arc<AtomicUsize>,
+    tx: SyncSender<ReadEvent>,
+) {
+    let mut reader = reader;
+    loop {
+        let limit = bound.load(Ordering::Relaxed);
+        match read_frame(&mut reader, limit) {
+            Ok(Some(bytes)) => {
+                if tx.send(ReadEvent::Frame(bytes)).is_err() {
+                    return;
+                }
+            },
+            Ok(None) => {
+                let _ = tx.send(ReadEvent::Eof);
+                return;
+            },
+            Err(_) => {
+                let _ = tx.send(ReadEvent::Unusable);
+                return;
+            },
+        }
+    }
+}
+
+pub(crate) enum Incoming {
+    Frame(Vec<u8>),
+    Eof,
+    Unusable,
+    Timeout,
 }
 
 pub(crate) struct PendingSubmit {
@@ -103,7 +159,6 @@ pub(crate) struct Adapter<'a> {
     pub(crate) sink: &'a mut dyn DiagnosticSink,
     pub(crate) table: PendingTable,
     pub(crate) binding: Option<Binding>,
-    pub(crate) inbound_bound: usize,
     pub(crate) selected_major: u32,
     pub(crate) selected_minor: u16,
     pub(crate) prime_anchors: HashMap<String, u64>,
@@ -114,6 +169,12 @@ pub(crate) struct Adapter<'a> {
     pub(crate) outbox: Outbox,
     pub(crate) liveness: Option<Liveness>,
     pub(crate) pending_submit: Option<PendingSubmit>,
+    pub(crate) failed: bool,
+    pub(crate) frame_bound: Arc<AtomicUsize>,
+    pub(crate) ev_max: u32,
+    pub(crate) ev_window_ms: u64,
+    pub(crate) ev_window_start: Option<u64>,
+    pub(crate) ev_count: u32,
 }
 
 impl<'a> Adapter<'a> {
@@ -130,7 +191,7 @@ impl<'a> Adapter<'a> {
             sink,
             table: PendingTable::new(),
             binding: None,
-            inbound_bound: BOOTSTRAP_MAX_FRAME_BYTES,
+            frame_bound: Arc::new(AtomicUsize::new(BOOTSTRAP_MAX_FRAME_BYTES)),
             selected_major: 0,
             selected_minor: 0,
             prime_anchors: HashMap::new(),
@@ -146,37 +207,75 @@ impl<'a> Adapter<'a> {
             ),
             liveness: None,
             pending_submit: None,
+            failed: false,
+            ev_max: 0,
+            ev_window_ms: 0,
+            ev_window_start: None,
+            ev_count: 0,
         }
     }
 
-    pub(crate) fn serve<R: BufRead>(&mut self, reader: &mut R) -> i32 {
-        if self.handshake(reader).is_err() {
-            return EXIT_REFUSAL;
+    pub(crate) fn serve<R: BufRead + Send + 'static>(
+        &mut self,
+        reader: R,
+    ) -> i32 {
+        let (tx, rx) = mpsc::sync_channel(16);
+        let frame_bound = self.frame_bound.clone();
+        thread::spawn(move || read_loop(reader, frame_bound, tx));
+        let start_ms = self.clock.now_ms();
+        match self.handshake(&rx, start_ms) {
+            Ok(()) => {},
+            Err(()) => return EXIT_REFUSAL,
         }
         loop {
-            let now = self.clock.now_ms();
-            if let Some(liveness) = &self.liveness
-                && liveness.is_expired(now)
-            {
-                self.terminalize_all("liveness_timeout");
-                return EXIT_CLEAN;
-            }
-            let frame = match read_frame(reader, self.inbound_bound) {
-                Ok(frame) => frame,
-                Err(_) => {
+            let deadline = self
+                .liveness
+                .as_ref()
+                .map(|liveness| liveness.deadline_ms())
+                .unwrap_or(u64::MAX);
+            match self.recv(&rx, deadline) {
+                Incoming::Frame(bytes) => {
+                    if let Some(code) = self.dispatch(&bytes) {
+                        return code;
+                    }
+                    if std::mem::take(&mut self.failed) {
+                        self.terminalize_all("transport_unusable");
+                        return EXIT_REFUSAL;
+                    }
+                },
+                Incoming::Eof => {
+                    self.terminalize_all("eof");
+                    return EXIT_CLEAN;
+                },
+                Incoming::Unusable => {
                     self.terminalize_all("transport_unusable");
                     return EXIT_REFUSAL;
                 },
-            };
-            let Some(bytes) = frame else {
-                self.terminalize_all("eof");
-                return EXIT_CLEAN;
-            };
-            if let Some(liveness) = &mut self.liveness {
-                liveness.observe(now);
+                Incoming::Timeout => {
+                    self.terminalize_all("liveness_timeout");
+                    return EXIT_CLEAN;
+                },
             }
-            if let Some(code) = self.dispatch(&bytes) {
-                return code;
+        }
+    }
+
+    fn recv(&self, rx: &Receiver<ReadEvent>, deadline_ms: u64) -> Incoming {
+        loop {
+            let now = self.clock.now_ms();
+            if now >= deadline_ms {
+                return Incoming::Timeout;
+            }
+            let wait = Duration::from_millis(deadline_ms.saturating_sub(now));
+            match rx.recv_timeout(wait) {
+                Ok(ReadEvent::Frame(bytes)) => {
+                    return Incoming::Frame(bytes);
+                },
+                Ok(ReadEvent::Eof) => return Incoming::Eof,
+                Ok(ReadEvent::Unusable) => return Incoming::Unusable,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Incoming::Unusable;
+                },
             }
         }
     }
@@ -192,6 +291,13 @@ impl<'a> Adapter<'a> {
         if envelope.get("jsonrpc") != Some(&Value::String("2.0".to_string())) {
             self.answer_invalid(envelope.get("id"));
             return None;
+        }
+        // Liveness resets on valid frames only: parseable envelopes
+        // with a JSON-RPC version marker, whether or not the binding
+        // or admission checks that follow succeed.
+        let now = self.clock.now_ms();
+        if let Some(liveness) = &mut self.liveness {
+            liveness.observe(now);
         }
         if let Some(method) = envelope.get("method").and_then(Value::as_str) {
             return self.dispatch_request(method, &envelope);
@@ -310,18 +416,97 @@ impl<'a> Adapter<'a> {
         ));
     }
 
+    /// Emits a lifecycle event on the control lane, enforcing the
+    /// negotiated event rate: coalescible kinds drop with a diagnostic
+    /// past the cap, authoritative kinds terminalize instead — never
+    /// silently dropped, never queued unboundedly. Returns an exit code
+    /// when the session must end.
+    pub(crate) fn emit_lifecycle(
+        &mut self,
+        kind: &str,
+        code: &str,
+    ) -> Option<i32> {
+        let coalescible = matches!(kind, "progress" | "heartbeat");
+        let now = self.clock.now_ms();
+        let window_expired = self.ev_window_start.is_none_or(|start| {
+            now.saturating_sub(start) >= self.ev_window_ms
+        });
+        if window_expired {
+            self.ev_window_start = Some(now);
+            self.ev_count = 0;
+        }
+        if self.ev_count >= self.ev_max {
+            if coalescible {
+                self.record("event_coalesced", kind);
+                return None;
+            }
+            self.terminalize_all("event_flood");
+            return Some(EXIT_REFUSAL);
+        }
+        self.ev_count = self.ev_count.saturating_add(1);
+        let Some(binding) = &self.binding else {
+            return None;
+        };
+        let result = self.write_control(&json!({
+            "jsonrpc": "2.0",
+            "method": "adapter.lifecycleEvent",
+            "params": {
+                "protocol_major": self.selected_major,
+                "protocol_minor": self.selected_minor,
+                "runtime_instance": binding.runtime_instance,
+                "target_session": binding.target_session,
+                "adapter_generation": binding.adapter_generation,
+                "kind": kind,
+                "code": code,
+            },
+        }));
+        if result.is_err() {
+            self.terminalize_all("lifecycle_write_failed");
+            return Some(EXIT_REFUSAL);
+        }
+        None
+    }
+
     pub(crate) fn write_value(&mut self, value: &Value) -> Result<(), ()> {
         let bytes = serde_json::to_vec(value).map_err(|_| ())?;
         if self.outbox.push_data(bytes.len()).is_err() {
             self.record("outbox_full", "response dropped at queue cap");
+            self.failed = true;
             return Err(());
         }
         // Operative bound is the negotiated maximum; the bootstrap
-        // ceiling applies only before the handshake completes (when
-        // inbound_bound still holds it).
-        let result =
-            write_frame(&mut *self.writer, &bytes, self.inbound_bound);
+        // ceiling applies while frame_bound still holds it.
+        let bound = self.frame_bound.load(Ordering::Relaxed);
+        let result = write_frame(&mut *self.writer, &bytes, bound);
         self.outbox.release_data(bytes.len());
+        if result.is_err() {
+            self.record("transport_write_failed", "terminalizing");
+            self.failed = true;
+        }
+        result.map_err(|_| ())
+    }
+
+    /// Writes a control-lane frame (lifecycle events, ping replies):
+    /// exempt from data caps within its own negotiated control bound.
+    /// Admission failure escalates: the session terminalizes rather
+    /// than dropping or silently queueing control traffic.
+    pub(crate) fn write_control(&mut self, value: &Value) -> Result<(), ()> {
+        let bytes = serde_json::to_vec(value).map_err(|_| ())?;
+        if self.outbox.push_control().is_err() {
+            self.record(
+                "control_lane_full",
+                "control admission escalates to terminalization",
+            );
+            self.failed = true;
+            return Err(());
+        }
+        let bound = self.frame_bound.load(Ordering::Relaxed);
+        let result = write_frame(&mut *self.writer, &bytes, bound);
+        self.outbox.release_control();
+        if result.is_err() {
+            self.record("control_write_failed", "terminalizing");
+            self.failed = true;
+        }
         result.map_err(|_| ())
     }
 
@@ -461,19 +646,22 @@ impl<'a> Adapter<'a> {
     pub(crate) fn terminalize_all(&mut self, reason: &str) {
         self.record("terminalize", reason);
         self.prime_anchors.clear();
+        // A held turn is never completed here: an unknown outcome keeps
+        // the single-flight gate until the attempt's cessation is
+        // observed, and a fence hint is not cessation. Draining the
+        // choice gate is safe: every open choice terminalizes now.
+        self.choice_gate.drain();
         if let Some(pending) = self.pending_submit.take() {
             if pending.choice.is_some() {
                 self.record("choice_cancelled", reason);
             }
-            if self.turn.complete().is_some() {
+            if self.turn.is_held() {
                 self.record(
                     "submission_unknown",
                     "turn interrupted before terminal ack",
                 );
             }
             self.table.retire(Direction::Inbound, pending.inbound_wire);
-        } else {
-            self.turn.complete();
         }
         for entry in self.table.clear() {
             if entry.kind == CallKind::Persist {

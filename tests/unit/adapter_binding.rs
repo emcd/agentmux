@@ -3,16 +3,14 @@ use agentmux::adapter::binding::{
     establish_binding,
 };
 
-/// Minted ids start at 1 and advance monotonically per direction.
+/// Minted ids start at 1 and advance monotonically.
 #[test]
 fn wire_ids_start_at_one_and_advance() {
     let mut table = PendingTable::new();
     let first = table
-        .mint(Direction::Outbound, CallKind::RequestChoice, None)
+        .mint(CallKind::RequestChoice, None)
         .expect("mint succeeds");
-    let second = table
-        .mint(Direction::Outbound, CallKind::Look, None)
-        .expect("mint succeeds");
+    let second = table.mint(CallKind::Look, None).expect("mint succeeds");
     assert_eq!((first, second), (1, 2));
 }
 
@@ -21,13 +19,11 @@ fn wire_ids_start_at_one_and_advance() {
 #[test]
 fn direction_spaces_are_independent() {
     let mut table = PendingTable::new();
-    let outbound = table
-        .mint(Direction::Outbound, CallKind::Submit, None)
-        .expect("mint succeeds");
-    let inbound = table
-        .mint(Direction::Inbound, CallKind::Look, None)
-        .expect("mint succeeds");
-    assert_eq!((outbound, inbound), (1, 1));
+    let outbound = table.mint(CallKind::Submit, None).expect("mint succeeds");
+    table
+        .note_inbound(1, CallKind::Look, None)
+        .expect("inbound opens");
+    assert_eq!(outbound, 1);
     assert!(table.admit(Direction::Outbound, 1).is_some());
     assert!(table.admit(Direction::Inbound, 1).is_some());
 }
@@ -46,7 +42,7 @@ fn unknown_wire_id_admits_nothing() {
 fn retired_entry_admits_no_reply() {
     let mut table = PendingTable::new();
     table
-        .mint(Direction::Outbound, CallKind::Persist, Some("c-1".into()))
+        .mint(CallKind::Persist, Some("c-1".into()))
         .expect("mint succeeds");
     let retired = table.retire(Direction::Outbound, 1);
     assert!(retired.is_some());
@@ -58,19 +54,36 @@ fn retired_entry_admits_no_reply() {
 #[test]
 fn clear_returns_entries_without_reusing_ids() {
     let mut table = PendingTable::new();
+    table.mint(CallKind::Submit, None).expect("mint succeeds");
     table
-        .mint(Direction::Outbound, CallKind::Submit, None)
-        .expect("mint succeeds");
-    table
-        .mint(Direction::Inbound, CallKind::Ping, None)
-        .expect("mint succeeds");
+        .note_inbound(5, CallKind::Ping, None)
+        .expect("inbound opens");
     let cleared = table.clear();
     assert_eq!(cleared.len(), 2);
     assert!(table.is_empty());
     let next = table
-        .mint(Direction::Outbound, CallKind::RequestChoice, None)
+        .mint(CallKind::RequestChoice, None)
         .expect("mint succeeds");
     assert_eq!(next, 2);
+}
+
+/// A regressed or repeated inbound id is refused even after the
+/// original entry retired or the table cleared: the high-water mark
+/// survives both.
+#[test]
+fn inbound_reuse_is_refused_after_retire_and_clear() {
+    let mut table = PendingTable::new();
+    table
+        .note_inbound(7, CallKind::Look, None)
+        .expect("inbound opens");
+    table.retire(Direction::Inbound, 7);
+    assert!(table.note_inbound(7, CallKind::Look, None).is_err());
+    assert!(table.note_inbound(3, CallKind::Look, None).is_err());
+    table.clear();
+    assert!(table.note_inbound(7, CallKind::Look, None).is_err());
+    table
+        .note_inbound(8, CallKind::Look, None)
+        .expect("greater id opens");
 }
 
 /// Establishment carries the pinned target into the captured binding:

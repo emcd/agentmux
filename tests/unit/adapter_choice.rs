@@ -70,3 +70,16 @@ fn release_saturates_at_zero() {
     gate.release();
     assert_eq!(gate.outstanding(), 0);
 }
+
+/// Draining releases every outstanding choice at once, as
+/// terminalization does before retiring the pending table.
+#[test]
+fn drain_releases_all_outstanding() {
+    let mut gate = ChoiceGate::new(4);
+    let mut sink: Vec<DiagnosticEntry> = Vec::new();
+    gate.request(&mut sink);
+    gate.request(&mut sink);
+    assert_eq!(gate.outstanding(), 2);
+    gate.drain();
+    assert_eq!(gate.outstanding(), 0);
+}

@@ -17,6 +17,8 @@ fn test_config(script_toml: &str) -> AdapterConfig {
         executable: "agentmux-adapter".to_string(),
         profile: "generic".to_string(),
         target_session: "seat-1".to_string(),
+        handshake_timeout_ms: 30_000,
+        liveness_timeout_ms: 60_000,
         offer: VersionOffer {
             major: 2,
             min_minor: 0,
@@ -109,10 +111,10 @@ fn run_transcript(
     input: &[u8],
 ) -> (i32, Vec<u8>, Vec<DiagnosticEntry>) {
     let clock = ManualClock::new(1_000);
-    let mut reader = BufReader::new(input);
+    let reader = BufReader::new(std::io::Cursor::new(input.to_vec()));
     let mut writer = Vec::new();
     let mut sink: Vec<DiagnosticEntry> = Vec::new();
-    let code = run_stdio(config, &clock, &mut reader, &mut writer, &mut sink);
+    let code = run_stdio(config, &clock, reader, &mut writer, &mut sink);
     (code, writer, sink)
 }
 
@@ -574,6 +576,102 @@ species = "confirm"
     assert_eq!(frames[1]["method"], "adapter.requestChoice");
     assert_eq!(frames[2]["result"]["outcome"], "Submitted");
     assert_eq!(frames[2]["result"]["correlation_id"], "c-2");
+}
+
+/// A SubmitUnknown turn never releases the gate: the next submit is
+/// refused until cessation is observed. Fence hints do not release it.
+#[test]
+fn unknown_turn_holds_gate_across_fence() {
+    let script = r#"
+[[turns]]
+correlation = "c-u"
+ack = "submitted"
+
+[[turns.choices]]
+title = "Deploy?"
+species = "approval"
+
+[[turns.choices.options]]
+option_id = "yes"
+name = "Yes"
+species = "confirm"
+"#;
+    let config = test_config(script);
+    let submit = |id: &str, correlation: &str| {
+        json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "adapter.submit",
+            "params": {
+                "protocol_major": 2,
+                "protocol_minor": 1,
+                "runtime_instance": "rt-9",
+                "target_session": "seat-1",
+                "adapter_generation": 3,
+                "correlation_id": correlation,
+                "members": [{
+                    "message_id": "m-1",
+                    "target_session": "seat-1",
+                    "adapter_generation": 3,
+                    "content_type": "default",
+                    "payload_b64": "aGk=",
+                }],
+            },
+        })
+    };
+    let malformed_choice = json!({
+        "jsonrpc": "2.0",
+        "id": "2",
+        "result": {
+            "correlation_id": "ch-2",
+            "outcome": {"chosen": {"option_id": "yes"}},
+        },
+    });
+    let fence = json!({
+        "jsonrpc": "2.0",
+        "method": "relay.supervisionSignal",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 0,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "signal": "fence-hint",
+        },
+    });
+    let terminate = json!({
+        "jsonrpc": "2.0",
+        "method": "relay.supervisionSignal",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 0,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "signal": "terminate",
+        },
+    });
+    let input = transcript(&[
+        hello_result(),
+        submit("10", "c-u"),
+        malformed_choice,
+        submit("11", "c-next"),
+        fence,
+        submit("12", "c-after-fence"),
+        terminate,
+    ]);
+    let (code, output, _) = run_transcript(&config, &input);
+    assert_eq!(code, EXIT_CLEAN);
+    let frames = split_frames(&output);
+    // hello, requestChoice, submit(SubmissionUnknown on malformed
+    // choice), persist marker, busy, busy. No second requestChoice
+    // ever goes out: the unknown turn holds the gate across the fence.
+    assert_eq!(frames[1]["method"], "adapter.requestChoice");
+    assert_eq!(frames[2]["result"]["outcome"], "SubmissionUnknown");
+    assert_eq!(frames[2]["result"]["correlation_id"], "c-u");
+    assert_eq!(frames[4]["result"]["outcome"], "RefusedBusy");
+    assert_eq!(frames[5]["result"]["outcome"], "RefusedBusy");
+    assert_eq!(frames.len(), 6, "unexpected frames: {frames:?}");
 }
 
 /// The bootstrap ceiling is the 64KiB pre-negotiation bound.

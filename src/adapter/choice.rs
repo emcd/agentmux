@@ -140,6 +140,12 @@ impl ChoiceGate {
         self.outstanding = self.outstanding.saturating_sub(1);
     }
 
+    /// Releases all outstanding choices. Terminalization calls this
+    /// after recording each open choice's terminal outcome.
+    pub fn drain(&mut self) {
+        self.outstanding = 0;
+    }
+
     /// Counts outstanding choices.
     #[must_use]
     pub fn outstanding(&self) -> usize {

@@ -18,7 +18,8 @@ fn usage() -> ! {
     eprintln!(
         "usage: agentmux-adapter --target <session> --script <path> \
         [--profile generic|acp] [--executable <path>] \
-        [--latency <type>=<ms>]... [--max-frame-bytes <n>]"
+        [--latency <type>=<ms>]... [--max-frame-bytes <n>] \
+        [--handshake-timeout-ms <n>] [--liveness-timeout-ms <n>]"
     );
     std::process::exit(2);
 }
@@ -40,6 +41,13 @@ fn parse_latency(
     true
 }
 
+fn parse_timeout(value: Option<String>, fallback: u64) -> u64 {
+    match value.and_then(|text| text.parse::<u64>().ok()) {
+        Some(0) | None => fallback,
+        Some(bound) => bound,
+    }
+}
+
 fn main() -> ExitCode {
     let mut arguments = env::args().skip(1);
     let mut target: Option<String> = None;
@@ -47,6 +55,8 @@ fn main() -> ExitCode {
     let mut profile = "generic".to_string();
     let mut executable = "agentmux-adapter".to_string();
     let mut max_frame_bytes = 1_048_576_u64;
+    let mut handshake_timeout_ms: Option<String> = None;
+    let mut liveness_timeout_ms: Option<String> = None;
     let mut latency = HashMap::from([("default".to_string(), 5_000_u64)]);
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -57,6 +67,12 @@ fn main() -> ExitCode {
             },
             "--executable" => {
                 executable = arguments.next().unwrap_or_default();
+            },
+            "--handshake-timeout-ms" => {
+                handshake_timeout_ms = arguments.next();
+            },
+            "--liveness-timeout-ms" => {
+                liveness_timeout_ms = arguments.next();
             },
             "--latency" => {
                 let Some(value) = arguments.next() else {
@@ -107,14 +123,15 @@ fn main() -> ExitCode {
             ..LimitsProposal::negotiation_defaults(latency)
         },
         script,
+        handshake_timeout_ms: parse_timeout(handshake_timeout_ms, 30_000),
+        liveness_timeout_ms: parse_timeout(liveness_timeout_ms, 60_000),
     };
-    let stdin = std::io::stdin();
+    let reader = BufReader::new(std::io::stdin());
     let stdout = std::io::stdout();
-    let mut reader = BufReader::new(stdin.lock());
     let mut writer = BufWriter::new(stdout.lock());
     let mut sink = StderrSink;
     let code =
-        run_stdio(&config, &SystemClock, &mut reader, &mut writer, &mut sink);
+        run_stdio(&config, &SystemClock, reader, &mut writer, &mut sink);
     let _ = writer.flush();
     ExitCode::from(code as u8)
 }
