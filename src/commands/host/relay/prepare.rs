@@ -207,42 +207,45 @@ pub(super) fn prepare_relay_host(
     // per-bundle startup work. The relay-level runtime lock above serializes
     // standalone hosts, but an embedded runtime claims only the domain lock;
     // a foreign-held claim refuses the host the same way a held relay lock
-    // does. A live same-process domain is adopted, not refused, and the
-    // serve context below adopts it again.
-    match claim_or_adopt(&roots.state_root, &delivery_context)
-        .map_err(shared::map_relay_error)?
-    {
-        DomainClaim::Adopted(_) | DomainClaim::Claimed => {},
-        DomainClaim::ForeignHeld => {
-            // Another process owns this state root's identity domain.
-            // Render an all-skipped summary and exit without binding.
-            let outcomes = memberships
-                .into_iter()
-                .map(|membership| {
-                    skipped_startup_bundle(
+    // does. A live same-process domain is adopted: the rest of preparation
+    // runs on the owner's delivery state, so configured registrations and
+    // worker state land in the domain that will serve requests.
+    let delivery_context =
+        match claim_or_adopt(&roots.state_root, &delivery_context)
+            .map_err(shared::map_relay_error)?
+        {
+            DomainClaim::Adopted(owner) => owner,
+            DomainClaim::Claimed => delivery_context,
+            DomainClaim::ForeignHeld => {
+                // Another process owns this state root's identity domain.
+                // Render an all-skipped summary and exit without binding.
+                let outcomes = memberships
+                    .into_iter()
+                    .map(|membership| {
+                        skipped_startup_bundle(
                         membership.bundle_name.as_str(),
                         "lock_held",
                         "identity domain is already owned by another relay"
                             .to_string(),
                     )
-                })
-                .collect();
-            let summary = build_startup_summary(
-                if no_autostart {
-                    "process_only"
-                } else {
-                    "autostart"
-                },
-                outcomes,
-            );
-            emit_inscription(
-                "relay.startup.summary",
-                &startup_summary_payload(&summary),
-            );
-            render_startup_summary(&summary);
-            return Ok(RelayHostPreparation::NoHostedBundles);
-        },
-    }
+                    })
+                    .collect();
+                let summary = build_startup_summary(
+                    if no_autostart {
+                        "process_only"
+                    } else {
+                        "autostart"
+                    },
+                    outcomes,
+                );
+                emit_inscription(
+                    "relay.startup.summary",
+                    &startup_summary_payload(&summary),
+                );
+                render_startup_summary(&summary);
+                return Ok(RelayHostPreparation::NoHostedBundles);
+            },
+        };
 
     // Prune expired principal-store records once at startup. A corrupt store is
     // fatal here: it would otherwise reject every Hello (which loads the store),
@@ -537,12 +540,11 @@ pub(super) fn host_selected_bundle(
     )
 }
 
-// Last-resort coverage for the host's domain-claim refusal: the decision is
-// only reachable through host preparation (no public interface drives it),
-// and it needs a foreign-held lock with no local registry entry — holding
-// the raw file lock in the test is exactly that shape. One test: a held
-// domain claim yields the graceful all-skipped exit rather than a served
-// host, before any bundle is started or any socket is bound.
+// Last-resort coverage for the host's domain-claim decisions: they are only
+// reachable through host preparation (no public interface drives them). One
+// test pins refusal of a foreign-held root; a second pins adoption of a
+// same-process runtime's live domain, including that startup registrations
+// land in the owner's delivery state rather than a discarded fresh one.
 #[cfg(test)]
 mod domain_claim_tests {
     use std::os::unix::io::AsRawFd as _;
@@ -556,23 +558,7 @@ mod domain_claim_tests {
 
     use super::{RelayHostPreparation, prepare_relay_host};
 
-    #[test]
-    fn foreign_held_domain_refuses_host_preparation() {
-        let temporary = TempDir::new().expect("temporary");
-        let configuration_root = temporary.path().join("conf");
-        let state_root = temporary.path().join("state");
-        let roots = RuntimeRoots {
-            configuration_roots: ConfigurationRoots::single(
-                &configuration_root,
-            ),
-            state_root: state_root.clone(),
-            inscriptions_root: temporary.path().join("inscriptions"),
-            configuration_root_source: ConfigurationRootSource::Default,
-        };
-        ensure_starter_configuration_layout(&roots)
-            .expect("starter configuration");
-        // A session-bearing bundle so preparation has something to host:
-        // the starter example is sessionless and never reaches hosting.
+    fn write_party_bundle(configuration_root: &std::path::Path) {
         std::fs::write(
             configuration_root.join("bundles").join("party.toml"),
             r#"
@@ -587,6 +573,40 @@ directory = "/tmp"
 "#,
         )
         .expect("write bundle");
+    }
+
+    fn test_roots(
+        temporary: &TempDir,
+    ) -> (RuntimeRoots, std::path::PathBuf, std::path::PathBuf) {
+        let configuration_root = temporary.path().join("conf");
+        let state_root = temporary.path().join("state");
+        let roots = RuntimeRoots {
+            configuration_roots: ConfigurationRoots::single(
+                &configuration_root,
+            ),
+            state_root: state_root.clone(),
+            // Shared with the other in-crate inscription tests: the
+            // configured path is first-wins per process, so per-test
+            // temporary paths would fail configuration depending on run
+            // order. relay_inscriptions_path appends relay.log, matching
+            // the shared test path exactly.
+            inscriptions_root:
+                crate::runtime::inscriptions::shared_test_inscriptions_path()
+                    .parent()
+                    .expect("inscription file has a parent")
+                    .to_path_buf(),
+            configuration_root_source: ConfigurationRootSource::Default,
+        };
+        ensure_starter_configuration_layout(&roots)
+            .expect("starter configuration");
+        write_party_bundle(&configuration_root);
+        (roots, configuration_root, state_root)
+    }
+
+    #[test]
+    fn foreign_held_domain_refuses_host_preparation() {
+        let temporary = TempDir::new().expect("temporary");
+        let (roots, _configuration_root, state_root) = test_roots(&temporary);
 
         // Hold the domain claim the way another process would: an open file
         // description with an exclusive, non-blocking flock, kept alive
@@ -623,14 +643,13 @@ directory = "/tmp"
             !roots.state_root.join("bundles").exists(),
             "refused preparation must not host bundles"
         );
-        // Fallback serve contexts on the same held root change nothing: the
-        // constructor cannot claim a foreign-held root, so no local entry
-        // exists to adopt, and preparing again must still refuse rather
-        // than adopt a fallback that never held the root.
+        // The serving constructor refuses the same root itself: no usable
+        // serving context can be built over a domain this process does
+        // not own, so there is no fallback for a later prepare to adopt.
         let foreign = std::sync::Arc::new(crate::relay::DeliveryContext::new(
             crate::relay::DeliveryConfiguration::default(),
         ));
-        let _first = crate::relay::ConnectionServeContext::new(
+        let failed = match crate::relay::ConnectionServeContext::new(
             roots.configuration_roots.clone(),
             roots.state_root.clone(),
             crate::relay::BundleCatalog::from_paths([]),
@@ -643,31 +662,23 @@ directory = "/tmp"
             Vec::new(),
             false,
             std::time::Duration::from_secs(2),
-            std::sync::Arc::clone(&foreign),
+            foreign,
+        ) {
+            Ok(_) => panic!("serve construction over a held root must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            failed.code, "validation_runtime_already_hosted",
+            "serving-path refusal names the ownership violation: {failed:?}"
         );
-        let _second = crate::relay::ConnectionServeContext::new(
-            roots.configuration_roots.clone(),
-            roots.state_root.clone(),
-            crate::relay::BundleCatalog::from_paths([]),
-            std::sync::Arc::new(
-                crate::relay::PeerConnectionManager::from_configuration(
-                    &roots.state_root,
-                    &[],
-                ),
-            ),
-            Vec::new(),
-            false,
-            std::time::Duration::from_secs(2),
-            std::sync::Arc::new(crate::relay::DeliveryContext::new(
-                crate::relay::DeliveryConfiguration::default(),
-            )),
-        );
+        // Preparing again must still refuse: no local entry was published
+        // for the failed construction to adopt.
         match prepare_relay_host(&roots, true, None, None)
             .expect("prepare runs")
         {
             RelayHostPreparation::NoHostedBundles => {},
             RelayHostPreparation::Serve(_) => {
-                panic!("fallback serve contexts must not lift the refusal")
+                panic!("a refused constructor must not yield a served host")
             },
         }
         assert!(
@@ -675,5 +686,39 @@ directory = "/tmp"
             "refused preparation must not host bundles"
         );
         drop(lock_file);
+    }
+
+    #[test]
+    fn adopted_domain_receives_startup_registrations() {
+        let temporary = TempDir::new().expect("temporary");
+        let (roots, configuration_root, state_root) = test_roots(&temporary);
+
+        // A same-process runtime owns the root: preparation adopts its
+        // delivery state instead of refusing, and startup registrations
+        // land in the owner's domain rather than a discarded fresh one.
+        let runtime = crate::relay::RelayRuntime::init(
+            configuration_root,
+            state_root,
+            crate::relay::DeliveryConfiguration::default(),
+        )
+        .expect("runtime init");
+        match prepare_relay_host(&roots, true, None, None)
+            .expect("prepare runs")
+        {
+            RelayHostPreparation::Serve(_) => {},
+            RelayHostPreparation::NoHostedBundles => {
+                panic!("an adopted domain must still be served")
+            },
+        }
+        let principals = crate::relay::registered_principal_ids(
+            runtime.delivery_context(),
+            "party",
+        );
+        assert!(
+            principals
+                .iter()
+                .any(|principal| principal == "victim@party"),
+            "startup registrations land in the owning domain: {principals:?}"
+        );
     }
 }

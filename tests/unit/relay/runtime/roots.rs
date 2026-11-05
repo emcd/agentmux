@@ -486,6 +486,62 @@ fn cross_process_second_init_is_refused() {
     assert!(status.success(), "holding child exits cleanly");
 }
 
+/// A delivery state that already owns one root cannot claim a second: the
+/// second claim is refused rather than dropping the first root's lock out
+/// from under its live serve context and registry entry. A raw separate
+/// open of the first root's claim file still fails while that context
+/// lives, proving the claim was retained and not silently replaced.
+#[test]
+fn shared_delivery_must_not_release_an_earlier_root_claim() {
+    use std::os::unix::io::AsRawFd as _;
+
+    let temporary = TempDir::new().expect("temporary");
+    let configuration_root = temporary.path().join("conf");
+    std::fs::create_dir_all(&configuration_root).expect("create config root");
+    let delivery =
+        Arc::new(DeliveryContext::new(DeliveryConfiguration::default()));
+    let state_a = temporary.path().join("state-a");
+    let state_b = temporary.path().join("state-b");
+    let _context_a =
+        serve_context_over(&configuration_root, &state_a, &delivery);
+
+    let failed = match ConnectionServeContext::new(
+        agentmux::configuration::ConfigurationRoots::single(
+            &configuration_root,
+        ),
+        state_b.clone(),
+        BundleCatalog::from_paths([BundleRuntimePaths::resolve(
+            &state_b, "party",
+        )
+        .expect("bundle paths")]),
+        Arc::new(PeerConnectionManager::from_configuration(&state_b, &[])),
+        Vec::new(),
+        false,
+        Duration::from_secs(2),
+        Arc::clone(&delivery),
+    ) {
+        Ok(_) => panic!("a second root on one delivery must fail"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        failed.code, "validation_runtime_already_hosted",
+        "one delivery owns one root: {failed:?}"
+    );
+    let lock_path = state_a.join("identity").join(".domain.lock");
+    let probe = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&lock_path)
+        .expect("open first root's claim file");
+    let taken = unsafe {
+        libc::flock(probe.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB)
+    };
+    assert_ne!(
+        taken, 0,
+        "the first root's claim must survive the refused second claim"
+    );
+}
+
 /// A runtime that never configured session credentials leaves them
 /// unenforced by default.
 #[test]

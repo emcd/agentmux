@@ -127,7 +127,15 @@ pub(crate) fn claim_or_adopt(
     domains.insert(domain_key.to_path_buf(), Arc::downgrade(delivery));
     match acquire_domain_lock(domain_key) {
         Ok(lock) => {
-            delivery.install_domain_lock(lock);
+            if !delivery.install_domain_lock(lock) {
+                // This delivery state already hosts another root's domain.
+                // One delivery owns one root: roll the new slot back rather
+                // than dropping the earlier root's lock out from under its
+                // live streams and registry entry. The registry guard is
+                // still held, so no second lock is taken here.
+                domains.remove(domain_key);
+                return Err(already_hosted(domain_key));
+            }
             Ok(DomainClaim::Claimed)
         },
         Err(error) if error.code == "validation_runtime_already_hosted" => {

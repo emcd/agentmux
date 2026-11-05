@@ -508,10 +508,13 @@ fn cross_relay_ingress_without_an_origin_names_the_peer_qualified_once() {
 // separately in the routing tests.
 #[test]
 fn cross_relay_ingress_composes_a_non_routable_origin_unaltered() {
-    let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
-        agentmux::relay::DeliveryConfiguration::default(),
-    ));
     for origin in ["app@EXTERNAL", "not-a-principal"] {
+        // One delivery per store root: a delivery state owns exactly one
+        // revocation domain, so each temporary root gets its own.
+        let delivery =
+            std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
+                agentmux::relay::DeliveryConfiguration::default(),
+            ));
         let temporary = TempDir::new().expect("temporary directory");
         let bundle_name = format!("party-{}", Uuid::new_v4().simple());
         let configuration_roots = write_bundle_configuration_with_ui_member(

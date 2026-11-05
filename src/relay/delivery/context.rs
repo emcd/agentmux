@@ -143,13 +143,25 @@ impl DeliveryContext {
     }
 
     /// Installs the exclusive store-root domain claim held for this delivery
-    /// state's lifetime. Called once by the domain-claim path; the lock is
-    /// released automatically when the last `Arc` holder drops.
-    pub(in crate::relay) fn install_domain_lock(&self, lock: std::fs::File) {
-        *self
+    /// state's lifetime. One delivery state owns one store root: a second
+    /// claim is refused so adopting a new root can never silently release
+    /// the earlier root's lock file while its streams and registry entry
+    /// are still live. Returns false without installing anything when this
+    /// state already holds a claim.
+    pub(in crate::relay) fn install_domain_lock(
+        &self,
+        lock: std::fs::File,
+    ) -> bool {
+        let mut slot = self
             .domain_lock
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(lock);
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot.is_some() {
+            drop(lock);
+            return false;
+        }
+        *slot = Some(lock);
+        true
     }
 
     /// Reports whether controlled shutdown was signalled for the handle.
