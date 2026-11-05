@@ -41,3 +41,7 @@ surrounding quotes, so `"id": "$hello_id"` replays as `"id": "1"`).
   the runner currently launches exactly `spawn.args` + `spawn.env`.
 - Slow-consumer backpressure beyond final-flush integrity needs a
   flood script and is recorded as future, not asserted here.
+- Every `relay.look` carries numeric `prime_timeout_ms` (0 answers
+  immediately with no hold); omitting it is a structural refusal per
+  the wire schema, never an answered poll. The citation lint enforces
+  this.

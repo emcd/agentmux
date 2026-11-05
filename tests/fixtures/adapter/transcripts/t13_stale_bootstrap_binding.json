@@ -36,9 +36,9 @@
   "frames": [
     {"send": {"jsonrpc": "2.0", "id": "10", "method": "adapter.submit", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 8, "correlation_id": "c-stale", "members": [{"message_id": "m-1", "target_session": "seat-1", "adapter_generation": 8, "content_type": "text", "payload_b64": "aGVsbG8="}]}}},
     {"expect_quiet_ms": 300},
-    {"send": {"jsonrpc": "2.0", "id": "11", "method": "relay.look", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "other-instance", "look_handle_id": "h-foreign", "adapter_generation": 7, "correlation_id": "c-foreign", "lines": 10}}},
+    {"send": {"jsonrpc": "2.0", "id": "11", "method": "relay.look", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "other-instance", "look_handle_id": "h-foreign", "adapter_generation": 7, "correlation_id": "c-foreign", "lines": 10, "prime_timeout_ms": 0}}},
     {"expect_quiet_ms": 300},
-    {"send": {"jsonrpc": "2.0", "id": "12", "method": "relay.look", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "look_handle_id": "h-probe", "adapter_generation": 7, "correlation_id": "c-probe", "lines": 10}}},
+    {"send": {"jsonrpc": "2.0", "id": "12", "method": "relay.look", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "look_handle_id": "h-probe", "adapter_generation": 7, "correlation_id": "c-probe", "lines": 10, "prime_timeout_ms": 0}}},
     {"expect": {"jsonrpc": "2.0", "id": "12", "result": {"correlation_id": "c-probe", "stale": true, "snapshot_source": "synthetic"}}}
   ]
 }

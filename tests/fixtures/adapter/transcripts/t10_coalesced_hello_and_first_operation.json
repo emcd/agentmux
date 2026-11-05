@@ -34,7 +34,7 @@
     "hello_result_raw": null
   },
   "frames": [
-    {"send": {"jsonrpc": "2.0", "id": "10", "method": "relay.look", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "look_handle_id": "h-first", "adapter_generation": 7, "correlation_id": "c-first", "lines": 10}}},
+    {"send": {"jsonrpc": "2.0", "id": "10", "method": "relay.look", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "look_handle_id": "h-first", "adapter_generation": 7, "correlation_id": "c-first", "lines": 10, "prime_timeout_ms": 0}}},
     {"expect": {"jsonrpc": "2.0", "id": "10", "result": {"correlation_id": "c-first", "stale": true, "snapshot_source": "synthetic"}}}
   ]
 }

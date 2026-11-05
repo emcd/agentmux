@@ -470,6 +470,13 @@ mod tests {
                                 SUPERVISOR_METHODS.contains(&method),
                                 "{name}: supervisor never originates {method}",
                             );
+                            if method == "relay.look" {
+                                assert!(
+                                    send["params"]["prime_timeout_ms"]
+                                        .is_number(),
+                                    "{name}: look without prime_timeout_ms is a structural refusal, not a poll",
+                                );
+                            }
                         }
                         if let Some(error) = send.get("error") {
                             assert!(

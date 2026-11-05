@@ -41,7 +41,7 @@
     {"expect_quiet_ms": 300},
     {"send": {"jsonrpc": "2.0", "id": "$p1", "result": {"correlation_id": "$pc1", "persisted": true}}},
     {"expect_quiet_ms": 300},
-    {"send": {"jsonrpc": "2.0", "id": "11", "method": "relay.look", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "look_handle_id": "h-probe", "adapter_generation": 7, "correlation_id": "c-probe", "lines": 10}}},
+    {"send": {"jsonrpc": "2.0", "id": "11", "method": "relay.look", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "look_handle_id": "h-probe", "adapter_generation": 7, "correlation_id": "c-probe", "lines": 10, "prime_timeout_ms": 0}}},
     {"expect": {"jsonrpc": "2.0", "id": "11", "result": {"correlation_id": "c-probe", "stale": true, "snapshot_source": "synthetic"}}}
   ]
 }
