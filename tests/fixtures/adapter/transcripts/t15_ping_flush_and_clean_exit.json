@@ -4,7 +4,7 @@
   "limit": null,
   "description": "Control flow stays intact end to end: three pings answer with empty results, stdin EOF delivers a clean shutdown, and every line on the pipe parses. Slow-consumer flooding beyond this flush integrity needs a flood script and is recorded as future.",
   "adapter_script": "no-op.toml",
-  "spawn": {"args": [], "env": {}},
+  "spawn": {"args": ["--target", "alpha", "--script", "tests/fixtures/adapter/no-op.toml"], "env": {}},
   "bind": {
     "expect_hello_subset": {
       "adapter_profile": "generic",

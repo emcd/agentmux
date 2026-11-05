@@ -4,7 +4,7 @@
   "limit": null,
   "description": "An unparseable line resolves nothing: the adapter logs a diagnostic, emits no correlated error, and the pipe stays usable for the next operation.",
   "adapter_script": "no-op.toml",
-  "spawn": {"args": [], "env": {}},
+  "spawn": {"args": ["--target", "alpha", "--script", "tests/fixtures/adapter/no-op.toml"], "env": {}},
   "bind": {
     "expect_hello_subset": {
       "adapter_profile": "generic",

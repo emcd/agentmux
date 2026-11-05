@@ -4,7 +4,7 @@
   "limit": null,
   "description": "A choice result with neither outcome key is a typed framing failure: no reply-to-reply, no second disposition. A later look proves the pipe is unwedged.",
   "adapter_script": "choice-raise-then-complete.toml",
-  "spawn": {"args": [], "env": {}},
+  "spawn": {"args": ["--target", "alpha", "--script", "tests/fixtures/adapter/choice-raise-then-complete.toml"], "env": {}},
   "bind": {
     "expect_hello_subset": {
       "adapter_profile": "generic",

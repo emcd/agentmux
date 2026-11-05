@@ -4,7 +4,7 @@
   "limit": null,
   "description": "The single-flight gate refuses a second submit while a choice-raising turn is still in flight: RefusedBusy naming the adapter single-flight, recorded as no-effect evidence, nothing queued. Requires a choice-raising turn that waits for its answer.",
   "adapter_script": "choice-raise-hanging.toml",
-  "spawn": {"args": [], "env": {}},
+  "spawn": {"args": ["--target", "alpha", "--script", "tests/fixtures/adapter/choice-raise-hanging.toml"], "env": {}},
   "bind": {
     "expect_hello_subset": {
       "adapter_profile": "generic",

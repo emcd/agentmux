@@ -4,7 +4,7 @@
   "limit": null,
   "description": "A contract error with a malformed shape (missing data.code) is refused before admission: the open choice entry survives unpoisoned, so a later valid Cancelled still resolves it and the turn completes. Quiet first, then the valid cancel proves the entry lived.",
   "adapter_script": "choice-raise-then-complete.toml",
-  "spawn": {"args": [], "env": {}},
+  "spawn": {"args": ["--target", "alpha", "--script", "tests/fixtures/adapter/choice-raise-then-complete.toml"], "env": {}},
   "bind": {
     "expect_hello_subset": {
       "adapter_profile": "generic",

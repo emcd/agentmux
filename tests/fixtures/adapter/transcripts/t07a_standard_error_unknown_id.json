@@ -4,7 +4,7 @@
   "limit": null,
   "description": "A standard protocol error for an unknown wire id is discarded with a diagnostic: no correlated error is fabricated in reply, and the pipe stays usable for the next operation.",
   "adapter_script": "no-op.toml",
-  "spawn": {"args": [], "env": {}},
+  "spawn": {"args": ["--target", "alpha", "--script", "tests/fixtures/adapter/no-op.toml"], "env": {}},
   "bind": {
     "expect_hello_subset": {
       "adapter_profile": "generic",

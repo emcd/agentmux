@@ -4,7 +4,7 @@
   "limit": null,
   "description": "A standard protocol error without correlation echo is admitted by pending-table match: the open choice resolves locally Cancelled, the turn completes with its scripted ack, and the entry retires. Requires a choice-raising turn that completes after local Cancelled.",
   "adapter_script": "choice-raise-then-complete.toml",
-  "spawn": {"args": [], "env": {}},
+  "spawn": {"args": ["--target", "alpha", "--script", "tests/fixtures/adapter/choice-raise-then-complete.toml"], "env": {}},
   "bind": {
     "expect_hello_subset": {
       "adapter_profile": "generic",

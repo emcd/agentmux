@@ -4,7 +4,7 @@
   "limit": null,
   "description": "Frames outside the captured binding triple are discarded with a diagnostic: a submit naming an unpublished generation and a look naming a foreign runtime instance each resolve nothing, and the bound pipe stays usable.",
   "adapter_script": "no-op.toml",
-  "spawn": {"args": [], "env": {}},
+  "spawn": {"args": ["--target", "alpha", "--script", "tests/fixtures/adapter/no-op.toml"], "env": {}},
   "bind": {
     "expect_hello_subset": {
       "adapter_profile": "generic",
