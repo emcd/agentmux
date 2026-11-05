@@ -792,3 +792,42 @@ fn domain_claim_refuses_exchanged_identity_dir() {
         "an exchanged ancestor fails closed: {failed:?}"
     );
 }
+
+/// A FIFO at the lock path is refused instead of flocked: unlike a
+/// directory (rejected by the open itself), a FIFO opens O_RDWR and reaches
+/// the regular-file guard, which must fail closed rather than pinning a
+/// non-file inode as the claim.
+#[test]
+fn domain_claim_refuses_fifo_lock_leaf() {
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let temporary = TempDir::new().expect("temporary");
+    let configuration_root = temporary.path().join("conf");
+    let state_root = temporary.path().join("state");
+    let identity_dir = state_root.join("identity");
+    std::fs::create_dir_all(&configuration_root).expect("create config root");
+    std::fs::create_dir_all(&identity_dir).expect("create identity dir");
+    let fifo = identity_dir.join(".domain.lock");
+    let name = std::ffi::CString::new(fifo.as_os_str().as_bytes())
+        .expect("fifo name");
+    let created =
+        unsafe { libc::mkfifo(name.as_ptr(), 0o600 as libc::mode_t) };
+    assert_eq!(created, 0, "pre-seed FIFO at the lock path");
+
+    let failed = match RelayRuntime::init(
+        configuration_root,
+        state_root,
+        DeliveryConfiguration::default(),
+    ) {
+        Ok(_) => panic!("a FIFO must not establish domain ownership"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        failed.code, "internal_unexpected_failure",
+        "a non-regular claim leaf fails closed: {failed:?}"
+    );
+    assert_ne!(
+        failed.code, "validation_runtime_already_hosted",
+        "a non-regular leaf is an I/O failure, not an ownership refusal"
+    );
+}
