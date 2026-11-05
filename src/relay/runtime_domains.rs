@@ -16,7 +16,8 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use serde_json::json;
 
-use super::confined::CONFINED_DIR_MODE;
+use super::confined::{ConfineError, confined_claim_lock};
+use super::identity::invalid_credential_path;
 use super::{DeliveryContext, RelayError};
 
 /// Leaf holding the exclusive cross-process domain claim, beneath the
@@ -91,8 +92,8 @@ pub(crate) enum DomainClaim {
     /// No live domain owned the root: the passed delivery state now does.
     Claimed,
     /// Another process holds the root: there is no local delivery state to
-    /// adopt. Callers that cannot fail fall back to their own state;
-    /// fallible hosts refuse instead.
+    /// adopt, and no claim to establish. Both the serving constructor and
+    /// fallible hosts refuse rather than serving an unowned domain.
     ForeignHeld,
 }
 
@@ -105,8 +106,10 @@ pub(crate) enum DomainClaim {
 ///
 /// # Errors
 ///
-/// Returns `validation_runtime_already_hosted` when another live domain in
-/// this process owns the same store root.
+/// Returns `Adopted` with the live owner's delivery state when another
+/// domain in this process already owns the same store root;
+/// `validation_runtime_already_hosted` when another process holds the
+/// root's claim; and the claim's I/O failures verbatim.
 pub(crate) fn claim_or_adopt(
     state_root: &Path,
     delivery: &Arc<DeliveryContext>,
@@ -199,61 +202,48 @@ pub(in crate::relay) fn release_domain_slot(
     }
 }
 
-/// Opens the domain lock file beneath the identity directory and takes it
-/// exclusively without blocking: a held lock means another process owns the
-/// store root.
+/// Opens the domain lock file beneath the identity directory through
+/// retained-handle no-follow traversal, then takes it exclusively without
+/// blocking: a held lock means another process owns the store root.
+///
+/// A symlinked identity directory or lock leaf is refused instead of
+/// followed, and a non-regular leaf is refused rather than flocked, so the
+/// flock always pins the root's own regular file: an atomic replacement of
+/// the principal store beside it cannot strand a second owner on a new
+/// inode. The returned descriptor is never re-resolved, so path exchanges
+/// after this point cannot redirect the held claim. Routine release only
+/// closes the descriptor; the claim inode is never unlinked or recreated.
 fn acquire_domain_lock(
     domain_key: &Path,
 ) -> Result<std::fs::File, RelayError> {
-    let identity_dir = domain_key.join("identity");
-    // Create the identity directory owner-only when it does not exist yet,
-    // matching the confined traversal's mode: a plain create_dir_all would
-    // leave umask-dependent permissions on a credential-bearing directory.
-    let created = !identity_dir.exists();
-    std::fs::create_dir_all(&identity_dir).map_err(|source| {
-        crate::relay::relay_error(
-            "internal_unexpected_failure",
-            "failed to ensure identity directory for domain claim",
-            Some(json!({
-                "path": identity_dir.display().to_string(),
-                "cause": source.to_string(),
-            })),
-        )
-    })?;
-    if created {
-        use std::os::unix::fs::PermissionsExt as _;
-        std::fs::set_permissions(
-            &identity_dir,
-            std::fs::Permissions::from_mode(CONFINED_DIR_MODE),
-        )
-        .map_err(|source| {
-            crate::relay::relay_error(
+    let relative = Path::new("identity").join(DOMAIN_LOCK_FILE);
+    let lock_file = confined_claim_lock(domain_key, &relative).map_err(
+        |error| match error {
+            ConfineError::Symlink { component } => invalid_credential_path(
+                component.as_str(),
+                "domain claim ancestor is a symlink",
+            ),
+            ConfineError::Exchanged { component } => invalid_credential_path(
+                component.as_str(),
+                "domain claim ancestor changed during claim",
+            ),
+            ConfineError::DirSync { .. } => crate::relay::relay_error(
                 "internal_unexpected_failure",
-                "failed to restrict identity directory for domain claim",
+                "failed to sync domain claim directory",
                 Some(json!({
-                    "path": identity_dir.display().to_string(),
-                    "cause": source.to_string(),
+                    "path": domain_key.display().to_string(),
                 })),
-            )
-        })?;
-    }
-    let lock_path = domain_lock_path(domain_key);
-    let lock_file = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-        .map_err(|source| {
-            crate::relay::relay_error(
+            ),
+            ConfineError::Io { source } => crate::relay::relay_error(
                 "internal_unexpected_failure",
                 "failed to open domain claim file",
                 Some(json!({
-                    "path": lock_path.display().to_string(),
+                    "path": domain_lock_path(domain_key).display().to_string(),
                     "cause": source.to_string(),
                 })),
-            )
-        })?;
+            ),
+        },
+    )?;
     // SAFETY: `flock` takes an owned open file descriptor and no other
     // memory; the flags request an exclusive, non-blocking take.
     let taken = unsafe {
@@ -268,7 +258,7 @@ fn acquire_domain_lock(
                 "internal_unexpected_failure",
                 "failed to claim domain lock file",
                 Some(json!({
-                    "path": lock_path.display().to_string(),
+                    "path": domain_lock_path(domain_key).display().to_string(),
                     "cause": source.to_string(),
                 })),
             )

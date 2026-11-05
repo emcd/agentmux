@@ -13,6 +13,18 @@
 //! interleave the middles of two transactions, because the lock under test
 //! forbids such an interleaving by construction.
 
+//!
+//! Explicit deferral (Tier-2 carry): deterministic seam-level serialization
+//! evidence across the supported mutation paths -- a controlled stale-load,
+//! publication, or compensation interleaving that must block -- is not
+//! provided here. Serialization instead rests on the per-store transaction
+//! mutex held across the complete load-to-persist sequence at every
+//! mutation site: the public provisioning paths in `relay::runtime`, the
+//! socket identity-admin dispatch in `relay`, and the startup prune in
+//! `relay::prune_principal_store`. Cross-process staleness is excluded by
+//! the domain claim: only the domain owner may persist. Mid-transaction
+//! interleaving tests remain deferred pending Tier-2 acceptance.
+
 use std::sync::{Arc, Barrier};
 
 use agentmux::relay::{

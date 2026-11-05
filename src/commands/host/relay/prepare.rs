@@ -249,10 +249,13 @@ pub(super) fn prepare_relay_host(
 
     // Prune expired principal-store records once at startup. A corrupt store is
     // fatal here: it would otherwise reject every Hello (which loads the store),
-    // so surfacing it at startup fails fast rather than per connection.
-    let pruned_principals =
-        crate::relay::prune_principal_store(&roots.state_root)
-            .map_err(shared::map_relay_error)?;
+    // so surfacing it at startup fails fast rather than per connection. The
+    // adopted-or-claimed owner proves domain ownership for the prune.
+    let pruned_principals = crate::relay::prune_principal_store(
+        &roots.state_root,
+        &delivery_context,
+    )
+    .map_err(shared::map_relay_error)?;
     if pruned_principals > 0 {
         emit_inscription(
             "relay.identity.store_pruned",

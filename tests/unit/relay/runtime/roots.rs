@@ -615,3 +615,123 @@ fn descriptor_carries_routing_defaults_and_metadata() {
         Some("red")
     );
 }
+
+/// A symlinked lock leaf is refused instead of followed: flocking through a
+/// link to the store would let an atomic store replacement strand a second
+/// owner on a new inode beside the live one.
+#[test]
+fn domain_claim_refuses_symlinked_lock_leaf() {
+    let temporary = TempDir::new().expect("temporary");
+    let configuration_root = temporary.path().join("conf");
+    let state_root = temporary.path().join("state");
+    let identity_dir = state_root.join("identity");
+    std::fs::create_dir_all(&configuration_root).expect("create config root");
+    std::fs::create_dir_all(&identity_dir).expect("create identity dir");
+    std::fs::write(identity_dir.join("principals.json"), "{}\n")
+        .expect("write store placeholder");
+    std::os::unix::fs::symlink(
+        identity_dir.join("principals.json"),
+        identity_dir.join(".domain.lock"),
+    )
+    .expect("link lock leaf at the store");
+
+    let failed = match RelayRuntime::init(
+        configuration_root,
+        state_root,
+        DeliveryConfiguration::default(),
+    ) {
+        Ok(_) => panic!("a symlinked claim leaf must not establish ownership"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        failed.code, "validation_invalid_credential_path",
+        "a symlinked lock leaf fails closed: {failed:?}"
+    );
+}
+
+/// A symlinked identity directory is refused instead of followed: the claim
+/// file would otherwise live outside the state-root trust anchor.
+#[test]
+fn domain_claim_refuses_symlinked_identity_dir() {
+    let temporary = TempDir::new().expect("temporary");
+    let configuration_root = temporary.path().join("conf");
+    let state_root = temporary.path().join("state");
+    let outside = temporary.path().join("outside");
+    std::fs::create_dir_all(&configuration_root).expect("create config root");
+    std::fs::create_dir_all(&outside).expect("create outside dir");
+    std::fs::create_dir_all(&state_root).expect("create state root");
+    std::os::unix::fs::symlink(&outside, state_root.join("identity"))
+        .expect("link identity dir outside the root");
+
+    let failed = match RelayRuntime::init(
+        configuration_root,
+        state_root,
+        DeliveryConfiguration::default(),
+    ) {
+        Ok(_) => {
+            panic!("a symlinked identity dir must not establish ownership")
+        },
+        Err(error) => error,
+    };
+    assert_eq!(
+        failed.code, "validation_invalid_credential_path",
+        "a symlinked identity dir fails closed: {failed:?}"
+    );
+}
+
+/// Replacing the store file beside a held claim does not admit a second
+/// owner: the held descriptor pins the claim inode, so a cross-process
+/// init is still refused after publication. The child runs this same test
+/// binary filtered to this test with a probe directive.
+#[test]
+fn store_replacement_does_not_break_owner_exclusion() {
+    // Child branch: attempt the claim and require refusal, then exit.
+    if let Ok(probe_root) = std::env::var("AGENTMUX_TEST_PROBE_DOMAIN") {
+        let probe_conf = std::env::var("AGENTMUX_TEST_PROBE_CONF")
+            .expect("probe configuration root");
+        let failed = match RelayRuntime::init(
+            probe_conf.into(),
+            probe_root.into(),
+            DeliveryConfiguration::default(),
+        ) {
+            Ok(_) => panic!("probe init over a held root must fail"),
+            Err(error) => error,
+        };
+        assert_eq!(
+            failed.code, "validation_runtime_already_hosted",
+            "probe init is refused: {failed:?}"
+        );
+        return;
+    }
+    let temporary = TempDir::new().expect("temporary");
+    let configuration_root = temporary.path().join("conf");
+    let state_root = temporary.path().join("state");
+    std::fs::create_dir_all(&configuration_root).expect("create config root");
+    let _owner = RelayRuntime::init(
+        configuration_root.clone(),
+        state_root.clone(),
+        DeliveryConfiguration::default(),
+    )
+    .expect("owner claims the domain");
+
+    // Atomically replace the store file the way a persist publication does:
+    // the claim must survive the inode exchange.
+    let store_path = state_root.join("identity").join("principals.json");
+    let staged = state_root.join("identity").join(".probe-staged");
+    std::fs::write(&staged, "{}\n").expect("stage replacement store");
+    std::fs::rename(&staged, &store_path).expect("publish replacement store");
+
+    let test_binary = std::env::current_exe().expect("test binary");
+    let status = std::process::Command::new(test_binary)
+        .arg("relay::runtime::roots::store_replacement_does_not_break_owner_exclusion")
+        .arg("--exact")
+        .env("AGENTMUX_TEST_PROBE_DOMAIN", &state_root)
+        .env("AGENTMUX_TEST_PROBE_CONF", &configuration_root)
+        .stdout(std::process::Stdio::null())
+        .status()
+        .expect("spawn probing child");
+    assert!(
+        status.success(),
+        "probing child is refused and exits cleanly"
+    );
+}

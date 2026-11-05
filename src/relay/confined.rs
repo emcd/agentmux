@@ -329,6 +329,51 @@ pub(crate) fn confined_read(
     Ok(Some(bytes))
 }
 
+/// Opens (creating) the domain-claim lock file through retained-handle,
+/// no-follow traversal, failing closed on a symlinked ancestor or leaf.
+///
+/// The returned file description pins the lock inode: later path exchanges
+/// (including atomic replacement of a symlinked target) cannot redirect
+/// the held claim, and a non-regular leaf is refused rather than flocked.
+pub(crate) fn confined_claim_lock(
+    state_root: &Path,
+    target: &Path,
+) -> Result<fs::File, ConfineError> {
+    let (parents, file_name) = split_confined_relative(target)?;
+    let Some(root) = open_confined_root(state_root, true)? else {
+        return Err(ConfineError::io(io::Error::new(
+            io::ErrorKind::NotFound,
+            "confined root vanished",
+        )));
+    };
+    let Some(parent) = walk_confined(root.as_fd(), &parents, true)? else {
+        return Err(ConfineError::io(io::Error::new(
+            io::ErrorKind::NotFound,
+            "confined parent vanished",
+        )));
+    };
+    let final_name = cname_of(file_name)?;
+    let fd = open_at(
+        parent.as_raw_fd(),
+        &final_name,
+        libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        CONFINED_FILE_MODE,
+    )
+    .map_err(|source| map_open_error(source, &target.display().to_string()))?;
+    // A pre-seeded fifo, socket, or directory must never become the claim:
+    // only a regular file pins one inode behind the exclusive flock.
+    let mut status: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd.as_raw_fd(), &mut status) } != 0 {
+        return Err(ConfineError::io(io::Error::last_os_error()));
+    }
+    if status.st_mode as u64 & libc::S_IFMT as u64 != libc::S_IFREG as u64 {
+        return Err(ConfineError::io(io::Error::other(
+            "domain claim file is not a regular file",
+        )));
+    }
+    Ok(fs::File::from(fd))
+}
+
 /// A staged confined write awaiting atomic publication.
 pub(crate) struct ConfinedWrite {
     parent: OwnedFd,

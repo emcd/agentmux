@@ -791,7 +791,25 @@ pub(in crate::relay) fn dispatch_identity_introspect(
 /// only when something was pruned. A missing store loads empty and no file is
 /// created. Intended to run once at relay startup; per-connection access prunes
 /// in memory, and store mutations persist the pruned set.
-pub fn prune_principal_store(state_root: &Path) -> Result<usize, RelayError> {
+///
+/// The caller must prove domain ownership: `owner` must be the live delivery
+/// state owning `state_root` (adopted or claimed through the serving
+/// constructor, host preparation, or runtime init). A caller that does not
+/// own the domain — including a second process while the domain is held — is
+/// refused with `validation_runtime_already_hosted` instead of persisting a
+/// stale snapshot over the owner's concurrent mutations. The per-store
+/// transaction lock below still serializes this process's own mutation
+/// paths across the whole load/prune/persist sequence.
+pub fn prune_principal_store(
+    state_root: &Path,
+    owner: &Arc<DeliveryContext>,
+) -> Result<usize, RelayError> {
+    let owned =
+        crate::relay::runtime_domains::owning_delivery_context(state_root)
+            .is_some_and(|live| Arc::ptr_eq(&live, owner));
+    if !owned {
+        return Err(crate::relay::runtime_domains::already_hosted(state_root));
+    }
     let store_lock =
         crate::relay::identity::lock_store_transaction(state_root);
     let _store_guard = store_lock
