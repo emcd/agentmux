@@ -56,6 +56,11 @@ pub(in crate::relay) fn admin_lock_for(domain_key: &Path) -> Arc<Mutex<()>> {
         .clone()
 }
 
+/// Path of the exclusive cross-process domain claim file for a state root.
+pub(crate) fn domain_lock_path(state_root: &Path) -> PathBuf {
+    state_root.join("identity").join(DOMAIN_LOCK_FILE)
+}
+
 /// Canonical registry key for a store root: the canonicalized path when it
 /// resolves, so two handles naming the same store through different
 /// spellings still coordinate.
@@ -77,6 +82,73 @@ pub(in crate::relay) fn owning_delivery_context(
         .and_then(Weak::upgrade)
 }
 
+/// Outcome of claiming a store root for a delivery state: either the
+/// caller adopts a live domain, establishes its own, or finds the root held
+/// by another process (which has no locally adoptable delivery state).
+pub(crate) enum DomainClaim {
+    /// A live domain already owns the root: adopt its delivery state.
+    Adopted(Arc<DeliveryContext>),
+    /// No live domain owned the root: the passed delivery state now does.
+    Claimed,
+    /// Another process holds the root: there is no local delivery state to
+    /// adopt. Callers that cannot fail fall back to their own state;
+    /// fallible hosts refuse instead.
+    ForeignHeld,
+}
+
+/// Claims the store root for `delivery`, or adopts the live owner: one
+/// critical section decides between adopting, claiming, and reporting a
+/// foreign holder, so concurrent first constructions converge on one domain
+/// instead of interleaving a lookup with a claim. A successful claim
+/// installs the cross-process lock file in the delivery state for its
+/// lifetime.
+///
+/// # Errors
+///
+/// Returns `validation_runtime_already_hosted` when another live domain in
+/// this process owns the same store root.
+pub(crate) fn claim_or_adopt(
+    state_root: &Path,
+    delivery: &Arc<DeliveryContext>,
+) -> Result<DomainClaim, RelayError> {
+    let domain_key = canonical_domain_key(state_root);
+    let domain_key = domain_key.as_path();
+    {
+        let mut domains = runtime_domains()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(owner) = domains.get(domain_key).and_then(Weak::upgrade) {
+            return Ok(DomainClaim::Adopted(owner));
+        }
+        domains.insert(domain_key.to_path_buf(), Arc::downgrade(delivery));
+    }
+    match acquire_domain_lock(domain_key) {
+        Ok(lock) => {
+            delivery.install_domain_lock(lock);
+            Ok(DomainClaim::Claimed)
+        },
+        Err(error) if error.code == "validation_runtime_already_hosted" => {
+            // Another process holds the root. The in-process slot claimed
+            // above stays: it names this process's fallback domain, so
+            // concurrent local constructions still converge on one delivery
+            // state instead of each falling back independently. The retain
+            // rule governs init the same way: a live fallback domain keeps
+            // refusing second claims until every holder ceases.
+            Ok(DomainClaim::ForeignHeld)
+        },
+        Err(error) => {
+            // A real claim I/O failure owns nothing: roll the slot back so
+            // a later construction retries instead of adopting a domain
+            // that never held the root.
+            let mut domains = runtime_domains()
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            domains.remove(domain_key);
+            Err(error)
+        },
+    }
+}
+
 /// Claims single-revocation-domain ownership of the canonical `domain_key`
 /// for `delivery`, returning the weak handle to store for release on drop.
 ///
@@ -94,22 +166,11 @@ pub(in crate::relay) fn claim_domain_slot(
     domain_key: &Path,
     delivery: &Arc<DeliveryContext>,
 ) -> Result<Weak<DeliveryContext>, RelayError> {
-    {
-        let domains = runtime_domains()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if domains.get(domain_key).and_then(Weak::upgrade).is_some() {
-            return Err(already_hosted(domain_key));
-        }
+    match claim_or_adopt(domain_key, delivery)? {
+        DomainClaim::Adopted(_) => Err(already_hosted(domain_key)),
+        DomainClaim::Claimed => Ok(Arc::downgrade(delivery)),
+        DomainClaim::ForeignHeld => Err(already_hosted(domain_key)),
     }
-    let lock = acquire_domain_lock(domain_key)?;
-    delivery.install_domain_lock(lock);
-    let domain_weak = Arc::downgrade(delivery);
-    runtime_domains()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .insert(domain_key.to_path_buf(), Weak::clone(&domain_weak));
-    Ok(domain_weak)
 }
 
 /// Releases `domain_key`, but only when no holder of the domain remains: a
@@ -169,7 +230,7 @@ fn acquire_domain_lock(
             )
         })?;
     }
-    let lock_path = identity_dir.join(DOMAIN_LOCK_FILE);
+    let lock_path = domain_lock_path(domain_key);
     let lock_file = std::fs::OpenOptions::new()
         .read(true)
         .write(true)

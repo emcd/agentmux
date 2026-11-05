@@ -73,6 +73,9 @@ pub use self::runtime::{
     drop_principal, introspect_principal, provision_principal,
     rotate_principal_credential, verify_identity,
 };
+#[cfg(test)]
+pub(crate) use self::runtime_domains::domain_lock_path;
+pub(crate) use self::runtime_domains::{DomainClaim, claim_or_adopt};
 pub use self::stream::second_claim_is_live_conflict_for_testing;
 pub use self::watcher::{BundleWatcher, spawn_bundle_watcher};
 #[doc(hidden)]

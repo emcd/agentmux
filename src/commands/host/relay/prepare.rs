@@ -5,8 +5,9 @@ use serde_json::json;
 use crate::{
     configuration::load_bundle_group_memberships,
     relay::{
-        BundleCatalog, ConnectionServeContext, DeliveryContext, HostingIntent,
-        PeerConnectionManager, persist_startup_failures, startup_bundle,
+        BundleCatalog, ConnectionServeContext, DeliveryContext, DomainClaim,
+        HostingIntent, PeerConnectionManager, claim_or_adopt,
+        persist_startup_failures, startup_bundle,
     },
     runtime::{
         bootstrap::{
@@ -201,6 +202,47 @@ pub(super) fn prepare_relay_host(
         return Ok(RelayHostPreparation::NoHostedBundles);
     }
     let runtime_lock = acquire_relay_runtime_lock(&relay_paths)?;
+
+    // Claim the identity domain for the serving delivery state before any
+    // per-bundle startup work. The relay-level runtime lock above serializes
+    // standalone hosts, but an embedded runtime claims only the domain lock;
+    // a foreign-held claim refuses the host the same way a held relay lock
+    // does. A live same-process domain is adopted, not refused, and the
+    // serve context below adopts it again.
+    match claim_or_adopt(&roots.state_root, &delivery_context)
+        .map_err(shared::map_relay_error)?
+    {
+        DomainClaim::Adopted(_) | DomainClaim::Claimed => {},
+        DomainClaim::ForeignHeld => {
+            // Another process owns this state root's identity domain.
+            // Render an all-skipped summary and exit without binding.
+            let outcomes = memberships
+                .into_iter()
+                .map(|membership| {
+                    skipped_startup_bundle(
+                        membership.bundle_name.as_str(),
+                        "lock_held",
+                        "identity domain is already owned by another relay"
+                            .to_string(),
+                    )
+                })
+                .collect();
+            let summary = build_startup_summary(
+                if no_autostart {
+                    "process_only"
+                } else {
+                    "autostart"
+                },
+                outcomes,
+            );
+            emit_inscription(
+                "relay.startup.summary",
+                &startup_summary_payload(&summary),
+            );
+            render_startup_summary(&summary);
+            return Ok(RelayHostPreparation::NoHostedBundles);
+        },
+    }
 
     // Prune expired principal-store records once at startup. A corrupt store is
     // fatal here: it would otherwise reject every Hello (which loads the store),
@@ -492,4 +534,94 @@ pub(super) fn host_selected_bundle(
             hosting_intent,
         }),
     )
+}
+
+// Last-resort coverage for the host's domain-claim refusal: the decision is
+// only reachable through host preparation (no public interface drives it),
+// and it needs a foreign-held lock with no local registry entry — holding
+// the raw file lock in the test is exactly that shape. One test: a held
+// domain claim yields the graceful all-skipped exit rather than a served
+// host, before any bundle is started or any socket is bound.
+#[cfg(test)]
+mod domain_claim_tests {
+    use std::os::unix::io::AsRawFd as _;
+
+    use tempfile::TempDir;
+
+    use crate::configuration::ConfigurationRoots;
+    use crate::relay::domain_lock_path;
+    use crate::runtime::paths::{ConfigurationRootSource, RuntimeRoots};
+    use crate::runtime::starter::ensure_starter_configuration_layout;
+
+    use super::{RelayHostPreparation, prepare_relay_host};
+
+    #[test]
+    fn foreign_held_domain_refuses_host_preparation() {
+        let temporary = TempDir::new().expect("temporary");
+        let configuration_root = temporary.path().join("conf");
+        let state_root = temporary.path().join("state");
+        let roots = RuntimeRoots {
+            configuration_roots: ConfigurationRoots::single(
+                &configuration_root,
+            ),
+            state_root: state_root.clone(),
+            inscriptions_root: temporary.path().join("inscriptions"),
+            configuration_root_source: ConfigurationRootSource::Default,
+        };
+        ensure_starter_configuration_layout(&roots)
+            .expect("starter configuration");
+        // A session-bearing bundle so preparation has something to host:
+        // the starter example is sessionless and never reaches hosting.
+        std::fs::write(
+            configuration_root.join("bundles").join("party.toml"),
+            r#"
+format-version = 1
+
+[[sessions]]
+id = "victim"
+name = "Victim"
+directory = "/tmp"
+
+[sessions.ui]
+"#,
+        )
+        .expect("write bundle");
+
+        // Hold the domain claim the way another process would: an open file
+        // description with an exclusive, non-blocking flock, kept alive
+        // across the prepare call. Same-process flock conflicts on a
+        // separate open description, so no child process is needed.
+        let lock_path = domain_lock_path(&state_root);
+        std::fs::create_dir_all(lock_path.parent().expect("lock parent"))
+            .expect("identity directory");
+        let lock_file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .expect("open domain lock file");
+        let taken = unsafe {
+            libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB)
+        };
+        assert_eq!(taken, 0, "test holds the domain lock");
+
+        match prepare_relay_host(&roots, true, None, None)
+            .expect("prepare runs")
+        {
+            RelayHostPreparation::NoHostedBundles => {},
+            RelayHostPreparation::Serve(_) => {
+                panic!("a foreign-held domain must not yield a served host")
+            },
+        }
+        // The refusal lands before any bundle is hosted: no per-bundle
+        // runtime directory may exist. (A bypassed check would proceed into
+        // hosting and create it, so this pins the early return, not just
+        // the preparation variant.)
+        assert!(
+            !roots.state_root.join("bundles").exists(),
+            "refused preparation must not host bundles"
+        );
+        drop(lock_file);
+    }
 }
