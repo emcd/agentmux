@@ -2,7 +2,7 @@
   "requirement": "Per-message payload definitions",
   "capability": "adapter-wire-schema",
   "limit": null,
-  "description": "A choice result with neither outcome key is a typed framing failure: no reply-to-reply, no second disposition. A later look proves the pipe is unwedged.",
+  "description": "A choice result with neither outcome key is a typed framing failure: no reply-to-reply, no second disposition. A later look proves the pipe is unwedged. Keep-open rule: the choice entry stays open, so a later valid Cancelled still resolves it and the turn completes with its scripted ack.",
   "adapter_script": "choice-raise-then-complete.toml",
   "spawn": {"args": ["--target", "alpha", "--script", "tests/fixtures/adapter/choice-raise-then-complete.toml"], "env": {}},
   "bind": {
@@ -39,6 +39,8 @@
     {"send": {"jsonrpc": "2.0", "id": "$c1", "result": {"correlation_id": "$cc1", "outcome": {}}}},
     {"expect_quiet_ms": 300},
     {"send": {"jsonrpc": "2.0", "id": "11", "method": "relay.look", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "look_handle_id": "h-probe", "adapter_generation": 7, "correlation_id": "c-probe", "lines": 10}}},
-    {"expect": {"jsonrpc": "2.0", "id": "11", "result": {"correlation_id": "c-probe", "stale": true, "snapshot_source": "synthetic"}}}
+    {"expect": {"jsonrpc": "2.0", "id": "11", "result": {"correlation_id": "c-probe", "stale": true, "snapshot_source": "synthetic"}}},
+    {"send": {"jsonrpc": "2.0", "id": "$c1", "result": {"correlation_id": "$cc1", "outcome": {"cancelled": {"decided_by": "tester", "reason_code": "user-cancelled"}}}}},
+    {"expect": {"jsonrpc": "2.0", "id": "10", "result": {"outcome": "Submitted", "correlation_id": "c-neither"}}}
   ]
 }
