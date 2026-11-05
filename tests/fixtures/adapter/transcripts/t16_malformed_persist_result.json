@@ -1,0 +1,47 @@
+{
+  "requirement": "Resume receipt-vs-commit linearization with bounded write-id retention",
+  "capability": "adapter-wire-schema",
+  "limit": "scripted turn-marker fixture carries no resume content; rich-content persist assertions wait for the resume-state follow-on",
+  "description": "A persist result with a malformed shape (persisted flag missing) is refused before admission: the call and its tracker stay open with no wire reply, and a later valid persisted:true resolves it the same quiet way. Pins no-crash, no-spurious-reply, no-wedge for both stimuli; kept-open resolution itself is asserted by the implementation's state tests. Requires a turn whose completion emits a persistState write; emission order assumed submit-result-then-persist.",
+  "adapter_script": "quick-ack.toml",
+  "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/quick-ack.toml"], "env": {}},
+  "bind": {
+    "expect_hello_subset": {
+      "adapter_profile": "generic",
+      "target_session": "seat-1",
+      "protocol_major": 1,
+      "protocol_minor": 0
+    },
+    "hello_result": {
+      "runtime_instance": "test-instance-1",
+      "adapter_generation": 7,
+      "selected_major": 1,
+      "selected_minor": 0,
+      "negotiated_limits": {
+        "max_frame_bytes": 1048576,
+        "queue_tx_bytes": 16777216,
+        "queue_rx_bytes": 16777216,
+        "max_control_pending": 32,
+        "max_events_per_second": 100,
+        "window_seconds": 1,
+        "max_submits_in_flight": 64,
+        "max_choices_in_flight": 16,
+        "max_looks_in_flight": 8,
+        "drain_wait_ms": 250
+      },
+      "snapshot_b64": ""
+    },
+    "hello_result_raw": null
+  },
+  "frames": [
+    {"send": {"jsonrpc": "2.0", "id": "10", "method": "adapter.submit", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7, "correlation_id": "c-1", "members": [{"message_id": "m-1", "target_session": "seat-1", "adapter_generation": 7, "content_type": "text", "payload_b64": "aGVsbG8="}]}}},
+    {"expect": {"jsonrpc": "2.0", "id": "10", "result": {"outcome": "Submitted", "correlation_id": "c-1"}}},
+    {"expect": {"jsonrpc": "2.0", "method": "adapter.persistState", "params": {"target_session": "seat-1"}}, "capture_id_as": "p1", "capture_correlation_as": "pc1"},
+    {"send": {"jsonrpc": "2.0", "id": "$p1", "result": {"correlation_id": "$pc1"}}},
+    {"expect_quiet_ms": 300},
+    {"send": {"jsonrpc": "2.0", "id": "$p1", "result": {"correlation_id": "$pc1", "persisted": true}}},
+    {"expect_quiet_ms": 300},
+    {"send": {"jsonrpc": "2.0", "id": "11", "method": "relay.look", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "look_handle_id": "h-probe", "adapter_generation": 7, "correlation_id": "c-probe", "lines": 10}}},
+    {"expect": {"jsonrpc": "2.0", "id": "11", "result": {"correlation_id": "c-probe", "stale": true, "snapshot_source": "synthetic"}}}
+  ]
+}

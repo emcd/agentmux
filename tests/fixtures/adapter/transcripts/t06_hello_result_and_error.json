@@ -4,11 +4,11 @@
   "limit": null,
   "description": "A hello result carrying both result and error is malformed: the adapter refuses the binding with termination, emitting no operation traffic. The pipe must close.",
   "adapter_script": "no-op.toml",
-  "spawn": {"args": ["--target", "alpha", "--script", "tests/fixtures/adapter/no-op.toml"], "env": {}},
+  "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/no-op.toml"], "env": {}},
   "bind": {
     "expect_hello_subset": {
       "adapter_profile": "generic",
-      "target_session": "alpha",
+      "target_session": "seat-1",
       "protocol_major": 1,
       "protocol_minor": 0
     },

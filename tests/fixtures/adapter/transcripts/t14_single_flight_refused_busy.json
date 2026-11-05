@@ -4,11 +4,11 @@
   "limit": null,
   "description": "The single-flight gate refuses a second submit while a choice-raising turn is still in flight: RefusedBusy naming the adapter single-flight, recorded as no-effect evidence, nothing queued. Requires a choice-raising turn that waits for its answer.",
   "adapter_script": "choice-raise-hanging.toml",
-  "spawn": {"args": ["--target", "alpha", "--script", "tests/fixtures/adapter/choice-raise-hanging.toml"], "env": {}},
+  "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/choice-raise-hanging.toml"], "env": {}},
   "bind": {
     "expect_hello_subset": {
       "adapter_profile": "generic",
-      "target_session": "alpha",
+      "target_session": "seat-1",
       "protocol_major": 1,
       "protocol_minor": 0
     },
@@ -34,9 +34,9 @@
     "hello_result_raw": null
   },
   "frames": [
-    {"send": {"jsonrpc": "2.0", "id": "10", "method": "adapter.submit", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "alpha", "adapter_generation": 7, "correlation_id": "c-hang", "members": [{"message_id": "m-1", "target_session": "alpha", "adapter_generation": 7, "content_type": "text", "payload_b64": "aGVsbG8="}]}}},
-    {"expect": {"jsonrpc": "2.0", "method": "adapter.requestChoice", "params": {"target_session": "alpha"}}, "capture_id_as": "c1", "capture_correlation_as": "cc1"},
-    {"send": {"jsonrpc": "2.0", "id": "11", "method": "adapter.submit", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "alpha", "adapter_generation": 7, "correlation_id": "c-busy", "members": [{"message_id": "m-2", "target_session": "alpha", "adapter_generation": 7, "content_type": "text", "payload_b64": "aGVsbG8="}]}}},
+    {"send": {"jsonrpc": "2.0", "id": "10", "method": "adapter.submit", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7, "correlation_id": "c-hang", "members": [{"message_id": "m-1", "target_session": "seat-1", "adapter_generation": 7, "content_type": "text", "payload_b64": "aGVsbG8="}]}}},
+    {"expect": {"jsonrpc": "2.0", "method": "adapter.requestChoice", "params": {"target_session": "seat-1"}}, "capture_id_as": "c1", "capture_correlation_as": "cc1"},
+    {"send": {"jsonrpc": "2.0", "id": "11", "method": "adapter.submit", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7, "correlation_id": "c-busy", "members": [{"message_id": "m-2", "target_session": "seat-1", "adapter_generation": 7, "content_type": "text", "payload_b64": "aGVsbG8="}]}}},
     {"expect": {"jsonrpc": "2.0", "id": "11", "result": {"outcome": "RefusedBusy", "correlation_id": "c-busy", "evidence_basis": "adapter_single_flight"}}}
   ]
 }

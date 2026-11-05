@@ -4,11 +4,11 @@
   "limit": null,
   "description": "The negotiated max_frame_bytes replaces the bootstrap ceiling as the operative bound: a 2KiB frame under the negotiated 4096-byte bound is accepted, an 8KiB frame over it is refused without a correlatable reply, and the binding survives the refusal.",
   "adapter_script": "quick-ack.toml",
-  "spawn": {"args": ["--target", "alpha", "--script", "tests/fixtures/adapter/quick-ack.toml", "--max-frame-bytes", "4096"], "env": {}},
+  "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/quick-ack.toml", "--max-frame-bytes", "4096"], "env": {}},
   "bind": {
     "expect_hello_subset": {
       "adapter_profile": "generic",
-      "target_session": "alpha",
+      "target_session": "seat-1",
       "protocol_major": 1,
       "protocol_minor": 0
     },
@@ -34,9 +34,9 @@
     "hello_result_raw": null
   },
   "frames": [
-    {"send": {"jsonrpc": "2.0", "id": "10", "method": "adapter.submit", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "alpha", "adapter_generation": 7, "correlation_id": "c-within", "members": [{"message_id": "m-1", "target_session": "alpha", "adapter_generation": 7, "content_type": "text", "payload_b64": ""}]}}, "expand_b64": {"pointer": "/params/members/0/payload_b64", "bytes": 2048}},
-    {"expect": {"jsonrpc": "2.0", "id": "10", "result": {"outcome": "Submitted", "correlation_id": "c-within"}}},
-    {"send": {"jsonrpc": "2.0", "id": "11", "method": "adapter.submit", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "alpha", "adapter_generation": 7, "correlation_id": "c-over", "members": [{"message_id": "m-2", "target_session": "alpha", "adapter_generation": 7, "content_type": "text", "payload_b64": ""}]}}, "expand_b64": {"pointer": "/params/members/0/payload_b64", "bytes": 8192}},
+    {"send": {"jsonrpc": "2.0", "id": "10", "method": "adapter.submit", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7, "correlation_id": "c-1", "members": [{"message_id": "m-1", "target_session": "seat-1", "adapter_generation": 7, "content_type": "text", "payload_b64": ""}]}}, "expand_b64": {"pointer": "/params/members/0/payload_b64", "bytes": 2048}},
+    {"expect": {"jsonrpc": "2.0", "id": "10", "result": {"outcome": "Submitted", "correlation_id": "c-1"}}},
+    {"send": {"jsonrpc": "2.0", "id": "11", "method": "adapter.submit", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7, "correlation_id": "c-over", "members": [{"message_id": "m-2", "target_session": "seat-1", "adapter_generation": 7, "content_type": "text", "payload_b64": ""}]}}, "expand_b64": {"pointer": "/params/members/0/payload_b64", "bytes": 8192}},
     {"expect_quiet_ms": 300},
     {"send": {"jsonrpc": "2.0", "id": "12", "method": "relay.look", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "look_handle_id": "h-probe", "adapter_generation": 7, "correlation_id": "c-probe", "lines": 10}}},
     {"expect": {"jsonrpc": "2.0", "id": "12", "result": {"correlation_id": "c-probe", "stale": true, "snapshot_source": "synthetic"}}}

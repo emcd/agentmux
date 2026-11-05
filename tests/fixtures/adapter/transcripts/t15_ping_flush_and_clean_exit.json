@@ -4,11 +4,11 @@
   "limit": null,
   "description": "Control flow stays intact end to end: three pings answer with empty results, stdin EOF delivers a clean shutdown, and every line on the pipe parses. Slow-consumer flooding beyond this flush integrity needs a flood script and is recorded as future.",
   "adapter_script": "no-op.toml",
-  "spawn": {"args": ["--target", "alpha", "--script", "tests/fixtures/adapter/no-op.toml"], "env": {}},
+  "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/no-op.toml"], "env": {}},
   "bind": {
     "expect_hello_subset": {
       "adapter_profile": "generic",
-      "target_session": "alpha",
+      "target_session": "seat-1",
       "protocol_major": 1,
       "protocol_minor": 0
     },
@@ -34,9 +34,9 @@
     "hello_result_raw": null
   },
   "frames": [
-    {"send": {"jsonrpc": "2.0", "id": "20", "method": "relay.ping", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "alpha", "adapter_generation": 7}}},
-    {"send": {"jsonrpc": "2.0", "id": "21", "method": "relay.ping", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "alpha", "adapter_generation": 7}}},
-    {"send": {"jsonrpc": "2.0", "id": "22", "method": "relay.ping", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "alpha", "adapter_generation": 7}}},
+    {"send": {"jsonrpc": "2.0", "id": "20", "method": "relay.ping", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7}}},
+    {"send": {"jsonrpc": "2.0", "id": "21", "method": "relay.ping", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7}}},
+    {"send": {"jsonrpc": "2.0", "id": "22", "method": "relay.ping", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7}}},
     {"expect": {"jsonrpc": "2.0", "id": "20", "result": {}}},
     {"expect": {"jsonrpc": "2.0", "id": "21", "result": {}}},
     {"expect": {"jsonrpc": "2.0", "id": "22", "result": {}}},
