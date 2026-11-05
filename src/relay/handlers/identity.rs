@@ -369,12 +369,37 @@ pub(in crate::relay) fn handle_change_psk(
             Err(error) => {
                 // The rename failed after the store commit: restore the prior
                 // record so the unchanged config file still authenticates, and
-                // leave live connections untouched. A rollback-persist failure
-                // would leave the rotated hash published without a usable
-                // credential, so surface it rather than swallowing it.
+                // leave live connections untouched — unless the compensation
+                // itself fails, in which case the effective outcome decides.
+                // A compensation that publishes the restored record leaves
+                // the old binding effective, so the original failure is
+                // reported without tearing anything down; a compensation that
+                // fails before its own publication leaves the rotated hash
+                // effective with no usable credential, so fail closed exactly
+                // as the store-persist double fault does.
                 store.remove_by_principal_id(principal_id.as_str());
                 store.insert(existing);
                 if let Err(rollback) = store.persist() {
+                    if is_durability_uncertain(&rollback) {
+                        return Err(error);
+                    }
+                    // The failed publish already discarded its staged
+                    // material, so there is nothing to complete: the rotated
+                    // hash stands effective with no usable credential.
+                    let (revoked_connections, notified_hosts) =
+                        revoke_superseded_credential(
+                            delivery,
+                            principal_id.as_str(),
+                            requester_principal_id,
+                        );
+                    emit_inscription(
+                        "relay.identity.psk_rotate_failed",
+                        &serde_json::json!({
+                            "principal_id": principal_id,
+                            "revoked_connections": revoked_connections,
+                            "notified_hosts": notified_hosts,
+                        }),
+                    );
                     return Err(credential_rollback_failed(error, rollback));
                 }
                 return Err(error);

@@ -10,6 +10,8 @@ mod choices;
 mod discovery;
 mod dispatch;
 mod identity;
+#[cfg(test)]
+mod identity_rollback_tests;
 mod install;
 mod listing;
 mod look;
