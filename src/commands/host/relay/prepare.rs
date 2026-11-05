@@ -604,9 +604,13 @@ directory = "/tmp"
     }
 
     #[test]
-    fn foreign_held_domain_refuses_host_preparation() {
+    fn host_domain_claim_decisions_route_preparation() {
+        // Phase 1 — a foreign-held root: refusal before any hosting, the
+        // serving constructor refuses the same root, and preparing again
+        // still refuses. The hold is a raw flock on a separate open
+        // description, the way another process would hold it.
         let temporary = TempDir::new().expect("temporary");
-        let (roots, _configuration_root, state_root) = test_roots(&temporary);
+        let (roots, configuration_root, state_root) = test_roots(&temporary);
 
         // Hold the domain claim the way another process would: an open file
         // description with an exclusive, non-blocking flock, kept alive
@@ -686,16 +690,11 @@ directory = "/tmp"
             "refused preparation must not host bundles"
         );
         drop(lock_file);
-    }
 
-    #[test]
-    fn adopted_domain_receives_startup_registrations() {
-        let temporary = TempDir::new().expect("temporary");
-        let (roots, configuration_root, state_root) = test_roots(&temporary);
-
-        // A same-process runtime owns the root: preparation adopts its
-        // delivery state instead of refusing, and startup registrations
-        // land in the owner's domain rather than a discarded fresh one.
+        // Phase 2 — the same root owned by a same-process runtime:
+        // preparation adopts its delivery state instead of refusing, and
+        // startup registrations land in the owner's domain rather than a
+        // discarded fresh one.
         let runtime = crate::relay::RelayRuntime::init(
             configuration_root,
             state_root,
