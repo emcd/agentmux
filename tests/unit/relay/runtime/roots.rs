@@ -542,6 +542,50 @@ fn shared_delivery_must_not_release_an_earlier_root_claim() {
     );
 }
 
+/// A claim I/O failure must not yield a usable serving context either: an
+/// occupied claim path (here a directory where the lock file belongs) makes
+/// the domain claim fail before any ownership exists, and construction
+/// reports the failure instead of serving unowned.
+#[test]
+fn claim_io_failure_must_not_return_a_usable_context() {
+    let temporary = TempDir::new().expect("temporary");
+    let configuration_root = temporary.path().join("conf");
+    let state_root = temporary.path().join("state");
+    std::fs::create_dir_all(&configuration_root).expect("create config root");
+    std::fs::create_dir_all(state_root.join("identity").join(".domain.lock"))
+        .expect("directory at lock path");
+
+    let delivery =
+        Arc::new(DeliveryContext::new(DeliveryConfiguration::default()));
+    let failed = match ConnectionServeContext::new(
+        agentmux::configuration::ConfigurationRoots::single(
+            &configuration_root,
+        ),
+        state_root.clone(),
+        BundleCatalog::from_paths([BundleRuntimePaths::resolve(
+            &state_root,
+            "party",
+        )
+        .expect("bundle paths")]),
+        Arc::new(PeerConnectionManager::from_configuration(&state_root, &[])),
+        Vec::new(),
+        false,
+        Duration::from_secs(2),
+        delivery,
+    ) {
+        Ok(_) => panic!("an unclaimable root must not yield a context"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        failed.code, "internal_unexpected_failure",
+        "claim I/O failures propagate rather than serving unowned: {failed:?}"
+    );
+    assert_ne!(
+        failed.code, "validation_runtime_already_hosted",
+        "an I/O failure is not an ownership refusal"
+    );
+}
+
 /// A runtime that never configured session credentials leaves them
 /// unenforced by default.
 #[test]
