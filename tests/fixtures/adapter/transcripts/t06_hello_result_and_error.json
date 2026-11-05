@@ -1,0 +1,21 @@
+{
+  "requirement": "Newline-delimited JSON-RPC 2.0 framing with contract method mapping",
+  "capability": "adapter-wire-schema",
+  "limit": null,
+  "description": "A hello result carrying both result and error is malformed: the adapter refuses the binding with termination, emitting no operation traffic. The pipe must close.",
+  "adapter_script": "no-op.toml",
+  "spawn": {"args": [], "env": {}},
+  "bind": {
+    "expect_hello_subset": {
+      "adapter_profile": "generic",
+      "target_session": "alpha",
+      "protocol_major": 1,
+      "protocol_minor": 0
+    },
+    "hello_result": {},
+    "hello_result_raw": "{\"jsonrpc\": \"2.0\", \"id\": \"$hello_id\", \"result\": {\"runtime_instance\": \"test-instance-1\"}, \"error\": {\"code\": -32000, \"data\": {\"code\": \"x\", \"reason\": \"y\"}}}"
+  },
+  "frames": [
+    {"expect_eof": true}
+  ]
+}

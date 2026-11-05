@@ -1,0 +1,44 @@
+{
+  "requirement": "Per-message payload definitions",
+  "capability": "adapter-wire-schema",
+  "limit": null,
+  "description": "A choice result with an extra outcome key violates the exactly-one-key rule: no reply-to-reply, no second disposition. A later look proves the pipe is unwedged.",
+  "adapter_script": "choice-raise-then-complete.toml",
+  "spawn": {"args": [], "env": {}},
+  "bind": {
+    "expect_hello_subset": {
+      "adapter_profile": "generic",
+      "target_session": "alpha",
+      "protocol_major": 1,
+      "protocol_minor": 0
+    },
+    "hello_result": {
+      "runtime_instance": "test-instance-1",
+      "adapter_generation": 7,
+      "selected_major": 1,
+      "selected_minor": 0,
+      "negotiated_limits": {
+        "max_frame_bytes": 1048576,
+        "queue_tx_bytes": 16777216,
+        "queue_rx_bytes": 16777216,
+        "max_control_pending": 32,
+        "max_events_per_second": 100,
+        "window_seconds": 1,
+        "max_submits_in_flight": 64,
+        "max_choices_in_flight": 16,
+        "max_looks_in_flight": 8,
+        "drain_wait_ms": 250
+      },
+      "snapshot_b64": ""
+    },
+    "hello_result_raw": null
+  },
+  "frames": [
+    {"send": {"jsonrpc": "2.0", "id": "10", "method": "adapter.submit", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "alpha", "adapter_generation": 7, "correlation_id": "c-extra", "members": [{"message_id": "m-1", "target_session": "alpha", "adapter_generation": 7, "content_type": "text", "payload_b64": "aGVsbG8="}]}}},
+    {"expect": {"jsonrpc": "2.0", "method": "adapter.requestChoice", "params": {"target_session": "alpha"}}, "capture_id_as": "c1", "capture_correlation_as": "cc1"},
+    {"send": {"jsonrpc": "2.0", "id": "$c1", "result": {"correlation_id": "$cc1", "outcome": {"chosen": {"option_id": "a", "decided_by": "d"}, "abstained": {}}}}},
+    {"expect_quiet_ms": 300},
+    {"send": {"jsonrpc": "2.0", "id": "11", "method": "relay.look", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "look_handle_id": "h-probe", "adapter_generation": 7, "correlation_id": "c-probe", "lines": 10}}},
+    {"expect": {"jsonrpc": "2.0", "id": "11", "result": {"correlation_id": "c-probe", "stale": true, "snapshot_source": "synthetic"}}}
+  ]
+}

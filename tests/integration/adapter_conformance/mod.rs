@@ -2,13 +2,16 @@
 //! wire contract, driven through the harness-side supervisor double.
 //!
 //! Layout: `harness` plays supervisor over the reference adapter's stdio
-//! pipe; round-trip equivalence drafts live in `round_trip_drafts.md` until
-//! the canonical operations land; fixture-dependent checks (citation lint,
-//! protocol-fixture presence) land with the first fixtures. Every case
-//! asserts adapted-is-direct; no MCP request/response shape appears in any
-//! case.
+//! pipe; `replay` runs contract-derived transcript fixtures from
+//! `tests/fixtures/adapter/transcripts/` through the harness and asserts
+//! the adapter's frames; round-trip equivalence drafts live in
+//! `round_trip_drafts.md` until the canonical operations land. The
+//! citation lint lives with the replay driver and runs with the fixtures.
+//! Every case asserts adapted-is-direct; no MCP request/response shape
+//! appears in any case.
 
 mod harness;
+mod replay;
 
 /// One wire-to-operation equivalence case: the wire payload traces to a
 /// canonical operation input/output pair.

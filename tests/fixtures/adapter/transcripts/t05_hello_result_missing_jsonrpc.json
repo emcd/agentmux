@@ -1,0 +1,21 @@
+{
+  "requirement": "Newline-delimited JSON-RPC 2.0 framing with contract method mapping",
+  "capability": "adapter-wire-schema",
+  "limit": null,
+  "description": "A hello result missing its jsonrpc member is not a well-formed frame: the adapter refuses the binding with termination, emitting no operation traffic. The pipe must close.",
+  "adapter_script": "no-op.toml",
+  "spawn": {"args": [], "env": {}},
+  "bind": {
+    "expect_hello_subset": {
+      "adapter_profile": "generic",
+      "target_session": "alpha",
+      "protocol_major": 1,
+      "protocol_minor": 0
+    },
+    "hello_result": {},
+    "hello_result_raw": "{\"id\": \"$hello_id\", \"result\": {\"runtime_instance\": \"test-instance-1\", \"adapter_generation\": 7, \"selected_major\": 1, \"selected_minor\": 0, \"negotiated_limits\": {\"max_frame_bytes\": 1048576, \"queue_tx_bytes\": 16777216, \"queue_rx_bytes\": 16777216, \"max_control_pending\": 32, \"max_events_per_second\": 100, \"window_seconds\": 1, \"max_submits_in_flight\": 64, \"max_choices_in_flight\": 16, \"max_looks_in_flight\": 8, \"drain_wait_ms\": 250}, \"snapshot_b64\": \"\"}}"
+  },
+  "frames": [
+    {"expect_eof": true}
+  ]
+}

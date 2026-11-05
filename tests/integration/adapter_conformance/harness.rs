@@ -34,6 +34,7 @@ pub(crate) enum ReadOutcome {
     Frame(Value),
     Timeout,
     Unparseable(String),
+    Closed,
 }
 
 /// Originator-monotonic wire ids, decimal strings from 1, never reused.
@@ -62,7 +63,7 @@ pub(crate) struct HelloCall {
 /// Supervisor side of one adapter process pipe.
 pub(crate) struct SupervisorDouble {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     lines: mpsc::Receiver<String>,
     transcript: Vec<TranscriptLine>,
     ids: WireIds,
@@ -98,8 +99,18 @@ impl SupervisorDouble {
         program: &str,
         arguments: &[&str],
     ) -> std::io::Result<Self> {
+        Self::spawn_with_env(program, arguments, &[])
+    }
+
+    /// Spawns `program` with piped stdio and extra environment variables.
+    pub(crate) fn spawn_with_env(
+        program: &str,
+        arguments: &[&str],
+        environment: &[(&str, &str)],
+    ) -> std::io::Result<Self> {
         let mut child = Command::new(program)
             .args(arguments)
+            .envs(environment.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -108,32 +119,55 @@ impl SupervisorDouble {
         let stdout = child.stdout.take().expect("piped adapter stdout");
         Ok(Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             lines: spawn_line_forwarder(stdout),
             transcript: Vec::new(),
             ids: WireIds::fresh(),
         })
     }
 
+    fn stdin(&mut self) -> &mut ChildStdin {
+        self.stdin.as_mut().expect("adapter stdin still open")
+    }
+
     /// Sends one frame and records it on the transcript.
     pub(crate) fn send_frame(&mut self, frame: &Value) {
         let raw = serde_json::to_string(frame).expect("encode frame");
-        writeln!(self.stdin, "{raw}").expect("write frame");
-        self.stdin.flush().expect("flush frame");
+        self.send_raw(&raw);
+    }
+
+    /// Sends one raw line and records it on the transcript. Malformed
+    /// input goes through here; well-formed frames use `send_frame`.
+    pub(crate) fn send_raw(&mut self, raw: &str) {
+        writeln!(self.stdin(), "{raw}").expect("write frame");
+        self.stdin().flush().expect("flush frame");
         self.transcript.push(TranscriptLine {
             direction: Direction::ToAdapter,
-            raw,
+            raw: raw.to_string(),
         });
     }
 
+    /// Closes the write end, delivering EOF without tearing the pipe down.
+    /// Reads continue until the child exits or the test disconnects.
+    pub(crate) fn close_stdin(&mut self) {
+        self.stdin = None;
+    }
+
     /// Reads one frame within `deadline`, recording it on the transcript.
+    /// A closed pipe reads as `Closed`, never as a timeout, so tests can
+    /// distinguish a quiet child from a dead one.
     pub(crate) fn read_frame_deadline(
         &mut self,
         deadline: Duration,
     ) -> ReadOutcome {
         let raw = match self.lines.recv_timeout(deadline) {
             Ok(line) => line,
-            Err(_) => return ReadOutcome::Timeout,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return ReadOutcome::Timeout;
+            },
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                return ReadOutcome::Closed;
+            },
         };
         let line = raw.trim_end().to_string();
         let outcome = match serde_json::from_str(&line) {
@@ -219,6 +253,41 @@ impl SupervisorDouble {
         }));
     }
 
+    /// Answers an open adapter-originated call with an error payload.
+    pub(crate) fn fail(&mut self, wire_id: &str, error: Value) {
+        self.send_frame(&json!({
+            "jsonrpc": "2.0",
+            "id": wire_id,
+            "error": error,
+        }));
+    }
+
+    /// Asserts no frame arrives within `duration`. A closed pipe fails
+    /// the assertion: silence means a live but quiet child, not a dead
+    /// one.
+    pub(crate) fn expect_quiet(
+        &mut self,
+        duration: Duration,
+    ) -> Result<(), String> {
+        match self.read_frame_deadline(duration) {
+            ReadOutcome::Timeout => Ok(()),
+            ReadOutcome::Frame(frame) => {
+                Err(format!("expected quiet, got frame {frame}"))
+            },
+            ReadOutcome::Unparseable(raw) => {
+                Err(format!("expected quiet, got unparseable {raw:?}"))
+            },
+            ReadOutcome::Closed => {
+                Err("expected quiet, pipe closed".to_string())
+            },
+        }
+    }
+
+    /// Reports whether the pipe closes within `deadline`.
+    pub(crate) fn expect_eof(&mut self, deadline: Duration) -> bool {
+        matches!(self.read_frame_deadline(deadline), ReadOutcome::Closed)
+    }
+
     /// A well-formed hello result assigning a fresh binding triple.
     pub(crate) fn hello_result(
         runtime_instance: &str,
@@ -255,7 +324,7 @@ impl SupervisorDouble {
         mut self,
         grace: Duration,
     ) -> Vec<TranscriptLine> {
-        drop(self.stdin);
+        self.stdin = None;
         let deadline = Instant::now() + grace;
         loop {
             match self.child.try_wait() {
@@ -415,6 +484,19 @@ mod tests {
         let transcript = double.disconnect();
         assert_eq!(transcript.len(), 1);
         assert!(transcript[0].raw.contains("\"outcome\""));
+    }
+
+    #[test]
+    fn fail_sends_error_frame_for_captured_id() {
+        let mut double =
+            SupervisorDouble::spawn("sh", &["-c", "read -r line"])
+                .expect("spawn reader stub");
+        double
+            .fail("9", json!({"code": -32600, "message": "Invalid Request"}));
+        let transcript = double.disconnect();
+        assert_eq!(transcript.len(), 1);
+        assert!(transcript[0].raw.contains("\"error\""));
+        assert!(transcript[0].raw.contains("\"id\":\"9\""));
     }
 
     #[test]
