@@ -622,6 +622,57 @@ directory = "/tmp"
             !roots.state_root.join("bundles").exists(),
             "refused preparation must not host bundles"
         );
+        // Fallback serve contexts on the same held root change nothing: the
+        // constructor cannot claim a foreign-held root, so no local entry
+        // exists to adopt, and preparing again must still refuse rather
+        // than adopt a fallback that never held the root.
+        let foreign = std::sync::Arc::new(crate::relay::DeliveryContext::new(
+            crate::relay::DeliveryConfiguration::default(),
+        ));
+        let _first = crate::relay::ConnectionServeContext::new(
+            roots.configuration_roots.clone(),
+            roots.state_root.clone(),
+            crate::relay::BundleCatalog::from_paths([]),
+            std::sync::Arc::new(
+                crate::relay::PeerConnectionManager::from_configuration(
+                    &roots.state_root,
+                    &[],
+                ),
+            ),
+            Vec::new(),
+            false,
+            std::time::Duration::from_secs(2),
+            std::sync::Arc::clone(&foreign),
+        );
+        let _second = crate::relay::ConnectionServeContext::new(
+            roots.configuration_roots.clone(),
+            roots.state_root.clone(),
+            crate::relay::BundleCatalog::from_paths([]),
+            std::sync::Arc::new(
+                crate::relay::PeerConnectionManager::from_configuration(
+                    &roots.state_root,
+                    &[],
+                ),
+            ),
+            Vec::new(),
+            false,
+            std::time::Duration::from_secs(2),
+            std::sync::Arc::new(crate::relay::DeliveryContext::new(
+                crate::relay::DeliveryConfiguration::default(),
+            )),
+        );
+        match prepare_relay_host(&roots, true, None, None)
+            .expect("prepare runs")
+        {
+            RelayHostPreparation::NoHostedBundles => {},
+            RelayHostPreparation::Serve(_) => {
+                panic!("fallback serve contexts must not lift the refusal")
+            },
+        }
+        assert!(
+            !roots.state_root.join("bundles").exists(),
+            "refused preparation must not host bundles"
+        );
         drop(lock_file);
     }
 }
