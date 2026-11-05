@@ -371,7 +371,45 @@ pub(crate) fn confined_claim_lock(
             "domain claim file is not a regular file",
         )));
     }
+    super::test_hooks::fire_confined_claim_hook(state_root);
+    // Publication-boundary verification, mirroring the commit path: re-walk
+    // the parent from a fresh anchor and compare directory identity, so a
+    // real-directory exchange between the walk and the open fails closed
+    // instead of pinning a detached directory's claim.
+    verify_claim_parent(state_root, &parents, &parent)?;
     Ok(fs::File::from(fd))
+}
+
+/// Re-walks `parents` from a fresh anchor and compares the re-resolved
+/// directory identity against the retained handle: a silently exchanged (or
+/// vanished) ancestor aborts the claim rather than locking a detached
+/// directory's file.
+fn verify_claim_parent(
+    state_root: &Path,
+    parents: &[&Path],
+    held: &OwnedFd,
+) -> Result<(), ConfineError> {
+    let Some(root) = open_confined_root(state_root, false)? else {
+        return Err(ConfineError::io(io::Error::new(
+            io::ErrorKind::NotFound,
+            "confined anchor vanished before claim",
+        )));
+    };
+    let Some(fresh) = walk_confined(root.as_fd(), parents, false)? else {
+        return Err(ConfineError::io(io::Error::new(
+            io::ErrorKind::NotFound,
+            "confined parent vanished before claim",
+        )));
+    };
+    let held_id = fd_identity(held.as_fd())?;
+    let fresh_id = fd_identity(fresh.as_fd())?;
+    if held_id != fresh_id {
+        let component: PathBuf = parents.iter().collect();
+        return Err(ConfineError::Exchanged {
+            component: component.display().to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// A staged confined write awaiting atomic publication.

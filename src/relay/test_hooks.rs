@@ -137,6 +137,70 @@ pub(crate) fn fire_confined_commit_hook() {
     }
 }
 
+/// A one-shot callback a test installs to run inside a domain-claim
+/// acquisition between opening the lock file and verifying the retained
+/// parent — e.g. exchanging the identity directory for a real replacement
+/// — so acquisition-boundary exchange tests are deterministic. Inert unless
+/// armed: unarmed claims cost one mutex probe.
+///
+/// The hook carries the state root it applies to: claims over other roots
+/// (including parallel tests) never fire it, so the exchange lands strictly
+/// inside the armed claim's own walk-to-verify window.
+pub struct ConfinedClaimHook {
+    root: std::path::PathBuf,
+    callback: Box<dyn Fn() + Send + 'static>,
+}
+
+impl ConfinedClaimHook {
+    /// Creates a claim hook running `callback` at the open/verify boundary
+    /// of claims over `root`.
+    pub fn arm_for(
+        root: std::path::PathBuf,
+        callback: impl Fn() + Send + 'static,
+    ) -> Self {
+        Self {
+            root,
+            callback: Box::new(callback),
+        }
+    }
+}
+
+static CONFINED_CLAIM_HOOK: Mutex<Option<ConfinedClaimHook>> =
+    Mutex::new(None);
+
+/// Installs `hook` as the active confined-claim hook, replacing any
+/// previous one. Test-only; call [`disarm_confined_claim_hook`] when done.
+pub fn arm_confined_claim_hook(hook: ConfinedClaimHook) {
+    *CONFINED_CLAIM_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(hook);
+}
+
+/// Removes any installed confined-claim hook.
+pub fn disarm_confined_claim_hook() {
+    *CONFINED_CLAIM_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// Claim-boundary pause point for domain acquisition, called after opening
+/// the lock file and before verifying the retained parent. Runs the armed
+/// hook when it targets `state_root`, if any, then returns. Unarmed calls,
+/// and calls over other roots, return after mutex probes.
+pub(crate) fn fire_confined_claim_hook(state_root: &std::path::Path) {
+    let hook = CONFINED_CLAIM_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(hook) = hook.as_ref() {
+        let applies = hook.root == state_root
+            || std::fs::canonicalize(&hook.root).ok().as_deref()
+                == Some(state_root);
+        if applies {
+            (hook.callback)();
+        }
+    }
+}
+
 /// Fault to inject at an identity-rollback persist, scoped by store root so
 /// a test can drive one call's compensation outcome through socket dispatch
 /// (which runs on the blocking pool, where thread-gated hooks cannot target

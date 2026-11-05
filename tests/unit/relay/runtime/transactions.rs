@@ -7,23 +7,15 @@
 //! seams below (`.fault-pre-rename`, `.fault-dir-sync` beside the store
 //! file) drive both sides of the atomic-rename publication point.
 //!
-//! Coverage limit, stated rather than implied: the barrier tests below gate
+//! Coverage limit, stated rather than implied. The barrier tests below gate
 //! thread *starts* only. They prove that fully serialized transactions
 //! neither lose nor resurrect records; they do not deterministically
-//! interleave the middles of two transactions, because the lock under test
-//! forbids such an interleaving by construction.
-
-//!
-//! Explicit deferral (Tier-2 carry): deterministic seam-level serialization
-//! evidence across the supported mutation paths -- a controlled stale-load,
-//! publication, or compensation interleaving that must block -- is not
-//! provided here. Serialization instead rests on the per-store transaction
-//! mutex held across the complete load-to-persist sequence at every
-//! mutation site: the public provisioning paths in `relay::runtime`, the
-//! socket identity-admin dispatch in `relay`, and the startup prune in
-//! `relay::prune_principal_store`. Cross-process staleness is excluded by
-//! the domain claim: only the domain owner may persist. Mid-transaction
-//! interleaving tests remain deferred pending Tier-2 acceptance.
+//! interleave the middles of two transactions. Serialization rests on the
+//! per-store transaction mutex held across the complete load-to-persist
+//! sequence at every mutation site: the public provisioning paths in
+//! `relay::runtime`, the socket identity-admin dispatch in `relay`, and the
+//! startup prune in `relay::prune_principal_store`. Cross-process staleness
+//! is excluded by the domain claim, which admits only the owner's persists.
 
 use std::sync::{Arc, Barrier};
 

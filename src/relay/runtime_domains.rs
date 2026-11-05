@@ -106,10 +106,12 @@ pub(crate) enum DomainClaim {
 ///
 /// # Errors
 ///
-/// Returns `Adopted` with the live owner's delivery state when another
-/// domain in this process already owns the same store root;
-/// `validation_runtime_already_hosted` when another process holds the
-/// root's claim; and the claim's I/O failures verbatim.
+/// The claim's I/O failures are returned verbatim. A root held by another
+/// process is reported as `Ok(DomainClaim::ForeignHeld)` — not an error at
+/// this layer — so each caller applies its own refusal: the serving
+/// constructor and runtime init map it to
+/// `validation_runtime_already_hosted`, while host preparation takes the
+/// graceful all-skipped exit.
 pub(crate) fn claim_or_adopt(
     state_root: &Path,
     delivery: &Arc<DeliveryContext>,

@@ -735,3 +735,60 @@ fn store_replacement_does_not_break_owner_exclusion() {
         "probing child is refused and exits cleanly"
     );
 }
+
+/// An identity directory exchanged for a real replacement between the
+/// claim walk and acquisition is refused: the verification re-walks from a
+/// fresh anchor and compares directory identity, so a detached directory's
+/// lock can never become the claim.
+#[test]
+fn domain_claim_refuses_exchanged_identity_dir() {
+    use agentmux::relay::test_hooks::{
+        ConfinedClaimHook, arm_confined_claim_hook, disarm_confined_claim_hook,
+    };
+
+    struct DisarmGuard;
+
+    impl Drop for DisarmGuard {
+        fn drop(&mut self) {
+            disarm_confined_claim_hook();
+        }
+    }
+
+    let temporary = TempDir::new().expect("temporary");
+    let configuration_root = temporary.path().join("conf");
+    let state_root = temporary.path().join("state");
+    std::fs::create_dir_all(&configuration_root).expect("create config root");
+    std::fs::create_dir_all(state_root.join("identity"))
+        .expect("create identity dir");
+
+    // Exchange the ancestor inside the acquisition boundary: rename the
+    // walked directory aside and recreate a real one. The hook is scoped to
+    // this root, so parallel claims over other roots never fire it.
+    let hook_root = state_root.clone();
+    arm_confined_claim_hook(ConfinedClaimHook::arm_for(
+        hook_root.clone(),
+        move || {
+            let target = hook_root.join("identity");
+            let backup = hook_root.join("identity.orig");
+            if backup.exists() || !target.exists() || target.is_symlink() {
+                return;
+            }
+            std::fs::rename(&target, &backup).expect("stage exchange");
+            std::fs::create_dir_all(&target).expect("recreate identity");
+        },
+    ));
+    let _guard = DisarmGuard;
+
+    let failed = match RelayRuntime::init(
+        configuration_root,
+        state_root,
+        DeliveryConfiguration::default(),
+    ) {
+        Ok(_) => panic!("an exchanged ancestor must not establish ownership"),
+        Err(error) => error,
+    };
+    assert_eq!(
+        failed.code, "validation_invalid_credential_path",
+        "an exchanged ancestor fails closed: {failed:?}"
+    );
+}
