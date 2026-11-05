@@ -27,6 +27,10 @@ pub(in crate::relay) use dispatch::{
     handle_global_list, handle_identity_admin_request,
     handle_identity_introspect, handle_request,
 };
+pub(in crate::relay) use identity::{
+    build_config_snippet, credential_rollback_failed, is_credential_uncertain,
+    is_durability_uncertain, revoke_superseded_credential,
+};
 pub(in crate::relay) use listing::handle_list_routed;
 pub(in crate::relay) use look::handle_look_routed;
 pub(in crate::relay) use raww::handle_raww_routed;

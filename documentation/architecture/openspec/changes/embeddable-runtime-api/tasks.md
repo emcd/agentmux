@@ -1,6 +1,6 @@
 ## 1. Implementation
 
-- [ ] 1.1 Define public relay runtime/configuration types with explicit
+- [x] 1.1 Define public relay runtime/configuration types with explicit
       configuration root, state root, and Agentmux-owned internal state layout.
       Reject fixed parent-layout assumptions and standalone-only root behavior
       in embedded initialization. Each live handle owns its registry, ledger,
@@ -12,11 +12,11 @@
       operation-bundle parameter; bare-target defaulting follows the
       suffix > parameter > bundle-scoped-home > relay-wide-reject precedence;
       broadcast requires the parameter with no home fallback.
-- [ ] 1.3 Define public principal provisioning and credential APIs over the
+- [x] 1.3 Define public principal provisioning and credential APIs over the
       relay identity store, including host-supplied identity descriptors and
       one-time credential return behavior. Include `direct_psk` support for
       host-held in-memory credential material.
-- [ ] 1.4 Define a public verified principal context type and require public
+- [x] 1.4 Define a public verified principal context type and require public
       handlers to receive that context rather than trusting request payload
       sender fields. The context carries principal-home as an explicit field
       set once at verification time. The type is opaque and non-caller-
@@ -58,9 +58,9 @@
 - [ ] 2.2 Add parity tests proving standalone socket and in-process dispatch
       produce equivalent routing, authorization, response, and attribution
       outcomes for representative operations.
-- [ ] 2.3 Add tests proving caller-supplied identity descriptors cannot be used
+- [x] 2.3 Add tests proving caller-supplied identity descriptors cannot be used
       as verified principal context.
-- [ ] 2.4 Add provisioning tests covering principal creation, one-time raw
+- [x] 2.4 Add provisioning tests covering principal creation, one-time raw
       credential return, metadata persistence, and later authentication with a
       direct in-memory credential source.
 - [ ] 2.5 Add transport adapter tests proving socket/MCP/CLI/stdio paths call the

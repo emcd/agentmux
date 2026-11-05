@@ -40,6 +40,7 @@ use tempfile::TempDir;
 
 use super::*;
 
+mod change_psk_rollback;
 mod concurrency;
 mod credential_confinement;
 mod drop_peer;

@@ -89,7 +89,8 @@ fn spawn_origin_relay(
                             agentmux::relay::DeliveryConfiguration::default(),
                         ),
                     ),
-                );
+                )
+                .expect("serve context claims its domain");
                 serve_connection(
                     stream,
                     &serve_context,

@@ -89,6 +89,24 @@ pub fn process_inscriptions_path() -> Option<&'static Path> {
     PROCESS_INSCRIPTIONS_PATH.get().map(PathBuf::as_path)
 }
 
+/// Process-wide inscriptions path shared by in-crate tests.
+///
+/// The configured path is first-wins per process, so tests that each build a
+/// fresh temporary path would fail configuration depending on run order. Tests
+/// that need the global sink configured share this pid-scoped path instead;
+/// assertions on emitted content scope to their own event names.
+#[cfg(test)]
+pub(crate) fn shared_test_inscriptions_path() -> PathBuf {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let dir = std::env::temp_dir()
+            .join(format!("agentmux-test-inscriptions-{}", process::id()));
+        fs::create_dir_all(&dir).expect("test inscriptions root");
+        dir.join("relay.log")
+    })
+    .clone()
+}
+
 /// Emits one structured inscription line to the configured sink.
 pub fn emit_inscription(event: &str, details: &Value) {
     let Some(path) = PROCESS_INSCRIPTIONS_PATH.get() else {

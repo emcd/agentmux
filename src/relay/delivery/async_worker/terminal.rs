@@ -567,8 +567,11 @@ mod unbound_resolution_tests {
         let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
             Default::default(),
         ));
-        let temporary = tempfile::TempDir::new().expect("temporary");
-        let inscriptions = temporary.path().join("inscriptions.log");
+        // Shared with the other in-crate inscription tests: the configured
+        // path is first-wins per process, so per-test temporary paths would
+        // fail configuration depending on run order.
+        let inscriptions =
+            crate::runtime::inscriptions::shared_test_inscriptions_path();
         let _ = crate::runtime::inscriptions::configure_process_inscriptions(
             &inscriptions,
         );

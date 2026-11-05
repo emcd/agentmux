@@ -98,7 +98,8 @@ pub(crate) fn run_serve_connection_with_peers(
             std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
                 agentmux::relay::DeliveryConfiguration::default(),
             )),
-        );
+        )
+        .expect("serve context claims its domain");
         serve_connection(
             stream,
             &serve_context,

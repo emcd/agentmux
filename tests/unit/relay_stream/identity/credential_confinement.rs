@@ -169,8 +169,10 @@ fn change_psk_config_rejects_symlinked_ancestor_without_rotating() {
     );
 }
 // Store load through a symlinked `identity/` ancestor aborts instead of
-// reading outside the state tree. The relay cannot authenticate without its
-// store, so even Hello fail-closes with the confinement code.
+// reading outside the state tree. The domain claim pins its own lock file
+// first, so the symlink is planted after a successful Hello over the real
+// directory: the next load re-walks the exchanged ancestor and fail-closes
+// with the confinement code, leaving the decoy store untouched.
 #[test]
 fn store_load_rejects_symlinked_identity() {
     let delivery = std::sync::Arc::new(agentmux::relay::DeliveryContext::new(
@@ -183,6 +185,35 @@ fn store_load_rejects_symlinked_identity() {
     let state_root = temporary.path().join("state");
     let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
         .expect("bundle paths");
+    let principal_id = format!("alpha@{bundle_name}");
+    let psk = register_peer(
+        &delivery,
+        &configuration_roots,
+        &bundle_paths,
+        bundle_name,
+        &principal_id,
+        None,
+    );
+
+    // Baseline: the store loads through the real directory.
+    let first = hello_first_frame(
+        &delivery,
+        &configuration_roots,
+        &bundle_paths,
+        &principal_id,
+        &psk,
+        false,
+    );
+    assert_eq!(
+        first["frame"], "hello_ack",
+        "baseline hello must succeed: {first:?}"
+    );
+
+    // Exchange the ancestor after the domain is held: the held claim pins
+    // its own lock inode, so only the load-side traversal observes the
+    // symlink.
+    std::fs::remove_dir_all(state_root.join("identity"))
+        .expect("remove real identity");
     let external = symlink_ancestor(&temporary, &state_root, "identity");
     let decoy = "{\"format_version\": 1, \"principals\": []}";
     std::fs::write(external.join("principals.json"), decoy)

@@ -149,13 +149,23 @@ fn walk_confined(
                         CONFINED_DIR_MODE as libc::mode_t,
                     )
                 };
-                if created != 0 {
+                if created != 0
+                    && io::Error::last_os_error().kind()
+                        != io::ErrorKind::AlreadyExists
+                {
                     return Err(map_open_error(
                         io::Error::last_os_error(),
                         &component.display().to_string(),
                     ));
                 }
-                sync_fd(&current).map_err(ConfineError::io)?;
+                // `AlreadyExists` means a concurrent creator won the race.
+                // Fall through to the reopen below, which refuses a
+                // symlinked or non-directory entry exactly as if the open
+                // had found it in the first place — creation stays
+                // idempotent instead of failing whichever caller lost.
+                if created == 0 {
+                    sync_fd(&current).map_err(ConfineError::io)?;
+                }
                 let reopen_fd = current.as_raw_fd();
                 current = open_at(reopen_fd, &cname, open_dir_flags(), 0)
                     .map_err(|source| {
@@ -317,6 +327,89 @@ pub(crate) fn confined_read(
     io::Read::read_to_end(&mut io::BufReader::new(file), &mut bytes)
         .map_err(ConfineError::io)?;
     Ok(Some(bytes))
+}
+
+/// Opens (creating) the domain-claim lock file through retained-handle,
+/// no-follow traversal, failing closed on a symlinked ancestor or leaf.
+///
+/// The returned file description pins the lock inode: later path exchanges
+/// (including atomic replacement of a symlinked target) cannot redirect
+/// the held claim, and a non-regular leaf is refused rather than flocked.
+pub(crate) fn confined_claim_lock(
+    state_root: &Path,
+    target: &Path,
+) -> Result<fs::File, ConfineError> {
+    let (parents, file_name) = split_confined_relative(target)?;
+    let Some(root) = open_confined_root(state_root, true)? else {
+        return Err(ConfineError::io(io::Error::new(
+            io::ErrorKind::NotFound,
+            "confined root vanished",
+        )));
+    };
+    let Some(parent) = walk_confined(root.as_fd(), &parents, true)? else {
+        return Err(ConfineError::io(io::Error::new(
+            io::ErrorKind::NotFound,
+            "confined parent vanished",
+        )));
+    };
+    let final_name = cname_of(file_name)?;
+    let fd = open_at(
+        parent.as_raw_fd(),
+        &final_name,
+        libc::O_RDWR | libc::O_CREAT | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+        CONFINED_FILE_MODE,
+    )
+    .map_err(|source| map_open_error(source, &target.display().to_string()))?;
+    // A pre-seeded fifo, socket, or directory must never become the claim:
+    // only a regular file pins one inode behind the exclusive flock.
+    let mut status: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd.as_raw_fd(), &mut status) } != 0 {
+        return Err(ConfineError::io(io::Error::last_os_error()));
+    }
+    if status.st_mode as u64 & libc::S_IFMT as u64 != libc::S_IFREG as u64 {
+        return Err(ConfineError::io(io::Error::other(
+            "domain claim file is not a regular file",
+        )));
+    }
+    super::test_hooks::fire_confined_claim_hook(state_root);
+    // Publication-boundary verification, mirroring the commit path: re-walk
+    // the parent from a fresh anchor and compare directory identity, so a
+    // real-directory exchange between the walk and the open fails closed
+    // instead of pinning a detached directory's claim.
+    verify_claim_parent(state_root, &parents, &parent)?;
+    Ok(fs::File::from(fd))
+}
+
+/// Re-walks `parents` from a fresh anchor and compares the re-resolved
+/// directory identity against the retained handle: a silently exchanged (or
+/// vanished) ancestor aborts the claim rather than locking a detached
+/// directory's file.
+fn verify_claim_parent(
+    state_root: &Path,
+    parents: &[&Path],
+    held: &OwnedFd,
+) -> Result<(), ConfineError> {
+    let Some(root) = open_confined_root(state_root, false)? else {
+        return Err(ConfineError::io(io::Error::new(
+            io::ErrorKind::NotFound,
+            "confined anchor vanished before claim",
+        )));
+    };
+    let Some(fresh) = walk_confined(root.as_fd(), parents, false)? else {
+        return Err(ConfineError::io(io::Error::new(
+            io::ErrorKind::NotFound,
+            "confined parent vanished before claim",
+        )));
+    };
+    let held_id = fd_identity(held.as_fd())?;
+    let fresh_id = fd_identity(fresh.as_fd())?;
+    if held_id != fresh_id {
+        let component: PathBuf = parents.iter().collect();
+        return Err(ConfineError::Exchanged {
+            component: component.display().to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// A staged confined write awaiting atomic publication.

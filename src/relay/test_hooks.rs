@@ -136,3 +136,170 @@ pub(crate) fn fire_confined_commit_hook() {
         (hook.callback)();
     }
 }
+
+/// A one-shot callback a test installs to run inside a domain-claim
+/// acquisition between opening the lock file and verifying the retained
+/// parent — e.g. exchanging the identity directory for a real replacement
+/// — so acquisition-boundary exchange tests are deterministic. Inert unless
+/// armed: unarmed claims cost one mutex probe.
+///
+/// The hook carries the state root it applies to: claims over other roots
+/// (including parallel tests) never fire it, so the exchange lands strictly
+/// inside the armed claim's own walk-to-verify window.
+pub struct ConfinedClaimHook {
+    root: std::path::PathBuf,
+    callback: Box<dyn Fn() + Send + 'static>,
+}
+
+impl ConfinedClaimHook {
+    /// Creates a claim hook running `callback` at the open/verify boundary
+    /// of claims over `root`.
+    pub fn arm_for(
+        root: std::path::PathBuf,
+        callback: impl Fn() + Send + 'static,
+    ) -> Self {
+        Self {
+            root,
+            callback: Box::new(callback),
+        }
+    }
+}
+
+static CONFINED_CLAIM_HOOK: Mutex<Option<ConfinedClaimHook>> =
+    Mutex::new(None);
+
+/// Installs `hook` as the active confined-claim hook, replacing any
+/// previous one. Test-only; call [`disarm_confined_claim_hook`] when done.
+pub fn arm_confined_claim_hook(hook: ConfinedClaimHook) {
+    *CONFINED_CLAIM_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(hook);
+}
+
+/// Removes any installed confined-claim hook.
+pub fn disarm_confined_claim_hook() {
+    *CONFINED_CLAIM_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// Claim-boundary pause point for domain acquisition, called after opening
+/// the lock file and before verifying the retained parent. Runs the armed
+/// hook when it targets `state_root`, if any, then returns. Unarmed calls,
+/// and calls over other roots, return after mutex probes.
+pub(crate) fn fire_confined_claim_hook(state_root: &std::path::Path) {
+    let hook = CONFINED_CLAIM_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(hook) = hook.as_ref() {
+        let applies = hook.root == state_root
+            || std::fs::canonicalize(&hook.root).ok().as_deref()
+                == Some(state_root);
+        if applies {
+            (hook.callback)();
+        }
+    }
+}
+
+/// Fault to inject at an identity-rollback persist, scoped by store root so
+/// a test can drive one call's compensation outcome through socket dispatch
+/// (which runs on the blocking pool, where thread-gated hooks cannot target
+/// a single call). One-shot: taking the fault disarms it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IdentityRollbackFault {
+    /// Fail the compensation before its own publication: the compensated
+    /// state never lands.
+    PrePublicationFailure,
+    /// Publish the compensation for real, then report post-rename durability
+    /// uncertainty instead of success.
+    PostPublicationUncertain,
+}
+
+static IDENTITY_ROLLBACK_FAULTS: std::sync::OnceLock<
+    Mutex<
+        std::collections::HashMap<std::path::PathBuf, IdentityRollbackFault>,
+    >,
+> = std::sync::OnceLock::new();
+
+/// Locks the rollback-fault registry, initializing it on first use.
+fn identity_rollback_faults() -> &'static Mutex<
+    std::collections::HashMap<std::path::PathBuf, IdentityRollbackFault>,
+> {
+    IDENTITY_ROLLBACK_FAULTS
+        .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Arms a one-shot rollback fault for the store under `state_root`.
+/// Test-only; the fault is consumed by the next rollback persist for that
+/// root, or remove it with [`disarm_identity_rollback_fault`].
+pub fn arm_identity_rollback_fault(
+    state_root: &std::path::Path,
+    fault: IdentityRollbackFault,
+) {
+    let key = std::fs::canonicalize(state_root)
+        .unwrap_or_else(|_| state_root.to_path_buf());
+    identity_rollback_faults()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(key, fault);
+}
+
+/// Removes any armed rollback fault for the store under `state_root`.
+pub fn disarm_identity_rollback_fault(state_root: &std::path::Path) {
+    let key = std::fs::canonicalize(state_root)
+        .unwrap_or_else(|_| state_root.to_path_buf());
+    identity_rollback_faults()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&key);
+}
+
+/// Takes the armed rollback fault for the store under `state_root`, if any.
+/// Called at the compensation persist site; unarmed calls cost one mutex
+/// probe and return `None`.
+pub(crate) fn take_identity_rollback_fault(
+    state_root: &std::path::Path,
+) -> Option<IdentityRollbackFault> {
+    let key = std::fs::canonicalize(state_root)
+        .unwrap_or_else(|_| state_root.to_path_buf());
+    identity_rollback_faults()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&key)
+}
+
+/// Runs `persist` for an identity-store compensation, overridden by an armed
+/// rollback fault: a pre-publication fault skips the persist and reports a
+/// synthetic pre-rename failure, while a post-publication fault persists
+/// for real and then reports durability uncertainty instead of success. With
+/// no fault armed this is exactly `persist()`: one mutex probe.
+pub(crate) fn fault_aware_rollback_persist(
+    state_root: &std::path::Path,
+    principal_id: &str,
+    persist: impl FnOnce() -> Result<(), super::RelayError>,
+) -> Result<(), super::RelayError> {
+    match take_identity_rollback_fault(state_root) {
+        Some(IdentityRollbackFault::PrePublicationFailure) => {
+            Err(super::relay_error(
+                "internal_principal_store",
+                "injected fault: identity rollback persist failed before publication",
+                Some(serde_json::json!({
+                    "principal_id": principal_id,
+                })),
+            ))
+        },
+        Some(IdentityRollbackFault::PostPublicationUncertain) => {
+            match persist() {
+                Ok(()) => Err(super::relay_error(
+                    "internal_store_durability_uncertain",
+                    "injected fault: identity rollback durability uncertain after publication",
+                    Some(serde_json::json!({
+                        "principal_id": principal_id,
+                    })),
+                )),
+                Err(real) => Err(real),
+            }
+        },
+        None => persist(),
+    }
+}

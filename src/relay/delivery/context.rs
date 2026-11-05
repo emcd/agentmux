@@ -67,6 +67,13 @@ pub struct DeliveryContext {
     async_registry: AsyncDeliveryRegistry,
     drain_coordinator: Arc<ConnectionDrainCoordinator>,
     shutdown_gate: InstanceShutdownGate,
+    /// Exclusive store-root domain claim held for the delivery state's
+    /// lifetime: whoever holds an `Arc` of this state — live streams, serve
+    /// contexts, the embedding handle — keeps the cross-process claim alive
+    /// with it, so a second process (or a second runtime in this process)
+    /// cannot own the same store while this domain is still effect-capable.
+    /// Released automatically when the last holder drops.
+    domain_lock: std::sync::Mutex<Option<std::fs::File>>,
 }
 
 impl DeliveryContext {
@@ -81,12 +88,13 @@ impl DeliveryContext {
             async_registry: AsyncDeliveryRegistry::default(),
             drain_coordinator: ConnectionDrainCoordinator::new(),
             shutdown_gate: InstanceShutdownGate::default(),
+            domain_lock: std::sync::Mutex::new(None),
         }
     }
 
     /// The handle's resolved `[delivery]` table.
     #[must_use]
-    pub(crate) fn delivery_configuration(&self) -> DeliveryConfiguration {
+    pub fn delivery_configuration(&self) -> DeliveryConfiguration {
         self.configuration
     }
 }
@@ -132,6 +140,28 @@ impl DeliveryContext {
     #[must_use]
     pub(crate) fn shutdown_gate(&self) -> &InstanceShutdownGate {
         &self.shutdown_gate
+    }
+
+    /// Installs the exclusive store-root domain claim held for this delivery
+    /// state's lifetime. One delivery state owns one store root: a second
+    /// claim is refused so adopting a new root can never silently release
+    /// the earlier root's lock file while its streams and registry entry
+    /// are still live. Returns false without installing anything when this
+    /// state already holds a claim.
+    pub(in crate::relay) fn install_domain_lock(
+        &self,
+        lock: std::fs::File,
+    ) -> bool {
+        let mut slot = self
+            .domain_lock
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if slot.is_some() {
+            drop(lock);
+            return false;
+        }
+        *slot = Some(lock);
+        true
     }
 
     /// Reports whether controlled shutdown was signalled for the handle.
