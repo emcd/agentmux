@@ -860,6 +860,37 @@ species = "confirm"
     assert!(codes.contains(&"submission_unknown"), "sink: {codes:?}");
 }
 
+/// A post-hello frame carrying the wrong protocol version is
+/// refused: the transition installs the selected version as the
+/// operative binding, not merely stored alongside the bootstrap.
+#[test]
+fn wrong_version_post_hello_is_refused() {
+    let config = test_config(SCRIPT);
+    let mut bad = submit_request("10", "c-1");
+    bad["params"]["protocol_minor"] = json!(9);
+    let terminate = json!({
+        "jsonrpc": "2.0",
+        "method": "relay.supervisionSignal",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "signal": "terminate",
+        },
+    });
+    let input = transcript(&[hello_result(), bad, terminate]);
+    let (code, output, _) = run_transcript(&config, &input);
+    assert_eq!(code, EXIT_CLEAN);
+    let frames = split_frames(&output);
+    // hello, scripted ready event, then the version refusal.
+    assert_eq!(frames.len(), 3, "unexpected frames: {frames:?}");
+    assert_eq!(frames[2]["error"]["code"], -32000);
+    assert_eq!(frames[2]["error"]["data"]["code"], "binding_mismatch");
+    assert_eq!(frames[2]["error"]["data"]["correlation_id"], "c-1");
+}
+
 /// The bootstrap ceiling is the 64KiB pre-negotiation bound.
 #[test]
 fn bootstrap_bound_is_64kib() {
