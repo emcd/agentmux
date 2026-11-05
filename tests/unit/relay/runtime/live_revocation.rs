@@ -82,7 +82,9 @@ directory = "/tmp"
 
 /// Serves one stream connection against the given delivery state. Reads/writes
 /// happen on the returned client; the server half runs on a background thread
-/// until the test's TempDir (and runtime) is dropped.
+/// until the test's TempDir (and runtime) is dropped. Serve construction
+/// over a hosted root adopts the owning delivery state, so passing a foreign
+/// state exercises the adoption path, not a second domain.
 fn serve_with(
     delivery: &Arc<agentmux::relay::DeliveryContext>,
     configuration_roots: &agentmux::configuration::ConfigurationRoots,
@@ -620,9 +622,10 @@ fn request_admin(
 }
 
 /// A drop issued over a socket served on a foreign delivery state still tears
-/// down the owning runtime's live sessions: the identity-admin dispatch
-/// routes revocation through the owning domain, not the serving connection's
-/// own delivery state.
+/// down the owning runtime's live sessions: serve construction over a hosted
+/// root adopts the owning domain's delivery state, so the admin connection,
+/// the victim, and the watching host all register in the one domain and the
+/// revocation lands where they live.
 #[test]
 fn socket_admin_routes_through_the_owning_runtime_domain() {
     let (temporary, runtime) = test_runtime();
@@ -650,9 +653,10 @@ fn socket_admin_routes_through_the_owning_runtime_domain() {
     let mut victim_reader =
         hello(&mut victim_client, "victim@party", &victim_psk);
 
-    // Same roots, but a fresh delivery state that owns no sessions: without
-    // owning-domain routing, the admin revocation below would land here and
-    // leave the victim untouched.
+    // Same roots, but a fresh delivery state: serve construction over the
+    // hosted root adopts the owning domain, so the admin connection
+    // registers where the victim lives. Without adoption the revocation
+    // below would land in a foreign registry and leave the victim untouched.
     let foreign_delivery =
         Arc::new(DeliveryContext::new(DeliveryConfiguration::default()));
     let (mut operator_client, operator_handle) =
