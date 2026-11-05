@@ -298,14 +298,20 @@ fn dropped_runtime_with_live_users_retains_ownership() {
         DeliveryConfiguration::default(),
     )
     .expect("first runtime init");
-    let context = serve_context_over(
-        &configuration_root,
-        &state_root,
-        runtime.delivery_context(),
-    );
+    // A foreign delivery state is set aside: the context adopts the owning
+    // one, so dropping the runtime afterwards still leaves the domain
+    // referenced through the context.
+    let foreign =
+        Arc::new(DeliveryContext::new(DeliveryConfiguration::default()));
+    let context =
+        serve_context_over(&configuration_root, &state_root, &foreign);
     assert!(
         Arc::ptr_eq(context.delivery_context(), runtime.delivery_context()),
         "a context over a hosted root adopts the owning delivery state"
+    );
+    assert!(
+        !Arc::ptr_eq(context.delivery_context(), &foreign),
+        "the passed foreign delivery must not survive adoption"
     );
     drop(runtime);
     let failed = match RelayRuntime::init(
@@ -321,6 +327,53 @@ fn dropped_runtime_with_live_users_retains_ownership() {
         "a live domain retains its root past the handle's drop: {failed:?}"
     );
     drop(context);
+    RelayRuntime::init(
+        configuration_root,
+        state_root,
+        DeliveryConfiguration::default(),
+    )
+    .expect("a fully released root hosts a new runtime");
+}
+
+/// Concurrent first constructions converge on one domain: every context
+/// shares the winner's delivery state rather than each keeping its own.
+#[test]
+fn concurrent_first_constructions_share_one_domain() {
+    let temporary = TempDir::new().expect("temporary");
+    let configuration_root = temporary.path().join("conf");
+    let state_root = temporary.path().join("state");
+    std::fs::create_dir_all(&configuration_root).expect("create config root");
+
+    let barrier = Arc::new(std::sync::Barrier::new(4));
+    let contexts = std::thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(4);
+        for _ in 0..4 {
+            let barrier = Arc::clone(&barrier);
+            let (configuration_root, state_root) =
+                (configuration_root.clone(), state_root.clone());
+            handles.push(scope.spawn(move || {
+                barrier.wait();
+                let foreign = Arc::new(DeliveryContext::new(
+                    DeliveryConfiguration::default(),
+                ));
+                serve_context_over(&configuration_root, &state_root, &foreign)
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("serve construction"))
+            .collect::<Vec<_>>()
+    });
+    {
+        let first = contexts[0].delivery_context().clone();
+        for context in &contexts[1..] {
+            assert!(
+                Arc::ptr_eq(context.delivery_context(), &first),
+                "concurrent constructions must converge on one domain"
+            );
+        }
+    }
+    drop(contexts);
     RelayRuntime::init(
         configuration_root,
         state_root,
@@ -380,8 +433,8 @@ fn cross_process_second_init_is_refused() {
         std::thread::sleep(Duration::from_millis(10));
     }
     let failed = match RelayRuntime::init(
-        configuration_root,
-        state_root,
+        configuration_root.clone(),
+        state_root.clone(),
         DeliveryConfiguration::default(),
     ) {
         Ok(_) => panic!("init over a foreign-held root must fail"),
@@ -391,6 +444,29 @@ fn cross_process_second_init_is_refused() {
         failed.code, "validation_runtime_already_hosted",
         "cross-process ownership is refused: {failed:?}"
     );
+
+    // Serve construction on the foreign-held root has no local owner to
+    // adopt, so each context falls back — but through the shared registry
+    // slot, concurrent local constructions still converge on one delivery
+    // state instead of each serving independently.
+    let (context_a, context_b) = {
+        let foreign_a =
+            Arc::new(DeliveryContext::new(DeliveryConfiguration::default()));
+        let foreign_b =
+            Arc::new(DeliveryContext::new(DeliveryConfiguration::default()));
+        (
+            serve_context_over(&configuration_root, &state_root, &foreign_a),
+            serve_context_over(&configuration_root, &state_root, &foreign_b),
+        )
+    };
+    assert!(
+        Arc::ptr_eq(
+            context_b.delivery_context(),
+            context_a.delivery_context()
+        ),
+        "local constructions converge even on a foreign-held root"
+    );
+    drop((context_a, context_b));
     drop(child.stdin.take());
     let status = child.wait().expect("reap holding child");
     assert!(status.success(), "holding child exits cleanly");
