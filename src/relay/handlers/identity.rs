@@ -27,6 +27,7 @@ use crate::relay::stream::{
     RelayStreamEvent, notify_trusted_hosts_of_revocation,
     revoke_streams_for_identity,
 };
+use crate::relay::test_hooks::fault_aware_rollback_persist;
 use crate::relay::{
     CredentialDestination, RelayDiagnostic, RelayError, RelayResponse,
     SCHEMA_VERSION, relay_error,
@@ -286,7 +287,14 @@ pub(in crate::relay) fn handle_change_psk(
         // effective outcome is known.
         store.remove_by_principal_id(principal_id.as_str());
         store.insert(existing.clone());
-        match store.persist() {
+        // Test seam: a root-scoped one-shot fault can override the
+        // compensation persist outcome without touching this branch.
+        let rollback = fault_aware_rollback_persist(
+            state_root,
+            principal_id.as_str(),
+            || store.persist(),
+        );
+        match rollback {
             Ok(()) => {
                 // Prior record restored deterministically: the old credential
                 // is effective again, so revocation stays skipped.
@@ -314,7 +322,10 @@ pub(in crate::relay) fn handle_change_psk(
                 // fault. A Response-destination PSK cannot be delivered
                 // alongside an error and is lost here; the operator
                 // reconciles by rotating again, which always applies cleanly
-                // to the existing record.
+                // to the existing record. Every error return carries no new
+                // credential, so unlike the success path there is no
+                // requester to preserve: a self-rotating session is revoked
+                // with the rest.
                 match pending {
                     None => {},
                     Some(pending) => {
@@ -325,7 +336,7 @@ pub(in crate::relay) fn handle_change_psk(
                     revoke_superseded_credential(
                         delivery,
                         principal_id.as_str(),
-                        requester_principal_id,
+                        "",
                     );
                 emit_inscription(
                     "relay.identity.psk_rotate_failed",
@@ -350,11 +361,13 @@ pub(in crate::relay) fn handle_change_psk(
                 // authenticating nothing while the old hash returns. Tear
                 // down sessions holding the superseded credential exactly as
                 // the success path does, then report the typed uncertainty.
+                // Like every error return this carries no new credential, so
+                // the success path's requester preservation does not apply.
                 let (revoked_connections, notified_hosts) =
                     revoke_superseded_credential(
                         delivery,
                         principal_id.as_str(),
-                        requester_principal_id,
+                        "",
                     );
                 emit_inscription(
                     "relay.identity.psk_rotated",
@@ -379,18 +392,28 @@ pub(in crate::relay) fn handle_change_psk(
                 // as the store-persist double fault does.
                 store.remove_by_principal_id(principal_id.as_str());
                 store.insert(existing);
-                if let Err(rollback) = store.persist() {
+                // Test seam: a root-scoped one-shot fault can override the
+                // compensation persist outcome without touching this branch.
+                let rollback = fault_aware_rollback_persist(
+                    state_root,
+                    principal_id.as_str(),
+                    || store.persist(),
+                );
+                if let Err(rollback) = rollback {
                     if is_durability_uncertain(&rollback) {
                         return Err(error);
                     }
                     // The failed publish already discarded its staged
                     // material, so there is nothing to complete: the rotated
-                    // hash stands effective with no usable credential.
+                    // hash stands effective with no usable credential. Like
+                    // every error return this carries no new credential, so
+                    // the success path's requester preservation does not
+                    // apply: a self-rotating session is revoked with the rest.
                     let (revoked_connections, notified_hosts) =
                         revoke_superseded_credential(
                             delivery,
                             principal_id.as_str(),
-                            requester_principal_id,
+                            "",
                         );
                     emit_inscription(
                         "relay.identity.psk_rotate_failed",

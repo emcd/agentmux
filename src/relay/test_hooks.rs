@@ -136,3 +136,106 @@ pub(crate) fn fire_confined_commit_hook() {
         (hook.callback)();
     }
 }
+
+/// Fault to inject at an identity-rollback persist, scoped by store root so
+/// a test can drive one call's compensation outcome through socket dispatch
+/// (which runs on the blocking pool, where thread-gated hooks cannot target
+/// a single call). One-shot: taking the fault disarms it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum IdentityRollbackFault {
+    /// Fail the compensation before its own publication: the compensated
+    /// state never lands.
+    PrePublicationFailure,
+    /// Publish the compensation for real, then report post-rename durability
+    /// uncertainty instead of success.
+    PostPublicationUncertain,
+}
+
+static IDENTITY_ROLLBACK_FAULTS: std::sync::OnceLock<
+    Mutex<
+        std::collections::HashMap<std::path::PathBuf, IdentityRollbackFault>,
+    >,
+> = std::sync::OnceLock::new();
+
+/// Locks the rollback-fault registry, initializing it on first use.
+fn identity_rollback_faults() -> &'static Mutex<
+    std::collections::HashMap<std::path::PathBuf, IdentityRollbackFault>,
+> {
+    IDENTITY_ROLLBACK_FAULTS
+        .get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Arms a one-shot rollback fault for the store under `state_root`.
+/// Test-only; the fault is consumed by the next rollback persist for that
+/// root, or remove it with [`disarm_identity_rollback_fault`].
+pub fn arm_identity_rollback_fault(
+    state_root: &std::path::Path,
+    fault: IdentityRollbackFault,
+) {
+    let key = std::fs::canonicalize(state_root)
+        .unwrap_or_else(|_| state_root.to_path_buf());
+    identity_rollback_faults()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(key, fault);
+}
+
+/// Removes any armed rollback fault for the store under `state_root`.
+pub fn disarm_identity_rollback_fault(state_root: &std::path::Path) {
+    let key = std::fs::canonicalize(state_root)
+        .unwrap_or_else(|_| state_root.to_path_buf());
+    identity_rollback_faults()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&key);
+}
+
+/// Takes the armed rollback fault for the store under `state_root`, if any.
+/// Called at the compensation persist site; unarmed calls cost one mutex
+/// probe and return `None`.
+pub(crate) fn take_identity_rollback_fault(
+    state_root: &std::path::Path,
+) -> Option<IdentityRollbackFault> {
+    let key = std::fs::canonicalize(state_root)
+        .unwrap_or_else(|_| state_root.to_path_buf());
+    identity_rollback_faults()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(&key)
+}
+
+/// Runs `persist` for an identity-store compensation, overridden by an armed
+/// rollback fault: a pre-publication fault skips the persist and reports a
+/// synthetic pre-rename failure, while a post-publication fault persists
+/// for real and then reports durability uncertainty instead of success. With
+/// no fault armed this is exactly `persist()`: one mutex probe.
+pub(crate) fn fault_aware_rollback_persist(
+    state_root: &std::path::Path,
+    principal_id: &str,
+    persist: impl FnOnce() -> Result<(), super::RelayError>,
+) -> Result<(), super::RelayError> {
+    match take_identity_rollback_fault(state_root) {
+        Some(IdentityRollbackFault::PrePublicationFailure) => {
+            Err(super::relay_error(
+                "internal_principal_store",
+                "injected fault: identity rollback persist failed before publication",
+                Some(serde_json::json!({
+                    "principal_id": principal_id,
+                })),
+            ))
+        },
+        Some(IdentityRollbackFault::PostPublicationUncertain) => {
+            match persist() {
+                Ok(()) => Err(super::relay_error(
+                    "internal_store_durability_uncertain",
+                    "injected fault: identity rollback durability uncertain after publication",
+                    Some(serde_json::json!({
+                        "principal_id": principal_id,
+                    })),
+                )),
+                Err(real) => Err(real),
+            }
+        },
+        None => persist(),
+    }
+}
