@@ -446,9 +446,9 @@ fn cross_process_second_init_is_refused() {
     );
 
     // Serve construction on the foreign-held root has no local owner to
-    // adopt, so each context falls back — but through the shared registry
-    // slot, concurrent local constructions still converge on one delivery
-    // state instead of each serving independently.
+    // adopt and claims nothing: each context falls back to its own
+    // delivery state rather than silently sharing an unowned domain.
+    // Fallible hosts still refuse on the same root.
     let (context_a, context_b) = {
         let foreign_a =
             Arc::new(DeliveryContext::new(DeliveryConfiguration::default()));
@@ -460,11 +460,11 @@ fn cross_process_second_init_is_refused() {
         )
     };
     assert!(
-        Arc::ptr_eq(
+        !Arc::ptr_eq(
             context_b.delivery_context(),
             context_a.delivery_context()
         ),
-        "local constructions converge even on a foreign-held root"
+        "unowned roots must not silently share a domain"
     );
     drop((context_a, context_b));
     drop(child.stdin.take());

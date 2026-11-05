@@ -113,36 +113,35 @@ pub(crate) fn claim_or_adopt(
 ) -> Result<DomainClaim, RelayError> {
     let domain_key = canonical_domain_key(state_root);
     let domain_key = domain_key.as_path();
-    {
-        let mut domains = runtime_domains()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(owner) = domains.get(domain_key).and_then(Weak::upgrade) {
-            return Ok(DomainClaim::Adopted(owner));
-        }
-        domains.insert(domain_key.to_path_buf(), Arc::downgrade(delivery));
+    // One critical section covers the lookup, the lock acquisition, and the
+    // publication: a concurrent construction can never observe a pending
+    // claim, adopt it, and diverge from its outcome. The mutex is never held
+    // across blocking work — the flock below is non-blocking — so parking
+    // here is bounded by another claim's syscalls.
+    let mut domains = runtime_domains()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(owner) = domains.get(domain_key).and_then(Weak::upgrade) {
+        return Ok(DomainClaim::Adopted(owner));
     }
+    domains.insert(domain_key.to_path_buf(), Arc::downgrade(delivery));
     match acquire_domain_lock(domain_key) {
         Ok(lock) => {
             delivery.install_domain_lock(lock);
             Ok(DomainClaim::Claimed)
         },
         Err(error) if error.code == "validation_runtime_already_hosted" => {
-            // Another process holds the root. The in-process slot claimed
-            // above stays: it names this process's fallback domain, so
-            // concurrent local constructions still converge on one delivery
-            // state instead of each falling back independently. The retain
-            // rule governs init the same way: a live fallback domain keeps
-            // refusing second claims until every holder ceases.
+            // Another process holds the root. Roll the slot back: adoption
+            // must stay contingent on successful ownership, so a later
+            // fallible host re-checks the lock instead of adopting a
+            // fallback that never held the root and skipping refusal.
+            domains.remove(domain_key);
             Ok(DomainClaim::ForeignHeld)
         },
         Err(error) => {
             // A real claim I/O failure owns nothing: roll the slot back so
             // a later construction retries instead of adopting a domain
             // that never held the root.
-            let mut domains = runtime_domains()
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
             domains.remove(domain_key);
             Err(error)
         },
