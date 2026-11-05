@@ -460,16 +460,19 @@ fn shared_serve_context(
             &[],
         ),
     );
-    std::sync::Arc::new(agentmux::relay::ConnectionServeContext::new(
-        configuration_roots.clone(),
-        state_root.to_path_buf(),
-        catalog,
-        peer_connection_manager,
-        Vec::new(),
-        false,
-        TEST_PRE_HELLO_IDLE_TIMEOUT,
-        std::sync::Arc::clone(delivery),
-    ))
+    std::sync::Arc::new(
+        agentmux::relay::ConnectionServeContext::new(
+            configuration_roots.clone(),
+            state_root.to_path_buf(),
+            catalog,
+            peer_connection_manager,
+            Vec::new(),
+            false,
+            TEST_PRE_HELLO_IDLE_TIMEOUT,
+            std::sync::Arc::clone(delivery),
+        )
+        .expect("serve context claims its domain"),
+    )
 }
 
 // Serves one connection against a shared context (see `shared_serve_context`),
@@ -579,7 +582,8 @@ fn run_serve_connection_with_slot(
             require_session_credentials,
             TEST_PRE_HELLO_IDLE_TIMEOUT,
             std::sync::Arc::clone(delivery),
-        );
+        )
+        .expect("serve context claims its domain");
         serve_connection(stream, &serve_context, worker_slot).await
     })
 }

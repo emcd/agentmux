@@ -271,7 +271,7 @@ fn acquire_domain_lock(
 
 /// Refusal for a store root that already hosts a live domain, in this
 /// process or another.
-fn already_hosted(domain_key: &Path) -> RelayError {
+pub(in crate::relay) fn already_hosted(domain_key: &Path) -> RelayError {
     crate::relay::relay_error(
         "validation_runtime_already_hosted",
         "a relay domain already hosts this state root; sharing one store across runtimes is refused",

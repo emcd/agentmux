@@ -16,9 +16,11 @@ use crate::configuration::ConfigurationRoots;
 use crate::relay::delivery::DeliveryContext;
 
 use super::super::PeerConnectionManager;
+use super::super::RelayError;
 use super::super::catalog::BundleCatalog;
 use super::super::runtime_domains::{
-    DomainClaim, admin_lock_for, canonical_domain_key, claim_or_adopt,
+    DomainClaim, admin_lock_for, already_hosted, canonical_domain_key,
+    claim_or_adopt,
 };
 
 /// Shared, connection-independent context threaded to every connection worker:
@@ -63,9 +65,14 @@ impl ConnectionServeContext {
     /// adopted instead, so every stream served over the root registers in the
     /// same domain. Otherwise this context claims the root for the passed
     /// delivery state. A root held by another process, or a claim I/O
-    /// failure, falls back to the passed state; fallible hosts refuse those
-    /// roots instead, so the fallback is unreachable through them.
-    #[must_use]
+    /// failure, is refused: there is no approved exception that would let an
+    /// infallible signature serve an unowned domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns `validation_runtime_already_hosted` when another live domain
+    /// in this process or another process already owns the same store root,
+    /// and the claim's I/O failures verbatim.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         configuration_roots: ConfigurationRoots,
@@ -76,7 +83,7 @@ impl ConnectionServeContext {
         require_session_credentials: bool,
         pre_hello_idle_timeout: Duration,
         delivery_context: Arc<DeliveryContext>,
-    ) -> Self {
+    ) -> Result<Self, RelayError> {
         let mut relay_aliases = relay_aliases;
         relay_aliases.sort();
         relay_aliases.dedup();
@@ -85,22 +92,21 @@ impl ConnectionServeContext {
         let _ = std::fs::create_dir_all(&state_root);
         let domain_key = canonical_domain_key(&state_root);
         // One critical section decides adoption against claiming, so
-        // concurrent first constructions converge on one domain. A root
-        // held by another process has no local delivery state to adopt, and
-        // a claim I/O failure leaves nothing to adopt either; the
-        // constructor cannot fail, so both fall back to the passed state.
-        // Fallible hosts refuse instead (runtime init, relay host
-        // preparation), which is what makes the fallback unreachable for
-        // them.
+        // concurrent first constructions converge on one domain. A
+        // foreign-held root or a claim I/O failure has no local delivery
+        // state to adopt and no claim to establish, so construction is
+        // refused rather than serving an unowned domain.
         let delivery_context =
             match claim_or_adopt(&domain_key, &delivery_context) {
                 Ok(DomainClaim::Adopted(owner)) => owner,
-                Ok(DomainClaim::Claimed)
-                | Ok(DomainClaim::ForeignHeld)
-                | Err(_) => delivery_context,
+                Ok(DomainClaim::Claimed) => delivery_context,
+                Ok(DomainClaim::ForeignHeld) => {
+                    return Err(already_hosted(&domain_key));
+                },
+                Err(error) => return Err(error),
             };
         let identity_admin_lock = admin_lock_for(&domain_key);
-        Self {
+        Ok(Self {
             configuration_roots,
             state_root,
             bundle_catalog,
@@ -110,7 +116,7 @@ impl ConnectionServeContext {
             pre_hello_idle_timeout,
             identity_admin_lock,
             delivery_context,
-        }
+        })
     }
 
     /// Configuration layers the catalog was built against, used by the serve

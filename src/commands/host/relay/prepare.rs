@@ -396,7 +396,8 @@ pub(super) fn prepare_relay_host(
         relay_configuration.require_session_credentials,
         pre_hello_idle_timeout,
         Arc::clone(&delivery_context),
-    );
+    )
+    .map_err(shared::map_relay_error)?;
 
     Ok(RelayHostPreparation::Serve(Box::new(RelayHostServePlan {
         summary,

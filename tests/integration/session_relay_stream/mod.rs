@@ -220,7 +220,8 @@ fn run_serve_connection(
             false,
             Duration::from_secs(2),
             std::sync::Arc::clone(delivery),
-        );
+        )
+        .expect("serve context claims its domain");
         serve_connection(
             stream,
             &serve_context,

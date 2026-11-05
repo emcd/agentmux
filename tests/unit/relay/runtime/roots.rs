@@ -237,6 +237,7 @@ fn serve_context_over(
         Duration::from_secs(2),
         Arc::clone(delivery),
     )
+    .expect("serve context claims its domain")
 }
 
 /// A runtime init over a root already claimed by serve contexts is refused:
@@ -446,27 +447,40 @@ fn cross_process_second_init_is_refused() {
     );
 
     // Serve construction on the foreign-held root has no local owner to
-    // adopt and claims nothing: each context falls back to its own
-    // delivery state rather than silently sharing an unowned domain.
-    // Fallible hosts still refuse on the same root.
-    let (context_a, context_b) = {
-        let foreign_a =
+    // adopt: the constructor refuses rather than returning an unowned
+    // usable context.
+    for _ in 0..2 {
+        let foreign =
             Arc::new(DeliveryContext::new(DeliveryConfiguration::default()));
-        let foreign_b =
-            Arc::new(DeliveryContext::new(DeliveryConfiguration::default()));
-        (
-            serve_context_over(&configuration_root, &state_root, &foreign_a),
-            serve_context_over(&configuration_root, &state_root, &foreign_b),
-        )
-    };
-    assert!(
-        !Arc::ptr_eq(
-            context_b.delivery_context(),
-            context_a.delivery_context()
-        ),
-        "unowned roots must not silently share a domain"
-    );
-    drop((context_a, context_b));
+        let failed = match ConnectionServeContext::new(
+            agentmux::configuration::ConfigurationRoots::single(
+                &configuration_root,
+            ),
+            state_root.clone(),
+            BundleCatalog::from_paths([BundleRuntimePaths::resolve(
+                &state_root,
+                "party",
+            )
+            .expect("bundle paths")]),
+            Arc::new(PeerConnectionManager::from_configuration(
+                &state_root,
+                &[],
+            )),
+            Vec::new(),
+            false,
+            Duration::from_secs(2),
+            foreign,
+        ) {
+            Ok(_) => {
+                panic!("serve construction over a held root must fail")
+            },
+            Err(error) => error,
+        };
+        assert_eq!(
+            failed.code, "validation_runtime_already_hosted",
+            "serving-path refusal names the ownership violation: {failed:?}"
+        );
+    }
     drop(child.stdin.take());
     let status = child.wait().expect("reap holding child");
     assert!(status.success(), "holding child exits cleanly");

@@ -95,19 +95,22 @@ fn serve_with(
     server_stream
         .set_nonblocking(true)
         .expect("non-blocking server stream");
-    let context = Arc::new(ConnectionServeContext::new(
-        configuration_roots.clone(),
-        bundle_paths.state_root.clone(),
-        BundleCatalog::from_paths([bundle_paths.clone()]),
-        Arc::new(PeerConnectionManager::from_configuration(
-            &bundle_paths.state_root,
-            &[],
-        )),
-        Vec::new(),
-        false,
-        Duration::from_secs(2),
-        Arc::clone(delivery),
-    ));
+    let context = Arc::new(
+        ConnectionServeContext::new(
+            configuration_roots.clone(),
+            bundle_paths.state_root.clone(),
+            BundleCatalog::from_paths([bundle_paths.clone()]),
+            Arc::new(PeerConnectionManager::from_configuration(
+                &bundle_paths.state_root,
+                &[],
+            )),
+            Vec::new(),
+            false,
+            Duration::from_secs(2),
+            Arc::clone(delivery),
+        )
+        .expect("serve context claims its domain"),
+    );
     let coordinator = ConnectionDrainCoordinator::new();
     let slot = coordinator.register_worker();
     // Leak the coordinator: dropping its shutdown sender would read as a
