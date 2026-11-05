@@ -36,6 +36,7 @@ fn snapshot_carries_freshness_metadata() {
         stale: false,
         discontinuity: false,
         stale_reason_code: None,
+        entries_total_override: None,
     });
     assert_eq!(result["correlation_id"], "c-1");
     assert_eq!(result["freshness"], "fresh");
@@ -56,6 +57,7 @@ fn snapshot_freshness_renders_verbatim() {
         source: SnapshotSource::Live,
         stale: false,
         discontinuity: false,
+        entries_total_override: None,
         stale_reason_code: None,
     });
     assert_eq!(fresh["freshness"], "fresh");
@@ -67,6 +69,7 @@ fn snapshot_freshness_renders_verbatim() {
         freshness: Freshness::Stale,
         source: SnapshotSource::Synthetic,
         stale: true,
+        entries_total_override: None,
         discontinuity: true,
         stale_reason_code: Some("priming".to_string()),
     });

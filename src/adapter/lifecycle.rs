@@ -24,6 +24,12 @@ pub trait Clock {
     /// Returns the current reading in milliseconds since an unspecified
     /// epoch. Only differences between readings are meaningful.
     fn now_ms(&self) -> u64;
+
+    /// Advances the reading by `delta_ms`. Fixture-driven virtual time
+    /// consumes one scheduled advance per post-handshake frame, so
+    /// timeout expiry in replay is driven only by trace events; the
+    /// live clock ignores advances.
+    fn advance(&self, _delta_ms: u64) {}
 }
 
 /// Monotonic millisecond source for adapter-side deadlines.
@@ -65,13 +71,17 @@ impl ManualClock {
 
     /// Advances the reading by `delta_ms`, saturating at `u64::MAX`.
     pub fn advance(&self, delta_ms: u64) {
-        self.now_ms.set(self.now_ms.get().saturating_add(delta_ms));
+        Clock::advance(self, delta_ms);
     }
 }
 
 impl Clock for ManualClock {
     fn now_ms(&self) -> u64 {
         self.now_ms.get()
+    }
+
+    fn advance(&self, delta_ms: u64) {
+        self.now_ms.set(self.now_ms.get().saturating_add(delta_ms));
     }
 }
 
@@ -124,6 +134,18 @@ impl Outbox {
         }
     }
 
+    /// Installs replacement caps while preserving outstanding
+    /// usage counts: the handshakeHello request itself is already
+    /// enqueued when the hello result installs the negotiated limits,
+    /// so resetting to empty would strand those bytes (leaking cap)
+    /// and let their late completions underflow the fresh counters.
+    /// A tighter negotiated cap simply refuses new admissions until
+    /// the outstanding bytes drain — bounded memory by refusal.
+    pub fn set_caps(&mut self, data_cap_bytes: usize, control_cap: usize) {
+        self.data_cap_bytes = data_cap_bytes;
+        self.control_cap = control_cap;
+    }
+
     /// Admits a data write of `len` bytes, failing past the cap.
     ///
     /// # Errors
@@ -160,6 +182,13 @@ impl Outbox {
     /// Releases one control signal after admission resolves.
     pub fn release_control(&mut self) {
         self.control_pending = self.control_pending.saturating_sub(1);
+    }
+
+    /// Reports an empty queue: nothing outstanding on either lane.
+    /// The drain watchdog arms only while this is false.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.data_bytes == 0 && self.control_pending == 0
     }
 }
 
@@ -255,6 +284,8 @@ impl Adapter<'_> {
             );
             return None;
         }
+        // Admitted: only now does the ping prove a live peer.
+        self.observe_liveness();
         if self
             .write_control(&json!({
                 "jsonrpc": "2.0",
@@ -275,12 +306,25 @@ impl Adapter<'_> {
         if !self.check_binding(params) {
             return None;
         }
-        match params.get("signal").and_then(Value::as_str) {
-            Some("terminate") => {
+        let signal = params.get("signal").and_then(Value::as_str)?;
+        // The signal domain is closed: only terminate and fence-hint
+        // are valid supervision signals. An unknown value is a
+        // framing failure, not a liveness frame — unknown minor
+        // fields are ignored, but that never extends an enumerated
+        // value domain.
+        if signal != "terminate" && signal != "fence-hint" {
+            self.record("unknown_supervision_signal", signal);
+            return None;
+        }
+        // Admitted: a binding-matched known signal proves a live
+        // peer.
+        self.observe_liveness();
+        match signal {
+            "terminate" => {
                 self.terminalize_all("terminate");
                 Some(EXIT_CLEAN)
             },
-            Some("fence-hint") => {
+            "fence-hint" => {
                 self.terminalize_all("fence_hint");
                 None
             },

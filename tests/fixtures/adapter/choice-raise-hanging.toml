@@ -1,0 +1,55 @@
+# Fixture script: choice-raise-hanging (generic profile).
+#
+# Requirement: Adapter requests choices over a blocking reverse-RPC
+# Capability: adapter-choice-rpc
+#
+# Limit: scripted turn-marker fixture carries no resume content; rich-content persist assertions wait for the resume-state follow-on
+#
+# Semantics: the scripted turn raises one requestChoice and HOLDS the
+# submit open with NO relay answer in the trace. The hanging choice
+# exercises the single-flight hold (a second submit answers
+# RefusedBusy), fence preemption (fence terminalizes the choice
+# locally with submission_unknown and no submit reply), and the
+# unknown-held gate (the gate stays held across the fence until
+# observed cessation). Canonical scripted correlation: "c-hang".
+# Canonical choice: title "Deploy?", species "approval", options
+# yes/no (confirm).
+#
+# Schema:
+# - [clock] advances_ms: virtual-clock advances consumed one before
+#   each post-handshake frame's dispatch, in trace order (timeouts
+#   expire only on these events; the trace replays byte-identical).
+# - [[turns]]: one scripted turn per supervisor submit correlation.
+#   ack is one of submitted | refused_busy | transport_unavailable |
+#   submission_unknown (maps to the contract outcome literal).
+# - [[turns.choices]]: scripted requestChoice raises for the turn.
+#   options must be non-empty; details is an opaque string.
+# - [[snapshots]]: scripted look answers per target session.
+#   delay_ms withholds fresh until first-poll + delay (default 0);
+#   earlier polls answer stale-tagged priming without blocking.
+# - [[events]]: scripted lifecycleEvent emissions in turn order.
+#
+# Scripted transport_ack evidence models a fake agent effect boundary,
+# not proof that any real agent accepted input.
+
+[clock]
+advances_ms = []
+
+[[turns]]
+correlation = "c-hang"
+ack = "submitted"
+
+[[turns.choices]]
+title = "Deploy?"
+species = "approval"
+details = "ship it"
+
+[[turns.choices.options]]
+option_id = "yes"
+name = "Yes"
+species = "confirm"
+
+[[turns.choices.options]]
+option_id = "no"
+name = "No"
+species = "confirm"

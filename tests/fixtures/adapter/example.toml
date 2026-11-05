@@ -10,7 +10,8 @@
 # Limit: scripted turn-marker fixture carries no resume content; rich-content persist assertions wait for the resume-state follow-on
 #
 # Schema:
-# - [clock] advances_ms: virtual-clock advances in trace order (timeouts
+# - [clock] advances_ms: virtual-clock advances consumed one before
+#   each post-handshake frame's dispatch, in trace order (timeouts
 #   expire only on these events; the trace replays byte-identical).
 # - [[turns]]: one scripted turn per supervisor submit correlation.
 #   ack is one of submitted | refused_busy | transport_unavailable |

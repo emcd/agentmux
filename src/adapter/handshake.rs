@@ -17,11 +17,17 @@ use std::{
 use serde_json::{Value, json};
 
 use super::Adapter;
+use super::ReadEvent;
 use super::binding::{CallKind, Direction, PinnedLaunch, establish_binding};
 use super::choice::ChoiceGate;
 use super::frame::parse_frame;
-use super::lifecycle::{Liveness, Outbox};
-use super::{Incoming, ReadEvent};
+use super::lifecycle::Liveness;
+
+/// Decodes standard base64; `None` is not valid base64.
+fn base64_decode(text: &str) -> Option<Vec<u8>> {
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    STANDARD.decode(text).ok()
+}
 
 /// Adapter-supported protocol window: one major, an inclusive minor
 /// range. Majors never negotiate; minors interoperate within overlap.
@@ -239,8 +245,14 @@ pub fn parse_hello_result(
     let selected_minor = u16::try_from(minor)
         .map_err(|_| malformed("selected_minor out of range"))?;
     // snapshot_b64 is required (empty string when none); v1 records no
-    // resume store of its own, so the value is validated and ignored.
-    get_string(result, "snapshot_b64")?;
+    // resume store of its own, so the value is validated as base64
+    // and ignored. Ignoring resume contents does not make invalid
+    // encoding well-formed: a non-base64 snapshot refuses the
+    // binding.
+    let snapshot_b64 = get_string(result, "snapshot_b64")?;
+    if base64_decode(&snapshot_b64).is_none() {
+        return Err(malformed("snapshot_b64 is not base64"));
+    }
     let limits = result
         .get("negotiated_limits")
         .filter(|limits| limits.is_object())
@@ -443,18 +455,70 @@ impl Adapter<'_> {
                 .map_err(|_| ())?;
         let hello_wire =
             self.table.mint(CallKind::Handshake, None).map_err(|_| ())?;
-        self.write_value(&json!({
+        // The binding-establishing frame rides the control lane: it is
+        // never queued behind data, so the hello request is always the
+        // first wire frame under every schedule (same-lane FIFO from
+        // an empty lane), and bootstrap traffic never consumes the
+        // data budget it is about to negotiate.
+        self.write_control(&json!({
             "jsonrpc": "2.0",
             "id": hello_wire.to_string(),
             "method": "adapter.handshakeHello",
             "params": request,
         }))
         .map_err(|_| ())?;
+        let release_gate = |adapter: &mut Self| {
+            if let Some(gate) = &adapter.gate_tx {
+                let _ = gate.send(());
+            }
+        };
         let deadline =
             start_ms.saturating_add(self.config.handshake_timeout_ms);
         let envelope = loop {
-            match self.recv(rx, deadline) {
-                Incoming::Frame(bytes) => {
+            // Observe the writer while waiting for the hello result:
+            // a dead transport fails the handshake now rather than
+            // parking it until the handshake timeout. The wait is
+            // sliced on the wall clock (not the virtual clock, which
+            // replay may freeze) so a dead peer surfaces within
+            // milliseconds while expiry still follows the virtual
+            // deadline.
+            self.drain_writer_events();
+            if self.failed {
+                return Err(());
+            }
+            if self.drain_expired() {
+                self.record(
+                    "drain_timeout",
+                    "blocked write exceeded the drain wait",
+                );
+                return Err(());
+            }
+            // The deadline is checked on every iteration, independent
+            // of receive outcome: a flood of parseable-but-wrong
+            // frames is still silence from the binding peer, and a
+            // matching result that arrives overdue is already
+            // expired. Neither postpones the timeout.
+            if self.clock.now_ms() >= deadline {
+                return Err(());
+            }
+            match rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(ReadEvent::Frame(bytes)) => {
+                    // Release the reader's RX queue accounting for
+                    // every acquired frame, kept or discarded.
+                    self.rx_queued.fetch_sub(
+                        bytes
+                            .len()
+                            .min(self.rx_queued.load(Ordering::Relaxed)),
+                        Ordering::AcqRel,
+                    );
+                    // A matching result that arrives overdue is
+                    // already expired: recheck the deadline on
+                    // receipt, not just on slices, so a wrong-id
+                    // frame that starts a fresh 50ms slice cannot
+                    // smuggle a late hello past the timeout.
+                    if self.clock.now_ms() >= deadline {
+                        return Err(());
+                    }
                     let envelope = parse_frame(&bytes).map_err(|_| ())?;
                     if envelope.get("id").and_then(Value::as_str)
                         == Some(&hello_wire.to_string())
@@ -465,11 +529,34 @@ impl Adapter<'_> {
                         "unexpected_pre_bind_frame",
                         "discarded before binding",
                     );
+                    release_gate(self);
                 },
-                Incoming::Timeout => return Err(()),
-                Incoming::Eof | Incoming::Unusable => return Err(()),
+                Ok(ReadEvent::Eof) | Ok(ReadEvent::Unusable) => {
+                    return Err(());
+                },
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    if self.clock.now_ms() >= deadline {
+                        return Err(());
+                    }
+                },
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(());
+                },
             }
         };
+        // The hello reply is a bootstrap envelope: it must carry the
+        // version marker, must not carry a JSON-RPC error, and must
+        // not carry both result and error.
+        if envelope.get("jsonrpc") != Some(&Value::String("2.0".to_string())) {
+            return Err(());
+        }
+        if envelope.get("error").is_some() {
+            self.record(
+                "hello_error_reply",
+                "hello result must not carry an error",
+            );
+            return Err(());
+        }
         let result = envelope
             .get("result")
             .ok_or(())
@@ -500,6 +587,12 @@ impl Adapter<'_> {
             self.clock.now_ms(),
             self.config.liveness_timeout_ms,
         ));
+        // The transition is ordered before post-hello acquisition:
+        // installing first, opening the reader gate second, so no
+        // coalesced first operation is ever read under the bootstrap
+        // bound after negotiation.
+        self.installed.store(true, Ordering::Release);
+        release_gate(self);
         for event in self.config.script.events.clone() {
             if self.emit_lifecycle(&event.kind, &event.code).is_some() {
                 return Err(());
@@ -508,25 +601,125 @@ impl Adapter<'_> {
         Ok(())
     }
 
+    /// Installs the negotiated limits VERBATIM: the hello result
+    /// carries already-resolved values, so no second application of
+    /// the matched-pair formula. Direction arrows name the adapter's
+    /// own perspective — supervisor→adapter is the adapter's RX
+    /// (bounding inbound acquisition together with the frame cap),
+    /// adapter→supervisor is the adapter's TX (bounding the outbox).
     fn install_negotiated(&mut self, negotiated: &NegotiatedLimits) {
-        let proposal = &self.config.proposal;
-        self.choice_gate = ChoiceGate::new(
-            (proposal
-                .max_choices_in_flight
-                .min(negotiated.max_choices_in_flight)) as usize,
+        self.choice_gate =
+            ChoiceGate::new(negotiated.max_choices_in_flight as usize);
+        // Carry the outbox across the transition: the handshakeHello
+        // request is still unacknowledged when the hello result lands,
+        // and its completion arrives after the install. New caps,
+        // preserved usage — no stranded bytes, no double-count.
+        self.outbox.set_caps(
+            negotiated.queue_tx_bytes as usize,
+            negotiated.max_control_pending as usize,
         );
-        self.outbox = Outbox::new(
-            proposal.queue_tx_bytes.min(negotiated.queue_tx_bytes) as usize,
-            proposal
-                .max_control_pending
-                .min(negotiated.max_control_pending) as usize,
+        self.read_bound.store(
+            (negotiated.max_frame_bytes as usize)
+                .min(negotiated.queue_rx_bytes as usize),
+            Ordering::Relaxed,
         );
-        self.ev_max = proposal
-            .max_events_per_second
-            .min(negotiated.max_events_per_second);
+        self.rx_budget
+            .store(negotiated.queue_rx_bytes as usize, Ordering::Relaxed);
+        self.look_cap = negotiated.max_looks_in_flight as usize;
+        self.ev_max = negotiated.max_events_per_second;
         self.ev_window_ms =
             u64::from(negotiated.window_seconds.saturating_mul(1000));
         self.ev_window_start = None;
         self.ev_count = 0;
+        self.drain_wait_ms = negotiated.drain_wait_ms;
+    }
+}
+
+/// Install accounting test: one test function by the inline-test
+/// rule.
+#[cfg(test)]
+mod install_tests {
+    use std::collections::HashMap;
+    use std::sync::mpsc;
+
+    use super::super::lifecycle::ManualClock;
+    use super::super::script::parse_script;
+    use super::super::writer::spawn_writer;
+    use super::super::{Adapter, AdapterConfig};
+    use super::{LimitsProposal, NegotiatedLimits, VersionOffer};
+
+    fn test_config() -> AdapterConfig {
+        let mut latency = HashMap::from([("default".to_string(), 5_000_u64)]);
+        latency.insert("text".to_string(), 5_000);
+        AdapterConfig {
+            executable: "agentmux-adapter".to_string(),
+            profile: "generic".to_string(),
+            target_session: "seat-1".to_string(),
+            offer: VersionOffer {
+                major: 2,
+                min_minor: 0,
+                max_minor: 1,
+            },
+            proposal: LimitsProposal {
+                max_frame_bytes: 65_536,
+                queue_tx_bytes: 16_777_216,
+                queue_rx_bytes: 16_777_216,
+                max_control_pending: 32,
+                max_events_per_second: 100,
+                window_seconds: 1,
+                max_submits_in_flight: 64,
+                max_choices_in_flight: 16,
+                max_looks_in_flight: 8,
+                drain_wait_ms: 250,
+                latency_declarations: latency,
+            },
+            script: parse_script("").expect("empty script parses"),
+            handshake_timeout_ms: 30_000,
+            liveness_timeout_ms: 60_000,
+        }
+    }
+
+    /// Installing the negotiated limits carries the outbox across the
+    /// transition: 500 unacknowledged hello-request bytes stay counted
+    /// under the new 4096-byte cap, so a 3597-byte write is refused
+    /// while a 3596-byte write fits, and the late completion releases
+    /// exactly the carried bytes. A reset-to-empty install would admit
+    /// the 3597-byte write and fail this test.
+    #[test]
+    fn install_preserves_outbox_usage() {
+        let config = test_config();
+        let clock = ManualClock::new(1_000);
+        let (event_tx, event_rx) = mpsc::channel();
+        let queues = spawn_writer(std::io::Cursor::new(Vec::new()), event_tx);
+        let mut sink = Vec::new();
+        let mut adapter =
+            Adapter::new(&config, &clock, queues, event_rx, &mut sink);
+        adapter
+            .outbox
+            .push_data(500)
+            .expect("hello request enqueued");
+        adapter.install_negotiated(&NegotiatedLimits {
+            max_frame_bytes: 65_536,
+            queue_tx_bytes: 4_096,
+            queue_rx_bytes: 16_777_216,
+            max_control_pending: 32,
+            max_events_per_second: 100,
+            window_seconds: 1,
+            max_submits_in_flight: 64,
+            max_choices_in_flight: 16,
+            max_looks_in_flight: 8,
+            drain_wait_ms: 250,
+        });
+        assert!(
+            adapter.outbox.push_data(3_597).is_err(),
+            "carried bytes must count against the new cap"
+        );
+        adapter.outbox.push_data(3_596).expect("remainder fits");
+        // The late hello-request completion releases exactly the
+        // carried bytes: no strand, no double-count.
+        adapter.outbox.release_data(500);
+        assert!(!adapter.outbox.is_empty());
+        adapter.outbox.release_data(3_596);
+        assert!(adapter.outbox.is_empty());
     }
 }

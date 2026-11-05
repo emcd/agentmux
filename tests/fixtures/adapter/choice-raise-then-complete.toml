@@ -1,0 +1,60 @@
+# Fixture script: choice-raise-then-complete (generic profile).
+#
+# Requirement: Adapter requests choices over a blocking reverse-RPC
+# Capability: adapter-choice-rpc
+# Requirement: Adapter submit replies preserve the submission-evidence trichotomy
+# Capability: adapter-submit-acks
+#
+# Limit: scripted turn-marker fixture carries no resume content; rich-content persist assertions wait for the resume-state follow-on
+#
+# Semantics: the scripted turn raises one requestChoice and HOLDS the
+# submit open until the relay answers. A valid Chosen reply records the
+# decision and completes the turn with the scripted ack (Submitted); a
+# valid Cancelled reply records Cancelled and completes the turn with
+# the scripted ack (post-cancel completion); a malformed choice result
+# (both/neither/extra outcome keys, mistyped fields) is discarded with
+# a local diagnostic and the call stays OPEN for a later valid reply
+# (never SubmissionUnknown). Fence/terminate/EOF with the choice
+# pending terminalizes locally with no submit reply. Canonical
+# scripted correlation: "c-2". Canonical choice: title "Deploy?",
+# species "approval", deciders default to the bound target, options
+# yes/no (confirm).
+#
+# Schema:
+# - [clock] advances_ms: virtual-clock advances consumed one before
+#   each post-handshake frame's dispatch, in trace order (timeouts
+#   expire only on these events; the trace replays byte-identical).
+# - [[turns]]: one scripted turn per supervisor submit correlation.
+#   ack is one of submitted | refused_busy | transport_unavailable |
+#   submission_unknown (maps to the contract outcome literal).
+# - [[turns.choices]]: scripted requestChoice raises for the turn.
+#   options must be non-empty; details is an opaque string.
+# - [[snapshots]]: scripted look answers per target session.
+#   delay_ms withholds fresh until first-poll + delay (default 0);
+#   earlier polls answer stale-tagged priming without blocking.
+# - [[events]]: scripted lifecycleEvent emissions in turn order.
+#
+# Scripted transport_ack evidence models a fake agent effect boundary,
+# not proof that any real agent accepted input.
+
+[clock]
+advances_ms = []
+
+[[turns]]
+correlation = "c-2"
+ack = "submitted"
+
+[[turns.choices]]
+title = "Deploy?"
+species = "approval"
+details = "ship it"
+
+[[turns.choices.options]]
+option_id = "yes"
+name = "Yes"
+species = "confirm"
+
+[[turns.choices.options]]
+option_id = "no"
+name = "No"
+species = "confirm"

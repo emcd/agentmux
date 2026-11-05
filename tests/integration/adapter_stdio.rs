@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::BufReader;
+use std::sync::{Arc, Mutex};
 
 use agentmux::adapter::choice::DiagnosticEntry;
 use agentmux::adapter::frame::BOOTSTRAP_MAX_FRAME_BYTES;
@@ -112,10 +113,29 @@ fn run_transcript(
 ) -> (i32, Vec<u8>, Vec<DiagnosticEntry>) {
     let clock = ManualClock::new(1_000);
     let reader = BufReader::new(std::io::Cursor::new(input.to_vec()));
-    let mut writer = Vec::new();
+    let shared = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let writer = SharedWriter(shared.clone());
     let mut sink: Vec<DiagnosticEntry> = Vec::new();
-    let code = run_stdio(config, &clock, reader, &mut writer, &mut sink);
-    (code, writer, sink)
+    let code = run_stdio(config, &clock, reader, writer, &mut sink);
+    let output = shared.lock().expect("writer lock").clone();
+    (code, output, sink)
+}
+
+/// Shared in-process transport for `run_stdio`: the writer thread
+/// owns this handle and appends frames behind the mutex, so the
+/// harness observes the complete transcript after shutdown drains.
+#[derive(Clone)]
+struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+
+impl std::io::Write for SharedWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().expect("writer lock").extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 fn split_frames(wire: &[u8]) -> Vec<Value> {
@@ -145,7 +165,12 @@ code = "adapter_ready"
 "#;
 
 /// A full hello/submit/look/ping/terminate run terminates cleanly and
-/// the submit resolves Submitted with evidence.
+/// the submit resolves Submitted with evidence. Cross-lane order is
+/// NOT pinned: at every intact frame boundary queued control goes
+/// first (priority lane), so the ping reply may precede submit, look,
+/// or persist output depending on writer scheduling. Same-lane order
+/// is pinned — data admits hello, Submitted, persist, look in
+/// enqueue order and control admits ready before ping.
 #[test]
 fn full_run_terminates_clean() {
     let config = test_config(SCRIPT);
@@ -199,23 +224,45 @@ fn full_run_terminates_clean() {
     assert_eq!(code, EXIT_CLEAN);
     let frames = split_frames(&output);
     assert_eq!(frames.len(), 6, "unexpected frames: {frames:?}");
-    // 0: hello request carries the pinned launch inputs.
+    // Hello opens the transcript: the binding-establishing frame is
+    // always first.
     assert_eq!(frames[0]["method"], "adapter.handshakeHello");
     assert_eq!(frames[0]["params"]["target_session"], "seat-1");
-    // 1: scripted ready event emits as a lifecycle notification.
-    assert_eq!(frames[1]["method"], "adapter.lifecycleEvent");
-    assert_eq!(frames[1]["params"]["kind"], "ready");
-    // 2: submit resolves Submitted; evidence only on non-Submitted.
-    assert_eq!(frames[2]["result"]["outcome"], "Submitted");
-    assert_eq!(frames[2]["result"]["correlation_id"], "c-1");
-    assert!(frames[2]["result"].get("evidence_basis").is_none());
-    // 3: persist marker follows the completed turn.
-    assert_eq!(frames[3]["method"], "adapter.persistState");
-    // 4: look renders the scripted snapshot as live.
-    assert_eq!(frames[4]["result"]["freshness"], "fresh");
-    assert_eq!(frames[4]["result"]["entries"][0]["seq"], 1);
-    // 5: ping answers the empty object.
-    assert_eq!(frames[5]["result"], json!({}));
+    fn position(frames: &[Value], matches: fn(&Value) -> bool) -> usize {
+        frames
+            .iter()
+            .position(matches)
+            .expect("expected frame present")
+    }
+    let ready = position(&frames, |frame| {
+        frame["method"] == "adapter.lifecycleEvent"
+            && frame["params"]["kind"] == "ready"
+    });
+    let submitted = position(&frames, |frame| {
+        frame
+            .get("result")
+            .is_some_and(|result| result.get("outcome").is_some())
+    });
+    let persist =
+        position(&frames, |frame| frame["method"] == "adapter.persistState");
+    let look =
+        position(&frames, |frame| frame["result"]["freshness"] == "fresh");
+    let ping = position(&frames, |frame| {
+        frame.get("result").is_some_and(|result| {
+            result.as_object().is_some_and(|object| object.is_empty())
+        })
+    });
+    // Same-lane order follows enqueue order on every schedule; the
+    // cross-lane interleave is the priority boundary's business.
+    assert!(
+        submitted < persist && persist < look,
+        "data lane keeps enqueue order: {frames:?}"
+    );
+    assert!(ready < ping, "control lane keeps enqueue order: {frames:?}");
+    assert_eq!(frames[submitted]["result"]["outcome"], "Submitted");
+    assert_eq!(frames[submitted]["result"]["correlation_id"], "c-1");
+    assert!(frames[submitted]["result"].get("evidence_basis").is_none());
+    assert_eq!(frames[look]["result"]["entries"][0]["seq"], 1);
 }
 
 /// The same input trace replays byte-identical: the determinism gate.
@@ -362,10 +409,12 @@ species = "confirm"
     assert!(codes.contains(&"submission_unknown"), "sink: {codes:?}");
 }
 
-/// A scripted snapshot with a delay answers stale-tagged priming
-/// until the delay elapses after the target's first poll.
+/// A scripted snapshot with a delay holds a positive-timeout poll
+/// open: the run loop keeps dispatching while the wait is pending,
+/// and termination resolves the held look with the
+/// fence-terminalized shape rather than fabricating freshness.
 #[test]
-fn delayed_snapshot_priming_then_fresh() {
+fn delayed_snapshot_holds_until_termination() {
     let script = r#"
 [[snapshots]]
 target = "seat-1"
@@ -404,16 +453,143 @@ text = "slow hello"
             "signal": "terminate",
         },
     });
-    // Fixed clock: the first poll anchors availability 200ms out, so
-    // the answer stays stale-tagged priming without blocking traffic.
+    // Fixed clock: no advance covers the 200ms delay, so the 2000ms
+    // prime-wait stays held; terminate resolves it fence-terminalized.
     let input = transcript(&[hello_result(), look, terminate]);
     let (code, output, _) = run_transcript(&config, &input);
     assert_eq!(code, EXIT_CLEAN);
     let frames = split_frames(&output);
+    assert_eq!(frames.len(), 2, "unexpected frames: {frames:?}");
     assert_eq!(frames[1]["result"]["freshness"], "stale");
     assert_eq!(frames[1]["result"]["snapshot_source"], "synthetic");
     assert_eq!(frames[1]["result"]["stale"], true);
+    assert_eq!(
+        frames[1]["result"]["stale_reason_code"],
+        "fence_terminalized"
+    );
+}
+
+/// A zero prime timeout never waits: the first poll answers stale.
+#[test]
+fn zero_prime_timeout_answers_stale_immediately() {
+    let script = r#"
+[[snapshots]]
+target = "seat-1"
+delay_ms = 200
+
+[[snapshots.entries]]
+kind = "text"
+seq = 1
+text = "slow hello"
+"#;
+    let config = test_config(script);
+    let look = json!({
+        "jsonrpc": "2.0",
+        "id": "11",
+        "method": "relay.look",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "correlation_id": "look-1",
+            "look_handle_id": "h-1",
+            "prime_timeout_ms": 0,
+        },
+    });
+    let terminate = json!({
+        "jsonrpc": "2.0",
+        "method": "relay.supervisionSignal",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "signal": "terminate",
+        },
+    });
+    let input = transcript(&[hello_result(), look, terminate]);
+    let (code, output, _) = run_transcript(&config, &input);
+    assert_eq!(code, EXIT_CLEAN);
+    let frames = split_frames(&output);
+    assert_eq!(frames.len(), 2, "unexpected frames: {frames:?}");
+    assert_eq!(frames[1]["result"]["freshness"], "stale");
     assert_eq!(frames[1]["result"]["stale_reason_code"], "priming");
+}
+
+/// A virtual-clock advance covering the scripted delay resolves a
+/// held prime-wait fresh: timeout expiry is driven only by trace
+/// advance events. One advance is consumed before each post-handshake
+/// frame's dispatch; the sweep after the next frame answers fresh.
+#[test]
+fn advance_covering_delay_resolves_held_look_fresh() {
+    let script = r#"
+[clock]
+advances_ms = [250, 300]
+
+[[snapshots]]
+target = "seat-1"
+delay_ms = 200
+
+[[snapshots.entries]]
+kind = "text"
+seq = 1
+text = "slow hello"
+"#;
+    let config = test_config(script);
+    let look = json!({
+        "jsonrpc": "2.0",
+        "id": "11",
+        "method": "relay.look",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "correlation_id": "look-1",
+            "look_handle_id": "h-1",
+            "prime_timeout_ms": 2000,
+        },
+    });
+    let ping = json!({
+        "jsonrpc": "2.0",
+        "id": "12",
+        "method": "relay.ping",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+        },
+    });
+    let terminate = json!({
+        "jsonrpc": "2.0",
+        "method": "relay.supervisionSignal",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+            "signal": "terminate",
+        },
+    });
+    // Look dispatch consumes advances[0] (now 1250), anchors at 1250,
+    // and holds (1250 < 1250 + 200). Ping consumes advances[1] (now
+    // 1550); the sweep after ping finds 1550 >= 1250 + 200 and answers
+    // the held look fresh.
+    let input = transcript(&[hello_result(), look, ping, terminate]);
+    let (code, output, _) = run_transcript(&config, &input);
+    assert_eq!(code, EXIT_CLEAN);
+    let frames = split_frames(&output);
+    assert_eq!(frames.len(), 3, "unexpected frames: {frames:?}");
+    assert_eq!(frames[1]["result"], json!({}));
+    assert_eq!(frames[2]["result"]["freshness"], "fresh");
+    assert_eq!(frames[2]["result"]["entries"][0]["seq"], 1);
 }
 
 /// A submit naming an unbound member target is refused structurally
@@ -578,10 +754,13 @@ species = "confirm"
     assert_eq!(frames[2]["result"]["correlation_id"], "c-2");
 }
 
-/// A SubmitUnknown turn never releases the gate: the next submit is
-/// refused until cessation is observed. Fence hints do not release it.
+/// A malformed choice result is discarded with the call kept open:
+/// the turn never completes from it, so the single-flight gate stays
+/// held, a second submit is refused busy, and a fence hint does not
+/// release the gate either. Malformed replies resolve nothing; only a
+/// later valid reply terminalizes the turn.
 #[test]
-fn unknown_turn_holds_gate_across_fence() {
+fn malformed_choice_keeps_open_and_holds_gate_across_fence() {
     let script = r#"
 [[turns]]
 correlation = "c-u"
@@ -660,18 +839,25 @@ species = "confirm"
         submit("12", "c-after-fence"),
         terminate,
     ]);
-    let (code, output, _) = run_transcript(&config, &input);
+    let (code, output, sink) = run_transcript(&config, &input);
     assert_eq!(code, EXIT_CLEAN);
     let frames = split_frames(&output);
-    // hello, requestChoice, submit(SubmissionUnknown on malformed
-    // choice), persist marker, busy, busy. No second requestChoice
-    // ever goes out: the unknown turn holds the gate across the fence.
+    // hello, requestChoice; the malformed choice resolves nothing, so
+    // c-u never completes: c-next and c-after-fence are refused busy.
+    // No second requestChoice ever goes out: the held turn keeps the
+    // gate across the fence, and termination records the unknown.
+    assert_eq!(frames.len(), 4, "unexpected frames: {frames:?}");
     assert_eq!(frames[1]["method"], "adapter.requestChoice");
-    assert_eq!(frames[2]["result"]["outcome"], "SubmissionUnknown");
-    assert_eq!(frames[2]["result"]["correlation_id"], "c-u");
-    assert_eq!(frames[4]["result"]["outcome"], "RefusedBusy");
-    assert_eq!(frames[5]["result"]["outcome"], "RefusedBusy");
-    assert_eq!(frames.len(), 6, "unexpected frames: {frames:?}");
+    assert_eq!(frames[2]["result"]["outcome"], "RefusedBusy");
+    assert_eq!(frames[2]["result"]["correlation_id"], "c-next");
+    assert_eq!(frames[3]["result"]["outcome"], "RefusedBusy");
+    assert_eq!(frames[3]["result"]["correlation_id"], "c-after-fence");
+    let codes: Vec<&str> =
+        sink.iter().map(|entry| entry.code.as_str()).collect();
+    assert!(codes.contains(&"malformed_reply_result"), "sink: {codes:?}");
+    assert!(codes.contains(&"terminalize"), "sink: {codes:?}");
+    assert!(codes.contains(&"choice_cancelled"), "sink: {codes:?}");
+    assert!(codes.contains(&"submission_unknown"), "sink: {codes:?}");
 }
 
 /// The bootstrap ceiling is the 64KiB pre-negotiation bound.

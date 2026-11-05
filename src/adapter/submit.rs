@@ -161,6 +161,9 @@ impl Adapter<'_> {
                 return None;
             },
         };
+        // Admitted: binding, wire, correlation, and every member
+        // validated. Only now does the request prove a live peer.
+        self.observe_liveness();
         let null_id = Value::Null;
         let id = envelope.get("id").unwrap_or(&null_id);
         if self.turn.begin(correlation.clone()).is_err() {
@@ -300,7 +303,9 @@ impl Adapter<'_> {
         if literal != OutcomeLiteral::Submitted {
             result["evidence_basis"] = Value::String(evidence.to_string());
         }
-        let _ = self.write_value(&json!({
+        // Terminal submit outcomes are ack traffic: the frozen
+        // priority lane carries ack resolution exempt from data caps.
+        let _ = self.write_control(&json!({
             "jsonrpc": "2.0",
             "id": id,
             "result": result,
@@ -322,7 +327,8 @@ impl Adapter<'_> {
         outcome: OutcomeLiteral,
         evidence: &str,
     ) {
-        let _ = self.write_value(&json!({
+        // Submit refusals are ack traffic like terminal outcomes.
+        let _ = self.write_control(&json!({
             "jsonrpc": "2.0",
             "id": id.cloned().unwrap_or(Value::Null),
             "result": {
@@ -333,6 +339,12 @@ impl Adapter<'_> {
         }));
     }
 
+    /// Validates EVERY submit member, not only the first: target and
+    /// generation binding, known content type (never a default
+    /// latency), and a present string payload that decodes as base64.
+    /// A missing or non-string payload is refused, never defaulted to
+    /// "". Returns the first member's message id; every member must
+    /// carry one.
     pub(crate) fn validate_members(
         &self,
         params: &Value,
@@ -348,7 +360,13 @@ impl Adapter<'_> {
             .binding
             .as_ref()
             .ok_or_else(|| "no captured binding for submit".to_string())?;
-        for member in members {
+        for (index, member) in members.iter().enumerate() {
+            let position = format!("member {index}");
+            member
+                .get("message_id")
+                .and_then(Value::as_str)
+                .filter(|message_id| !message_id.is_empty())
+                .ok_or_else(|| format!("{position} needs a message id"))?;
             let target = member
                 .get("target_session")
                 .and_then(Value::as_str)
@@ -380,12 +398,13 @@ impl Adapter<'_> {
             {
                 return Err(format!("unknown content type {content_type:?}"));
             }
-            let payload = member
-                .get("payload_b64")
-                .and_then(Value::as_str)
-                .unwrap_or("");
-            if base64_decode(payload).is_none() {
-                return Err("submit member payload is not base64".to_string());
+            match member.get("payload_b64").and_then(Value::as_str) {
+                Some(payload) if base64_decode(payload).is_some() => {},
+                _ => {
+                    return Err(
+                        "submit member payload is not base64".to_string()
+                    );
+                },
             }
         }
         members

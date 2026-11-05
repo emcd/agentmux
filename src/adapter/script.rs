@@ -123,6 +123,8 @@ pub struct Script {
 pub enum ScriptError {
     Malformed { reason: String },
     EmptyChoiceOptions { title: String },
+    UnknownSnapshotKind { kind: String },
+    UnknownEventKind { kind: String },
 }
 
 impl std::fmt::Display for ScriptError {
@@ -136,6 +138,18 @@ impl std::fmt::Display for ScriptError {
             },
             Self::EmptyChoiceOptions { title } => {
                 write!(formatter, "scripted choice {title:?} has no options")
+            },
+            Self::UnknownSnapshotKind { kind } => {
+                write!(
+                    formatter,
+                    "scripted snapshot kind {kind:?} is not valid for this profile"
+                )
+            },
+            Self::UnknownEventKind { kind } => {
+                write!(
+                    formatter,
+                    "scripted lifecycle kind {kind:?} is outside the frozen domain"
+                )
             },
         }
     }
@@ -174,6 +188,53 @@ impl Script {
         self.turns
             .iter()
             .find(|turn| turn.correlation == correlation_id)
+    }
+
+    /// Validates scripted payload domains against the adapter
+    /// profile before any wire traffic: snapshot entry kinds are
+    /// closed per profile (generic admits only `text`; the ACP
+    /// profile additionally admits the agent-surface kinds), and
+    /// lifecycle event kinds are closed to the frozen domain
+    /// regardless of profile. A trusted fixture is never permission
+    /// to emit a non-conforming frame.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ScriptError::UnknownSnapshotKind`] for an entry kind
+    /// outside the profile's closed set and
+    /// [`ScriptError::UnknownEventKind`] for an event kind outside
+    /// the frozen domain.
+    pub fn validate_for_profile(
+        &self,
+        profile: &str,
+    ) -> Result<(), ScriptError> {
+        const GENERIC_KINDS: &[&str] = &["text"];
+        const ACP_KINDS: &[&str] =
+            &["text", "user", "agent", "cognition", "invocation", "update"];
+        const EVENT_KINDS: &[&str] =
+            &["ready", "degraded", "failed", "progress", "heartbeat"];
+        let snapshot_kinds = if profile == "acp" {
+            ACP_KINDS
+        } else {
+            GENERIC_KINDS
+        };
+        for snapshot in &self.snapshots {
+            for entry in &snapshot.entries {
+                if !snapshot_kinds.contains(&entry.kind.as_str()) {
+                    return Err(ScriptError::UnknownSnapshotKind {
+                        kind: entry.kind.clone(),
+                    });
+                }
+            }
+        }
+        for event in &self.events {
+            if !EVENT_KINDS.contains(&event.kind.as_str()) {
+                return Err(ScriptError::UnknownEventKind {
+                    kind: event.kind.clone(),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Finds the scripted snapshot for a look target, if any.

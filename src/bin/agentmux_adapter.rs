@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 use std::env;
 use std::fs;
-use std::io::{BufReader, BufWriter, Write};
+use std::io::BufWriter;
 use std::process::ExitCode;
 
 use agentmux::adapter::handshake::{LimitsProposal, VersionOffer};
@@ -126,12 +126,58 @@ fn main() -> ExitCode {
         handshake_timeout_ms: parse_timeout(handshake_timeout_ms, 30_000),
         liveness_timeout_ms: parse_timeout(liveness_timeout_ms, 60_000),
     };
-    let reader = BufReader::new(std::io::stdin());
-    let stdout = std::io::stdout();
-    let mut writer = BufWriter::new(stdout.lock());
+    // No BufReader and no std::io::stdin() here: both buffer
+    // beneath the run loop (BufReader's 8KiB buffer; stdin's shared
+    // global input buffer), and prefetched-but-unread bytes escape
+    // the RX queue budget. StdinRaw issues one read syscall per call
+    // with no userspace buffering, so the run loop's counting reader
+    // sees every transport byte exactly once.
+    #[cfg(unix)]
+    let reader = StdinRaw::new();
+    // Non-Unix fallback: the shared stdin handle (buffered; the RX
+    // budget does not see its prefetch — Unix deployments, including
+    // all conformance harnesses, use the raw reader above).
+    #[cfg(not(unix))]
+    let reader = std::io::stdin();
+    let writer = BufWriter::new(std::io::stdout());
     let mut sink = StderrSink;
-    let code =
-        run_stdio(&config, &SystemClock, reader, &mut writer, &mut sink);
-    let _ = writer.flush();
+    let code = run_stdio(&config, &SystemClock, reader, writer, &mut sink);
     ExitCode::from(code as u8)
+}
+
+/// Unbuffered stdin reader: one `read` syscall per call, no
+/// userspace buffering anywhere between the pipe and the run loop's
+/// byte budget. Retries on interruption; EOF and errors surface
+/// unchanged.
+#[cfg(unix)]
+struct StdinRaw;
+
+#[cfg(unix)]
+impl StdinRaw {
+    fn new() -> Self {
+        Self
+    }
+}
+
+#[cfg(unix)]
+impl std::io::Read for StdinRaw {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            let taken = unsafe {
+                libc::read(
+                    0,
+                    buf.as_mut_ptr().cast::<libc::c_void>(),
+                    buf.len(),
+                )
+            };
+            if taken < 0 {
+                let error = std::io::Error::last_os_error();
+                if error.kind() == std::io::ErrorKind::Interrupted {
+                    continue;
+                }
+                return Err(error);
+            }
+            return Ok(taken as usize);
+        }
+    }
 }

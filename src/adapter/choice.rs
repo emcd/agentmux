@@ -160,6 +160,13 @@ use super::binding::Direction;
 use super::submit::OutcomeLiteral;
 
 impl Adapter<'_> {
+    /// Resolves one admitted choice reply. Only shape-valid replies
+    /// reach this point (malformed results are discarded with the
+    /// call kept open before admission), so every branch below
+    /// records a terminal for the pending turn: a valid Chosen or
+    /// Cancelled outcome from a result, or a local Cancelled carrying
+    /// the admitted error's reason. The turn completes with its
+    /// scripted ack in all three cases.
     pub(crate) fn resolve_choice(&mut self, envelope: &Value, wire: u64) {
         let Some(mut pending) = self.pending_submit.take() else {
             self.record("orphan_choice_reply", "no pending submit");
@@ -178,48 +185,39 @@ impl Adapter<'_> {
             return;
         }
         let mut resolver = choice.resolver;
-        let mut malformed = false;
         if let Some(result) = envelope.get("result") {
+            // Shape-valid by the admission gate: exactly one of
+            // chosen or cancelled with well-typed fields.
             let outcome = result.get("outcome");
             let chosen = outcome.and_then(|outcome| outcome.get("chosen"));
             let cancelled =
                 outcome.and_then(|outcome| outcome.get("cancelled"));
             if let Some(chosen) = chosen {
-                let option = chosen.get("option_id").and_then(Value::as_str);
-                let decider = chosen.get("decided_by").and_then(Value::as_str);
-                match (option, decider) {
-                    (Some(option_id), Some(decided_by)) => {
-                        let _ = resolver.resolve(ChoiceResolution::Chosen {
-                            option_id: option_id.to_string(),
-                            decided_by: decided_by.to_string(),
-                        });
-                    },
-                    _ => {
-                        malformed = true;
-                        let _ = resolver.cancel("malformed_choice_result");
-                    },
-                }
+                let option_id = chosen
+                    .get("option_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let decided_by = chosen
+                    .get("decided_by")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let _ = resolver.resolve(ChoiceResolution::Chosen {
+                    option_id: option_id.to_string(),
+                    decided_by: decided_by.to_string(),
+                });
             } else if let Some(cancelled) = cancelled {
-                match cancelled.get("reason_code").and_then(Value::as_str) {
-                    Some(reason_code) => {
-                        let decided_by = cancelled
-                            .get("decided_by")
-                            .and_then(Value::as_str)
-                            .map(str::to_string);
-                        let _ =
-                            resolver.resolve(ChoiceResolution::Cancelled {
-                                decided_by,
-                                reason_code: reason_code.to_string(),
-                            });
-                    },
-                    None => {
-                        malformed = true;
-                        let _ = resolver.cancel("malformed_choice_result");
-                    },
-                }
-            } else {
-                malformed = true;
-                let _ = resolver.cancel("malformed_choice_result");
+                let reason_code = cancelled
+                    .get("reason_code")
+                    .and_then(Value::as_str)
+                    .unwrap_or("relay_cancelled");
+                let decided_by = cancelled
+                    .get("decided_by")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let _ = resolver.resolve(ChoiceResolution::Cancelled {
+                    decided_by,
+                    reason_code: reason_code.to_string(),
+                });
             }
         } else if let Some(error) = envelope.get("error") {
             let reason = error
@@ -229,18 +227,12 @@ impl Adapter<'_> {
                 .unwrap_or("relay_error")
                 .to_string();
             let _ = resolver.cancel(&reason);
-        } else {
-            malformed = true;
-            let _ = resolver.cancel("malformed_choice_reply");
         }
         self.choice_gate.release();
-        let ack = if malformed {
-            OutcomeLiteral::SubmissionUnknown
-        } else {
-            let turn = self.config.script.turn_for(&pending.correlation);
-            turn.map(|turn| turn.ack.as_outcome())
-                .unwrap_or(OutcomeLiteral::Submitted)
-        };
+        let turn = self.config.script.turn_for(&pending.correlation);
+        let ack = turn
+            .map(|turn| turn.ack.as_outcome())
+            .unwrap_or(OutcomeLiteral::Submitted);
         self.table.retire(Direction::Outbound, wire);
         let id = Value::String(pending.inbound_wire.to_string());
         self.complete_submit(
