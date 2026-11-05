@@ -541,10 +541,11 @@ pub(super) fn host_selected_bundle(
 }
 
 // Last-resort coverage for the host's domain-claim decisions: they are only
-// reachable through host preparation (no public interface drives them). One
-// test pins refusal of a foreign-held root; a second pins adoption of a
-// same-process runtime's live domain, including that startup registrations
-// land in the owner's delivery state rather than a discarded fresh one.
+// reachable through host preparation (no public interface drives them).
+// One test drives both phases in order: a foreign-held root is refused
+// before any hosting, then, with the hold released and the same root owned
+// by a live same-process runtime, preparation adopts the owner and startup
+// registrations land in the owning domain rather than a discarded fresh one.
 #[cfg(test)]
 mod domain_claim_tests {
     use std::os::unix::io::AsRawFd as _;

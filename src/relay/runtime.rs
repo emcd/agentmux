@@ -67,8 +67,9 @@ use super::stream::{
 /// delivery state rather than the serving connection's own. Two handles on
 /// separate roots stay isolated by construction: separate roots, separate
 /// delivery state, separate instance ids. Sharing one store root across
-/// processes is operator error: the registry is in-process only and cannot
-/// serialize against another process's writers.
+/// processes is refused as well: the in-process registry serializes claims
+/// made in this process, and an exclusive lock file held for the delivery
+/// state's lifetime refuses a root already hosted by another process.
 pub struct RelayRuntime {
     configuration_roots: ConfigurationRoots,
     state_root: PathBuf,
@@ -112,7 +113,8 @@ impl RelayRuntime {
     /// an internal failure when the state-root layout cannot be ensured,
     /// or `validation_runtime_already_hosted` when another live runtime in
     /// this process already hosts the same state root. Cross-process
-    /// sharing of one store root is operator error and is not detected.
+    /// sharing of the same store root is refused the same way, through an
+    /// exclusive lock file held for the delivery state's lifetime.
     pub fn init(
         configuration_root: PathBuf,
         state_root: PathBuf,

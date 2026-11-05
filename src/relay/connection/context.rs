@@ -64,15 +64,15 @@ impl ConnectionServeContext {
     /// aside and the owning domain's delivery state (and admin lock) is
     /// adopted instead, so every stream served over the root registers in the
     /// same domain. Otherwise this context claims the root for the passed
-    /// delivery state. A root held by another process, or a claim I/O
-    /// failure, is refused: there is no approved exception that would let an
-    /// infallible signature serve an unowned domain.
+    /// delivery state. A root held by another process has no local delivery
+    /// state to adopt and no claim to establish, so construction is refused
+    /// rather than serving an unowned domain.
     ///
     /// # Errors
     ///
-    /// Returns `validation_runtime_already_hosted` when another live domain
-    /// in this process or another process already owns the same store root,
-    /// and the claim's I/O failures verbatim.
+    /// Returns `validation_runtime_already_hosted` when another process
+    /// holds the same store root's claim, and the claim's I/O failures
+    /// verbatim. A live same-process domain is adopted, not refused.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         configuration_roots: ConfigurationRoots,
