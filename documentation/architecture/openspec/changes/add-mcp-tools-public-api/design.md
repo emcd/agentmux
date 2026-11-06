@@ -116,6 +116,122 @@ The public boundary must not include:
 - private relay socket Hello/request/response frames,
 - any caller-supplied sender or actor identity field.
 
+## Boundary Design (Task 1)
+
+Classification, canonical types, error taxonomy, and signatures below
+are the Task 1 output. Mapping rationale stays in `ideas/mcp/4`
+(§3 wire mapping, §6 cross-check, precision notes) and is cited, not
+duplicated. Implementation waits on step-3 public relay handlers
+(Migration Plan step 1); the Backend touchpoints in §5 are open
+through the Coordinator until answered.
+
+### 1.1 Handler classification
+
+`help` is the only adapter-native handler: it builds no
+`RelayRequest`, reaches no relay, and answers from the adapter catalog
+plus generated schemas. Every other handler is operation-backed
+(verified per handler against `src/mcp/server/handlers/*`,
+`src/mcp/params.rs`, `src/mcp/validation.rs`, `src/relay/contract.rs`):
+
+| Tool / command | RelayRequest built | Authority input today |
+|---|---|---|
+| `send` | `Send` | associated sender session + namespace qualification |
+| `look` | `Look` | associated sender session + namespace qualification |
+| `raww` | `Raww` | associated sender session + namespace qualification |
+| `list.principals` (local) | `List` | associated sender session (+ bundle paths for home default) |
+| `list.principals` (foreign) | `DiscoverPrincipals` | association (not sender value) |
+| `list.namespaces` | `DiscoverNamespaces` | association |
+| `list.relays` | `ListRelays` | association |
+| `list.decisions` | `ChoicesList` | implicit (stream-bound; no explicit gate) |
+| `choose` | `ChoicesPick` | implicit (stream-bound; relay derives the actor) |
+| `updown.up` / `updown.down` | `Up` / `Down` | implicit (stream-bound) |
+| `new.peer` | `NewPeer` | implicit (stream-bound) |
+| `change.psk` / `change.scope` | `ChangePsk` / `ChangeScope` | implicit (stream-bound) |
+| `drop.peer` | `DropPeer` | implicit (stream-bound) |
+| `link.peer` | `InstallPeerCredential` | implicit (stream-bound) |
+| `help` | none (adapter-native) | association read for display only |
+
+Semantics-vs-presentation split rules, uniform across handlers:
+validation (unknown fields, then shape) runs before readiness and
+association gates, so malformed input reports as malformed rather than
+as server state; `send`/`look`/`raww` resolve the sender before target
+qualification so an unassociated server fails as
+`validation_unassociated_server` regardless of target shape. Moving
+into operations: request validation against relay contracts, relay
+dispatch, and outcome interpretation. Staying in the adapter:
+parameter deserialization, association-to-context resolution, JSON
+rendering (including `list` Down/empty-GLOBAL synthesis on
+relay-unavailable and `link` secret redaction), and rmcp errors.
+
+### 1.2 Canonical inputs and outputs
+
+Derived from the existing tool contracts; optionality lives in the
+type system (`Option`, typed enums). No operation carries a sender or
+`on_behalf_of` field — the relay stamps cross-relay attribution and
+local callers send none.
+
+| Operation | Input | Output |
+|---|---|---|
+| `send` | targets, broadcast, message, request_id?, operation-bundle param (bundle qualification happens operation-side; the wire carries no bundle field — ideas/mcp/4 precision note (a)) | schema_version, requester_session, results, request_id?, sender_display_name?, authenticated_identity?, on_behalf_of? |
+| `look` | target, lines?, offset? (no timeout: the §1 table's `timeout` conflated the wire poll's adapter-side `prime_timeout_ms` with the operation input; the tool contract has no timeout field — addendum a2) | snapshot payload (lines or structured entries + freshness/generation metadata), target, captured_at, authenticated_identity?, on_behalf_of? |
+| `list.principals` | namespace?, relay? | schema_version, bundles |
+| `list.namespaces` | relay? | schema_version, namespaces (+ relay echo on foreign path) |
+| `list.relays` | (none) | schema_version, relays |
+| `list.decisions` | (none) | schema_version, pending_requests |
+| `decide` | choice_request_id, outcome (selected requires option_id; cancelled forbids it — in the types), option_id? | status, choice_request_id, outcome, decided_by?, reason_code?, reason? |
+| `raww` | target, text, no_enter, request_id? | schema_version, status, target_session, transport, request_id?, message_id? |
+| `up` / `down` | (none; operates on the associated bundle server-side) | action, bundles, changed/degraded/skipped/failed counts |
+| `new.peer` | principal_id, scope?, destination? | principal_id, principal_type, config_snippet, psk?, written_path?, diagnostics? |
+| `change.psk` | principal_id, destination? | principal_id, psk?, written_path? |
+| `change.scope` | principal_id, scope (required; empty string clears, omission is an error) | principal_id, scope, diagnostics? |
+| `drop.peer` | principal_id | principal_id, principal_type, credential_path? |
+| `link.peer` | alias, psk | alias, written_path (psk structurally absent everywhere past the request) |
+
+### 1.3 Canonical error
+
+`{code, message, details}` with typed details. Relay-authored codes
+(including `authorization_forbidden`) pass through with code and
+details unchanged; operations synthesize no authorization decision.
+Adapter-only failures are excluded from the set:
+`validation_unassociated_server` and the adapter-socket
+`relay_timeout` / `relay_unavailable`. The `link` adapter mapping is
+the documented redaction exception: the canonical error still carries
+details, but the adapter renders `(code, message, None)` because an
+unexpected variant could carry a PSK — a mapping-layer rule, not a
+second error set.
+
+### 1.4 Signatures
+
+Shape (names illustrative; the boundary constraints in Public API
+Shape govern):
+
+```rust
+async fn <op>(
+    runtime: &RelayRuntime,
+    principal: &VerifiedPrincipal,
+    input: <Op>Input,
+) -> Result<<Op>Output, OperationError>
+```
+
+All eleven operations are defined in the design (a coherent surface
+prevents signature drift); publication proceeds in two waves. Wave 1
+(conformance-critical): `send`, `look`, `list` (+ meta-commands),
+`decide`, `raww`, plus adapter-native `help`. Wave 2 (gated on
+Phase-2 merge, not start): `up`, `down`, `new.peer`, `change.psk`,
+`change.scope`, `drop.peer`, `link.peer` — admin operations touch
+the dispatch/admin boundaries Backend is building now.
+
+### Task-1 limits
+
+Signatures are draft until step-3 public relay handlers land
+(Migration Plan step 1); bare-target defaulting and the
+operation-bundle parameter shape follow the step-3 runtime types.
+Tasks 2.3+ wait on the Backend answers for admission-refusal
+taxonomy and priority-at-operation-layer (planning read: the option-A
+ruling is a wire-scheduler rule — adapter outbox plus relay dispatch
+internals — and operations carry no priority semantics, passing
+denials through; Backend confirms).
+
 ## Risks / Trade-offs
 
 - Keeping the schema derives on the adapter's parameter types buys the
@@ -165,6 +281,6 @@ The public boundary must not include:
 - Exact module and type names are implementation details as long as the
   operation boundary carries no protocol types and principal context stays
   distinct from caller-supplied identity.
-- Whether the admin operations (`updown`, `new`, `change`, `drop`) are in the
-  first published operation set follows the separate admin-tool scope decision,
-  not this proposal.
+- Admin operations: DEFINED all eleven in the design; PUBLISHED in
+  two waves (wave 1 conformance-critical now, wave 2 admin after
+  Phase-2 merge) per Coordinator ruling.

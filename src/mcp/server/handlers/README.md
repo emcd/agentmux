@@ -87,10 +87,10 @@ tool-specific quirks:
   (so an unassociated server fails as `validation_unassociated_server`
   regardless of target shape). The qualified target list is what
   rides the relay.
-- `look.rs` — does not qualify `target_session`; the caller must
-  supply the `@<namespace>` suffix. Maps `LookSnapshotPayload` to
-  the JSON shape described in `src/mcp/README.md` (Responsibilities
-  section).
+- `look.rs` — qualifies `target_session` via `qualify_target` after
+  sender resolution (same unassociated-first rationale as `send`).
+  Maps `LookSnapshotPayload` to the JSON shape described in
+  `src/mcp/README.md` (Responsibilities section).
 - `updown.rs`, `new.rs`, `change.rs`, `drop.rs` — own the meta-tool
   `command` dispatch (`up` / `down`, `peer`, `psk`, `peer`
   respectively) and the typed request builders. `new.rs` also
