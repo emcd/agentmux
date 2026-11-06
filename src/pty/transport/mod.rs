@@ -282,6 +282,19 @@ impl PtyTransport {
         *self.readiness.lock().expect("pty readiness mutex")
     }
 
+    /// Update the transport-local readiness state WITHOUT mirroring it
+    /// into the relay registry. Used exactly once: the synchronous
+    /// startup-failure path. The registry mirror for that terminal
+    /// transition is the relay wrapper's job, ordered strictly after the
+    /// construction-error record lands — otherwise a prime-wait poll could
+    /// observe `Unavailable` with no cause while the record is still in
+    /// flight, and report a generic failure instead of the transport's
+    /// own code. Every other transition keeps mirroring at the point it
+    /// happens.
+    fn set_readiness_local(&self, state: WorkerReadinessState) {
+        *self.readiness.lock().expect("pty readiness mutex") = state;
+    }
+
     /// Whether the worker runtime exists and is usable, which `Busy` satisfies:
     /// a pty mid-turn still has a live master to snapshot.
     ///
@@ -464,9 +477,13 @@ impl Transport for PtyTransport {
             // publish step) may have published `Unavailable` on its
             // way out. Ensure the transport-local readiness reflects
             // the failure even if neither cleanup ran (very early
-            // failure before any thread / child resource existed).
+            // failure before any thread / child resource existed) —
+            // locally only, without mirroring: the registry mirror for
+            // this terminal transition is the relay wrapper's job,
+            // ordered strictly after the construction-error record
+            // lands (see `set_readiness_local`).
             if !matches!(self.readiness(), WorkerReadinessState::Unavailable) {
-                self.set_readiness(WorkerReadinessState::Unavailable);
+                self.set_readiness_local(WorkerReadinessState::Unavailable);
             }
         }
         result

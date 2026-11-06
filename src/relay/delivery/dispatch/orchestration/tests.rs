@@ -330,8 +330,14 @@ mod staged_gate_signal_tests {
     /// A gate signalled mid-wait interrupts the prime wait with the
     /// interruption error rather than reporting the (never-coming) ready
     /// state. The entry pre-exists so no worker spawns and no child runs.
+    /// The barrier stages the signal strictly after the initializer
+    /// starts: the pre-check runs within microseconds of the rendezvous
+    /// while the signal lands a full staged interval later, so the test
+    /// deterministically exercises the in-wait gate check rather than the
+    /// pre-election refusal (which has its own test).
     #[test]
     fn staged_gate_signal_interrupts_prime_wait() {
+        use std::sync::Barrier;
         let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
             Default::default(),
         ));
@@ -349,11 +355,15 @@ mod staged_gate_signal_tests {
             Arc::new(AtomicUsize::new(0)),
             false,
         );
+        let barrier = Arc::new(Barrier::new(2));
         let gate = Arc::clone(&delivery);
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(100));
+        let gate_barrier = Arc::clone(&barrier);
+        let signaller = std::thread::spawn(move || {
+            gate_barrier.wait();
+            std::thread::sleep(std::time::Duration::from_millis(50));
             gate.shutdown_gate().signal_shutdown();
         });
+        barrier.wait();
         let member = pty_member("staged-gate-sess");
         let error = initialize_pty_target_for_startup(
             &delivery,
@@ -363,6 +373,7 @@ mod staged_gate_signal_tests {
         )
         .expect_err("a mid-wait gate signal interrupts startup");
         assert_eq!(error.0, "runtime_startup_interrupted");
+        signaller.join().expect("signaller joins");
         unregister_worker(&delivery, registry, &key, owner);
         assert!(
             adopt_registered_attempt(registry, &key).is_none(),
@@ -443,11 +454,11 @@ mod unavailable_before_cause_tests {
     use std::sync::atomic::AtomicUsize;
     use tokio::sync::mpsc::unbounded_channel;
 
-    /// Unavailable published before the construction record still reports
-    /// the transport's own cause: the prime wait gives a landed record one
-    /// grace interval to arrive before reporting the state without it. The
-    /// record lands milliseconds after the publish; the grace is an order
-    /// of magnitude wider.
+    /// A recorded cause wins over an observed Unavailable: construction
+    /// records before it publishes the terminal registry state, so an
+    /// Unavailable observation with a cause present always prefers the
+    /// cause. No threads, no timing: the record strictly precedes the
+    /// observation.
     #[test]
     fn unavailable_before_cause_reports_cause() {
         let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
@@ -467,6 +478,18 @@ mod unavailable_before_cause_tests {
             Arc::new(AtomicUsize::new(0)),
             false,
         );
+        assert!(
+            record_construction_error(
+                registry,
+                &key,
+                owner,
+                WorkerFailureReason {
+                    code: "pty_spawn_failed".to_string(),
+                    reason: "spawn: no such program".to_string(),
+                },
+            ),
+            "the record lands on the waited attempt"
+        );
         set_worker_readiness(
             registry,
             "unavailable-cause-ns",
@@ -474,21 +497,6 @@ mod unavailable_before_cause_tests {
             "unavailable-cause-sess",
             WorkerReadinessState::Unavailable,
         );
-        let recorder = Arc::clone(&delivery);
-        let record_key = key.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-            let landed = record_construction_error(
-                recorder.async_registry(),
-                &record_key,
-                owner,
-                WorkerFailureReason {
-                    code: "pty_spawn_failed".to_string(),
-                    reason: "spawn: no such program".to_string(),
-                },
-            );
-            assert!(landed, "the record lands on the waited attempt");
-        });
         let member = pty_member("unavailable-cause-sess");
         let error = initialize_pty_target_for_startup(
             &delivery,
@@ -544,12 +552,17 @@ mod stopping_entry_not_serving_tests {
             Arc::new(AtomicUsize::new(0)),
             false,
         );
-        // Stop first, then publish: no poll ever sees a serving entry
-        // that is not already stopping, so any Ok would be the old gate.
-        // The drain's unregister ends the wait promptly instead.
+        // The drain thread sleeps first so the pre-election guard passes
+        // deterministically; it then stops and publishes while the prime
+        // wait is polling, so the serving gate (not the pre-check) is what
+        // refuses the entry. Stop precedes publish within the thread, so
+        // no poll can ever see a serving entry that is not already
+        // stopping — any Ok would be the old gate. The drain's unregister
+        // ends the wait promptly instead of burning the prime bound.
         let drain = Arc::clone(&delivery);
         let drain_key = key.clone();
         let drain_handle = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(50));
             stop_workers_for_bundle(
                 drain.async_registry(),
                 "stopping-ns",

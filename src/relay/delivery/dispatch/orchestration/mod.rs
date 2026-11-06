@@ -15,7 +15,7 @@ use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
 #[cfg(feature = "pty")]
 use super::super::async_worker::{
-    PtyElection, WorkerOwner, adopt_registered_attempt, elect_pty_attempt,
+    PtyElection, adopt_registered_attempt, elect_pty_attempt,
     worker_attempt_snapshot,
 };
 use super::super::async_worker::{
@@ -367,7 +367,6 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
         Instant::now() + Duration::from_millis(PTY_STARTUP_PRIME_TIMEOUT_MS);
     // A stop signalled after a valid ready observation is a later event;
     // an entry already stopping at a snapshot is never reported serving.
-    let mut unavailable_grace_owner: Option<WorkerOwner> = None;
     loop {
         if shutdown_requested() || delivery.is_shutting_down() {
             return Err(startup_interrupted_error(
@@ -457,15 +456,13 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
             // no matter when the stop landed relative to this poll.
             return Ok(());
         }
-        // An Unavailable observation for the waited attempt is a startup
-        // failure, not a reason to keep waiting out the bound — with one
-        // ordering guard. The transport publishes Unavailable before the
-        // synchronous construction error is recorded, so a first sighting
-        // with no cause yet yields one poll interval for the record to
-        // land; only a second sighting still causeless reports the
-        // Unavailable state itself. A cause that lands in between is
-        // always preferred: it is the transport's own code, and it names
-        // the attempt this pass waited on.
+        // An Unavailable observation for the waited attempt ends the wait.
+        // A recorded cause wins: construction records before it publishes
+        // the terminal registry state, so a cause still in flight at the
+        // moment of observation is unrepresentable — the registry cannot
+        // show this attempt as Unavailable until its record has landed.
+        // With no cause, the state itself is the report: a genuinely
+        // causeless terminal state, never a generic timeout.
         if readiness == Some(WorkerReadinessState::Unavailable) {
             if let Some((_, completion)) = waited.as_ref()
                 && let Some(recorded) = completion.read()
@@ -479,20 +476,15 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
                     }),
                 ));
             }
-            if unavailable_grace_owner == waited_owner {
-                return Err(startup_failure_error(
-                    None,
-                    "runtime_pty_unavailable",
-                    "Pty worker reported Unavailable during startup",
-                    json!({
-                        "target_session": target_member.id,
-                        "last_readiness": format!("{readiness:?}"),
-                    }),
-                ));
-            }
-            thread::sleep(Duration::from_millis(25));
-            unavailable_grace_owner = waited_owner;
-            continue;
+            return Err(startup_failure_error(
+                None,
+                "runtime_pty_unavailable",
+                "Pty worker reported Unavailable during startup",
+                json!({
+                    "target_session": target_member.id,
+                    "last_readiness": format!("{readiness:?}"),
+                }),
+            ));
         }
         if let Some((_, completion)) = waited.as_ref()
             && let Some(recorded) = completion.read()

@@ -47,6 +47,8 @@ use crate::relay::{
 use crate::configuration::{BundleMember, SessionType};
 use crate::envelope::PromptBatchSettings;
 use crate::runtime::inscriptions::emit_inscription;
+#[cfg(feature = "pty")]
+use crate::transports::WorkerReadinessState;
 use crate::transports::{
     AcpDriverServices, ChoiceMade, ChoiceToMake, Chooser, DeliveryEnvelope,
     DeliveryExecutorContext, DeliveryMessage, StartupContext, TransportError,
@@ -236,7 +238,7 @@ pub(super) async fn build_pty_transport(
     let transport = TransportImpl::pty(
         target_member.clone(),
         pty_config,
-        Some(pty_mirror_state),
+        Some(Arc::clone(&pty_mirror_state)),
         delivery,
     );
     // Propagated rather than discarded. A dropped startup error installed
@@ -244,7 +246,16 @@ pub(super) async fn build_pty_transport(
     // could not write, so the entries waited out the whole dwell before
     // anything reported a generic unreachable -- turning a spawn failure
     // the relay already knew about into a delayed guess.
-    start_transport_off_runtime(
+    //
+    // On failure the registry mirror is published here, strictly after
+    // the construction-error record above lands: the transport reports
+    // its synchronous failure locally without mirroring (see
+    // `set_readiness_local`), so the registry can never show this
+    // attempt as `Unavailable` while its cause is still in flight. A
+    // prime-wait poll that observes `Unavailable` with no cause is
+    // therefore observing a genuinely causeless terminal state — never
+    // a record that has not landed yet.
+    let built = start_transport_off_runtime(
         transport,
         StartupContext {
             namespace: namespace.to_string(),
@@ -257,9 +268,12 @@ pub(super) async fn build_pty_transport(
         target_member.id.clone(),
         Some(record_failure),
     )
-    .await
+    .await;
+    if built.is_err() {
+        pty_mirror_state(WorkerReadinessState::Unavailable);
+    }
+    built
 }
-
 /// Builds a non-ACP worker's transport from inputs resolved before the worker
 /// existed.
 ///
