@@ -194,11 +194,21 @@ impl PtyTransport {
     /// probe has no use for them.
     ///
     /// `mirror_state` is the relay-constructed closure that mirrors
-    /// per-turn readiness transitions into the relay's global
+    /// per-turn readiness transitions into the relay's per-handle
     /// worker-state registry. Pass `None` in tests constructed
     /// without a relay registry; the transport's internal readiness
     /// state still advances so the readiness predicates can drive the
     /// lifecycle locally.
+    ///
+    /// Synchronous startup errors are the one exception to mirroring at
+    /// the point of transition: `startup` reports a failed build locally
+    /// only, without invoking this closure. The relay wrapper that
+    /// invoked `startup` records the construction error first and then
+    /// publishes the terminal `Unavailable` through this same closure,
+    /// so an observer can never see this attempt as `Unavailable` while
+    /// its cause is still being recorded. Worker-thread terminal
+    /// transitions (post-startup init failure, child exit, shutdown)
+    /// still mirror immediately: no construction error can follow them.
     #[must_use]
     pub fn new(
         target_member: BundleMember,
@@ -254,16 +264,23 @@ impl PtyTransport {
     }
 
     /// Update the readiness state and (if a closure was injected)
-    /// mirror the transition into the relay's global worker-state
-    /// registry. Used at every relay-side lifecycle point: the
-    /// pre-init `Initializing` publish, the post-failure `Unavailable`
-    /// publish, and the pre-shutdown `Unavailable` publish.
+    /// mirror the transition into the relay's per-handle worker-state
+    /// registry. Used at relay-side lifecycle points: the pre-init
+    /// `Initializing` publish and the pre-shutdown `Unavailable` publish.
+    /// A synchronous startup failure deliberately does NOT mirror here —
+    /// see `set_readiness_local`: the relay wrapper publishes that
+    /// terminal transition only after the construction-error record
+    /// lands, so no observer ever sees `Unavailable` for an attempt whose
+    /// cause is still in flight.
     ///
     /// The worker thread publishes the rest of the lifecycle
     /// (`Available` on successful init, `Busy`/`Available`/
     /// `Unavailable` around each delivery) via the cloned
     /// `Arc<Mutex<WorkerReadinessState>>` + cloned `mirror_state`
-    /// closure it owns.
+    /// closure it owns. Those run only after the reader thread exists
+    /// (spawned first — see `startup_inner`), so by the time the worker
+    /// thread can publish, synchronous startup can no longer fail with
+    /// a record pending.
     ///
     /// `Recovering` transitions are not emitted by this transport —
     /// they require a respawn monitor that does not yet exist for Pty
@@ -280,6 +297,19 @@ impl PtyTransport {
     #[must_use]
     pub fn readiness(&self) -> WorkerReadinessState {
         *self.readiness.lock().expect("pty readiness mutex")
+    }
+
+    /// Update the transport-local readiness state WITHOUT mirroring it
+    /// into the relay registry. Used exactly once: the synchronous
+    /// startup-failure path. The registry mirror for that terminal
+    /// transition is the relay wrapper's job, ordered strictly after the
+    /// construction-error record lands — otherwise a prime-wait poll could
+    /// observe `Unavailable` with no cause while the record is still in
+    /// flight, and report a generic failure instead of the transport's
+    /// own code. Every other transition keeps mirroring at the point it
+    /// happens.
+    fn set_readiness_local(&self, state: WorkerReadinessState) {
+        *self.readiness.lock().expect("pty readiness mutex") = state;
     }
 
     /// Whether the worker runtime exists and is usable, which `Busy` satisfies:
@@ -464,9 +494,13 @@ impl Transport for PtyTransport {
             // publish step) may have published `Unavailable` on its
             // way out. Ensure the transport-local readiness reflects
             // the failure even if neither cleanup ran (very early
-            // failure before any thread / child resource existed).
+            // failure before any thread / child resource existed) —
+            // locally only, without mirroring: the registry mirror for
+            // this terminal transition is the relay wrapper's job,
+            // ordered strictly after the construction-error record
+            // lands (see `set_readiness_local`).
             if !matches!(self.readiness(), WorkerReadinessState::Unavailable) {
-                self.set_readiness(WorkerReadinessState::Unavailable);
+                self.set_readiness_local(WorkerReadinessState::Unavailable);
             }
         }
         result

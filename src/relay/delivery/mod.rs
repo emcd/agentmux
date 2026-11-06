@@ -21,6 +21,8 @@ pub(in crate::relay) use self::choice_state::{
 };
 pub(in crate::relay) use self::consumer::LedgerMailboxConsumer;
 pub use self::context::DeliveryContext;
+#[cfg(feature = "pty")]
+pub(in crate::relay) use self::dispatch::initialize_pty_target_for_startup;
 pub(in crate::relay) use self::dispatch::{
     enqueue_async_delivery, initialize_acp_target_for_startup,
     wait_for_async_delivery_shutdown,

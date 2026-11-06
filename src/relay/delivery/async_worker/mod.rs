@@ -1,9 +1,10 @@
 //! Async delivery workers: the registry that owns a target, the terminal
 //! transition that resolves one member, and the reporting that publishes it.
 //!
-//! Split three ways along the boundary the module's own tests already followed:
+//! Split four ways along the boundary the module's own tests already followed:
 //!
 //! - [`registry`] — which worker owns a target and what state it is in.
+//! - [`attempt`] — one construction attempt's completion and its waiters.
 //! - [`reap`] — a registration ending, and the target state it takes with it.
 //! - [`terminal`] — the single terminal transition and the evidence order.
 //! - [`reporting`] — the observability floor, the sender's event, the receipt.
@@ -15,14 +16,29 @@
 //! reaches past the registry into the admission ledger — an entry leaving is
 //! what makes a target's mailbox nobody's.
 
+#[cfg(feature = "pty")]
+mod attempt;
 mod reap;
 pub(crate) mod registry;
 mod reporting;
 mod terminal;
 
+/// Entry-owned construction completions for the bring-up prime wait: only
+/// Pty records into them today (the one transport whose worker unregisters
+/// on construction failure). Each attempt carries its own completion in its
+/// own entry — there is no table to purge — so the handles and their
+/// touchpoints are gated with it rather than compiled dead into every
+/// build.
+#[cfg(feature = "pty")]
+pub(in crate::relay::delivery) use self::attempt::{
+    PtyElection, adopt_registered_attempt, elect_pty_attempt,
+    record_construction_error, worker_attempt_snapshot,
+};
 pub(in crate::relay::delivery) use self::reap::{
     bind_worker_consumer_generation, unregister_worker,
 };
+#[cfg(feature = "pty")]
+pub(in crate::relay) use self::registry::set_worker_readiness_if_owner;
 pub(in crate::relay::delivery) use self::registry::{
     AsyncDeliveryRegistry, AsyncWorkerKey, WorkerDispatch, WorkerOwner,
     build_worker_key, close_worker, drop_pending_async_tasks_on_stop,
@@ -38,10 +54,14 @@ pub(in crate::relay) use self::registry::{
 };
 
 /// Test-only registry seam: installs an entry directly, so a test can make a
-/// worker key routable without spawning a real worker. Re-exported under the same
-/// `cfg` as its definition rather than made unconditionally visible.
+/// worker key routable without spawning a real worker. The `_with_readiness`
+/// variant names the entry's readiness in the same insert. Re-exported under
+/// the same `cfg` as their definitions rather than made unconditionally
+/// visible.
 #[cfg(test)]
 pub(in crate::relay::delivery) use self::registry::register_worker;
+#[cfg(all(test, feature = "pty"))]
+pub(in crate::relay::delivery) use self::registry::register_worker_with_readiness;
 
 pub(in crate::relay::delivery) use self::terminal::{
     complete_task_on_shutdown, complete_task_outcome,

@@ -102,6 +102,13 @@ pub(in crate::relay) struct AsyncWorkerEntry {
     /// be writing. Recovery is by operator action, which is the fail-stop the
     /// fence chooses over an ordering hazard.
     pub fail_stopped: bool,
+    /// This worker's construction completion: the immutable result of the
+    /// build that installed it, shared with every waiter that adopted or
+    /// elected the attempt. Cloned out under the workers lock; waiters
+    /// never touch it through any other path, so no replacement,
+    /// unregister, or teardown can blind a waiter holding its clone.
+    #[cfg(feature = "pty")]
+    pub completion: std::sync::Arc<super::attempt::AttemptCompletion>,
     /// The consumer generation this worker currently holds for its target, if it
     /// holds one.
     ///
@@ -288,13 +295,13 @@ pub(in crate::relay::delivery) fn try_existing_worker(
 
 /// Identifies one worker installation, distinct from every other for the same
 /// target. Minted by whichever caller wins the registry insert.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(in crate::relay) struct WorkerOwner(u64);
 
 static NEXT_WORKER_OWNER: AtomicU64 = AtomicU64::new(1);
 
 impl WorkerOwner {
-    fn mint() -> Self {
+    pub(super) fn mint() -> Self {
         Self(NEXT_WORKER_OWNER.fetch_add(1, Ordering::Relaxed))
     }
 }
@@ -323,6 +330,10 @@ pub(in crate::relay::delivery) fn register_worker(
                 stopping: false,
                 fail_stopped: false,
                 consumer_generation: None,
+                #[cfg(feature = "pty")]
+                completion: std::sync::Arc::new(
+                    super::attempt::AttemptCompletion::default(),
+                ),
             },
         );
     }
@@ -361,9 +372,54 @@ pub(in crate::relay::delivery) fn register_worker_if_absent(
             stopping: false,
             fail_stopped: false,
             consumer_generation: None,
+            #[cfg(feature = "pty")]
+            completion: std::sync::Arc::new(
+                super::attempt::AttemptCompletion::default(),
+            ),
         },
     );
     Ok(Some(owner))
+}
+
+/// Test-only install that names its readiness in the same insert: the entry
+/// is born serving, so no publish gap follows the install. The snapshot
+/// storm uses this to separate the two questions it asks — installs always
+/// produce a serving entry, and the observer checks the serving state is
+/// attributed to the owner that published it — instead of entangling them
+/// through an install-then-publish window the test would have to excuse.
+#[cfg(all(test, feature = "pty"))]
+pub(in crate::relay::delivery) fn register_worker_with_readiness(
+    registry: &AsyncDeliveryRegistry,
+    key: AsyncWorkerKey,
+    sender: UnboundedSender<AsyncDeliveryTask>,
+    pending: std::sync::Arc<AtomicUsize>,
+    bounded_acp_queue: bool,
+    readiness: WorkerReadinessState,
+) -> WorkerOwner {
+    let owner = WorkerOwner::mint();
+    if let Ok(mut workers) = registry.workers.lock() {
+        workers.insert(
+            key,
+            AsyncWorkerEntry {
+                owner,
+                sender,
+                pending,
+                bounded_acp_queue,
+                readiness: Some(readiness),
+                last_failure: None,
+                acp_output_view: None,
+                closing: false,
+                stopping: false,
+                fail_stopped: false,
+                consumer_generation: None,
+                #[cfg(feature = "pty")]
+                completion: std::sync::Arc::new(
+                    super::attempt::AttemptCompletion::default(),
+                ),
+            },
+        );
+    }
+    owner
 }
 
 /// Marks a target fail-stopped after a negative generation-fence verdict, so
@@ -532,6 +588,46 @@ pub(in crate::relay) fn set_worker_readiness(
     // worker registration so subscribers can observe pre-registration and
     // post-unregistration transitions.
     observability::publish_worker_readiness(&key, state);
+}
+
+/// Owner-checked readiness publish: the state lands only on the entry
+/// still owned by `owner`. A late publisher (a detached worker thread, a
+/// superseded generation) must never describe its successor's attempt —
+/// the mirror closure captures the owner at creation for exactly this
+/// check, the way the construction-failure callback already does.
+#[cfg(feature = "pty")]
+pub(in crate::relay) fn set_worker_readiness_if_owner(
+    registry: &AsyncDeliveryRegistry,
+    owner: WorkerOwner,
+    namespace: &str,
+    runtime_directory: &Path,
+    target_session: &str,
+    state: WorkerReadinessState,
+) {
+    let key = build_worker_key(namespace, runtime_directory, target_session);
+    let landed = if let Ok(mut workers) = registry.workers.lock()
+        && let Some(entry) = workers.get_mut(&key)
+        && entry.owner == owner
+    {
+        entry.readiness = Some(state);
+        // Same recovery clearing as the unchecked publish: a healthy
+        // state means this attempt recovered.
+        if matches!(
+            state,
+            WorkerReadinessState::Available | WorkerReadinessState::Busy
+        ) {
+            entry.last_failure = None;
+        }
+        true
+    } else {
+        false
+    };
+    // Report only a transition that actually happened: unlike the
+    // unchecked path, a skipped write names no state change, and
+    // publishing one would show observers a state no entry holds.
+    if landed {
+        observability::publish_worker_readiness(&key, state);
+    }
 }
 
 pub(in crate::relay) fn get_worker_readiness(
