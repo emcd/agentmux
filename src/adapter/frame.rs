@@ -457,15 +457,20 @@ pub(crate) fn read_loop(
                         // The bound was already exceeded before the
                         // transport ended or failed: record the framing
                         // failure first so EOF or a dead transport
-                        // cannot erase the detected oversize, then let
-                        // the normal end-of-stream path close the
-                        // session. The cleared prefix keeps the next
-                        // acquisition byte-exact.
-                        DrainOutcome::Eof | DrainOutcome::Unusable => {
+                        // cannot erase the detected oversize, then
+                        // close with the ORIGINAL terminal result —
+                        // never rediscover it with another source
+                        // read, which could swallow a one-shot error
+                        // and answer later frames.
+                        DrainOutcome::Eof => {
                             prefix =
                                 Some(ReadEvent::Discarded { bound: hard });
-                            frame.clear();
-                            continue;
+                            break ReadEvent::Eof;
+                        },
+                        DrainOutcome::Unusable => {
+                            prefix =
+                                Some(ReadEvent::Discarded { bound: hard });
+                            break ReadEvent::Unusable;
                         },
                         DrainOutcome::Shutdown => return,
                     }
