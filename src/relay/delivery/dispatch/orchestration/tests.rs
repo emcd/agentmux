@@ -633,3 +633,50 @@ mod stopping_entry_not_serving_tests {
         drain_handle.join().expect("drain thread joins");
     }
 }
+#[cfg(all(test, feature = "pty"))]
+mod unconstructible_child_reports_own_cause_tests {
+    use super::super::super::super::async_worker::{
+        adopt_registered_attempt, build_worker_key,
+    };
+    use super::super::*;
+    use super::pty_startup_fixtures::*;
+    use crate::configuration::TargetConfiguration;
+    use std::path::Path;
+    use std::sync::Arc;
+
+    /// An unconstructible child fails bring-up with the transport's own
+    /// code, promptly and without a registered worker left behind. This
+    /// drives the full path — election, spawn, synchronous failure,
+    /// record, unregistration — through the production wrapper, so the
+    /// record-before-mirror ordering holds end to end rather than only
+    /// at each seam. The global delivery runtime hosts the worker task,
+    /// so no test runtime is needed; nothing here depends on timing.
+    #[test]
+    fn unconstructible_child_reports_own_cause() {
+        let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
+            Default::default(),
+        ));
+        let mut member = pty_member("unconstructible-sess");
+        if let TargetConfiguration::Pty(ref mut config) = member.target {
+            config.initial_command = "/definitely/not/a/program".to_string();
+        }
+        let error = initialize_pty_target_for_startup(
+            &delivery,
+            "unconstructible-ns",
+            Path::new("/unconstructible-rt"),
+            &member,
+        )
+        .expect_err("an unspawnable child fails startup");
+        assert_eq!(error.0, "pty_spawn_failed");
+        let registry = delivery.async_registry();
+        let key = build_worker_key(
+            "unconstructible-ns",
+            Path::new("/unconstructible-rt"),
+            "unconstructible-sess",
+        );
+        assert!(
+            adopt_registered_attempt(registry, &key).is_none(),
+            "the failed worker unregisters; no entry is left behind"
+        );
+    }
+}

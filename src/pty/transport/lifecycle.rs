@@ -6,6 +6,8 @@
 //! `PtyTransport::startup_inner` (the `openpty` → `spawn_command` →
 //! worker/reader thread launch that `Transport::startup` publishes around).
 
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::{
     sync::{
         Arc,
@@ -25,6 +27,16 @@ use super::{
     PtyChildHandle, PtyTransport, STARTUP_CLEANUP_JOIN_BOUND,
     STARTUP_CLEANUP_POLL,
 };
+
+/// Test-only failpoints for the startup thread launch order. The reader
+/// hook injects a deterministic reader-spawn failure; the spawn counter
+/// pins that the worker spawn site is reached at most once per startup.
+/// Both are `#[cfg(test)]`-only and default off; production code paths
+/// never observe them set.
+#[cfg(test)]
+static FAIL_PTY_READER_SPAWN: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static PTY_WORKER_SPAWNS: AtomicUsize = AtomicUsize::new(0);
 
 impl PtyTransport {
     /// Performs the bootstrap work behind [`crate::transports::Transport::startup`].
@@ -147,6 +159,14 @@ impl PtyTransport {
         // interleave unrepresentable — any worker-thread terminal state
         // implies synchronous startup can no longer fail with a pending
         // record.
+        #[cfg(test)]
+        if FAIL_PTY_READER_SPAWN.load(Ordering::SeqCst) {
+            return Err(TransportError {
+                code: "pty_reader_spawn_failed".to_string(),
+                reason: "injected reader spawn failure".to_string(),
+                details: None,
+            });
+        }
         let reader_handle = thread::Builder::new()
             .name(format!("pty-reader-{target_session}"))
             .spawn(move || {
@@ -164,6 +184,8 @@ impl PtyTransport {
             })?;
         guard.note_reader(reader_handle);
 
+        #[cfg(test)]
+        PTY_WORKER_SPAWNS.fetch_add(1, Ordering::SeqCst);
         let worker_handle = thread::Builder::new()
             .name(format!("pty-worker-{target_session_for_worker}"))
             .spawn(move || {
@@ -313,7 +335,129 @@ fn observe_thread_finished(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::configuration::{
+        BundleMember, TargetConfiguration, TermProtocol,
+    };
+    use crate::protocol::delivery::PackingUnitId;
+    use crate::protocol::mailbox::EntryRange;
+    use crate::protocol::operations::{
+        AckResult, DeclareResult, MemberAcknowledgment, PeekResult,
+    };
+    use crate::transports::{
+        ChoiceMade, ChoiceToMake, DeliveryExecutorContext, MailboxConsumer,
+        StartupContext, Transport,
+    };
+    use std::sync::Mutex;
     use std::time::Duration;
+
+    /// A mailbox consumer that is never driven: startup failures under
+    /// test happen before any executor exists, so every method is
+    /// unreachable by construction.
+    struct NeverMailbox;
+
+    impl MailboxConsumer for NeverMailbox {
+        fn peek(
+            &self,
+            _entry_max: usize,
+            _canonical_bytes_max: u64,
+        ) -> PeekResult {
+            unimplemented!("no executor runs in a failed startup")
+        }
+
+        fn declare(&self, _range: EntryRange) -> DeclareResult {
+            unimplemented!("no executor runs in a failed startup")
+        }
+
+        fn ack(
+            &self,
+            _unit: PackingUnitId,
+            _members: &[MemberAcknowledgment],
+        ) -> AckResult {
+            unimplemented!("no executor runs in a failed startup")
+        }
+
+        fn resolve_unreachable(&self) {
+            unimplemented!("no executor runs in a failed startup")
+        }
+    }
+
+    fn unstarted_transport(
+        mirrored: &Arc<Mutex<Vec<crate::transports::WorkerReadinessState>>>,
+        initial_command: &str,
+    ) -> PtyTransport {
+        use crate::protocol::DeliveryDoorbell;
+        PtyTransport::new(
+            BundleMember {
+                id: "ordering-sess".to_string(),
+                name: None,
+                working_directory: None,
+                target: TargetConfiguration::Pty(
+                    crate::configuration::PtyTargetConfiguration {
+                        initial_command: initial_command.to_string(),
+                        resume_command: String::new(),
+                        prompt_readiness: None,
+                        cols: 120,
+                        rows: 40,
+                        term_protocol: TermProtocol::default(),
+                    },
+                ),
+                coder_session_id: None,
+                policy_id: None,
+                environment: Vec::new(),
+            },
+            super::super::PtyTargetConfiguration {
+                initial_command: initial_command.to_string(),
+                resume_command: String::new(),
+                prompt_readiness: None,
+                cols: 120,
+                rows: 40,
+                working_directory: None,
+                term_protocol: TermProtocol::default(),
+            },
+            Some({
+                let mirrored = Arc::clone(mirrored);
+                Arc::new(move |state| {
+                    mirrored.lock().expect("mirror mutex").push(state);
+                })
+            }),
+            DeliveryExecutorContext {
+                consumer: Arc::new(NeverMailbox),
+                doorbell: DeliveryDoorbell::default(),
+                poll_interval: Duration::from_millis(10),
+                unreachable_dwell: Duration::from_secs(60),
+            },
+        )
+    }
+
+    fn startup_context() -> StartupContext {
+        StartupContext {
+            namespace: "ordering-ns".to_string(),
+            runtime_directory: std::path::PathBuf::from("/ordering-rt"),
+            target_member: BundleMember {
+                id: "ordering-sess".to_string(),
+                name: None,
+                working_directory: None,
+                target: TargetConfiguration::Pty(
+                    crate::configuration::PtyTargetConfiguration {
+                        initial_command: String::new(),
+                        resume_command: String::new(),
+                        prompt_readiness: None,
+                        cols: 120,
+                        rows: 40,
+                        term_protocol: TermProtocol::default(),
+                    },
+                ),
+                coder_session_id: None,
+                policy_id: None,
+                environment: Vec::new(),
+            },
+            choose: Arc::new(|_: ChoiceToMake| ChoiceMade::Cancelled {
+                decided_by: String::new(),
+                reason_code: String::new(),
+                reason: None,
+            }),
+        }
+    }
 
     #[test]
     fn startup_cleanup_observes_thread_within_bound_and_detaches_beyond_it() {
@@ -330,6 +474,72 @@ mod tests {
         assert!(
             !observe_thread_finished(slow, Duration::from_millis(10)),
             "a thread not finished by the bound should be detached, not joined",
+        );
+    }
+
+    /// A synchronous construction failure publishes no terminal mirror:
+    /// the local readiness still records the failure, but the registry
+    /// sees nothing until the relay wrapper records the cause first.
+    /// Restoring a mirroring failure path fails here with an Unavailable
+    /// entry in the mirror log.
+    #[test]
+    fn sync_failure_mirrors_nothing_terminal() {
+        let mirrored = Arc::new(Mutex::new(Vec::new()));
+        let mut transport =
+            unstarted_transport(&mirrored, "/definitely/not/a/program --flag");
+        let error = transport
+            .startup(startup_context())
+            .expect_err("an unspawnable child fails startup");
+        assert_eq!(error.code, "pty_spawn_failed");
+        assert_eq!(
+            transport.readiness(),
+            crate::transports::WorkerReadinessState::Unavailable,
+            "the local readiness still records the failure"
+        );
+        assert_eq!(
+            mirrored.lock().expect("mirror mutex").as_slice(),
+            &[crate::transports::WorkerReadinessState::Initializing],
+            "only the pre-init publish mirrored; no terminal state leaked early"
+        );
+    }
+
+    /// A forced reader-spawn failure starts no worker thread: the mirror
+    /// log stays at the pre-init publish however long the test waits, so
+    /// no worker-thread terminal state can precede the recorded cause.
+    /// Restoring worker-first ordering spawns the worker, which publishes
+    /// Available and fails this log.
+    #[test]
+    fn reader_spawn_failure_starts_no_worker_mirror() {
+        PTY_WORKER_SPAWNS.store(0, Ordering::SeqCst);
+        FAIL_PTY_READER_SPAWN.store(true, Ordering::SeqCst);
+        let mirrored = Arc::new(Mutex::new(Vec::new()));
+        // A real, spawnable child: the failure under test is the injected
+        // reader-spawn refusal, not the command.
+        let mut transport = unstarted_transport(&mirrored, "/bin/true");
+        let error = transport
+            .startup(startup_context())
+            .expect_err("an injected reader failure fails startup");
+        FAIL_PTY_READER_SPAWN.store(false, Ordering::SeqCst);
+        assert_eq!(error.code, "pty_reader_spawn_failed");
+        assert_eq!(
+            transport.readiness(),
+            crate::transports::WorkerReadinessState::Unavailable,
+            "the local readiness still records the failure"
+        );
+        // The worker spawn site was never reached: with reader-first
+        // ordering the injected failure aborts startup before any worker
+        // thread exists, so no worker-thread terminal state can precede
+        // the recorded cause. Worker-first ordering would reach the
+        // spawn site and fail this count.
+        assert_eq!(
+            PTY_WORKER_SPAWNS.load(Ordering::SeqCst),
+            0,
+            "no worker thread was spawned"
+        );
+        assert_eq!(
+            mirrored.lock().expect("mirror mutex").as_slice(),
+            &[crate::transports::WorkerReadinessState::Initializing],
+            "no terminal mirror preceded the failure"
         );
     }
 }
