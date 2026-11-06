@@ -561,19 +561,20 @@ mod stopping_entry_not_serving_tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     /// A stopping entry that reads Available is never reported serving:
-    /// no poll can observe a serving snapshot that is not already
-    /// stopping, so the loop skips the ready outcome and the drain's
-    /// unregister ends the wait instead. The entry pre-exists so no
-    /// worker spawns and no child runs. The drain waits for loop passes
-    /// (not wall time) before stopping, so the pre-election guard
-    /// deterministically passes on an unstopped entry while every
-    /// serving observation happens under the stop.
+    /// every serving decision rechecks stopping on a fresh snapshot, so
+    /// polls that observe the stopping entry skip the ready outcome and
+    /// the drain's unregister ends the wait instead. The entry
+    /// pre-exists so no worker spawns and no child runs. The drain waits
+    /// for loop passes — not wall time — proving the pre-election guard
+    /// passed on an unstopped entry, then publishes, then waits for two
+    /// more passes so at least one full poll observes the stopping
+    /// Available entry before the unregister. A mutant without the gate
+    /// returns Ok at the first such poll instead.
     #[test]
     fn stopping_entry_never_reports_serving() {
         use super::pty_startup_fixtures::{
             PRIME_WAIT_SERIAL, pty_member, wait_for_polls,
         };
-        use std::sync::atomic::Ordering;
         let _serial =
             PRIME_WAIT_SERIAL.lock().expect("prime-wait serial lock");
         let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
@@ -593,14 +594,20 @@ mod stopping_entry_not_serving_tests {
             Arc::new(AtomicUsize::new(0)),
             false,
         );
-        // Strictly after the loop has started polling (hence after the
-        // pre-election guard passed on an unstopped entry): stop,
-        // publish, let polls observe, then unregister.
+        // After the first pass the pre-election guard has passed on an
+        // unstopped entry: stop, publish, then wait for two more passes
+        // so at least one full poll observes the stopping Available
+        // entry before it is reaped. Single-threaded loop order makes
+        // this conclusive: the second additional pass cannot start until
+        // the first post-publish pass has snapshotted.
         let drain = Arc::clone(&delivery);
         let drain_key = key.clone();
-        let start = super::super::PRIME_WAIT_POLLS.load(Ordering::Relaxed);
         let drain_handle = std::thread::spawn(move || {
-            wait_for_polls(start, 1);
+            wait_for_polls(
+                super::super::PRIME_WAIT_POLLS
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1,
+            );
             stop_workers_for_bundle(
                 drain.async_registry(),
                 "stopping-ns",
@@ -613,7 +620,11 @@ mod stopping_entry_not_serving_tests {
                 "stopping-sess",
                 WorkerReadinessState::Available,
             );
-            std::thread::sleep(std::time::Duration::from_millis(200));
+            wait_for_polls(
+                super::super::PRIME_WAIT_POLLS
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                2,
+            );
             unregister_worker(
                 &drain,
                 drain.async_registry(),
