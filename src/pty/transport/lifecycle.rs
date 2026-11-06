@@ -7,7 +7,7 @@
 //! worker/reader thread launch that `Transport::startup` publishes around).
 
 #[cfg(test)]
-use std::sync::atomic::AtomicUsize;
+use std::cell::Cell;
 use std::{
     sync::{
         Arc,
@@ -28,15 +28,16 @@ use super::{
     STARTUP_CLEANUP_POLL,
 };
 
-/// Test-only failpoints for the startup thread launch order. The reader
-/// hook injects a deterministic reader-spawn failure; the spawn counter
-/// pins that the worker spawn site is reached at most once per startup.
-/// Both are `#[cfg(test)]`-only and default off; production code paths
-/// never observe them set.
+// Test-only failpoints for the startup thread launch order, scoped to
+// the calling thread: `startup_inner` runs synchronously on its
+// caller's thread, so thread-local state cannot leak into or out of a
+// concurrent startup on another thread. Both are `#[cfg(test)]`-only
+// and default off; production code never observes them set.
 #[cfg(test)]
-static FAIL_PTY_READER_SPAWN: AtomicBool = AtomicBool::new(false);
-#[cfg(test)]
-static PTY_WORKER_SPAWNS: AtomicUsize = AtomicUsize::new(0);
+thread_local! {
+    static FAIL_PTY_READER_SPAWN: Cell<bool> = const { Cell::new(false) };
+    static PTY_WORKER_SPAWNS: Cell<usize> = const { Cell::new(0) };
+}
 
 impl PtyTransport {
     /// Performs the bootstrap work behind [`crate::transports::Transport::startup`].
@@ -160,7 +161,7 @@ impl PtyTransport {
         // implies synchronous startup can no longer fail with a pending
         // record.
         #[cfg(test)]
-        if FAIL_PTY_READER_SPAWN.load(Ordering::SeqCst) {
+        if FAIL_PTY_READER_SPAWN.with(Cell::get) {
             return Err(TransportError {
                 code: "pty_reader_spawn_failed".to_string(),
                 reason: "injected reader spawn failure".to_string(),
@@ -185,7 +186,7 @@ impl PtyTransport {
         guard.note_reader(reader_handle);
 
         #[cfg(test)]
-        PTY_WORKER_SPAWNS.fetch_add(1, Ordering::SeqCst);
+        PTY_WORKER_SPAWNS.with(|count| count.set(count.get() + 1));
         let worker_handle = thread::Builder::new()
             .name(format!("pty-worker-{target_session_for_worker}"))
             .spawn(move || {
@@ -333,7 +334,8 @@ fn observe_thread_finished(
 }
 
 #[cfg(test)]
-mod tests {
+mod startup_fixtures {
+    use super::super::PtyTransport;
     use super::*;
     use crate::configuration::{
         BundleMember, TargetConfiguration, TermProtocol,
@@ -345,7 +347,7 @@ mod tests {
     };
     use crate::transports::{
         ChoiceMade, ChoiceToMake, DeliveryExecutorContext, MailboxConsumer,
-        StartupContext, Transport,
+        StartupContext,
     };
     use std::sync::Mutex;
     use std::time::Duration;
@@ -353,7 +355,7 @@ mod tests {
     /// A mailbox consumer that is never driven: startup failures under
     /// test happen before any executor exists, so every method is
     /// unreachable by construction.
-    struct NeverMailbox;
+    pub(super) struct NeverMailbox;
 
     impl MailboxConsumer for NeverMailbox {
         fn peek(
@@ -381,7 +383,7 @@ mod tests {
         }
     }
 
-    fn unstarted_transport(
+    pub(super) fn unstarted_transport(
         mirrored: &Arc<Mutex<Vec<crate::transports::WorkerReadinessState>>>,
         initial_command: &str,
     ) -> PtyTransport {
@@ -429,7 +431,7 @@ mod tests {
         )
     }
 
-    fn startup_context() -> StartupContext {
+    pub(super) fn startup_context() -> StartupContext {
         StartupContext {
             namespace: "ordering-ns".to_string(),
             runtime_directory: std::path::PathBuf::from("/ordering-rt"),
@@ -458,6 +460,12 @@ mod tests {
             }),
         }
     }
+}
+
+#[cfg(test)]
+mod startup_cleanup_tests {
+    use super::*;
+    use std::time::Duration;
 
     #[test]
     fn startup_cleanup_observes_thread_within_bound_and_detaches_beyond_it() {
@@ -476,42 +484,42 @@ mod tests {
             "a thread not finished by the bound should be detached, not joined",
         );
     }
+}
 
-    /// A synchronous construction failure publishes no terminal mirror:
-    /// the local readiness still records the failure, but the registry
-    /// sees nothing until the relay wrapper records the cause first.
-    /// Restoring a mirroring failure path fails here with an Unavailable
-    /// entry in the mirror log.
-    #[test]
-    fn sync_failure_mirrors_nothing_terminal() {
-        let mirrored = Arc::new(Mutex::new(Vec::new()));
-        let mut transport =
-            unstarted_transport(&mirrored, "/definitely/not/a/program --flag");
-        let error = transport
-            .startup(startup_context())
-            .expect_err("an unspawnable child fails startup");
-        assert_eq!(error.code, "pty_spawn_failed");
-        assert_eq!(
-            transport.readiness(),
-            crate::transports::WorkerReadinessState::Unavailable,
-            "the local readiness still records the failure"
-        );
-        assert_eq!(
-            mirrored.lock().expect("mirror mutex").as_slice(),
-            &[crate::transports::WorkerReadinessState::Initializing],
-            "only the pre-init publish mirrored; no terminal state leaked early"
-        );
+#[cfg(test)]
+mod reader_spawn_order_tests {
+    use super::startup_fixtures::*;
+    use super::*;
+    use crate::transports::Transport;
+    use std::sync::Mutex;
+
+    /// Guard-restored failpoint: the flag clears on scope exit even if an
+    /// assertion panics, so no other test can observe injection enabled.
+    struct ReaderSpawnFailGuard;
+
+    impl ReaderSpawnFailGuard {
+        fn set() -> Self {
+            super::FAIL_PTY_READER_SPAWN.with(|flag| flag.set(true));
+            Self
+        }
     }
 
-    /// A forced reader-spawn failure starts no worker thread: the mirror
-    /// log stays at the pre-init publish however long the test waits, so
-    /// no worker-thread terminal state can precede the recorded cause.
-    /// Restoring worker-first ordering spawns the worker, which publishes
-    /// Available and fails this log.
+    impl Drop for ReaderSpawnFailGuard {
+        fn drop(&mut self) {
+            super::FAIL_PTY_READER_SPAWN.with(|flag| flag.set(false));
+        }
+    }
+
+    /// A forced reader-spawn failure starts no worker thread and mirrors
+    /// nothing terminal: with reader-first ordering the injected failure
+    /// aborts startup before any worker thread exists, so no
+    /// worker-thread terminal state can precede the recorded cause.
+    /// Worker-first ordering would reach the spawn site (failing the
+    /// counter) or mirror from the stray worker.
     #[test]
     fn reader_spawn_failure_starts_no_worker_mirror() {
-        PTY_WORKER_SPAWNS.store(0, Ordering::SeqCst);
-        FAIL_PTY_READER_SPAWN.store(true, Ordering::SeqCst);
+        super::PTY_WORKER_SPAWNS.with(|count| count.set(0));
+        let _fail_guard = ReaderSpawnFailGuard::set();
         let mirrored = Arc::new(Mutex::new(Vec::new()));
         // A real, spawnable child: the failure under test is the injected
         // reader-spawn refusal, not the command.
@@ -519,20 +527,15 @@ mod tests {
         let error = transport
             .startup(startup_context())
             .expect_err("an injected reader failure fails startup");
-        FAIL_PTY_READER_SPAWN.store(false, Ordering::SeqCst);
+        drop(_fail_guard);
         assert_eq!(error.code, "pty_reader_spawn_failed");
         assert_eq!(
             transport.readiness(),
             crate::transports::WorkerReadinessState::Unavailable,
             "the local readiness still records the failure"
         );
-        // The worker spawn site was never reached: with reader-first
-        // ordering the injected failure aborts startup before any worker
-        // thread exists, so no worker-thread terminal state can precede
-        // the recorded cause. Worker-first ordering would reach the
-        // spawn site and fail this count.
         assert_eq!(
-            PTY_WORKER_SPAWNS.load(Ordering::SeqCst),
+            super::PTY_WORKER_SPAWNS.with(std::cell::Cell::get),
             0,
             "no worker thread was spawned"
         );

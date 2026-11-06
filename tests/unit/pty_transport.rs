@@ -474,3 +474,90 @@ fn a_departed_pty_child_resolves_its_queued_mail_at_the_dwell() {
 
     Transport::shutdown(&mut transport);
 }
+
+/// A synchronous construction failure publishes no terminal mirror: the
+/// transport records its failure locally, and the relay wrapper publishes
+/// the registry `Unavailable` only after the construction error is
+/// recorded. Runs against a child that can never spawn, so no worker
+/// thread exists and the mirror log is fully determined. Restoring the
+/// early terminal mirror fails this log.
+#[test]
+fn sync_failure_mirrors_nothing_terminal() {
+    use agentmux::transports::WorkerReadinessState;
+
+    let mirrored = Arc::new(Mutex::new(Vec::new()));
+    let mirror = {
+        let mirrored = Arc::clone(&mirrored);
+        Arc::new(move |state| {
+            mirrored.lock().expect("mirror mutex").push(state);
+        })
+    };
+    let mailbox = Arc::new(StubMailbox::with_entries(Vec::new()));
+    let mut transport = PtyTransport::new(
+        BundleMember {
+            id: "mirror-sess".to_string(),
+            name: None,
+            working_directory: None,
+            target: TargetConfiguration::Pty(
+                agentmux::configuration::PtyTargetConfiguration {
+                    initial_command: "/definitely/not/a/program".to_string(),
+                    resume_command: String::new(),
+                    prompt_readiness: None,
+                    cols: 120,
+                    rows: 40,
+                    term_protocol: TermProtocol::default(),
+                },
+            ),
+            coder_session_id: None,
+            policy_id: None,
+            environment: Vec::new(),
+        },
+        PtyTargetConfiguration {
+            initial_command: "/definitely/not/a/program".to_string(),
+            resume_command: String::new(),
+            prompt_readiness: None,
+            cols: 120,
+            rows: 40,
+            working_directory: None,
+            term_protocol: TermProtocol::default(),
+        },
+        Some(mirror),
+        DeliveryExecutorContext {
+            consumer: Arc::clone(&mailbox) as Arc<_>,
+            doorbell: DeliveryDoorbell::default(),
+            poll_interval: Duration::from_millis(10),
+            unreachable_dwell: Duration::from_secs(60),
+        },
+    );
+    let error = transport
+        .startup(StartupContext {
+            namespace: "mirror-ns".to_string(),
+            runtime_directory: std::path::PathBuf::from("/mirror-rt"),
+            target_member: BundleMember {
+                id: "mirror-sess".to_string(),
+                name: None,
+                working_directory: None,
+                target: TargetConfiguration::Ui,
+                coder_session_id: None,
+                policy_id: None,
+                environment: Vec::new(),
+            },
+            choose: Arc::new(|_| ChoiceMade::Cancelled {
+                decided_by: String::new(),
+                reason_code: "not_applicable".to_string(),
+                reason: None,
+            }),
+        })
+        .expect_err("an unspawnable child fails startup");
+    assert_eq!(error.code, "pty_spawn_failed");
+    assert_eq!(
+        transport.readiness(),
+        WorkerReadinessState::Unavailable,
+        "the local readiness still records the failure"
+    );
+    assert_eq!(
+        mirrored.lock().expect("mirror mutex").as_slice(),
+        &[WorkerReadinessState::Initializing],
+        "only the pre-init publish mirrored; no terminal state leaked early"
+    );
+}

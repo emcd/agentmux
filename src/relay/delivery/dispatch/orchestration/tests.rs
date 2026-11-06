@@ -650,9 +650,15 @@ mod unconstructible_child_reports_own_cause_tests {
     /// record, unregistration — through the production wrapper, so the
     /// record-before-mirror ordering holds end to end rather than only
     /// at each seam. The global delivery runtime hosts the worker task,
-    /// so no test runtime is needed; nothing here depends on timing.
+    /// so no test runtime is needed. The test serializes with the other
+    /// prime-wait tests (its loop advances the shared counter) and then
+    /// waits for the entry's removal with a bound instead of assuming
+    /// the failing worker has already reaped itself.
     #[test]
     fn unconstructible_child_reports_own_cause() {
+        let _serial = super::pty_startup_fixtures::PRIME_WAIT_SERIAL
+            .lock()
+            .expect("prime-wait serial lock");
         let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
             Default::default(),
         ));
@@ -674,9 +680,20 @@ mod unconstructible_child_reports_own_cause_tests {
             Path::new("/unconstructible-rt"),
             "unconstructible-sess",
         );
-        assert!(
-            adopt_registered_attempt(registry, &key).is_none(),
-            "the failed worker unregisters; no entry is left behind"
-        );
+        // The failing worker unregisters on its own way out; the prime
+        // wait may return the recorded cause before that reap lands, so
+        // wait for the removal with a bound rather than assuming it.
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if adopt_registered_attempt(registry, &key).is_none() {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the failed worker must unregister its entry"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 }
