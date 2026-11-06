@@ -19,7 +19,7 @@
 
 ## 2. Operation Implementation
 
-- [ ] 2.1 Add the public tool-operations module and its crate-level exports,
+- [x] 2.1 Add the public tool-operations module and its crate-level exports,
   carrying no rmcp, MCP association, or JSON schema types.
 - [ ] 2.2 Move each operation-backed handler body into its operation function,
   dispatching through the public relay handlers and preserving existing
