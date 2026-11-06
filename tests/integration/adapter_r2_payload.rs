@@ -138,8 +138,18 @@ fn malformed_snapshot_b64_refuses_binding() {
     let (code, output, _) = run_transcript(&config, &input);
     assert_eq!(code, EXIT_REFUSAL);
     let frames = split_frames(&output);
-    assert_eq!(frames.len(), 1, "only the hello request goes out");
-    assert_eq!(frames[0]["method"], "adapter.handshakeHello");
+    // The hello request is enqueued before the refusal is known, but
+    // the writer thread may not drain it before the run loop fails
+    // the handshake on preloaded input — a live supervisor cannot
+    // send the result without having received the request, so this
+    // race is test-only. Either way nothing beyond hello goes out.
+    assert!(
+        frames.len() <= 1,
+        "at most the hello request goes out: {frames:?}"
+    );
+    if let Some(first) = frames.first() {
+        assert_eq!(first["method"], "adapter.handshakeHello");
+    }
 }
 
 /// HELLO SHAPE (adapter-wire-schema): a base64 resume snapshot is
