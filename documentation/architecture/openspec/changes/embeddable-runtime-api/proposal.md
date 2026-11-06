@@ -26,11 +26,14 @@ the embeddable runtime, not a special implementation path beside it.
 - Require topology-independent relay semantics across embedded, standalone, and
   sidecar deployments.
 - Separate caller-supplied identity descriptors from relay-verified principal
-  context in public API types. Verified context is runtime-issued and opaque,
-  bound to its issuing runtime/identity-store instance with a
-  credential-binding-epoch lifetime (rotation/revocation/deletion invalidates;
-  recreation starts a new epoch); introspection describes but never mints
-  authority.
+  context in public API types. Credential-backed verified context is
+  runtime-issued and opaque, bound to its issuing
+  runtime/identity-store instance with a credential-binding-epoch
+  lifetime (rotation/revocation/deletion invalidates; recreation
+  starts a new epoch); credential-free sessions receive
+  registration-minted input bound to instance plus connection and
+  registration generation instead. Introspection describes but never
+  mints authority of either branch.
 - Require two simultaneously live runtime handles with separate roots, state,
   registries, ledgers, and shutdown gates to be fully isolated, with
   cross-instance context rejection.
