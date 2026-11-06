@@ -9,7 +9,7 @@
     "expect_hello_subset": {
       "adapter_profile": "generic",
       "target_session": "seat-1",
-      "protocol_major": 1,
+      "protocol_major": 2,
       "protocol_minor": 0
     },
     "hello_result": {},

@@ -9,13 +9,13 @@
     "expect_hello_subset": {
       "adapter_profile": "generic",
       "target_session": "seat-1",
-      "protocol_major": 1,
+      "protocol_major": 2,
       "protocol_minor": 0
     },
     "hello_result": {
       "runtime_instance": "test-instance-1",
       "adapter_generation": 7,
-      "selected_major": 1,
+      "selected_major": 2,
       "selected_minor": 0,
       "negotiated_limits": {
         "max_frame_bytes": 1048576,
@@ -36,7 +36,7 @@
   "frames": [
     {"send_raw": "this is not json"},
     {"expect_quiet_ms": 300},
-    {"send": {"jsonrpc": "2.0", "id": "11", "method": "relay.look", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "look_handle_id": "h-probe", "adapter_generation": 7, "correlation_id": "c-probe", "lines": 10, "prime_timeout_ms": 0}}},
+    {"send": {"jsonrpc": "2.0", "id": "11", "method": "relay.look", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "look_handle_id": "h-probe", "adapter_generation": 7, "correlation_id": "c-probe", "lines": 10, "prime_timeout_ms": 0}}},
     {"expect": {"jsonrpc": "2.0", "id": "11", "result": {"correlation_id": "c-probe", "stale": true, "snapshot_source": "synthetic"}}}
   ]
 }

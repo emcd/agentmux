@@ -9,13 +9,13 @@
     "expect_hello_subset": {
       "adapter_profile": "generic",
       "target_session": "seat-1",
-      "protocol_major": 1,
+      "protocol_major": 2,
       "protocol_minor": 0
     },
     "hello_result": {
       "runtime_instance": "test-instance-1",
       "adapter_generation": 7,
-      "selected_major": 1,
+      "selected_major": 2,
       "selected_minor": 0,
       "negotiated_limits": {
         "max_frame_bytes": 1048576,
@@ -34,9 +34,9 @@
     "hello_result_raw": null
   },
   "frames": [
-    {"send": {"jsonrpc": "2.0", "id": "20", "method": "relay.ping", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7}}},
-    {"send": {"jsonrpc": "2.0", "id": "21", "method": "relay.ping", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7}}},
-    {"send": {"jsonrpc": "2.0", "id": "22", "method": "relay.ping", "params": {"protocol_major": 1, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7}}},
+    {"send": {"jsonrpc": "2.0", "id": "20", "method": "relay.ping", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7}}},
+    {"send": {"jsonrpc": "2.0", "id": "21", "method": "relay.ping", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7}}},
+    {"send": {"jsonrpc": "2.0", "id": "22", "method": "relay.ping", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7}}},
     {"expect": {"jsonrpc": "2.0", "id": "20", "result": {}}},
     {"expect": {"jsonrpc": "2.0", "id": "21", "result": {}}},
     {"expect": {"jsonrpc": "2.0", "id": "22", "result": {}}},

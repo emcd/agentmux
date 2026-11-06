@@ -1,0 +1,45 @@
+{
+  "requirement": "Handshake negotiation schema with defaults-vs-required table",
+  "capability": "adapter-wire-schema",
+  "limit": null,
+  "description": "DISPUTED — pending bilateral resolution. Contract-derived expectation: an 8KiB frame over the negotiated 4096-byte bound is discarded with a local diagnostic and no correlatable reply, and the binding survives (reference-adapter spec: oversize frames are discarded, never answered; unparseable frames resolve nothing). Observed implementation behavior: the reader surfaces transport-unusable, terminalizes, and exits refusal. If termination is blessed, this transcript becomes expect_eof; if discard-and-continue stands, the implementation changes. Either way the probe below decides it.",
+  "adapter_script": "quick-ack.toml",
+  "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/quick-ack.toml", "--max-frame-bytes", "4096"], "env": {}},
+  "bind": {
+    "expect_hello_subset": {
+      "adapter_profile": "generic",
+      "target_session": "seat-1",
+      "protocol_major": 2,
+      "protocol_minor": 0
+    },
+    "hello_result": {
+      "runtime_instance": "test-instance-1",
+      "adapter_generation": 7,
+      "selected_major": 2,
+      "selected_minor": 0,
+      "negotiated_limits": {
+        "max_frame_bytes": 4096,
+        "queue_tx_bytes": 16777216,
+        "queue_rx_bytes": 16777216,
+        "max_control_pending": 32,
+        "max_events_per_second": 100,
+        "window_seconds": 1,
+        "max_submits_in_flight": 64,
+        "max_choices_in_flight": 16,
+        "max_looks_in_flight": 8,
+        "drain_wait_ms": 250
+      },
+      "snapshot_b64": ""
+    },
+    "hello_result_raw": null
+  },
+  "frames": [
+    {"send": {"jsonrpc": "2.0", "id": "10", "method": "adapter.submit", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7, "correlation_id": "c-1", "members": [{"message_id": "m-1", "target_session": "seat-1", "adapter_generation": 7, "content_type": "default", "payload_b64": ""}]}}, "expand_b64": {"pointer": "/params/members/0/payload_b64", "bytes": 2048}},
+    {"expect": {"jsonrpc": "2.0", "id": "10", "result": {"outcome": "Submitted", "correlation_id": "c-1"}}},
+    {"expect": {"jsonrpc": "2.0", "method": "adapter.persistState", "params": {"target_session": "seat-1"}}},
+    {"send": {"jsonrpc": "2.0", "id": "11", "method": "adapter.submit", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "adapter_generation": 7, "correlation_id": "c-over", "members": [{"message_id": "m-2", "target_session": "seat-1", "adapter_generation": 7, "content_type": "default", "payload_b64": ""}]}}, "expand_b64": {"pointer": "/params/members/0/payload_b64", "bytes": 8192}},
+    {"expect_quiet_ms": 300},
+    {"send": {"jsonrpc": "2.0", "id": "12", "method": "relay.look", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "look_handle_id": "h-probe", "adapter_generation": 7, "correlation_id": "c-probe", "lines": 10, "prime_timeout_ms": 0}}},
+    {"expect": {"jsonrpc": "2.0", "id": "12", "result": {"correlation_id": "c-probe", "stale": true, "snapshot_source": "synthetic"}}}
+  ]
+}
