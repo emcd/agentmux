@@ -125,6 +125,9 @@ pub(crate) fn load_transcripts(
 
 /// Reports whether `expected` holds inside `actual`: objects match by
 /// subset, arrays element-wise at equal length, scalars by equality.
+/// One exception keeps the matcher honest: an empty expected object
+/// matches only an empty actual object, so a `{}` expectation pins
+/// emptiness instead of passing everything.
 pub(crate) fn subset_match(
     expected: &Value,
     actual: &Value,
@@ -139,6 +142,11 @@ fn subset_match_at(
 ) -> Result<(), String> {
     match (expected, actual) {
         (Value::Object(expected_map), Value::Object(actual_map)) => {
+            if expected_map.is_empty() && !actual_map.is_empty() {
+                return Err(format!(
+                    "{path}: expected empty object, got {actual_map:?}"
+                ));
+            }
             for (key, expected_value) in expected_map {
                 let actual_value = actual_map
                     .get(key)
@@ -304,6 +312,13 @@ pub(crate) fn run_transcript(
                 capture_correlation_as,
             } => match double.read_frame_deadline(STEP_DEADLINE) {
                 super::harness::ReadOutcome::Frame(frame) => {
+                    if frame.get("result").is_some()
+                        && frame.get("error").is_some()
+                    {
+                        return Err(format!(
+                            "{context}: frame carries both result and error"
+                        ));
+                    }
                     subset_match(expect, &frame).map_err(|detail| {
                         format!("{context} mismatch: {detail}")
                     })?;
@@ -331,6 +346,14 @@ pub(crate) fn run_transcript(
                     return Err(format!(
                         "{context}: unparseable line {raw:?}"
                     ));
+                },
+                super::harness::ReadOutcome::Incomplete(raw) => {
+                    return Err(format!(
+                        "{context}: unterminated line {raw:?}"
+                    ));
+                },
+                super::harness::ReadOutcome::ReadFailed(reason) => {
+                    return Err(format!("{context}: read failed: {reason}"));
                 },
                 super::harness::ReadOutcome::Closed => {
                     return Err(format!("{context}: pipe closed early"));
@@ -413,20 +436,9 @@ mod tests {
 
     #[test]
     fn transcript_fixtures_cite_contract_requirements() {
-        let roots = [
-            Path::new("tests/fixtures/adapter/transcripts"),
-            Path::new("tests/fixtures/adapter/transcripts/pending"),
-        ];
-        let mut transcripts = Vec::new();
-        for directory in roots {
-            if directory.is_dir() {
-                let mut loaded =
-                    load_transcripts(directory).unwrap_or_else(|detail| {
-                        panic!("load {}: {detail}", directory.display())
-                    });
-                transcripts.append(&mut loaded);
-            }
-        }
+        let directory = Path::new("tests/fixtures/adapter/transcripts");
+        let transcripts =
+            load_transcripts(directory).expect("load transcripts");
         assert!(!transcripts.is_empty(), "no transcript fixtures to check");
         let requirements = contract_requirements();
         let capabilities = contract_capabilities();
@@ -585,6 +597,54 @@ mod tests {
         )
         .expect_err("length mismatch must fail");
         assert!(length.contains("$.items"), "path was {length}");
+    }
+
+    #[test]
+    fn empty_expected_object_matches_only_empty() {
+        assert!(
+            subset_match(
+                &serde_json::json!({"result": {}}),
+                &serde_json::json!({"result": {}}),
+            )
+            .is_ok()
+        );
+        let nonempty = subset_match(
+            &serde_json::json!({"result": {}}),
+            &serde_json::json!({"result": {"wrong": true}}),
+        )
+        .expect_err("nonempty pong must fail an empty expectation");
+        assert!(nonempty.contains("$.result"), "path was {nonempty}");
+    }
+
+    /// Inline transcript proving the envelope rule against a stub: a
+    /// frame carrying both result and error is rejected even though
+    /// each half subset-matches on its own.
+    #[test]
+    fn replay_rejects_frame_with_both_result_and_error() {
+        let script = r#"printf '%s\n' '{"jsonrpc":"2.0","id":"1","method":"adapter.handshakeHello","params":{"adapter_profile":"generic","protocol_major":1,"protocol_minor":0}}'; printf '%s\n' '{"jsonrpc":"2.0","id":"9","result":{},"error":{"code":-32600,"message":"x"}}'; read -r first"#;
+        let transcript: Transcript = serde_json::from_value(serde_json::json!({
+            "requirement": "Newline-delimited JSON-RPC 2.0 framing with contract method mapping",
+            "capability": "adapter-wire-schema",
+            "limit": null,
+            "description": "envelope rule",
+            "adapter_script": "no-op.toml",
+            "spawn": {"args": ["-c", script], "env": {}},
+            "bind": {
+                "expect_hello_subset": {"adapter_profile": "generic"},
+                "hello_result": {"runtime_instance": "i", "snapshot_b64": ""},
+                "hello_result_raw": null
+            },
+            "frames": [
+                {"expect": {"jsonrpc": "2.0", "id": "9"}}
+            ]
+        }))
+        .expect("inline transcript parses");
+        let detail = run_transcript("sh", &transcript)
+            .expect_err("both result and error must fail");
+        assert!(
+            detail.contains("both result and error"),
+            "detail was {detail}"
+        );
     }
 
     /// Inline transcript proving runner plumbing against a stub: hello

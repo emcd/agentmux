@@ -8,7 +8,7 @@
 //! a faithful pipe with a captured transcript.
 
 use std::{
-    io::{BufRead, BufReader, Write},
+    io::{BufReader, Read, Write},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::mpsc,
     thread,
@@ -34,7 +34,39 @@ pub(crate) enum ReadOutcome {
     Frame(Value),
     Timeout,
     Unparseable(String),
+    Incomplete(String),
     Closed,
+    ReadFailed(String),
+}
+
+/// One item from the stdout forwarder: a read line with its delimiter
+/// status, a true empty EOF, or an observed read failure. Delimiter and
+/// read-error status travel with the bytes so a newline-less final
+/// frame can never pass as a complete one.
+pub(crate) enum PipeRead {
+    Line { text: String, terminated: bool },
+    Eof,
+    Failed(String),
+}
+
+/// Maps one forwarder item to its read outcome. Pure to keep the
+/// delimiter and read-error seam unit-testable without real I/O
+/// failures.
+fn classify(read: PipeRead) -> ReadOutcome {
+    match read {
+        PipeRead::Line { text, terminated } => {
+            let line = text.trim_end().to_string();
+            if !terminated {
+                return ReadOutcome::Incomplete(line);
+            }
+            match serde_json::from_str(&line) {
+                Ok(frame) => ReadOutcome::Frame(frame),
+                Err(_) => ReadOutcome::Unparseable(line),
+            }
+        },
+        PipeRead::Eof => ReadOutcome::Closed,
+        PipeRead::Failed(reason) => ReadOutcome::ReadFailed(reason),
+    }
 }
 
 /// Originator-monotonic wire ids, decimal strings from 1, never reused.
@@ -61,25 +93,75 @@ pub(crate) struct HelloCall {
 }
 
 /// Supervisor side of one adapter process pipe.
+///
+/// Dropping the double reaps the child within a bound: every early
+/// return and every panic unwinds through `Drop`, so a defective
+/// adapter can never leave a live child behind the test.
 pub(crate) struct SupervisorDouble {
     child: Child,
     stdin: Option<ChildStdin>,
-    lines: mpsc::Receiver<String>,
+    lines: mpsc::Receiver<PipeRead>,
     transcript: Vec<TranscriptLine>,
     ids: WireIds,
 }
 
-fn spawn_line_forwarder(stdout: ChildStdout) -> mpsc::Receiver<String> {
+/// Strictly decodes one wire line: invalid UTF-8 is a failure with a
+/// byte-exact detail, never silently replaced with U+FFFD. Pure for
+/// testability; the forwarder applies it to every emitted line.
+fn decode_line(raw: Vec<u8>) -> Result<String, String> {
+    String::from_utf8(raw)
+        .map_err(|source| format!("non-UTF8 line: {:?}", source.into_bytes()))
+}
+
+fn spawn_line_forwarder(stdout: ChildStdout) -> mpsc::Receiver<PipeRead> {
     let (sender, receiver) = mpsc::channel();
     thread::spawn(move || {
         let mut reader = BufReader::new(stdout);
+        let mut pending: Vec<u8> = Vec::new();
+        let mut chunk = [0u8; 4096];
         loop {
-            let mut line = String::new();
-            match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => return,
-                Ok(_) => {
-                    if sender.send(line).is_err() {
-                        return;
+            match reader.read(&mut chunk) {
+                Ok(0) => {
+                    if !pending.is_empty() {
+                        let raw: Vec<u8> = std::mem::take(&mut pending);
+                        let terminated = false;
+                        match decode_line(raw) {
+                            Ok(text) => {
+                                let _ = sender
+                                    .send(PipeRead::Line { text, terminated });
+                            },
+                            Err(reason) => {
+                                let _ = sender.send(PipeRead::Failed(reason));
+                            },
+                        }
+                    }
+                    let _ = sender.send(PipeRead::Eof);
+                    return;
+                },
+                Err(source) => {
+                    let _ = sender.send(PipeRead::Failed(source.to_string()));
+                    return;
+                },
+                Ok(count) => {
+                    pending.extend_from_slice(&chunk[..count]);
+                    while let Some(end) =
+                        pending.iter().position(|byte| *byte == b'\n')
+                    {
+                        let raw: Vec<u8> = pending.drain(..=end).collect();
+                        match decode_line(raw) {
+                            Ok(text) => {
+                                let terminated = true;
+                                if sender
+                                    .send(PipeRead::Line { text, terminated })
+                                    .is_err()
+                                {
+                                    return;
+                                }
+                            },
+                            Err(reason) => {
+                                let _ = sender.send(PipeRead::Failed(reason));
+                            },
+                        }
                     }
                 },
             }
@@ -155,30 +237,34 @@ impl SupervisorDouble {
 
     /// Reads one frame within `deadline`, recording it on the transcript.
     /// A closed pipe reads as `Closed`, never as a timeout, so tests can
-    /// distinguish a quiet child from a dead one.
+    /// distinguish a quiet child from a dead one. Lines that arrive
+    /// without their newline read as `Incomplete`, never as frames, so a
+    /// truncated final line cannot pass as a complete one.
     pub(crate) fn read_frame_deadline(
         &mut self,
         deadline: Duration,
     ) -> ReadOutcome {
-        let raw = match self.lines.recv_timeout(deadline) {
-            Ok(line) => line,
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                return ReadOutcome::Timeout;
+        match self.lines.recv_timeout(deadline) {
+            Ok(PipeRead::Line { text, terminated }) => {
+                let line = text.trim_end().to_string();
+                self.transcript.push(TranscriptLine {
+                    direction: Direction::FromAdapter,
+                    raw: line.clone(),
+                });
+                classify(PipeRead::Line {
+                    text: line,
+                    terminated,
+                })
             },
+            Ok(PipeRead::Eof) => ReadOutcome::Closed,
+            Ok(PipeRead::Failed(reason)) => ReadOutcome::ReadFailed(reason),
+            Err(mpsc::RecvTimeoutError::Timeout) => ReadOutcome::Timeout,
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                return ReadOutcome::Closed;
+                ReadOutcome::ReadFailed(
+                    "forwarder ended without an EOF marker".to_string(),
+                )
             },
-        };
-        let line = raw.trim_end().to_string();
-        let outcome = match serde_json::from_str(&line) {
-            Ok(frame) => ReadOutcome::Frame(frame),
-            Err(_) => ReadOutcome::Unparseable(line.clone()),
-        };
-        self.transcript.push(TranscriptLine {
-            direction: Direction::FromAdapter,
-            raw: line,
-        });
-        outcome
+        }
     }
 
     /// Sends a supervisor-originated request, returning its wire id.
@@ -264,7 +350,8 @@ impl SupervisorDouble {
 
     /// Asserts no frame arrives within `duration`. A closed pipe fails
     /// the assertion: silence means a live but quiet child, not a dead
-    /// one.
+    /// one. A truncated line or a read failure fails it too — quiet
+    /// never hides a damaged pipe.
     pub(crate) fn expect_quiet(
         &mut self,
         duration: Duration,
@@ -276,6 +363,12 @@ impl SupervisorDouble {
             },
             ReadOutcome::Unparseable(raw) => {
                 Err(format!("expected quiet, got unparseable {raw:?}"))
+            },
+            ReadOutcome::Incomplete(raw) => {
+                Err(format!("expected quiet, got truncated {raw:?}"))
+            },
+            ReadOutcome::ReadFailed(reason) => {
+                Err(format!("expected quiet, read failed: {reason}"))
             },
             ReadOutcome::Closed => {
                 Err("expected quiet, pipe closed".to_string())
@@ -316,14 +409,25 @@ impl SupervisorDouble {
 
     /// Closes stdin, reaps the child within a bound, and returns the
     /// transcript. Escalates to a kill when the child ignores EOF.
-    pub(crate) fn disconnect(self) -> Vec<TranscriptLine> {
-        self.disconnect_with_grace(Duration::from_secs(5))
+    pub(crate) fn disconnect(mut self) -> Vec<TranscriptLine> {
+        self.teardown(Duration::from_secs(5));
+        std::mem::take(&mut self.transcript)
     }
 
+    #[cfg(test)]
     fn disconnect_with_grace(
         mut self,
         grace: Duration,
     ) -> Vec<TranscriptLine> {
+        self.teardown(grace);
+        std::mem::take(&mut self.transcript)
+    }
+
+    /// Closes the write end, kills if still alive past `grace`, and
+    /// reaps within a further bound. Teardown is polled explicitly
+    /// with bounds throughout: it never blocks on a child that
+    /// ignores EOF, and never trusts an un-reaped wait.
+    fn teardown(&mut self, grace: Duration) {
         self.stdin = None;
         let deadline = Instant::now() + grace;
         loop {
@@ -339,22 +443,36 @@ impl SupervisorDouble {
             }
         }
         let _ = self.child.kill();
-        // Bounded reap poll. A blocking wait on a silent piped child
-        // returns immediately in some environments without reaping, so
-        // the reap is polled explicitly rather than trusted to wait.
-        let reaped = Instant::now() + Duration::from_secs(2);
+        self.reap();
+    }
+
+    /// Reaps the child within a fixed bound, ignoring the outcome.
+    /// Safe to call on an already-reaped child.
+    fn reap(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(2);
         loop {
             match self.child.try_wait() {
                 Ok(Some(_)) | Err(_) => break,
                 Ok(None) => {
-                    if Instant::now() >= reaped {
+                    if Instant::now() >= deadline {
                         break;
                     }
                     thread::sleep(Duration::from_millis(10));
                 },
             }
         }
-        self.transcript
+    }
+}
+
+impl Drop for SupervisorDouble {
+    /// Reaps the child on every path, including early returns and
+    /// panics: the runner's mismatch exits all drop the double, so a
+    /// defective adapter can never leave a live child behind the
+    /// test. Bounded and infallible by construction.
+    fn drop(&mut self) {
+        self.stdin = None;
+        let _ = self.child.kill();
+        self.reap();
     }
 }
 
@@ -508,5 +626,122 @@ mod tests {
             double.disconnect_with_grace(Duration::from_millis(100));
         assert!(transcript.is_empty());
         assert!(started.elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
+    fn classify_marks_delimiter_and_read_status() {
+        match classify(PipeRead::Line {
+            text: "{\"a\":1}\n".to_string(),
+            terminated: true,
+        }) {
+            ReadOutcome::Frame(frame) => assert_eq!(frame["a"], 1),
+            _ => panic!("terminated JSON is a frame"),
+        }
+        match classify(PipeRead::Line {
+            text: "nope\n".to_string(),
+            terminated: true,
+        }) {
+            ReadOutcome::Unparseable(raw) => assert_eq!(raw, "nope"),
+            _ => panic!("terminated garbage is unparseable"),
+        }
+        match classify(PipeRead::Line {
+            text: "{\"a\":1}".to_string(),
+            terminated: false,
+        }) {
+            ReadOutcome::Incomplete(raw) => assert_eq!(raw, "{\"a\":1}"),
+            _ => panic!("unterminated JSON is incomplete"),
+        }
+        assert!(matches!(classify(PipeRead::Eof), ReadOutcome::Closed));
+        match classify(PipeRead::Failed("boom".to_string())) {
+            ReadOutcome::ReadFailed(reason) => assert_eq!(reason, "boom"),
+            _ => panic!("read failure stays a failure"),
+        }
+    }
+
+    #[test]
+    fn decode_line_rejects_invalid_utf8_without_replacement() {
+        assert_eq!(
+            decode_line(b"{\"a\":1}\n".to_vec()),
+            Ok("{\"a\":1}\n".to_string())
+        );
+        let detail = decode_line(vec![0xff, 0xfe, b'\n'])
+            .expect_err("invalid UTF-8 must fail");
+        assert!(detail.contains("[255, 254, 10]"), "detail was {detail}");
+    }
+
+    #[test]
+    fn non_utf8_line_reads_as_read_failed() {
+        let mut double = SupervisorDouble::spawn(
+            "sh",
+            &["-c", r#"printf '\377\376\n'; exec sleep 30"#],
+        )
+        .expect("spawn non-UTF8 stub");
+        match double.read_frame_deadline(Duration::from_secs(5)) {
+            ReadOutcome::ReadFailed(reason) => {
+                assert!(reason.contains("non-UTF8"), "{reason}")
+            },
+            _ => panic!("expected the read-failed outcome"),
+        }
+        double.disconnect();
+    }
+
+    #[test]
+    fn unterminated_valid_json_reads_as_incomplete() {
+        let mut double =
+            SupervisorDouble::spawn("sh", &["-c", r#"printf '%s' '{"a":1}'"#])
+                .expect("spawn delimiter-less stub");
+        match double.read_frame_deadline(Duration::from_secs(5)) {
+            ReadOutcome::Incomplete(raw) => assert_eq!(raw, "{\"a\":1}"),
+            _ => panic!("expected the incomplete outcome"),
+        }
+        double.disconnect();
+    }
+
+    #[test]
+    fn dropped_double_reaps_a_live_child_on_mismatch() {
+        let directory = tempfile::tempdir().expect("tempdir");
+        let pid_file = directory.path().join("pid");
+        let script = format!(
+            "echo $$ > {}; printf '%s\\n' '{{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"adapter.handshakeHello\",\"params\":{{\"adapter_profile\":\"generic\",\"protocol_major\":1,\"protocol_minor\":0}}}}'; printf '%s\\n' 'bogus'; exec sleep 30",
+            pid_file.display()
+        );
+        let mut double = SupervisorDouble::spawn("sh", &["-c", &script])
+            .expect("spawn sleeper stub");
+        let call = double
+            .expect_hello(Duration::from_secs(5))
+            .expect("stub emits hello");
+        double.answer_hello(
+            &call,
+            SupervisorDouble::hello_result("instance-1", 7),
+        );
+        match double.read_frame_deadline(Duration::from_secs(5)) {
+            ReadOutcome::Unparseable(_) => {},
+            _ => panic!("expected the stub garbage"),
+        }
+        drop(double);
+        let end = Instant::now() + Duration::from_secs(5);
+        let pid: i32 = loop {
+            if let Ok(text) = std::fs::read_to_string(&pid_file)
+                && let Ok(pid) = text.trim().parse()
+            {
+                break pid;
+            }
+            if Instant::now() >= end {
+                panic!("stub never wrote its pid");
+            }
+            thread::sleep(Duration::from_millis(20));
+        };
+        loop {
+            let gone = unsafe {
+                libc::kill(pid, 0) != 0
+                    && std::io::Error::last_os_error().raw_os_error()
+                        == Some(libc::ESRCH)
+            };
+            if gone || Instant::now() >= end {
+                assert!(gone, "sleeper child still alive after drop");
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 }
