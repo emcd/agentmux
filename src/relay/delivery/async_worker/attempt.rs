@@ -134,17 +134,47 @@ pub(in crate::relay::delivery) fn worker_attempt_snapshot(
     Some((entry.owner, entry.readiness))
 }
 
+/// The outcome of a Pty bring-up election: either this pass installed the
+/// worker or another pass already had.
+///
+/// Both variants name the attempt with the entry's own completion handle,
+/// cloned under the same workers-lock acquisition that observed the entry
+/// — so a loser that observed a winner retains the winner even if the
+/// winner records and unregisters before the loser polls. No second
+/// acquisition, no cache, and no misattribution: the waiter names exactly
+/// the attempt it observed.
+#[cfg(feature = "pty")]
+#[derive(Debug)]
+pub(in crate::relay::delivery) enum PtyElection {
+    /// This pass won: the entry is newly installed and the worker remains
+    /// to be spawned by the caller.
+    Elected {
+        owner: WorkerOwner,
+        completion: Arc<AttemptCompletion>,
+    },
+    /// Another pass already owned the target: the observed attempt, named
+    /// with its handle, so a winner that fails before adoption still
+    /// reports its own cause through the loser's handle.
+    Existing {
+        owner: WorkerOwner,
+        completion: Arc<AttemptCompletion>,
+    },
+}
+
 /// Elects a Pty target's delivery worker, returning the elected attempt with
 /// its completion handle under the SAME workers-lock acquisition as the
 /// election itself.
 ///
 /// The handle is born with the election: the entry field is assigned as the
 /// entry is installed, so no interleaving — purge, replacement, unregister
-/// — can land between naming the attempt and retaining its result. There
-/// is no second acquisition to split, and nothing to purge afterwards:
-/// each attempt carries its own handle in its own entry. Replaces
-/// `register_worker_if_absent` for the Pty bring-up path only; the ACP and
-/// lazy-Direct paths keep the shared election.
+/// — can land between naming the attempt and retaining its result. A loser
+/// that finds an entry already installed names that entry's own handle
+/// under the same acquisition instead of re-resolving it afterwards, so a
+/// winner that records and unregisters in between still reports its own
+/// cause through the loser. There is no second acquisition to split, and
+/// nothing to purge afterwards: each attempt carries its own handle in its
+/// own entry. Replaces `register_worker_if_absent` for the Pty bring-up
+/// path only; the ACP and lazy-Direct paths keep the shared election.
 #[cfg(feature = "pty")]
 pub(in crate::relay::delivery) fn elect_pty_attempt(
     registry: &AsyncDeliveryRegistry,
@@ -152,7 +182,7 @@ pub(in crate::relay::delivery) fn elect_pty_attempt(
     sender: UnboundedSender<AsyncDeliveryTask>,
     pending: Arc<AtomicUsize>,
     bounded_acp_queue: bool,
-) -> Result<Option<(WorkerOwner, Arc<AttemptCompletion>)>, RelayError> {
+) -> Result<PtyElection, RelayError> {
     let mut workers = registry.workers.lock().map_err(|_| {
         relay_error(
             "internal_unexpected_failure",
@@ -160,8 +190,11 @@ pub(in crate::relay::delivery) fn elect_pty_attempt(
             None,
         )
     })?;
-    if workers.contains_key(&key) {
-        return Ok(None);
+    if let Some(entry) = workers.get(&key) {
+        return Ok(PtyElection::Existing {
+            owner: entry.owner,
+            completion: entry.completion.clone(),
+        });
     }
     let owner = WorkerOwner::mint();
     let completion = Arc::new(AttemptCompletion::default());
@@ -183,7 +216,7 @@ pub(in crate::relay::delivery) fn elect_pty_attempt(
             completion: completion.clone(),
         },
     );
-    Ok(Some((owner, completion)))
+    Ok(PtyElection::Elected { owner, completion })
 }
 /// Attempt-handle semantics: adoption atomicity, waiter lifetime across
 /// unregister and replacement, and owner-attributed snapshots.
@@ -273,7 +306,7 @@ mod elected_handle_tests {
         let key = key("construction-elect-identity");
         let (sender, _) =
             tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        let (owner, handle) = elect_pty_attempt(
+        let (owner, handle) = match elect_pty_attempt(
             registry,
             key.clone(),
             sender,
@@ -281,7 +314,12 @@ mod elected_handle_tests {
             false,
         )
         .expect("registry lock")
-        .expect("the target is free");
+        {
+            PtyElection::Elected { owner, completion } => (owner, completion),
+            PtyElection::Existing { .. } => {
+                panic!("a fresh target elects")
+            },
+        };
         record_construction_error(
             registry,
             &key,
@@ -304,6 +342,131 @@ mod elected_handle_tests {
             handle.read().is_some(),
             "the handle outlives the unregistered entry"
         );
+    }
+}
+#[cfg(all(test, feature = "pty"))]
+mod lost_election_tests {
+    use super::super::reap::unregister_worker;
+    use super::construction_completion_fixtures::*;
+    use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+
+    fn elect(
+        registry: &AsyncDeliveryRegistry,
+        key: &AsyncWorkerKey,
+    ) -> PtyElection {
+        let (sender, _) =
+            tokio::sync::mpsc::unbounded_channel::<AsyncDeliveryTask>();
+        elect_pty_attempt(
+            registry,
+            key.clone(),
+            sender,
+            Arc::new(AtomicUsize::new(0)),
+            false,
+        )
+        .expect("registry lock")
+    }
+
+    /// A loser that observed the winner retains the winner's own cause:
+    /// adopt#1 names nothing, the winner elects, the loser elects and
+    /// names the same entry with its handle under the same acquisition —
+    /// then the winner records and unregisters. The loser's handle still
+    /// reads the recorded cause, and a replacement describes only itself.
+    /// A split that re-resolves after the election (or drops the observed
+    /// handle) leaves the loser with no cause here.
+    #[test]
+    fn observed_election_winner_retains_own_cause() {
+        let delivery = test_delivery();
+        let registry = delivery.async_registry();
+        let key = key("construction-lost-election");
+        assert!(
+            adopt_registered_attempt(registry, &key).is_none(),
+            "nothing registered before the winner elects"
+        );
+        // Winner elects and retains its handle as the first witness.
+        let (winner, winner_handle) = match elect(registry, &key) {
+            PtyElection::Elected { owner, completion } => (owner, completion),
+            PtyElection::Existing { .. } => {
+                panic!("a fresh target elects")
+            },
+        };
+        // Loser elects while E lives: Existing names the same attempt with
+        // the entry's own handle — no second acquisition to split.
+        let (loser, loser_handle) = match elect(registry, &key) {
+            PtyElection::Existing { owner, completion } => (owner, completion),
+            PtyElection::Elected { .. } => {
+                panic!("an occupied target reports the existing attempt")
+            },
+        };
+        assert_eq!(loser, winner, "the loser names the winner");
+        assert!(
+            Arc::ptr_eq(&loser_handle, &winner_handle),
+            "election and existing name one handle"
+        );
+        // Winner fails: the record strictly precedes the unregister, then
+        // E is gone — adoption afterwards names nothing.
+        assert!(
+            record_construction_error(
+                registry,
+                &key,
+                winner,
+                cause("pty_spawn_failed"),
+            ),
+            "the winner's record lands on its own attempt"
+        );
+        unregister_worker(&delivery, registry, &key, winner);
+        assert!(
+            adopt_registered_attempt(registry, &key).is_none(),
+            "the unregistered winner is gone"
+        );
+        // The loser never adopted through a second acquisition, yet
+        // observes E's own cause through the retained handle.
+        assert_eq!(
+            loser_handle
+                .read()
+                .expect("the loser retains E's result")
+                .code,
+            "pty_spawn_failed",
+            "the observed winner reports its own cause to the loser"
+        );
+        assert_eq!(
+            winner_handle
+                .read()
+                .expect("the winner retains E's result")
+                .code,
+            "pty_spawn_failed",
+            "the winner observes its own cause"
+        );
+        // Replacement describes only itself: a successor records its own
+        // cause, and the loser's handle still reads the winner's.
+        let second = install(registry, &key);
+        assert_ne!(second, winner, "the test needs a distinct successor");
+        assert!(
+            record_construction_error(
+                registry,
+                &key,
+                second,
+                cause("pty_open_failed"),
+            ),
+            "the successor's record lands on its own attempt"
+        );
+        assert_eq!(
+            loser_handle
+                .read()
+                .expect("the loser retains E's result")
+                .code,
+            "pty_spawn_failed",
+            "the replacement neither describes nor blinds the loser"
+        );
+        let (_, successor_handle) =
+            adopt_registered_attempt(registry, &key).expect("registered");
+        assert_eq!(
+            successor_handle.read().expect("successor recorded").code,
+            "pty_open_failed",
+            "the successor observes its own cause"
+        );
+        unregister_worker(&delivery, registry, &key, second);
     }
 }
 #[cfg(all(test, feature = "pty"))]

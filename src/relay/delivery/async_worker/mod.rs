@@ -31,8 +31,8 @@ mod terminal;
 /// build.
 #[cfg(feature = "pty")]
 pub(in crate::relay::delivery) use self::attempt::{
-    adopt_registered_attempt, elect_pty_attempt, record_construction_error,
-    worker_attempt_snapshot,
+    PtyElection, adopt_registered_attempt, elect_pty_attempt,
+    record_construction_error, worker_attempt_snapshot,
 };
 pub(in crate::relay::delivery) use self::reap::{
     bind_worker_consumer_generation, unregister_worker,

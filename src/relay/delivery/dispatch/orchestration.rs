@@ -13,12 +13,13 @@ use crate::configuration::{BundleMember, TargetConfiguration};
 use super::super::super::{AsyncDeliveryTask, RelayError};
 use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
-use super::super::async_worker::{
-    WorkerDispatch, get_worker_failure, get_worker_readiness,
-};
 #[cfg(feature = "pty")]
 use super::super::async_worker::{
-    adopt_registered_attempt, elect_pty_attempt, worker_attempt_snapshot,
+    PtyElection, adopt_registered_attempt, elect_pty_attempt,
+    worker_attempt_snapshot,
+};
+use super::super::async_worker::{
+    WorkerDispatch, get_worker_failure, get_worker_readiness,
 };
 #[cfg(feature = "pty")]
 use super::worker::PtyWorkerBootstrap;
@@ -270,6 +271,8 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
     // handle (not a re-read owner id) is what closes the adoption lookup
     // race: a fast failure unregistering between election and first poll
     // cannot strand this waiter, because the handle outlives the entry.
+    // The election itself names an observed winner with its handle, so
+    // there is no second lookup for a winner to vanish through.
     let mut waited = adopt_registered_attempt(registry, &key);
     if waited.is_none() {
         let (sender, receiver) =
@@ -305,7 +308,7 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
                 })),
             )
         })? {
-            Some((owner, completion)) => {
+            PtyElection::Elected { owner, completion } => {
                 // The handle is born with the election under one
                 // acquisition — never fetched after it — so no purge can
                 // land between naming the attempt and retaining its
@@ -320,13 +323,14 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
                 );
                 waited = Some((owner, completion));
             },
-            // Lost the election: adopt whoever won rather than waiting on
-            // an attempt that never existed for this pass. A single
-            // acquisition names the winner and its handle together; if the
-            // winner already vanished, there is no attempt to wait on and
-            // the poll below reports that honestly instead of inventing
-            // one.
-            None => waited = adopt_registered_attempt(registry, &key),
+            // Already registered: the election observed the winner and
+            // named it with its handle under the same acquisition, so no
+            // second lookup — and no vanished-winner gap — stands between
+            // this pass and the attempt it waits on. No spawn: the
+            // winner's worker already exists.
+            PtyElection::Existing { owner, completion } => {
+                waited = Some((owner, completion));
+            },
         }
     }
     // Prime wait: registration alone must not report ready. The waiter
@@ -389,11 +393,12 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
                     }),
                 ));
             }
-            // No waited attempt and none registered: a lost election whose
-            // winner vanished before adoption. No attempt exists to
-            // attribute a cause to, so keep polling for a successor until
-            // the deadline rather than inventing one — the phase detail
-            // names what happened instead of a generic timeout.
+            // No waited attempt and none registered. The election above
+            // always names an attempt, so this arm is defensive rather
+            // than a semantics the election relies on: keep polling for
+            // a successor until the deadline rather than inventing a
+            // cause — the phase detail names what happened instead of a
+            // generic timeout.
             if waited.is_none() {
                 if Instant::now() >= deadline {
                     return Err(startup_failure_error(
