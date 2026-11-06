@@ -234,6 +234,12 @@ pub fn contract_error(
 #[derive(Debug)]
 pub(crate) enum ReadEvent {
     Frame(Vec<u8>),
+    /// An oversize frame was drained past its newline and refused:
+    /// nothing retained, nothing answered. The run loop records the
+    /// typed framing failure and continues the session.
+    Discarded {
+        bound: usize,
+    },
     Eof,
     Unusable,
 }
@@ -266,6 +272,82 @@ pub(crate) struct ReaderShared {
 /// bound aggregate buffered bytes by the RX queue cap exactly —
 /// backpressure, never unbounded queueing. The reader releases on
 /// shutdown and never outlives the run.
+/// Outcome of draining an oversize frame past its newline.
+enum DrainOutcome {
+    /// Newline reached; the post-newline remainder (always empty on
+    /// the pre-bind single-byte stride) returns stashed for the next
+    /// frame.
+    Discarded(Vec<u8>),
+    /// Transport closed before any newline.
+    Eof,
+    /// Transport failed mid-drain.
+    Unusable,
+    /// Shutdown requested mid-drain.
+    Shutdown,
+}
+
+/// Discards an oversize frame through its terminating newline without
+/// retaining it: the bound that refused the frame bounds nothing
+/// here. Pre-bind drains one byte at a time so no bulk-read stash
+/// can accumulate under the bootstrap budget and survive into the
+/// negotiated bound; post-bind drains in chunks and returns the
+/// post-newline remainder. EOF before the newline ends the drain as
+/// EOF (the session ends by EOF, clean); a read failure is a dead
+/// transport.
+fn drain_oversize(
+    reader: &mut (impl Read + ?Sized),
+    chunk: &mut [u8; 4096],
+    installed: bool,
+    retain_cap: usize,
+    done: &AtomicBool,
+) -> DrainOutcome {
+    let stride = if installed {
+        chunk.len().min(retain_cap.saturating_add(1)).max(1)
+    } else {
+        1
+    };
+    loop {
+        if done.load(Ordering::Acquire) {
+            return DrainOutcome::Shutdown;
+        }
+        let count = match reader.read(&mut chunk[..stride]) {
+            Ok(0) => return DrainOutcome::Eof,
+            Ok(count) => count,
+            Err(_) => return DrainOutcome::Unusable,
+        };
+        if let Some(index) =
+            chunk[..count].iter().position(|byte| *byte == b'\n')
+        {
+            return DrainOutcome::Discarded(chunk[index + 1..count].to_vec());
+        }
+    }
+}
+
+/// Depth-one rendezvous handoff with shutdown release: parks
+/// while the run loop has not taken the event. Returns false when the
+/// run loop is gone, in which case the caller returns.
+fn rendezvous(
+    tx: &SyncSender<ReadEvent>,
+    done: &AtomicBool,
+    event: ReadEvent,
+) -> bool {
+    let mut pending = Some(event);
+    while let Some(current) = pending.take() {
+        match tx.try_send(current) {
+            Ok(()) => return true,
+            Err(mpsc::TrySendError::Full(event)) => {
+                if done.load(Ordering::Acquire) {
+                    return false;
+                }
+                pending = Some(event);
+                thread::sleep(Duration::from_millis(1));
+            },
+            Err(mpsc::TrySendError::Disconnected(_)) => return false,
+        }
+    }
+    true
+}
+
 /// Gated NDJSON reader; see run-loop documentation for the
 /// ordering, handoff, and budget rules.
 pub(crate) fn read_loop(
@@ -295,7 +377,7 @@ pub(crate) fn read_loop(
     // next frame's accumulation so the budget gate keeps accounting
     // them.
     let mut stash: Vec<u8> = Vec::new();
-    loop {
+    'read: loop {
         let hard = bound.load(Ordering::Relaxed);
         // Budget-gated acquisition: accumulate the next frame without
         // ever retaining more than the remaining RX queue budget.
@@ -318,7 +400,10 @@ pub(crate) fn read_loop(
                 completed.pop();
             }
             if completed.len() > hard {
-                ReadEvent::Unusable
+                // Refuse the frame, keep the session: the post-newline
+                // remainder still belongs to the next frame.
+                stash.extend_from_slice(&frame[index + 1..]);
+                ReadEvent::Discarded { bound: hard }
             } else {
                 let queued_now = rx_queued.load(Ordering::Acquire);
                 let mut admitted = queued_now + completed.len()
@@ -353,9 +438,82 @@ pub(crate) fn read_loop(
                 // is the CRLF terminator's carriage return, decided
                 // only when the newline arrives: the exact post-strip
                 // bound is enforced below, so an exact-bound CRLF
-                // frame is admitted like its LF twin.
-                if frame.len() > hard.saturating_add(1) {
-                    break ReadEvent::Unusable;
+                // frame is admitted like its LF twin. At exactly
+                // cap plus one with no trailing CR the verdict is
+                // already certain too (only a terminator can follow,
+                // and the body is over bound with or without a
+                // stripped CR), so that state drains as well instead
+                // of falling through to the budget refusal below.
+                let over = frame.len() > hard.saturating_add(1)
+                    || (frame.len() == hard.saturating_add(1)
+                        && frame.last() != Some(&b'\r'));
+                if over {
+                    // The bound is certainly exceeded: publish the
+                    // framing failure FIRST, independently of whether
+                    // delimiter resynchronization subsequently
+                    // completes. A peer that holds the pipe open with
+                    // no further bytes must not take the detected
+                    // oversize down with its silence: handshake and
+                    // liveness timeouts close such sessions on their
+                    // own deadlines with the evidence already
+                    // recorded. Discarded bytes never prove a live
+                    // peer, so liveness is deliberately untouched.
+                    if !rendezvous(
+                        &tx,
+                        done,
+                        ReadEvent::Discarded { bound: hard },
+                    ) {
+                        return;
+                    }
+                    if !installed.load(Ordering::Acquire) {
+                        if done.load(Ordering::Acquire) {
+                            return;
+                        }
+                        if gate.recv().is_err() {
+                            return;
+                        }
+                    }
+                    let installed_now = installed.load(Ordering::Acquire);
+                    // Snapshot cap: the run loop only releases budget
+                    // while the reader drains, so a cap taken now still
+                    // bounds the retained tail later.
+                    let retain_cap = if installed_now {
+                        rx_budget
+                            .load(Ordering::Relaxed)
+                            .saturating_sub(rx_queued.load(Ordering::Acquire))
+                    } else {
+                        0
+                    };
+                    match drain_oversize(
+                        &mut reader,
+                        &mut chunk,
+                        installed_now,
+                        retain_cap,
+                        done,
+                    ) {
+                        DrainOutcome::Discarded(remainder) => {
+                            // The refused prefix stays refused: drop
+                            // it and keep only the post-newline tail.
+                            // Resume from the outer loop so the
+                            // stashed tail resolves before any further
+                            // transport read.
+                            frame.clear();
+                            stash.extend_from_slice(&remainder);
+                            continue 'read;
+                        },
+                        // The terminal cause is already decided — and
+                        // the oversize already published — so close
+                        // with it directly instead of rediscovering it
+                        // with another source read, which could swallow
+                        // a one-shot error and answer later frames.
+                        DrainOutcome::Eof => {
+                            break ReadEvent::Eof;
+                        },
+                        DrainOutcome::Unusable => {
+                            break ReadEvent::Unusable;
+                        },
+                        DrainOutcome::Shutdown => return,
+                    }
                 }
                 let queued_now = rx_queued.load(Ordering::Acquire);
                 let remaining = rx_budget
@@ -424,10 +582,12 @@ pub(crate) fn read_loop(
                         if frame.last() == Some(&b'\r') {
                             frame.pop();
                         }
-                        if frame.len() > hard {
-                            break ReadEvent::Unusable;
-                        }
                         stash.extend_from_slice(&chunk[index + 1..count]);
+                        if frame.len() > hard {
+                            // The head is refused; the stashed tail
+                            // still belongs to the next frame.
+                            break ReadEvent::Discarded { bound: hard };
+                        }
                         break ReadEvent::Frame(frame);
                     },
                     None => frame.extend_from_slice(&chunk[..count]),
@@ -440,19 +600,8 @@ pub(crate) fn read_loop(
         }
         // Rendezvous handoff with shutdown release: park while the run
         // loop has not yet taken the previous frame.
-        let mut pending = Some(event);
-        while let Some(current) = pending.take() {
-            match tx.try_send(current) {
-                Ok(()) => {},
-                Err(mpsc::TrySendError::Full(event)) => {
-                    if done.load(Ordering::Acquire) {
-                        return;
-                    }
-                    pending = Some(event);
-                    thread::sleep(Duration::from_millis(1));
-                },
-                Err(mpsc::TrySendError::Disconnected(_)) => return,
-            }
+        if !rendezvous(&tx, done, event) {
+            return;
         }
         if terminal {
             return;
@@ -653,5 +802,93 @@ mod reader_budget_tests {
         );
         done.store(true, Ordering::Release);
         handle.join().expect("reader thread releases on shutdown");
+        // Phase 2: an oversize head drains past its newline retaining
+        // at most the remaining RX budget. Bound and budget are both
+        // 300: a 301-byte oversize head plus ten coalesced 100-byte
+        // future frames.
+        let mut oversize = vec![b'X'; 301];
+        oversize.push(b'\n');
+        for _ in 0..10 {
+            oversize.extend_from_slice(&[b'F'; 100]);
+            oversize.push(b'\n');
+        }
+        let drain_yielded = Arc::new(AtomicUsize::new(0));
+        let drain_reader = CountingReader {
+            inner: std::io::Cursor::new(oversize),
+            count: drain_yielded.clone(),
+        };
+        let (drain_tx, drain_rx) = mpsc::sync_channel(1);
+        let (_drain_gate_tx, drain_gate_rx) = mpsc::channel::<()>();
+        let drain_done = Arc::new(AtomicBool::new(false));
+        let drain_queued = Arc::new(AtomicUsize::new(0));
+        let drain_budget = Arc::new(AtomicUsize::new(300));
+        let drain_handle = std::thread::spawn({
+            let drain_done = drain_done.clone();
+            let drain_queued = drain_queued.clone();
+            let drain_budget = drain_budget.clone();
+            move || {
+                read_loop(
+                    drain_reader,
+                    drain_tx,
+                    drain_gate_rx,
+                    ReaderShared {
+                        bound: Arc::new(AtomicUsize::new(300)),
+                        installed: Arc::new(AtomicBool::new(true)),
+                        done: drain_done,
+                        rx_queued: drain_queued,
+                        rx_budget: drain_budget,
+                    },
+                );
+            }
+        });
+        match drain_rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(ReadEvent::Discarded { bound }) => {
+                assert_eq!(bound, 300);
+            },
+            other => panic!("oversize head must discard: {other:?}"),
+        }
+        // Acquisition at the discard is bounded: the 301-byte refused
+        // prefix plus at most one budget-capped drain read. A drain
+        // that prefetches the coalesced future beyond the 300-byte
+        // budget would already have taken far more from the
+        // transport here.
+        assert!(
+            drain_yielded.load(Ordering::Acquire) <= 301 + 301,
+            "drain must not prefetch past the budget: {}",
+            drain_yielded.load(Ordering::Acquire)
+        );
+        // All ten future frames still arrive whole and in order.
+        for _ in 0..10 {
+            match drain_rx.recv_timeout(Duration::from_secs(2)) {
+                Ok(ReadEvent::Frame(bytes)) => {
+                    assert_eq!(bytes.len(), 100);
+                    assert!(bytes.iter().all(|byte| *byte == b'F'));
+                    // Mirror the run loop: dispatched bytes release
+                    // their queue accounting.
+                    drain_queued.fetch_sub(
+                        bytes.len().min(drain_queued.load(Ordering::Acquire)),
+                        Ordering::AcqRel,
+                    );
+                },
+                other => {
+                    panic!("future frame must follow in order: {other:?}")
+                },
+            }
+        }
+        // The transport then ends: every byte acquired exactly once,
+        // nothing lost or duplicated across the discard.
+        match drain_rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(ReadEvent::Eof) => {},
+            other => panic!("EOF must close the drained stream: {other:?}"),
+        }
+        assert_eq!(
+            drain_yielded.load(Ordering::Acquire),
+            301 + 1 + 10 * 101,
+            "oversize prefix, newline, and future frames exactly once",
+        );
+        drain_done.store(true, Ordering::Release);
+        drain_handle
+            .join()
+            .expect("reader thread releases on shutdown");
     }
 }

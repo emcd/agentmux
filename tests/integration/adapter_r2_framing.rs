@@ -222,8 +222,10 @@ fn exact_bound_crlf_accepted() {
     );
 }
 
-/// FRAMING (adapter-wire-schema): one byte past the bound is refused
-/// with an LF terminator.
+/// FRAMING (adapter-wire-schema): one byte past the bound is
+/// discarded with an LF terminator and the session continues — the
+/// refused frame terminalizes nothing and the terminate signal ends
+/// the session clean.
 #[test]
 fn over_bound_lf_refused() {
     let config = test_config(SCRIPT);
@@ -233,12 +235,21 @@ fn over_bound_lf_refused() {
     let mut submit = exact_submit("10", 4097);
     submit.push(b'\n');
     let input = transcript_bytes(&[hello, submit, terminate()]);
-    let (code, _, _) = run_transcript(&config, &input);
-    assert_eq!(code, EXIT_REFUSAL);
+    let (code, output, _) = run_transcript(&config, &input);
+    assert_eq!(code, EXIT_CLEAN);
+    let frames = split_frames(&output);
+    assert!(
+        frames
+            .iter()
+            .all(|frame| frame["result"]["outcome"] != "Submitted"),
+        "no terminal for the discarded frame: {frames:?}"
+    );
 }
 
-/// FRAMING (adapter-wire-schema): one byte past the bound is refused
-/// with a CRLF terminator.
+/// FRAMING (adapter-wire-schema): one byte past the bound is
+/// discarded with a CRLF terminator and the session continues — the
+/// refused frame terminalizes nothing and the terminate signal ends
+/// the session clean.
 #[test]
 fn over_bound_crlf_refused() {
     let config = test_config(SCRIPT);
@@ -248,8 +259,223 @@ fn over_bound_crlf_refused() {
     let mut submit = exact_submit("10", 4097);
     submit.extend_from_slice(b"\r\n");
     let input = transcript_bytes(&[hello, submit, terminate()]);
-    let (code, _, _) = run_transcript(&config, &input);
+    let (code, output, _) = run_transcript(&config, &input);
+    assert_eq!(code, EXIT_CLEAN);
+    let frames = split_frames(&output);
+    assert!(
+        frames
+            .iter()
+            .all(|frame| frame["result"]["outcome"] != "Submitted"),
+        "no terminal for the discarded frame: {frames:?}"
+    );
+}
+
+/// FRAMING (adapter-wire-schema): an oversize head does not consume
+/// follower budget. With bound and budget both 300, a 301-byte
+/// oversize head drains past its newline retaining at most the
+/// remaining budget, so ten small pings behind it are all answered
+/// in order and the session ends clean at EOF.
+#[test]
+fn oversize_head_does_not_consume_follower_budget() {
+    let config = test_config(SCRIPT);
+    let mut hello =
+        serde_json::to_vec(&hello_result_with(4096, 300)).expect("serializes");
+    hello.push(b'\n');
+    let mut head = vec![b'x'; 301];
+    head.push(b'\n');
+    let mut wire = transcript_bytes(&[hello, head]);
+    for n in 1..=10 {
+        let ping = json!({
+            "jsonrpc": "2.0",
+            "id": format!("{}", n + 10),
+            "method": "relay.ping",
+            "params": {
+                "protocol_major": 2,
+                "protocol_minor": 1,
+                "runtime_instance": "rt-9",
+                "target_session": "seat-1",
+                "adapter_generation": 3,
+            },
+        });
+        let bytes = serde_json::to_vec(&ping).expect("serializes");
+        assert!(
+            bytes.len() < 300,
+            "pings must fit the bound to isolate the drain: {n}"
+        );
+        wire.extend_from_slice(&bytes);
+        wire.push(b'\n');
+    }
+    let (code, output, sink) = run_transcript(&config, &wire);
+    assert_eq!(code, EXIT_CLEAN);
+    assert!(
+        sink.iter().any(|entry| entry.code == "oversize_frame"),
+        "the discarded head is recorded: {:?}",
+        sink.iter().map(|entry| &entry.code).collect::<Vec<_>>()
+    );
+    let frames = split_frames(&output);
+    let pongs: Vec<String> = frames
+        .iter()
+        .filter(|frame| frame.get("result") == Some(&json!({})))
+        .filter_map(|frame| frame.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    let expected: Vec<String> = (11..=20).map(|n| n.to_string()).collect();
+    assert_eq!(pongs, expected, "every ping behind the head is answered");
+}
+
+/// Scripted source for the drain-terminal tests: yields queued
+/// byte chunks, then exactly one terminal condition (a one-shot I/O
+/// error or a one-shot clean EOF), then the rest of the wire, then
+/// clean EOF forever. A one-shot terminal must end the session with
+/// its original result: the reader must not rediscover the terminal
+/// with another source read, which could swallow a one-shot error
+/// and answer later frames.
+enum TerminalProbeOp {
+    Bytes(Vec<u8>),
+    FailOnce,
+    EofOnce,
+}
+
+struct TerminalProbeReader {
+    ops: std::collections::VecDeque<TerminalProbeOp>,
+    current: Vec<u8>,
+    pos: usize,
+}
+
+impl TerminalProbeReader {
+    fn new(ops: Vec<TerminalProbeOp>) -> Self {
+        Self {
+            ops: ops.into(),
+            current: Vec::new(),
+            pos: 0,
+        }
+    }
+}
+
+impl std::io::Read for TerminalProbeReader {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if self.pos < self.current.len() {
+            let end = (self.pos + buf.len()).min(self.current.len());
+            let count = end - self.pos;
+            buf[..count].copy_from_slice(&self.current[self.pos..end]);
+            self.pos = end;
+            return Ok(count);
+        }
+        match self.ops.pop_front() {
+            None => Ok(0),
+            Some(TerminalProbeOp::Bytes(bytes)) => {
+                assert!(!bytes.is_empty(), "probe chunks must be non-empty");
+                self.current = bytes;
+                self.pos = 0;
+                self.read(buf)
+            },
+            Some(TerminalProbeOp::FailOnce) => Err(std::io::Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "injected one-shot failure",
+            )),
+            Some(TerminalProbeOp::EofOnce) => Ok(0),
+        }
+    }
+}
+
+fn ping_frame(id: &str) -> Vec<u8> {
+    let frame = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "relay.ping",
+        "params": {
+            "protocol_major": 2,
+            "protocol_minor": 1,
+            "runtime_instance": "rt-9",
+            "target_session": "seat-1",
+            "adapter_generation": 3,
+        },
+    });
+    let mut bytes = serde_json::to_vec(&frame).expect("serializes");
+    bytes.push(b'\n');
+    bytes
+}
+
+/// Runs one drain-terminal probe: hello (bound 300 via the min
+/// rule), a 301-byte oversize head with no newline yet, then the
+/// injected terminal, then a valid ping. Returns exit code, stdout,
+/// and diagnostics.
+fn run_terminal_probe(
+    terminal: TerminalProbeOp,
+    ping_id: &str,
+) -> (i32, Vec<u8>, Vec<DiagnosticEntry>) {
+    let config = test_config(SCRIPT);
+    let mut hello =
+        serde_json::to_vec(&hello_result_with(4096, 300)).expect("serializes");
+    hello.push(b'\n');
+    let ops = vec![
+        TerminalProbeOp::Bytes(hello),
+        TerminalProbeOp::Bytes(vec![b'x'; 301]),
+        terminal,
+        TerminalProbeOp::Bytes(ping_frame(ping_id)),
+    ];
+    let reader = TerminalProbeReader::new(ops);
+    let shared = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let writer = SharedWriter(shared.clone());
+    let clock = ManualClock::new(1_000);
+    let mut sink: Vec<DiagnosticEntry> = Vec::new();
+    // No BufReader smoothing: the terminal condition must land
+    // exactly on the drain read.
+    let code = run_stdio(&config, &clock, reader, writer, &mut sink);
+    let output = shared.lock().expect("writer lock").clone();
+    (code, output, sink)
+}
+
+fn has_pong(output: &[u8], id: &str) -> bool {
+    split_frames(output).iter().any(|frame| {
+        frame.get("id").and_then(Value::as_str) == Some(id)
+            && frame.get("result") == Some(&json!({}))
+    })
+}
+
+/// FRAMING (adapter-wire-schema): a one-shot transport failure
+/// mid-drain keeps its original terminal result. The oversize is
+/// recorded, the session refuses with the dead transport, and the
+/// ping offered after the error is never answered.
+#[test]
+fn drain_error_keeps_original_terminal() {
+    let (code, output, sink) =
+        run_terminal_probe(TerminalProbeOp::FailOnce, "21");
     assert_eq!(code, EXIT_REFUSAL);
+    assert!(
+        sink.iter().any(|entry| entry.code == "oversize_frame"),
+        "detected oversize is recorded despite the failed drain: {:?}",
+        sink.iter().map(|entry| &entry.code).collect::<Vec<_>>()
+    );
+    assert!(
+        !has_pong(&output, "21"),
+        "no reply after the terminal error: {}",
+        String::from_utf8_lossy(&output)
+    );
+}
+
+/// FRAMING (adapter-wire-schema): a one-shot EOF mid-drain keeps its
+/// original terminal result. The oversize is recorded, the session
+/// ends clean by EOF, and the ping offered after it is never
+/// answered.
+#[test]
+fn drain_eof_keeps_original_terminal() {
+    let (code, output, sink) =
+        run_terminal_probe(TerminalProbeOp::EofOnce, "22");
+    assert_eq!(code, EXIT_CLEAN);
+    assert!(
+        sink.iter().any(|entry| entry.code == "oversize_frame"),
+        "detected oversize is recorded despite the EOF cut: {:?}",
+        sink.iter().map(|entry| &entry.code).collect::<Vec<_>>()
+    );
+    assert!(
+        !has_pong(&output, "22"),
+        "no reply after the terminal EOF: {}",
+        String::from_utf8_lossy(&output)
+    );
 }
 
 /// FRAMING (adapter-wire-schema): terminators split across transport

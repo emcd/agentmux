@@ -1,25 +1,25 @@
 ## 1. Operation Boundary Design
 
-- [ ] 1.1 Inventory each current MCP handler, classify it as operation-backed or
+- [x] 1.1 Inventory each current MCP handler, classify it as operation-backed or
   adapter-native, and split each operation-backed body into operation semantics
   (validation, relay request construction, dispatch, outcome interpretation)
   versus adapter presentation (JSON assembly, schema, rmcp result and error
   construction). `help` is the one adapter-native handler; confirm no other
   handler is adapter-native before relying on that.
-- [ ] 1.2 Define the canonical typed input and output for each operation-backed
+- [x] 1.2 Define the canonical typed input and output for each operation-backed
   tool and meta-tool command from the existing tool contracts, expressing
   optionality in the type system rather than a JSON encoding. Define no
   operation for `help`.
-- [ ] 1.3 Define the canonical operation error type covering the code, message,
+- [x] 1.3 Define the canonical operation error type covering the code, message,
   and typed details of the current error taxonomy, excluding adapter-only
   failures such as `unassociated_server`.
-- [ ] 1.4 Define operation function signatures over the public runtime handle
+- [x] 1.4 Define operation function signatures over the public runtime handle
   and relay-verified principal context from `embeddable-runtime-api`, with no
   caller-supplied sender identity parameter.
 
 ## 2. Operation Implementation
 
-- [ ] 2.1 Add the public tool-operations module and its crate-level exports,
+- [x] 2.1 Add the public tool-operations module and its crate-level exports,
   carrying no rmcp, MCP association, or JSON schema types.
 - [ ] 2.2 Move each operation-backed handler body into its operation function,
   dispatching through the public relay handlers and preserving existing

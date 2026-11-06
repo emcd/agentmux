@@ -162,6 +162,11 @@ pub fn run_replay_stdio<W: Write + Send + 'static>(
 
 pub(crate) enum Incoming {
     Frame(Vec<u8>),
+    /// An oversize frame was drained and refused: record the typed
+    /// framing failure and continue the session.
+    Discarded {
+        bound: usize,
+    },
     Eof,
     Unusable,
     /// A wait slice elapsed. `expired` is true only when the
@@ -429,6 +434,16 @@ impl<'a> Adapter<'a> {
                         return EXIT_REFUSAL;
                     }
                 },
+                Incoming::Discarded { bound } => {
+                    self.record(
+                        "oversize_frame",
+                        format!(
+                            "frame exceeded the inbound bound of {bound} bytes; \
+                             discarded without reply"
+                        )
+                        .as_str(),
+                    );
+                },
                 Incoming::Eof => {
                     self.terminalize_all("eof");
                     return EXIT_CLEAN;
@@ -476,6 +491,9 @@ impl<'a> Adapter<'a> {
         let wait = Duration::from_millis(wait_until_ms.saturating_sub(now));
         match rx.recv_timeout(wait) {
             Ok(ReadEvent::Frame(bytes)) => Incoming::Frame(bytes),
+            Ok(ReadEvent::Discarded { bound }) => {
+                Incoming::Discarded { bound }
+            },
             Ok(ReadEvent::Eof) => Incoming::Eof,
             Ok(ReadEvent::Unusable) => Incoming::Unusable,
             Err(mpsc::RecvTimeoutError::Timeout) => {

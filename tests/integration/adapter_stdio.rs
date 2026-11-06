@@ -289,8 +289,12 @@ fn replay_is_byte_identical() {
     assert_eq!(first, second);
 }
 
-/// A scripted choice raises requestChoice; the turn completes only
-/// after the relay answers it.
+/// A scripted choice raises requestChoice with the scripted content and
+/// the turn completes with its terminal only after the relay answers
+/// it. The preloaded trace establishes content and outcome, not wire
+/// order across lanes: control-first scheduling may emit the terminal
+/// before the held data-lane requestChoice, while each lane stays
+/// FIFO.
 #[test]
 fn scripted_choice_round_trips_before_submit_completes() {
     let script = r#"
@@ -338,12 +342,74 @@ species = "confirm"
     let (code, output, _) = run_transcript(&config, &input);
     assert_eq!(code, EXIT_CLEAN);
     let frames = split_frames(&output);
-    // hello, requestChoice, submit result, persist marker.
-    assert_eq!(frames[1]["method"], "adapter.requestChoice");
-    assert_eq!(frames[1]["params"]["title"], "Deploy?");
-    assert_eq!(frames[2]["result"]["outcome"], "Submitted");
-    assert_eq!(frames[2]["result"]["correlation_id"], "c-2");
-    assert_eq!(frames[3]["method"], "adapter.persistState");
+    // Cross-lane order is scheduling-dependent by design
+    // (control-first writer with take-then-recheck): with fully
+    // preloaded input the run loop can enqueue the control-lane
+    // submit terminal before the writer thread drains the data-lane
+    // requestChoice it took first, so exact indices are not pinned.
+    // A live supervisor answers only after receiving requestChoice,
+    // which makes that inversion impossible outside preloaded input.
+    // Assert the contract-derived shape instead: hello first (the
+    // first-enqueued control frame, which no held data can jump),
+    // per-lane content, and terminal correctness.
+    assert_eq!(frames[0]["method"], "adapter.handshakeHello");
+    let choices: Vec<&Value> = frames
+        .iter()
+        .filter(|frame| {
+            frame.get("method") == Some(&json!("adapter.requestChoice"))
+        })
+        .collect();
+    assert_eq!(choices.len(), 1, "one choice raised: {frames:?}");
+    assert_eq!(choices[0]["params"]["title"], "Deploy?");
+    let terminals: Vec<&Value> = frames
+        .iter()
+        .filter(|frame| {
+            frame.get("result").and_then(|result| result.get("outcome"))
+                == Some(&json!("Submitted"))
+        })
+        .collect();
+    assert_eq!(terminals.len(), 1, "one submit terminal: {frames:?}");
+    assert_eq!(terminals[0]["result"]["correlation_id"], "c-2");
+    let persists: Vec<&Value> = frames
+        .iter()
+        .filter(|frame| {
+            frame.get("method") == Some(&json!("adapter.persistState"))
+        })
+        .collect();
+    assert_eq!(persists.len(), 1, "persist marker present: {frames:?}");
+    let hello_at = frames
+        .iter()
+        .position(|frame| {
+            frame.get("method") == Some(&json!("adapter.handshakeHello"))
+        })
+        .expect("hello present");
+    let terminal_at = frames
+        .iter()
+        .position(|frame| {
+            frame.get("result").and_then(|result| result.get("outcome"))
+                == Some(&json!("Submitted"))
+        })
+        .expect("terminal present");
+    assert!(
+        hello_at < terminal_at,
+        "control-lane FIFO pins hello before the terminal: {frames:?}"
+    );
+    let choice_at = frames
+        .iter()
+        .position(|frame| {
+            frame.get("method") == Some(&json!("adapter.requestChoice"))
+        })
+        .expect("choice present");
+    let persist_at = frames
+        .iter()
+        .position(|frame| {
+            frame.get("method") == Some(&json!("adapter.persistState"))
+        })
+        .expect("persist present");
+    assert!(
+        choice_at < persist_at,
+        "data-lane FIFO pins requestChoice before persist: {frames:?}"
+    );
 }
 
 /// A fence-hint with a pending submit terminalizes locally: the

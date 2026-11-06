@@ -4,6 +4,8 @@ mod acp;
 mod adapter_pipes;
 #[path = "integration/adapter_pipes_handshake.rs"]
 mod adapter_pipes_handshake;
+#[path = "integration/adapter_pipes_oversize.rs"]
+mod adapter_pipes_oversize;
 #[path = "integration/adapter_pipes_stall.rs"]
 mod adapter_pipes_stall;
 #[path = "integration/adapter_r2_admission.rs"]
