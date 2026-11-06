@@ -10,6 +10,7 @@
 //! and exit codes.
 
 use std::io::Write;
+use std::os::unix::io::FromRawFd;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -146,10 +147,24 @@ fn partial_frame_hits_handshake_timeout() {
     child.kill().ok();
 }
 
-/// A closed channel terminalizes instead of hanging on write.
+/// A closed channel terminalizes instead of hanging on write. The
+/// stdout pipe's read end is closed before the child is even spawned,
+/// so the very first write deterministically fails: no post-spawn
+/// drop race can let the hello request out first. No stdin traffic is
+/// offered at all and stdin stays held open, so EOF can never offer
+/// a clean exit either — the only way out is the dead-channel
+/// terminalization, proven by its diagnostic (a bare exit code could
+/// also come from paths that record nothing). In production the
+/// supervisor cannot send the hello result without having received
+/// that request, so the EPIPE always wins there too.
 #[test]
 fn closed_stdout_exits_unusable() {
     let (_dir, script) = fixture(MINIMAL_SCRIPT);
+    // Pre-closed stdout: every write from the first byte fails.
+    let mut fds = [0; 2];
+    assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+    assert_eq!(unsafe { libc::close(fds[0]) }, 0);
+    let stdout = unsafe { Stdio::from(std::fs::File::from_raw_fd(fds[1])) };
     let mut child = Command::new(binary())
         .args([
             "--target",
@@ -158,18 +173,37 @@ fn closed_stdout_exits_unusable() {
             script.to_str().expect("utf8"),
         ])
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stdout(stdout)
+        .stderr(Stdio::piped())
         .spawn()
         .expect("adapter spawns");
-    drop(child.stdout.take());
-    let mut stdin = child.stdin.take().expect("stdin piped");
-    let hello = serde_json::to_vec(&hello_result()).expect("serializes");
-    stdin.write_all(&hello).expect("hello fits the pipe");
-    stdin.write_all(b"\n").expect("newline lands");
-    drop(stdin);
-    let status = child.wait().expect("adapter exits");
-    assert_eq!(status.code(), Some(2));
+    // Stdin stays held open and silent: EOF must never arrive to offer
+    // the run loop a clean exit. Poll rather than blocking-wait so a
+    // regression that hangs instead of terminalizing fails loudly.
+    let start = Instant::now();
+    let code = loop {
+        if let Some(status) = child.try_wait().expect("wait works") {
+            break status.code();
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "adapter must terminalize the closed stdout, not hang"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let _ = child.kill();
+    let output = child.wait_with_output().expect("adapter exits");
+    assert_eq!(code.or(output.status.code()), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Pre-binding the handshake fails without terminalizing (there
+    // is no binding to retire), so the dead-channel evidence is the
+    // writer-event record, not a terminalize entry: a handshake
+    // timeout would record nothing at all, which this assertion
+    // excludes.
+    assert!(
+        stderr.contains("transport_dead"),
+        "dead-channel observation must be recorded, not just exited: {stderr}"
+    );
 }
 
 /// An outbox cap refusal terminalizes instead of queueing unboundedly.

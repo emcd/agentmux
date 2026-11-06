@@ -49,6 +49,15 @@ fn parse_timeout(value: Option<String>, fallback: u64) -> u64 {
 }
 
 fn main() -> ExitCode {
+    // Ignore SIGPIPE so writes to a closed stdout surface as EPIPE
+    // instead of killing the process: the dead-channel rule requires
+    // local terminalization, which needs error delivery, not signal
+    // death. Portability, not just preference — default dispositions
+    // differ across supported Unixes.
+    if unsafe { libc::signal(libc::SIGPIPE, libc::SIG_IGN) } == libc::SIG_ERR {
+        eprintln!("agentmux-adapter: cannot ignore SIGPIPE");
+        return ExitCode::from(2);
+    }
     let mut arguments = env::args().skip(1);
     let mut target: Option<String> = None;
     let mut script_path: Option<String> = None;
