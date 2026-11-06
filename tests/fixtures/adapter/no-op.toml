@@ -1,0 +1,31 @@
+# Fixture script: no-op (generic profile).
+#
+# Requirement: Relay reads adapter output through a poll look RPC
+# Capability: adapter-look-poll
+#
+# Limit: scripted turn-marker fixture carries no resume content; rich-content persist assertions wait for the resume-state follow-on
+#
+# Semantics: no scripted turns and no scripted snapshots. Every submit
+# answers Submitted with no choices (unscripted default); every look
+# answers synthetic-stale empty (no_snapshot_scripted). Used for
+# handshake-only, liveness, and framing-boundary traces.
+#
+# Schema:
+# - [clock] advances_ms: virtual-clock advances consumed one before
+#   each post-handshake frame's dispatch, in trace order (timeouts
+#   expire only on these events; the trace replays byte-identical).
+# - [[turns]]: one scripted turn per supervisor submit correlation.
+#   ack is one of submitted | refused_busy | transport_unavailable |
+#   submission_unknown (maps to the contract outcome literal).
+# - [[turns.choices]]: scripted requestChoice raises for the turn.
+#   options must be non-empty; details is an opaque string.
+# - [[snapshots]]: scripted look answers per target session.
+#   delay_ms withholds fresh until first-poll + delay (default 0);
+#   earlier polls answer stale-tagged priming without blocking.
+# - [[events]]: scripted lifecycleEvent emissions in turn order.
+#
+# Scripted transport_ack evidence models a fake agent effect boundary,
+# not proof that any real agent accepted input.
+
+[clock]
+advances_ms = []

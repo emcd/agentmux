@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Lint the delivery protocol boundary (`src/protocol/`) for back-edges.
+"""Lint product-module back-edges out of boundary trees.
+
+Covers `src/protocol/` (delivery vocabulary both directions name) and
+`src/adapter/` (adapter side of the frozen wire, opaque handles only).
 
 Delivery runs in two directions -- the relay calls a transport to read a target,
 and a transport calls the relay to consume a target's mailbox -- and
@@ -74,19 +77,40 @@ import re
 import sys
 from pathlib import Path
 
-BOUNDARY = Path("src/protocol")
-
-# Each name is a sibling of the boundary that must not be reachable from inside
-# it, mapped to where it lives. The paths are checked to exist: without that, the
-# rule passes vacuously once a module is renamed out from under it -- nothing
-# would match because the name is gone, not because the boundary stayed clean.
-FORBIDDEN_MODULES = {
-    "relay": "src/relay",
-    "acp": "src/acp",
-    "tmux": "src/tmux",
-    "pty": "src/pty",
-    "transports": "src/transports",
-}
+# Each boundary is a module tree plus the sibling modules it must not
+# reach, mapped to where each lives, plus the rationale reported on
+# failure. The paths are checked to exist: without that, the rule passes
+# vacuously once a module is renamed out from under it -- nothing would
+# match because the name is gone, not because the boundary stayed clean.
+BOUNDARIES = [
+    (
+        Path("src/protocol"),
+        {
+            "relay": "src/relay",
+            "acp": "src/acp",
+            "tmux": "src/tmux",
+            "pty": "src/pty",
+            "transports": "src/transports",
+        },
+        "it holds the vocabulary both delivery directions name, so a "
+        "dependency on either side makes it one side's module wearing a "
+        "neutral name",
+    ),
+    (
+        Path("src/adapter"),
+        {
+            "relay": "src/relay",
+            "mcp": "src/mcp",
+            "acp": "src/acp",
+            "tmux": "src/tmux",
+            "pty": "src/pty",
+            "transports": "src/transports",
+        },
+        "it implements the adapter side of the frozen wire with opaque "
+        "handles only, so a dependency on relay internals or sibling "
+        "product modules breaks the no-back-edge contract",
+    ),
+]
 
 # The leading delimiter is matched but not reported from: a statement following
 # `;` on an earlier line would otherwise be attributed to that earlier line. The
@@ -329,7 +353,7 @@ def line_of(source, offset):
     return source.count("\n", 0, offset) + 1
 
 
-def violations_in(source):
+def violations_in(source, forbidden):
     """Returns `(line, name, path)` for every back-edge the source creates.
 
     One report per forbidden module per line, carrying the longest path seen for
@@ -340,15 +364,15 @@ def violations_in(source):
     found = {}
 
     def record(line, path_segments):
-        forbidden = [
+        flagged = [
             plain_identifier(s)
             for s in path_segments
-            if plain_identifier(s) in FORBIDDEN_MODULES
+            if plain_identifier(s) in forbidden
         ]
-        if not forbidden:
+        if not flagged:
             return
         rendered = "::".join(path_segments)
-        key = (line, forbidden[0])
+        key = (line, flagged[0])
         if key not in found or len(rendered) > len(found[key]):
             found[key] = rendered
 
@@ -423,8 +447,7 @@ SELFTEST_CASES = [
     # behaviour rather than guarding the class.
     (
         "root alias carrying a combining mark",
-        "use crate as π́;\n"
-        "fn failing() -> π́::relay::RelayError { todo!() }",
+        "use crate as π́;\nfn failing() -> π́::relay::RelayError { todo!() }",
         True,
     ),
     # This one is the guard: the forbidden segment is last, so its only join is
@@ -535,14 +558,20 @@ def run_selftest():
     """Returns a list of failure descriptions; empty when the detector works."""
     failures = []
     for name, source, should_flag in SELFTEST_CASES:
-        flagged = bool(violations_in(source))
+        flagged = bool(
+            violations_in(source, set().union(*(set(f) for _, f, _ in BOUNDARIES)))
+        )
         if flagged != should_flag:
             expected = "rejected" if should_flag else "accepted"
-            failures.append(
-                f"self-test case {name!r} should have been {expected}"
-            )
+            failures.append(f"self-test case {name!r} should have been {expected}")
 
-    reported = [line for line, _, _ in violations_in(LINE_ATTRIBUTION_CASE)]
+    reported = [
+        line
+        for line, _, _ in violations_in(
+            LINE_ATTRIBUTION_CASE,
+            set().union(*(set(f) for _, f, _ in BOUNDARIES)),
+        )
+    ]
     if reported != [LINE_ATTRIBUTION_EXPECTED]:
         failures.append(
             "self-test line attribution should have reported "
@@ -566,54 +595,58 @@ def main():
         )
         return 1
 
-    if not BOUNDARY.is_dir():
-        print(
-            f"lint-delivery-protocol-boundary: {BOUNDARY} is missing; the "
-            "back-edge guard covers nothing",
-            file=sys.stderr,
-        )
-        return 1
-
-    sources = sorted(BOUNDARY.rglob("*.rs"))
-    if not sources:
-        print(
-            f"lint-delivery-protocol-boundary: {BOUNDARY} holds no Rust "
-            "sources; the back-edge guard covers nothing",
-            file=sys.stderr,
-        )
-        return 1
-
-    for name, location in sorted(FORBIDDEN_MODULES.items()):
-        module = Path(location)
-        if not module.exists() and not module.with_suffix(".rs").exists():
+    for boundary, forbidden_modules, rationale in BOUNDARIES:
+        if not boundary.is_dir():
             print(
-                f"lint-delivery-protocol-boundary: forbidden module {name!r} no "
-                f"longer exists at {location}; this rule names a module that is "
-                "gone, so update it rather than leaving it matching nothing",
+                f"lint-delivery-protocol-boundary: {boundary} is missing; "
+                "the back-edge guard covers nothing",
                 file=sys.stderr,
             )
-            failed = True
+            return 1
 
-    for source in sources:
-        for line, name, path in violations_in(
-            source.read_text(encoding="utf-8")
-        ):
+        sources = sorted(boundary.rglob("*.rs"))
+        if not sources:
             print(
-                f"lint-delivery-protocol-boundary: {source}:{line}: "
-                f"depends on {name} via {path}",
+                f"lint-delivery-protocol-boundary: {boundary} holds no Rust "
+                "sources; the back-edge guard covers nothing",
                 file=sys.stderr,
             )
-            failed = True
+            return 1
 
-    if failed:
-        print(
-            "lint-delivery-protocol-boundary: {} must not depend on crate::{{{}}}; "
-            "it holds the vocabulary both delivery directions name, so a "
-            "dependency on either side makes it one side's module wearing a "
-            "neutral name".format(BOUNDARY, ", ".join(sorted(FORBIDDEN_MODULES))),
-            file=sys.stderr,
-        )
-        return 1
+        for name, location in sorted(forbidden_modules.items()):
+            module = Path(location)
+            if not module.exists() and not module.with_suffix(".rs").exists():
+                print(
+                    f"lint-delivery-protocol-boundary: forbidden module "
+                    f"{name!r} no longer exists at {location}; this rule "
+                    "names a module that is gone, so update it rather than "
+                    "leaving it matching nothing",
+                    file=sys.stderr,
+                )
+                failed = True
+
+        for source in sources:
+            for line, name, path in violations_in(
+                source.read_text(encoding="utf-8"), set(forbidden_modules)
+            ):
+                print(
+                    f"lint-delivery-protocol-boundary: {source}:{line}: "
+                    f"depends on {name} via {path}",
+                    file=sys.stderr,
+                )
+                failed = True
+
+        if failed:
+            print(
+                "lint-delivery-protocol-boundary: {} must not depend on "
+                "crate::{{{}}}; {}".format(
+                    boundary,
+                    ", ".join(sorted(forbidden_modules)),
+                    rationale,
+                ),
+                file=sys.stderr,
+            )
+            return 1
 
     return 0
 
