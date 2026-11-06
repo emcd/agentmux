@@ -9,6 +9,7 @@
 
 use std::io::Write;
 use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 fn binary() -> std::path::PathBuf {
     let mut path = std::env::current_exe().expect("test executable path");
@@ -31,6 +32,27 @@ const MINIMAL_SCRIPT: &str = r#"
 correlation = "c-1"
 ack = "submitted"
 "#;
+
+/// Polls for child exit, returning the code once observed.
+/// Uses try_wait rather than wait: in this environment a plain wait on
+/// a child with silent piped stdin returns immediately as if at EOF,
+/// which would turn a held-open peer into an EOF peer. Polling keeps
+/// the pipe open so timeouts are actually exercised.
+fn poll_exit(
+    child: &mut std::process::Child,
+    start: Instant,
+    limit: Duration,
+) -> Option<i32> {
+    loop {
+        if let Some(status) = child.try_wait().expect("wait works") {
+            return status.code();
+        }
+        if start.elapsed() > limit {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
 
 fn hello_negotiated(
     max_frame: u64,
@@ -202,5 +224,93 @@ fn oversize_truncated_by_eof_still_records_diagnostic() {
     assert!(
         stderr.contains("oversize_frame"),
         "the detected oversize is recorded despite EOF: {stderr}"
+    );
+}
+
+/// A known-over-bound pre-bind prefix with no terminator still
+/// records its diagnostic when the handshake timeout fires: the
+/// evidence is published at detection, so the open pipe and the
+/// missing newline cannot erase it. Stdin stays held open; the
+/// timeout — not EOF — ends the wait.
+#[test]
+fn silent_oversize_prefix_meets_handshake_timeout() {
+    let (_dir, script) = fixture(MINIMAL_SCRIPT);
+    let mut child = Command::new(binary())
+        .args([
+            "--target",
+            "seat-1",
+            "--script",
+            script.to_str().expect("utf8"),
+            "--handshake-timeout-ms",
+            "2000",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("adapter spawns");
+    // 70KiB over the 64KiB bootstrap ceiling, no newline: the bound
+    // is certainly exceeded mid-stream.
+    let mut stdin = child.stdin.take().expect("stdin piped");
+    stdin
+        .write_all(&vec![b'x'; 70 * 1024])
+        .expect("prefix lands");
+    stdin.flush().expect("prefix flushes");
+    // Hold the pipe open: no EOF may rescue or end this session.
+    let start = Instant::now();
+    let code = poll_exit(&mut child, start, Duration::from_secs(10));
+    let _ = child.kill();
+    let output = child.wait_with_output().expect("adapter exits");
+    assert_eq!(code, Some(2), "handshake refusal on timeout");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("oversize_frame"),
+        "the detected oversize is recorded despite the silent peer: {stderr}"
+    );
+}
+
+/// A known-over-bound post-hello prefix with no terminator still
+/// records its diagnostic when liveness expires: the evidence is
+/// published at detection, the timeout ends the session clean, and
+/// no wake from the silent peer is required.
+#[test]
+fn silent_oversize_prefix_meets_liveness_timeout() {
+    let (_dir, script) = fixture(MINIMAL_SCRIPT);
+    let mut child = Command::new(binary())
+        .args([
+            "--target",
+            "seat-1",
+            "--script",
+            script.to_str().expect("utf8"),
+            "--liveness-timeout-ms",
+            "500",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("adapter spawns");
+    let hello = hello_negotiated(4096, 250, 16_777_216, 16_777_216);
+    let mut wire = serde_json::to_vec(&hello).expect("serializes");
+    wire.push(b'\n');
+    // 8KiB over the negotiated 4096-byte bound, no newline.
+    wire.extend_from_slice(&vec![b'x'; 8192]);
+    let mut stdin = child.stdin.take().expect("stdin piped");
+    stdin.write_all(&wire).expect("wire lands");
+    stdin.flush().expect("wire flushes");
+    // Hold the pipe open: no EOF may rescue or end this session.
+    let start = Instant::now();
+    let code = poll_exit(&mut child, start, Duration::from_secs(10));
+    let _ = child.kill();
+    let output = child.wait_with_output().expect("adapter exits");
+    assert_eq!(code, Some(0), "liveness expiry ends the session clean");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("oversize_frame"),
+        "the detected oversize is recorded despite the silent peer: {stderr}"
+    );
+    assert!(
+        stderr.contains("liveness_timeout"),
+        "the timeout — not the oversize — ends the session: {stderr}"
     );
 }
