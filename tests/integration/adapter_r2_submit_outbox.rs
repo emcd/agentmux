@@ -433,15 +433,21 @@ ack = "submitted"
         submit_request("10", "c-1"),
         terminate_signal(),
     ]);
-    let (code, _, sink) = run_transcript(&config, &input);
+    let (code, output, sink) = run_transcript(&config, &input);
     // The ~300B submit frame exceeds min(frame cap, RX cap) = 100B, so
-    // the read is unusable: the supervisor->adapter direction bounds
-    // reads.
-    assert_eq!(code, EXIT_REFUSAL);
+    // it is discarded at acquisition with a typed framing failure and
+    // the session continues: the terminate signal ends it clean with
+    // no submit terminal fabricated for the refused frame.
+    assert_eq!(code, EXIT_CLEAN);
     assert!(
-        sink_codes(&sink).contains(&"terminalize"),
-        "unusable read must terminalize: {:?}",
+        sink_codes(&sink).contains(&"oversize_frame"),
+        "discard must record the framing failure: {:?}",
         sink_codes(&sink)
+    );
+    let text = String::from_utf8(output).expect("stdout is UTF-8");
+    assert!(
+        !text.contains("\"outcome\":\"Submitted\""),
+        "no terminal for the discarded frame: {text}"
     );
 }
 

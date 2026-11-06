@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use agentmux::adapter::choice::DiagnosticEntry;
 use agentmux::adapter::handshake::{LimitsProposal, VersionOffer};
 use agentmux::adapter::lifecycle::ManualClock;
-use agentmux::adapter::{AdapterConfig, EXIT_CLEAN, EXIT_REFUSAL, run_stdio};
+use agentmux::adapter::{AdapterConfig, EXIT_CLEAN, run_stdio};
 use serde_json::{Value, json};
 
 fn test_config(script_toml: &str) -> AdapterConfig {
@@ -222,8 +222,10 @@ fn exact_bound_crlf_accepted() {
     );
 }
 
-/// FRAMING (adapter-wire-schema): one byte past the bound is refused
-/// with an LF terminator.
+/// FRAMING (adapter-wire-schema): one byte past the bound is
+/// discarded with an LF terminator and the session continues — the
+/// refused frame terminalizes nothing and the terminate signal ends
+/// the session clean.
 #[test]
 fn over_bound_lf_refused() {
     let config = test_config(SCRIPT);
@@ -233,12 +235,21 @@ fn over_bound_lf_refused() {
     let mut submit = exact_submit("10", 4097);
     submit.push(b'\n');
     let input = transcript_bytes(&[hello, submit, terminate()]);
-    let (code, _, _) = run_transcript(&config, &input);
-    assert_eq!(code, EXIT_REFUSAL);
+    let (code, output, _) = run_transcript(&config, &input);
+    assert_eq!(code, EXIT_CLEAN);
+    let frames = split_frames(&output);
+    assert!(
+        frames
+            .iter()
+            .all(|frame| frame["result"]["outcome"] != "Submitted"),
+        "no terminal for the discarded frame: {frames:?}"
+    );
 }
 
-/// FRAMING (adapter-wire-schema): one byte past the bound is refused
-/// with a CRLF terminator.
+/// FRAMING (adapter-wire-schema): one byte past the bound is
+/// discarded with a CRLF terminator and the session continues — the
+/// refused frame terminalizes nothing and the terminate signal ends
+/// the session clean.
 #[test]
 fn over_bound_crlf_refused() {
     let config = test_config(SCRIPT);
@@ -248,8 +259,15 @@ fn over_bound_crlf_refused() {
     let mut submit = exact_submit("10", 4097);
     submit.extend_from_slice(b"\r\n");
     let input = transcript_bytes(&[hello, submit, terminate()]);
-    let (code, _, _) = run_transcript(&config, &input);
-    assert_eq!(code, EXIT_REFUSAL);
+    let (code, output, _) = run_transcript(&config, &input);
+    assert_eq!(code, EXIT_CLEAN);
+    let frames = split_frames(&output);
+    assert!(
+        frames
+            .iter()
+            .all(|frame| frame["result"]["outcome"] != "Submitted"),
+        "no terminal for the discarded frame: {frames:?}"
+    );
 }
 
 /// FRAMING (adapter-wire-schema): terminators split across transport

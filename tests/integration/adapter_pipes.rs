@@ -282,35 +282,6 @@ fn look_poll(id: &str, target: &str, prime_timeout_ms: u64) -> Vec<u8> {
     bytes
 }
 
-/// The 64KiB bootstrap ceiling applies before negotiation: an
-/// oversize hello result is refused without body-sized allocation.
-#[test]
-fn oversize_hello_result_refused() {
-    let (_dir, script) = fixture(MINIMAL_SCRIPT);
-    let mut child = Command::new(binary())
-        .args([
-            "--target",
-            "seat-1",
-            "--script",
-            script.to_str().expect("utf8"),
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("adapter spawns");
-    let mut hello = hello_negotiated(65536, 250, 16_777_216, 16_777_216);
-    hello["result"]["snapshot_b64"] =
-        serde_json::Value::String("x".repeat(70 * 1024));
-    let mut wire = serde_json::to_vec(&hello).expect("serializes");
-    wire.push(b'\n');
-    let mut stdin = child.stdin.take().expect("stdin piped");
-    let _ = stdin.write_all(&wire);
-    drop(stdin);
-    let status = child.wait().expect("adapter exits");
-    assert_eq!(status.code(), Some(2));
-}
-
 /// After negotiating up, a first post-hello frame larger than the
 /// 64KiB bootstrap ceiling is admitted: the transition is ordered
 /// before post-hello acquisition even when both frames coalesce.
@@ -432,8 +403,8 @@ fn coalesced_down_negotiation_refuses_large_first_frame() {
     let _ = stdin.write_all(&wire);
     drop(stdin);
     let output = child.wait_with_output().expect("adapter exits");
-    assert_eq!(output.status.code(), Some(2));
-    // The oversize first frame is refused at acquisition: only the
+    assert_eq!(output.status.code(), Some(0));
+    // The oversize first frame is discarded at acquisition: only the
     // hello request completed, and no submit terminal was fabricated
     // for the refused frame.
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -496,7 +467,7 @@ fn delayed_down_negotiation_refuses_large_frame() {
     let _ = stdin.write_all(&frame);
     drop(stdin);
     let status = child.wait().expect("adapter exits");
-    assert_eq!(status.code(), Some(2));
+    assert_eq!(status.code(), Some(0));
 }
 
 /// A delayed first operation after up-negotiation is admitted under

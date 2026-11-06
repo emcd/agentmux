@@ -531,6 +531,21 @@ impl Adapter<'_> {
                     );
                     release_gate(self);
                 },
+                Ok(ReadEvent::Discarded { bound }) => {
+                    // An oversize frame is refused without ending the
+                    // handshake wait: record the typed framing failure
+                    // and keep waiting for the hello result until the
+                    // deadline or EOF.
+                    self.record(
+                        "oversize_frame",
+                        format!(
+                            "frame exceeded the inbound bound of {bound} bytes; \
+                             discarded without reply"
+                        )
+                        .as_str(),
+                    );
+                    release_gate(self);
+                },
                 Ok(ReadEvent::Eof) | Ok(ReadEvent::Unusable) => {
                     return Err(());
                 },
