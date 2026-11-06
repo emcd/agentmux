@@ -279,8 +279,9 @@ pub(super) fn list_principals_input(
     }
 }
 
-/// Maps `ListNamespacesArgs` into a `ListNamespacesInput`. The relay
-/// selector is trimmed for the check; the carried value stays verbatim.
+/// Maps `ListNamespacesArgs` into a `ListNamespacesInput`. The
+/// carried selector is the trimmed value (whitespace-only is rejected
+/// up front, so the empty filter never fires on validated input).
 pub(super) fn list_namespaces_input(
     args: &ListNamespacesArgs,
 ) -> Result<ListNamespacesInput, OperationError> {
