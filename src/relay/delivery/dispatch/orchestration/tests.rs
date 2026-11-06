@@ -250,7 +250,32 @@ mod pty_startup_fixtures {
     // each test lives in its own inline module (one `#[test]` per block)
     // because the initializer is crate-private, and widening visibility to
     // reach it from `tests/` would publish delivery internals.
+    use super::super::PRIME_WAIT_POLLS;
     use crate::configuration::{BundleMember, TargetConfiguration};
+    use std::sync::atomic::Ordering;
+
+    /// Serializes the prime-wait tests: the poll counter below is
+    /// process-wide, so concurrent prime-wait loops would advance it on a
+    /// waiting test's behalf. Held for the whole test by every test that
+    /// runs the loop while a helper thread waits on the counter.
+    pub(super) static PRIME_WAIT_SERIAL: std::sync::Mutex<()> =
+        std::sync::Mutex::new(());
+
+    /// Blocks until the prime-wait loop has completed `additional` passes
+    /// past `start` (read before the loop can start), then returns. A
+    /// counter advance proves the pre-election guard passed and at least
+    /// one snapshot was read — the helper thread's action is therefore
+    /// staged strictly mid-wait, not guessed by sleep. Bounded so a loop
+    /// that never polls cannot hang the test; the prime wait's own
+    /// outcome assertions still decide pass or fail.
+    pub(super) fn wait_for_polls(start: usize, additional: usize) {
+        for _ in 0..5000 {
+            if PRIME_WAIT_POLLS.load(Ordering::Relaxed) >= start + additional {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
 
     pub(super) fn pty_member(id: &str) -> BundleMember {
         BundleMember {
@@ -289,6 +314,9 @@ mod startup_refused_when_signalled_tests {
     /// process-wide signal is quiet.
     #[test]
     fn startup_refused_when_signalled_before_election() {
+        let _serial = super::pty_startup_fixtures::PRIME_WAIT_SERIAL
+            .lock()
+            .expect("prime-wait serial lock");
         let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
             Default::default(),
         ));
@@ -321,7 +349,6 @@ mod staged_gate_signal_tests {
         unregister_worker,
     };
     use super::super::*;
-    use super::pty_startup_fixtures::*;
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
@@ -330,14 +357,17 @@ mod staged_gate_signal_tests {
     /// A gate signalled mid-wait interrupts the prime wait with the
     /// interruption error rather than reporting the (never-coming) ready
     /// state. The entry pre-exists so no worker spawns and no child runs.
-    /// The barrier stages the signal strictly after the initializer
-    /// starts: the pre-check runs within microseconds of the rendezvous
-    /// while the signal lands a full staged interval later, so the test
-    /// deterministically exercises the in-wait gate check rather than the
-    /// pre-election refusal (which has its own test).
+    /// The signaller waits for loop passes, not wall time: the counter
+    /// advance proves the pre-election guard passed, so the signal lands
+    /// strictly mid-wait under the shared serial lock.
     #[test]
     fn staged_gate_signal_interrupts_prime_wait() {
-        use std::sync::Barrier;
+        use super::pty_startup_fixtures::{
+            PRIME_WAIT_SERIAL, pty_member, wait_for_polls,
+        };
+        use std::sync::atomic::Ordering;
+        let _serial =
+            PRIME_WAIT_SERIAL.lock().expect("prime-wait serial lock");
         let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
             Default::default(),
         ));
@@ -355,15 +385,12 @@ mod staged_gate_signal_tests {
             Arc::new(AtomicUsize::new(0)),
             false,
         );
-        let barrier = Arc::new(Barrier::new(2));
+        let start = super::super::PRIME_WAIT_POLLS.load(Ordering::Relaxed);
         let gate = Arc::clone(&delivery);
-        let gate_barrier = Arc::clone(&barrier);
         let signaller = std::thread::spawn(move || {
-            gate_barrier.wait();
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            wait_for_polls(start, 1);
             gate.shutdown_gate().signal_shutdown();
         });
-        barrier.wait();
         let member = pty_member("staged-gate-sess");
         let error = initialize_pty_target_for_startup(
             &delivery,
@@ -400,6 +427,9 @@ mod unavailable_without_cause_tests {
     /// on a generic timeout. The entry pre-exists so no worker spawns.
     #[test]
     fn unavailable_without_cause_fails_promptly() {
+        let _serial = super::pty_startup_fixtures::PRIME_WAIT_SERIAL
+            .lock()
+            .expect("prime-wait serial lock");
         let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
             Default::default(),
         ));
@@ -461,6 +491,9 @@ mod unavailable_before_cause_tests {
     /// observation.
     #[test]
     fn unavailable_before_cause_reports_cause() {
+        let _serial = super::pty_startup_fixtures::PRIME_WAIT_SERIAL
+            .lock()
+            .expect("prime-wait serial lock");
         let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
             Default::default(),
         ));
@@ -520,7 +553,6 @@ mod stopping_entry_not_serving_tests {
         stop_workers_for_bundle, unregister_worker,
     };
     use super::super::*;
-    use super::pty_startup_fixtures::*;
     use crate::transports::WorkerReadinessState;
     use std::path::Path;
     use std::sync::Arc;
@@ -528,13 +560,21 @@ mod stopping_entry_not_serving_tests {
     use tokio::sync::mpsc::unbounded_channel;
 
     /// A stopping entry that reads Available is never reported serving:
-    /// stopping is published before readiness here, so no poll can ever
-    /// observe a serving entry that is not already stopping — under the
-    /// old gate the first poll after the publish returns Ok, under the new
-    /// gate the drain's unregister ends the wait instead. The entry
-    /// pre-exists so no worker spawns and no gate is signalled.
+    /// no poll can observe a serving snapshot that is not already
+    /// stopping, so the loop skips the ready outcome and the drain's
+    /// unregister ends the wait instead. The entry pre-exists so no
+    /// worker spawns and no child runs. The drain waits for loop passes
+    /// (not wall time) before stopping, so the pre-election guard
+    /// deterministically passes on an unstopped entry while every
+    /// serving observation happens under the stop.
     #[test]
     fn stopping_entry_never_reports_serving() {
+        use super::pty_startup_fixtures::{
+            PRIME_WAIT_SERIAL, pty_member, wait_for_polls,
+        };
+        use std::sync::atomic::Ordering;
+        let _serial =
+            PRIME_WAIT_SERIAL.lock().expect("prime-wait serial lock");
         let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
             Default::default(),
         ));
@@ -552,17 +592,14 @@ mod stopping_entry_not_serving_tests {
             Arc::new(AtomicUsize::new(0)),
             false,
         );
-        // The drain thread sleeps first so the pre-election guard passes
-        // deterministically; it then stops and publishes while the prime
-        // wait is polling, so the serving gate (not the pre-check) is what
-        // refuses the entry. Stop precedes publish within the thread, so
-        // no poll can ever see a serving entry that is not already
-        // stopping — any Ok would be the old gate. The drain's unregister
-        // ends the wait promptly instead of burning the prime bound.
+        // Strictly after the loop has started polling (hence after the
+        // pre-election guard passed on an unstopped entry): stop,
+        // publish, let polls observe, then unregister.
         let drain = Arc::clone(&delivery);
         let drain_key = key.clone();
+        let start = super::super::PRIME_WAIT_POLLS.load(Ordering::Relaxed);
         let drain_handle = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            wait_for_polls(start, 1);
             stop_workers_for_bundle(
                 drain.async_registry(),
                 "stopping-ns",

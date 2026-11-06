@@ -254,16 +254,23 @@ impl PtyTransport {
     }
 
     /// Update the readiness state and (if a closure was injected)
-    /// mirror the transition into the relay's global worker-state
-    /// registry. Used at every relay-side lifecycle point: the
-    /// pre-init `Initializing` publish, the post-failure `Unavailable`
-    /// publish, and the pre-shutdown `Unavailable` publish.
+    /// mirror the transition into the relay's per-handle worker-state
+    /// registry. Used at relay-side lifecycle points: the pre-init
+    /// `Initializing` publish and the pre-shutdown `Unavailable` publish.
+    /// A synchronous startup failure deliberately does NOT mirror here —
+    /// see `set_readiness_local`: the relay wrapper publishes that
+    /// terminal transition only after the construction-error record
+    /// lands, so no observer ever sees `Unavailable` for an attempt whose
+    /// cause is still in flight.
     ///
     /// The worker thread publishes the rest of the lifecycle
     /// (`Available` on successful init, `Busy`/`Available`/
     /// `Unavailable` around each delivery) via the cloned
     /// `Arc<Mutex<WorkerReadinessState>>` + cloned `mirror_state`
-    /// closure it owns.
+    /// closure it owns. Those run only after the reader thread exists
+    /// (spawned first — see `startup_inner`), so by the time the worker
+    /// thread can publish, synchronous startup can no longer fail with
+    /// a record pending.
     ///
     /// `Recovering` transitions are not emitted by this transport —
     /// they require a respawn monitor that does not yet exist for Pty

@@ -1,3 +1,6 @@
+#[cfg(test)]
+#[cfg(all(test, feature = "pty"))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
     sync::Arc,
     thread,
@@ -228,6 +231,16 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
 #[cfg(feature = "pty")]
 const PTY_STARTUP_PRIME_TIMEOUT_MS: u64 = 5_000;
 
+// Test seam: the counter below lets prime-wait tests stage helper-thread
+// actions strictly after the loop has started polling (a counter advance
+// proves the pre-election guard passed and at least one snapshot was
+// read), instead of guessing with sleeps. It counts loop passes only,
+// is compiled out of non-test builds, and serializes with the prime-wait
+// tests' shared lock so concurrent loops cannot advance it on a waiting
+// test's behalf.
+#[cfg(all(test, feature = "pty"))]
+pub(super) static PRIME_WAIT_POLLS: AtomicUsize = AtomicUsize::new(0);
+
 /// Eagerly elects a Pty target's delivery worker at bundle bring-up.
 ///
 /// Mirrors `initialize_acp_target_for_startup`: the registry election is
@@ -374,6 +387,8 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
                 "Pty",
             ));
         }
+        #[cfg(all(test, feature = "pty"))]
+        PRIME_WAIT_POLLS.fetch_add(1, Ordering::Relaxed);
         // One acquisition covers owner, readiness, and stopping together:
         // check below and the supersession check above read the same
         // snapshot, so neither can describe a worker the other did not see.

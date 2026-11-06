@@ -138,6 +138,32 @@ impl PtyTransport {
         let reader_shutdown_flag = self.shutdown_flag.clone();
         let child_exited_for_reader = self.shared.child_exited.clone();
 
+        // The reader thread starts before the worker thread on purpose:
+        // the worker publishes registry state (including terminal
+        // `Unavailable`) that the prime wait acts on, while the reader
+        // spawn can still fail with a construction error recorded
+        // afterwards. Worker-first ordering would let an `Unavailable`
+        // mirror land before its cause exists; reader-first makes that
+        // interleave unrepresentable — any worker-thread terminal state
+        // implies synchronous startup can no longer fail with a pending
+        // record.
+        let reader_handle = thread::Builder::new()
+            .name(format!("pty-reader-{target_session}"))
+            .spawn(move || {
+                super::runtime::run_reader(
+                    reader,
+                    bytes_tx_for_reader,
+                    reader_shutdown_flag,
+                    child_exited_for_reader,
+                );
+            })
+            .map_err(|e| TransportError {
+                code: "pty_reader_spawn_failed".to_string(),
+                reason: format!("reader thread spawn: {e}"),
+                details: None,
+            })?;
+        guard.note_reader(reader_handle);
+
         let worker_handle = thread::Builder::new()
             .name(format!("pty-worker-{target_session_for_worker}"))
             .spawn(move || {
@@ -163,23 +189,6 @@ impl PtyTransport {
                 details: None,
             })?;
         guard.note_worker(worker_handle);
-
-        let reader_handle = thread::Builder::new()
-            .name(format!("pty-reader-{target_session}"))
-            .spawn(move || {
-                super::runtime::run_reader(
-                    reader,
-                    bytes_tx_for_reader,
-                    reader_shutdown_flag,
-                    child_exited_for_reader,
-                );
-            })
-            .map_err(|e| TransportError {
-                code: "pty_reader_spawn_failed".to_string(),
-                reason: format!("reader thread spawn: {e}"),
-                details: None,
-            })?;
-        guard.note_reader(reader_handle);
 
         let (child, worker, reader) = guard.finish();
         self.bytes_tx = Some(bytes_tx);
