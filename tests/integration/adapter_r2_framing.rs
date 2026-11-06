@@ -270,6 +270,59 @@ fn over_bound_crlf_refused() {
     );
 }
 
+/// FRAMING (adapter-wire-schema): an oversize head does not consume
+/// follower budget. With bound and budget both 300, a 301-byte
+/// oversize head drains past its newline retaining at most the
+/// remaining budget, so ten small pings behind it are all answered
+/// in order and the session ends clean at EOF.
+#[test]
+fn oversize_head_does_not_consume_follower_budget() {
+    let config = test_config(SCRIPT);
+    let mut hello =
+        serde_json::to_vec(&hello_result_with(4096, 300)).expect("serializes");
+    hello.push(b'\n');
+    let mut head = vec![b'x'; 301];
+    head.push(b'\n');
+    let mut wire = transcript_bytes(&[hello, head]);
+    for n in 1..=10 {
+        let ping = json!({
+            "jsonrpc": "2.0",
+            "id": format!("{}", n + 10),
+            "method": "relay.ping",
+            "params": {
+                "protocol_major": 2,
+                "protocol_minor": 1,
+                "runtime_instance": "rt-9",
+                "target_session": "seat-1",
+                "adapter_generation": 3,
+            },
+        });
+        let bytes = serde_json::to_vec(&ping).expect("serializes");
+        assert!(
+            bytes.len() < 300,
+            "pings must fit the bound to isolate the drain: {n}"
+        );
+        wire.extend_from_slice(&bytes);
+        wire.push(b'\n');
+    }
+    let (code, output, sink) = run_transcript(&config, &wire);
+    assert_eq!(code, EXIT_CLEAN);
+    assert!(
+        sink.iter().any(|entry| entry.code == "oversize_frame"),
+        "the discarded head is recorded: {:?}",
+        sink.iter().map(|entry| &entry.code).collect::<Vec<_>>()
+    );
+    let frames = split_frames(&output);
+    let pongs: Vec<String> = frames
+        .iter()
+        .filter(|frame| frame.get("result") == Some(&json!({})))
+        .filter_map(|frame| frame.get("id").and_then(Value::as_str))
+        .map(str::to_string)
+        .collect();
+    let expected: Vec<String> = (11..=20).map(|n| n.to_string()).collect();
+    assert_eq!(pongs, expected, "every ping behind the head is answered");
+}
+
 /// FRAMING (adapter-wire-schema): terminators split across transport
 /// reads still terminate — a byte-at-a-time peer delivers the same
 /// frames as a coalesced one. Drives run_stdio through a 1-byte

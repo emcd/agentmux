@@ -168,3 +168,39 @@ fn oversize_frame_discarded_session_continues() {
         "the discard is recorded as a typed framing failure: {stderr}"
     );
 }
+
+/// An oversize frame truncated by EOF is still recorded: the bound
+/// was already exceeded before the transport ended, so the session
+/// ends clean by EOF but the typed framing failure is not erased.
+#[test]
+fn oversize_truncated_by_eof_still_records_diagnostic() {
+    let (_dir, script) = fixture(MINIMAL_SCRIPT);
+    let mut child = Command::new(binary())
+        .args([
+            "--target",
+            "seat-1",
+            "--script",
+            script.to_str().expect("utf8"),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("adapter spawns");
+    let hello = hello_negotiated(4096, 250, 16_777_216, 16_777_216);
+    let mut wire = serde_json::to_vec(&hello).expect("serializes");
+    wire.push(b'\n');
+    // Oversize garbage with no terminating newline: the bound is
+    // exceeded mid-frame, then the transport closes.
+    wire.extend_from_slice(&vec![b'x'; 8192]);
+    let mut stdin = child.stdin.take().expect("stdin piped");
+    stdin.write_all(&wire).expect("wire lands");
+    drop(stdin);
+    let output = child.wait_with_output().expect("adapter exits");
+    assert_eq!(output.status.code(), Some(0));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("oversize_frame"),
+        "the detected oversize is recorded despite EOF: {stderr}"
+    );
+}
