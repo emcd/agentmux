@@ -2,7 +2,7 @@
   "requirement": "Handshake negotiation schema with defaults-vs-required table",
   "capability": "adapter-wire-schema",
   "limit": null,
-  "description": "An 8KiB frame over the negotiated 4096-byte bound is discarded with a local diagnostic and no correlatable reply, and the binding survives: the reader drains to the newline without a body-sized allocation and the session continues. Adjudicated defect-turned-proof: the implementation once terminated here; the discard behavior now asserted is the contract-derived one.",
+  "description": "An 8KiB frame over the negotiated 4096-byte bound is discarded with no correlatable reply, and the binding survives: the session continues and the probe below is answered. Adjudicated defect-turned-proof: the implementation once terminated here; the discard behavior now asserted is the contract-derived one. Observed scope is discard, no reply, and continuation.",
   "adapter_script": "quick-ack.toml",
   "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/quick-ack.toml", "--max-frame-bytes", "4096"], "env": {}},
   "bind": {

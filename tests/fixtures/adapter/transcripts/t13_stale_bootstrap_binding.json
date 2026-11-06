@@ -2,7 +2,7 @@
   "requirement": "Common params with explicit authority binding",
   "capability": "adapter-wire-schema",
   "limit": null,
-  "description": "Frames outside the captured binding triple are refused with a typed binding failure before semantic processing: a submit naming an unpublished generation and a look naming a foreign runtime instance each earn a binding_mismatch error echoing id and correlation, execute nothing, and leave the bound pipe usable.",
+  "description": "Frames outside the captured binding triple are refused with a typed binding failure before semantic processing: a submit naming an unpublished generation and a look naming a foreign runtime instance each earn the adapter's binding_mismatch error echoing id and correlation, execute nothing, and leave the bound pipe usable. The contract mandates the typed refusal; the binding_mismatch code string is the reference adapter's chosen literal.",
   "adapter_script": "no-op.toml",
   "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/no-op.toml"], "env": {}},
   "bind": {

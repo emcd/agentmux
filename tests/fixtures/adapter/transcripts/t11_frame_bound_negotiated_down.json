@@ -2,7 +2,7 @@
   "requirement": "Handshake negotiation schema with defaults-vs-required table",
   "capability": "adapter-wire-schema",
   "limit": null,
-  "description": "The negotiated max_frame_bytes replaces the bootstrap ceiling as the operative bound: a 2KiB frame under the negotiated 4096-byte bound is accepted and acked. The over-bound leg lives in pending/t11b_oversize_refused.json until the discard-vs-terminate dispute resolves.",
+  "description": "The negotiated max_frame_bytes replaces the bootstrap ceiling as the operative bound: a 2KiB frame under the negotiated 4096-byte bound is accepted and acked. The over-bound leg lives in the companion t11b_oversize_refused transcript.",
   "adapter_script": "quick-ack.toml",
   "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/quick-ack.toml", "--max-frame-bytes", "4096"], "env": {}},
   "bind": {

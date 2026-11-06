@@ -2,7 +2,7 @@
   "requirement": "Newline-delimited JSON-RPC 2.0 framing with contract method mapping",
   "capability": "adapter-wire-schema",
   "limit": null,
-  "description": "Control flow stays intact end to end: three pings answer with empty results, stdin EOF delivers a clean shutdown, and every line on the pipe parses. Slow-consumer flooding beyond this flush integrity needs a flood script and is recorded as future.",
+  "description": "Control flow stays intact end to end: three pings answer with empty results, stdin EOF delivers end-of-stream with every line on the pipe parseable, and no frame is truncated. Closure is observed as EOF, not asserted as an exit status. Slow-consumer flooding beyond this flush integrity needs a flood script and is recorded as future.",
   "adapter_script": "no-op.toml",
   "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/no-op.toml"], "env": {}},
   "bind": {
