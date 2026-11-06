@@ -1,0 +1,42 @@
+{
+  "requirement": "Pending-call table scopes results and errors",
+  "capability": "adapter-wire-schema",
+  "limit": null,
+  "description": "A standard protocol error for an unknown wire id is discarded with a diagnostic: no correlated error is fabricated in reply, and the pipe stays usable for the next operation.",
+  "adapter_script": "no-op.toml",
+  "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/no-op.toml"], "env": {}},
+  "bind": {
+    "expect_hello_subset": {
+      "adapter_profile": "generic",
+      "target_session": "seat-1",
+      "protocol_major": 2,
+      "protocol_minor": 0
+    },
+    "hello_result": {
+      "runtime_instance": "test-instance-1",
+      "adapter_generation": 7,
+      "selected_major": 2,
+      "selected_minor": 0,
+      "negotiated_limits": {
+        "max_frame_bytes": 1048576,
+        "queue_tx_bytes": 16777216,
+        "queue_rx_bytes": 16777216,
+        "max_control_pending": 32,
+        "max_events_per_second": 100,
+        "window_seconds": 1,
+        "max_submits_in_flight": 64,
+        "max_choices_in_flight": 16,
+        "max_looks_in_flight": 8,
+        "drain_wait_ms": 250
+      },
+      "snapshot_b64": ""
+    },
+    "hello_result_raw": null
+  },
+  "frames": [
+    {"send": {"jsonrpc": "2.0", "id": "99", "error": {"code": -32600, "message": "Invalid Request"}}},
+    {"expect_quiet_ms": 300},
+    {"send": {"jsonrpc": "2.0", "id": "11", "method": "relay.look", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "look_handle_id": "h-probe", "adapter_generation": 7, "correlation_id": "c-probe", "lines": 10, "prime_timeout_ms": 0}}},
+    {"expect": {"jsonrpc": "2.0", "id": "11", "result": {"correlation_id": "c-probe", "stale": true, "snapshot_source": "synthetic"}}}
+  ]
+}

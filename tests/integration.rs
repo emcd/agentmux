@@ -1,5 +1,7 @@
 #[path = "integration/acp/mod.rs"]
 mod acp;
+#[path = "integration/adapter_conformance/mod.rs"]
+mod adapter_conformance;
 #[path = "integration/adapter_pipes.rs"]
 mod adapter_pipes;
 #[path = "integration/adapter_pipes_handshake.rs"]
