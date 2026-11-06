@@ -63,6 +63,19 @@ Team roster, lane ownership, merge policy, review routing, coordinator and
 specialist responsibilities, and OpenSpec multi-agent workflow live in
 `coordination/general/14`.
 
+### Review routing and notification (operator directive, 2026-11-05)
+
+Reviews are bilateral: review messages (verdicts, findings, rework requests,
+evidence questions) flow between the author and the reviewer only. Do not Cc
+the other reviewer, the Coordinator, or anyone else on review traffic. The
+Coordinator is notified ONLY of a merge request, after final review approval
+AND autosquash of the commit stack, carrying the cleaned hashes, the tree
+identity against the reviewed tree, the validation summary, and the approval
+trail. Scope decisions, sequencing, cross-lane coordination, blockers, and
+external matters still go to the Coordinator directly. Review evidence
+standards (`agentmux:procedures/15`) are unchanged. Full policy:
+`agentmux:procedures/16`.
+
 ## Procedures
 
 - [Cleanup and removal protocol](agentmux:procedures/2) — inventory-first,
@@ -94,6 +107,11 @@ specialist responsibilities, and OpenSpec multi-agent workflow live in
     handshake.
 - Record refresh outcome in the lane handoff note when tool inventory
   changed.
+- OpenCode may "retire" rarely used tools from an agent's visible
+  inventory. Before declaring an MCP tool unavailable or broken, use
+  OpenCode's tool-search to resurface it — a retired tool is still
+  callable once searched back. Only report a tool as missing when it
+  cannot be resurfaced.
 
 ## Notebook Notes
 
