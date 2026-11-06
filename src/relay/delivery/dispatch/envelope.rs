@@ -30,6 +30,7 @@ use crate::relay::delivery::async_worker::{
 #[cfg(feature = "pty")]
 use crate::relay::delivery::async_worker::{
     WorkerOwner, build_worker_key, record_construction_error,
+    set_worker_readiness_if_owner,
 };
 use crate::relay::delivery::choice_state::{
     ChoiceEventContext, build_acp_chooser, invalidate_pending_for_respawn,
@@ -196,29 +197,20 @@ pub(super) async fn build_pty_transport(
         },
     };
     // Mirror ACP's `MirrorStateFn` pattern (see `build_acp_driver_services`
-    // above): the relay constructs the closure closing over
-    // `set_worker_readiness(relay.async_registry(), namespace,
-    // runtime_directory, target_session, state)`. The transport holds an
-    // opaque `Arc<dyn Fn>` so `src/pty` does not import `crate::relay`.
-    // The transport uses the closure to publish
-    // `Initializing` / `Available` / `Busy` / `Unavailable`
-    // transitions into the relay handle's worker-state registry at its
-    // lifecycle points.
-    let pty_mirror_state: crate::pty::PtyMirrorStateFn = {
-        let namespace = namespace.to_string();
-        let runtime_directory = runtime_directory.to_path_buf();
-        let target_session = target_member.id.clone();
-        let relay = Arc::clone(relay);
-        Arc::new(move |state| {
-            set_worker_readiness(
-                relay.async_registry(),
-                namespace.as_str(),
-                runtime_directory.as_path(),
-                target_session.as_str(),
-                state,
-            );
-        })
-    };
+    // above): the relay constructs the closure closing over the registry
+    // handle, the target identity, and the ELECTED OWNER. The transport
+    // holds an opaque `Arc<dyn Fn>` so `src/pty` does not import
+    // `crate::relay`. The owner check is load-bearing: a late publisher
+    // (a detached worker thread, a superseded generation) must never
+    // describe its successor's attempt, so the write lands only while
+    // the entry still names this owner.
+    let pty_mirror_state: crate::pty::PtyMirrorStateFn = pty_mirror_closure(
+        relay,
+        owner,
+        namespace,
+        runtime_directory,
+        target_member.id.as_str(),
+    );
     let record_failure = {
         let key = build_worker_key(
             namespace,
@@ -696,5 +688,113 @@ fn stream_send_to_broadcast_status(
         Err(source) => UiBroadcastStatus::Failed(format!(
             "failed to emit relay stream event: {source}"
         )),
+    }
+}
+
+/// Builds the registry mirror closure for one elected Pty attempt.
+///
+/// Factored so the owner binding is unit-testable without constructing a
+/// transport: the closure captures the electing owner and the returned
+/// closure refuses to write once the entry names anyone else.
+#[cfg(feature = "pty")]
+fn pty_mirror_closure(
+    relay: &Arc<DeliveryContext>,
+    owner: WorkerOwner,
+    namespace: &str,
+    runtime_directory: &std::path::Path,
+    target_session: &str,
+) -> crate::pty::PtyMirrorStateFn {
+    let namespace = namespace.to_string();
+    let runtime_directory = runtime_directory.to_path_buf();
+    let target_session = target_session.to_string();
+    let relay = Arc::clone(relay);
+    Arc::new(move |state| {
+        set_worker_readiness_if_owner(
+            relay.async_registry(),
+            owner,
+            namespace.as_str(),
+            runtime_directory.as_path(),
+            target_session.as_str(),
+            state,
+        );
+    })
+}
+
+#[cfg(all(test, feature = "pty"))]
+mod mirror_owner_tests {
+    use super::super::super::async_worker::{
+        build_worker_key, get_worker_readiness, register_worker,
+    };
+    use super::*;
+    use crate::transports::WorkerReadinessState;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use tokio::sync::mpsc::unbounded_channel;
+
+    /// A superseded mirror callback cannot change the successor's entry:
+    /// the stale closure publishes nothing, while a closure built for
+    /// the current owner publishes normally. The prime wait therefore
+    /// never reads another attempt's state as its waited result.
+    #[test]
+    fn superseded_callback_leaves_successor_untouched() {
+        let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
+            Default::default(),
+        ));
+        let registry = delivery.async_registry();
+        let key = build_worker_key(
+            "mirror-ns",
+            std::path::Path::new("/mirror-rt"),
+            "mirror-sess",
+        );
+        let install = |registry: &crate::relay::delivery::async_worker::AsyncDeliveryRegistry| {
+            let (sender, _) =
+                unbounded_channel::<crate::relay::AsyncDeliveryTask>();
+            register_worker(
+                registry,
+                key.clone(),
+                sender,
+                Arc::new(AtomicUsize::new(0)),
+                false,
+            )
+        };
+        let first = install(registry);
+        let stale = pty_mirror_closure(
+            &delivery,
+            first,
+            "mirror-ns",
+            std::path::Path::new("/mirror-rt"),
+            "mirror-sess",
+        );
+        let second = install(registry);
+        assert_ne!(second, first, "the test needs a successor");
+        stale(WorkerReadinessState::Available);
+        assert!(
+            get_worker_readiness(
+                registry,
+                "mirror-ns",
+                std::path::Path::new("/mirror-rt"),
+                "mirror-sess",
+            )
+            .is_none(),
+            "a superseded callback publishes nothing"
+        );
+        let current = pty_mirror_closure(
+            &delivery,
+            second,
+            "mirror-ns",
+            std::path::Path::new("/mirror-rt"),
+            "mirror-sess",
+        );
+        current(WorkerReadinessState::Busy);
+        assert_eq!(
+            get_worker_readiness(
+                registry,
+                "mirror-ns",
+                std::path::Path::new("/mirror-rt"),
+                "mirror-sess",
+            ),
+            Some(WorkerReadinessState::Busy),
+            "the current owner's callback publishes"
+        );
     }
 }

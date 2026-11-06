@@ -791,18 +791,23 @@ has not observed, and a bound that cannot be made true is worse than none.
 ### Requirement: Pty Persistent Worker Lifecycle
 
 Bundle bring-up SHALL elect a Pty member's delivery worker through the
-worker registry (`register_worker_if_absent`), passing a
-`WorkerTransportSource::Pty` construction input resolved from the
-configured member — the same election a first delivery runs, so bring-up
-and first delivery cannot produce two workers (and therefore two children)
-for one target. The child SHALL be spawned inside the elected worker's
-first generation build, after the registration win, never at bring-up
-directly.
+worker registry's shared election — the same election a first delivery
+runs, so bring-up and first delivery cannot produce two workers (and
+therefore two children) for one target. The child SHALL be spawned inside
+the elected worker's first generation build, after the registration win,
+never at bring-up directly. The election SHALL name the winning attempt
+with its completion handle under the same registry acquisition that
+observed it, so a loser that observes a winner reports the winner's own
+cause rather than re-resolving it afterwards.
 
 Bring-up SHALL prime-wait the worker's readiness: `Available`/`Busy`
 records ready; `Unavailable`, unregistration during startup, or the prime
-bound elapsing records a structured startup failure carrying the
-transport's own recorded cause. Registration alone SHALL NOT record ready.
+bound elapsing records a structured startup failure. The failure carries
+the transport's own recorded cause when one was recorded for the waited
+attempt; an `Unavailable` observed with no recorded cause reports the
+`Unavailable` state with phase detail rather than a generic timeout — and
+never invents a transport cause that was never recorded. Registration
+alone SHALL NOT record ready.
 
 A repeated bring-up pass over a registered worker SHALL adopt it
 unchanged. A Pty target with no worker SHALL still be constructed on

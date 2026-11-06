@@ -15,7 +15,7 @@ use crate::acp::state::ACP_STARTUP_PRIME_TIMEOUT_MS;
 
 #[cfg(feature = "pty")]
 use super::super::async_worker::{
-    PtyElection, adopt_registered_attempt, elect_pty_attempt,
+    PtyElection, WorkerOwner, adopt_registered_attempt, elect_pty_attempt,
     worker_attempt_snapshot,
 };
 use super::super::async_worker::{
@@ -56,7 +56,10 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
     // difference between the remaining members never starting and each of them
     // starting an agent for a fence to have to end.
     if shutdown_requested() || delivery.is_shutting_down() {
-        return Err(startup_interrupted_error(target_member.id.as_str()));
+        return Err(startup_interrupted_error(
+            target_member.id.as_str(),
+            "ACP",
+        ));
     }
     if target_member.working_directory.is_none() {
         return Err((
@@ -156,7 +159,10 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
         // change. Signalled during a multi-member startup, that cost the relay
         // its whole timeout for every member still to come.
         if shutdown_requested() || delivery.is_shutting_down() {
-            return Err(startup_interrupted_error(target_member.id.as_str()));
+            return Err(startup_interrupted_error(
+                target_member.id.as_str(),
+                "ACP",
+            ));
         }
         let readiness = get_worker_readiness(
             delivery.async_registry(),
@@ -243,9 +249,14 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
     }
     // Checked before the worker is created, not only while waiting on it:
     // starting a target means spawning a child process, and a relay on its
-    // way out has no use for one.
-    if shutdown_requested() {
-        return Err(startup_interrupted_error(target_member.id.as_str()));
+    // way out has no use for one. The instance gate joins the process-wide
+    // signal: a per-handle shutdown must refuse new children even while the
+    // process itself keeps running.
+    if shutdown_requested() || delivery.is_shutting_down() {
+        return Err(startup_interrupted_error(
+            target_member.id.as_str(),
+            "Pty",
+        ));
     }
     let key = super::super::async_worker::build_worker_key(
         namespace,
@@ -354,15 +365,21 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
     // every other exit carries honest phase details instead.
     let deadline =
         Instant::now() + Duration::from_millis(PTY_STARTUP_PRIME_TIMEOUT_MS);
+    // A stop signalled after a valid ready observation is a later event;
+    // an entry already stopping at a snapshot is never reported serving.
+    let mut unavailable_grace_owner: Option<WorkerOwner> = None;
     loop {
-        if shutdown_requested() {
-            return Err(startup_interrupted_error(target_member.id.as_str()));
+        if shutdown_requested() || delivery.is_shutting_down() {
+            return Err(startup_interrupted_error(
+                target_member.id.as_str(),
+                "Pty",
+            ));
         }
-        // One acquisition covers owner and readiness together: the serving
+        // One acquisition covers owner, readiness, and stopping together:
         // check below and the supersession check above read the same
         // snapshot, so neither can describe a worker the other did not see.
         let snapshot = worker_attempt_snapshot(registry, &key);
-        let current = snapshot.as_ref().map(|(owner, _)| *owner);
+        let current = snapshot.as_ref().map(|(owner, ..)| *owner);
         let waited_owner = waited.as_ref().map(|(owner, _)| *owner);
         if current != waited_owner {
             if let Some((owner, completion)) =
@@ -425,12 +442,57 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
                 }),
             ));
         }
-        let readiness = snapshot.and_then(|(_, readiness)| readiness);
-        if super::super::async_worker::acp_readiness_is_ready(readiness) {
+        let readiness = snapshot.and_then(|(_, readiness, _)| readiness);
+        let stopping = snapshot
+            .as_ref()
+            .map(|(_, _, stopping)| *stopping)
+            .unwrap_or(false);
+        if super::super::async_worker::acp_readiness_is_ready(readiness)
+            && !stopping
+        {
             // A serving worker is definitionally not described by a failure
             // record, and a new entry carries a fresh handle anyway: there
-            // is no stale state to clear.
+            // is no stale state to clear. Eligibility was rechecked on this
+            // same snapshot, so a stopping entry is never reported serving
+            // no matter when the stop landed relative to this poll.
             return Ok(());
+        }
+        // An Unavailable observation for the waited attempt is a startup
+        // failure, not a reason to keep waiting out the bound — with one
+        // ordering guard. The transport publishes Unavailable before the
+        // synchronous construction error is recorded, so a first sighting
+        // with no cause yet yields one poll interval for the record to
+        // land; only a second sighting still causeless reports the
+        // Unavailable state itself. A cause that lands in between is
+        // always preferred: it is the transport's own code, and it names
+        // the attempt this pass waited on.
+        if readiness == Some(WorkerReadinessState::Unavailable) {
+            if let Some((_, completion)) = waited.as_ref()
+                && let Some(recorded) = completion.read()
+            {
+                return Err(startup_failure_error(
+                    Some(recorded),
+                    "runtime_pty_startup_failed",
+                    "Pty worker reported Unavailable during startup",
+                    json!({
+                        "target_session": target_member.id,
+                    }),
+                ));
+            }
+            if unavailable_grace_owner == waited_owner {
+                return Err(startup_failure_error(
+                    None,
+                    "runtime_pty_unavailable",
+                    "Pty worker reported Unavailable during startup",
+                    json!({
+                        "target_session": target_member.id,
+                        "last_readiness": format!("{readiness:?}"),
+                    }),
+                ));
+            }
+            thread::sleep(Duration::from_millis(25));
+            unavailable_grace_owner = waited_owner;
+            continue;
         }
         if let Some((_, completion)) = waited.as_ref()
             && let Some(recorded) = completion.read()
@@ -445,6 +507,18 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
             ));
         }
         if Instant::now() >= deadline {
+            if readiness == Some(WorkerReadinessState::Unavailable) {
+                return Err(startup_failure_error(
+                    None,
+                    "runtime_pty_unavailable",
+                    "Pty worker reported Unavailable during startup",
+                    json!({
+                        "target_session": target_member.id,
+                        "timeout_ms": PTY_STARTUP_PRIME_TIMEOUT_MS,
+                        "last_readiness": format!("{readiness:?}"),
+                    }),
+                ));
+            }
             return Err(startup_failure_error(
                 None,
                 "runtime_startup_failed",
@@ -460,13 +534,16 @@ pub(in crate::relay) fn initialize_pty_target_for_startup(
     }
 }
 
-/// Reports a startup abandoned because the relay is shutting down.
+/// Reports a startup abandoned because the relay is shutting down. The
+/// transport name keeps the phase detail honest: a Pty bring-up refused by
+/// the gate must not report an ACP startup.
 fn startup_interrupted_error(
     target_session: &str,
+    transport: &str,
 ) -> (String, String, Option<serde_json::Value>) {
     (
         "runtime_startup_interrupted".to_string(),
-        "relay shutdown requested during ACP worker startup".to_string(),
+        format!("relay shutdown requested during {transport} worker startup"),
         Some(json!({
             "target_session": target_session,
         })),
@@ -675,242 +752,4 @@ fn fail_stopped_error(task: &AsyncDeliveryTask) -> RelayError {
 }
 
 #[cfg(test)]
-mod enqueue_fixtures {
-    // Shared member fixture for the one-test modules below: each test
-    // lives in its own inline module (one `#[test]` per block) because
-    // the enqueue path's arms are crate-private, and widening visibility
-    // to reach them from `tests/` would publish delivery internals.
-    use crate::configuration::{BundleMember, TargetConfiguration};
-
-    pub(super) fn tmux_member(id: &str) -> BundleMember {
-        BundleMember {
-            id: id.to_string(),
-            name: Some(id.to_string()),
-            working_directory: None,
-            target: TargetConfiguration::Tmux(
-                crate::configuration::TmuxTargetConfiguration {
-                    start_command: format!("run-{id}"),
-                    prompt_readiness: None,
-                },
-            ),
-            coder_session_id: None,
-            policy_id: None,
-            environment: Vec::new(),
-        }
-    }
-}
-
-/// The enqueue path's `Closing` arm is crate-private and unreachable through any
-/// public interface without a live relay shutdown. This inline test registers a
-/// closing target worker and drives `enqueue_delivery_task` against it, observing
-/// that the raced task is dropped as a `DroppedOnShutdown` receipt to the
-/// sender's worker while the closing entry is retained and fed nothing — no
-/// replacement worker is spawned over it. One `#[test]`, no widened visibility.
-#[cfg(test)]
-mod closing_drop_tests {
-    use super::super::super::async_worker::{
-        build_worker_key, close_worker, register_worker, unregister_worker,
-        worker_exists,
-    };
-    use super::enqueue_fixtures::*;
-    use super::*;
-    use crate::configuration::BundleConfiguration;
-    use crate::relay::{
-        DeliveryPayloadMode, SCHEMA_VERSION, SenderReturnRoute,
-    };
-    use std::path::{Path, PathBuf};
-    use std::sync::Arc;
-    use std::sync::atomic::AtomicUsize;
-
-    /// A Send racing relay shutdown whose target worker is already draining
-    /// (`closing`) is dropped as `DroppedOnShutdown`, not spawned into a replacement
-    /// worker that would clobber the closing registry entry the shutdown barrier
-    /// still counts. The dropped task surfaces to the sender as a receipt; the
-    /// closing worker is fed nothing and stays registered.
-    #[test]
-    fn enqueue_drops_task_targeting_a_closing_worker() {
-        let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
-            Default::default(),
-        ));
-        let target_namespace = "enqueue-target-ns";
-        let target_runtime = "/enqueue-target-rt";
-        let target_session = "enqueue-target-sess";
-        let sender_namespace = "enqueue-sender-ns";
-        let sender_runtime = "/enqueue-sender-rt";
-        let sender_member_id = "enqueue-sender-mem";
-
-        // A registered, closing target worker; enqueue must not feed it.
-        let target_key = build_worker_key(
-            target_namespace,
-            Path::new(target_runtime),
-            target_session,
-        );
-        let (target_tx, mut target_rx) =
-            tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        let target_owner = register_worker(
-            delivery.async_registry(),
-            target_key.clone(),
-            target_tx,
-            Arc::new(AtomicUsize::new(0)),
-            false,
-        );
-        close_worker(delivery.async_registry(), &target_key, target_owner);
-
-        // A live sender worker: the DroppedOnShutdown receipt should land here.
-        let sender_key = build_worker_key(
-            sender_namespace,
-            Path::new(sender_runtime),
-            sender_member_id,
-        );
-        let (sender_tx, mut sender_rx) =
-            tokio_mpsc::unbounded_channel::<AsyncDeliveryTask>();
-        let owner = register_worker(
-            delivery.async_registry(),
-            sender_key.clone(),
-            sender_tx,
-            Arc::new(AtomicUsize::new(0)),
-            false,
-        );
-
-        let task = AsyncDeliveryTask {
-            // Test fixture: constructed directly, never admitted.
-            admitted: false,
-            bundle: BundleConfiguration {
-                schema_version: SCHEMA_VERSION.to_string(),
-                bundle_name: target_namespace.to_string(),
-                autostart: false,
-                groups: Vec::new(),
-                members: Vec::new(),
-            },
-            sender_namespace: sender_namespace.to_string(),
-            sender: tmux_member(sender_member_id),
-            authenticated_identity: None,
-            on_behalf_of: None,
-            all_target_sessions: Vec::new(),
-            target_session: target_session.to_string(),
-            message: "body".to_string(),
-            message_id: "orig-message-id".to_string(),
-            runtime_directory: PathBuf::from(target_runtime),
-            payload_mode: DeliveryPayloadMode::EnvelopeMessage,
-            append_enter: true,
-            choice_decider_sessions: Vec::new(),
-            is_receipt: false,
-            sender_return_route: Some(SenderReturnRoute {
-                member: tmux_member(sender_member_id),
-                runtime_directory: PathBuf::from(sender_runtime),
-            }),
-        };
-
-        enqueue_delivery_task(&delivery, task)
-            .expect("enqueue returns Ok when the target worker is closing");
-
-        // The closing worker is retained and was fed nothing: no replacement worker
-        // spawned or registered over the closing entry.
-        assert!(
-            worker_exists(delivery.async_registry(), &target_key)
-                .expect("registry lock"),
-            "the closing worker entry is retained"
-        );
-        assert!(
-            target_rx.try_recv().is_err(),
-            "the closing worker must not be fed the raced task"
-        );
-
-        // The raced task resolved DroppedOnShutdown, surfaced to the sender as a
-        // receipt through the sender's own worker.
-        let receipt = sender_rx
-            .try_recv()
-            .expect("the dropped task yields a DroppedOnShutdown receipt to the sender");
-        assert!(receipt.is_receipt);
-        assert!(
-            receipt.message.contains("dropped on relay shutdown"),
-            "receipt reports the dropped-on-shutdown outcome: {}",
-            receipt.message
-        );
-
-        unregister_worker(
-            &delivery,
-            delivery.async_registry(),
-            &target_key,
-            target_owner,
-        );
-        unregister_worker(
-            &delivery,
-            delivery.async_registry(),
-            &sender_key,
-            owner,
-        );
-    }
-}
-
-/// Lazy-election queue policy is crate-private (the Missing/Dropped arm is
-/// unreachable without driving the real enqueue path), so this inline test
-/// is the seam: one `#[test]`, no widened visibility.
-#[cfg(test)]
-mod lazy_queue_tests {
-    use super::enqueue_fixtures::*;
-    use super::*;
-    use crate::configuration::BundleConfiguration;
-    use crate::relay::{DeliveryPayloadMode, SCHEMA_VERSION};
-    use std::path::PathBuf;
-    use std::sync::Arc;
-
-    /// Lazy-election queue policy: the delivery-time Missing/Dropped arm
-    /// elects workers for every non-ACP transport, so its registration
-    /// stays unbounded. Seventy sends against a worker that never consumes
-    /// (entered but unpolled runtime: spawns succeed, nothing runs, no
-    /// slot is ever released) must all succeed; with the ACP cap
-    /// reimposed here, sends past the 64-slot bound fail
-    /// `runtime_acp_queue_full`.
-    #[test]
-    fn lazy_election_keeps_non_acp_workers_unbounded() {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("test runtime");
-        let _entered = runtime.enter();
-        let delivery = Arc::new(crate::relay::delivery::DeliveryContext::new(
-            Default::default(),
-        ));
-        let target_namespace = "lazy-queue-target-ns";
-        let target_runtime = "/lazy-queue-target-rt";
-        let target_session = "lazy-queue-target-sess";
-        let sender_member_id = "lazy-queue-sender-mem";
-
-        let send = |index: usize| AsyncDeliveryTask {
-            // Test fixture: constructed directly, never admitted.
-            admitted: false,
-            bundle: BundleConfiguration {
-                schema_version: SCHEMA_VERSION.to_string(),
-                bundle_name: target_namespace.to_string(),
-                autostart: false,
-                groups: Vec::new(),
-                members: vec![tmux_member(target_session)],
-            },
-            sender_namespace: target_namespace.to_string(),
-            sender: tmux_member(sender_member_id),
-            authenticated_identity: None,
-            on_behalf_of: None,
-            all_target_sessions: Vec::new(),
-            target_session: target_session.to_string(),
-            message: format!("body-{index}"),
-            message_id: format!("lazy-queue-{index}"),
-            runtime_directory: PathBuf::from(target_runtime),
-            payload_mode: DeliveryPayloadMode::EnvelopeMessage,
-            append_enter: true,
-            choice_decider_sessions: Vec::new(),
-            is_receipt: false,
-            sender_return_route: None,
-        };
-
-        let mut refused = Vec::new();
-        for index in 0..70 {
-            if let Err(error) = enqueue_delivery_task(&delivery, send(index)) {
-                refused.push((index, error.code));
-            }
-        }
-        assert!(
-            refused.is_empty(),
-            "every send to a lazily elected non-ACP worker must be accepted, refused: {refused:?}"
-        );
-    }
-}
+mod tests;

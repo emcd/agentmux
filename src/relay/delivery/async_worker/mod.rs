@@ -37,6 +37,8 @@ pub(in crate::relay::delivery) use self::attempt::{
 pub(in crate::relay::delivery) use self::reap::{
     bind_worker_consumer_generation, unregister_worker,
 };
+#[cfg(feature = "pty")]
+pub(in crate::relay) use self::registry::set_worker_readiness_if_owner;
 pub(in crate::relay::delivery) use self::registry::{
     AsyncDeliveryRegistry, AsyncWorkerKey, WorkerDispatch, WorkerOwner,
     build_worker_key, close_worker, drop_pending_async_tasks_on_stop,

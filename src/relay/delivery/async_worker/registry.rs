@@ -590,6 +590,46 @@ pub(in crate::relay) fn set_worker_readiness(
     observability::publish_worker_readiness(&key, state);
 }
 
+/// Owner-checked readiness publish: the state lands only on the entry
+/// still owned by `owner`. A late publisher (a detached worker thread, a
+/// superseded generation) must never describe its successor's attempt —
+/// the mirror closure captures the owner at creation for exactly this
+/// check, the way the construction-failure callback already does.
+#[cfg(feature = "pty")]
+pub(in crate::relay) fn set_worker_readiness_if_owner(
+    registry: &AsyncDeliveryRegistry,
+    owner: WorkerOwner,
+    namespace: &str,
+    runtime_directory: &Path,
+    target_session: &str,
+    state: WorkerReadinessState,
+) {
+    let key = build_worker_key(namespace, runtime_directory, target_session);
+    let landed = if let Ok(mut workers) = registry.workers.lock()
+        && let Some(entry) = workers.get_mut(&key)
+        && entry.owner == owner
+    {
+        entry.readiness = Some(state);
+        // Same recovery clearing as the unchecked publish: a healthy
+        // state means this attempt recovered.
+        if matches!(
+            state,
+            WorkerReadinessState::Available | WorkerReadinessState::Busy
+        ) {
+            entry.last_failure = None;
+        }
+        true
+    } else {
+        false
+    };
+    // Report only a transition that actually happened: unlike the
+    // unchecked path, a skipped write names no state change, and
+    // publishing one would show observers a state no entry holds.
+    if landed {
+        observability::publish_worker_readiness(&key, state);
+    }
+}
+
 pub(in crate::relay) fn get_worker_readiness(
     registry: &AsyncDeliveryRegistry,
     namespace: &str,
