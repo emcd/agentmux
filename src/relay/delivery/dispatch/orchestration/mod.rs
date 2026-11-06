@@ -232,12 +232,12 @@ pub(in crate::relay) fn initialize_acp_target_for_startup(
 const PTY_STARTUP_PRIME_TIMEOUT_MS: u64 = 5_000;
 
 // Test seam: the counter below lets prime-wait tests stage helper-thread
-// actions strictly after the loop has started polling (a counter advance
-// proves the pre-election guard passed and at least one snapshot was
-// read), instead of guessing with sleeps. It counts loop passes only,
-// is compiled out of non-test builds, and serializes with the prime-wait
-// tests' shared lock so concurrent loops cannot advance it on a waiting
-// test's behalf.
+// actions strictly after the loop has started another pass (a counter
+// advance proves the pre-election guard passed and the loop is polling),
+// instead of guessing with sleeps. It counts loop passes only, not
+// snapshots — a pass may observe absence — and is compiled out of
+// non-test builds. Concurrent prime waits would advance it on a waiting
+// test's behalf, so the waiting tests serialize on the shared lock below.
 #[cfg(all(test, feature = "pty"))]
 pub(super) static PRIME_WAIT_POLLS: AtomicUsize = AtomicUsize::new(0);
 

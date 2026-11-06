@@ -194,11 +194,21 @@ impl PtyTransport {
     /// probe has no use for them.
     ///
     /// `mirror_state` is the relay-constructed closure that mirrors
-    /// per-turn readiness transitions into the relay's global
+    /// per-turn readiness transitions into the relay's per-handle
     /// worker-state registry. Pass `None` in tests constructed
     /// without a relay registry; the transport's internal readiness
     /// state still advances so the readiness predicates can drive the
     /// lifecycle locally.
+    ///
+    /// Synchronous startup errors are the one exception to mirroring at
+    /// the point of transition: `startup` reports a failed build locally
+    /// only, without invoking this closure. The relay wrapper that
+    /// invoked `startup` records the construction error first and then
+    /// publishes the terminal `Unavailable` through this same closure,
+    /// so an observer can never see this attempt as `Unavailable` while
+    /// its cause is still being recorded. Worker-thread terminal
+    /// transitions (post-startup init failure, child exit, shutdown)
+    /// still mirror immediately: no construction error can follow them.
     #[must_use]
     pub fn new(
         target_member: BundleMember,

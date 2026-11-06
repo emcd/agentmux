@@ -262,12 +262,10 @@ mod pty_startup_fixtures {
         std::sync::Mutex::new(());
 
     /// Blocks until the prime-wait loop has completed `additional` passes
-    /// past `start` (read before the loop can start), then returns. A
-    /// counter advance proves the pre-election guard passed and at least
-    /// one snapshot was read — the helper thread's action is therefore
-    /// staged strictly mid-wait, not guessed by sleep. Bounded so a loop
-    /// that never polls cannot hang the test; the prime wait's own
-    /// outcome assertions still decide pass or fail.
+    /// past `start` (read before the loop can start), then returns. The
+    /// counter proves the pre-election guard passed and the loop is
+    /// polling — not that a snapshot was read. Fails loudly instead of
+    /// hanging the test if the loop never advances.
     pub(super) fn wait_for_polls(start: usize, additional: usize) {
         for _ in 0..5000 {
             if PRIME_WAIT_POLLS.load(Ordering::Relaxed) >= start + additional {
@@ -275,6 +273,9 @@ mod pty_startup_fixtures {
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+        panic!(
+            "prime-wait loop did not advance {additional} passes past {start}"
+        );
     }
 
     pub(super) fn pty_member(id: &str) -> BundleMember {

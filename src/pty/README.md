@@ -1,20 +1,26 @@
 # src/pty/
 
-> **Work-in-progress — not production-ready.** The Pty transport landed early in
-> the 0.9.0 cycle, but it is marked explicitly WIP. This change
-> (`fix-pty-eager-startup-and-probe-blocking`) fixes `agentmux:issues/runtime/8`
-> (Pty prompt probe `blocking_recv` panic in a tokio worker) and
-> `agentmux:issues/runtime/9` (held-bundle guard — `is_held` at group
-> construction), both previously milestone 0.10.0. Remaining deferred gap:
-> eager Pty startup parity (`Pty Persistent Worker Lifecycle` — requires a
-> `WorkerTransportSource::Pty` handoff analogous to `AcpWorkerBootstrap`,
-> `worker.rs:81-86` vs `Direct` at `184-190`; see `lifecycle.rs:475` stopgap).
-> This module is compiled only when the `pty` Cargo feature is enabled.
-
 Pty transport: libghostty-vt-backed delivery with portable-pty child process
 management. Compiled only when the `pty` Cargo feature is enabled; the default
 `cargo build` does NOT pull libghostty-vt or portable-pty and does NOT invoke
 Zig.
+
+Eager startup is implemented: bring-up elects the target's delivery worker
+through the shared registry election, and the child is spawned inside the
+elected worker's first generation build. Two ordering rules keep that
+construction honest, both owned by the relay side:
+
+- Reader-first startup: the reader thread spawns before the worker thread,
+  so no worker-thread terminal publish can precede a construction error
+  that is still being recorded.
+- Record-before-mirror: on synchronous startup failure the transport
+  reports locally only; the relay wrapper records the construction error
+  first and publishes the registry `Unavailable` afterwards, so a prime
+  wait never observes `Unavailable` with a cause still in flight.
+
+Work-in-progress: respawn-monitor follow-ups (restart after `Unavailable`
+is rejected pending a teardown-then-restart path; `Recovering` transitions
+are not emitted).
 
 Build-time prerequisites (Zig 0.15.x on PATH, optional outbound network access
 for the vendored ghostty clone) and the upstream escape hatches
