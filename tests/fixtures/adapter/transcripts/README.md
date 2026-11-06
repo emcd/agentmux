@@ -39,9 +39,9 @@ surrounding quotes, so `"id": "$hello_id"` replays as `"id": "1"`).
 - `adapter_script` names the required Agents-owned TOML script; the
   spawn argv/env pairing that selects it is confirmed separately, and
   the runner currently launches exactly `spawn.args` + `spawn.env`.
-- Over-bound frames live in `pending/` until their dispute resolves
-  (see there). The gate replays only the top level; the citation lint
-  covers both.
+- Over-bound frames replay in the gate like every other transcript; the
+  discard-vs-terminate dispute that once parked one in `pending/` was
+  adjudicated defect and repaired on the implementation side.
 - Slow-consumer backpressure beyond final-flush integrity needs a
   flood script and is recorded as future, not asserted here.
 - Every `relay.look` carries numeric `prime_timeout_ms` (0 answers

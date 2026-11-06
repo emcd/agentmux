@@ -2,7 +2,7 @@
   "requirement": "Handshake negotiation schema with defaults-vs-required table",
   "capability": "adapter-wire-schema",
   "limit": null,
-  "description": "DISPUTED — pending bilateral resolution. Contract-derived expectation: an 8KiB frame over the negotiated 4096-byte bound is discarded with a local diagnostic and no correlatable reply, and the binding survives (reference-adapter spec: oversize frames are discarded, never answered; unparseable frames resolve nothing). Observed implementation behavior: the reader surfaces transport-unusable, terminalizes, and exits refusal. If termination is blessed, this transcript becomes expect_eof; if discard-and-continue stands, the implementation changes. Either way the probe below decides it.",
+  "description": "An 8KiB frame over the negotiated 4096-byte bound is discarded with a local diagnostic and no correlatable reply, and the binding survives: the reader drains to the newline without a body-sized allocation and the session continues. Adjudicated defect-turned-proof: the implementation once terminated here; the discard behavior now asserted is the contract-derived one.",
   "adapter_script": "quick-ack.toml",
   "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/quick-ack.toml", "--max-frame-bytes", "4096"], "env": {}},
   "bind": {

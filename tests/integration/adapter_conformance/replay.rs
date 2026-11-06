@@ -413,9 +413,20 @@ mod tests {
 
     #[test]
     fn transcript_fixtures_cite_contract_requirements() {
-        let directory = Path::new("tests/fixtures/adapter/transcripts");
-        let transcripts =
-            load_transcripts(directory).expect("load transcripts");
+        let roots = [
+            Path::new("tests/fixtures/adapter/transcripts"),
+            Path::new("tests/fixtures/adapter/transcripts/pending"),
+        ];
+        let mut transcripts = Vec::new();
+        for directory in roots {
+            if directory.is_dir() {
+                let mut loaded =
+                    load_transcripts(directory).unwrap_or_else(|detail| {
+                        panic!("load {}: {detail}", directory.display())
+                    });
+                transcripts.append(&mut loaded);
+            }
+        }
         assert!(!transcripts.is_empty(), "no transcript fixtures to check");
         let requirements = contract_requirements();
         let capabilities = contract_capabilities();
@@ -629,19 +640,18 @@ mod tests {
         run_transcript("sh", &transcript).expect("stub replay succeeds");
     }
 
-    /// Gate for the real binary. Ignored until the reference adapter
-    /// binary lands; run explicitly with AGENTMUX_ADAPTER_BIN set.
+    /// Gate for the real binary. Runs in the normal suite: the binary
+    /// target builds alongside the test, so its path is known at
+    /// compile time.
     #[test]
-    #[ignore = "needs reference adapter binary: set AGENTMUX_ADAPTER_BIN"]
     fn replay_transcripts_against_reference_adapter() {
-        let binary = std::env::var("AGENTMUX_ADAPTER_BIN")
-            .expect("set AGENTMUX_ADAPTER_BIN to the adapter binary");
+        let binary = env!("CARGO_BIN_EXE_agentmux-adapter");
         let directory = Path::new("tests/fixtures/adapter/transcripts");
         let transcripts =
             load_transcripts(directory).expect("load transcripts");
         assert!(!transcripts.is_empty(), "no transcripts to replay");
         for (name, transcript) in &transcripts {
-            run_transcript(&binary, transcript)
+            run_transcript(binary, transcript)
                 .unwrap_or_else(|detail| panic!("{name}: {detail}"));
         }
     }
