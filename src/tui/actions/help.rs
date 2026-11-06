@@ -23,10 +23,8 @@
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use super::action::Action;
-use super::bindings::{
-    BoundAction, ContextRow, DisplaySection, default_rows, default_section,
-};
+use super::action::{Action, DisplaySection};
+use super::bindings::{BoundAction, ContextRow, default_rows};
 use super::chord::Chord;
 use super::context::BindingContext;
 use super::effective::EffectiveBindings;
@@ -357,9 +355,9 @@ pub fn interaction_write_hint(bindings: &EffectiveBindings) -> Vec<HelpEntry> {
 /// One row of the table in force in a context, as presentation reads it.
 ///
 /// A compiled row already carries all three fields. A configured row carries
-/// only the first two, and takes its heading from the context's compiled rows
-/// for the same behavior -- which exist, because a configuration may bind only
-/// a behavior the context already declares.
+/// only the first two, and takes its heading from the behavior -- which is
+/// filed under one heading wherever it is bound, so no table lookup is needed
+/// to present it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PresentedRow {
     chord: Chord,
@@ -407,17 +405,26 @@ fn rows_of(
             Some(PresentedRow {
                 chord: row.chord,
                 action: BoundAction::Fixed(action),
-                section: default_section(context, action)?,
+                section: action.section()?,
             })
         })
         .collect();
     rows.extend(
         default_rows(context)
             .filter(|row| !superseded(bindings, context, row))
-            .map(|row| PresentedRow {
-                chord: row.chord,
-                action: row.action,
-                section: row.section,
+            .filter_map(|row| match row.action {
+                BoundAction::Fixed(action) => {
+                    action.section().map(|section| PresentedRow {
+                        chord: row.chord,
+                        action: row.action,
+                        section,
+                    })
+                },
+                BoundAction::Typed(sink) => Some(PresentedRow {
+                    chord: row.chord,
+                    action: row.action,
+                    section: sink.section(),
+                }),
             }),
     );
     rows
