@@ -221,16 +221,36 @@ Phase-2 merge, not start): `up`, `down`, `new.peer`, `change.psk`,
 `change.scope`, `drop.peer`, `link.peer` — admin operations touch
 the dispatch/admin boundaries Backend is building now.
 
-### Task-1 limits
+### Task-1 limits and Backend-confirmed boundaries
 
 Signatures are draft until step-3 public relay handlers land
 (Migration Plan step 1); bare-target defaulting and the
 operation-bundle parameter shape follow the step-3 runtime types.
-Tasks 2.3+ wait on the Backend answers for admission-refusal
-taxonomy and priority-at-operation-layer (planning read: the option-A
-ruling is a wire-scheduler rule — adapter outbox plus relay dispatch
-internals — and operations carry no priority semantics, passing
-denials through; Backend confirms).
+
+Admission-refusal taxonomy (Backend-confirmed via Coordinator):
+every quota/admission refusal on the dispatch path is a relay-authored
+denial entering `RelayResponse::Error` unchanged and therefore the
+canonical operation error set with code and details preserved —
+`runtime_delivery_queue_full` (per-target quota), `runtime_acp_queue_full`
+(bounded ACP mailbox; a distinct code, never merged with the former),
+`validation_payload_too_large`, session-type-not-implemented,
+`runtime_acp_worker_unavailable`, `runtime_shutting_down`,
+`runtime_startup_failed` / fail-stopped, and all `validation_*`
+routing/auth codes. Outside the set, as drafted:
+`validation_unassociated_server` (originates in MCP handlers),
+`relay_timeout` / `relay_unavailable` (client-side I/O renderings,
+never dispatch `RelayError`), `runtime_connection_limit_reached`
+(serve-layer overload frame).
+
+Priority at the operation layer (Backend-confirmed): operations carry
+no priority semantics. Admission is reserve-or-deny synchronously
+(admit rolls back on first refusal; no queueing), the bounded ACP
+mailbox is reserve-or-deny, and worker mailboxes drain FIFO with no
+priority classes. The option-A lane rule lives entirely in the adapter
+outbox plus dispatch internals. Boundary condition: if dispatch ever
+gains a true operation queue (e.g. multi-target route staging across
+await points), that queue would need the lane rule — current code has
+none.
 
 ## Risks / Trade-offs
 
