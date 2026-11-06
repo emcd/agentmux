@@ -201,7 +201,47 @@ species = "confirm"
     );
     let _ = valid;
     let frames = split_frames(&output);
-    assert_eq!(frames[2]["result"]["outcome"], "Submitted");
+    // Cross-lane order is scheduling-dependent (control-first writer
+    // with take-then-recheck): with a preloaded reply the run loop
+    // can enqueue the control-lane submit terminal before the writer
+    // drains the data-lane requestChoice, so exact indices are not
+    // pinned. Assert the contract-derived shape instead: hello first,
+    // one requestChoice with the scripted title, one Submitted
+    // terminal for the turn, and data-lane choice-before-persist.
+    assert_eq!(frames[0]["method"], "adapter.handshakeHello");
+    let choices: Vec<&Value> = frames
+        .iter()
+        .filter(|frame| {
+            frame.get("method") == Some(&json!("adapter.requestChoice"))
+        })
+        .collect();
+    assert_eq!(choices.len(), 1, "one choice raised: {frames:?}");
+    assert_eq!(choices[0]["params"]["title"], "Deploy?");
+    let terminals: Vec<&Value> = frames
+        .iter()
+        .filter(|frame| {
+            frame.get("result").and_then(|result| result.get("outcome"))
+                == Some(&json!("Submitted"))
+        })
+        .collect();
+    assert_eq!(terminals.len(), 1, "one submit terminal: {frames:?}");
+    assert_eq!(terminals[0]["result"]["correlation_id"], "c-2");
+    let choice_at = frames
+        .iter()
+        .position(|frame| {
+            frame.get("method") == Some(&json!("adapter.requestChoice"))
+        })
+        .expect("choice present");
+    let persist_at = frames
+        .iter()
+        .position(|frame| {
+            frame.get("method") == Some(&json!("adapter.persistState"))
+        })
+        .expect("persist present");
+    assert!(
+        choice_at < persist_at,
+        "data-lane FIFO pins requestChoice before persist: {frames:?}"
+    );
 }
 
 /// Exempt errors admit by table match regardless of echo: a
@@ -248,7 +288,44 @@ species = "confirm"
         sink_codes(&sink)
     );
     let frames = split_frames(&output);
-    assert_eq!(frames[2]["result"]["outcome"], "Submitted");
+    // Same scheduling note as above: preloaded reply plus
+    // control-first writer means the terminal may precede the held
+    // data-lane choice on the wire. Assert the contract-derived
+    // shape instead of exact indices.
+    assert_eq!(frames[0]["method"], "adapter.handshakeHello");
+    let choices: Vec<&Value> = frames
+        .iter()
+        .filter(|frame| {
+            frame.get("method") == Some(&json!("adapter.requestChoice"))
+        })
+        .collect();
+    assert_eq!(choices.len(), 1, "one choice raised: {frames:?}");
+    assert_eq!(choices[0]["params"]["title"], "Deploy?");
+    let terminals: Vec<&Value> = frames
+        .iter()
+        .filter(|frame| {
+            frame.get("result").and_then(|result| result.get("outcome"))
+                == Some(&json!("Submitted"))
+        })
+        .collect();
+    assert_eq!(terminals.len(), 1, "one submit terminal: {frames:?}");
+    assert_eq!(terminals[0]["result"]["correlation_id"], "c-2");
+    let choice_at = frames
+        .iter()
+        .position(|frame| {
+            frame.get("method") == Some(&json!("adapter.requestChoice"))
+        })
+        .expect("choice present");
+    let persist_at = frames
+        .iter()
+        .position(|frame| {
+            frame.get("method") == Some(&json!("adapter.persistState"))
+        })
+        .expect("persist present");
+    assert!(
+        choice_at < persist_at,
+        "data-lane FIFO pins requestChoice before persist: {frames:?}"
+    );
 }
 
 /// Exempt errors admit on persist writes too: a standard error with
