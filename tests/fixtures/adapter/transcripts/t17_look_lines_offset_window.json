@@ -1,0 +1,51 @@
+{
+  "requirement": "Relay reads adapter output through a poll look RPC",
+  "capability": "adapter-look-poll",
+  "limit": null,
+  "description": "Lines/offset windowing over a scripted singleton snapshot: full reads, tail-1, offset-past-end, zero-lines, huge offset, and absent-lines all honor the tail-N rule (skip offset from the newest end, take the last lines; empty window without underflow), with entries_total counting the whole snapshot and returned_entries_count counting the window. Multi-entry windows need a richer snapshot script and are recorded as future.",
+  "adapter_script": "example.toml",
+  "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/example.toml"], "env": {}},
+  "bind": {
+    "expect_hello_subset": {
+      "adapter_profile": "generic",
+      "target_session": "seat-1",
+      "protocol_major": 2,
+      "protocol_minor": 0
+    },
+    "hello_result": {
+      "runtime_instance": "test-instance-1",
+      "adapter_generation": 7,
+      "selected_major": 2,
+      "selected_minor": 0,
+      "negotiated_limits": {
+        "max_frame_bytes": 1048576,
+        "queue_tx_bytes": 16777216,
+        "queue_rx_bytes": 16777216,
+        "max_control_pending": 32,
+        "max_events_per_second": 100,
+        "window_seconds": 1,
+        "max_submits_in_flight": 64,
+        "max_choices_in_flight": 16,
+        "max_looks_in_flight": 8,
+        "drain_wait_ms": 250
+      },
+      "snapshot_b64": ""
+    },
+    "hello_result_raw": null
+  },
+  "frames": [
+    {"expect": {"jsonrpc": "2.0", "method": "adapter.lifecycleEvent", "params": {"kind": "ready", "code": "adapter_ready"}}},
+    {"send": {"jsonrpc": "2.0", "id": "10", "method": "relay.look", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "look_handle_id": "h-full", "adapter_generation": 7, "correlation_id": "c-full", "lines": 10, "offset": 0, "prime_timeout_ms": 0}}},
+    {"expect": {"jsonrpc": "2.0", "id": "10", "result": {"correlation_id": "c-full", "adapter_generation": 7, "entries": [{"kind": "text", "seq": 1, "text_b64": "aGVsbG8=", "truncated": false}], "entries_total": 1, "returned_entries_count": 1, "freshness": "fresh", "snapshot_source": "live", "stale": false, "discontinuity": false}}},
+    {"send": {"jsonrpc": "2.0", "id": "11", "method": "relay.look", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "look_handle_id": "h-tail", "adapter_generation": 7, "correlation_id": "c-tail", "lines": 1, "offset": 0, "prime_timeout_ms": 0}}},
+    {"expect": {"jsonrpc": "2.0", "id": "11", "result": {"correlation_id": "c-tail", "entries_total": 1, "returned_entries_count": 1, "freshness": "fresh", "stale": false}}},
+    {"send": {"jsonrpc": "2.0", "id": "12", "method": "relay.look", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "look_handle_id": "h-past", "adapter_generation": 7, "correlation_id": "c-past", "lines": 10, "offset": 1, "prime_timeout_ms": 0}}},
+    {"expect": {"jsonrpc": "2.0", "id": "12", "result": {"correlation_id": "c-past", "entries": [], "entries_total": 1, "returned_entries_count": 0, "freshness": "fresh"}}},
+    {"send": {"jsonrpc": "2.0", "id": "13", "method": "relay.look", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "look_handle_id": "h-zero", "adapter_generation": 7, "correlation_id": "c-zero", "lines": 0, "offset": 0, "prime_timeout_ms": 0}}},
+    {"expect": {"jsonrpc": "2.0", "id": "13", "result": {"correlation_id": "c-zero", "entries": [], "entries_total": 1, "returned_entries_count": 0}}},
+    {"send": {"jsonrpc": "2.0", "id": "14", "method": "relay.look", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "look_handle_id": "h-huge", "adapter_generation": 7, "correlation_id": "c-huge", "lines": 10, "offset": 9999, "prime_timeout_ms": 0}}},
+    {"expect": {"jsonrpc": "2.0", "id": "14", "result": {"correlation_id": "c-huge", "entries": [], "entries_total": 1, "returned_entries_count": 0}}},
+    {"send": {"jsonrpc": "2.0", "id": "15", "method": "relay.look", "params": {"protocol_major": 2, "protocol_minor": 0, "runtime_instance": "test-instance-1", "target_session": "seat-1", "look_handle_id": "h-absent", "adapter_generation": 7, "correlation_id": "c-absent", "prime_timeout_ms": 0}}},
+    {"expect": {"jsonrpc": "2.0", "id": "15", "result": {"correlation_id": "c-absent", "entries_total": 1, "returned_entries_count": 1, "freshness": "fresh"}}}
+  ]
+}

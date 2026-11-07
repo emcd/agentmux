@@ -499,6 +499,24 @@ mod tests {
                                         .is_number(),
                                     "{name}: look without prime_timeout_ms is a structural refusal, not a poll",
                                 );
+                                if let Some(lines) =
+                                    send["params"].get("lines")
+                                {
+                                    assert!(
+                                        lines.as_u64().is_some_and(|value| {
+                                            u32::try_from(value).is_ok()
+                                        }),
+                                        "{name}: look lines must lie within u32 or the adapter refuses the frame",
+                                    );
+                                }
+                                if let Some(offset) =
+                                    send["params"].get("offset")
+                                {
+                                    assert!(
+                                        offset.as_u64().is_some(),
+                                        "{name}: look offset must be a u64 or the adapter refuses the frame",
+                                    );
+                                }
                             }
                         }
                         if let Some(error) = send.get("error") {
