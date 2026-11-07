@@ -1,0 +1,34 @@
+# Fixture script for look tail-N coverage: a snapshot with three
+# entries so take-last-N windows (offset/limit slicing) exercise a
+# genuine multi-entry window instead of a singleton.
+#
+# Requirement: Relay reads adapter output through a poll look RPC
+# Capability: adapter-look-poll
+#
+# Schema: see example.toml. Entries carry literal text (base64 at
+# render time); seq numbers are consecutive from 1.
+
+[clock]
+advances_ms = [100]
+
+[[turns]]
+correlation = "c-1"
+ack = "submitted"
+
+[[snapshots]]
+target = "seat-1"
+
+[[snapshots.entries]]
+kind = "text"
+seq = 1
+text = "first line"
+
+[[snapshots.entries]]
+kind = "text"
+seq = 2
+text = "second line"
+
+[[snapshots.entries]]
+kind = "text"
+seq = 3
+text = "third line"
