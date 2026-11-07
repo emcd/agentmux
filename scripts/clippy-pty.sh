@@ -7,9 +7,9 @@
 # `--all-features` so contributors without Zig and outbound network
 # can lint the default workspace. The Pty transport (`src/pty/`,
 # `src/bin/agentmux_pty.rs`, `Cargo.toml`) opts into Zig-vendored
-# libghostty-vt; this hook exercises that path only when Pty sources
-# are touched (see the pre-commit.yaml `files:` filter on the parent
-# hook).
+# libghostty-vt; this hook exercises that path when Pty sources,
+# manifests, or any test path are touched (see the pre-commit.yaml
+# `files:` filter on the parent hook).
 #
 # Behavior:
 #   * zig 0.15.x on PATH      -> `cargo clippy --all-targets --features pty -- -D warnings`
