@@ -199,7 +199,14 @@ repos:
       pass_filenames: false
       require_serial: true
       stages: [ 'pre-commit', 'pre-merge-commit' ]
-      files: '^(src/pty/|src/bin/agentmux_pty\.rs|Cargo\.toml|Cargo\.lock|tests/unit/relay/pty_generation_release\.rs|tests/unit/pty_transport\.rs|tests/integration/cli/mod\.rs)'
+      # Trigger on Pty sources, manifests, and any test path: inline
+      # #[cfg(feature = "pty")] gates and pty-gated test modules live in
+      # files whose names do not always say so (e.g.
+      # tests/unit/relay/mod.rs), so enumerating pty-named paths
+      # misses them. The hook lints the whole crate when it runs (see
+      # scripts/clippy-pty.sh), and skips fast without Zig, so a broad
+      # trigger is cheap and does not rot as new pty-gated tests land.
+      files: '^(src/pty/|src/bin/agentmux_pty\.rs|Cargo\.toml|Cargo\.lock|tests/)'
       fail_fast: false
 
     - id: lint-tui-binding-documentation
