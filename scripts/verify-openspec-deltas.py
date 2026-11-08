@@ -19,10 +19,19 @@ change -- cursor-column gating, the operator-decision case, copy-mode delivery,
 the activity-signal sources -- while rewriting the requirements around them.
 Every one passed `--strict`. This script found them.
 
-**The audit is title-only.** It compares `#### Scenario:` headings, so it cannot
-see a scenario whose title survived while its body was hollowed out, nor a
-requirement whose prose lost a normative clause. Those remain a manual-review
-concern; this catches the silent-deletion class, not every regression.
+Scenario retention compares `#### Scenario:` headings. Text retention also
+reports strict token-subset deletions and whole prose clauses backed by a
+literal earlier version of the same requirement. Retention is checked across
+the projected capability, so moving text between its requirements is not loss.
+Historical witnesses come only from ancestor live specs and print their source
+revision/path. Heavy rewrites without a witness are not reported; there are no
+similarity thresholds. This is a lexical review aid, not a semantic proof.
+
+These text checks require pre-sync live content and are not added to the archive
+gate. Exported trees without Git history still support subset detection, but
+cannot supply historical witnesses. A wholly new prose sentence alongside a
+reversion may also prevent a historical match; prefer silence to an unsupported
+whole-clause report.
 
 Errors, which set a non-zero exit status:
 
@@ -38,6 +47,7 @@ Errors, which set a non-zero exit status:
 Reports, which print and pass:
 
 - scenarios present live but absent from a MODIFIED delta
+- witnessed word or prose-clause deletions from MODIFIED requirements
 - a requirement relocated between capabilities whose text changed in transit
 - a delta target that is not live yet because another change has not synced
 
@@ -123,7 +133,7 @@ import difflib
 import re
 import subprocess
 import sys
-from collections import namedtuple
+from collections import Counter, namedtuple
 from pathlib import Path
 
 REQUIREMENT = "### Requirement:"
@@ -603,6 +613,193 @@ def normative_clauses(requirement):
     return [s for s in sentences if NORMATIVE_WORD.search(s)]
 
 
+# A shortened unit is evidence of deletion; absence or low similarity alone
+# is not. This deliberately leaves wholesale rewrites to human review.
+DELETION_SENTENCE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _deletion_tokens(text):
+    """Return punctuation-insensitive word counts for a comparable unit."""
+    words = (word.strip(".,;:!?()[]`'\"") for word in text.split())
+    return Counter(word for word in words if word)
+
+
+def deletion_units(requirement):
+    """Return prose sentences and whole scenarios, independent of wrapping.
+
+    Join prose lines before sentence splitting. Blank lines and list items
+    bound prose blocks; list-only prose remains outside this heuristic, as in
+    prose_of(). Scenarios retain their complete WHEN/THEN contract.
+    """
+    units, prose, scenario = [], [], []
+
+    def flush_prose():
+        units.extend(DELETION_SENTENCE.split(flattened(" ".join(prose))))
+        prose.clear()
+
+    for line in normalized(requirement).splitlines():
+        if line.startswith(REQUIREMENT):
+            continue
+        if line.startswith(SCENARIO):
+            flush_prose()
+            if scenario:
+                units.append(flattened(" ".join(scenario)))
+            scenario = [line]
+        elif scenario:
+            scenario.append(line)
+        elif not line.strip() or line.lstrip().startswith(("-", "*", "+")):
+            flush_prose()
+        else:
+            prose.append(line)
+    flush_prose()
+    if scenario:
+        units.append(flattened(" ".join(scenario)))
+    return [unit for unit in units if unit]
+
+
+def historical_requirements(live_specs, capability, revision="HEAD"):
+    """Return ancestor versions of this capability's live requirement blocks.
+
+    Search only the live capability path in the selected revision's ancestry,
+    never change archives, tags or unrelated refs. No repository means no
+    historical witness; subset detection still works on exported trees.
+    """
+    root = repository_root()
+    if not (root / ".git").exists():
+        return []
+    try:
+        relative = (live_specs / capability).resolve().relative_to(root)
+    except ValueError:
+        return []
+
+    def git(*arguments):
+        return subprocess.run(
+            ["git", "-C", str(root), *arguments],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+
+    revisions = git("log", "--format=%H", revision, "--", str(relative))
+    history, seen = [], set()
+    for source in revisions.splitlines():
+        paths = git("ls-tree", "-r", "--name-only", source, "--", str(relative))
+        for path in paths.splitlines():
+            if not path.endswith(".md"):
+                continue
+            for requirement in parse_requirements(
+                git("show", f"{source}:{path}")
+            ).values():
+                identity = (path, requirement.text)
+                if identity not in seen:
+                    seen.add(identity)
+                    history.append((source, path, requirement))
+    return history
+
+
+def _historical_witness(name, words, retained, proposed, history):
+    """Find a literal earlier contract carried forward without this live unit.
+
+    Every old unit must be retained verbatim at token level or expanded by
+    strict token inclusion; at least one must be strictly expanded. Proposed
+    prose must also be accounted for by old prose, not a newly reworded clause
+    with no literal ancestor. New scenarios need not have old counterparts.
+    Equality alone is retention, not the strict-subset witness. This narrower
+    policy may miss reverts accompanied by entirely new prose sentences.
+    """
+    for source, path, requirement in history:
+        if requirement.name != name:
+            continue
+        units = deletion_units(requirement)
+        old = [_deletion_tokens(unit) for unit in units]
+        if not old or any(not (words - unit) for unit in old):
+            continue
+        if not all(any(not (unit - kept) for kept in retained) for unit in old):
+            continue
+        old_prose = [
+            _deletion_tokens(unit) for unit in units if not unit.startswith(SCENARIO)
+        ]
+        proposed_prose = [
+            _deletion_tokens(unit) for unit in proposed if not unit.startswith(SCENARIO)
+        ]
+        if not all(
+            any(not (old_unit - unit) for old_unit in old_prose)
+            for unit in proposed_prose
+        ):
+            continue
+        if any(not (unit - kept) and kept - unit for unit in old for kept in retained):
+            return source, path
+    return None
+
+
+def silent_deletions(live, delta, pairs, history=()):
+    """Return witnessed MODIFIED losses in the projected capability.
+
+    Compare against the union of the projected capability, including ADDED
+    requirements, renamed blocks and untouched live requirements. A unit
+    retained anywhere in that capability is not lost. Explicit REMOVED blocks
+    are intentional retirements, not silent modifications.
+
+    Each result is (name, lost_words, live_unit, shorter_delta_unit, source).
+    A shortened unit needs a nonempty strict-subset witness. A whole-unit
+    report needs an earlier same-requirement contract carried by the proposed
+    capability, with source revision/path returned as evidence. Otherwise a
+    heavy rewrite is silent. These are lexical review prompts, not semantic
+    proofs, and this function must be given pre-sync live content.
+    """
+    projected = dict(live)
+    for name in delta.get("REMOVED", {}):
+        projected.pop(name, None)
+    sources = {to_name: from_name for from_name, to_name in rename_pairs(pairs)}
+    for to_name, from_name in sources.items():
+        if from_name in projected:
+            projected[to_name] = projected.pop(from_name)
+    for operation in ("MODIFIED", "ADDED"):
+        projected.update(delta.get(operation, {}))
+    retained = [
+        _deletion_tokens(unit)
+        for requirement in projected.values()
+        for unit in deletion_units(requirement)
+    ]
+    witnesses = [
+        (unit, _deletion_tokens(unit))
+        for operation in ("MODIFIED", "ADDED")
+        for requirement in delta.get(operation, {}).values()
+        for unit in deletion_units(requirement)
+    ]
+    findings = []
+    for name in delta.get("MODIFIED", {}):
+        before = live.get(sources.get(name, name))
+        if before is None:
+            continue
+        for unit in deletion_units(before):
+            words = _deletion_tokens(unit)
+            if any(not (words - kept) for kept in retained):
+                continue
+            subsets = [
+                (text, counts)
+                for text, counts in witnesses
+                if counts and not (counts - words) and words - counts
+            ]
+            if subsets:
+                text, counts = max(subsets, key=lambda pair: sum(pair[1].values()))
+                lost = list((words - counts).elements())
+                findings.append((name, lost, unit, text, None))
+            else:
+                witness = None
+                if not unit.startswith(SCENARIO):
+                    witness = _historical_witness(
+                        sources.get(name, name),
+                        words,
+                        retained,
+                        deletion_units(delta["MODIFIED"][name]),
+                        history,
+                    )
+                if witness is not None:
+                    findings.append((name, None, unit, None, witness))
+    return findings
+
+
 def rename_pairs(pairs):
     """Yield (from_name, to_name) for each well-formed RENAMED pair.
 
@@ -1078,9 +1275,127 @@ MOVE_CASES = [
 ]
 
 
-def run_selftest():
-    """Return a list of failure descriptions; empty when the classifiers work."""
+def deletion_selftest():
+    """Return failures for literal retention, witness and wrapping controls."""
+    statement = "The adapter SHALL retain transitions and preserve evidence."
+    shorter = "The adapter SHALL retain transitions."
+    credentials = "The runtime SHALL read credentials before connecting."
+    rewritten = "Before connection, configured credentials MUST be loaded."
+    baseline = "The runtime MUST connect."
+    expanded = "The runtime MUST connect securely."
+    missing = "The adapter SHALL preserve diagnostic evidence."
+    old = _requirement("Alpha", baseline)
+    history = [("abc123", "specs/probes/spec.md", old)]
+    live = {"Alpha": _requirement("Alpha", statement)}
+    modified = {"Alpha": _requirement("Alpha", shorter)}
+    cases = [
+        ("strict subset", live, {"MODIFIED": modified}, [], (), 1),
+        (
+            "move into modified sibling",
+            live,
+            {"MODIFIED": {**modified, "Beta": _requirement("Beta", statement)}},
+            [],
+            (),
+            0,
+        ),
+        (
+            "move into added sibling",
+            live,
+            {"MODIFIED": modified, "ADDED": {"Beta": _requirement("Beta", statement)}},
+            [],
+            (),
+            0,
+        ),
+        (
+            "untouched sibling retains obligation",
+            {**live, "Beta": _requirement("Beta", statement)},
+            {"MODIFIED": modified},
+            [],
+            (),
+            0,
+        ),
+        (
+            "reflow",
+            {"Alpha": _requirement("Alpha", credentials)},
+            {
+                "MODIFIED": {
+                    "Alpha": _requirement(
+                        "Alpha", credentials.replace("before", "\nbefore")
+                    )
+                }
+            },
+            [],
+            (),
+            0,
+        ),
+        (
+            "heavy rewrite with earlier version",
+            {"Alpha": _requirement("Alpha", credentials)},
+            {"MODIFIED": {"Alpha": _requirement("Alpha", rewritten)}},
+            [],
+            [("abc123", "specs/probes/spec.md", _requirement("Alpha", credentials))],
+            0,
+        ),
+        (
+            "absence without witness",
+            {"Alpha": _requirement("Alpha", baseline + " " + missing)},
+            {"MODIFIED": {"Alpha": _requirement("Alpha", expanded)}},
+            [],
+            (),
+            0,
+        ),
+        (
+            "literal historical witness",
+            {"Alpha": _requirement("Alpha", baseline + " " + missing)},
+            {"MODIFIED": {"Alpha": _requirement("Alpha", expanded)}},
+            [],
+            history,
+            1,
+        ),
+        (
+            "unanchored new prose is not a historical return",
+            {"Alpha": _requirement("Alpha", baseline + " " + missing)},
+            {
+                "MODIFIED": {
+                    "Alpha": _requirement(
+                        "Alpha", expanded + " Diagnostics MUST be available."
+                    )
+                }
+            },
+            [],
+            history,
+            0,
+        ),
+        (
+            "history of another requirement is not a witness",
+            {"Alpha": _requirement("Alpha", baseline + " " + missing)},
+            {"MODIFIED": {"Alpha": _requirement("Alpha", expanded)}},
+            [],
+            [("abc123", "specs/probes/spec.md", _requirement("Other", baseline))],
+            0,
+        ),
+        (
+            "rename preserves full text",
+            live,
+            {"MODIFIED": {"Beta": _requirement("Beta", statement)}},
+            [("FROM", "Alpha"), ("TO", "Beta")],
+            (),
+            0,
+        ),
+    ]
     failures = []
+    for label, before, delta, pairs, past, expected in cases:
+        found = silent_deletions(before, delta, pairs, past)
+        if len(found) != expected:
+            failures.append(
+                f"deletion case {label!r} reported {len(found)}, expected {expected}"
+            )
+    return failures
+
+
+def run_selftest():
+    """Return failures from classifier and text-retention controls."""
+    failures = deletion_selftest()
     for name, by_capability, live_owners, expected in MOVE_CASES:
         errors, _, _ = check_moves(
             "selftest", by_capability, Path("/nonexistent"), live_owners, True
@@ -1356,7 +1671,7 @@ def check_renames(capability, pairs, live, errors):
 
 
 def audit(change_id, live_owners, inflight, quiet):
-    """Audit one change's deltas. Returns (errors, dropped_scenarios, waits)."""
+    """Audit one change's deltas. Return (errors, reported_drops, waits)."""
     resolved = resolve_paths(change_id)
     if resolved is None:
         return [f"no such change: '{change_id}'"], 0, []
@@ -1446,6 +1761,28 @@ def audit(change_id, live_owners, inflight, quiet):
                     print(f"     - DROPPED  {scenario}")
                 for scenario in added:
                     print(f"     + added    {scenario}")
+
+        # Compare once per capability, after collecting every operation. Text
+        # relocated between requirements remains part of the same contract.
+        history = historical_requirements(live_specs, capability)
+        for name, lost, live_unit, delta_unit, witness in silent_deletions(
+            live, delta, pairs, history
+        ):
+            drops += 1
+            if quiet:
+                continue
+            if not header_shown:
+                print(f"\n=== {capability}")
+                header_shown = True
+            print(f"\n  {name}")
+            if witness is not None:
+                source, path = witness
+                print(f"     - DROPPED CLAUSE  {live_unit[:160]}")
+                print(f"       witness {source}:{path}")
+            else:
+                print(f"     - DROPPED WORDS   {' '.join(lost)!r}")
+                print(f"       live  {live_unit[:160]}")
+                print(f"       delta {delta_unit[:160]}")
 
     move_errors, moved, altered = check_moves(
         change_id, by_capability, live_specs, live_owners, quiet
