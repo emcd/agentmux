@@ -630,6 +630,7 @@ pub(crate) fn read_loop(
 mod reader_budget_tests {
     use std::io::Read;
     use std::sync::Arc;
+    use std::sync::Mutex;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::sync::mpsc;
     use std::time::Duration;
@@ -643,12 +644,17 @@ mod reader_budget_tests {
     struct CountingReader<R> {
         inner: R,
         count: Arc<AtomicUsize>,
+        /// Immutable per-read observations: (start offset, acquired
+        /// length). Append-only history, so inspecting it after the
+        /// fact is timing-independent, unlike the live total.
+        log: Arc<Mutex<Vec<(usize, usize)>>>,
     }
 
     impl<R: Read> Read for CountingReader<R> {
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             let n = self.inner.read(buf)?;
-            self.count.fetch_add(n, Ordering::Relaxed);
+            let start = self.count.fetch_add(n, Ordering::Relaxed);
+            self.log.lock().expect("log lock").push((start, n));
             Ok(n)
         }
     }
@@ -675,6 +681,7 @@ mod reader_budget_tests {
         let pre_reader = CountingReader {
             inner: std::io::Cursor::new(prebind),
             count: pre_yielded.clone(),
+            log: Arc::new(Mutex::new(Vec::new())),
         };
         let (pre_tx, pre_rx) = mpsc::sync_channel(1);
         let (pre_gate_tx, pre_gate_rx) = mpsc::channel::<()>();
@@ -733,6 +740,7 @@ mod reader_budget_tests {
         let reader = CountingReader {
             inner: std::io::Cursor::new(wire),
             count: yielded.clone(),
+            log: Arc::new(Mutex::new(Vec::new())),
         };
         let (tx, rx) = mpsc::sync_channel(1);
         let (_gate_tx, gate_rx) = mpsc::channel::<()>();
@@ -813,9 +821,11 @@ mod reader_budget_tests {
             oversize.push(b'\n');
         }
         let drain_yielded = Arc::new(AtomicUsize::new(0));
+        let drain_log = Arc::new(Mutex::new(Vec::new()));
         let drain_reader = CountingReader {
             inner: std::io::Cursor::new(oversize),
             count: drain_yielded.clone(),
+            log: drain_log.clone(),
         };
         let (drain_tx, drain_rx) = mpsc::sync_channel(1);
         let (_drain_gate_tx, drain_gate_rx) = mpsc::channel::<()>();
@@ -847,18 +857,48 @@ mod reader_budget_tests {
             },
             other => panic!("oversize head must discard: {other:?}"),
         }
-        // Acquisition at the discard is bounded: the 301-byte refused
-        // prefix plus at most one budget-capped drain read. A drain
-        // that prefetches the coalesced future beyond the 300-byte
-        // budget would already have taken far more from the
-        // transport here.
-        assert!(
-            drain_yielded.load(Ordering::Acquire) <= 301 + 301,
-            "drain must not prefetch past the budget: {}",
-            drain_yielded.load(Ordering::Acquire)
-        );
-        // All ten future frames still arrive whole and in order.
-        for _ in 0..10 {
+        // The first post-discard frame must arrive whole WITHOUT
+        // releasing RX accounting first: resumption resolves it from
+        // the retained tail.
+        match drain_rx.recv_timeout(Duration::from_secs(2)) {
+            Ok(ReadEvent::Frame(bytes)) => {
+                assert_eq!(bytes.len(), 100);
+                assert!(bytes.iter().all(|byte| *byte == b'F'));
+                // The drain read is bounded: the first transport read
+                // at or past the refused-prefix length must fit one
+                // budget-capped chunk. This inspects immutable
+                // per-read history, so unlike a live total it cannot
+                // race the reader: F1's arrival proves the drain
+                // completed, and no later read can rewrite this entry.
+                // An uncapped drain reads 1011 here instead of 301.
+                let drain_read = drain_log
+                    .lock()
+                    .expect("log lock")
+                    .iter()
+                    .find(|(start, _)| *start >= 301)
+                    .copied();
+                match drain_read {
+                    Some((_, len)) => assert!(
+                        len <= 301,
+                        "drain read past the refused prefix must stay capped: {len} bytes",
+                    ),
+                    None => panic!(
+                        "drain must have read past the refused prefix: {drain_yielded:?}"
+                    ),
+                }
+                // Mirror the run loop: dispatched bytes release
+                // their queue accounting.
+                drain_queued.fetch_sub(
+                    bytes.len().min(drain_queued.load(Ordering::Acquire)),
+                    Ordering::AcqRel,
+                );
+            },
+            other => {
+                panic!("first future frame must follow in order: {other:?}")
+            },
+        }
+        // The remaining nine frames still arrive whole and in order.
+        for _ in 0..9 {
             match drain_rx.recv_timeout(Duration::from_secs(2)) {
                 Ok(ReadEvent::Frame(bytes)) => {
                     assert_eq!(bytes.len(), 100);
