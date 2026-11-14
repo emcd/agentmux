@@ -27,6 +27,7 @@ text = "first line"
 kind = "text"
 seq = 2
 text = "second line"
+truncated = true
 
 [[snapshots.entries]]
 kind = "text"
