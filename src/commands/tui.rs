@@ -58,7 +58,7 @@ pub(super) fn run_agentmux_tui(
     // Read before the relay is brought up, so a binding group that does not
     // validate fails the launch without a relay having been spawned to tear
     // down again. A missing `ui.toml`, or one declaring no bindings, resolves
-    // to no configuration and the compiled defaults stand.
+    // to no configuration and the embedded base stands.
     let bindings = load_ui_binding_configuration(&roots.configuration_roots)?;
     let relay_paths = RelayRuntimePaths::resolve(&roots.state_root);
     let owned_relay = ensure_tui_relay_available(&roots, &relay_paths)?;

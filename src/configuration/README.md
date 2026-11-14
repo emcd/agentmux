@@ -113,7 +113,7 @@ Returning validated structures rather than raw ones is also what keeps the
 raw-structs-private invariant below intact; handing a consumer the parsed TOML
 to interpret would have broken it.
 
-Which actions a context may bind is derived from that context's compiled rows
+Which actions a context may bind is derived from that context's base rows
 rather than from a list kept here. The table declares a behavior only where it
 has an effect, so its rows already are the answer, and a second list could
 disagree with them.
@@ -132,7 +132,7 @@ where in the file the mistake sat.
 
 Layer resolution above selects one `ui.toml` and reads it; a file in a nearer
 layer replaces the one it shadows rather than merging with it. Binding rows
-inside the selected file then merge *over* the compiled defaults, row by row.
+inside the selected file then merge *over* the embedded base, row by row.
 The two rules look inconsistent and are not, because they answer different
 questions.
 
@@ -141,7 +141,7 @@ would produce a configuration existing in no file, whose effective content an
 operator could only derive by simulating the merge — and layer resolution exists
 precisely so they can tell which copy is in force.
 
-The compiled defaults are not a file, are not authored by the operator, and
+The embedded base is not a file, is not authored by the operator, and
 change between releases. Replacing them wholesale would mean every operator who
 wanted one different chord had to restate the entire table, and would freeze
 that release's table into their configuration — so a later release's new or

@@ -11,7 +11,8 @@ mod targets;
 mod types;
 
 pub use bindings::{
-    ShippedPreset, embedded_binding_preset, shipped_binding_presets,
+    ShippedPreset, embedded_base_preset, embedded_binding_preset,
+    shipped_binding_presets,
 };
 pub use errors::ConfigurationError;
 pub use loaders::{

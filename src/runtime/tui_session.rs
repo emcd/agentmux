@@ -148,7 +148,7 @@ fn load_ui_default_bundle(
 /// A sibling of [`load_ui_default_bundle`] rather than part of it: both read
 /// the same file, and both are here so that the mapping from a configuration
 /// fault to an operator-facing error has one definition. A missing file, or one
-/// declaring no bindings, resolves to `None` and leaves the compiled defaults
+/// declaring no bindings, resolves to `None` and leaves the embedded base
 /// in force.
 ///
 /// # Errors
