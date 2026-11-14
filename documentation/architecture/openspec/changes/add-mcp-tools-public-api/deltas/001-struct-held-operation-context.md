@@ -1,9 +1,11 @@
-# Design delta 001: struct-held operation context (PROPOSED v2)
+# Design delta 001: struct-held operation context (PROPOSED v3)
 
-Status: PROPOSED v2 — supersedes the v1 text in full. Operator
-pre-review authority must be re-granted (v1 grant covered v1 text
-only); Tier-1 scope/text sign-off PENDING. No wiring proceeds on
-this text. On sign-off it folds into `design.md` Public API Shape /
+Status: PROPOSED v3 — supersedes v1 and v2 texts in full. Operator
+pre-review authority must be re-granted (prior grants covered prior
+texts); Tier-1 scope/text sign-off PENDING; required Tier-2
+architecture/security review of the ownership/construction contract
+applies before final scope approval. No wiring proceeds on this
+text. On sign-off it folds into `design.md` Public API Shape /
 Boundary Design (§1.4), `tasks.md` 1.4 + 2.x notes, `proposal.md`
 boundary wording, and `specs/tool-operations/spec.md`, and this file
 is removed.
@@ -103,10 +105,8 @@ copied as a snapshot inside the operation path. The wiring itself is
 sealed (next section): only its two constructors can mint it, and
 neither accepts a caller-supplied pair.
 
-- Adapter (post-3.1): clones the serve context it already holds
-  into the live constructor — serve catalog plus serve peer
-  manager. Same staleness semantics as the socket path
-  (watcher-driven).
+- Adapter (post-3.1): `DispatchWiring::live` against the serve
+  context it already holds (clones the registered live pair).
 - Embedded callers: the Backend once-per-runtime constructor slice
   (returns the live pair; see contract below).
 - Tests: direct construction via `DispatchWiring::mirrored`, the
@@ -115,62 +115,75 @@ neither accepts a caller-supplied pair.
 
 Backend wiring contract, quoted verbatim with attribution (Backend
 Engineer, 2026-11-14; normative reference until the constructor
-slice lands, which carries the code):
+slice lands, which carries the code). This supersedes the v1/v2
+mixture rule and the peer getter entirely:
 
-> SEALED WIRING HANDLE. `pub struct DispatchWiring {
-> runtime_delivery: Arc<DeliveryContext>, catalog: BundleCatalog,
-> peers: Arc<PeerConnectionManager> }` — all fields private, no
-> struct-literal construction, no test-only constructors (tests use
-> the mirrored path below like any embedded host, so no provisional
-> bypass can become supported). Two constructors, the only ones, and
-> neither accepts a caller-supplied pair: (1)
-> `DispatchWiring::live(runtime: &Arc<RelayRuntime>, serve:
-> &ConnectionServeContext)` clones the serve pair and stamps
-> `serve.delivery_context().clone()` — the domain-claimed delivery,
-> so the binding is the domain machinery itself, not a string; (2)
-> `DispatchWiring::mirrored(runtime: &Arc<RelayRuntime>, peers:
-> &[PeerConfiguration], autostart: bool)` builds the pair from that
-> runtime's own roots (config-derived memberships, Hold/Run intent
-> rule, `from_configuration`) and stamps
-> `runtime.delivery_context().clone()` — inherently bound, nothing
-> caller-supplied. Dispatch-time check inside experimental
-> dispatch_send, before any other work:
-> `Arc::ptr_eq(runtime.delivery_context(),
-> &wiring.runtime_delivery)`, else refuse with
-> `validation_wiring_runtime_mismatch`. No signature change needed
-> (delivery Arc is already threaded to handle_send). Consequences,
-> stated as guarantees: a mismatched runtime fails closed
-> (different delivery Arc); an empty foreign catalog cannot be
-> wrapped (no constructor takes bare catalogs); a same-root
-> reconstructed pair binds its own fresh delivery Arc and fails
-> closed against any other runtime, including a re-initialized
-> successor of its own root — stale wiring is refused, never
-> honored.
-
-Reload semantics — option (b), precisely scoped (Backend
-statement): catalog identity is shared-mutable
-(`BundleCatalog` clones share one inner `Arc<RwLock<map>>`), so
-watcher-driven bundle load/unload flows through every cloned handle
-with no invalidation needed and no staleness possible. Peer-manager
-identity is immutable per manager: a new peer set is a new manager
-is a new wiring; old wirings keep their old-but-valid peer scope,
-never a wrong scope. Exactly-once constructor discipline is
-TRUSTED, not statically enforced: misuse degrades to fail-closed
-refusal (brand mismatch) or fixed valid scope, never to
-wrong-authority dispatch — that degradation property, not a call
-counter, is the enforcement claim. Static-set construction
-(`mirrored`) is valid where the hosted set is static for the
-runtime lifetime; hosts that reload bundles at runtime must rebuild
-the pair on the same events that rebuild the serve pair, or use
-serve.
+> DOMAIN-BOUND REGISTRATION. The domain registry gains a pair slot
+> beside the delivery Weak, same key, same lifecycle: released
+> together in release_domain_slot, never separately. Registration
+> rule: ConnectionServeContext construction does NOT register
+> anything (adopt path behavior unchanged — zero socket-test blast
+> radius); the host prepare path explicitly calls
+> register_domain_pair(delivery, state_root, catalog, peers) once
+> after building the serve context, and mirrored() registers on
+> first use. Register requires proof of ownership — the passed
+> delivery Arc must ptr-match the domain's upgraded Weak or it
+> fails — then first-writer-wins per domain generation;
+> re-registration with identical Arc identity is idempotent Ok; with
+> different content it is refused (mid-generation replacement
+> requires domain regeneration). The V2-1 counterexample is
+> defeated structurally: serve(stateRootA, catalogB) on an
+> init-claimed A registers nothing (only prepare/mirrored register,
+> and this serve call is neither), so wiring::live(runtimeA) finds
+> an empty slot and fails closed with
+> validation_wiring_unregistered — pairB is never consulted, never
+> yielded.
+>
+> SINGLE ISSUANCE. mirrored(runtime, peers, autostart): if the slot
+> holds a pair, it adopts the registered pair and discards its fresh
+> build; if empty, it builds from that runtime's own roots,
+> installs, and returns it. live(runtime) (serve-side; takes NO
+> serve context): returns the registered pair or fails closed on
+> empty/stale. Two mirrored() calls with distinct pairs therefore
+> yield identical content — the second adopts. Same-root
+> reconstruction in a fresh process is a fresh domain and binds its
+> fresh delivery. The dispatch-time brand check stays as defense in
+> depth: experimental dispatch_send takes the wiring instead of the
+> bare pair and refuses with validation_wiring_runtime_mismatch
+> unless Arc::ptr_eq(runtime.delivery_context(),
+> wiring.delivery). Stale pre-release wirings fail this check after
+> drop-and-reclaim, which is the specified old-context
+> invalidation.
+>
+> RELOAD DOCTRINE (specified, not deferred). Catalog identity is
+> shared-mutable: the registered object IS prepare's live catalog
+> (same Arc), so watcher-driven bundle load/unload flows through
+> every cloned handle with no action and no staleness possible. Peer
+> scope is snapshot-at-issuance per wiring; a peer-set change is a
+> new manager is a new domain generation (in practice process
+> restart, matching current behavior — nothing regresses). Snapshot
+> lifetime equals domain generation; invalidation equals the brand
+> check.
+>
+> DROPPED FROM V2: the peer-manager getter (live() no longer takes
+> serve, so nothing to get) and the operation-side root-string
+> comparison (replaced by brand check plus construction
+> discipline). UNCHANGED: refusal-test placement with my constructor
+> slice (non-member bundle target refused via
+> validation_unknown_bundle; the test now also covers the exact V2-1
+> counterexample — foreign-serve construction yields
+> error-not-pairB — plus still-pairA-after-second-serve plus
+> cross-runtime brand refusal); the quoted Hold/Run intent rule; S2
+> model and heartbeat ownership.
 
 Unloaded-bundle refusal coverage rides with the Backend constructor
 slice (non-member bundle target refused via the existing
 `validation_unknown_bundle` path — pins no-probing and no
-Run-defaulting). Intent rule the constructor applies, quoted for
-citation: a bundle whose configured membership has autostart
-disabled, or a relay started with autostart disabled, enters the
-catalog as `HostingIntent::Hold`; otherwise `Run`.
+Run-defaulting, plus the V2-1 counterexample coverage above).
+Intent rule the constructor applies, quoted for citation: a bundle
+whose configured membership has autostart disabled, or a relay
+started with autostart disabled, enters the catalog as
+`HostingIntent::Hold`; otherwise `Run`.
 
 ### Per-invocation principal, validated after scheduling
 
@@ -198,18 +211,22 @@ unresponsive peer.
    handle/server distinction stated normatively; proposal boundary
    wording clarified as above. Waves, BundleScope, error and
    validation rules untouched.
-2. ONE host-live shared pair: construction table above; no rebuild
-   from files, no catalog copies, Arc/clone of live handles only.
-   Mixture rejection is the sealed brand check (pointer equality on
-   the domain-claimed delivery Arc), not path-string comparison;
-   masquerade cases (mismatched runtime, empty foreign catalog,
-   same-root reconstructed pair) fail closed by construction.
+2. ONE host-live shared pair: domain-bound registration with the
+   delivery Weak sharing key and lifecycle; first-writer-wins per
+   generation; only prepare/mirrored register (serve construction
+   registers nothing). Masquerade cases defeated structurally:
+   foreign-serve construction finds an empty slot (never consults
+   the foreign pair); same-call repeated construction adopts the
+   identical pair; same-root successors are fresh domains.
    Unloaded-bundle refusal test rides with the Backend constructor
    slice.
 3. Principal per invocation; validate-against-owning-runtime after
    scheduling; spawn_blocking ownership; typed join failures
    distinguished from caller cancellation; truthful (no-recall)
-   cancellation; heartbeat test with the operation.
+   cancellation; heartbeat test with the operation. Reload follows
+   the specified doctrine (shared-mutable catalog identity;
+   snapshot-at-issuance peers; invalidation equals the brand
+   check).
 4. Default-off experimental boundary, R1 cutover hold, runtime
    isolation, and the no-protocol-types rule (fields and
    constructor included) are preserved verbatim. Scope approval of
