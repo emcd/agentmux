@@ -2,7 +2,7 @@
   "requirement": "Relay reads adapter output through a poll look RPC",
   "capability": "adapter-look-poll",
   "limit": null,
-  "description": "Lines/offset windowing over a scripted singleton snapshot: full reads, tail-1, offset-past-end, zero-lines, huge offset, and absent-lines all honor the tail-N rule (skip offset from the newest end, take the last lines; empty window without underflow), with entries_total counting the whole snapshot and returned_entries_count counting the window. Multi-entry windows need a richer snapshot script and are recorded as future.",
+  "description": "Lines/offset windowing over a scripted singleton snapshot: full reads, tail-1, offset-past-end, zero-lines, huge offset, and absent-lines all honor the tail-N rule (skip offset from the newest end, take the last lines; empty window without underflow), with entries_total counting the whole snapshot and returned_entries_count counting the window. Multi-entry windows live in the companion t18_look_multi_entry_window.",
   "adapter_script": "example.toml",
   "spawn": {"args": ["--target", "seat-1", "--script", "tests/fixtures/adapter/example.toml"], "env": {}},
   "bind": {
