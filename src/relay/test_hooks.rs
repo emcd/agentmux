@@ -89,6 +89,311 @@ pub(crate) fn test_authority_gate(peer_principal_id: &str) {
         .expect("test authority gate released");
 }
 
+/// A rendezvous a test installs to park a session send at the final
+/// admission gate — after routing and authorization, before the protected
+/// revalidation span — so credential, scope, or shutdown changes commit
+/// mid-flight deterministically.
+pub struct SendAdmitGate {
+    requester_session: String,
+    reached_tx: mpsc::Sender<()>,
+    proceed_rx: mpsc::Receiver<()>,
+}
+
+impl SendAdmitGate {
+    /// Creates an armed gate for `requester_session`, returning the gate
+    /// alongside the test-side rendezvous channels.
+    pub fn arm(
+        requester_session: &str,
+    ) -> (Self, mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (reached_tx, reached_rx) = mpsc::channel::<()>();
+        let (proceed_tx, proceed_rx) = mpsc::channel::<()>();
+        (
+            Self {
+                requester_session: requester_session.to_string(),
+                reached_tx,
+                proceed_rx,
+            },
+            reached_rx,
+            proceed_tx,
+        )
+    }
+}
+
+static SEND_ADMIT_GATE: Mutex<Option<SendAdmitGate>> = Mutex::new(None);
+
+/// Installs `gate` as the active send-admit gate, replacing any previous
+/// one. Test-only; call [`disarm_send_admit_gate`] when done.
+pub fn arm_send_admit_gate(gate: SendAdmitGate) {
+    *SEND_ADMIT_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(gate);
+}
+
+/// Removes any installed send-admit gate.
+pub fn disarm_send_admit_gate() {
+    *SEND_ADMIT_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// Pause point for session send final admission, called after the route is
+/// authorized and before the protected validity span. When a gate armed for
+/// `requester_session` is installed, signals arrival and blocks until the
+/// test releases it. Unarmed (or non-matching) calls return immediately.
+pub(crate) fn test_send_admit_gate(requester_session: &str) {
+    fire_send_admit_gate(requester_session, &SEND_ADMIT_GATE);
+}
+
+/// Pause point inside the protected span, after credential revalidation
+/// and before grant re-resolution and admission. Only lock-free
+/// invalidations can commit here without deadlocking the parked span;
+/// store and shutdown invalidations serialize on the held locks by
+/// construction.
+pub(crate) fn test_send_admit_commit_gate(requester_session: &str) {
+    fire_send_admit_gate(requester_session, &SEND_ADMIT_COMMIT_GATE);
+}
+
+/// Pause point inside the protected span, after the quota reservation is
+/// recorded and before it is published to the queue and worker registry.
+/// Lets a test park the exact reservation-to-publication interleave: a
+/// shutdown arriving here waits out the span, and the entry it publishes
+/// on release precedes the barrier — never orphaned past it.
+pub(crate) fn test_send_admit_reserved_gate(requester_session: &str) {
+    fire_send_admit_gate(requester_session, &SEND_ADMIT_RESERVED_GATE);
+}
+
+static SEND_ADMIT_RESERVED_GATE: Mutex<Option<SendAdmitGate>> =
+    Mutex::new(None);
+
+/// Installs `gate` as the active send-admit reserved gate. Disarm with
+/// [`disarm_send_admit_reserved_gate`] when done.
+pub fn arm_send_admit_reserved_gate(gate: SendAdmitGate) {
+    *SEND_ADMIT_RESERVED_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(gate);
+}
+
+/// Removes any installed send-admit reserved gate.
+pub fn disarm_send_admit_reserved_gate() {
+    *SEND_ADMIT_RESERVED_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+fn fire_send_admit_gate(
+    requester_session: &str,
+    slot: &Mutex<Option<SendAdmitGate>>,
+) {
+    let gate = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(gate) = gate.as_ref() else {
+        return;
+    };
+    if gate.requester_session != requester_session {
+        return;
+    }
+    let _ = gate.reached_tx.send(());
+    gate.proceed_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("test send-admit gate released");
+}
+
+static SEND_ADMIT_COMMIT_GATE: Mutex<Option<SendAdmitGate>> = Mutex::new(None);
+
+/// Installs `gate` as the active send-admit commit gate. Disarm with
+/// [`disarm_send_admit_commit_gate`] when done.
+pub fn arm_send_admit_commit_gate(gate: SendAdmitGate) {
+    *SEND_ADMIT_COMMIT_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(gate);
+}
+
+/// Removes any installed send-admit commit gate.
+pub fn disarm_send_admit_commit_gate() {
+    *SEND_ADMIT_COMMIT_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// Keyed publication capture for the test contract. Fired by the send
+/// spine for every queued local target, inside the final admission span,
+/// next to the queued inscription. Recording is strictly opt-in: with no
+/// hook armed this is one mutex probe that stores nothing, so unarmed
+/// production sends — socket or public — retain zero records. An armed
+/// hook captures only its own requester session; unrelated senders are
+/// dropped without storage. Lifetime is the arming: tests arm before
+/// dispatch, drain with [`take_published_sends`], and disarm on guard
+/// drop, so captures never accumulate across tests.
+pub struct SendPublishedHook {
+    requester_session: String,
+    captured: Mutex<Vec<String>>,
+}
+
+impl SendPublishedHook {
+    /// Creates an unarmed capture for `requester_session`; install with
+    /// [`arm_send_published_hook`], drain with [`take_published_sends`].
+    pub fn arm(requester_session: &str) -> Self {
+        Self {
+            requester_session: requester_session.to_string(),
+            captured: Mutex::new(Vec::new()),
+        }
+    }
+
+    fn take_for(&self, requester_session: &str) -> Vec<String> {
+        if self.requester_session.as_str() != requester_session {
+            return Vec::new();
+        }
+        std::mem::take(
+            &mut self
+                .captured
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+    }
+}
+
+/// Records one published local delivery under the armed hook, if any.
+/// Unarmed calls store nothing.
+pub(crate) fn record_send_published(
+    requester_session: &str,
+    message_id: &str,
+) {
+    let hook = PUBLISHED_SEND_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(hook) = hook.as_ref() else {
+        return;
+    };
+    if hook.requester_session.as_str() != requester_session {
+        return;
+    }
+    hook.captured
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .push(message_id.to_string());
+}
+
+static PUBLISHED_SEND_HOOK: Mutex<Option<SendPublishedHook>> =
+    Mutex::new(None);
+
+/// Installs `hook` as the active publication capture, replacing any
+/// previous one. Disarm with [`disarm_send_published_hook`] when done.
+pub fn arm_send_published_hook(hook: SendPublishedHook) {
+    *PUBLISHED_SEND_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(hook);
+}
+
+/// Removes any installed publication capture, dropping undrained records.
+pub fn disarm_send_published_hook() {
+    *PUBLISHED_SEND_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// Drains the recorded publications for `requester_session`, returning
+/// their message ids. With no hook armed — or a hook for another sender —
+/// this is empty: unarmed production sends retain nothing.
+pub fn take_published_sends(requester_session: &str) -> Vec<String> {
+    let hook = PUBLISHED_SEND_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(hook) = hook.as_ref() else {
+        return Vec::new();
+    };
+    hook.take_for(requester_session)
+}
+
+/// Pause point for the shutdown wait: fires when a shutdown reaches the
+/// admission-guard write, before it blocks. Lets a test prove the waiter
+/// arrived while an in-flight span still holds the guard, without any
+/// timing assumption — arrival is a message, not a timeout.
+pub(crate) fn test_shutdown_waiting() {
+    let hook = SHUTDOWN_WAIT_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(hook) = hook.as_ref() {
+        let _ = hook.send(());
+    }
+}
+
+static SHUTDOWN_WAIT_HOOK: Mutex<Option<mpsc::Sender<()>>> = Mutex::new(None);
+
+/// Installs a one-shot arrival signal for the next shutdown wait.
+pub fn arm_shutdown_wait_hook(sender: mpsc::Sender<()>) {
+    *SHUTDOWN_WAIT_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(sender);
+}
+
+/// Removes any installed shutdown-wait hook.
+pub fn disarm_shutdown_wait_hook() {
+    *SHUTDOWN_WAIT_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// Arrival signal for a store mutation reaching its transaction-lock
+/// acquisition. Lets a test prove a rotation/revocation mutator arrived
+/// at the store mutex — rather than merely being spawned — before
+/// asserting it cannot commit while a send span holds that mutex.
+///
+/// Keyed by store root and principal id, and one-shot: only a firing
+/// whose key matches the armed key signals, and that firing consumes
+/// the arming. Arrivals from unrelated runtimes or principals neither
+/// signal nor consume, so a shared-process neighbor rotating its own
+/// store cannot satisfy this waiter.
+pub(crate) fn test_store_mutation_waiting(
+    state_root: &std::path::Path,
+    principal_id: &str,
+) {
+    let mut hook = STORE_MUTATION_WAIT_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let matches = hook.as_ref().is_some_and(|(key, _)| {
+        key.state_root.as_path() == state_root
+            && key.principal_id.as_str() == principal_id
+    });
+    if matches {
+        let (_, sender) = hook.take().expect("matched hook is present");
+        let _ = sender.send(());
+    }
+}
+
+struct StoreMutationWaitKey {
+    state_root: std::path::PathBuf,
+    principal_id: String,
+}
+
+static STORE_MUTATION_WAIT_HOOK: Mutex<
+    Option<(StoreMutationWaitKey, mpsc::Sender<()>)>,
+> = Mutex::new(None);
+
+/// Arms a one-shot arrival signal for the next store mutation whose
+/// store root and principal id both match. A firing with any other key
+/// is dropped without signaling and without consuming the arming.
+pub fn arm_store_mutation_wait_hook(
+    state_root: &std::path::Path,
+    principal_id: &str,
+    sender: mpsc::Sender<()>,
+) {
+    *STORE_MUTATION_WAIT_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some((
+        StoreMutationWaitKey {
+            state_root: state_root.to_path_buf(),
+            principal_id: principal_id.to_string(),
+        },
+        sender,
+    ));
+}
+
+/// Removes any installed store-mutation-wait hook.
+pub fn disarm_store_mutation_wait_hook() {
+    *STORE_MUTATION_WAIT_HOOK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
 /// A one-shot callback a test installs to run inside a confined commit
 /// between staging and rename publication — e.g. exchanging an ancestor
 /// directory for a symlink — so ancestor-exchange tests are deterministic.

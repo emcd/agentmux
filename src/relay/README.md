@@ -37,6 +37,15 @@ alongside state that no single stage owns: `catalog.rs`, `identity.rs`,
 `lifecycle.rs` and `startup_state.rs`. Every target-addressed operation passes
 through every stage.
 
+Public dispatch handlers live in `dispatch.rs` and take verified principal
+context instead of socket authority; the socket entry points in
+`connection/requests.rs` are framing adapters that translate frames into
+the same spine. Admission and shutdown linearize through the admission
+guard on the delivery context: dispatch holds it shared across the
+check-to-commit span (including the revalidated final admission), and
+shutdown publishes its gate first, then takes the guard exclusively to
+wait out in-flight admissions.
+
 **Assume a capability is spread across stages unless its specification requires
 otherwise.** Exactly one currently requires otherwise. `relay-routing-layer`
 defines itself as the shared resolution and authorization stages *and* obliges
@@ -97,7 +106,17 @@ one directory apart; prefer `control` when the authorization sense is meant.
   - relay request/response enums and public payload structs.
 - `context.rs`
   - internal request context and delivery task structs shared across relay
-    submodules.
+    submodules. `RequestPrincipal::from_verified` is the single translation
+    from verified principal context to the socket authority shape, used only
+    by the public dispatch handlers.
+- `dispatch.rs`
+  - public dispatch handlers taking `(&RelayRuntime, &VerifiedPrincipal, …)`
+    plus typed operation inputs (e.g. `SendOperation` with its explicit
+    operation-bundle parameter). Each handler validates its context, fuses
+    bare targets against parameter then home, runs the shared authorize and
+    admit spine, and returns the same `RelayResponse` union the socket
+    path produces. Relay-ingress and registration-minted contexts are
+    refused here until their dedicated slices land.
 - `constants.rs`
   - relay-local constants shared across submodules.
 - `identity.rs`

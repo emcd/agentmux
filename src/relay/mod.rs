@@ -19,6 +19,11 @@ mod constants;
 mod context;
 mod contract;
 mod delivery;
+/// Public in-process dispatch handlers. Compiled only under the
+/// experimental cutover feature; without it the surface — and this
+/// module — does not exist for any embedding host.
+#[cfg(feature = "experimental-public-send")]
+mod dispatch;
 mod drain;
 mod errors;
 mod handlers;
@@ -61,6 +66,10 @@ pub use self::delivery::observability::{
     ChoicesQueueEvent, subscribe_choices_queue_events,
     subscribe_worker_readiness,
 };
+/// Public in-process send surface. Exported only under the experimental
+/// cutover feature: without it no embedding host can name this path.
+#[cfg(feature = "experimental-public-send")]
+pub use self::dispatch::{SendOperation, dispatch_send};
 pub use self::drain::{
     ConnectionDrainCoordinator, ConnectionDrainReport, ConnectionWorkerSlot,
 };
@@ -148,6 +157,11 @@ fn handle_request_with_principal(
             // The non-stream single-bundle entry point holds no peer connection
             // manager, so a cross-relay target reports as unavailable here; the
             // stream path supplies the manager for real forwarding.
+            let send_state_root = runtime_directory
+                .parent()
+                .and_then(Path::parent)
+                .unwrap_or(runtime_directory)
+                .to_path_buf();
             return handlers::handle_send_routed(
                 delivery,
                 bundle_name,
@@ -157,6 +171,7 @@ fn handle_request_with_principal(
                 principal.as_ref(),
                 None,
                 None,
+                &send_state_root,
             );
         },
         RelayRequest::Look { .. } => {
@@ -534,7 +549,7 @@ pub(in crate::relay) fn dispatch_list(
 /// authorization context from the namespace; per-target delivery loads every
 /// target bundle — the home bundle included — from the catalog.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::relay) fn dispatch_send(
+pub(in crate::relay) fn dispatch_send_frame(
     delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
@@ -543,6 +558,7 @@ pub(in crate::relay) fn dispatch_send(
     bundle_catalog: &BundleCatalog,
     peer_connection_manager: &PeerConnectionManager,
     ingress_authority: Option<PeerIngressAuthority<'_>>,
+    state_root: &Path,
 ) -> RelayResponse {
     if delivery.is_shutting_down() {
         return RelayResponse::Error {
@@ -566,6 +582,7 @@ pub(in crate::relay) fn dispatch_send(
         principal.as_ref(),
         Some(peer_connection_manager),
         ingress_authority,
+        state_root,
     ) {
         Ok(value) => value,
         Err(error) => RelayResponse::Error { error },

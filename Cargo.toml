@@ -71,6 +71,13 @@ uuid = { version = "1.18.1", features = ["v4"] }
 # wrapper gap.
 default = []
 pty = ["dep:libghostty-vt", "dep:portable-pty", "dep:shell-words"]
+# Default-off gate for the public in-process send surface and its tests.
+# Without it, `relay::dispatch_send`/`SendOperation` do not exist and no
+# embedding host can reach the public-send path; the socket transport is
+# unaffected. Enable only for cutover work after the embedding cutover
+# gate opens (managed-publication contract or an operator-chosen
+# amendment with its review): `cargo ... --features experimental-public-send`.
+experimental-public-send = []
 
 [[bin]]
 name = "agentmux-adapter"

@@ -11,6 +11,11 @@ use agentmux::relay::{
 };
 use tempfile::TempDir;
 
+/// In-process public-send dispatch tests. Compiled only under the
+/// experimental cutover feature, matching the gated surface they
+/// exercise: without it `dispatch_send`/`SendOperation` do not exist.
+#[cfg(feature = "experimental-public-send")]
+mod dispatch_send;
 mod live_revocation;
 mod provisioning;
 mod roots;

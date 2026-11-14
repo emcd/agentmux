@@ -46,30 +46,31 @@ pub(super) struct SendExecutionContext<'a> {
     pub(super) peer_connection_manager: Option<&'a PeerConnectionManager>,
 }
 
-/// Enqueues async delivery to every authorized local target, forwards every
-/// cross-relay (bang-path) target to its peer relay, and builds the merged
-/// `Send` response. Runs as the spine's `execute` stage, after authorization.
-/// Local and cross-relay outcomes are folded into one `results` list; a peer
-/// transport or handshake failure surfaces as that target's `failed` outcome
-/// rather than failing the whole send.
-pub(super) fn execute_send(
+/// Publishes every authorized local target to the async delivery queue and
+/// worker registry, returning one `Queued` result per target in
+/// group-then-target iteration order.
+///
+/// Must run inside the caller's final admission span: the reservation and
+/// its publication are one atomic commit against shutdown. A shutdown that
+/// published first makes the caller refuse before reaching here; a shutdown
+/// that arrives after finds published queue entries and drains them instead
+/// of missing them. The queueing pass itself performs no network execution:
+/// tasks are handed to in-memory channels and workers are spawned, while the
+/// transports run asynchronously outside the span. An enqueue failure rolls
+/// back every reservation with no task, so every admission is either queued
+/// or released — never reserved-but-invisible.
+///
+/// The `admitted` message ids arrive in group-then-target iteration order so
+/// the queueing pass can pair them back up. A request that cannot be admitted
+/// holds nothing and queues nothing.
+pub(super) fn publish_local_deliveries(
     route: &ResolvedRoute,
-    groups: Vec<DeliveryGroup>,
-    context: SendExecutionContext<'_>,
-) -> Result<RelayResponse, RelayError> {
-    let SendExecutionContext {
-        delivery,
-        sender,
-        authenticated_identity,
-        admitted_identity,
-        on_behalf_of,
-        sender_return_route,
-        message,
-        home_namespace,
-        request_id,
-        peer_connection_manager,
-    } = context;
-    let sender_member = sender.to_bundle_member();
+    groups: &[DeliveryGroup],
+    admitted: Vec<String>,
+    context: &SendExecutionContext<'_>,
+) -> Result<Vec<SendResult>, RelayError> {
+    let delivery = context.delivery;
+    let sender_member = context.sender.to_bundle_member();
     let mut results = Vec::with_capacity(route.targets.len());
     // Every task carries the full recipient list so delivered envelopes can show
     // co-recipients elsewhere. Entries are canonical ids: local recipients as
@@ -93,32 +94,30 @@ pub(super) fn execute_send(
             .filter(|target| target.is_cross_relay())
             .map(cross_relay_target_label),
     );
-    // Admission precedes every queue entry in this request. Reserving the whole
-    // request's quota up front is what makes a refusal clean: a request that
-    // cannot be admitted holds nothing and queues nothing, rather than leaving a
-    // half-admitted send behind for the caller to reason about.
-    let admitted = admit_request_targets(delivery, &groups, message)?;
+    // The queueing pass pairs each entry back up with its reservation by
+    // group-then-target iteration order; see the admission-span comment at
+    // the call site.
     let mut admitted_index = 0usize;
-    for group in &groups {
+    for group in groups {
         for target in &group.targets {
             let message_id = admitted[admitted_index].clone();
             let task = AsyncDeliveryTask {
                 bundle: group.bundle.clone(),
                 admitted: true,
-                sender_namespace: home_namespace.to_string(),
+                sender_namespace: context.home_namespace.to_string(),
                 sender: sender_member.clone(),
-                authenticated_identity: authenticated_identity.clone(),
-                on_behalf_of: on_behalf_of.clone(),
+                authenticated_identity: context.authenticated_identity.clone(),
+                on_behalf_of: context.on_behalf_of.clone(),
                 all_target_sessions: all_recipient_sessions.clone(),
                 target_session: target.session_id.clone(),
-                message: message.to_string(),
+                message: context.message.to_string(),
                 message_id: message_id.clone(),
                 runtime_directory: group.runtime_directory.clone(),
                 payload_mode: DeliveryPayloadMode::EnvelopeMessage,
                 append_enter: true,
                 choice_decider_sessions: group.choice_decider_sessions.clone(),
                 is_receipt: false,
-                sender_return_route: sender_return_route.clone(),
+                sender_return_route: context.sender_return_route.clone(),
             };
             if let Err(error) = enqueue_async_delivery(delivery, task) {
                 // This entry never became a queue entry, and neither will the
@@ -135,10 +134,22 @@ pub(super) fn execute_send(
                 "relay.send.async.queued",
                 &json!({
                     "namespace": group.bundle.bundle_name,
-                    "sender_session": sender.session_id,
+                    "sender_session": context.sender.session_id,
                     "target_session": target.session_id,
                     "message_id": message_id,
                 }),
+            );
+            // Keyed publication record for the test contract: fires at the
+            // same program point as the queued inscription, inside the
+            // final admission span, but through the keyed hook instead of
+            // the process-global file sink so a test needs no shared sink.
+            super::super::super::test_hooks::record_send_published(
+                format!(
+                    "{}@{}",
+                    context.sender.session_id, context.home_namespace
+                )
+                .as_str(),
+                message_id.as_str(),
             );
             results.push(SendResult {
                 target_session: canonical_session_id(
@@ -153,6 +164,33 @@ pub(super) fn execute_send(
             });
         }
     }
+    Ok(results)
+}
+
+/// Forwards every cross-relay (bang-path) target to its peer relay and builds
+/// the merged `Send` response from the published local results. Runs outside
+/// the admission span: peer transport execution must never sit under the
+/// shutdown gate or the store lock. Local and cross-relay outcomes are folded
+/// into one `results` list; a peer transport or handshake failure surfaces as
+/// that target's `failed` outcome rather than failing the whole send.
+pub(super) fn execute_send(
+    route: &ResolvedRoute,
+    local_results: Vec<SendResult>,
+    context: SendExecutionContext<'_>,
+) -> Result<RelayResponse, RelayError> {
+    let SendExecutionContext {
+        delivery: _,
+        sender,
+        authenticated_identity,
+        admitted_identity,
+        on_behalf_of,
+        sender_return_route: _,
+        message,
+        home_namespace,
+        request_id,
+        peer_connection_manager,
+    } = context;
+    let mut results = local_results;
     // Forward each cross-relay target to its peer relay and fold the peer's
     // outcome (or a transport failure) into the merged results. The manager is
     // present here: a cross-relay target on a manager-less entry point was already

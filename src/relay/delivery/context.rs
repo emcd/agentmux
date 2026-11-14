@@ -21,6 +21,7 @@ use std::sync::{
 use crate::relay::configuration::DeliveryConfiguration;
 use crate::relay::drain::ConnectionDrainCoordinator;
 
+use super::super::test_hooks;
 use super::admission::{AdmissionLedger, LedgerState, lock_ledger};
 use super::async_worker::AsyncDeliveryRegistry;
 use crate::relay::stream::StreamRegistry;
@@ -31,21 +32,56 @@ use crate::relay::stream::StreamRegistry;
 /// new work once set; worker loops keep their process-global kill-switch
 /// reads. Distinct from the process signal so one handle's shutdown never
 /// reaches another handle's dispatch path.
+///
+/// Admission and shutdown linearize through the admission guard: dispatch
+/// holds the guard shared across its whole check-to-commit span, and
+/// shutdown publishes the gate first, then takes the guard exclusively
+/// to wait out in-flight admissions. The guard is outermost in the lock
+/// order (guard, admin, store, ledger), with the single documented
+/// peer-ingress exception holding the identity-admin serialization
+/// first (admin, then guard, then store): shutdown waits holding no inner
+/// locks, and admission never touches the gate without holding the guard.
 #[derive(Default)]
 pub(crate) struct InstanceShutdownGate {
     signalled: AtomicBool,
+    admission: std::sync::RwLock<()>,
 }
 
 impl InstanceShutdownGate {
     /// Signals controlled shutdown for the owning handle. Idempotent.
+    /// Publishes the gate first, then waits out in-flight admissions
+    /// before returning: a span that acquired first commits visibly,
+    /// and a span that acquires after sees the published gate and
+    /// refuses. No inner locks are held while waiting.
     pub(crate) fn signal_shutdown(&self) {
         self.signalled.store(true, Ordering::SeqCst);
+        test_hooks::test_shutdown_waiting();
+        let _held = self
+            .admission
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
     }
 
     /// Reports whether controlled shutdown was signalled for the handle.
     #[must_use]
     pub(crate) fn is_shutting_down(&self) -> bool {
         self.signalled.load(Ordering::SeqCst)
+    }
+
+    /// Holds the admission guard shared across one check-to-commit span.
+    /// Release only after the commit or rollback publishes.
+    pub(crate) fn admission_span(&self) -> std::sync::RwLockReadGuard<'_, ()> {
+        self.admission
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Reports whether the admission guard is currently held shared.
+    /// Test-only exclusion probe: a would-be invalidator that must
+    /// acquire the guard exclusively observes held exclusion while a
+    /// span is parked inside the check-to-commit region.
+    pub fn exclusion_held_for_testing(&self) -> bool {
+        self.admission.try_write().is_err()
     }
 }
 
@@ -114,6 +150,21 @@ impl DeliveryContext {
     ) -> Result<std::sync::MutexGuard<'_, LedgerState>, crate::relay::RelayError>
     {
         lock_ledger(&self.ledger)
+    }
+
+    /// Holds the admission guard shared across one check-to-commit span.
+    /// Shutdown publishes its gate first, then waits on the matching
+    /// exclusive hold, so a span that acquired first commits visibly.
+    pub(crate) fn admission_span(&self) -> std::sync::RwLockReadGuard<'_, ()> {
+        self.shutdown_gate.admission_span()
+    }
+
+    /// Reports whether the admission guard is currently held shared.
+    /// Test-only exclusion probe: a would-be invalidator that must
+    /// acquire the guard exclusively observes held exclusion while a
+    /// span is parked inside the check-to-commit region.
+    pub fn admission_exclusion_for_testing(&self) -> bool {
+        self.shutdown_gate.exclusion_held_for_testing()
     }
 
     /// The handle's stream registry.

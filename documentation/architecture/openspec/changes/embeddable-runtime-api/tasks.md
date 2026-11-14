@@ -18,11 +18,16 @@
       host-held in-memory credential material.
 - [x] 1.4 Define a public verified principal context type and require public
       handlers to receive that context rather than trusting request payload
-      sender fields. The context carries principal-home as an explicit field
-      set once at verification time. The type is opaque and non-caller-
-      constructible, bound to the issuing runtime/identity-store instance
-      with a credential-binding-epoch lifetime (rotation/revocation/deletion
-      invalidates; recreation starts a new epoch; shutdown rejects dispatch).
+      sender fields. The credential-backed context carries principal-home
+      as an explicit field set once at verification time; the
+      registration-minted input carries home frozen from the admitted
+      registration and bound configuration. The type is opaque and
+      non-caller-constructible, bound to the issuing
+      runtime/identity-store instance with a credential-binding-epoch
+      lifetime for the credential branch (rotation/revocation/deletion
+      invalidates; recreation starts a new epoch; shutdown rejects
+      dispatch) and instance-plus-generation binding for the
+      registration branch.
       Name the trusted administrative boundary for provisioning and
       introspection; introspection SHALL NOT mint dispatch authority.
 - [ ] 1.5 Refactor the standalone relay binary to construct and call the public

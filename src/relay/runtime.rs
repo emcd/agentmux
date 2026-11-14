@@ -54,6 +54,7 @@ use super::stream::{
     RelayStreamEvent, notify_trusted_hosts_of_revocation,
     revoke_streams_for_identity,
 };
+use super::test_hooks;
 
 /// An embedded relay runtime handle: one live relay instance.
 ///
@@ -167,16 +168,16 @@ impl RelayRuntime {
         self.state_root.as_path()
     }
 
-    /// This runtime's per-instance delivery state.
-    #[must_use]
-    pub fn delivery_context(&self) -> &Arc<DeliveryContext> {
-        &self.delivery
-    }
-
     /// Whether relay policy requires store-backed credentials.
     #[must_use]
     pub fn require_session_credentials(&self) -> bool {
         self.require_session_credentials
+    }
+
+    /// This runtime's per-instance delivery state.
+    #[must_use]
+    pub fn delivery_context(&self) -> &Arc<DeliveryContext> {
+        &self.delivery
     }
 
     /// Begins controlled shutdown for this runtime.
@@ -655,6 +656,12 @@ pub fn rotate_principal_credential(
     destination: CredentialDestination,
 ) -> Result<ProvisionedCredential, RelayError> {
     let store_lock = lock_store_transaction(&runtime.state_root);
+    // Test arrival probe: fires immediately before the transaction-lock
+    // acquisition so a test can prove this mutator reached the mutex —
+    // rather than merely being spawned — before asserting it cannot
+    // commit while a send span holds that mutex. Keyed by store root
+    // and principal so unrelated mutators cannot satisfy the waiter.
+    test_hooks::test_store_mutation_waiting(&runtime.state_root, principal_id);
     let _store_guard = store_lock
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -842,6 +849,9 @@ pub fn drop_principal(
     principal_id: &str,
 ) -> Result<(), RelayError> {
     let store_lock = lock_store_transaction(&runtime.state_root);
+    // Same arrival probe as the rotation path: revocation is the other
+    // store-mutex mutator a span-hold test may need to observe.
+    test_hooks::test_store_mutation_waiting(&runtime.state_root, principal_id);
     let _store_guard = store_lock
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());

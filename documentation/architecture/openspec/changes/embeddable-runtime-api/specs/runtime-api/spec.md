@@ -117,12 +117,16 @@ Embedded hosts SHALL be able to authenticate dynamic agents with `direct_psk`
 without forcing those agents through Agentmux-managed credential files or
 `socket-trust`.
 
-Relay-verified principal context SHALL be produced by Agentmux verification or
-introspection logic and SHALL be the identity authority passed to public
-dispatch handlers. It SHALL carry the principal home as an explicit field
-(e.g. `home_namespace`), set once at verification time from the principal
-record — never re-derived by re-splitting principal-id strings at dispatch or
-routing call sites.
+Credential-backed verified principal context SHALL be produced by Agentmux
+verification or authorized provisioning logic and SHALL be the identity
+authority passed to public dispatch handlers. It SHALL carry the principal
+home as an explicit field (e.g. `home_namespace`), set once at verification
+time from the principal record — never re-derived by re-splitting
+principal-id strings at dispatch or routing call sites. Registration-minted
+input is produced by transport admission under the Registration-Minted
+Identity Branch requirement instead, with home frozen from the admitted
+registration and bound configuration. Read-only introspection SHALL never
+mint dispatch context of either branch.
 
 Principal-home (initiator authority, from verified principal identity) and
 operation-bundle (target/routing context, from operation inputs) are
@@ -163,18 +167,25 @@ defaults only, never identity.
 
 ### Requirement: Verified Principal Context Authority and Lifetime
 
-Relay-verified principal context SHALL be runtime-issued and
+Credential-backed verified principal context SHALL be runtime-issued and
 non-caller-constructible: opaque to embedding hosts and minted only by
-Agentmux verification or authorized provisioning paths. Callers SHALL NOT be
-able to forge dispatch authority by constructing the context type directly.
+Agentmux verification or authorized provisioning paths. Transport-admitted
+connections without a store credential SHALL receive dispatch input only
+through the Registration-Minted Identity Branch requirement below. Both
+branches share one sealed input model with a single handler surface: no
+public constructor and no caller-built trust sentinel on either branch.
+Callers SHALL NOT be able to forge dispatch authority by constructing the
+context type directly.
 
 Each verified context SHALL be bound to the issuing runtime handle and
 identity-store instance. A context verified in runtime A SHALL NOT authorize
 dispatch in runtime B; cross-instance presentation SHALL be rejected before
 routing or authorization.
 
-Authority SHALL be frozen to the credential/principal binding epoch: the
-binding verified at mint time. Credential rotation, revocation, or principal
+Credential-backed authority SHALL be frozen to the credential/principal
+binding epoch: the binding verified at mint time. Transport-branch lifetime
+follows the connection epoch and invalidation rules of the Registration-Minted
+Identity Branch requirement. Credential rotation, revocation, or principal
 deletion SHALL invalidate outstanding contexts minted under the prior
 binding, even when the principal id is later recreated and reused —
 recreation starts a new epoch and does not resurrect old contexts. Home is
@@ -220,6 +231,61 @@ rejected.
 - **WHEN** the runtime begins controlled shutdown and dispatch is attempted
 - **THEN** the operation is rejected and no worker is created or resurrected
 
+
+### Requirement: Registration-Minted Identity Branch
+
+Connections admitted without a store-backed credential SHALL receive a
+registration-minted dispatch input minted by transport admission as an
+authorized administrative mutation: bound to the accepting runtime
+instance and the connection and registration generation, never to a
+credential or store epoch. Replacement, reconnect, disconnect, runtime
+shutdown, and bound-configuration change SHALL invalidate it, with no
+lingering input and no grace reuse. Registration minting applies only
+to Session and User principals admitted with enforcement off;
+Application and Relay principals SHALL always require a recognized
+token and SHALL NOT receive a credential-free branch. Registration
+minting SHALL create no store credential and cause no other store
+side effect. Registration-minted input SHALL be labeled
+non-store-authenticated in every local record, diagnostic, and
+attribution; admitted claims SHALL never render as authenticated and
+SHALL never upgrade to credential-minted standing, and no new wire
+field SHALL convey the distinction. A fresh explicit registration
+SHALL be a separate mint, never an in-place provenance upgrade or
+downgrade. Home SHALL be frozen from the admitted registration and
+bound configuration, never from wire per-request namespace. Dispatch
+with registration-minted input uses the same public handlers and the
+same per-operation home-namespace authorization as any other route,
+with no exemption from the scope threshold. No public caller trust
+sentinel is offered.
+
+#### Scenario: Credential-free session receives the registration branch
+
+- **GIVEN** a session admitted without a store-backed credential
+- **WHEN** transport admission mints its dispatch input
+- **THEN** the input is bound to the runtime instance plus the
+  connection and registration generation
+- **AND** it is labeled non-store-authenticated in local records
+
+#### Scenario: Invalidation ends the registration branch
+
+- **GIVEN** a live registration-minted input
+- **WHEN** a conflicting claim replaces the registration, the
+  connection disconnects or reconnects, or the runtime begins
+  shutdown
+- **THEN** further dispatch with that input is rejected
+
+#### Scenario: Registration branch authorizes per operation without elevation
+
+- **GIVEN** a valid registration-minted input
+- **WHEN** it dispatches an operation
+- **THEN** authorization runs per operation in the requester home
+  namespace under current grants
+- **AND** attribution never presents the holder as store-authenticated:
+  local provenance uses the existing authenticated_identity omission for
+  the unverified requester, while remote on_behalf_of stays advisory
+  and peer authenticated_identity stays credential-backed per the
+  landed relay-identity branch
+- **AND** no new wire field conveys the branch distinction
 
 ### Requirement: Embedded Runtime Instance Isolation
 

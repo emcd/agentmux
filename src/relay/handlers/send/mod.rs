@@ -1,4 +1,5 @@
 use serde_json::json;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::configuration::ConfigurationRoots;
@@ -13,7 +14,8 @@ use crate::relay::handlers::sender::{
     SenderIdentity, resolve_sender_in_namespace,
 };
 use crate::relay::identity::{
-    PrincipalType, classify_principal_id, live_peer_ingress,
+    PrincipalStore, PrincipalType, classify_principal_id, live_peer_ingress,
+    lock_store_transaction,
 };
 use crate::relay::routing::{
     Addressing, Capability, OperationProfile, ResolvedTarget as RouteTarget,
@@ -32,7 +34,10 @@ mod execute;
 mod groups;
 mod route;
 
-use execute::{SendExecutionContext, execute_send};
+use execute::{
+    SendExecutionContext, admit_request_targets, execute_send,
+    publish_local_deliveries,
+};
 use route::{
     prepare_send, resolve_send_route_or_broadcast, resolve_sender_return_route,
 };
@@ -52,6 +57,7 @@ pub(in crate::relay) fn handle_send_routed(
     principal: Option<&RequestPrincipal>,
     peer_connection_manager: Option<&PeerConnectionManager>,
     ingress_authority: Option<PeerIngressAuthority<'_>>,
+    state_root: &Path,
 ) -> Result<RelayResponse, RelayError> {
     let RelayRequest::Send {
         request_id,
@@ -84,7 +90,50 @@ pub(in crate::relay) fn handle_send_routed(
         principal,
         peer_connection_manager,
         ingress_authority,
+        state_root,
     )
+}
+
+/// Revalidates the sender's credential binding against the live store
+/// inside the final admission span: the record must still exist, carry
+/// the presented epoch, and be unexpired. Credential-free (socket-trust)
+/// senders carry no binding and skip this check; live-stream revocation
+/// remains their invalidation mechanism.
+fn revalidate_sender_binding(
+    state_root: &Path,
+    principal: Option<&RequestPrincipal>,
+) -> Result<(), RelayError> {
+    let Some(principal) = principal else {
+        return Ok(());
+    };
+    let Some(authenticated) = principal.authenticated_identity.as_deref()
+    else {
+        return Ok(());
+    };
+    let store = PrincipalStore::load(state_root)?;
+    let Some(record) = store.find_by_principal_id(authenticated) else {
+        return Err(relay_error(
+            "validation_stale_verified_context",
+            "principal binding no longer exists under this identity store",
+            Some(json!({ "principal_id": authenticated })),
+        ));
+    };
+    let presented = principal.credential_hash.as_deref().unwrap_or("");
+    if record.credential_hash != presented {
+        return Err(relay_error(
+            "validation_stale_verified_context",
+            "principal credential binding changed since this context was minted",
+            Some(json!({ "principal_id": authenticated })),
+        ));
+    }
+    if record.is_expired(time::OffsetDateTime::now_utc()) {
+        return Err(relay_error(
+            "runtime_identity_expired",
+            "principal credential has expired",
+            Some(json!({ "principal_id": authenticated })),
+        ));
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -97,6 +146,7 @@ fn handle_send(
     principal: Option<&RequestPrincipal>,
     peer_connection_manager: Option<&PeerConnectionManager>,
     ingress_authority: Option<PeerIngressAuthority<'_>>,
+    state_root: &Path,
 ) -> Result<RelayResponse, RelayError> {
     // A cross-relay ingress request arrives from an authenticated peer relay
     // principal (`<id>@RELAY`): it carries no bundle policy, its home namespace is
@@ -295,22 +345,87 @@ fn handle_send(
             )
         },
         |route, groups| {
-            execute_send(
-                route,
-                groups,
-                SendExecutionContext {
+            // Final admission gate: park for tests, then hold the
+            // admission guard and the store lock across revalidation,
+            // commit, and local queue/registry publication. Reservation
+            // and publication are one atomic commit against shutdown: a
+            // shutdown that published first makes the recheck refuse, and
+            // a shutdown that arrives after finds published queue entries
+            // and drains them. Only cross-relay forwarding runs outside
+            // the span, since peer transport execution must never sit
+            // under the shutdown gate or the store lock.
+            test_hooks::test_send_admit_gate(
+                format!("{}@{home_namespace}", sender.session_id).as_str(),
+            );
+            let execution = SendExecutionContext {
+                delivery,
+                sender: &sender,
+                authenticated_identity,
+                admitted_identity,
+                on_behalf_of,
+                sender_return_route,
+                message: message.as_str(),
+                home_namespace,
+                request_id,
+                peer_connection_manager,
+            };
+            let local_results = {
+                let _admission = delivery.admission_span();
+                let store_lock = lock_store_transaction(state_root);
+                let _store = store_lock
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                if delivery.is_shutting_down() {
+                    return Err(relay_error(
+                        "runtime_shutting_down",
+                        "relay handle is shutting down",
+                        None,
+                    ));
+                }
+                revalidate_sender_binding(state_root, principal)?;
+                test_hooks::test_send_admit_commit_gate(
+                    format!("{}@{home_namespace}", sender.session_id).as_str(),
+                );
+                if !relay_ingress {
+                    // Current grants under the same span: reload the home
+                    // bundle and authorization, re-resolve the sender
+                    // against the fresh membership, and re-authorize the
+                    // whole route, so a narrowing or membership removal
+                    // committed while parked still denies.
+                    // Relay-ingress keeps its live binding, which the
+                    // held admin lock keeps current by construction.
+                    let (fresh_bundle, fresh_authorization) =
+                        load_home_context(
+                            home_namespace,
+                            configuration_roots,
+                        )?;
+                    resolve_sender_in_namespace(
+                        fresh_bundle.as_ref(),
+                        &fresh_authorization,
+                        sender.session_id.as_str(),
+                        "requester_session",
+                    )?;
+                    RouteAuthorization::Policy(&fresh_authorization)
+                        .authorize(
+                            home_namespace,
+                            OperationProfile {
+                                capability: Capability::Send,
+                                addressing: Addressing::MultiTarget,
+                            },
+                            route,
+                        )?;
+                }
+                let admitted = admit_request_targets(
                     delivery,
-                    sender: &sender,
-                    authenticated_identity,
-                    admitted_identity,
-                    on_behalf_of,
-                    sender_return_route,
-                    message: message.as_str(),
-                    home_namespace,
-                    request_id,
-                    peer_connection_manager,
-                },
-            )
+                    &groups,
+                    message.as_str(),
+                )?;
+                test_hooks::test_send_admit_reserved_gate(
+                    format!("{}@{home_namespace}", sender.session_id).as_str(),
+                );
+                publish_local_deliveries(route, &groups, admitted, &execution)?
+            };
+            execute_send(route, local_results, execution)
         },
     )
 }
