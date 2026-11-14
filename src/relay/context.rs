@@ -47,6 +47,30 @@ pub(super) struct RequestPrincipal {
     pub(super) introspect_rights: Option<IdentityIntrospectRights>,
 }
 
+impl RequestPrincipal {
+    /// Builds the internal socket authority from a verified principal for
+    /// the credential-backed branch: the full principal id travels as the
+    /// session id (downstream normalization strips the home qualifier
+    /// exactly as it does for socket registrations), and the binding epoch
+    /// travels as the credential hash live peer-ingress binds against.
+    /// Exactly one construction site feeds public dispatch; the socket path
+    /// keeps building from the connection binding. Available only under
+    /// the experimental cutover feature, like its sole caller.
+    #[cfg(feature = "experimental-public-send")]
+    pub(in crate::relay) fn from_verified(
+        principal: &super::runtime::VerifiedPrincipal,
+    ) -> Self {
+        let id = principal.principal_id().to_string();
+        Self {
+            session_id: id.clone(),
+            authenticated_identity: Some(id.clone()),
+            admitted_identity: Some(id),
+            credential_hash: Some(principal.epoch_hash().to_string()),
+            introspect_rights: None,
+        }
+    }
+}
+
 /// Relay-wide handles a peer-ingress request needs for live authorization:
 /// the state root locating the principal store, and the shared
 /// identity-admin serialization. Held across the final grant lookup,

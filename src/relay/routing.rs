@@ -394,6 +394,101 @@ pub(super) fn resolve_send_route(
     })
 }
 
+/// Applies the bare-target fusion rule for public dispatch: an explicit
+/// suffix wins, then the explicit operation-bundle parameter, then the
+/// bundle-scoped principal home. Relay-wide homes never default bare
+/// targets. Broadcast carries no targets; its scope resolves solely from
+/// the parameter at expansion, so this stage only requires the parameter
+/// and returns no targets. Available only under the experimental cutover
+/// feature, like its sole caller.
+#[cfg(feature = "experimental-public-send")]
+pub(in crate::relay) fn qualify_targets_for_dispatch(
+    targets: &[String],
+    broadcast: bool,
+    operation_bundle: Option<&str>,
+    home_namespace: &str,
+) -> Result<Vec<String>, RelayError> {
+    use super::constants::GLOBAL_NAMESPACE;
+
+    if broadcast {
+        if !targets.is_empty() {
+            return Err(relay_error(
+                "validation_conflicting_targets",
+                "targets must be empty when broadcast=true",
+                None,
+            ));
+        }
+        if operation_bundle.is_none() {
+            return Err(relay_error(
+                "validation_invalid_arguments",
+                "broadcast requires an explicit operation-bundle parameter",
+                None,
+            ));
+        }
+        return Ok(Vec::new());
+    }
+    targets
+        .iter()
+        .map(|target| {
+            let trimmed = target.trim();
+            if trimmed.contains('@') || trimmed.contains('!') {
+                return Ok(trimmed.to_string());
+            }
+            if let Some(bundle) = operation_bundle {
+                return Ok(format!("{trimmed}@{bundle}"));
+            }
+            if home_namespace == GLOBAL_NAMESPACE {
+                return Err(relay_error(
+                    "validation_unqualified_target",
+                    "relay-wide principals must qualify targets explicitly",
+                    Some(json!({ "target": trimmed })),
+                ));
+            }
+            Ok(format!("{trimmed}@{home_namespace}"))
+        })
+        .collect()
+}
+
+/// Expands a broadcast scope to explicit bundle-member targets. Scope comes
+/// solely from the operation-bundle parameter; authorization stays in the
+/// requester's home namespace downstream, where the cross-bundle tier rules
+/// apply as they do for explicit targets. Exclusion is by canonical
+/// identity: only a same-home member naming the sender itself is skipped,
+/// so a same-named member of a foreign scope still receives. Available only
+/// under the experimental cutover feature, like its sole caller.
+#[cfg(feature = "experimental-public-send")]
+pub(in crate::relay) fn expand_broadcast_scope(
+    configuration_roots: &crate::configuration::ConfigurationRoots,
+    scope_bundle: &str,
+    sender_principal_id: &str,
+    sender_home: &str,
+) -> Result<Vec<String>, RelayError> {
+    let configured = crate::configuration::load_bundle_configuration(
+        configuration_roots,
+        scope_bundle,
+    )
+    .map_err(|source| {
+        relay_error(
+            "validation_unknown_target",
+            "broadcast scope bundle is not configured",
+            Some(json!({
+                "bundle": scope_bundle,
+                "cause": source.to_string(),
+            })),
+        )
+    })?;
+    let sender_bare =
+        super::identity::bare_session_id(sender_principal_id, sender_home);
+    Ok(configured
+        .members
+        .iter()
+        .filter(|member| {
+            scope_bundle != sender_home || member.id != sender_bare
+        })
+        .map(|member| format!("{}@{scope_bundle}", member.id))
+        .collect())
+}
+
 /// The shared `SingleTarget` resolution stage for the complementary read/write
 /// operations Look (inspect) and Raww (write): one [`resolve_target`] call.
 ///

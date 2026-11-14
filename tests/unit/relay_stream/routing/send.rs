@@ -705,3 +705,269 @@ fn send_to_external_namespace_target_is_rejected() {
         "EXTERNAL"
     );
 }
+
+/// 2.2 parity: the same credential-backed send over the socket and through
+/// the public in-process handler produces equivalent routing, authorization,
+/// response, and attribution. The socket leg Helloes with the provisioned
+/// PSK; the direct leg verifies the same credential and dispatches with the
+/// minted context. `message_id` values differ by construction (one UUID per
+/// admission) and are excluded from the comparison. Compiled only under
+/// the experimental cutover feature, matching the gated direct leg.
+#[cfg(feature = "experimental-public-send")]
+#[test]
+fn socket_and_in_process_send_are_equivalent() {
+    use agentmux::relay::{
+        BundleCatalog, CredentialSource, DeliveryConfiguration,
+        IdentityDescriptor, PeerConnectionManager, ProvisionParams,
+        RelayResponse, RelayRuntime, SendOperation, dispatch_send,
+        provision_principal, verify_identity,
+    };
+
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "parity_send_equiv";
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
+
+    // The direct leg owns the domain; the socket leg adopts it.
+    let runtime = RelayRuntime::init(
+        configuration_roots.base_layer().to_path_buf(),
+        state_root.clone(),
+        DeliveryConfiguration::default(),
+    )
+    .expect("runtime claims the domain");
+    let psk = provision_principal(
+        &runtime,
+        ProvisionParams::new(format!("alpha@{bundle_name}")),
+    )
+    .expect("provision alpha")
+    .psk
+    .expect("one-time raw PSK");
+    let context = verify_identity(
+        &runtime,
+        &IdentityDescriptor::new(
+            format!("alpha@{bundle_name}"),
+            CredentialSource::DirectPsk(psk.clone()),
+        ),
+    )
+    .expect("verify alpha");
+
+    let catalog = BundleCatalog::from_paths([bundle_paths.clone()]);
+    let peer_manager =
+        PeerConnectionManager::from_configuration(&state_root, &[]);
+    let direct = dispatch_send(
+        &runtime,
+        &context,
+        &catalog,
+        &peer_manager,
+        SendOperation {
+            targets: vec![format!("bravo@{bundle_name}")],
+            message: "parity".to_string(),
+            broadcast: false,
+            operation_bundle: None,
+        },
+    );
+    let RelayResponse::Send {
+        requester_session: direct_requester,
+        authenticated_identity: direct_auth,
+        results: direct_results,
+        ..
+    } = direct
+    else {
+        panic!("direct dispatch must send, got {direct:?}");
+    };
+
+    let (mut client, join) = spawn_relay_connection(
+        runtime.delivery_context(),
+        &configuration_roots,
+        &bundle_paths,
+    );
+    let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": format!("alpha@{bundle_name}"),
+            "identity_token": psk,
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "parity-1",
+            "request": {
+                "operation": "send",
+                "requester_session": format!("alpha@{bundle_name}"),
+                "message": "parity",
+                "targets": [format!("bravo@{bundle_name}")],
+                "broadcast": false,
+            },
+        }),
+    );
+    let mut socket = read_json(&mut reader);
+    while socket["frame"] != "response" {
+        socket = read_json(&mut reader);
+    }
+    shutdown_stream(&client, "shutdown parity stream");
+    join.join().expect("join relay thread");
+
+    assert_eq!(socket["response"]["kind"], "send");
+    assert_eq!(
+        socket["response"]["requester_session"], direct_requester,
+        "requester attribution matches"
+    );
+    assert_eq!(
+        socket["response"]["authenticated_identity"].as_str(),
+        direct_auth.as_deref(),
+        "credential-backed attribution matches"
+    );
+    let socket_targets: Vec<String> = socket["response"]["results"]
+        .as_array()
+        .expect("results array")
+        .iter()
+        .map(|result| {
+            format!(
+                "{}:{}:{}",
+                result["target_session"].as_str().unwrap_or(""),
+                result["outcome"].as_str().unwrap_or(""),
+                result["reason_code"].as_str().unwrap_or("")
+            )
+        })
+        .collect();
+    let mut direct_targets: Vec<String> = direct_results
+        .iter()
+        .map(|result| {
+            format!(
+                "{}:{}:{}",
+                result.target_session,
+                serde_json::to_value(&result.outcome)
+                    .expect("outcome serializes")
+                    .as_str()
+                    .unwrap_or(""),
+                result.reason_code.as_deref().unwrap_or("")
+            )
+        })
+        .collect();
+    direct_targets.sort();
+    let mut socket_sorted = socket_targets;
+    socket_sorted.sort();
+    assert_eq!(
+        socket_sorted, direct_targets,
+        "per-target routing and outcomes match"
+    );
+}
+
+/// Documented interim divergence: with no operation-bundle parameter, the
+/// socket path still rejects bare targets while the public handler already
+/// applies the new home-default rule. The 1.6 socket-as-adapter cutover
+/// converges the socket onto the public contract; until then the two
+/// surfaces intentionally disagree here and agree everywhere else.
+/// Compiled only under the experimental cutover feature, matching the
+/// gated direct leg.
+#[cfg(feature = "experimental-public-send")]
+#[test]
+fn bare_target_divergence_is_documented_until_adapter_cutover() {
+    use agentmux::relay::{
+        BundleCatalog, CredentialSource, DeliveryConfiguration,
+        IdentityDescriptor, PeerConnectionManager, ProvisionParams,
+        RelayResponse, RelayRuntime, SendOperation, dispatch_send,
+        provision_principal, verify_identity,
+    };
+
+    let temporary = TempDir::new().expect("temporary directory");
+    let bundle_name = "parity_send_diverge";
+    let configuration_roots =
+        write_bundle_configuration(&temporary, bundle_name);
+    let state_root = temporary.path().join("state");
+    let bundle_paths = BundleRuntimePaths::resolve(&state_root, bundle_name)
+        .expect("bundle paths");
+    let runtime = RelayRuntime::init(
+        configuration_roots.base_layer().to_path_buf(),
+        state_root.clone(),
+        DeliveryConfiguration::default(),
+    )
+    .expect("runtime claims the domain");
+    let psk = provision_principal(
+        &runtime,
+        ProvisionParams::new(format!("alpha@{bundle_name}")),
+    )
+    .expect("provision alpha")
+    .psk
+    .expect("one-time raw PSK");
+    let context = verify_identity(
+        &runtime,
+        &IdentityDescriptor::new(
+            format!("alpha@{bundle_name}"),
+            CredentialSource::DirectPsk(psk.clone()),
+        ),
+    )
+    .expect("verify alpha");
+
+    // Public handler: bare resolves to the bundle-scoped home.
+    let catalog = BundleCatalog::from_paths([bundle_paths.clone()]);
+    let peer_manager =
+        PeerConnectionManager::from_configuration(&state_root, &[]);
+    let direct = dispatch_send(
+        &runtime,
+        &context,
+        &catalog,
+        &peer_manager,
+        SendOperation {
+            targets: vec!["bravo".to_string()],
+            message: "parity".to_string(),
+            broadcast: false,
+            operation_bundle: None,
+        },
+    );
+    assert!(
+        matches!(direct, RelayResponse::Send { .. }),
+        "public handler resolves the bare home target, got {direct:?}"
+    );
+
+    // Socket path: bare is still rejected until the adapter cutover.
+    let (mut client, join) = spawn_relay_connection(
+        runtime.delivery_context(),
+        &configuration_roots,
+        &bundle_paths,
+    );
+    let mut reader = BufReader::new(client.try_clone().expect("clone stream"));
+    send_json(
+        &mut client,
+        json!({
+            "frame": "hello",
+            "schema_version": "1",
+            "principal_id": format!("alpha@{bundle_name}"),
+            "identity_token": psk,
+        }),
+    );
+    assert_eq!(read_json(&mut reader)["frame"], "hello_ack");
+    send_json(
+        &mut client,
+        json!({
+            "frame": "request",
+            "request_id": "parity-2",
+            "request": {
+                "operation": "send",
+                "requester_session": format!("alpha@{bundle_name}"),
+                "message": "parity",
+                "targets": ["bravo"],
+                "broadcast": false,
+            },
+        }),
+    );
+    let mut socket = read_json(&mut reader);
+    while socket["frame"] != "response" {
+        socket = read_json(&mut reader);
+    }
+    shutdown_stream(&client, "shutdown divergence stream");
+    join.join().expect("join relay thread");
+    assert_eq!(
+        socket["response"]["error"]["code"], "validation_unqualified_target",
+        "socket still rejects bare targets pre-cutover: {socket:?}"
+    );
+}

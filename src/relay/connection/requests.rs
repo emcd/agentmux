@@ -19,7 +19,7 @@ use super::super::{
     PeerIngressAuthority, RelayRequest, RelayResponse, RequestPrincipal,
     dispatch_discovery, dispatch_identity_admin, dispatch_identity_introspect,
     dispatch_list, dispatch_look, dispatch_raww, dispatch_request,
-    dispatch_send, handlers, relay_error,
+    dispatch_send_frame, handlers, relay_error,
 };
 use super::framing::dispatch_on_blocking_pool;
 use super::helpers::{
@@ -242,7 +242,7 @@ pub(super) async fn handle_request(
                     state_root: state_root.as_ref(),
                     admin_lock: identity_admin_lock.as_ref(),
                 };
-                dispatch_send(
+                dispatch_send_frame(
                     &delivery,
                     request,
                     &configuration_roots,
@@ -251,6 +251,7 @@ pub(super) async fn handle_request(
                     &bundle_catalog,
                     peer_connection_manager.as_ref(),
                     Some(ingress_authority),
+                    state_root.as_ref(),
                 )
             })
             .await
