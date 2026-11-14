@@ -540,7 +540,22 @@ seq = 1
 text = "x"
 "#;
     let config = test_config(script);
-    let mut frames = vec![hello_result()];
+    // The operative drain wait is negotiated from the hello's
+    // advertised limits (parse_hello_result/install_negotiated),
+    // not the harness proposal alone. The overall shutdown drain
+    // must accommodate 22 slow frames plus scheduler slack:
+    // twenty-two frames at two 3ms writes each cost 132ms of wall
+    // time before any scheduling overhead, against the shared
+    // 250ms budget — no margin left for slow runners (a local
+    // 12ms-sleep simulation trips the identical
+    // ["terminalize", "drain_timeout"] signature, showing the
+    // assertion is budget-sensitive). A 5000ms budget keeps the
+    // mechanism under test (a dropped wakeup still terminalizes,
+    // only slower) while leaving ample slack. SlowWriter stays at
+    // 3ms so deferred-queue pressure is unchanged.
+    let mut hello = hello_result();
+    hello["result"]["negotiated_limits"]["drain_wait_ms"] = json!(5_000);
+    let mut frames = vec![hello];
     for n in 20..=39 {
         frames.push(json!({
             "jsonrpc": "2.0",
