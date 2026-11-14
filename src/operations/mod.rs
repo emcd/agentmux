@@ -17,6 +17,8 @@
 pub mod error;
 pub mod inputs;
 pub mod outputs;
+#[cfg(feature = "experimental-public-send")]
+pub mod send;
 
 pub use self::error::OperationError;
 pub use self::inputs::{
@@ -31,3 +33,5 @@ pub use self::outputs::{
     ListPrincipalsOutput, ListRelaysOutput, LookOutput, NewPeerOutput,
     RawwOutput, SendOutput,
 };
+#[cfg(feature = "experimental-public-send")]
+pub use self::send::send;
