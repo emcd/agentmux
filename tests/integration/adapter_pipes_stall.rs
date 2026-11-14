@@ -384,6 +384,11 @@ fn partial_frame_terminalizes_with_framing_intact() {
     // newline: every newline-terminated chunk parses, and exactly one
     // complete frame (the hello request) precedes the cut. Only the
     // final segment may fail to parse, and only because it is cut.
+    // The count here is contract-derived, unlike in
+    // no_control_reply_after_stall below: with no ping in the input
+    // no second complete frame is emittable under any schedule
+    // (the answer cannot complete against an unread pipe, and
+    // fence-hint emits no stdout frame).
     assert!(!out.ends_with(b"\n"), "the stalled frame is cut mid-write");
     let lines: Vec<&str> = stdout.lines().collect();
     assert!(lines.len() >= 2, "hello plus the cut tail, got {lines:?}");
@@ -404,8 +409,11 @@ fn partial_frame_terminalizes_with_framing_intact() {
     );
 }
 
-/// A control reply is never injected into a partially written data
-/// frame: a ping arriving after the stall gets no wire answer.
+/// A control reply is never spliced into a partially written data
+/// frame: the control-first writer may emit a whole ping reply
+/// before it parks in the stalled data frame, but frame atomicity
+/// holds on the wire either way — complete frames parse whole and
+/// the stalled tail is a single cut prefix.
 #[test]
 fn no_control_reply_after_stall() {
     let (_dir, script) = fixture(&big_snapshot_script());
@@ -449,8 +457,11 @@ fn no_control_reply_after_stall() {
     let mut stdin = child.stdin.take().expect("stdin piped");
     stdin.write_all(&wire).expect("small input fits the pipe");
     drop(stdin);
-    // Hold stdout unread so the stall is real: the ping reply stays
-    // queued behind the parked frame and never reaches the wire.
+    // Hold stdout unread so the stall is real: the 2MiB data frame
+    // parks the writer mid-write and the wire ends without a
+    // trailing newline. A queued control reply may still be emitted
+    // whole ahead of the parked frame (control-first at intact
+    // boundaries) — atomicity, not absence, is the guarantee.
     let mut stdout = child.stdout.take().expect("stdout piped");
     let status = child.wait().expect("adapter exits");
     assert_eq!(status.code(), Some(0));
@@ -459,17 +470,35 @@ fn no_control_reply_after_stall() {
     stdout.read_to_end(&mut out).expect("stdout reads");
     drop(stdout);
     let stdout = String::from_utf8_lossy(&out);
-    // The ping reply stays queued behind the parked 2MiB frame: the
-    // wire ends mid-frame with no trailing newline, and the only
-    // complete frame is the hello request.
+    // The stall is real: the wire ends mid-frame with no trailing
+    // newline. The ping reply is control-lane (write_control) and
+    // the 2MiB look answer is data-lane; the writer serves queued
+    // control first at every intact frame boundary without
+    // preempting a frame already being written. Whether the reply
+    // is queued before the writer parks in the data frame is
+    // scheduling-dependent, so the wire holds either [hello] or
+    // [hello, ping-reply] ahead of the cut tail — never a spliced
+    // frame. Pin that contract shape, not one schedule.
     assert!(!out.ends_with(b"\n"), "the stalled frame is cut mid-write");
     let lines: Vec<&str> = stdout.lines().collect();
     assert!(lines.len() >= 2, "hello plus the cut tail");
     let (complete, tail) = lines.split_at(lines.len() - 1);
-    assert_eq!(complete.len(), 1, "no ping reply after the stall");
+    // Emittable complete frames are exactly the hello request plus
+    // at most one ping reply: the 2MiB answer cannot complete
+    // against an unread pipe, and fence-hint emits no stdout frame.
+    assert!(
+        (1..=2).contains(&complete.len()),
+        "hello plus at most the ping reply completes: {complete:?}"
+    );
     let frame: serde_json::Value =
         serde_json::from_str(complete[0]).expect("hello parses");
     assert_eq!(frame["method"], "adapter.handshakeHello");
+    for reply in &complete[1..] {
+        let reply: serde_json::Value =
+            serde_json::from_str(reply).expect("ping reply parses whole");
+        assert_eq!(reply["id"], "11", "only the ping reply: {reply:?}");
+        assert_eq!(reply["result"], serde_json::json!({}));
+    }
     assert!(
         tail[0].starts_with("{\"id\""),
         "the tail is a cut frame prefix, got: {:?}",

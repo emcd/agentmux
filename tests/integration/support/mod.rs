@@ -1,3 +1,4 @@
+pub(crate) mod frames;
 #[path = "../../support/mailbox.rs"]
 pub(crate) mod mailbox;
 pub(crate) mod permissions;
