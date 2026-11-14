@@ -66,7 +66,7 @@ impl CapabilityClass {
     /// chord that cannot arrive looks fine.
     ///
     /// `Enter` alone, because that is the divergence this codebase's capability
-    /// contract is written about: the compiled table's own documentation says a
+    /// contract is written about: the base table's own documentation says a
     /// modified `Enter` invokes whatever its context binds to bare `Enter`, and
     /// nothing else is claimed to vary. A class that came to differ in another
     /// key would be declared here.
@@ -105,7 +105,7 @@ pub struct BindingConfiguration {
 /// One configured chord and what it invokes, per terminal capability class.
 ///
 /// A class left `None` is one the configuration did not speak for, and keeps
-/// whatever the compiled default says. That is distinct from a class bound to
+/// whatever the embedded base says. That is distinct from a class bound to
 /// [`ConfiguredAction::Unbound`], which the operator deliberately emptied.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConfiguredBinding {
@@ -135,7 +135,7 @@ pub enum ConfiguredAction {
     /// The named behavior.
     Invoke(Action),
     /// Nothing: the chord is inert here, and does not fall through to the
-    /// compiled default.
+    /// embedded base.
     Unbound,
 }
 
@@ -147,10 +147,10 @@ pub enum ConfiguredAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedRow {
     pub context: BindingContext,
-    /// The same shape a compiled row carries, so a configured chord and a
-    /// compiled one naming the same thing denote the same keystrokes. Storing
+    /// The same shape a base row carries, so a configured chord and a
+    /// base one naming the same thing denote the same keystrokes. Storing
     /// the resolved keystroke instead would leave a configured bare character
-    /// claiming only its bare form while the compiled row kept answering for
+    /// claiming only its bare form while the base row kept answering for
     /// the shifted one.
     pub chord: Chord,
     /// `None` is an explicit unbinding, which answers "nothing" rather than
@@ -188,7 +188,7 @@ impl ResolvedRow {
 
 /// The bindings in force: what an operator configured, over what ships.
 ///
-/// Built once, from the compiled defaults, any named binding sets, and the
+/// Built once, from the embedded base, any named binding sets, and the
 /// operator's own rows, with the symbolic modifier already resolved for the
 /// running platform and the capability class already chosen. A lookup therefore
 /// needs neither the configuration nor the probe outcome, only a chord.
@@ -207,7 +207,7 @@ impl EffectiveBindings {
     /// here, so a caller can build the table for either class and either
     /// platform without a terminal.
     ///
-    /// Both tiers above the compiled defaults come from the one configuration:
+    /// Both tiers above the embedded base come from the one configuration:
     /// the rows it declares itself, and the rows the sets it names contribute,
     /// which were resolved when it was validated.
     #[must_use]
@@ -270,7 +270,7 @@ impl EffectiveBindings {
     /// none.
     ///
     /// Tiers are consulted in declared order — configured, then any binding set,
-    /// then the compiled defaults — and the first tier holding the chord
+    /// then the embedded base — and the first tier holding the chord
     /// answers. An explicit unbinding therefore answers "nothing" rather than
     /// letting a lower tier reply, which is what separates emptying a chord
     /// from never having spoken about it.
@@ -308,14 +308,14 @@ impl EffectiveBindings {
         default_binding(context, code, modifiers)
     }
 
-    /// The rows above the compiled defaults that a lookup in this context could
+    /// The rows above the embedded base that a lookup in this context could
     /// actually reach, in the order presentation reads them: the operator's own
     /// first, then any binding set's.
     ///
     /// Only the rows that *win*. A row a lookup can never return is a row
     /// presentation must not advertise, or the overlay names a chord under a
     /// behavior it does not reach — which is the same defect as advertising a
-    /// compiled row a configuration took over, arriving from the other
+    /// base row a configuration took over, arriving from the other
     /// direction. Two rows can lose that way: one superseded later in its own
     /// tier, since binding sets are applied in the order they are named, and a
     /// binding set's row whose chord the operator bound themselves.
@@ -345,7 +345,7 @@ impl EffectiveBindings {
         rows
     }
 
-    /// Whether any tier above the compiled defaults speaks for this chord.
+    /// Whether any tier above the embedded base speaks for this chord.
     ///
     /// Distinguishes a chord answering `None` because an operator emptied it
     /// from one answering `None` because nothing binds it.

@@ -1,6 +1,7 @@
 //! Resolution of the binding contexts a chord is looked up against.
 
 use super::super::state::{AppState, FocusField, PickerColumn, ScreenMode};
+use super::bindings::TextSink;
 
 /// Counts the identifiers handed to it, so a generated list can keep its
 /// fixed-size array type rather than decaying to a slice.
@@ -115,6 +116,28 @@ impl BindingContext {
             Self::ComposeMessage => 6,
             Self::InteractionChoice => 7,
             Self::InteractionWrite => 8,
+        }
+    }
+
+    /// Where this surface's typed characters go, if it takes any.
+    ///
+    /// Typing is a property of the surface rather than a row in its table: a
+    /// `Chord::Text` row matches any character, so it can only ever sit last
+    /// and defer to every row above it, which is exactly what consulting the
+    /// sink after no row matched does. Naming it here removes the one row
+    /// shape the chord grammar cannot spell, leaving every remaining row an
+    /// exact chord the operator's parser accepts.
+    #[must_use]
+    pub(crate) const fn text_sink(self) -> Option<TextSink> {
+        match self {
+            Self::ComposeTo | Self::ComposeMessage => Some(TextSink::Compose),
+            Self::InteractionWrite | Self::InteractionChoice => {
+                Some(TextSink::Raww)
+            },
+            Self::PickerBundles | Self::PickerSessions => {
+                Some(TextSink::PickerFilter)
+            },
+            Self::Global | Self::EventsOverlay | Self::HelpOverlay => None,
         }
     }
 }

@@ -52,7 +52,7 @@ behavior from every surface are ordinary rows under the global context.
 
 The table declares **defaults**. An operator's `ui.toml` binding group is
 resolved over it into the effective table `actions/effective.rs` builds, which
-is what dispatch, the help overlay, and the pane hint strips read. The compiled
+is what dispatch, the help overlay, and the pane hint strips read. The base
 table alone is what the generated usage guide documents, because the guide is
 committed to the repository and has no operator's configuration to speak for.
 
@@ -106,7 +106,7 @@ produce identical observable behavior on a terminal that disambiguates modified
 keys and one that does not.
 
 The reason is not that the distinction is worthless — detection is what makes
-modified chords bindable at all. It is that a compiled default is the wrong
+modified chords bindable at all. It is that an embedded base is the wrong
 place to spend it. Terminal classes are meant to diverge through a binding
 configuration the operator controls, and a default that behaved differently on
 two terminals would put that divergence somewhere they cannot reach. Note that

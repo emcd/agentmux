@@ -64,6 +64,23 @@ pub fn shipped_binding_presets() -> &'static [ShippedPreset] {
     SHIPPED_PRESETS
 }
 
+/// The default binding table built into this binary, in the operator's own
+/// format.
+///
+/// Not a preset an operator can name: it is the base every configuration
+/// resolves over. Exposed so the shipped-set parse check reads the same text
+/// the TUI parses at startup, holding the two readers to the same row set.
+#[must_use]
+pub fn embedded_base_preset() -> ShippedPreset {
+    ShippedPreset {
+        name: "base table",
+        text: include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/data/configuration/bindings/base.toml"
+        )),
+    }
+}
+
 /// Reads one binding set from configuration text built into this binary.
 ///
 /// `artifact` names what is being read, and appears in the fault rather than a
@@ -276,7 +293,7 @@ fn resolutions_of(chord: ChordPattern) -> Vec<ResolvedChord> {
 /// Reads what one chord entry maps to, per terminal capability class.
 ///
 /// A bare string speaks for both classes; a table speaks for the classes it
-/// names and leaves the other on its compiled default. Anything else, and any
+/// names and leaves the other on its embedded base. Anything else, and any
 /// key other than the two class names, is refused by name — which is why this
 /// interprets the value rather than letting serde match an untagged enum that
 /// could only report that nothing matched.
@@ -341,7 +358,7 @@ fn capability_columns(
 
 /// Resolves one action name, refusing a behavior the context cannot perform.
 ///
-/// The compiled table declares a behavior only where it has an effect, so the
+/// The base table declares a behavior only where it has an effect, so the
 /// actions a context declares are exactly the ones that do something there.
 /// Binding any other would produce a row generated help advertises and that
 /// does nothing when pressed, which is the defect the table's own rule exists

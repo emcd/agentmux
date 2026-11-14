@@ -4,6 +4,25 @@ use crate::runtime::error::RuntimeError;
 
 use super::super::state::AppState;
 
+/// The heading a behavior is presented under. The variants are the sections
+/// the help overlay groups by, so generated presentation can reproduce its
+/// layout rather than invent one.
+///
+/// The section is a property of the behavior, not of the row: every behavior
+/// is filed under the same heading wherever it is bound. That is what lets a
+/// configured row name a behavior without naming where to present it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DisplaySection {
+    Modes,
+    Communication,
+    Interaction,
+    Picker,
+    /// The overlay's own viewport controls. Filed apart from `Modes` -- which
+    /// holds the chords that reach a surface -- because these reach nothing;
+    /// they move what is drawn of the surface the operator is already on.
+    Help,
+}
+
 /// Stands in for the typed character in [`Action::ALL`]'s data-carrying
 /// entries. Never read: those entries exist so the list covers every variant,
 /// and what distinguishes them is the variant rather than this value.
@@ -192,6 +211,90 @@ impl Action {
                 | Self::InsertRawwCharacter(_)
                 | Self::AppendPickerFilterCharacter(_)
         )
+    }
+
+    /// The heading this behavior is presented under, or `None` where the
+    /// behavior is never filed as a row.
+    ///
+    /// Answers `None` for exactly the behaviors
+    /// [`Action::carries_operator_input`] answers `true` for: the typing
+    /// rows are filed under their sink's section, and the per-character
+    /// actions have no presentation of their own. The two are separate
+    /// declarations that a test holds in agreement, rather than one derived
+    /// from the other, so neither can be quietly widened.
+    #[must_use]
+    pub(crate) const fn section(self) -> Option<DisplaySection> {
+        match self {
+            Self::Quit
+            | Self::ToggleHelpOverlay
+            | Self::ToggleEventsOverlay
+            | Self::ToggleMode
+            | Self::OpenPicker
+            | Self::OpenBundlePicker
+            | Self::RefreshRecipients => Some(DisplaySection::Modes),
+            Self::CycleNextFocus
+            | Self::CyclePreviousFocus
+            | Self::AcceptToCompletion
+            | Self::SendMessage
+            | Self::InsertMessageNewline
+            | Self::AutocompleteRecipient
+            | Self::ClearToField
+            | Self::MoveNextToCompletion
+            | Self::MovePreviousToCompletion
+            | Self::MoveMessageCursorUp
+            | Self::MoveMessageCursorDown
+            | Self::MoveMessageCursorLeft
+            | Self::MoveMessageCursorRight
+            | Self::MoveMessageCursorHome
+            | Self::MoveMessageCursorEnd
+            | Self::MoveToFieldCursorLeft
+            | Self::MoveToFieldCursorRight
+            | Self::MoveToFieldCursorHome
+            | Self::MoveToFieldCursorEnd
+            | Self::DeleteComposeCharacter
+            | Self::SnapChatHistoryToLatest
+            | Self::ScrollChatHistoryPageUp
+            | Self::ScrollChatHistoryPageDown => {
+                Some(DisplaySection::Communication)
+            },
+            Self::DispatchRaww
+            | Self::InsertRawwNewline
+            | Self::DeleteRawwCharacter
+            | Self::MoveRawwCursorLeft
+            | Self::MoveRawwCursorRight
+            | Self::MoveRawwCursorHome
+            | Self::MoveRawwCursorEnd
+            | Self::NavigateInteractionUp
+            | Self::NavigateInteractionDown
+            | Self::ScrollInteractionSnapshotPageUp
+            | Self::ScrollInteractionSnapshotPageDown
+            | Self::MoveNextChoiceRequest
+            | Self::MovePreviousChoiceRequest
+            | Self::MoveNextChoiceOption
+            | Self::MovePreviousChoiceOption
+            | Self::ResolveChoiceSelected
+            | Self::ResolveChoiceCancelled => {
+                Some(DisplaySection::Interaction)
+            },
+            Self::ClosePicker
+            | Self::TogglePickerFocus
+            | Self::MoveNextPickerSelection
+            | Self::MovePreviousPickerSelection
+            | Self::CommitPickerBundle
+            | Self::CommitPickerSession
+            | Self::DeletePickerFilterCharacter => {
+                Some(DisplaySection::Picker)
+            },
+            Self::ScrollHelpUp
+            | Self::ScrollHelpDown
+            | Self::ScrollHelpPageUp
+            | Self::ScrollHelpPageDown
+            | Self::ScrollHelpToStart
+            | Self::ScrollHelpToEnd => Some(DisplaySection::Help),
+            Self::InsertComposeCharacter(_)
+            | Self::InsertRawwCharacter(_)
+            | Self::AppendPickerFilterCharacter(_) => None,
+        }
     }
 
     /// The behavior a configuration name denotes, if any does.
@@ -413,5 +516,29 @@ impl Action {
             },
         }
         Ok(())
+    }
+}
+
+/// The heading a behavior is filed under is present exactly when the behavior
+/// is filed at all: the typing rows are filed under their sink, and the
+/// per-character actions have no presentation of their own.
+///
+/// One test, because the property is one sentence: broadening
+/// [`Action::carries_operator_input`] without narrowing [`Action::section`]
+/// (or the reverse) would file an unpresentable behavior or strand a
+/// presentable one.
+#[cfg(test)]
+mod section_tests {
+    use super::Action;
+
+    #[test]
+    fn heading_present_exactly_for_filed_behaviors() {
+        for action in Action::ALL {
+            assert_eq!(
+                action.section().is_some(),
+                !action.carries_operator_input(),
+                "{action:?} disagrees about being filed"
+            );
+        }
     }
 }

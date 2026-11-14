@@ -122,6 +122,22 @@ fn is_typed(modifiers: KeyModifiers) -> bool {
     modifiers.is_empty() || modifiers == KeyModifiers::SHIFT
 }
 
+/// The character a keystroke types, if it types one.
+///
+/// A character key with no modifier or only `Shift` — the same keystrokes
+/// [`Chord::Text`] matches. Resolution consults the context's sink for these
+/// once no row has answered, which is what lets typing live on the context
+/// rather than as a row the chord grammar cannot spell.
+pub(crate) fn typed_character(
+    code: KeyCode,
+    modifiers: KeyModifiers,
+) -> Option<char> {
+    match code {
+        KeyCode::Char(character) if is_typed(modifiers) => Some(character),
+        _ => None,
+    }
+}
+
 fn key_code_display(code: KeyCode) -> String {
     match code {
         KeyCode::Enter => "Enter".to_string(),
@@ -286,10 +302,10 @@ impl ChordPattern {
     ///
     /// This is where the two sides are made to denote the same thing. An
     /// operator writing a bare single character gets [`Chord::Char`] — the same
-    /// shape a compiled row naming that character carries, denoting the
+    /// shape a base row naming that character carries, denoting the
     /// character bare and carrying `Shift`. Resolving to the bare keystroke
     /// alone would leave the configured row claiming one of the two while the
-    /// compiled row kept answering for the other, which is the exact condition
+    /// base row kept answering for the other, which is the exact condition
     /// exactness exists to remove, reappearing in the one shape exempted from
     /// it.
     ///
@@ -388,7 +404,7 @@ pub fn parse_chord(text: &str) -> Result<ChordPattern, ChordError> {
 /// Folds a spelling onto the representation a terminal actually reports.
 ///
 /// `Shift+Tab` is the case that matters: crossterm delivers it as
-/// [`KeyCode::BackTab`] with no modifier, and the compiled rows match on that,
+/// [`KeyCode::BackTab`] with no modifier, and the base rows match on that,
 /// so reading the spelling as `Tab` carrying `Shift` would produce a chord no
 /// keystroke ever satisfies. Canonicalizing here rather than at match time
 /// keeps one representation flowing through resolution and dispatch alike.

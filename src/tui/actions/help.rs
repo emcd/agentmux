@@ -14,19 +14,17 @@
 //! the write pane from `Enter` in the choice pane.
 //!
 //! What is presented is the **effective** table -- what an operator configured
-//! over what ships -- rather than the compiled rows alone. An operator's first
+//! over what ships -- rather than the base rows alone. An operator's first
 //! move after rebinding a chord is to open the overlay and check it took, so a
 //! catalogue that could only describe the defaults would be wrong for exactly
 //! the reader most likely to consult it. [`default_help_bindings`] is the one
-//! projection that stays on the compiled rows, for generated documentation,
+//! projection that stays on the base rows, for generated documentation,
 //! which has no operator's configuration to speak for.
 
 use crossterm::event::{KeyCode, KeyModifiers};
 
-use super::action::Action;
-use super::bindings::{
-    BoundAction, ContextRow, DisplaySection, default_rows, default_section,
-};
+use super::action::{Action, DisplaySection};
+use super::bindings::{BoundAction, ContextRow, default_rows};
 use super::chord::Chord;
 use super::context::BindingContext;
 use super::effective::EffectiveBindings;
@@ -170,7 +168,7 @@ pub fn help_bindings(bindings: &EffectiveBindings) -> Vec<HelpSection> {
         .collect()
 }
 
-/// The catalogue the compiled defaults alone produce.
+/// The catalogue the embedded base alone produces.
 ///
 /// This is what generated operator documentation reads, and it takes no
 /// effective table for that reason rather than by omission. The guide is
@@ -211,7 +209,7 @@ pub fn binding_for(
     one(bindings, context, BoundAction::Fixed(action))
 }
 
-/// Every behavior this context's compiled rows declare, without duplicates.
+/// Every behavior this context's base rows declare, without duplicates.
 ///
 /// The table declares a behavior only in the contexts where it has an effect,
 /// so this is exactly the set that does something on that surface. A
@@ -222,7 +220,7 @@ pub fn binding_for(
 /// character rather than a behavior named in advance, and are outside the
 /// configurable vocabulary for the same reason.
 ///
-/// The compiled rows and not the effective table, which is not an oversight in
+/// The base rows and not the effective table, which is not an oversight in
 /// the one function here that still reads them. The question is what a context
 /// is *capable* of, which the shipped table decides; answering it from a table
 /// an operator's own rows contributed to would let a configuration widen the
@@ -273,7 +271,7 @@ pub fn typing_binding(
 /// read from `focused` instead, and that distinction is load-bearing rather
 /// than tidiness.
 ///
-/// A binding is scoped to the context that declares it. The compiled table
+/// A binding is scoped to the context that declares it. The base table
 /// declares the same rows in both columns, so reading either answered for both
 /// and the difference was invisible; a configuration can bind a chord in one
 /// column alone, and then a strip that answered from the other would print a
@@ -356,10 +354,10 @@ pub fn interaction_write_hint(bindings: &EffectiveBindings) -> Vec<HelpEntry> {
 
 /// One row of the table in force in a context, as presentation reads it.
 ///
-/// A compiled row already carries all three fields. A configured row carries
-/// only the first two, and takes its heading from the context's compiled rows
-/// for the same behavior -- which exist, because a configuration may bind only
-/// a behavior the context already declares.
+/// A base row already carries all three fields. A configured row carries
+/// only the first two, and takes its heading from the behavior -- which is
+/// filed under one heading wherever it is bound, so no table lookup is needed
+/// to present it.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PresentedRow {
     chord: Chord,
@@ -368,15 +366,15 @@ struct PresentedRow {
 }
 
 /// The rows one context presents: what the operator configured, then whatever
-/// of the compiled table their configuration left standing.
+/// of the base table their configuration left standing.
 ///
 /// Configured rows lead, because that is the order a reader wants. The chords
 /// reaching one behavior fold onto a single line and a one-line hint strip
-/// prints the first of them, so a rebinding that trailed its compiled
+/// prints the first of them, so a rebinding that trailed its base
 /// predecessor would be catalogued correctly and still leave every strip
 /// advertising the chord it replaced.
 ///
-/// A compiled row drops out where a higher tier has claimed the keystroke that
+/// A base row drops out where a higher tier has claimed the keystroke that
 /// row is written as, which for every chord shape is exactly the keystroke its
 /// display spells. That is the whole test, and it is what makes a presented
 /// chord one that still reaches the behavior printed beside it.
@@ -401,29 +399,44 @@ fn rows_of(
         .into_iter()
         .filter_map(|row| {
             // An explicit unbinding reaches nothing, so there is nothing to
-            // present. It is not silent: the compiled row it emptied is dropped
+            // present. It is not silent: the base row it emptied is dropped
             // below, which is the whole of what the operator asked for.
             let action = row.action?;
             Some(PresentedRow {
                 chord: row.chord,
                 action: BoundAction::Fixed(action),
-                section: default_section(context, action)?,
+                section: action.section()?,
             })
         })
         .collect();
     rows.extend(
         default_rows(context)
             .filter(|row| !superseded(bindings, context, row))
-            .map(|row| PresentedRow {
-                chord: row.chord,
-                action: row.action,
-                section: row.section,
+            .filter_map(|row| match row.action {
+                BoundAction::Fixed(action) => {
+                    action.section().map(|section| PresentedRow {
+                        chord: row.chord,
+                        action: row.action,
+                        section,
+                    })
+                },
+                // The base table no longer carries typing rows; the
+                // context's sink is appended below instead. The arm stays so
+                // the synthesis has a shape to construct.
+                BoundAction::Typed(_) => None,
             }),
     );
+    if let Some(sink) = context.text_sink() {
+        rows.push(PresentedRow {
+            chord: Chord::Text,
+            action: BoundAction::Typed(sink),
+            section: sink.section(),
+        });
+    }
     rows
 }
 
-/// Whether a higher tier has taken the keystroke a compiled row is written as.
+/// Whether a higher tier has taken the keystroke a base row is written as.
 fn superseded(
     bindings: &EffectiveBindings,
     context: BindingContext,

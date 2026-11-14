@@ -2,7 +2,7 @@
 //! class.
 //!
 //! Separate from `help.rs`, which asks what to *present*. The questions differ
-//! where a chord is claimed: presentation drops a compiled row a configuration
+//! where a chord is claimed: presentation drops a base row a configuration
 //! took over, while this asks whether anything at all still reaches the
 //! behavior that row carried — possibly a chord in another row entirely.
 //!
@@ -45,7 +45,7 @@ impl AffectedClasses {
     }
 }
 
-/// A behavior a context's compiled rows declare that no chord reaches there.
+/// A behavior a context's base rows declare that no chord reaches there.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct UnreachableAction {
     pub context: BindingContext,
@@ -83,7 +83,7 @@ impl UnreachableAction {
 /// stay reachable from a test.
 ///
 /// Contexts are swept rather than named, and each context's behaviors are read
-/// from its own compiled rows, so a context or a behavior added later is
+/// from its own base rows, so a context or a behavior added later is
 /// inspected without this being revisited.
 #[must_use]
 pub fn unreachable_actions(

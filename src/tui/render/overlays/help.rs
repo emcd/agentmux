@@ -609,7 +609,7 @@ mod tests {
     #[test]
     fn the_overlay_reaches_every_binding_at_every_height() {
         // No configuration is in play in this module's fixtures, so the
-        // effective table is the compiled defaults and the two agree by
+        // effective table is the embedded base and the two agree by
         // construction. The configured case is asserted through the workbench,
         // in `tests/unit`.
         let defaults = EffectiveBindings::default();

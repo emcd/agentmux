@@ -28,10 +28,14 @@ Two halves, deliberately independent:
     public seam that applies one is `Workbench::apply_action`.
 - `bindings.rs`
   - The default chord-to-action table, and `default_binding`, which
-    reads it. Rows are grouped under their context rather than
-    repeating it, and within a group declaration order is the tiebreak
-    between rows that could both match — so a row for one character
-    must precede its context's typing row.
+    reads it. The table ships as embedded configuration
+    (`data/configuration/bindings/base.toml`), parsed here through the
+    operator's chord grammar and vocabularies rather than written as
+    Rust, so it cannot drift from what the parser accepts. Rows are
+    grouped under their context rather than repeating it, and within a
+    group document order is the order presentation reads them in. No
+    two rows share a keystroke, so no tiebreak rule is needed; typing
+    is not a row at all, living on the context as its sink instead.
 - `chord.rs`
   - `Chord` denotes keystrokes rather than mirroring handler
     conditions: a key with an exact modifier set, one character bare or
@@ -61,11 +65,11 @@ Two halves, deliberately independent:
     table it renders is a property of the run rather than of the
     surface, so that stays true once a configuration is in play.
   - What a context presents is its configured rows first, then whatever
-    of its compiled rows the configuration left standing. Configured
+    of its base rows the configuration left standing. Configured
     first because a line's chords fold together and a one-line hint
     strip prints the first of them, so a rebinding that trailed its
-    compiled predecessor would be catalogued correctly and still leave
-    every strip advertising the chord it replaced. A compiled row drops
+    base predecessor would be catalogued correctly and still leave
+    every strip advertising the chord it replaced. A base row drops
     out where a higher tier claimed the keystroke that row is written
     as, which is now the whole of what that row matches — so nothing
     outlasts a rebinding, and the overlay and dispatch cannot disagree
@@ -74,7 +78,7 @@ Two halves, deliberately independent:
     answering; that arises for a bare character, the one form denoting
     two keystrokes.
   - `default_help_bindings` is the one projection that stays on the
-    compiled rows, and it takes no effective table rather than
+    base rows, and it takes no effective table rather than
     defaulting one. The usage guide generated from it is committed to
     the repository and read by operators who have written no
     configuration; having nothing to pass is what stops a
@@ -120,7 +124,7 @@ Two halves, deliberately independent:
 - `effective.rs`
   - What an operator configured — `BindingConfiguration`,
     `ConfiguredBinding`, `ConfiguredAction` — and `EffectiveBindings`,
-    the table those produce over the compiled defaults.
+    the table those produce over the embedded base.
   - The configured types live here rather than with the file format
     that parses them because they are described in this vocabulary: a
     configured row holds a behavior and a chord, not the strings a file
@@ -128,7 +132,7 @@ Two halves, deliberately independent:
     modules one way. `src/configuration` reads this vocabulary to
     validate a binding group; nothing here reads `src/configuration`.
   - Three tiers answer a lookup, in order: the operator's own rows, the
-    rows any named binding set contributed, then the compiled table. The
+    rows any named binding set contributed, then the base table. The
     first tier holding the chord answers, which is what makes an
     explicit unbinding mean "nothing" rather than deferring downward.
   - Both upper tiers arrive on the one `BindingConfiguration`: the rows
@@ -162,8 +166,8 @@ exported from `agentmux::tui`, and
 `Workbench` exposes `apply_action`, `binding_context`,
 `binding_lookup_order`, `bindings`, and `help_bindings`. Together they
 let a caller outside the crate ask what surface is active, what a chord
-means there, and then invoke it — without naming a chord the TUI
-compiled in, and without a `KeyEvent` — or compose the same catalogue
+means there, and then invoke it — without naming a chord from the base
+table, and without a `KeyEvent` — or compose the same catalogue
 and hint strips the TUI draws, from the table `Workbench::bindings`
 hands them.
 
@@ -171,7 +175,7 @@ The presentation functions take an `EffectiveBindings` for that reason:
 what they answer is a property of a run, and a caller that has one
 should not have to be told which of its rows the TUI would have
 honoured. `default_binding` and `default_help_bindings` are the two
-that stay on the compiled **defaults**, and neither is a claim that a
+that stay on the embedded **base**, and neither is a claim that a
 chord is fixed — a configuration answers the same question differently,
 which is precisely what makes the distinction worth keeping in the
 signatures.
@@ -249,7 +253,7 @@ Two spellings need care, and both are covered:
 - `Shift+Tab` is the one key spelling carrying a modifier in the key
   half, because that is how `BackTab` renders. It parses back to
   `BackTab` bare, not to `Tab` carrying `Shift`: crossterm delivers the
-  keystroke as `BackTab` and the compiled rows match on that, so the
+  keystroke as `BackTab` and the base rows match on that, so the
   other reading would produce a chord no keystroke ever satisfies.
   `canonical_key` folds the spelling at parse time so one
   representation flows through resolution and dispatch alike.
