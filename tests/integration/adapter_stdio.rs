@@ -9,6 +9,11 @@ use agentmux::adapter::lifecycle::ManualClock;
 use agentmux::adapter::{AdapterConfig, EXIT_CLEAN, run_stdio};
 use serde_json::{Value, json};
 
+use crate::support::frames::{
+    assert_lifecycle_kind, assert_method_order, frames_with_error,
+    frames_with_method, frames_with_outcome, outcome_correlations,
+};
+
 fn test_config(script_toml: &str) -> AdapterConfig {
     let script = agentmux::adapter::script::parse_script(script_toml)
         .expect("script parses");
@@ -704,11 +709,18 @@ fn wrong_member_target_is_structural() {
     let (code, output, _) = run_transcript(&config, &input);
     assert_eq!(code, EXIT_CLEAN);
     let frames = split_frames(&output);
-    // hello, structural refusal, submit result, persist marker.
-    assert_eq!(frames[2]["error"]["code"], -32000);
-    assert_eq!(frames[2]["error"]["data"]["code"], "validation_structural");
-    assert_eq!(frames[2]["error"]["data"]["correlation_id"], "c-bad");
-    assert_eq!(frames[3]["result"]["outcome"], "Submitted");
+    // Mixed data/control paths: pin the full multiset, not the order.
+    assert_eq!(frames[0]["method"], "adapter.handshakeHello");
+    assert_eq!(frames.len(), 5, "unexpected frames: {frames:?}");
+    assert_lifecycle_kind(&frames, "ready");
+    let refusals = frames_with_error(&frames, "validation_structural");
+    assert_eq!(refusals.len(), 1, "one structural refusal: {frames:?}");
+    assert_eq!(refusals[0]["error"]["data"]["correlation_id"], "c-bad");
+    let terminals = frames_with_outcome(&frames, "Submitted");
+    assert_eq!(terminals.len(), 1, "one submit terminal: {frames:?}");
+    assert_eq!(terminals[0]["result"]["correlation_id"], "c-1");
+    let persists = frames_with_method(&frames, "adapter.persistState");
+    assert_eq!(persists.len(), 1, "one persist marker: {frames:?}");
 }
 
 /// An unknown content type is a structural refusal, never a default
@@ -752,8 +764,13 @@ fn unknown_content_type_is_structural() {
     let (code, output, _) = run_transcript(&config, &input);
     assert_eq!(code, EXIT_CLEAN);
     let frames = split_frames(&output);
-    assert_eq!(frames[2]["error"]["code"], -32000);
-    assert_eq!(frames[2]["error"]["data"]["code"], "validation_structural");
+    // Same mixed-path note: pin refusal and multiset, not indices.
+    assert_eq!(frames[0]["method"], "adapter.handshakeHello");
+    assert_eq!(frames.len(), 3, "unexpected frames: {frames:?}");
+    assert_lifecycle_kind(&frames, "ready");
+    let refusals = frames_with_error(&frames, "validation_structural");
+    assert_eq!(refusals.len(), 1, "one structural refusal: {frames:?}");
+    assert_eq!(refusals[0]["error"]["data"]["correlation_id"], "c-bad");
 }
 
 /// A choice result with a mismatched correlation echo is kept open:
@@ -813,11 +830,19 @@ species = "confirm"
     let (code, output, _) = run_transcript(&config, &input);
     assert_eq!(code, EXIT_CLEAN);
     let frames = split_frames(&output);
-    // hello, requestChoice, submit result (only after the right echo),
-    // persist marker. The mismatched echo resolves nothing.
-    assert_eq!(frames[1]["method"], "adapter.requestChoice");
-    assert_eq!(frames[2]["result"]["outcome"], "Submitted");
-    assert_eq!(frames[2]["result"]["correlation_id"], "c-2");
+    // Preloaded echo: control terminal may precede data choice; pin multiset + FIFO.
+    assert_eq!(frames[0]["method"], "adapter.handshakeHello");
+    assert_eq!(frames.len(), 4, "unexpected frames: {frames:?}");
+    let choices = frames_with_method(&frames, "adapter.requestChoice");
+    assert_eq!(choices.len(), 1, "one choice raised: {frames:?}");
+    let terminals = frames_with_outcome(&frames, "Submitted");
+    assert_eq!(terminals.len(), 1, "one submit terminal: {frames:?}");
+    assert_eq!(terminals[0]["result"]["correlation_id"], "c-2");
+    assert_method_order(
+        &frames,
+        "adapter.requestChoice",
+        "adapter.persistState",
+    );
 }
 
 /// A malformed choice result is discarded with the call kept open:
@@ -912,12 +937,16 @@ species = "confirm"
     // c-u never completes: c-next and c-after-fence are refused busy.
     // No second requestChoice ever goes out: the held turn keeps the
     // gate across the fence, and termination records the unknown.
+    // Control-lane busy vs data-lane choice: multiset pins, not indices.
+    assert_eq!(frames[0]["method"], "adapter.handshakeHello");
     assert_eq!(frames.len(), 4, "unexpected frames: {frames:?}");
-    assert_eq!(frames[1]["method"], "adapter.requestChoice");
-    assert_eq!(frames[2]["result"]["outcome"], "RefusedBusy");
-    assert_eq!(frames[2]["result"]["correlation_id"], "c-next");
-    assert_eq!(frames[3]["result"]["outcome"], "RefusedBusy");
-    assert_eq!(frames[3]["result"]["correlation_id"], "c-after-fence");
+    let choices = frames_with_method(&frames, "adapter.requestChoice");
+    assert_eq!(choices.len(), 1, "one choice raised: {frames:?}");
+    assert_eq!(
+        outcome_correlations(&frames, "RefusedBusy"),
+        vec!["c-after-fence".to_string(), "c-next".to_string()],
+        "both refused: {frames:?}"
+    );
     let codes: Vec<&str> =
         sink.iter().map(|entry| entry.code.as_str()).collect();
     assert!(codes.contains(&"malformed_reply_result"), "sink: {codes:?}");
@@ -950,11 +979,14 @@ fn wrong_version_post_hello_is_refused() {
     let (code, output, _) = run_transcript(&config, &input);
     assert_eq!(code, EXIT_CLEAN);
     let frames = split_frames(&output);
-    // hello, scripted ready event, then the version refusal.
+    // hello, scripted ready event, plus the version refusal —
+    // pin the multiset, not the order.
+    assert_eq!(frames[0]["method"], "adapter.handshakeHello");
     assert_eq!(frames.len(), 3, "unexpected frames: {frames:?}");
-    assert_eq!(frames[2]["error"]["code"], -32000);
-    assert_eq!(frames[2]["error"]["data"]["code"], "binding_mismatch");
-    assert_eq!(frames[2]["error"]["data"]["correlation_id"], "c-1");
+    assert_lifecycle_kind(&frames, "ready");
+    let refusals = frames_with_error(&frames, "binding_mismatch");
+    assert_eq!(refusals.len(), 1, "one version refusal: {frames:?}");
+    assert_eq!(refusals[0]["error"]["data"]["correlation_id"], "c-1");
 }
 
 /// The bootstrap ceiling is the 64KiB pre-negotiation bound.

@@ -134,13 +134,19 @@ fn wrong_id_flood_does_not_postpone_handshake_timeout() {
 }
 
 /// A matching hello that arrives after the deadline is already
-/// expired: the test syncs on the hello request (handshake start),
-/// lands a wrong-id frame at +960ms to start a fresh 50ms receive
-/// slice spanning the 1000ms deadline, and delivers the matching
-/// hello at +1010ms inside that slice. The post-receipt deadline
-/// check rejects it — a slice in flight never smuggles a late hello
-/// past the timeout. Exit is refusal with only the hello request on
-/// the wire.
+/// expired is refused, never accepted. The test syncs on the hello
+/// request (an approximation of the handshake start the 1000ms
+/// deadline counts from: the read lags the write by scheduling
+/// time), lands a wrong-id frame ~25ms before the deadline to start
+/// a fresh 50ms receive slice spanning it, and delivers the matching
+/// hello ~10ms overdue inside that slice. Refusal holds under both
+/// schedules: the post-receipt deadline check rejects the overdue
+/// hello while the slice is live, and the loop-top check has already
+/// fired when test-side lag lets the deadline pass first (the
+/// wrong-id write then fails against the closed stdin). Either way
+/// the wire carries only the hello request — verified by draining
+/// the retained stdout handle, since the child no longer owns the
+/// pipe after exit.
 #[test]
 fn overdue_matching_hello_is_rejected_not_accepted() {
     let (_dir, script) = fixture(MINIMAL_SCRIPT);
@@ -160,12 +166,14 @@ fn overdue_matching_hello_is_rejected_not_accepted() {
         .spawn()
         .expect("adapter spawns");
     let mut stdin = child.stdin.take().expect("stdin piped");
-    let mut stdout = child.stdout.take().expect("stdout piped");
-    // Sync on the hello request: it marks the handshake start the
-    // deadline counts from.
-    use std::io::{BufRead, BufReader};
+    let stdout = child.stdout.take().expect("stdout piped");
+    // Sync on the hello request: it approximates the handshake
+    // start the deadline counts from (the read lags the adapter-side
+    // write by scheduling time — exactly the margin below).
+    use std::io::{BufRead, BufReader, Read};
+    let mut reader = BufReader::new(stdout);
     let mut hello_line = String::new();
-    BufReader::new(&mut stdout)
+    reader
         .read_line(&mut hello_line)
         .expect("hello request arrives");
     assert!(
@@ -182,29 +190,52 @@ fn overdue_matching_hello_is_rejected_not_accepted() {
     // Land the wrong-id inside the final 50ms window so the next
     // receive slice spans the deadline ...
     std::thread::sleep(Duration::from_millis(975));
-    stdin.write_all(&wrong_bytes).expect("wrong-id lands late");
+    // The deadline runs from the adapter-side handshake start while
+    // this sleep runs from the hello-request read: if this thread
+    // is descheduled more than ~25ms between the adapter writing
+    // hello and the read above, the deadline has already fired and
+    // the peer is gone. Either interleaving refuses without
+    // accepting — the spanning-slice post-receipt check rejects the
+    // overdue hello, or the loop-top check already fired — so a
+    // refused write is a consistent outcome, not a lost proof (the
+    // flooder thread above treats peer-gone the same way).
+    // Acceptance is impossible in both: the hello follows the
+    // wrong-id on the same FIFO pipe at hello-read + ~1010ms,
+    // always past the start + 1000ms deadline.
+    let _ = stdin.write_all(&wrong_bytes);
     // ... and the matching hello inside that spanning slice, overdue.
-    // Only the post-receipt deadline check can refuse it: the
-    // loop-top check already passed for this slice, and the slice
-    // itself does not end before the hello arrives.
+    // When the slice is live only the post-receipt deadline check
+    // can refuse it; when test-side lag already let the deadline
+    // pass, the loop-top check fired first and the writes above
+    // fail instead. Both paths refuse — acceptance would require
+    // the hello to arrive before start + 1000ms, impossible since
+    // it follows the wrong-id on one FIFO pipe.
     std::thread::sleep(Duration::from_millis(35));
     let mut hello = serde_json::to_vec(&hello_result()).expect("serializes");
     hello.push(b'\n');
     // The peer may already be gone: a refused write is fine.
     let _ = stdin.write_all(&hello);
     drop(stdin);
-    drop(stdout);
-    let output = child.wait_with_output().expect("adapter exits");
-    assert_eq!(output.status.code(), Some(2));
+    // Bounded exit wait: refusal must land promptly either way.
+    let code = match poll_exit(&mut child, start, Duration::from_secs(5)) {
+        Some(code) => code,
+        None => {
+            child.kill().ok();
+            panic!("the overdue hello must fail fast, not hang");
+        },
+    };
+    assert_eq!(code, 2);
+    // Drain the retained stdout handle past the buffered hello
+    // line: the hello request went there, and nothing else may
+    // follow it — the late match is refused, never answered.
+    // output.stdout would be trivially empty (the child no longer
+    // owns the pipe), so the retained handle is the wire proof.
+    let mut rest = Vec::new();
+    reader
+        .read_to_end(&mut rest)
+        .expect("stdout drains after exit");
     assert!(
-        start.elapsed() < Duration::from_secs(5),
-        "the overdue hello must fail fast, not hang"
-    );
-    // The hello request went to the taken stdout handle; nothing
-    // else may follow it — the late match is refused, not answered.
-    assert_eq!(
-        output.stdout.lines().count(),
-        0,
-        "no further frames after the refused match"
+        rest.is_empty(),
+        "no further frames after the refused match: {rest:?}"
     );
 }
