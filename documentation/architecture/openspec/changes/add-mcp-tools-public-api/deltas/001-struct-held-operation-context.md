@@ -1,14 +1,13 @@
 # Design delta 001: struct-held operation context (PROPOSED v3)
 
-Status: PROPOSED v3 — supersedes v1 and v2 texts in full. Operator
-pre-review authority must be re-granted (prior grants covered prior
-texts); Tier-1 scope/text sign-off PENDING; required Tier-2
-architecture/security review of the ownership/construction contract
-applies before final scope approval. No wiring proceeds on this
-text. On sign-off it folds into `design.md` Public API Shape /
-Boundary Design (§1.4), `tasks.md` 1.4 + 2.x notes, `proposal.md`
-boundary wording, and `specs/tool-operations/spec.md`, and this file
-is removed.
+Status: PROPOSED v3 — operator pre-review authority GRANTED as written
+(in-session review 2026-11-15); Tier-1 scope/text sign-off PENDING;
+required Tier-2 architecture/security review of the
+ownership/construction contract applies before final scope approval.
+No wiring proceeds on this text. On sign-off it folds into `design.md`
+Public API Shape / Boundary Design (§1.4), `tasks.md` 1.4 + 2.x notes,
+`proposal.md` boundary wording, and `specs/tool-operations/spec.md`,
+and this file is removed.
 
 ## Supersedes (narrowly)
 
