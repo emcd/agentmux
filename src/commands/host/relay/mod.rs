@@ -1,4 +1,6 @@
 mod prepare;
+#[cfg(test)]
+mod prepare_tests;
 mod serve;
 
 use std::{os::unix::net::UnixListener, sync::atomic::AtomicUsize};
@@ -22,10 +24,15 @@ pub(super) enum RelayHostStartupMode {
 
 #[derive(Debug)]
 pub(super) struct HostedBundle {
+    // Written but, under the experimental wiring build, never read back:
+    // the serve context consumes the early-installed shared catalog
+    // instead of rebuilding from these per-bundle records.
+    #[cfg_attr(feature = "experimental-public-send", allow(dead_code))]
     paths: BundleRuntimePaths,
     /// Initial hosting intent for the catalog entry: `Run` for an autostarted
     /// bundle, `Hold` for a process-only one (per-bundle `autostart = false` or
     /// relay-wide `--no-autostart`).
+    #[cfg_attr(feature = "experimental-public-send", allow(dead_code))]
     hosting_intent: HostingIntent,
 }
 

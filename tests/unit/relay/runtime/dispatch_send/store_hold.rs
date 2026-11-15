@@ -8,7 +8,8 @@ use super::{
     send_fixture, verified_context,
 };
 use agentmux::relay::{
-    RelayResponse, SendOperation, dispatch_send, rotate_principal_credential,
+    DispatchWiring, RelayResponse, SendOperation, dispatch_send,
+    rotate_principal_credential,
 };
 
 /// Unarmed publication retains nothing: a send committed with no hook
@@ -24,11 +25,12 @@ fn unarmed_publication_retains_nothing() {
     let sender = "alpha@party".to_string();
     let psk = provisioned_psk(&fixture.runtime, &sender);
     let context = verified_context(&fixture.runtime, &sender, &psk);
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &context,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: vec!["bravo@party".to_string()],
             message: "hello".to_string(),
@@ -65,11 +67,12 @@ fn publication_capture_ignores_other_senders() {
     let sender = "alpha@party".to_string();
     let psk = provisioned_psk(&fixture.runtime, &sender);
     let context = verified_context(&fixture.runtime, &sender, &psk);
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &context,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: vec!["bravo@party".to_string()],
             message: "hello".to_string(),
@@ -130,14 +133,13 @@ fn rotation_waits_out_span_store_hold_before_committing() {
     let parked = {
         let fixture_party = fixture.party.clone();
         let runtime = std::sync::Arc::clone(&fixture.runtime);
-        let catalog = fixture.catalog.clone();
-        let peer_manager = std::sync::Arc::clone(&fixture.peer_manager);
         std::thread::spawn(move || {
+            let wiring = DispatchWiring::mirrored(&runtime, &[], true)
+                .expect("mirror domain wiring");
             dispatch_send(
                 &runtime,
                 &context,
-                &catalog,
-                &peer_manager,
+                &wiring,
                 SendOperation {
                     targets: vec![format!("bravo@{fixture_party}")],
                     message: "hello".to_string(),
@@ -241,11 +243,12 @@ fn rotation_waits_out_span_store_hold_before_committing() {
     rotating.join().expect("rotation thread joins");
     // Grants never changed, so this denial is purely the new epoch: the
     // old context went stale exactly when the rotation committed.
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let refused = dispatch_send(
         &fixture.runtime,
         &context_clone,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: vec![format!("bravo@{}", fixture.party)],
             message: "hello".to_string(),

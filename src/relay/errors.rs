@@ -4,7 +4,7 @@ use crate::configuration::{ConfigurationError, SessionType};
 
 use super::RelayError;
 
-pub(super) fn map_config(error: ConfigurationError) -> RelayError {
+pub(in crate::relay) fn map_config(error: ConfigurationError) -> RelayError {
     match error {
         ConfigurationError::UnknownBundle { bundle_name, path } => {
             relay_error(

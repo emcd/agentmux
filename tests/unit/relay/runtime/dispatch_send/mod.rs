@@ -3,19 +3,17 @@
 //! Matrix coverage lives in [`fusion`]; final-admission interleavings live
 //! in [`admission`]. Shared fixtures and verified-context helpers live here.
 
-use std::sync::Arc;
-
 use agentmux::relay::{
-    BundleCatalog, CredentialSource, DeliveryConfiguration,
-    IdentityDescriptor, PeerConnectionManager, ProvisionParams, RelayResponse,
-    RelayRuntime, VerifiedPrincipal, provision_principal, verify_identity,
+    CredentialSource, DeliveryConfiguration, IdentityDescriptor,
+    ProvisionParams, RelayResponse, RelayRuntime, VerifiedPrincipal,
+    provision_principal, verify_identity,
 };
-use agentmux::runtime::paths::BundleRuntimePaths;
 use tempfile::TempDir;
 
 mod admission;
 mod fusion;
 mod store_hold;
+mod wiring;
 fn write_bundles(
     temporary: &TempDir,
     send_scope: &str,
@@ -78,7 +76,12 @@ coder = "shell"
             .collect();
         std::fs::write(
             bundles.join(format!("{bundle}.toml")),
-            format!("format-version = 1\n{}", sessions.join("")),
+            // Hosted bundles declare autostart explicitly: an absent key
+            // means Hold, so fixtures model running bundles honestly.
+            format!(
+                "format-version = 1\nautostart = true\n{}",
+                sessions.join("")
+            ),
         )
         .expect("write bundle configuration");
     }
@@ -87,8 +90,6 @@ coder = "shell"
 struct SendFixture {
     _temporary: TempDir,
     runtime: RelayRuntime,
-    catalog: BundleCatalog,
-    peer_manager: Arc<PeerConnectionManager>,
 }
 
 fn send_fixture(send_scope: &str) -> SendFixture {
@@ -109,18 +110,9 @@ fn send_fixture_with_members(
         DeliveryConfiguration::default(),
     )
     .expect("runtime init");
-    let catalog =
-        BundleCatalog::from_paths(["party", "other"].iter().map(|bundle| {
-            BundleRuntimePaths::resolve(&state_root, bundle)
-                .expect("bundle paths")
-        }));
-    let peer_manager =
-        Arc::new(PeerConnectionManager::from_configuration(&state_root, &[]));
     SendFixture {
         _temporary: temporary,
         runtime,
-        catalog,
-        peer_manager,
     }
 }
 
@@ -166,8 +158,6 @@ fn send_targets(response: RelayResponse) -> Vec<String> {
 struct ParkFixture {
     _temporary: TempDir,
     runtime: std::sync::Arc<RelayRuntime>,
-    catalog: BundleCatalog,
-    peer_manager: Arc<PeerConnectionManager>,
     party: String,
     _other: String,
 }
@@ -220,7 +210,12 @@ coder = "shell"
             configuration_root
                 .join("bundles")
                 .join(format!("{bundle}.toml")),
-            format!("format-version = 1\n{}", sessions.join("")),
+            // Hosted bundles declare autostart explicitly: an absent key
+            // means Hold, so fixtures model running bundles honestly.
+            format!(
+                "format-version = 1\nautostart = true\n{}",
+                sessions.join("")
+            ),
         )
         .expect("write bundle configuration");
     }
@@ -246,18 +241,9 @@ resume-command = "sh -lc 'exec sleep 45'"
         )
         .expect("runtime init"),
     );
-    let catalog =
-        BundleCatalog::from_paths([&party, &other].iter().map(|bundle| {
-            BundleRuntimePaths::resolve(&state_root, bundle)
-                .expect("bundle paths")
-        }));
-    let peer_manager =
-        Arc::new(PeerConnectionManager::from_configuration(&state_root, &[]));
     ParkFixture {
         _temporary: temporary,
         runtime,
-        catalog,
-        peer_manager,
         party,
         _other: other,
     }

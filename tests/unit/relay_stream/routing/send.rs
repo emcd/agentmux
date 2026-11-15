@@ -717,10 +717,9 @@ fn send_to_external_namespace_target_is_rejected() {
 #[test]
 fn socket_and_in_process_send_are_equivalent() {
     use agentmux::relay::{
-        BundleCatalog, CredentialSource, DeliveryConfiguration,
-        IdentityDescriptor, PeerConnectionManager, ProvisionParams,
-        RelayResponse, RelayRuntime, SendOperation, dispatch_send,
-        provision_principal, verify_identity,
+        CredentialSource, DeliveryConfiguration, DispatchWiring,
+        IdentityDescriptor, ProvisionParams, RelayResponse, RelayRuntime,
+        SendOperation, dispatch_send, provision_principal, verify_identity,
     };
 
     let temporary = TempDir::new().expect("temporary directory");
@@ -754,14 +753,12 @@ fn socket_and_in_process_send_are_equivalent() {
     )
     .expect("verify alpha");
 
-    let catalog = BundleCatalog::from_paths([bundle_paths.clone()]);
-    let peer_manager =
-        PeerConnectionManager::from_configuration(&state_root, &[]);
+    let wiring = DispatchWiring::mirrored(&runtime, &[], true)
+        .expect("mirror domain wiring");
     let direct = dispatch_send(
         &runtime,
         &context,
-        &catalog,
-        &peer_manager,
+        &wiring,
         SendOperation {
             targets: vec![format!("bravo@{bundle_name}")],
             message: "parity".to_string(),
@@ -873,10 +870,9 @@ fn socket_and_in_process_send_are_equivalent() {
 #[test]
 fn bare_target_divergence_is_documented_until_adapter_cutover() {
     use agentmux::relay::{
-        BundleCatalog, CredentialSource, DeliveryConfiguration,
-        IdentityDescriptor, PeerConnectionManager, ProvisionParams,
-        RelayResponse, RelayRuntime, SendOperation, dispatch_send,
-        provision_principal, verify_identity,
+        CredentialSource, DeliveryConfiguration, DispatchWiring,
+        IdentityDescriptor, ProvisionParams, RelayResponse, RelayRuntime,
+        SendOperation, dispatch_send, provision_principal, verify_identity,
     };
 
     let temporary = TempDir::new().expect("temporary directory");
@@ -909,14 +905,12 @@ fn bare_target_divergence_is_documented_until_adapter_cutover() {
     .expect("verify alpha");
 
     // Public handler: bare resolves to the bundle-scoped home.
-    let catalog = BundleCatalog::from_paths([bundle_paths.clone()]);
-    let peer_manager =
-        PeerConnectionManager::from_configuration(&state_root, &[]);
+    let wiring = DispatchWiring::mirrored(&runtime, &[], true)
+        .expect("mirror domain wiring");
     let direct = dispatch_send(
         &runtime,
         &context,
-        &catalog,
-        &peer_manager,
+        &wiring,
         SendOperation {
             targets: vec!["bravo".to_string()],
             message: "parity".to_string(),

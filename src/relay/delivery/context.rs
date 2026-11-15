@@ -110,6 +110,25 @@ pub struct DeliveryContext {
     /// cannot own the same store while this domain is still effect-capable.
     /// Released automatically when the last holder drops.
     domain_lock: std::sync::Mutex<Option<std::fs::File>>,
+    /// The domain's installed dispatch pair, if any. It lives and dies
+    /// with this delivery state — never in a side registry — so a dropped
+    /// domain takes its pair with it and a reclaimed root starts empty by
+    /// construction. Experimental-gated with the wiring surface.
+    #[cfg(feature = "experimental-public-send")]
+    wiring_pair: std::sync::Mutex<
+        Option<crate::relay::runtime_domains::InstalledDomainPair>,
+    >,
+    /// The ordered, resolved configuration-source identity bound to this
+    /// delivery state when it acquired domain ownership: the absolutized
+    /// configuration layers. A restarted domain may bind different
+    /// configuration once all prior holders release (a fresh claim binds
+    /// anew), but a live owner never rebinds: installs carrying different
+    /// layers are refused, so an adopted prepare cannot silently mix one
+    /// runtime's authority with another configuration's hosting.
+    /// Experimental-gated with the wiring surface.
+    #[cfg(feature = "experimental-public-send")]
+    bound_configuration_layers:
+        std::sync::Mutex<Option<Vec<std::path::PathBuf>>>,
 }
 
 impl DeliveryContext {
@@ -125,6 +144,10 @@ impl DeliveryContext {
             drain_coordinator: ConnectionDrainCoordinator::new(),
             shutdown_gate: InstanceShutdownGate::default(),
             domain_lock: std::sync::Mutex::new(None),
+            #[cfg(feature = "experimental-public-send")]
+            wiring_pair: std::sync::Mutex::new(None),
+            #[cfg(feature = "experimental-public-send")]
+            bound_configuration_layers: std::sync::Mutex::new(None),
         }
     }
 
@@ -150,6 +173,242 @@ impl DeliveryContext {
     ) -> Result<std::sync::MutexGuard<'_, LedgerState>, crate::relay::RelayError>
     {
         lock_ledger(&self.ledger)
+    }
+
+    /// Reads back the installed dispatch pair, cloning the shared handles.
+    /// `None` means no pair was ever installed on this delivery state, or
+    /// the installed pair is still tentative: preparation publishes
+    /// dispatchability only at its commit boundary, after every fallible
+    /// step, so concurrent readers can never obtain a wiring for a pair
+    /// that may yet abort. Because the slot lives inside the delivery
+    /// itself, a reclaimed root always reads a fresh slot — never a
+    /// previous generation's pair. Experimental-gated with the wiring
+    /// surface.
+    #[cfg(feature = "experimental-public-send")]
+    pub(in crate::relay) fn read_live_pair(
+        &self,
+    ) -> Option<(
+        crate::relay::catalog::BundleCatalog,
+        Arc<crate::relay::peer_connection::PeerConnectionManager>,
+    )> {
+        let slot = self
+            .wiring_pair
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        slot.as_ref().and_then(|installed| {
+            installed.published.then(|| {
+                (installed.catalog.clone(), Arc::clone(&installed.peers))
+            })
+        })
+    }
+
+    /// Installs the domain's live dispatch pair into this delivery state,
+    /// published and immediately readable, or reports the already
+    /// installed one. First installation wins per delivery lifetime; a
+    /// divergent reinstall over a committed pair is refused so a peer-set
+    /// change forces domain regeneration instead of silently rebinding
+    /// live dispatch, while a divergent install over a still-tentative
+    /// pair fails with an initializing error so the loser retries after
+    /// the winner commits or aborts. The embedded mirrored constructor
+    /// uses this: its install is its commitment. `install_layers` must
+    /// agree with the configuration identity bound to this delivery
+    /// state at domain-ownership acquisition; a mismatch is refused
+    /// before anything installs, so an adopted prepare cannot mix one
+    /// runtime's authority with another configuration's hosting.
+    /// Experimental-gated with the wiring surface.
+    #[cfg(feature = "experimental-public-send")]
+    pub(in crate::relay) fn install_live_pair(
+        &self,
+        catalog: crate::relay::catalog::BundleCatalog,
+        peers: Arc<crate::relay::peer_connection::PeerConnectionManager>,
+        install_layers: &[std::path::PathBuf],
+    ) -> Result<bool, crate::relay::RelayError> {
+        self.install_pair(catalog, peers, true, install_layers)
+    }
+
+    /// Installs the domain's dispatch pair into this delivery state as
+    /// tentative: unreadable through live/mirrored reads until
+    /// [`publish_live_pair`](Self::publish_live_pair) runs. The host
+    /// prepare path uses this so the registration preflight reserves
+    /// initialization ownership without granting operative send
+    /// authority. Same first-installation-wins and configuration-binding
+    /// rules as [`install_live_pair`](Self::install_live_pair).
+    /// Experimental-gated with the wiring surface.
+    #[cfg(feature = "experimental-public-send")]
+    pub(in crate::relay) fn install_tentative_live_pair(
+        &self,
+        catalog: crate::relay::catalog::BundleCatalog,
+        peers: Arc<crate::relay::peer_connection::PeerConnectionManager>,
+        install_layers: &[std::path::PathBuf],
+    ) -> Result<bool, crate::relay::RelayError> {
+        self.install_pair(catalog, peers, false, install_layers)
+    }
+
+    /// Binds the ordered, resolved configuration-source identity to this
+    /// delivery state at domain-ownership acquisition. Called once by
+    /// whoever acquires the domain (runtime construction or a claiming
+    /// prepare); a live owner never rebinds, so later installs carrying
+    /// different layers are refused rather than silently mixing
+    /// configurations. A restarted domain binds anew once all prior
+    /// holders release: this is a per-generation binding, not a
+    /// permanent deployment-to-configuration mapping, and it records
+    /// source identity (which layers), never content freshness.
+    /// Experimental-gated with the wiring surface.
+    #[cfg(feature = "experimental-public-send")]
+    pub(crate) fn bind_configuration_identity(
+        &self,
+        layers: &[std::path::PathBuf],
+    ) {
+        let mut bound = self
+            .bound_configuration_layers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if bound.is_none() {
+            *bound = Some(Self::canonical_configuration_layers(layers));
+        }
+    }
+
+    /// The ordered, resolved configuration layers, absolutized lexically
+    /// (no symlink resolution, matching the propagation contract): two
+    /// spellings resolving through the same normalization pipeline to
+    /// the same list name the same source identity.
+    #[cfg(feature = "experimental-public-send")]
+    fn canonical_configuration_layers(
+        layers: &[std::path::PathBuf],
+    ) -> Vec<std::path::PathBuf> {
+        layers
+            .iter()
+            .map(|layer| {
+                std::path::absolute(layer).unwrap_or_else(|_| layer.clone())
+            })
+            .collect()
+    }
+
+    #[cfg(feature = "experimental-public-send")]
+    fn install_pair(
+        &self,
+        catalog: crate::relay::catalog::BundleCatalog,
+        peers: Arc<crate::relay::peer_connection::PeerConnectionManager>,
+        published: bool,
+        install_layers: &[std::path::PathBuf],
+    ) -> Result<bool, crate::relay::RelayError> {
+        // The configuration check precedes the occupancy check: a
+        // mismatched installer is refused for what it carries even when
+        // the slot is empty, and a matching installer keeps the
+        // existing conflict/initializing behavior when it is not. Every
+        // domain publisher binds before publication, so an unbound owner
+        // here is a programming error, never a first declaration: fail
+        // loud rather than let an unbound owner accept an arbitrary
+        // installation.
+        let installing = Self::canonical_configuration_layers(install_layers);
+        let bound = self
+            .bound_configuration_layers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match bound.as_ref() {
+            Some(bound) if *bound != installing => {
+                return Err(crate::relay::relay_error(
+                    "validation_wiring_config_mismatch",
+                    "preparation configuration does not match the owning domain's bound configuration; restart the owner with the intended configuration",
+                    None,
+                ));
+            },
+            Some(_) => {},
+            None => {
+                return Err(crate::relay::relay_error(
+                    "internal_unexpected_failure",
+                    "dispatch pair install found no bound configuration identity",
+                    None,
+                ));
+            },
+        }
+        drop(bound);
+        let mut slot = self
+            .wiring_pair
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match slot.as_ref() {
+            Some(installed) => {
+                if installed.catalog.same_identity_as(&catalog)
+                    && Arc::ptr_eq(&installed.peers, &peers)
+                {
+                    Ok(false)
+                } else if installed.published {
+                    Err(crate::relay::relay_error(
+                        "validation_wiring_conflict",
+                        "domain pair already installed; regenerate the domain to change it",
+                        None,
+                    ))
+                } else {
+                    Err(crate::relay::relay_error(
+                        "validation_wiring_initializing",
+                        "domain pair initialization in progress; retry after it commits or aborts",
+                        None,
+                    ))
+                }
+            },
+            None => {
+                *slot =
+                    Some(crate::relay::runtime_domains::InstalledDomainPair {
+                        catalog,
+                        peers,
+                        published,
+                    });
+                Ok(true)
+            },
+        }
+    }
+
+    /// Publishes a tentatively installed pair, making it readable through
+    /// live/mirrored reads. The host prepare path calls this once, at its
+    /// commit boundary after every fallible step: dispatchability starts
+    /// here and not earlier. Experimental-gated with the wiring surface.
+    #[cfg(feature = "experimental-public-send")]
+    pub(in crate::relay) fn publish_live_pair(
+        &self,
+    ) -> Result<(), crate::relay::RelayError> {
+        let mut slot = self
+            .wiring_pair
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match slot.as_mut() {
+            Some(installed) => {
+                installed.published = true;
+                Ok(())
+            },
+            None => Err(crate::relay::relay_error(
+                "internal_unexpected_failure",
+                "dispatch pair publication found no installed pair",
+                None,
+            )),
+        }
+    }
+
+    /// Reports whether this delivery state holds a tentative (installed
+    /// but unpublished) pair. Readers use this to fail closed with an
+    /// initializing error rather than treating the domain as merely
+    /// unregistered. Experimental-gated with the wiring surface.
+    #[cfg(feature = "experimental-public-send")]
+    pub(in crate::relay) fn pair_pending(&self) -> bool {
+        let slot = self
+            .wiring_pair
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        slot.as_ref().is_some_and(|installed| !installed.published)
+    }
+
+    /// Removes the installed dispatch pair from this delivery state, if
+    /// any. The host prepare path calls this when preparation fails after
+    /// the early tentative install, so a failed preparation never leaves
+    /// a retained tentative pair behind for the next preparation to
+    /// conflict with. Experimental-gated with the wiring surface.
+    #[cfg(feature = "experimental-public-send")]
+    pub(in crate::relay) fn clear_live_pair(&self) {
+        let mut slot = self
+            .wiring_pair
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *slot = None;
     }
 
     /// Holds the admission guard shared across one check-to-commit span.

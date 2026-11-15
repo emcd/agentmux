@@ -16,8 +16,12 @@ use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use serde_json::json;
 
+#[cfg(feature = "experimental-public-send")]
+use super::catalog::BundleCatalog;
 use super::confined::{ConfineError, confined_claim_lock};
 use super::identity::invalid_credential_path;
+#[cfg(feature = "experimental-public-send")]
+use super::peer_connection::PeerConnectionManager;
 use super::{DeliveryContext, RelayError};
 
 /// Leaf holding the exclusive cross-process domain claim, beneath the
@@ -36,6 +40,29 @@ static RUNTIME_DOMAINS: OnceLock<
 static DOMAIN_ADMIN_LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> =
     OnceLock::new();
 
+/// The domain's live dispatch pair: the shared catalog and peer manager
+/// a domain's dispatch resolves through. Stored inside the owning delivery
+/// state itself (see `DeliveryContext::wiring_pair`), never in a side
+/// registry: the pair's lifetime is exactly the domain's lifetime, a
+/// dropped delivery takes its pair with it, and a reclaimed root gets a
+/// fresh delivery with a fresh empty slot by construction. No stale
+/// entries can linger for a later generation to trip over — and no
+/// strong back-edge beyond the delivery the pair already belongs to.
+/// Experimental-gated with the wiring surface.
+#[cfg(feature = "experimental-public-send")]
+pub(in crate::relay) struct InstalledDomainPair {
+    pub(in crate::relay) catalog: BundleCatalog,
+    pub(in crate::relay) peers: Arc<PeerConnectionManager>,
+    /// Whether the pair is readable through live/mirrored reads.
+    /// Tentative installs stay unreadable until the installer publishes
+    /// them, so initialization ownership never grants operative send
+    /// authority by itself.
+    pub(in crate::relay) published: bool,
+}
+
+/// Readers go through the owning delivery state looked up in the domain
+/// map, so no side registry exists whose lifetime could outlive the
+/// domain it was installed for.
 fn runtime_domains() -> &'static Mutex<HashMap<PathBuf, Weak<DeliveryContext>>>
 {
     RUNTIME_DOMAINS.get_or_init(|| Mutex::new(HashMap::new()))
@@ -202,6 +229,191 @@ pub(in crate::relay) fn release_domain_slot(
     if retained && domain_weak.upgrade().is_none() {
         domains.remove(domain_key);
     }
+    // No pair cleanup here: the installed pair lives inside the delivery
+    // state itself, so it is released exactly when the delivery drops —
+    // never earlier, never later, and with no cross-generation residue.
+}
+
+/// Installs the domain's live dispatch pair into the owning delivery
+/// state, published and immediately readable, once per domain
+/// generation. Experimental-gated with the wiring surface: default
+/// builds have no pair slot and no production write path to it.
+///
+/// Only the embedded mirrored constructor calls this; serve
+/// construction itself never installs, so a foreign pair handed to a
+/// second serve constructor on an already-owned root is never registered.
+/// First installation wins: re-registering the identical pair (same shared
+/// identities) is a no-op success, while a different pair over a committed
+/// one is refused so a peer-set change forces domain regeneration instead
+/// of silently rebinding live dispatch — and a different pair over a
+/// still-tentative one fails with an initializing error so the loser
+/// retries after the winner commits or aborts. `install_layers` must
+/// agree with the configuration identity bound to the owning delivery
+/// at domain-ownership acquisition; a mismatch is refused before
+/// anything installs. The caller's delivery must be the domain
+/// owner or registration is refused — holding the pair types
+/// alone confers no authority.
+///
+/// Lock order is domains-then-pair-slot, matching nothing else in reverse:
+/// the pair mutex is never held while acquiring the domain map.
+#[cfg(feature = "experimental-public-send")]
+pub(crate) fn register_domain_pair(
+    delivery: &Arc<DeliveryContext>,
+    state_root: &Path,
+    catalog: BundleCatalog,
+    peers: Arc<PeerConnectionManager>,
+    install_layers: &[PathBuf],
+) -> Result<bool, RelayError> {
+    let domain_key = canonical_domain_key(state_root);
+    let owner = Arc::downgrade(delivery);
+    // Both locks are held across the check-and-install so a release and
+    // reclaim racing this call cannot interleave between them.
+    let domains = runtime_domains()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !domains
+        .get(domain_key.as_path())
+        .is_some_and(|entry| Weak::ptr_eq(entry, &owner))
+    {
+        return Err(crate::relay::relay_error(
+            "validation_wiring_not_owned",
+            "only the domain owner can install its live dispatch pair",
+            None,
+        ));
+    }
+    delivery.install_live_pair(catalog, peers, install_layers)
+}
+
+/// Installs the domain's dispatch pair into the owning delivery state as
+/// tentative: reserved but unreadable until
+/// [`publish_domain_pair`] runs. Only the host prepare path calls this;
+/// the reservation is the preflight (a domain that already hosts a pair
+/// fails here, before workers spawn or listeners bind) without granting
+/// operative send authority. `install_layers` must agree with the
+/// configuration identity bound to the owning delivery: a mismatched
+/// adopted prepare is refused before installing or starting anything
+/// foreign. Same ownership and first-installation-wins rules as
+/// [`register_domain_pair`].
+/// Experimental-gated with the wiring surface.
+#[cfg(feature = "experimental-public-send")]
+pub(crate) fn register_tentative_domain_pair(
+    delivery: &Arc<DeliveryContext>,
+    state_root: &Path,
+    catalog: BundleCatalog,
+    peers: Arc<PeerConnectionManager>,
+    install_layers: &[PathBuf],
+) -> Result<bool, RelayError> {
+    let domain_key = canonical_domain_key(state_root);
+    let owner = Arc::downgrade(delivery);
+    let domains = runtime_domains()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !domains
+        .get(domain_key.as_path())
+        .is_some_and(|entry| Weak::ptr_eq(entry, &owner))
+    {
+        return Err(crate::relay::relay_error(
+            "validation_wiring_not_owned",
+            "only the domain owner can install its live dispatch pair",
+            None,
+        ));
+    }
+    delivery.install_tentative_live_pair(catalog, peers, install_layers)
+}
+
+/// Publishes the domain's tentatively installed pair, making it readable
+/// through live/mirrored reads. Only the host prepare path calls this,
+/// once, at its commit boundary after every fallible step: dispatchability
+/// starts here and not earlier. Experimental-gated with the wiring
+/// surface.
+#[cfg(feature = "experimental-public-send")]
+pub(crate) fn publish_domain_pair(
+    delivery: &Arc<DeliveryContext>,
+    state_root: &Path,
+) -> Result<(), RelayError> {
+    let domain_key = canonical_domain_key(state_root);
+    let owner = Arc::downgrade(delivery);
+    let owned = runtime_domains()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(domain_key.as_path())
+        .is_some_and(|entry| Weak::ptr_eq(entry, &owner));
+    if !owned {
+        return Err(crate::relay::relay_error(
+            "validation_wiring_not_owned",
+            "only the domain owner can publish its live dispatch pair",
+            None,
+        ));
+    }
+    delivery.publish_live_pair()
+}
+
+/// Reports whether the domain currently holds a tentative (installed but
+/// unpublished) pair. Readers use this to fail closed with an
+/// initializing error rather than treating the domain as merely
+/// unregistered. Experimental-gated with the wiring surface.
+#[cfg(feature = "experimental-public-send")]
+pub(in crate::relay) fn domain_pair_pending(state_root: &Path) -> bool {
+    let domain_key = canonical_domain_key(state_root);
+    let delivery = runtime_domains()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(domain_key.as_path())
+        .and_then(|entry| entry.upgrade());
+    delivery
+        .as_ref()
+        .is_some_and(|delivery| delivery.pair_pending())
+}
+
+/// Removes the domain's installed dispatch pair from the owning
+/// delivery state, if any. The host prepare path calls this when
+/// preparation fails after the early tentative install, so a failed
+/// preparation never leaves a retained tentative pair behind: the next
+/// preparation over the same live domain starts from an empty slot
+/// instead of conflicting with its predecessor's residue. Only the
+/// domain owner can clear; a non-owner call is a no-op success so
+/// cleanup on a failing error path cannot itself fail.
+/// Experimental-gated with the wiring surface.
+#[cfg(feature = "experimental-public-send")]
+pub(crate) fn unregister_domain_pair(
+    delivery: &Arc<DeliveryContext>,
+    state_root: &Path,
+) {
+    let domain_key = canonical_domain_key(state_root);
+    let owner = Arc::downgrade(delivery);
+    let owned = runtime_domains()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(domain_key.as_path())
+        .is_some_and(|entry| Weak::ptr_eq(entry, &owner));
+    if owned {
+        delivery.clear_live_pair();
+    }
+}
+
+/// Returns the domain's installed dispatch pair with its owning delivery,
+/// or `None` when no pair was installed, the installed pair is still
+/// tentative, or the owning domain lapsed. Callers treat absence as
+/// fail-closed: there is no fallback pair, and tentative pairs are never
+/// exposed. The pair is read from the owning delivery state itself, so a
+/// reclaimed root can never surface a previous generation's pair.
+/// Experimental-gated with the wiring surface, its only reader.
+#[cfg(feature = "experimental-public-send")]
+pub(in crate::relay) fn domain_live_pair(
+    state_root: &Path,
+) -> Option<(
+    Arc<DeliveryContext>,
+    BundleCatalog,
+    Arc<PeerConnectionManager>,
+)> {
+    let domain_key = canonical_domain_key(state_root);
+    let delivery = runtime_domains()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .get(domain_key.as_path())?
+        .upgrade()?;
+    let (catalog, peers) = delivery.read_live_pair()?;
+    Some((delivery, catalog, peers))
 }
 
 /// Opens the domain lock file beneath the identity directory through

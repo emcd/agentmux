@@ -91,6 +91,7 @@ send = "home"
         bundles_directory.join(format!("{bundle_name}.toml")),
         r#"
 format-version = 1
+autostart = true
 
 [[sessions]]
 id = "alpha"

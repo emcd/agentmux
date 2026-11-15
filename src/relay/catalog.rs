@@ -128,6 +128,28 @@ impl BundleCatalog {
             .collect()
     }
 
+    /// Whether `other` is the same shared registry object: two clones made
+    /// from one construction share one inner map, while two independent
+    /// constructions never do. Used by the domain-pair registry to tell a
+    /// harmless re-registration of the identical pair from a conflicting
+    /// replacement, without comparing bundle contents. Experimental-gated
+    /// with the wiring surface that is its only reader.
+    #[cfg(feature = "experimental-public-send")]
+    pub(in crate::relay) fn same_identity_as(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.bundles, &other.bundles)
+    }
+
+    /// Removes a bundle from the registry in place. Bundles that fail
+    /// startup are removed from the installed catalog the same way rather
+    /// than served from a stale snapshot: all holders of the shared map
+    /// observe the removal, so a failed bundle stops resolving everywhere
+    /// at once. Experimental-gated with the wiring surface that relies on
+    /// the shared identity.
+    #[cfg(feature = "experimental-public-send")]
+    pub(crate) fn remove_bundle(&self, bundle_name: &str) {
+        self.write().remove(bundle_name);
+    }
+
     /// Returns the set of currently loaded bundle names. Used by the watcher to
     /// diff the loaded set against the on-disk set during reconciliation.
     pub(super) fn loaded_bundle_names(&self) -> HashSet<String> {
@@ -179,8 +201,10 @@ impl BundleCatalog {
     }
 
     /// Returns whether `bundle_name` is currently held — i.e. the relay must not
-    /// start it on its own. `false` when the bundle is not loaded.
-    pub(super) fn is_held(&self, bundle_name: &str) -> bool {
+    /// start it on its own. `false` when the bundle is not loaded. The host
+    /// prepare path's paused-window test reads this to prove tentative
+    /// entries are `Hold` before promotion.
+    pub(crate) fn is_held(&self, bundle_name: &str) -> bool {
         self.read()
             .get(bundle_name)
             .is_some_and(|entry| entry.hosting_intent == HostingIntent::Hold)
@@ -201,5 +225,62 @@ impl BundleCatalog {
         self.bundles
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A cloned catalog shares the underlying map: inserts through one
+    /// handle are visible through the other. This shared identity is what
+    /// lets watcher-driven bundle load/unload flow to every dispatch
+    /// wiring cloned from the same installed pair — and what makes two
+    /// independent constructions detectably different objects.
+    /// Experimental-gated with the wiring surface that relies on it.
+    #[cfg(feature = "experimental-public-send")]
+    #[test]
+    fn cloned_catalog_shares_live_map() {
+        use tempfile::TempDir;
+
+        use super::super::HostingIntent;
+        use super::BundleCatalog;
+        use crate::runtime::paths::BundleRuntimePaths;
+
+        fn test_paths(
+            state_root: &std::path::Path,
+            name: &str,
+        ) -> BundleRuntimePaths {
+            BundleRuntimePaths::resolve(state_root, name)
+                .expect("test bundle paths resolve")
+        }
+
+        let root = TempDir::new().expect("temporary state root");
+        let state_root = root.path().join("state");
+        let installed = BundleCatalog::from_entries([(
+            test_paths(&state_root, "party"),
+            HostingIntent::Run,
+        )]);
+        let alias = installed.clone();
+        assert!(
+            installed.same_identity_as(&alias),
+            "a clone shares the installed identity"
+        );
+        alias.insert(test_paths(&state_root, "other"), HostingIntent::Run);
+        assert!(
+            installed.loaded_bundle_names().contains("other"),
+            "in-place inserts are visible through every shared handle"
+        );
+        alias.remove_bundle("other");
+        assert!(
+            !installed.loaded_bundle_names().contains("other"),
+            "in-place removals are visible through every shared handle"
+        );
+        let independent = BundleCatalog::from_entries([(
+            test_paths(&state_root, "party"),
+            HostingIntent::Run,
+        )]);
+        assert!(
+            !installed.same_identity_as(&independent),
+            "an independent construction is detectably distinct"
+        );
     }
 }

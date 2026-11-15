@@ -5,9 +5,8 @@ use serde_json::json;
 use crate::{
     configuration::load_bundle_group_memberships,
     relay::{
-        BundleCatalog, ConnectionServeContext, DeliveryContext, DomainClaim,
-        HostingIntent, PeerConnectionManager, claim_or_adopt,
-        persist_startup_failures, startup_bundle,
+        ConnectionServeContext, DeliveryContext, DomainClaim, HostingIntent,
+        claim_or_adopt, persist_startup_failures, startup_bundle,
     },
     runtime::{
         bootstrap::{
@@ -123,6 +122,47 @@ pub(super) fn resolve_runtime_roots(
     Ok(roots)
 }
 
+/// Abort guard for the tentative installed pair: any post-install exit
+/// that does not reach `Serve` unregisters the pair on drop, so a failed
+/// preparation never leaves a retained tentative pair behind. Defused
+/// only on the successful `Serve` path.
+#[cfg(feature = "experimental-public-send")]
+struct InstalledPairAbortGuard {
+    delivery: Arc<DeliveryContext>,
+    state_root: std::path::PathBuf,
+    defused: bool,
+}
+
+#[cfg(feature = "experimental-public-send")]
+impl InstalledPairAbortGuard {
+    fn new(
+        delivery: Arc<DeliveryContext>,
+        state_root: std::path::PathBuf,
+    ) -> Self {
+        Self {
+            delivery,
+            state_root,
+            defused: false,
+        }
+    }
+
+    fn defuse(mut self) {
+        self.defused = true;
+    }
+}
+
+#[cfg(feature = "experimental-public-send")]
+impl Drop for InstalledPairAbortGuard {
+    fn drop(&mut self) {
+        if !self.defused {
+            crate::relay::unregister_domain_pair(
+                &self.delivery,
+                &self.state_root,
+            );
+        }
+    }
+}
+
 /// Runs the synchronous startup phase: acquire the relay-level lock, bind
 /// the single relay socket, host each bundle, and decide whether there is
 /// anything to serve.
@@ -209,7 +249,15 @@ pub(super) fn prepare_relay_host(
     // a foreign-held claim refuses the host the same way a held relay lock
     // does. A live same-process domain is adopted: the rest of preparation
     // runs on the owner's delivery state, so configured registrations and
-    // worker state land in the domain that will serve requests.
+    // worker state land in the domain that will serve requests. The fresh
+    // delivery binds this preparation's configuration identity BEFORE the
+    // claim publishes anything: if the claim adopts a live owner, this
+    // candidate is discarded and the owner's binding governs; if the
+    // claim publishes this candidate, it is already bound, so no
+    // concurrent adopter can ever observe an unbound owner.
+    #[cfg(feature = "experimental-public-send")]
+    delivery_context
+        .bind_configuration_identity(roots.configuration_roots.layers());
     let delivery_context =
         match claim_or_adopt(&roots.state_root, &delivery_context)
             .map_err(shared::map_relay_error)?
@@ -250,7 +298,9 @@ pub(super) fn prepare_relay_host(
     // Prune expired principal-store records once at startup. A corrupt store is
     // fatal here: it would otherwise reject every Hello (which loads the store),
     // so surfacing it at startup fails fast rather than per connection. The
-    // adopted-or-claimed owner proves domain ownership for the prune.
+    // adopted-or-claimed owner proves domain ownership for the prune. This
+    // runs before the tentative pair install so a corrupt store needs no
+    // pair cleanup on its error path.
     let pruned_principals = crate::relay::prune_principal_store(
         &roots.state_root,
         &delivery_context,
@@ -262,6 +312,84 @@ pub(super) fn prepare_relay_host(
             &json!({ "pruned_count": pruned_principals }),
         );
     }
+
+    // Build the tentative dispatch pair from the resolved configuration
+    // and install it atomically before any bundle startup side effect.
+    // The reservation IS the preflight: a domain that already hosts a
+    // pair fails here, before workers spawn or listeners bind, and a
+    // concurrent mirrored install in this window fails closed with an
+    // initializing error (it cannot adopt the unpublished pair) and
+    // retries after the winner commits or aborts.
+    //
+    // The install is tentative and unreadable: live/mirrored reads fail
+    // closed with an initializing error until the commit boundary below
+    // publishes the pair, so the reservation grants no operative send
+    // authority by itself — promotion timing and per-route bypasses are
+    // moot, because no wiring is issuable for a pair that may yet abort.
+    // Bundles that fail to start below are removed from this same
+    // installed catalog in place, and the serve context reuses the
+    // early-installed identity, so registration, failure pruning, and
+    // serving can never diverge onto different objects.
+    // Experimental-gated with the wiring surface.
+    #[cfg(feature = "experimental-public-send")]
+    let (catalog, peer_connection_manager) = {
+        use crate::relay::{
+            BundleCatalog, PeerConnectionManager,
+            register_tentative_domain_pair,
+        };
+
+        let mut hosted = Vec::with_capacity(memberships.len());
+        for membership in &memberships {
+            let Ok(paths) = BundleRuntimePaths::resolve(
+                &roots.state_root,
+                membership.bundle_name.as_str(),
+            ) else {
+                // Unresolvable names fail below in host_selected_bundle;
+                // they are simply not installed up front.
+                continue;
+            };
+            let intent = if no_autostart || !membership.autostart {
+                HostingIntent::Hold
+            } else {
+                HostingIntent::Run
+            };
+            hosted.push((paths, intent));
+        }
+        let catalog = BundleCatalog::from_entries(hosted);
+        let peer_connection_manager =
+            std::sync::Arc::new(PeerConnectionManager::from_configuration(
+                &roots.state_root,
+                &relay_configuration.peers,
+            ));
+        register_tentative_domain_pair(
+            &delivery_context,
+            &roots.state_root,
+            catalog.clone(),
+            Arc::clone(&peer_connection_manager),
+            roots.configuration_roots.layers(),
+        )
+        .map_err(shared::map_relay_error)?;
+        (catalog, peer_connection_manager)
+    };
+
+    // Abort guard: any post-install exit that does not reach `Serve`
+    // unregisters the tentative pair, so a failed preparation never
+    // leaves a retained tentative pair behind for the next preparation
+    // to conflict with. Defused only on the successful `Serve` path.
+    // Experimental-gated with the wiring surface.
+    #[cfg(feature = "experimental-public-send")]
+    let abort_guard = InstalledPairAbortGuard::new(
+        Arc::clone(&delivery_context),
+        roots.state_root.clone(),
+    );
+
+    // Test pause point: with an armed gate for this state root, park
+    // after ownership acquisition and the tentative install but before
+    // any bundle startup side effect, so a test can observe the exact
+    // unpublished window. Unarmed calls return immediately.
+    // Experimental-gated with the wiring surface.
+    #[cfg(feature = "experimental-public-send")]
+    crate::relay::test_hooks::test_prepare_installed_gate(&roots.state_root);
 
     let mut outcomes = Vec::with_capacity(memberships.len());
     let mut hosted_bundles =
@@ -286,8 +414,16 @@ pub(super) fn prepare_relay_host(
             );
         }
         outcomes.push(outcome);
+        let _failed = hosted_bundle.is_none();
         if let Some(hosted_bundle) = hosted_bundle {
             hosted_bundles.push(hosted_bundle);
+        }
+        #[cfg(feature = "experimental-public-send")]
+        if _failed {
+            // A bundle that did not start must not stay routable: remove
+            // it from the installed catalog in place so every holder of
+            // the shared catalog stops resolving it at once.
+            catalog.remove_bundle(&membership.bundle_name);
         }
     }
 
@@ -368,23 +504,26 @@ pub(super) fn prepare_relay_host(
     // Build the outbound peer connection manager once from the resolved peers,
     // before that field is consumed below. Each peer carries its own presented
     // identity (`connect-as`); the manager is empty (and never dials) on a relay
-    // with no configured peers.
-    let peer_connection_manager =
-        Arc::new(PeerConnectionManager::from_configuration(
-            &roots.state_root,
-            &relay_configuration.peers,
-        ));
+    // with no configured peers. In experimental builds the pair was already
+    // installed above and the serve context reuses that exact installed
+    // identity, so registration, failure pruning, and serving can never
+    // diverge onto different objects.
+    #[cfg(not(feature = "experimental-public-send"))]
+    let (catalog, peer_connection_manager) = {
+        use crate::relay::{BundleCatalog, PeerConnectionManager};
 
-    // Build the bundle catalog and pre-build the shared serving context so the
-    // serve phase constructs `ConnectionServeContext` exactly once and clones
-    // (cheaply, via the inner `Arc`s) per accepted connection. Carrying the
-    // already-built context in the plan keeps the serve-phase signature within
-    // the project's argument budget without resorting to a clippy suppression.
-    let catalog = BundleCatalog::from_entries(
-        hosted_bundles
-            .into_iter()
-            .map(|hosted| (hosted.paths.clone(), hosted.hosting_intent)),
-    );
+        let peer_connection_manager =
+            Arc::new(PeerConnectionManager::from_configuration(
+                &roots.state_root,
+                &relay_configuration.peers,
+            ));
+        let catalog = BundleCatalog::from_entries(
+            hosted_bundles
+                .into_iter()
+                .map(|hosted| (hosted.paths.clone(), hosted.hosting_intent)),
+        );
+        (catalog, peer_connection_manager)
+    };
     let pre_hello_idle_timeout = relay_pre_hello_idle_timeout();
     // Configured outbound peer aliases, read from the normalized `[[peers]]`
     // entries so `list.relays` enumerates the routing table without dialing.
@@ -404,6 +543,21 @@ pub(super) fn prepare_relay_host(
         Arc::clone(&delivery_context),
     )
     .map_err(shared::map_relay_error)?;
+
+    // Commit boundary: every fallible step (bundle startup, principal
+    // registration, listener bind, serve construction) has succeeded, so
+    // publish the tentative pair. Dispatchability starts here and not
+    // earlier: no wiring was issuable before this point, so no stale or
+    // aborted wiring can exist, and the abort guard below is defused for
+    // the successful serve plan.
+    #[cfg(feature = "experimental-public-send")]
+    crate::relay::publish_domain_pair(&delivery_context, &roots.state_root)
+        .map_err(shared::map_relay_error)?;
+
+    // The tentative pair is now the committed hosted set: defuse the
+    // abort guard so the successful serve plan keeps it.
+    #[cfg(feature = "experimental-public-send")]
+    abort_guard.defuse();
 
     Ok(RelayHostPreparation::Serve(Box::new(RelayHostServePlan {
         summary,
@@ -541,187 +695,4 @@ pub(super) fn host_selected_bundle(
             hosting_intent,
         }),
     )
-}
-
-// Last-resort coverage for the host's domain-claim decisions: they are only
-// reachable through host preparation (no public interface drives them).
-// One test drives both phases in order: a foreign-held root is refused
-// before any hosting, then, with the hold released and the same root owned
-// by a live same-process runtime, preparation adopts the owner and startup
-// registrations land in the owning domain rather than a discarded fresh one.
-#[cfg(test)]
-mod domain_claim_tests {
-    use std::os::unix::io::AsRawFd as _;
-
-    use tempfile::TempDir;
-
-    use crate::configuration::ConfigurationRoots;
-    use crate::relay::domain_lock_path;
-    use crate::runtime::paths::{ConfigurationRootSource, RuntimeRoots};
-    use crate::runtime::starter::ensure_starter_configuration_layout;
-
-    use super::{RelayHostPreparation, prepare_relay_host};
-
-    fn write_party_bundle(configuration_root: &std::path::Path) {
-        std::fs::write(
-            configuration_root.join("bundles").join("party.toml"),
-            r#"
-format-version = 1
-
-[[sessions]]
-id = "victim"
-name = "Victim"
-directory = "/tmp"
-
-[sessions.ui]
-"#,
-        )
-        .expect("write bundle");
-    }
-
-    fn test_roots(
-        temporary: &TempDir,
-    ) -> (RuntimeRoots, std::path::PathBuf, std::path::PathBuf) {
-        let configuration_root = temporary.path().join("conf");
-        let state_root = temporary.path().join("state");
-        let roots = RuntimeRoots {
-            configuration_roots: ConfigurationRoots::single(
-                &configuration_root,
-            ),
-            state_root: state_root.clone(),
-            // Shared with the other in-crate inscription tests: the
-            // configured path is first-wins per process, so per-test
-            // temporary paths would fail configuration depending on run
-            // order. relay_inscriptions_path appends relay.log, matching
-            // the shared test path exactly.
-            inscriptions_root:
-                crate::runtime::inscriptions::shared_test_inscriptions_path()
-                    .parent()
-                    .expect("inscription file has a parent")
-                    .to_path_buf(),
-            configuration_root_source: ConfigurationRootSource::Default,
-        };
-        ensure_starter_configuration_layout(&roots)
-            .expect("starter configuration");
-        write_party_bundle(&configuration_root);
-        (roots, configuration_root, state_root)
-    }
-
-    #[test]
-    fn host_domain_claim_decisions_route_preparation() {
-        // Phase 1 — a foreign-held root: refusal before any hosting, the
-        // serving constructor refuses the same root, and preparing again
-        // still refuses. The hold is a raw flock on a separate open
-        // description, the way another process would hold it.
-        let temporary = TempDir::new().expect("temporary");
-        let (roots, configuration_root, state_root) = test_roots(&temporary);
-
-        // Hold the domain claim the way another process would: an open file
-        // description with an exclusive, non-blocking flock, kept alive
-        // across the prepare call. Same-process flock conflicts on a
-        // separate open description, so no child process is needed.
-        let lock_path = domain_lock_path(&state_root);
-        std::fs::create_dir_all(lock_path.parent().expect("lock parent"))
-            .expect("identity directory");
-        let lock_file = std::fs::OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .expect("open domain lock file");
-        let taken = unsafe {
-            libc::flock(lock_file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB)
-        };
-        assert_eq!(taken, 0, "test holds the domain lock");
-
-        match prepare_relay_host(&roots, true, None, None)
-            .expect("prepare runs")
-        {
-            RelayHostPreparation::NoHostedBundles => {},
-            RelayHostPreparation::Serve(_) => {
-                panic!("a foreign-held domain must not yield a served host")
-            },
-        }
-        // The refusal lands before any bundle is hosted: no per-bundle
-        // runtime directory may exist. (A bypassed check would proceed into
-        // hosting and create it, so this pins the early return, not just
-        // the preparation variant.)
-        assert!(
-            !roots.state_root.join("bundles").exists(),
-            "refused preparation must not host bundles"
-        );
-        // The serving constructor refuses the same root itself: no usable
-        // serving context can be built over a domain this process does
-        // not own, so there is no fallback for a later prepare to adopt.
-        let foreign = std::sync::Arc::new(crate::relay::DeliveryContext::new(
-            crate::relay::DeliveryConfiguration::default(),
-        ));
-        let failed = match crate::relay::ConnectionServeContext::new(
-            roots.configuration_roots.clone(),
-            roots.state_root.clone(),
-            crate::relay::BundleCatalog::from_paths([]),
-            std::sync::Arc::new(
-                crate::relay::PeerConnectionManager::from_configuration(
-                    &roots.state_root,
-                    &[],
-                ),
-            ),
-            Vec::new(),
-            false,
-            std::time::Duration::from_secs(2),
-            foreign,
-        ) {
-            Ok(_) => panic!("serve construction over a held root must fail"),
-            Err(error) => error,
-        };
-        assert_eq!(
-            failed.code, "validation_runtime_already_hosted",
-            "serving-path refusal names the ownership violation: {failed:?}"
-        );
-        // Preparing again must still refuse: no local entry was published
-        // for the failed construction to adopt.
-        match prepare_relay_host(&roots, true, None, None)
-            .expect("prepare runs")
-        {
-            RelayHostPreparation::NoHostedBundles => {},
-            RelayHostPreparation::Serve(_) => {
-                panic!("a refused constructor must not yield a served host")
-            },
-        }
-        assert!(
-            !roots.state_root.join("bundles").exists(),
-            "refused preparation must not host bundles"
-        );
-        drop(lock_file);
-
-        // Phase 2 — the same root owned by a same-process runtime:
-        // preparation adopts its delivery state instead of refusing, and
-        // startup registrations land in the owner's domain rather than a
-        // discarded fresh one.
-        let runtime = crate::relay::RelayRuntime::init(
-            configuration_root,
-            state_root,
-            crate::relay::DeliveryConfiguration::default(),
-        )
-        .expect("runtime init");
-        match prepare_relay_host(&roots, true, None, None)
-            .expect("prepare runs")
-        {
-            RelayHostPreparation::Serve(_) => {},
-            RelayHostPreparation::NoHostedBundles => {
-                panic!("an adopted domain must still be served")
-            },
-        }
-        let principals = crate::relay::registered_principal_ids(
-            runtime.delivery_context(),
-            "party",
-        );
-        assert!(
-            principals
-                .iter()
-                .any(|principal| principal == "victim@party"),
-            "startup registrations land in the owning domain: {principals:?}"
-        );
-    }
 }

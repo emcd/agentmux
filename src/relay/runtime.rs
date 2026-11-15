@@ -140,6 +140,14 @@ impl RelayRuntime {
         // exists, so the canonical key resolves: a second live runtime on
         // the same root is refused while the first is alive.
         let owned_delivery = Arc::new(DeliveryContext::new(delivery));
+        // Bind the configuration-source identity BEFORE publishing this
+        // delivery as an adoptable domain below: a concurrent prepare
+        // adopting between publication and binding would otherwise
+        // install against an unbound owner. A claim failure drops this
+        // never-published delivery, so the early binding escapes nowhere.
+        #[cfg(feature = "experimental-public-send")]
+        owned_delivery
+            .bind_configuration_identity(configuration_roots.layers());
         let domain_key = canonical_domain_key(state_root.as_path());
         let domain_weak = claim_domain_slot(&domain_key, &owned_delivery)?;
         Ok(Self {

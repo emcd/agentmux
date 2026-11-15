@@ -5,7 +5,8 @@ use super::{
     AdmitGuard, PARK_SERIAL, park_fixture, park_provisioned, send_targets,
 };
 use agentmux::relay::{
-    RelayResponse, SendOperation, dispatch_send, rotate_principal_credential,
+    DispatchWiring, RelayResponse, SendOperation, dispatch_send,
+    rotate_principal_credential,
 };
 
 /// A credential rotation committing mid-flight denies the parked send even
@@ -28,14 +29,13 @@ fn parked_send_denies_rotation_with_unchanged_grants() {
     let parked = {
         let fixture_party = fixture.party.clone();
         let runtime = std::sync::Arc::clone(&fixture.runtime);
-        let catalog = fixture.catalog.clone();
-        let peer_manager = std::sync::Arc::clone(&fixture.peer_manager);
         std::thread::spawn(move || {
+            let wiring = DispatchWiring::mirrored(&runtime, &[], true)
+                .expect("mirror domain wiring");
             dispatch_send(
                 &runtime,
                 &context,
-                &catalog,
-                &peer_manager,
+                &wiring,
                 SendOperation {
                     targets: vec![format!("bravo@{fixture_party}")],
                     message: "hello".to_string(),
@@ -84,14 +84,13 @@ fn parked_send_denies_narrowing_before_admission() {
     let parked = {
         let fixture_party = fixture.party.clone();
         let runtime = std::sync::Arc::clone(&fixture.runtime);
-        let catalog = fixture.catalog.clone();
-        let peer_manager = std::sync::Arc::clone(&fixture.peer_manager);
         std::thread::spawn(move || {
+            let wiring = DispatchWiring::mirrored(&runtime, &[], true)
+                .expect("mirror domain wiring");
             dispatch_send(
                 &runtime,
                 &context,
-                &catalog,
-                &peer_manager,
+                &wiring,
                 SendOperation {
                     targets: vec![format!("bravo@{fixture_party}")],
                     message: "hello".to_string(),
@@ -150,14 +149,13 @@ fn parked_send_denies_shutdown_before_commit() {
     let parked = {
         let fixture_party = fixture.party.clone();
         let runtime = std::sync::Arc::clone(&fixture.runtime);
-        let catalog = fixture.catalog.clone();
-        let peer_manager = std::sync::Arc::clone(&fixture.peer_manager);
         std::thread::spawn(move || {
+            let wiring = DispatchWiring::mirrored(&runtime, &[], true)
+                .expect("mirror domain wiring");
             dispatch_send(
                 &runtime,
                 &context,
-                &catalog,
-                &peer_manager,
+                &wiring,
                 SendOperation {
                     targets: vec![format!("bravo@{fixture_party}")],
                     message: "hello".to_string(),
@@ -201,14 +199,13 @@ fn parked_send_without_interleaving_commits() {
     let parked = {
         let fixture_party = fixture.party.clone();
         let runtime = std::sync::Arc::clone(&fixture.runtime);
-        let catalog = fixture.catalog.clone();
-        let peer_manager = std::sync::Arc::clone(&fixture.peer_manager);
         std::thread::spawn(move || {
+            let wiring = DispatchWiring::mirrored(&runtime, &[], true)
+                .expect("mirror domain wiring");
             dispatch_send(
                 &runtime,
                 &context,
-                &catalog,
-                &peer_manager,
+                &wiring,
                 SendOperation {
                     targets: vec![format!("bravo@{fixture_party}")],
                     message: "hello".to_string(),
@@ -254,14 +251,13 @@ fn parked_send_denies_membership_removal_before_admission() {
     let parked = {
         let fixture_party = fixture.party.clone();
         let runtime = std::sync::Arc::clone(&fixture.runtime);
-        let catalog = fixture.catalog.clone();
-        let peer_manager = std::sync::Arc::clone(&fixture.peer_manager);
         std::thread::spawn(move || {
+            let wiring = DispatchWiring::mirrored(&runtime, &[], true)
+                .expect("mirror domain wiring");
             dispatch_send(
                 &runtime,
                 &context,
-                &catalog,
-                &peer_manager,
+                &wiring,
                 SendOperation {
                     targets: vec![format!("bravo@{fixture_party}")],
                     message: "hello".to_string(),
@@ -328,14 +324,13 @@ fn exclusion_probe_observes_held_span_at_pre_commit_point() {
     let parked = {
         let fixture_party = fixture.party.clone();
         let runtime = std::sync::Arc::clone(&fixture.runtime);
-        let catalog = fixture.catalog.clone();
-        let peer_manager = std::sync::Arc::clone(&fixture.peer_manager);
         std::thread::spawn(move || {
+            let wiring = DispatchWiring::mirrored(&runtime, &[], true)
+                .expect("mirror domain wiring");
             dispatch_send(
                 &runtime,
                 &context,
-                &catalog,
-                &peer_manager,
+                &wiring,
                 SendOperation {
                     targets: vec![format!("bravo@{fixture_party}")],
                     message: "hello".to_string(),
@@ -393,14 +388,13 @@ fn shutdown_during_span_waits_then_releases_barrier_after_commit() {
     let parked = {
         let fixture_party = fixture.party.clone();
         let runtime = std::sync::Arc::clone(&fixture.runtime);
-        let catalog = fixture.catalog.clone();
-        let peer_manager = std::sync::Arc::clone(&fixture.peer_manager);
         std::thread::spawn(move || {
+            let wiring = DispatchWiring::mirrored(&runtime, &[], true)
+                .expect("mirror domain wiring");
             dispatch_send(
                 &runtime,
                 &context,
-                &catalog,
-                &peer_manager,
+                &wiring,
                 SendOperation {
                     targets: vec![format!("bravo@{fixture_party}")],
                     message: "hello".to_string(),
@@ -430,11 +424,12 @@ fn shutdown_during_span_waits_then_releases_barrier_after_commit() {
         matches!(response, RelayResponse::Send { .. }),
         "admitted-before-shutdown commits visibly: {response:?}"
     );
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let refused = dispatch_send(
         &fixture.runtime,
         &context_clone,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: vec![format!("bravo@{}", fixture.party)],
             message: "hello".to_string(),
@@ -476,14 +471,13 @@ fn narrowing_after_commit_gate_denies_before_admission() {
     let parked = {
         let fixture_party = fixture.party.clone();
         let runtime = std::sync::Arc::clone(&fixture.runtime);
-        let catalog = fixture.catalog.clone();
-        let peer_manager = std::sync::Arc::clone(&fixture.peer_manager);
         std::thread::spawn(move || {
+            let wiring = DispatchWiring::mirrored(&runtime, &[], true)
+                .expect("mirror domain wiring");
             dispatch_send(
                 &runtime,
                 &context,
-                &catalog,
-                &peer_manager,
+                &wiring,
                 SendOperation {
                     targets: vec![format!("bravo@{fixture_party}")],
                     message: "hello".to_string(),
@@ -558,14 +552,13 @@ fn shutdown_waits_for_in_flight_span_then_releases_barrier() {
     let parked = {
         let fixture_party = fixture.party.clone();
         let runtime = std::sync::Arc::clone(&fixture.runtime);
-        let catalog = fixture.catalog.clone();
-        let peer_manager = std::sync::Arc::clone(&fixture.peer_manager);
         std::thread::spawn(move || {
+            let wiring = DispatchWiring::mirrored(&runtime, &[], true)
+                .expect("mirror domain wiring");
             dispatch_send(
                 &runtime,
                 &context,
-                &catalog,
-                &peer_manager,
+                &wiring,
                 SendOperation {
                     targets: vec![format!("bravo@{fixture_party}")],
                     message: "hello".to_string(),
@@ -618,11 +611,12 @@ fn shutdown_waits_for_in_flight_span_then_releases_barrier() {
         .recv_timeout(std::time::Duration::from_secs(30))
         .expect("the admission barrier releases after the span");
     shutdown.join().expect("shutdown thread joins");
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let refused = dispatch_send(
         &fixture.runtime,
         &context_clone,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: vec![format!("bravo@{}", fixture.party)],
             message: "hello".to_string(),
@@ -683,14 +677,13 @@ fn shutdown_after_reservation_waits_for_publication() {
     let parked = {
         let fixture_party = fixture.party.clone();
         let runtime = std::sync::Arc::clone(&fixture.runtime);
-        let catalog = fixture.catalog.clone();
-        let peer_manager = std::sync::Arc::clone(&fixture.peer_manager);
         std::thread::spawn(move || {
+            let wiring = DispatchWiring::mirrored(&runtime, &[], true)
+                .expect("mirror domain wiring");
             dispatch_send(
                 &runtime,
                 &context,
-                &catalog,
-                &peer_manager,
+                &wiring,
                 SendOperation {
                     targets: vec![format!("alpha@{fixture_party}")],
                     message: "hello".to_string(),
@@ -762,11 +755,12 @@ fn shutdown_after_reservation_waits_for_publication() {
         .recv_timeout(std::time::Duration::from_secs(30))
         .expect("the admission barrier releases after publication");
     shutdown.join().expect("shutdown thread joins");
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let refused = dispatch_send(
         &fixture.runtime,
         &context_clone,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: vec![format!("alpha@{}", fixture.party)],
             message: "hello".to_string(),

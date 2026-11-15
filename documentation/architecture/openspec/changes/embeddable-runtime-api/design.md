@@ -375,6 +375,67 @@ The experimental suite is the cutover evidence, not a second
 implementation: one shared spine, no socket fork — the socket
 suites run green in both configurations as the parity proof.
 
+Dispatch wiring binds the shared pair to its owning domain. The
+public entry takes a `DispatchWiring` instead of a bare catalog and
+peer manager: the handle carries the domain's live catalog and peer
+manager stapled to the domain's delivery Arc, constructed only by
+`live` (reads the installed pair, fail-closed when absent) or
+`mirrored` (adopts the installed pair if present, else builds from
+the runtime's own roots and installs). No constructor accepts a
+caller-supplied pair, so a foreign catalog can never be wrapped;
+dispatch refuses with `validation_wiring_runtime_mismatch` unless
+the wiring's delivery `Arc::ptr_eq`s the dispatching runtime's.
+The pair lives inside the delivery state itself, so it is released
+exactly when the domain drops — a reclaimed root starts from an
+empty slot by construction and stale generations cannot linger.
+First installation wins per domain generation while the installer
+still owns it, and the first installation must also agree with the
+configuration identity already bound to the owning delivery: the
+ordered, resolved layers are bound BEFORE the claim publishes the
+delivery as an adoptable domain (runtime construction, claiming
+prepare, and serve construction all bind their candidate first), so
+no concurrent adopter can ever observe an unbound owner. A mismatch
+is refused with a configuration-mismatch error before anything
+installs or starts, and an install against a somehow-unbound owner
+fails loud rather than accepting an arbitrary installation. A live
+owner never rebinds; a restarted domain binds anew once all prior
+holders release. This is a per-generation source-identity binding,
+not a permanent deployment-to-configuration mapping. Concurrent
+mirrored calls converge on the installed pair instead of forking
+it; a different pair over a committed one is refused, while a
+different pair over a still-tentative one fails with an initializing
+error so the loser retries after the winner commits or aborts. `prepare` installs its pair tentatively right after the domain
+claim (after the principal-store prune, so prune errors need no pair
+cleanup) and before any bundle startup side effect -- the reservation
+IS the preflight, so a domain that already hosts a pair fails there
+with a conflict, before workers spawn or listeners bind. The tentative
+install is unreadable: live/mirrored reads fail closed with an
+initializing error until the commit boundary publishes the pair, so
+the reservation grants no operative send authority by itself and no
+wiring for a pair that may yet abort can ever be issued. The commit
+boundary sits after every fallible step (bundle startup, principal
+registration, listener bind, serve construction): publish, defuse the
+abort guard, serve. That boundary -- not entry intents, not promotion
+timing -- is the readiness definition, so per-route bypass questions
+are moot: nothing is dispatchable before it. Bundles that fail to
+start are removed from the installed catalog in place before publish,
+and the serve context reuses the early-installed identity, so
+registration, failure pruning, and serving can never diverge onto
+different objects. Any post-install exit that does not reach the
+commit boundary unregisters the tentative pair via a drop-guaranteed
+abort guard (defused only on success), so a failed preparation leaves
+no retained pair behind and the next preparation over the same live
+domain starts from an empty slot instead of conflicting with its
+predecessor's residue. Because no wiring is issuable before publish
+and committed pairs are never unpublished, no stale or aborted wiring
+can exist to revoke: retention across abort is unconstructible, and
+the paused-window and abort traces prove the fail-closed reads rather
+than post-success state. A state-root-filtered test gate parks
+preparation between the tentative install and the first bundle side
+effect, pinning the unpublished window with a timing-observable trace.
+Read-only `catalog()`/`peers()` views expose the bound pair without
+conferring rebinding authority.
+
 Scope treatment of the shared spine and shutdown changes, proposed
 for agreement: the admission guard, publish-inside-span span, commit
 and reserved gates, and shutdown hooks live in dispatch code paths
@@ -383,7 +444,14 @@ improvements under routing parity rather than held-back scaffolding.
 They are covered by the full suite including the socket suites in
 both configurations and are required for the final shape; forking
 the spine for the hold would create the very divergence Phase 2
-exists to remove.
+exists to remove. The domain-pair slot lives inside the owning
+delivery state and exists only under the experimental flag: default
+builds have no slot and no production write path to it. The
+process-global map holds only weak delivery handles for the
+state-root claim plus the pair mutex ordering (domains-then-pair).
+The wiring constructors, the dispatch brand check, the
+tentative/publish/unregister calls, and the prepare abort guard all
+sit behind the experimental flag with the slot.
 
 ### Registration-minted authority (Coordinator D1 ruling, adjudicated)
 
