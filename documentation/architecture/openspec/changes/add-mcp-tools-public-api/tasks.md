@@ -13,18 +13,24 @@
 - [x] 1.3 Define the canonical operation error type covering the code, message,
   and typed details of the current error taxonomy, excluding adapter-only
   failures such as `unassociated_server`.
-- [x] 1.4 Define operation function signatures over the public runtime handle
-  and relay-verified principal context from `embeddable-runtime-api`, with no
-  caller-supplied sender identity parameter.
+- [x] 1.4 Define operation struct-plus-invoke signatures over the public
+  runtime handle and relay-verified principal context from
+  `embeddable-runtime-api`, with no caller-supplied sender identity
+  parameter. (Amended by delta 001: struct holds `Arc<RelayRuntime>`
+  plus sealed domain-bound wiring; per-invocation principal passed to
+  `invoke`, never stored.)
 
 ## 2. Operation Implementation
 
 - [x] 2.1 Add the public tool-operations module and its crate-level exports,
   carrying no rmcp, MCP association, or JSON schema types.
-- [ ] 2.2 Move each operation-backed handler body into its operation function,
-  dispatching through the public relay handlers and preserving existing
-  validation order and inscription emission. Leave `help` in the adapter,
-  answering from the adapter catalog.
+- [ ] 2.2 Move each operation-backed handler body into its operation struct's
+  invoke method, dispatching through the public relay handlers and preserving
+  existing validation order and inscription emission. The operation struct is
+  constructed per owning runtime from the host-live pair (serve clone,
+  Backend once-per-runtime constructor, or mirrored test construction);
+  dispatch uses the sealed wiring with pointer-brand defense in depth.
+  Leave `help` in the adapter, answering from the adapter catalog.
 - [ ] 2.3 Map public runtime-handler failures and relay-authored denials onto the
   canonical operation error type, preserving the relay-authored code and
   details. Keep MCP adapter transport and association failures — including
