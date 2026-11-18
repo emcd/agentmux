@@ -608,3 +608,87 @@ pub(crate) fn fault_aware_rollback_persist(
         None => persist(),
     }
 }
+
+/// A rendezvous a test installs to park host preparation after the
+/// tentative pair install and before any bundle startup side effect, so
+/// the test can observe the exact ownership-acquired-but-unpublished
+/// window: concurrent wiring reads must see only tentative `Hold`
+/// entries. It exists because no black-box signal can pause preparation
+/// between those two steps: every phase around them is fast local work.
+///
+/// The hook is state-root-filtered and inert unless a test arms it:
+/// unarmed calls cost one mutex probe on the prepare path only, and
+/// armed gates match a single state root, so parallel tests cannot trip
+/// each other's gates.
+#[cfg(feature = "experimental-public-send")]
+pub struct PrepareInstalledGate {
+    state_root: std::path::PathBuf,
+    reached_tx: mpsc::Sender<()>,
+    proceed_rx: mpsc::Receiver<()>,
+}
+
+#[cfg(feature = "experimental-public-send")]
+impl PrepareInstalledGate {
+    /// Creates an armed gate for `state_root`, returning the gate
+    /// alongside the test-side rendezvous channels.
+    pub fn arm(
+        state_root: &std::path::Path,
+    ) -> (Self, mpsc::Receiver<()>, mpsc::Sender<()>) {
+        let (reached_tx, reached_rx) = mpsc::channel::<()>();
+        let (proceed_tx, proceed_rx) = mpsc::channel::<()>();
+        (
+            Self {
+                state_root: state_root.to_path_buf(),
+                reached_tx,
+                proceed_rx,
+            },
+            reached_rx,
+            proceed_tx,
+        )
+    }
+}
+
+#[cfg(feature = "experimental-public-send")]
+static PREPARE_INSTALLED_GATE: Mutex<Option<PrepareInstalledGate>> =
+    Mutex::new(None);
+
+/// Installs `gate` as the active prepare-installed gate, replacing any
+/// previous one. Test-only; call [`disarm_prepare_installed_gate`] when
+/// done.
+#[cfg(feature = "experimental-public-send")]
+pub fn arm_prepare_installed_gate(gate: PrepareInstalledGate) {
+    *PREPARE_INSTALLED_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(gate);
+}
+
+/// Removes any installed prepare-installed gate.
+#[cfg(feature = "experimental-public-send")]
+pub fn disarm_prepare_installed_gate() {
+    *PREPARE_INSTALLED_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+}
+
+/// Pause point for host preparation, called after the tentative pair
+/// install and before any bundle startup side effect. When a gate armed
+/// for `state_root` is installed, signals arrival and blocks until the
+/// test releases it. Unarmed (or non-matching) calls return immediately.
+/// Timeouts fail loudly rather than resolving ambiguously — a stuck gate
+/// must never be mistaken for a startup decision.
+#[cfg(feature = "experimental-public-send")]
+pub(crate) fn test_prepare_installed_gate(state_root: &std::path::Path) {
+    let gate = PREPARE_INSTALLED_GATE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let Some(gate) = gate.as_ref() else {
+        return;
+    };
+    if gate.state_root != state_root {
+        return;
+    }
+    let _ = gate.reached_tx.send(());
+    gate.proceed_rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("test prepare-installed gate released");
+}

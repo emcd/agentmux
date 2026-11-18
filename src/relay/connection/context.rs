@@ -95,7 +95,16 @@ impl ConnectionServeContext {
         // concurrent first constructions converge on one domain. A
         // foreign-held root or a claim I/O failure has no local delivery
         // state to adopt and no claim to establish, so construction is
-        // refused rather than serving an unowned domain.
+        // refused rather than serving an unowned domain. The candidate
+        // delivery binds this construction's configuration identity
+        // BEFORE the claim publishes anything: on adoption the candidate
+        // is discarded and the live owner's binding governs (a foreign
+        // serve never rebinds it); on claim the published owner is
+        // already bound, so no concurrent adopter can ever observe an
+        // unbound owner.
+        #[cfg(feature = "experimental-public-send")]
+        delivery_context
+            .bind_configuration_identity(configuration_roots.layers());
         let delivery_context =
             match claim_or_adopt(&domain_key, &delivery_context) {
                 Ok(DomainClaim::Adopted(owner)) => owner,

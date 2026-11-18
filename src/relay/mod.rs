@@ -69,7 +69,7 @@ pub use self::delivery::observability::{
 /// Public in-process send surface. Exported only under the experimental
 /// cutover feature: without it no embedding host can name this path.
 #[cfg(feature = "experimental-public-send")]
-pub use self::dispatch::{SendOperation, dispatch_send};
+pub use self::dispatch::{DispatchWiring, SendOperation, dispatch_send};
 pub use self::drain::{
     ConnectionDrainCoordinator, ConnectionDrainReport, ConnectionWorkerSlot,
 };
@@ -85,6 +85,11 @@ pub use self::runtime::{
 #[cfg(test)]
 pub(crate) use self::runtime_domains::domain_lock_path;
 pub(crate) use self::runtime_domains::{DomainClaim, claim_or_adopt};
+#[cfg(feature = "experimental-public-send")]
+pub(crate) use self::runtime_domains::{
+    publish_domain_pair, register_tentative_domain_pair,
+    unregister_domain_pair,
+};
 pub use self::stream::second_claim_is_live_conflict_for_testing;
 pub use self::watcher::{BundleWatcher, spawn_bundle_watcher};
 #[doc(hidden)]

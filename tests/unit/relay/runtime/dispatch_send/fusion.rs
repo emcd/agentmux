@@ -6,7 +6,8 @@ use super::{
     verified_context,
 };
 use agentmux::relay::{
-    RelayResponse, SendOperation, dispatch_send, rotate_principal_credential,
+    DispatchWiring, RelayResponse, SendOperation, dispatch_send,
+    rotate_principal_credential,
 };
 
 #[test]
@@ -15,11 +16,12 @@ fn explicit_suffix_wins_over_operation_bundle_parameter() {
     let psk = provisioned_psk(&fixture.runtime, "alpha@party");
     let context = verified_context(&fixture.runtime, "alpha@party", &psk);
 
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &context,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: vec!["carol@other".to_string()],
             message: "hello".to_string(),
@@ -42,11 +44,12 @@ fn bare_target_defaults_to_operation_bundle_parameter() {
     let psk = provisioned_psk(&fixture.runtime, "alpha@party");
     let context = verified_context(&fixture.runtime, "alpha@party", &psk);
 
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &context,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: vec!["carol".to_string()],
             message: "hello".to_string(),
@@ -68,11 +71,12 @@ fn bare_target_defaults_to_bundle_scoped_home() {
     let psk = provisioned_psk(&fixture.runtime, "alpha@party");
     let context = verified_context(&fixture.runtime, "alpha@party", &psk);
 
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &context,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: vec!["bravo".to_string()],
             message: "hello".to_string(),
@@ -96,11 +100,12 @@ fn bare_target_rejected_for_global_without_resolvable_scope() {
     let psk = provisioned_psk(&fixture.runtime, "op@GLOBAL");
     let context = verified_context(&fixture.runtime, "op@GLOBAL", &psk);
 
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &context,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: vec!["bravo".to_string()],
             message: "hello".to_string(),
@@ -124,11 +129,12 @@ fn broadcast_without_parameter_rejected_for_bundle_principal() {
     let psk = provisioned_psk(&fixture.runtime, "alpha@party");
     let context = verified_context(&fixture.runtime, "alpha@party", &psk);
 
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &context,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: Vec::new(),
             message: "hello all".to_string(),
@@ -152,11 +158,12 @@ fn broadcast_without_parameter_rejected_for_global_principal() {
     let psk = provisioned_psk(&fixture.runtime, "op@GLOBAL");
     let context = verified_context(&fixture.runtime, "op@GLOBAL", &psk);
 
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &context,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: Vec::new(),
             message: "hello all".to_string(),
@@ -181,11 +188,12 @@ fn broadcast_with_parameter_fans_out_to_scope_members() {
     let psk = provisioned_psk(&fixture.runtime, "alpha@party");
     let context = verified_context(&fixture.runtime, "alpha@party", &psk);
 
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &context,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: Vec::new(),
             message: "hello all".to_string(),
@@ -208,11 +216,12 @@ fn cross_instance_context_is_rejected_by_public_dispatch() {
     let psk = provisioned_psk(&other_runtime, "alpha@party");
     let foreign = verified_context(&other_runtime, "alpha@party", &psk);
 
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &foreign,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: vec!["bravo@party".to_string()],
             message: "hello".to_string(),
@@ -243,11 +252,12 @@ fn rotated_binding_invalidates_outstanding_context_at_dispatch() {
     )
     .expect("rotate credential");
 
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &context,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: vec!["bravo@party".to_string()],
             message: "hello".to_string(),
@@ -274,11 +284,12 @@ fn unknown_sender_fails_at_context_check() {
     agentmux::relay::drop_principal(&fixture.runtime, "alpha@party")
         .expect("drop sender");
 
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &context,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: vec!["bravo@party".to_string()],
             message: "hello".to_string(),
@@ -304,11 +315,12 @@ fn broadcast_with_foreign_scope_fans_out_under_home_authorization() {
     let psk = provisioned_psk(&fixture.runtime, "alpha@party");
     let context = verified_context(&fixture.runtime, "alpha@party", &psk);
 
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &context,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: Vec::new(),
             message: "hello other".to_string(),
@@ -335,11 +347,12 @@ fn broadcast_with_targets_is_rejected_without_fanout() {
     for operation_bundle in
         [Some("party".to_string()), Some("other".to_string()), None]
     {
+        let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+            .expect("mirror domain wiring");
         let response = dispatch_send(
             &fixture.runtime,
             &context,
-            &fixture.catalog,
-            &fixture.peer_manager,
+            &wiring,
             SendOperation {
                 targets: vec!["bravo@party".to_string()],
                 message: "hello".to_string(),
@@ -365,11 +378,12 @@ fn foreign_scope_keeps_same_named_member_in_fanout() {
     let psk = provisioned_psk(&fixture.runtime, "alpha@party");
     let context = verified_context(&fixture.runtime, "alpha@party", &psk);
 
+    let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
+        .expect("mirror domain wiring");
     let response = dispatch_send(
         &fixture.runtime,
         &context,
-        &fixture.catalog,
-        &fixture.peer_manager,
+        &wiring,
         SendOperation {
             targets: Vec::new(),
             message: "hello other".to_string(),
