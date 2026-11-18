@@ -1,142 +1,227 @@
 //! Canonical `send` operation: validated, principal-authorized message
 //! delivery through the public relay dispatch spine.
 //!
-//! This moves the MCP `send` handler body here: the same validation
-//! order, the same inscription emission, and the same outcome
-//! interpretation — minus association, which stays adapter-side. The
-//! handler keeps working unchanged until the adapter is reduced to
-//! delegate to this operation; when that happens the handler must
-//! drop its own `mcp.tool.send.*` emissions (they live here now)
-//! rather than emit twice.
+//! The operation is a struct holding the public runtime handle and the
+//! sealed domain-bound dispatch wiring, with an async invoke method
+//! taking the relay-verified principal and the typed input. The wiring
+//! is sourced once per owning runtime (serve clone, Backend
+//! once-per-runtime constructor, or the mirrored constructor in
+//! tests) — never rebuilt per call, never probed from the
+//! filesystem by this layer.
+//!
+//! Dispatch runs on the blocking pool: the synchronous relay spine
+//! (including potentially slow peer forwarding) must never park an
+//! async executor thread. Validation and inscription emission happen
+//! up front in invoke; the outcome is interpreted after the join.
 //!
 //! Available only under `experimental-public-send`, like the dispatch
 //! boundary it calls.
 
-use serde_json::json;
+use std::sync::Arc;
 
-use crate::configuration::effective_bundle_definitions;
+use serde_json::{Value, json};
+
 use crate::relay::{
-    BundleCatalog, PeerConnectionManager, RelayResponse, RelayRuntime,
-    SendOperation, VerifiedPrincipal, dispatch_send,
-    load_relay_runtime_configuration,
+    DispatchWiring, RelayResponse, RelayRuntime, SendOperation,
+    VerifiedPrincipal, dispatch_send,
 };
 use crate::runtime::inscriptions::emit_inscription;
-use crate::runtime::paths::BundleRuntimePaths;
 
 use super::error::OperationError;
 use super::inputs::{BundleScope, SendInput};
 use super::outputs::SendOutput;
 
-/// Sends a message to explicit targets or broadcasts it to a bundle
-/// scope, authorized by relay-verified principal context.
+/// Canonical `send` operation: validated, principal-authorized
+/// message delivery through the public relay dispatch spine.
 ///
-/// Validation runs in handler order (message shape, then
-/// broadcast/target coherence, then bundle scope) before anything
-/// touches the relay. The relay request carries a minted correlation
-/// id for relay-side tracing; the caller-visible `request_id` is the
-/// input's echo, matching the MCP contract. Relay-authored denials
-/// enter the canonical error unchanged; an unexpected response
-/// variant is an internal failure. Socket-transport failures cannot
-/// arise: dispatch stays in-process and never touches the adapter's
-/// `RelayStreamSession`.
-pub async fn send(
-    runtime: &RelayRuntime,
-    principal: &VerifiedPrincipal,
-    input: SendInput,
-) -> Result<SendOutput, OperationError> {
-    validate_send(&input)?;
-    emit_inscription(
-        "mcp.tool.send.request",
-        &json!({
-            "namespace": principal.home_namespace(),
-            "request_id": input.request_id,
-            "targets": input.targets,
-            "broadcast": input.broadcast,
-            "message_length": input.message.len(),
-        }),
-    );
-    let operation_bundle = match &input.bundle {
-        // The canonical home resolves into the concrete principal-home
-        // scope, matching the MCP bound-bundle default — including for
-        // broadcast, which requires an explicit scope at the dispatch
-        // boundary. Relay-wide homes are the exception, mirroring the
-        // dispatch layer's own rule (qualify_targets_for_dispatch
-        // never defaults bare targets for the GLOBAL namespace): a
-        // bare name fused with a GLOBAL home would classify as a
-        // relay-wide user and silently become an explicit routing
-        // default, so GLOBAL homes stay parameter-less and dispatch
-        // applies its unqualified-target and parameter-required
-        // rejections instead.
-        BundleScope::Home if principal.home_namespace() == "GLOBAL" => None,
-        BundleScope::Home => Some(principal.home_namespace().to_string()),
-        BundleScope::Named(scope) => Some(scope.clone()),
-        // Send fans out within a single bundle scope (the dispatch
-        // layer expands one scope bundle per broadcast); `All` names
-        // no such scope, so it is a validation failure here rather
-        // than a silent home default.
-        BundleScope::All => {
-            return Err(OperationError::new(
-                "validation_invalid_arguments",
-                "send requires a single bundle scope: home or a named bundle",
-                None,
-            ));
-        },
-    };
-    let operation = SendOperation {
-        targets: input.targets.clone(),
-        message: input.message.clone(),
-        broadcast: input.broadcast,
-        operation_bundle,
-    };
-    let (catalog, peer_manager) = dispatch_auxiliaries(runtime)?;
-    match dispatch_send(runtime, principal, &catalog, &peer_manager, operation)
-    {
-        RelayResponse::Send {
-            schema_version,
-            requester_session,
-            sender_display_name,
-            authenticated_identity,
-            on_behalf_of,
-            results,
-            ..
-        } => {
-            emit_inscription(
-                "mcp.tool.send.success",
-                &json!({ "result_count": results.len() }),
-            );
-            Ok(SendOutput {
+/// Construct once per owning runtime from its sealed dispatch
+/// wiring; invoke per verified principal and typed input. The struct
+/// holds shared handles to runtime-owned relay machinery, not a
+/// server: it cannot act without a per-invocation principal, and it
+/// performs no authorization of its own beyond input validation —
+/// relay remains the decision point.
+#[derive(Clone)]
+#[cfg(feature = "experimental-public-send")]
+pub struct SendTool {
+    runtime: Arc<RelayRuntime>,
+    wiring: DispatchWiring,
+}
+
+#[cfg(feature = "experimental-public-send")]
+impl std::fmt::Debug for SendTool {
+    // Handles are never observable without acquiring them, and
+    // formatting while held could deadlock a thread partway through
+    // an inspect. Surface the structural placeholder only.
+    fn fmt(
+        &self,
+        formatter: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        formatter.debug_struct("SendTool").finish_non_exhaustive()
+    }
+}
+
+#[cfg(feature = "experimental-public-send")]
+impl SendTool {
+    /// Binds the operation to one owning runtime through previously
+    /// installed domain wiring (serve clone, Backend once-per-runtime
+    /// constructor, or the mirrored test path). No catalog or peer
+    /// manager is accepted here: the pair arrives sealed inside the
+    /// wiring, and mismatch with the runtime fails closed at
+    /// dispatch via the brand check.
+    pub fn new(runtime: Arc<RelayRuntime>, wiring: DispatchWiring) -> Self {
+        Self { runtime, wiring }
+    }
+
+    /// Sends a message to explicit targets or broadcasts it to a bundle
+    /// scope, authorized by relay-verified principal context.
+    ///
+    /// Validation runs in handler order (message shape, then
+    /// broadcast/target coherence, then bundle scope) before anything
+    /// touches the relay. The relay request carries a minted
+    /// correlation id for relay-side tracing; the caller-visible
+    /// `request_id` is the input's echo, matching the MCP contract.
+    /// Relay-authored denials enter the canonical error unchanged; an
+    /// unexpected response variant is an internal failure.
+    /// Socket-transport failures cannot arise: dispatch stays
+    /// in-process and never touches the adapter's
+    /// `RelayStreamSession`.
+    pub async fn invoke(
+        &self,
+        principal: &VerifiedPrincipal,
+        input: SendInput,
+    ) -> Result<SendOutput, OperationError> {
+        validate_send(&input)?;
+        emit_inscription_async(
+            "mcp.tool.send.request",
+            json!({
+                "namespace": principal.home_namespace(),
+                "request_id": input.request_id,
+                "targets": input.targets,
+                "broadcast": input.broadcast,
+                "message_length": input.message.len(),
+            }),
+        )
+        .await;
+        let operation_bundle = match input.bundle {
+            // The canonical home resolves into the concrete
+            // principal-home scope, matching the MCP bound-bundle
+            // default — including for broadcast, which requires an
+            // explicit scope at the dispatch boundary. Relay-wide
+            // homes are the exception, mirroring the dispatch
+            // layer's own rule: a bare name fused with a GLOBAL home
+            // would classify as a relay-wide user and silently
+            // become an explicit routing default, so GLOBAL homes
+            // pass no bundle and dispatch applies its unqualified
+            // and parameter-required rejections instead.
+            BundleScope::Home if principal.home_namespace() == "GLOBAL" => {
+                None
+            },
+            BundleScope::Home => Some(principal.home_namespace().to_string()),
+            BundleScope::Named(scope) => Some(scope),
+            // Send fans out within a single bundle scope (the
+            // dispatch layer expands one scope bundle per
+            // broadcast); `All` names no such scope, so it is a
+            // validation failure here rather than a silent home
+            // default.
+            BundleScope::All => {
+                return Err(OperationError::new(
+                    "validation_invalid_arguments",
+                    "send requires a single bundle scope: home or a named bundle",
+                    None,
+                ));
+            },
+        };
+        let operation = SendOperation {
+            targets: input.targets.clone(),
+            message: input.message.clone(),
+            broadcast: input.broadcast,
+            operation_bundle,
+        };
+        // The synchronous dispatch (including potentially slow peer
+        // forwarding) runs on the blocking pool so the executor
+        // stays free; dropping the invoke future detaches the
+        // waiter without recalling a dispatched send.
+        let runtime = Arc::clone(&self.runtime);
+        let wiring = self.wiring.clone();
+        let principal = principal.clone();
+        let response = tokio::task::spawn_blocking(move || {
+            dispatch_send(&runtime, &principal, &wiring, operation)
+        })
+        .await
+        .map_err(|source| {
+            OperationError::new(
+                "internal_unexpected_failure",
+                "send dispatch task failed to join",
+                Some(json!({ "cause": source.to_string() })),
+            )
+        })?;
+        match response {
+            RelayResponse::Send {
                 schema_version,
-                request_id: input.request_id,
                 requester_session,
                 sender_display_name,
                 authenticated_identity,
                 on_behalf_of,
                 results,
-            })
-        },
-        RelayResponse::Error { error } => {
-            emit_inscription(
-                "mcp.tool.send.relay_error",
-                &json!({
-                    "code": error.code.clone(),
-                    "message": error.message.clone(),
-                    "details": error.details.clone(),
-                }),
-            );
-            Err(OperationError::from_relay(&error))
-        },
-        other => {
-            emit_inscription(
-                "mcp.tool.send.unexpected_response",
-                &json!({ "response": other }),
-            );
-            Err(OperationError::new(
-                "internal_unexpected_failure",
-                "relay returned unexpected response variant",
-                Some(json!({ "response": other })),
-            ))
-        },
+                ..
+            } => {
+                emit_inscription_async(
+                    "mcp.tool.send.success",
+                    json!({ "result_count": results.len() }),
+                )
+                .await;
+                Ok(SendOutput {
+                    schema_version,
+                    request_id: input.request_id,
+                    requester_session,
+                    sender_display_name,
+                    authenticated_identity,
+                    on_behalf_of,
+                    results,
+                })
+            },
+            RelayResponse::Error { error } => {
+                emit_inscription_async(
+                    "mcp.tool.send.relay_error",
+                    json!({
+                        "code": error.code.clone(),
+                        "message": error.message.clone(),
+                        "details": error.details.clone(),
+                    }),
+                )
+                .await;
+                Err(OperationError::from_relay(&error))
+            },
+            other => {
+                emit_inscription_async(
+                    "mcp.tool.send.unexpected_response",
+                    json!({ "response": other }),
+                )
+                .await;
+                Err(OperationError::new(
+                    "internal_unexpected_failure",
+                    "relay returned unexpected response variant",
+                    Some(json!({ "response": other })),
+                ))
+            },
+        }
     }
+}
+
+/// Emits one diagnostic inscription without parking the executor:
+/// the sink performs synchronous filesystem I/O (directory
+/// creation, open in append mode, write), so it runs on the blocking
+/// pool. Awaited in order — request before dispatch, outcome after —
+/// so the handler's emission sequence is preserved. Fire-and-forget
+/// like the sync call: a failed write is dropped, never an operation
+/// error; abandoning the invoke future between awaits simply skips
+/// later events, which reports nothing untrue (a dispatched-but-unobserved
+/// completion is not recorded as observed).
+async fn emit_inscription_async(event: &'static str, details: Value) {
+    let _ = tokio::task::spawn_blocking(move || {
+        emit_inscription(event, &details);
+    })
+    .await;
 }
 
 /// Handler-order validation on the typed input, with the exact codes
@@ -166,54 +251,4 @@ fn validate_send(input: &SendInput) -> Result<(), OperationError> {
         ));
     }
     Ok(())
-}
-
-/// Builds the ephemeral dispatch auxiliaries from the runtime roots,
-/// mirroring the socket path's per-request catalog: every configured
-/// bundle stays addressable (cross-bundle fan-out needs more than the
-/// home bundle), and the peer manager reads the configured peers.
-/// Failures here are environment faults, reported as internal
-/// failures with the source preserved in details.
-fn dispatch_auxiliaries(
-    runtime: &RelayRuntime,
-) -> Result<(BundleCatalog, PeerConnectionManager), OperationError> {
-    let roots = runtime.configuration_roots();
-    let state_root = runtime.state_root();
-    let definitions =
-        effective_bundle_definitions(roots).map_err(|source| {
-            OperationError::new(
-                "internal_unexpected_failure",
-                "bundle enumeration failed",
-                Some(json!({ "error": source.to_string() })),
-            )
-        })?;
-    let mut paths = Vec::with_capacity(definitions.len());
-    for bundle in definitions.keys() {
-        match BundleRuntimePaths::resolve(state_root, bundle) {
-            Ok(resolved) => paths.push(resolved),
-            Err(source) => {
-                return Err(OperationError::new(
-                    "internal_unexpected_failure",
-                    "bundle path resolution failed",
-                    Some(json!({ "error": source.to_string() })),
-                ));
-            },
-        }
-    }
-    let catalog = BundleCatalog::from_paths(paths);
-    let peers = load_relay_runtime_configuration(roots, None, None)
-        .map_err(|source| {
-            OperationError::new(
-                "internal_unexpected_failure",
-                "peer configuration failed to load",
-                Some(json!({
-                    "code": source.code.clone(),
-                    "message": source.message.clone(),
-                })),
-            )
-        })?
-        .peers;
-    let peer_manager =
-        PeerConnectionManager::from_configuration(state_root, &peers);
-    Ok((catalog, peer_manager))
 }

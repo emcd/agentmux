@@ -34,4 +34,4 @@ pub use self::outputs::{
     RawwOutput, SendOutput,
 };
 #[cfg(feature = "experimental-public-send")]
-pub use self::send::send;
+pub use self::send::SendTool;
