@@ -6,6 +6,8 @@
 //! `experimental-public-send`, matching the gated surface exercised.
 
 #[cfg(feature = "experimental-public-send")]
+mod look;
+#[cfg(feature = "experimental-public-send")]
 mod send;
 #[cfg(feature = "experimental-public-send")]
 mod support;

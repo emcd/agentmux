@@ -14,8 +14,12 @@
 //! (`crate::mcp::operation_mapping`). `help` has no operation: its
 //! subject matter is the adapter catalog and generated schemas.
 
+#[cfg(feature = "experimental-public-send")]
+pub(crate) mod common;
 pub mod error;
 pub mod inputs;
+#[cfg(feature = "experimental-public-send")]
+pub mod look;
 pub mod outputs;
 #[cfg(feature = "experimental-public-send")]
 pub mod send;
@@ -27,6 +31,8 @@ pub use self::inputs::{
     ListNamespacesInput, ListPrincipalsInput, ListRelaysInput, LookInput,
     NewPeerInput, RawwInput, SendInput, UpInput,
 };
+#[cfg(feature = "experimental-public-send")]
+pub use self::look::LookTool;
 pub use self::outputs::{
     BundleTransitionOutput, ChangePskOutput, ChangeScopeOutput, DecideOutput,
     DropPeerOutput, LinkPeerOutput, ListDecisionsOutput, ListNamespacesOutput,

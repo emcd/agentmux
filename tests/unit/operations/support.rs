@@ -21,7 +21,15 @@ pub(super) struct OperationFixture {
     pub(super) runtime: Arc<RelayRuntime>,
 }
 
-fn write_bundles(temporary: &TempDir, send_scope: &str) {
+/// Variant whose sessions use the given coder: `"shell"` backs tmux
+/// sessions, `"acp"` backs workerless-snapshot targets that need no
+/// live session. The coder definition matches the reference.
+fn write_bundles_with_coder(
+    temporary: &TempDir,
+    send_scope: &str,
+    coder: &str,
+    look_scope: &str,
+) {
     let configuration_root = temporary.path().join("conf");
     let bundles = configuration_root.join("bundles");
     std::fs::create_dir_all(&bundles).expect("create bundles directory");
@@ -37,7 +45,7 @@ id = "default"
 
 [policies.controls]
 list = "home"
-look = "self"
+look = "{look_scope}"
 send = "{send_scope}"
 "#
         ),
@@ -55,7 +63,7 @@ send = "{send_scope}"
 id = "{id}"
 name = "{id}"
 directory = "/tmp"
-coder = "shell"
+coder = "{coder}"
 "#
                 )
             })
@@ -71,7 +79,20 @@ coder = "shell"
     }
     std::fs::write(
         configuration_root.join("coders.toml"),
-        r#"
+        if coder == "acp" {
+            r#"
+format-version = 1
+
+[[coders]]
+id = "acp"
+
+[coders.acp]
+channel = "stdio"
+command = "sh -lc 'cat >/dev/null'"
+"#
+            .to_string()
+        } else {
+            r#"
 format-version = 1
 
 [[coders]]
@@ -80,14 +101,45 @@ id = "shell"
 [coders.tmux]
 initial-command = "sh -lc 'exec sleep 45'"
 resume-command = "sh -lc 'exec sleep 45'"
-"#,
+"#
+            .to_string()
+        },
     )
     .expect("write coders file");
 }
 
 pub(super) fn operation_fixture(send_scope: &str) -> OperationFixture {
+    operation_fixture_with_coder(send_scope, "shell")
+}
+
+/// Fixture variant whose sessions use the given coder: `"shell"`
+/// backs tmux sessions, `"acp"` backs workerless-snapshot targets
+/// that need no live session.
+pub(super) fn operation_fixture_with_coder(
+    send_scope: &str,
+    coder: &str,
+) -> OperationFixture {
+    operation_fixture_full(send_scope, coder, "self")
+}
+
+/// Fixture variant with an explicit look scope: cross-bundle
+/// inspection needs `all`, while the default `self` keeps the
+/// denial tests meaningful.
+pub(super) fn operation_fixture_with_look(
+    send_scope: &str,
+    coder: &str,
+    look_scope: &str,
+) -> OperationFixture {
+    operation_fixture_full(send_scope, coder, look_scope)
+}
+
+fn operation_fixture_full(
+    send_scope: &str,
+    coder: &str,
+    look_scope: &str,
+) -> OperationFixture {
     let temporary = TempDir::new().expect("temporary directory");
-    write_bundles(&temporary, send_scope);
+    write_bundles_with_coder(&temporary, send_scope, coder, look_scope);
     let runtime = Arc::new(
         RelayRuntime::init(
             temporary.path().join("conf"),
@@ -150,7 +202,7 @@ id = "operator"
 
 [policies.controls]
 list = "home"
-look = "home"
+look = "all"
 send = "all"
 "#,
     )
