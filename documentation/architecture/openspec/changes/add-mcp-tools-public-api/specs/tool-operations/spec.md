@@ -3,20 +3,28 @@
 ### Requirement: Canonical Tool Operations API
 
 The system SHALL expose canonical Agentmux tool operations as public typed Rust
-functions that an in-process caller invokes directly.
+operation objects that an in-process caller invokes directly: one struct per
+operation-backed tool holding the public runtime handle and the sealed
+dispatch wiring, with an async invoke method taking the relay-verified
+principal context and the typed input.
 
 Invoking an operation SHALL NOT require constructing or embedding the MCP
-server, opening a stdio transport, constructing an rmcp `ToolRouter`, or running
-an agent harness.
+server, opening a stdio transport, constructing an rmcp `ToolRouter`, running
+an agent harness, or presenting any host or server object: the operation
+itself is a capability bundle, not a server — it owns no transport endpoint,
+resolves no association, generates no schemas, serves no connections, and
+cannot act without a per-invocation verified principal.
 
-An operation signature SHALL carry no MCP, JSON-RPC, rmcp, stdio, or JSON schema
-type, and SHALL NOT require a host or server object.
+An operation signature (struct fields, constructor parameters, and invoke
+parameters) SHALL carry no MCP, JSON-RPC, rmcp, stdio, or JSON schema type,
+and SHALL NOT require a host or server object.
 
 #### Scenario: Application invokes a tool operation in process
 
-- **GIVEN** an application host holds a public runtime handle and relay-verified
-  principal context
-- **WHEN** it calls a canonical tool operation with a typed input
+- **GIVEN** an application host holds a public runtime handle, the sealed
+  dispatch wiring for its owning runtime, and relay-verified principal context
+- **WHEN** it constructs the canonical operation object and invokes it with
+  a typed input
 - **THEN** the operation executes the tool's semantics and returns the typed
   output or the canonical operation error
 - **AND** the host does not construct the MCP server, a stdio transport, or an
@@ -24,8 +32,8 @@ type, and SHALL NOT require a host or server object.
 
 #### Scenario: Operation boundary carries no protocol types
 
-- **WHEN** a caller names the input, output, and error types of a canonical tool
-  operation
+- **WHEN** a caller names the struct fields, constructor parameters, input,
+  output, and error types of a canonical tool operation
 - **THEN** none of those types is an MCP, rmcp, JSON-RPC, or JSON schema type
 
 ### Requirement: Tool Operation Authorization Context

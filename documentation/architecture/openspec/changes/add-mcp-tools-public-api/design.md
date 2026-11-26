@@ -103,9 +103,14 @@ Implementation may choose exact names, but the public boundary must include:
 - a typed success output type per operation,
 - one canonical operation error type carrying the code, message, and typed
   details each operation contract defines,
-- async operation functions whose parameters are the public runtime handle, the
-  relay-verified principal context, and the typed input, returning the typed
-  output or the canonical error.
+- one canonical operation object per operation-backed tool: a struct holding
+  the public runtime handle (`Arc<RelayRuntime>`) and the sealed dispatch
+  wiring defined below, with one async invoke method taking the
+  relay-verified principal context and the typed input, returning the typed
+  output or the canonical error. The wiring binds the struct to one owning
+  runtime (domain-bound registration with pointer-brand defense in depth;
+  see Boundary Design). The constructor takes the runtime handle and the
+  wiring; per-invocation principals are passed to invoke, never stored.
 
 The public boundary must not include:
 
@@ -115,6 +120,14 @@ The public boundary must not include:
 - a `JsonSchema` or MCP-deserialization obligation on any operation type,
 - private relay socket Hello/request/response frames,
 - any caller-supplied sender or actor identity field.
+
+An operation-state handle is a capability bundle, not a server: it owns no
+transport endpoint, resolves no association, generates no schemas, serves no
+connections, and cannot act without a per-invocation verified principal. It
+holds only shared handles to runtime-owned relay machinery through the sealed
+wiring. The "no host or server object" rule targets `McpServer`,
+`ToolRouter`, transports, and association-bearing hosts — objects that
+authorize, frame, or present. The struct holds none of those capabilities.
 
 ## Boundary Design (Task 1)
 
@@ -203,15 +216,47 @@ second error set.
 ### 1.4 Signatures
 
 Shape (names illustrative; the boundary constraints in Public API
-Shape govern):
+Shape govern). Each operation is a struct holding the runtime handle
+and the sealed dispatch wiring, constructed per owning runtime, with
+an async invoke method taking the per-invocation principal and the
+typed input:
 
 ```rust
-async fn <op>(
-    runtime: &RelayRuntime,
-    principal: &VerifiedPrincipal,
-    input: <Op>Input,
-) -> Result<<Op>Output, OperationError>
+pub struct <Op>Operation { /* illustrative only */
+    runtime: Arc<RelayRuntime>,
+    wiring: DispatchWiring,
+}
+
+impl <Op>Operation {
+    pub fn new(
+        runtime: Arc<RelayRuntime>,
+        wiring: DispatchWiring,
+    ) -> Self;
+
+    pub async fn invoke(
+        &self,
+        principal: &VerifiedPrincipal,
+        input: <Op>Input,
+    ) -> Result<<Op>Output, OperationError>;
+}
 ```
+
+The wiring binds the struct to one owning runtime (domain-bound
+registration with pointer-brand defense in depth): the constructor
+takes the runtime handle and a sealed wiring minted for that runtime.
+Mismatch between wiring and runtime is refused at dispatch time by
+the brand check (`validation_wiring_runtime_mismatch`); the
+constructor itself carries no error contract beyond taking the pair.
+Per-invocation principals are passed to invoke and validated
+against the owning runtime inside the dispatched work — never
+cached. `spawn_blocking` owns cloned context, principal, and input;
+no lock is held across an await; an awaited join failure surfaces as
+`internal_unexpected_failure`, and dropping the invoke future
+detaches without implying recall (no result is delivered to a dropped
+receiver). No wiring, catalog, or peer state is rebuilt per call;
+the host-live pair is cloned per operation from the owning serve
+context (adapter), the Backend once-per-runtime constructor
+(embedded callers), or the mirrored constructor in tests.
 
 All eleven operations are defined in the design (a coherent surface
 prevents signature drift); publication proceeds in two waves. Wave 1
@@ -282,13 +327,14 @@ none.
 2. Introduce protocol-neutral operation input, output, and error types derived
    from the current tool contracts.
 3. Move each operation-backed handler body — validation, relay request
-   construction, dispatch, and outcome interpretation — into an operation
-   function taking principal context. `help` stays in the adapter.
+   construction, dispatch, and outcome interpretation — into its operation
+   struct's invoke method, taking per-invocation principal context. `help`
+   stays in the adapter.
 4. Reduce each operation-backed MCP handler to: deserialize its MCP parameter
    type, resolve association into principal context, map the parameter type to
-   the operation input, call the operation, render the JSON payload, and map the
-   canonical error onto the existing MCP error code and details. The `help`
-   handler keeps its current shape.
+   the operation input, invoke the host-constructed operation, render the JSON
+   payload, and map the canonical error onto the existing MCP error code and
+   details. The `help` handler keeps its current shape.
 5. Keep help and schema generation in the adapter, generated from the adapter's
    MCP parameter types, and add contract tests binding each parameter type to
    the operation input it maps to.

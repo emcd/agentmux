@@ -53,9 +53,11 @@ delegates.
 
 - No new tools and no changes to any existing MCP tool contract.
 - No MCP-specific host, server, or association type as the public embedding
-  boundary.
+  boundary. (An operation-state handle holding shared runtime machinery is
+  not a host/server type under this rule: it authorizes, frames, and
+  presents nothing — see design Public API Shape.)
 - No rmcp types (`ToolRouter`, `CallToolResult`, `ErrorData`) in the public
-  operation boundary.
+  operation boundary (fields and constructor parameters included).
 - No second authorization engine; relay remains the decision point.
 - No public Rust API for private relay Hello/request/response socket frames.
 - No stabilization of private helper names such as per-handler relay response
@@ -65,8 +67,9 @@ delegates.
 ## Dependencies and Ordering
 
 - This change depends on `embeddable-runtime-api` and SHALL land after it.
-  Operation signatures take the public runtime's relay-verified principal
-  context and dispatch through its public relay handlers; neither exists until
+  Operation structs take the public runtime handle plus sealed dispatch wiring
+  at construction and the relay-verified principal context per invocation,
+  dispatching through public relay handlers; neither handle exists until
   that change lands.
 - The dependency is one-directional. `embeddable-runtime-api` does not depend on
   this change.

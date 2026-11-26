@@ -40,6 +40,9 @@ mod delivery_protocol;
 mod envelope;
 #[path = "unit/opencode_prompt_regex.rs"]
 mod opencode_prompt_regex;
+#[cfg(feature = "experimental-public-send")]
+#[path = "unit/operations/mod.rs"]
+mod operations;
 #[cfg(feature = "pty")]
 #[path = "unit/pty_transport.rs"]
 mod pty_transport;

@@ -73,6 +73,7 @@ pub(super) fn send_input(
             None,
         ));
     }
+
     if params.broadcast && !params.targets.is_empty() {
         return Err(op_error(
             "validation_conflicting_targets",
@@ -507,9 +508,49 @@ pub(super) fn link_peer_input(
 /// section 3.1, so no public path exercises them yet.
 #[cfg(test)]
 mod operation_mapping_tests {
-    use super::super::params::{ListArgs, ListNamespacesArgs};
-    use super::{list_namespaces_input, list_principals_input};
+    use std::collections::BTreeMap;
+
+    use super::super::params::{ListArgs, ListNamespacesArgs, SendParams};
+    use super::{list_namespaces_input, list_principals_input, send_input};
     use crate::operations::inputs::BundleScope;
+
+    /// `send` parameter mapping is representation-exact: the message
+    /// travels verbatim (validated non-empty after trim, never
+    /// trimmed), targets and broadcast pass through, the request id
+    /// passes through, and the bundle stays raw for the operation to
+    /// qualify. Failures carry the handler-identical code.
+    #[test]
+    fn send_mapping_preserves_contract() {
+        let params =
+            |message: &str, targets: &[&str], broadcast: bool| SendParams {
+                request_id: Some("c-9".to_string()),
+                message: message.to_string(),
+                targets: targets.iter().map(ToString::to_string).collect(),
+                broadcast,
+                extra_fields: BTreeMap::new(),
+            };
+        let input = send_input(
+            &params("  padded but verbatim  ", &["bravo"], false),
+            BundleScope::Home,
+        )
+        .expect("valid params map");
+        assert_eq!(input.targets, vec!["bravo".to_string()]);
+        assert!(!input.broadcast);
+        assert_eq!(input.message, "  padded but verbatim  ");
+        assert_eq!(input.request_id.as_deref(), Some("c-9"));
+        assert_eq!(input.bundle, BundleScope::Home);
+        let error =
+            send_input(&params("   ", &["bravo"], false), BundleScope::Home)
+                .expect_err("blank message must fail");
+        assert_eq!(error.code, "validation_invalid_arguments");
+        let error =
+            send_input(&params("hi", &["bravo"], true), BundleScope::Home)
+                .expect_err("broadcast with targets must fail");
+        assert_eq!(error.code, "validation_conflicting_targets");
+        let error = send_input(&params("hi", &[], false), BundleScope::Home)
+            .expect_err("empty targets must fail");
+        assert_eq!(error.code, "validation_empty_targets");
+    }
 
     /// Selector normalization is representation-exact: surrounding
     /// whitespace trims, whitespace-only/omitted selects the local
