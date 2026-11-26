@@ -4,145 +4,19 @@
 //! in [`admission`]. Shared fixtures and verified-context helpers live here.
 
 use agentmux::relay::{
-    CredentialSource, DeliveryConfiguration, IdentityDescriptor,
-    ProvisionParams, RelayResponse, RelayRuntime, VerifiedPrincipal,
-    provision_principal, verify_identity,
+    DeliveryConfiguration, RelayResponse, RelayRuntime, VerifiedPrincipal,
 };
 use tempfile::TempDir;
+
+pub(super) use super::dispatch_fixtures::{
+    SendFixture, provisioned_psk, send_fixture, send_fixture_with_members,
+    verified_context,
+};
 
 mod admission;
 mod fusion;
 mod store_hold;
 mod wiring;
-fn write_bundles(
-    temporary: &TempDir,
-    send_scope: &str,
-    extra_other_members: &[(&str, &str)],
-) {
-    let configuration_root = temporary.path().join("conf");
-    let bundles = configuration_root.join("bundles");
-    std::fs::create_dir_all(&bundles).expect("create bundles directory");
-    std::fs::write(
-        configuration_root.join("coders.toml"),
-        r#"
-format-version = 1
-
-[[coders]]
-id = "shell"
-
-[coders.tmux]
-initial-command = "sh -lc 'exec sleep 45'"
-resume-command = "sh -lc 'exec sleep 45'"
-"#,
-    )
-    .expect("write coders file");
-    std::fs::write(
-        configuration_root.join("policies.toml"),
-        format!(
-            r#"
-format-version = 1
-default = "default"
-
-[[policies]]
-id = "default"
-
-[policies.controls]
-list = "home"
-look = "self"
-send = "{send_scope}"
-"#
-        ),
-    )
-    .expect("write policies file");
-    let mut other_members = vec![("carol", "Carol")];
-    other_members.extend_from_slice(extra_other_members);
-    for (bundle, members) in [
-        ("party", vec![("alpha", "Alpha"), ("bravo", "Bravo")]),
-        ("other", other_members),
-    ] {
-        let sessions: Vec<String> = members
-            .iter()
-            .map(|(id, name)| {
-                format!(
-                    r#"
-[[sessions]]
-id = "{id}"
-name = "{name}"
-directory = "/tmp"
-coder = "shell"
-"#
-                )
-            })
-            .collect();
-        std::fs::write(
-            bundles.join(format!("{bundle}.toml")),
-            // Hosted bundles declare autostart explicitly: an absent key
-            // means Hold, so fixtures model running bundles honestly.
-            format!(
-                "format-version = 1\nautostart = true\n{}",
-                sessions.join("")
-            ),
-        )
-        .expect("write bundle configuration");
-    }
-}
-
-struct SendFixture {
-    _temporary: TempDir,
-    runtime: RelayRuntime,
-}
-
-fn send_fixture(send_scope: &str) -> SendFixture {
-    send_fixture_with_members(send_scope, &[])
-}
-
-fn send_fixture_with_members(
-    send_scope: &str,
-    extra_other_members: &[(&str, &str)],
-) -> SendFixture {
-    let temporary = TempDir::new().expect("temporary directory");
-    write_bundles(&temporary, send_scope, extra_other_members);
-    let configuration_root = temporary.path().join("conf");
-    let state_root = temporary.path().join("state");
-    let runtime = RelayRuntime::init(
-        configuration_root,
-        state_root.clone(),
-        DeliveryConfiguration::default(),
-    )
-    .expect("runtime init");
-    SendFixture {
-        _temporary: temporary,
-        runtime,
-    }
-}
-
-/// Verifies `principal_id` with the given one-time PSK, returning the
-/// live context dispatch requires.
-fn verified_context(
-    runtime: &RelayRuntime,
-    principal_id: &str,
-    psk: &str,
-) -> agentmux::relay::VerifiedPrincipal {
-    verify_identity(
-        runtime,
-        &IdentityDescriptor::new(
-            principal_id.to_string(),
-            CredentialSource::DirectPsk(psk.to_string()),
-        ),
-    )
-    .expect("verify identity")
-}
-
-fn provisioned_psk(runtime: &RelayRuntime, principal_id: &str) -> String {
-    provision_principal(
-        runtime,
-        ProvisionParams::new(principal_id.to_string()),
-    )
-    .expect("provision principal")
-    .psk
-    .expect("one-time raw PSK")
-}
-
 fn send_targets(response: RelayResponse) -> Vec<String> {
     let RelayResponse::Send { results, .. } = response else {
         panic!("expected a send response, got {response:?}");

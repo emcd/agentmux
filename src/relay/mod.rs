@@ -69,7 +69,9 @@ pub use self::delivery::observability::{
 /// Public in-process send surface. Exported only under the experimental
 /// cutover feature: without it no embedding host can name this path.
 #[cfg(feature = "experimental-public-send")]
-pub use self::dispatch::{DispatchWiring, SendOperation, dispatch_send};
+pub use self::dispatch::{
+    DispatchWiring, LookOperation, SendOperation, dispatch_look, dispatch_send,
+};
 pub use self::drain::{
     ConnectionDrainCoordinator, ConnectionDrainReport, ConnectionWorkerSlot,
 };
@@ -501,7 +503,7 @@ pub(in crate::relay) fn dispatch_request(
 /// session listing and runtime context. This is the seam that lets a session
 /// list a peer bundle without being rejected as unknown in the wrong bundle's
 /// members.
-pub(in crate::relay) fn dispatch_list(
+pub(in crate::relay) fn dispatch_list_frame(
     delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
@@ -601,7 +603,7 @@ pub(in crate::relay) fn dispatch_send_frame(
 /// `None` for relay-wide requesters. The look path resolves and authorizes the
 /// requester in its home namespace and loads the target's bundle separately for
 /// the snapshot — never a borrowed dispatch bundle.
-pub(in crate::relay) fn dispatch_look(
+pub(in crate::relay) fn dispatch_look_frame(
     delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,
@@ -643,7 +645,7 @@ pub(in crate::relay) fn dispatch_look(
 /// cross-namespace raww authorize the sender in its home namespace rather than a
 /// borrowed target bundle.
 #[allow(clippy::too_many_arguments)]
-pub(in crate::relay) fn dispatch_raww(
+pub(in crate::relay) fn dispatch_raww_frame(
     delivery: &Arc<DeliveryContext>,
     request: RelayRequest,
     configuration_roots: &ConfigurationRoots,

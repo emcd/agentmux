@@ -11,6 +11,14 @@ use agentmux::relay::{
 };
 use tempfile::TempDir;
 
+/// Shared fixtures for the public-dispatch integration suites.
+#[cfg(feature = "experimental-public-send")]
+pub(super) mod dispatch_fixtures;
+/// In-process public-look dispatch tests. Compiled only under the
+/// experimental cutover feature, matching the gated surface they
+/// exercise.
+#[cfg(feature = "experimental-public-send")]
+mod dispatch_look;
 /// In-process public-send dispatch tests. Compiled only under the
 /// experimental cutover feature, matching the gated surface they
 /// exercise: without it `dispatch_send`/`SendOperation` do not exist.

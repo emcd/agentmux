@@ -112,11 +112,18 @@ one directory apart; prefer `control` when the authorization sense is meant.
 - `dispatch.rs`
   - public dispatch handlers taking `(&RelayRuntime, &VerifiedPrincipal, …)`
     plus typed operation inputs (e.g. `SendOperation` with its explicit
-    operation-bundle parameter). Each handler validates its context, fuses
-    bare targets against parameter then home, runs the shared authorize and
-    admit spine, and returns the same `RelayResponse` union the socket
-    path produces. Relay-ingress and registration-minted contexts are
-    refused here until their dedicated slices land.
+    operation-bundle parameter, `LookOperation` with target, window, and
+    bundle parameter). Each handler validates its context, fuses bare
+    targets against parameter then home, runs the shared authorize-and-
+    route spine, and returns the same `RelayResponse` union the socket
+    path produces: sends admit and publish through the admission ledger,
+    looks read a snapshot through the target transport. Relay-ingress
+    and registration-minted contexts are refused here until their
+    dedicated slices land. All handlers and their wiring surface exist
+    only under the experimental cutover feature; without it the symbols
+    do not exist and no embedding host can reach the path, and the
+    operative cutover stays held behind the managed-publication
+    contract.
 - `constants.rs`
   - relay-local constants shared across submodules.
 - `identity.rs`
