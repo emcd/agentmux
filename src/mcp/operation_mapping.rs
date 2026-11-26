@@ -510,8 +510,13 @@ pub(super) fn link_peer_input(
 mod operation_mapping_tests {
     use std::collections::BTreeMap;
 
-    use super::super::params::{ListArgs, ListNamespacesArgs, SendParams};
-    use super::{list_namespaces_input, list_principals_input, send_input};
+    use super::super::params::{
+        LOOK_LINES_MAX, LOOK_LINES_MIN, ListArgs, ListNamespacesArgs,
+        LookParams, SendParams,
+    };
+    use super::{
+        list_namespaces_input, list_principals_input, look_input, send_input,
+    };
     use crate::operations::inputs::BundleScope;
 
     /// `send` parameter mapping is representation-exact: the message
@@ -550,6 +555,47 @@ mod operation_mapping_tests {
         let error = send_input(&params("hi", &[], false), BundleScope::Home)
             .expect_err("empty targets must fail");
         assert_eq!(error.code, "validation_empty_targets");
+    }
+
+    /// `look` parameter mapping is representation-exact: the target
+    /// passes through raw for the operation to qualify, lines and
+    /// offset pass through unchanged, and out-of-range lines fail
+    /// with the handler-identical code and bounds.
+    #[test]
+    fn look_mapping_preserves_contract() {
+        let params = |target: &str, lines: Option<u64>| LookParams {
+            target_session: target.to_string(),
+            lines,
+            offset: Some(2),
+            extra_fields: BTreeMap::new(),
+        };
+        let input =
+            look_input(&params("seat-1", Some(10))).expect("valid params map");
+        assert_eq!(input.target, "seat-1");
+        assert_eq!(input.lines, Some(10));
+        assert_eq!(input.offset, Some(2));
+        // Range bounds are inclusive on both ends.
+        for lines in [Some(1), Some(1000)] {
+            look_input(&params("seat-1", lines))
+                .expect("boundary lines are valid");
+        }
+        let error = look_input(&params("   ", Some(10)))
+            .expect_err("blank target must fail");
+        assert_eq!(error.code, "validation_unknown_target");
+        let error = look_input(&params("seat-1", Some(0)))
+            .expect_err("zero lines must fail");
+        assert_eq!(error.code, "validation_invalid_lines");
+        let error = look_input(&params("seat-1", Some(1001)))
+            .expect_err("oversize lines must fail");
+        assert_eq!(error.code, "validation_invalid_lines");
+        assert_eq!(
+            error.details,
+            Some(serde_json::json!({
+                "lines": 1001,
+                "min": LOOK_LINES_MIN,
+                "max": LOOK_LINES_MAX,
+            })),
+        );
     }
 
     /// Selector normalization is representation-exact: surrounding

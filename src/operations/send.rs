@@ -19,16 +19,16 @@
 
 use std::sync::Arc;
 
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::relay::{
     DispatchWiring, RelayResponse, RelayRuntime, SendOperation,
     VerifiedPrincipal, dispatch_send,
 };
-use crate::runtime::inscriptions::emit_inscription;
 
+use super::common::{emit_inscription_async, operation_bundle_for};
 use super::error::OperationError;
-use super::inputs::{BundleScope, SendInput};
+use super::inputs::SendInput;
 use super::outputs::SendOutput;
 
 /// Canonical `send` operation: validated, principal-authorized
@@ -102,35 +102,11 @@ impl SendTool {
             }),
         )
         .await;
-        let operation_bundle = match input.bundle {
-            // The canonical home resolves into the concrete
-            // principal-home scope, matching the MCP bound-bundle
-            // default — including for broadcast, which requires an
-            // explicit scope at the dispatch boundary. Relay-wide
-            // homes are the exception, mirroring the dispatch
-            // layer's own rule: a bare name fused with a GLOBAL home
-            // would classify as a relay-wide user and silently
-            // become an explicit routing default, so GLOBAL homes
-            // pass no bundle and dispatch applies its unqualified
-            // and parameter-required rejections instead.
-            BundleScope::Home if principal.home_namespace() == "GLOBAL" => {
-                None
-            },
-            BundleScope::Home => Some(principal.home_namespace().to_string()),
-            BundleScope::Named(scope) => Some(scope),
-            // Send fans out within a single bundle scope (the
-            // dispatch layer expands one scope bundle per
-            // broadcast); `All` names no such scope, so it is a
-            // validation failure here rather than a silent home
-            // default.
-            BundleScope::All => {
-                return Err(OperationError::new(
-                    "validation_invalid_arguments",
-                    "send requires a single bundle scope: home or a named bundle",
-                    None,
-                ));
-            },
-        };
+        let operation_bundle = operation_bundle_for(
+            "send",
+            principal.home_namespace(),
+            &input.bundle,
+        )?;
         let operation = SendOperation {
             targets: input.targets.clone(),
             message: input.message.clone(),
@@ -206,22 +182,6 @@ impl SendTool {
             },
         }
     }
-}
-
-/// Emits one diagnostic inscription without parking the executor:
-/// the sink performs synchronous filesystem I/O (directory
-/// creation, open in append mode, write), so it runs on the blocking
-/// pool. Awaited in order — request before dispatch, outcome after —
-/// so the handler's emission sequence is preserved. Fire-and-forget
-/// like the sync call: a failed write is dropped, never an operation
-/// error; abandoning the invoke future between awaits simply skips
-/// later events, which reports nothing untrue (a dispatched-but-unobserved
-/// completion is not recorded as observed).
-async fn emit_inscription_async(event: &'static str, details: Value) {
-    let _ = tokio::task::spawn_blocking(move || {
-        emit_inscription(event, &details);
-    })
-    .await;
 }
 
 /// Handler-order validation on the typed input, with the exact codes
