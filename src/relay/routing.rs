@@ -400,7 +400,7 @@ pub(super) fn resolve_send_route(
 /// targets. Broadcast carries no targets; its scope resolves solely from
 /// the parameter at expansion, so this stage only requires the parameter
 /// and returns no targets. Available only under the experimental cutover
-/// feature, like its sole caller.
+/// feature, like the public dispatch handlers that call it.
 #[cfg(feature = "experimental-public-send")]
 pub(in crate::relay) fn qualify_targets_for_dispatch(
     targets: &[String],
@@ -455,7 +455,8 @@ pub(in crate::relay) fn qualify_targets_for_dispatch(
 /// apply as they do for explicit targets. Exclusion is by canonical
 /// identity: only a same-home member naming the sender itself is skipped,
 /// so a same-named member of a foreign scope still receives. Available only
-/// under the experimental cutover feature, like its sole caller.
+/// under the experimental cutover feature, like the public send handler
+/// that calls it.
 #[cfg(feature = "experimental-public-send")]
 pub(in crate::relay) fn expand_broadcast_scope(
     configuration_roots: &crate::configuration::ConfigurationRoots,

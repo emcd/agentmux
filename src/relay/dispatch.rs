@@ -1,6 +1,7 @@
 //! Public relay dispatch handlers: typed operations over verified principal
-//! context, routing through the same authorize and admit spine as the
-//! socket transport.
+//! context, routing through the same authorize-and-route spine as the
+//! socket transport. Sends additionally admit and publish through the
+//! admission ledger; look reads a snapshot and does not admit.
 //!
 //! Each handler validates its context through [`check_context`], fuses
 //! bare targets against the explicit operation bundle and the principal
@@ -40,7 +41,27 @@ pub struct SendOperation {
     pub operation_bundle: Option<String>,
 }
 
-/// The domain-bound dispatch pair for public send: the shared catalog and
+/// Typed look operation for public dispatch: a single target session,
+/// an optional snapshot window, and the explicit operation-bundle
+/// parameter driving bare-target fusion. The requester is the verified
+/// context itself, never a wire field; relay ingress stays on the
+/// socket path.
+#[derive(Clone, Debug)]
+#[cfg(feature = "experimental-public-send")]
+pub struct LookOperation {
+    /// Raw target session as named by the caller; a bare name fuses
+    /// against the operation bundle, then the principal home.
+    pub target_session: String,
+    /// Snapshot window size (contract range 1..=1000); the spine
+    /// applies the transport default when absent.
+    pub lines: Option<usize>,
+    /// Entries to skip from the newest end before the tail-N window.
+    pub offset: Option<usize>,
+    /// Explicit default namespace for a bare target session.
+    pub operation_bundle: Option<String>,
+}
+
+/// The domain-bound dispatch pair for public operations: the shared catalog and
 /// peer manager a runtime's dispatch resolves through, stapled to the
 /// owning delivery state.
 ///
@@ -353,6 +374,85 @@ pub fn dispatch_send(
         Some(wiring.peers.as_ref()),
         None,
         runtime.state_root(),
+    ) {
+        Ok(value) => value,
+        Err(error) => super::RelayResponse::Error { error },
+    }
+}
+
+/// Public look dispatch: verifies the caller's context, fuses the bare
+/// target session against the explicit operation bundle, and routes
+/// through the shared authorize-and-route spine (look reads a snapshot;
+/// it does not admit). Available only under
+/// the `experimental-public-send` cutover feature; without it this
+/// symbol does not exist and no embedding host can reach the path.
+#[cfg(feature = "experimental-public-send")]
+pub fn dispatch_look(
+    runtime: &RelayRuntime,
+    context: &VerifiedPrincipal,
+    wiring: &DispatchWiring,
+    operation: LookOperation,
+) -> super::RelayResponse {
+    // Brand check first: the wiring's delivery must be this runtime's own.
+    // A wiring built for another domain — or a stale one from before a
+    // domain regeneration — is refused before any context check, routing,
+    // or admission work. There is deliberately no fallback pair.
+    if !std::sync::Arc::ptr_eq(runtime.delivery_context(), &wiring.delivery) {
+        return super::RelayResponse::Error {
+            error: crate::relay::relay_error(
+                "validation_wiring_runtime_mismatch",
+                "dispatch wiring was not built for this runtime",
+                None,
+            ),
+        };
+    }
+    if let Err(error) = check_context(runtime, context) {
+        return super::RelayResponse::Error { error };
+    }
+    if classify_principal_id(context.principal_id())
+        == Some(PrincipalType::Relay)
+    {
+        return super::RelayResponse::Error {
+            error: crate::relay::relay_error(
+                "validation_invalid_arguments",
+                "relay-ingress dispatch stays on the socket transport",
+                None,
+            ),
+        };
+    }
+    let home_namespace = context.home_namespace().to_string();
+    let fused = match super::routing::qualify_targets_for_dispatch(
+        std::slice::from_ref(&operation.target_session),
+        false,
+        operation.operation_bundle.as_deref(),
+        home_namespace.as_str(),
+    ) {
+        Ok(targets) => targets,
+        Err(error) => return super::RelayResponse::Error { error },
+    };
+    let Some(target_session) = fused.into_iter().next() else {
+        return super::RelayResponse::Error {
+            error: crate::relay::relay_error(
+                "internal_unexpected_failure",
+                "look target fusion produced no target",
+                None,
+            ),
+        };
+    };
+    let request = super::RelayRequest::Look {
+        requester_session: context.principal_id().to_string(),
+        target_session,
+        lines: operation.lines,
+        offset: operation.offset,
+    };
+    let principal = super::context::RequestPrincipal::from_verified(context);
+    match super::handlers::handle_look_routed(
+        runtime.delivery_context(),
+        home_namespace.as_str(),
+        request,
+        runtime.configuration_roots(),
+        &wiring.catalog,
+        Some(&principal),
     ) {
         Ok(value) => value,
         Err(error) => super::RelayResponse::Error { error },

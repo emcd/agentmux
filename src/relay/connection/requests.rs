@@ -18,8 +18,8 @@ use super::super::stream::{
 use super::super::{
     PeerIngressAuthority, RelayRequest, RelayResponse, RequestPrincipal,
     dispatch_discovery, dispatch_identity_admin, dispatch_identity_introspect,
-    dispatch_list, dispatch_look, dispatch_raww, dispatch_request,
-    dispatch_send_frame, handlers, relay_error,
+    dispatch_list_frame, dispatch_look_frame, dispatch_raww_frame,
+    dispatch_request, dispatch_send_frame, handlers, relay_error,
 };
 use super::framing::dispatch_on_blocking_pool;
 use super::helpers::{
@@ -196,7 +196,7 @@ pub(super) async fn handle_request(
             let configuration_roots = Arc::clone(frame.configuration_roots);
             let delivery = Arc::clone(frame.context.delivery_context());
             dispatch_on_blocking_pool(move || {
-                dispatch_list(
+                dispatch_list_frame(
                     &delivery,
                     request,
                     &configuration_roots,
@@ -279,7 +279,7 @@ pub(super) async fn handle_request(
             let bundle_catalog = bundle_catalog.clone();
             let delivery = Arc::clone(frame.context.delivery_context());
             dispatch_on_blocking_pool(move || {
-                dispatch_look(
+                dispatch_look_frame(
                     &delivery,
                     request,
                     &configuration_roots,
@@ -321,7 +321,7 @@ pub(super) async fn handle_request(
                     state_root: state_root.as_ref(),
                     admin_lock: identity_admin_lock.as_ref(),
                 };
-                dispatch_raww(
+                dispatch_raww_frame(
                     &delivery,
                     request,
                     &configuration_roots,
