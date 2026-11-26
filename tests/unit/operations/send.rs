@@ -12,173 +12,22 @@ use agentmux::operations::{
     BundleScope, OperationError, SendInput, SendOutput, SendTool,
 };
 use agentmux::relay::{
-    CredentialSource, DeliveryConfiguration, DispatchWiring,
-    IdentityDescriptor, PeerConfiguration, ProvisionParams, RelayRuntime,
-    SendOutcome, VerifiedPrincipal, provision_principal,
-    rotate_principal_credential, verify_identity,
+    DispatchWiring, PeerConfiguration, SendOutcome,
+    rotate_principal_credential,
 };
-use tempfile::TempDir;
 
-struct SendFixture {
-    _temporary: TempDir,
-    runtime: Arc<RelayRuntime>,
-}
-
-fn write_bundles(temporary: &TempDir, send_scope: &str) {
-    let configuration_root = temporary.path().join("conf");
-    let bundles = configuration_root.join("bundles");
-    std::fs::create_dir_all(&bundles).expect("create bundles directory");
-    std::fs::write(
-        configuration_root.join("policies.toml"),
-        format!(
-            r#"
-format-version = 1
-default = "default"
-
-[[policies]]
-id = "default"
-
-[policies.controls]
-list = "home"
-look = "self"
-send = "{send_scope}"
-"#
-        ),
-    )
-    .expect("write policies file");
-    for (bundle, members) in
-        [("party", vec!["alpha", "bravo"]), ("other", vec!["carol"])]
-    {
-        let sessions: Vec<String> = members
-            .iter()
-            .map(|id| {
-                format!(
-                    r#"
-[[sessions]]
-id = "{id}"
-name = "{id}"
-directory = "/tmp"
-coder = "shell"
-"#
-                )
-            })
-            .collect();
-        std::fs::write(
-            bundles.join(format!("{bundle}.toml")),
-            format!(
-                "format-version = 1\nautostart = true\n{}",
-                sessions.join("")
-            ),
-        )
-        .expect("write bundle configuration");
-    }
-    std::fs::write(
-        configuration_root.join("coders.toml"),
-        r#"
-format-version = 1
-
-[[coders]]
-id = "shell"
-
-[coders.tmux]
-initial-command = "sh -lc 'exec sleep 45'"
-resume-command = "sh -lc 'exec sleep 45'"
-"#,
-    )
-    .expect("write coders file");
-}
-
-fn send_fixture(send_scope: &str) -> SendFixture {
-    let temporary = TempDir::new().expect("temporary directory");
-    write_bundles(&temporary, send_scope);
-    let runtime = Arc::new(
-        RelayRuntime::init(
-            temporary.path().join("conf"),
-            temporary.path().join("state"),
-            DeliveryConfiguration::default(),
-        )
-        .expect("runtime init"),
-    );
-    SendFixture {
-        _temporary: temporary,
-        runtime,
-    }
-}
-
-fn verified_context(
-    runtime: &RelayRuntime,
-    principal_id: &str,
-) -> VerifiedPrincipal {
-    let psk = provision_principal(
-        runtime,
-        ProvisionParams::new(principal_id.to_string()),
-    )
-    .expect("provision principal")
-    .psk
-    .expect("one-time raw PSK");
-    verify_identity(
-        runtime,
-        &IdentityDescriptor::new(
-            principal_id.to_string(),
-            CredentialSource::DirectPsk(psk),
-        ),
-    )
-    .expect("verify identity")
-}
+use super::support::{
+    OperationFixture, authorize_global_operator, operation_fixture,
+    verified_context,
+};
 
 /// Builds the operation bound to the fixture runtime through the
 /// mirrored constructor — the same path any embedded host uses.
 /// No wiring is rebuilt per call; the struct holds the shared pair.
-fn send_tool(fixture: &SendFixture) -> SendTool {
+fn send_tool(fixture: &OperationFixture) -> SendTool {
     let wiring = DispatchWiring::mirrored(&fixture.runtime, &[], true)
         .expect("mirrored wiring installs");
     SendTool::new(Arc::clone(&fixture.runtime), wiring)
-}
-
-/// A relay operator binding, so a relay-wide principal has resolved
-/// controls: GLOBAL homes have no bundle members, so their policy
-/// comes from the TUI session presets, independent of any bundle.
-fn authorize_global_operator(fixture: &SendFixture, operator_id: &str) {
-    let configuration_root = fixture._temporary.path().join("conf");
-    std::fs::write(
-        configuration_root.join("policies.toml"),
-        r#"
-format-version = 1
-default = "default"
-
-[[policies]]
-id = "default"
-
-[policies.controls]
-list = "home"
-look = "self"
-send = "all"
-
-[[policies]]
-id = "operator"
-
-[policies.controls]
-list = "home"
-look = "home"
-send = "all"
-"#,
-    )
-    .expect("write operator policies");
-    std::fs::write(
-        configuration_root.join("users.toml"),
-        format!(
-            r#"
-default-session = "{operator_id}"
-
-[[sessions]]
-id = "{operator_id}"
-policy = "operator"
-
-[sessions.ui]
-"#
-        ),
-    )
-    .expect("write operator binding");
 }
 
 fn send_input(targets: &[&str], message: &str) -> SendInput {
@@ -197,7 +46,7 @@ fn send_input(targets: &[&str], message: &str) -> SendInput {
 /// present.
 #[tokio::test]
 async fn direct_send_returns_typed_outcome() {
-    let fixture = send_fixture("all");
+    let fixture = operation_fixture("all");
     let tool = send_tool(&fixture);
     let context = verified_context(&fixture.runtime, "alpha@party");
     let output = tool
@@ -215,7 +64,7 @@ async fn direct_send_returns_typed_outcome() {
 /// never a null.
 #[tokio::test]
 async fn direct_send_echoes_absent_request_id_as_absent() {
-    let fixture = send_fixture("all");
+    let fixture = operation_fixture("all");
     let tool = send_tool(&fixture);
     let context = verified_context(&fixture.runtime, "alpha@party");
     let mut input = send_input(&["bravo"], "hi");
@@ -230,7 +79,7 @@ async fn direct_send_echoes_absent_request_id_as_absent() {
 /// A named bundle parameter qualifies bare targets against it.
 #[tokio::test]
 async fn direct_send_maps_named_bundle() {
-    let fixture = send_fixture("all");
+    let fixture = operation_fixture("all");
     let tool = send_tool(&fixture);
     let context = verified_context(&fixture.runtime, "alpha@party");
     let mut input = send_input(&["carol"], "hi");
@@ -247,7 +96,7 @@ async fn direct_send_maps_named_bundle() {
 /// principal's home bundle, like the MCP bound-bundle default.
 #[tokio::test]
 async fn direct_send_broadcast_home_scope() {
-    let fixture = send_fixture("all");
+    let fixture = operation_fixture("all");
     let tool = send_tool(&fixture);
     let context = verified_context(&fixture.runtime, "alpha@party");
     let output = tool
@@ -275,7 +124,7 @@ async fn direct_send_broadcast_home_scope() {
 /// Broadcast fans out to the named scope's members except the sender.
 #[tokio::test]
 async fn direct_send_broadcast_fans_out_scope() {
-    let fixture = send_fixture("all");
+    let fixture = operation_fixture("all");
     let tool = send_tool(&fixture);
     let context = verified_context(&fixture.runtime, "alpha@party");
     let output = tool
@@ -307,7 +156,7 @@ async fn direct_send_broadcast_fans_out_scope() {
 /// parameter-required rule instead.
 #[tokio::test]
 async fn direct_send_broadcast_global_home_is_refused() {
-    let fixture = send_fixture("all");
+    let fixture = operation_fixture("all");
     authorize_global_operator(&fixture, "op@GLOBAL");
     let tool = send_tool(&fixture);
     let context = verified_context(&fixture.runtime, "op@GLOBAL");
@@ -338,7 +187,7 @@ async fn direct_send_broadcast_global_home_is_refused() {
 /// rejection governs.
 #[tokio::test]
 async fn direct_send_bare_target_global_home_is_refused() {
-    let fixture = send_fixture("all");
+    let fixture = operation_fixture("all");
     authorize_global_operator(&fixture, "op@GLOBAL");
     let tool = send_tool(&fixture);
     let context = verified_context(&fixture.runtime, "op@GLOBAL");
@@ -353,7 +202,7 @@ async fn direct_send_bare_target_global_home_is_refused() {
 /// resolved controls: provisioning is not authorization.
 #[tokio::test]
 async fn direct_send_unbound_global_has_no_controls() {
-    let fixture = send_fixture("all");
+    let fixture = operation_fixture("all");
     let tool = send_tool(&fixture);
     let context = verified_context(&fixture.runtime, "op@GLOBAL");
     let error = tool
@@ -377,7 +226,7 @@ async fn direct_send_unbound_global_has_no_controls() {
 /// GLOBAL sender is no home member and nothing is excluded.
 #[tokio::test]
 async fn direct_send_global_operator_broadcasts_named_scope() {
-    let fixture = send_fixture("all");
+    let fixture = operation_fixture("all");
     authorize_global_operator(&fixture, "op@GLOBAL");
     let tool = send_tool(&fixture);
     let context = verified_context(&fixture.runtime, "op@GLOBAL");
@@ -407,7 +256,7 @@ async fn direct_send_global_operator_broadcasts_named_scope() {
 /// with the exact codes the MCP handler produces today.
 #[tokio::test]
 async fn direct_send_validates_input_shape() {
-    let fixture = send_fixture("all");
+    let fixture = operation_fixture("all");
     let tool = send_tool(&fixture);
     let context = verified_context(&fixture.runtime, "alpha@party");
     let cases: Vec<(SendInput, &str)> = vec![
@@ -448,7 +297,7 @@ async fn direct_send_validates_input_shape() {
 /// its own.
 #[tokio::test]
 async fn direct_send_surfaces_relay_denial_unchanged() {
-    let fixture = send_fixture("home");
+    let fixture = operation_fixture("home");
     let tool = send_tool(&fixture);
     let context = verified_context(&fixture.runtime, "alpha@party");
     let error = tool
@@ -467,7 +316,7 @@ async fn direct_send_surfaces_relay_denial_unchanged() {
 /// socket path.
 #[tokio::test]
 async fn direct_send_rejects_stale_context_after_rotation() {
-    let fixture = send_fixture("all");
+    let fixture = operation_fixture("all");
     let tool = send_tool(&fixture);
     let context = verified_context(&fixture.runtime, "alpha@party");
     rotate_principal_credential(
@@ -486,8 +335,8 @@ async fn direct_send_rejects_stale_context_after_rotation() {
 /// A context minted by another runtime instance is foreign here.
 #[tokio::test]
 async fn direct_send_rejects_foreign_instance_context() {
-    let first = send_fixture("all");
-    let second = send_fixture("all");
+    let first = operation_fixture("all");
+    let second = operation_fixture("all");
     let tool = send_tool(&second);
     let context = verified_context(&first.runtime, "alpha@party");
     let error = tool
@@ -502,7 +351,7 @@ async fn direct_send_rejects_foreign_instance_context() {
 /// verified context.
 #[tokio::test]
 async fn direct_send_attributes_requester_from_context() {
-    let fixture = send_fixture("all");
+    let fixture = operation_fixture("all");
     let tool = send_tool(&fixture);
     let context = verified_context(&fixture.runtime, "alpha@party");
     let output = tool
@@ -517,10 +366,10 @@ async fn direct_send_attributes_requester_from_context() {
 /// delegation, which a direct call has no path to.
 #[tokio::test]
 async fn direct_send_never_reports_unassociated_server() {
-    let open = send_fixture("all");
+    let open = operation_fixture("all");
     let open_tool = send_tool(&open);
     let open_context = verified_context(&open.runtime, "alpha@party");
-    let strict = send_fixture("home");
+    let strict = operation_fixture("home");
     let strict_tool = send_tool(&strict);
     let strict_context = verified_context(&strict.runtime, "alpha@party");
     let mut codes = Vec::new();
@@ -703,7 +552,7 @@ impl Drop for BlackholePeer {
 async fn direct_send_heartbeat_during_blocked_forward() {
     use std::time::{Duration, Instant};
 
-    let fixture = send_fixture("all");
+    let fixture = operation_fixture("all");
     let socket_path = fixture._temporary.path().join("blackhole.sock");
     let peers = vec![PeerConfiguration {
         alias: "blackhole".to_string(),
